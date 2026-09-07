@@ -27,6 +27,12 @@
 //! data (`notes/upstream/freya.md`), so a child listening to the down would hand the row a
 //! location relative to the child and the column would be wrong. The links listen to the
 //! press, which is a different event, and to `over`/`out`.
+//!
+//! [`row`] is the drawing and holds nothing itself. What a row keeps is [`RowCells`], which
+//! answers both ways between a column and an x and is the one thing a handler clones; the
+//! marks around the text are [`marks`], and the write a caret past the pane's edge makes is
+//! named there ([`bring_caret_into_view`]) rather than left inside the drawing. Each
+//! handler is built by a function of its own.
 
 use std::cell::Cell;
 use std::rc::Weak;
@@ -373,6 +379,132 @@ pub(crate) struct Chrome {
     pub(crate) measured: bool,
 }
 
+/// The cells and states a row keeps for as long as it is mounted, and the two questions
+/// they answer: which column a place on the row is, and where a column is drawn. A handler
+/// clones one of these rather than four cells of its own.
+#[derive(Clone)]
+struct RowCells {
+    /// The laid-out paragraph, for the pointer to be answered in columns. One per row, as
+    /// freya's own editor keeps one per line.
+    holder: State<ParagraphHolder>,
+    /// Where the row was laid out, and where its paragraph was, so a pointer location
+    /// relative to the row can be made relative to the text. Cells and not states:
+    /// nothing renders from them, and the difference between the two is scroll-invariant.
+    row_x: Rc<Cell<f32>>,
+    text_x: Rc<Cell<f32>>,
+    /// Where the row's top is, which is what the hover box is placed against. Its own
+    /// cell rather than a corner of `row_x`'s: this one moves with every scroll, and the
+    /// move is what says a box drawn against it is about a place that has gone.
+    row_y: Rc<Cell<f32>>,
+    /// Whether the pointer is over the link inside the text, which the link's box says.
+    over_link: Rc<Cell<bool>>,
+    /// Which of the row's names the pointer is on. A cell and not a state: hovering a
+    /// name changes nothing this row draws, and only the box is redrawn for it.
+    named: Rc<Cell<Option<usize>>>,
+    /// Whether the paragraph has been laid out, which is when the holder can answer where
+    /// a column is: the caret is drawn from the render after that.
+    laid: State<bool>,
+    /// Whether the row has text at all. A row without answers no column.
+    has_text: bool,
+}
+
+/// A row's cells, made once as it mounts.
+fn use_row_cells(has_text: bool) -> RowCells {
+    RowCells {
+        holder: use_state(ParagraphHolder::default),
+        row_x: use_hook(|| Rc::new(Cell::new(0.0f32))),
+        text_x: use_hook(|| Rc::new(Cell::new(0.0f32))),
+        row_y: use_hook(|| Rc::new(Cell::new(f32::NAN))),
+        over_link: use_hook(|| Rc::new(Cell::new(false))),
+        named: use_hook(|| Rc::new(Cell::new(None))),
+        laid: use_state(|| false),
+        has_text,
+    }
+}
+
+impl RowCells {
+    /// The column under `at`, a location relative to the row: `None` left of the text on
+    /// a press, which is the gutter and picks rows out alone; and on a sweep column 0,
+    /// since a pointer left of the text is where the line starts.
+    fn column(&self, at: CursorPoint, press: bool) -> Option<usize> {
+        if !self.has_text {
+            return None;
+        }
+        let x = at.x as f32 - (self.text_x.get() - self.row_x.get());
+        if x < 0.0 {
+            return if press { None } else { Some(0) };
+        }
+        caret_col(&self.holder.read(), x, at.y as f32)
+    }
+
+    /// Where column `col` of a row `units` long is, from the row's padded edge, once the
+    /// paragraph has been laid out and the holder can say.
+    fn column_x(&self, col: usize, units: usize) -> Option<f32> {
+        (*self.laid.read()).then_some(())?;
+        let x = caret_x(&self.holder.read(), col.min(units))?;
+        Some(self.text_x.get() - self.row_x.get() - ROW_PAD + x)
+    }
+
+    /// Lend the row's paragraph to the list, for a sweep that has left the rows to ask
+    /// this row where a column is. A row with no text lends nothing.
+    fn lend(&self, listing: &Listing, row: usize) {
+        if !self.has_text {
+            return;
+        }
+        let lent = RowText {
+            holder: Rc::downgrade(&self.holder.read().0),
+            text_x: self.text_x.clone(),
+        };
+        listing.texts.borrow_mut().insert(row, lent);
+    }
+}
+
+/// What of a row is a link, once the row kind's own type is gone ([`Drawn`]). The element
+/// is not here: it goes into the paragraph, and nothing after that wants it.
+#[derive(Clone)]
+struct Links {
+    /// Whether the element inside the text is a link *now*: the element's own answer, the
+    /// one it lights itself by, so the hand is shown over exactly what is drawn as a link.
+    /// Asked at the pointer's move and not subscribed to, the icon being set from
+    /// handlers.
+    hand: Rc<dyn Fn() -> bool>,
+    /// The columns of the runs of the row's own text that are links.
+    columns: Rc<Vec<Range<usize>>>,
+    /// What a press on one of those runs follows.
+    follow: Option<Rc<dyn Fn(Range<usize>)>>,
+}
+
+impl Links {
+    /// The row's links taken out of its text, before the spans are moved into the
+    /// paragraph, and the element that goes inside it.
+    fn taken(text: &mut Option<Text<Drawn>>) -> (Self, Option<Element>) {
+        let Drawn { inline, runs } = text
+            .as_mut()
+            .map(|text| std::mem::take(&mut text.links))
+            .unwrap_or_default();
+        let hand: Rc<dyn Fn() -> bool> = match &inline {
+            Some((_, is_link)) => is_link.clone(),
+            None => Rc::new(|| false),
+        };
+        let (columns, follow) = match runs {
+            Some((columns, follow)) => (columns, Some(follow)),
+            None => (Vec::new(), None),
+        };
+        let links = Links {
+            hand,
+            columns: Rc::new(columns),
+            follow,
+        };
+        (links, inline.map(|(element, _)| element))
+    }
+
+    /// Which of the runs column `column` is in, and `None` where it is in none.
+    fn at(&self, column: Option<usize>) -> Option<usize> {
+        let column = column?;
+        self.columns.iter().position(|link| link.contains(&column))
+    }
+}
+
 /// The row: its chrome, what comes `before` the text -- a gutter, an address, a line
 /// number -- the `text` where the row has any, and the `menu` the right button opens.
 ///
@@ -401,174 +533,157 @@ fn row(
     let marked = use_consume::<Marked>().0;
     let shift = use_consume::<Shift>().0;
     let listing = use_consume::<Listing>();
-    // The laid-out paragraph, for the pointer to be answered in columns. One per row, as
-    // freya's own editor keeps one per line.
-    let holder = use_state(ParagraphHolder::default);
-    // Where the row and its paragraph were laid out, so a pointer location relative to
-    // the row can be made relative to the text. Cells and not states: nothing renders
-    // from them, and the difference between the two is scroll-invariant.
-    let row_x = use_hook(|| Rc::new(Cell::new(0.0f32)));
-    let text_x = use_hook(|| Rc::new(Cell::new(0.0f32)));
-    // Where the row's top is, which is what the hover box is placed against. Its own
-    // cell rather than a corner of `row_x`'s: this one moves with every scroll, and the
-    // move is what says a box drawn against it is about a place that has gone.
-    let row_y = use_hook(|| Rc::new(Cell::new(f32::NAN)));
-    // Whether the pointer is over the link inside the text, which the link's box says.
-    let over_link = use_hook(|| Rc::new(Cell::new(false)));
+    let cells = use_row_cells(text.is_some());
+    // Which of the links in the row's own text the pointer is over. Written with
+    // `set_if_modified`, so a row is drawn again when the pointer crosses a link's edge
+    // and not as it moves along one.
+    let mut over = use_state(|| None::<usize>);
     let alt = try_consume_context::<Alt>().map(|alt| alt.0);
+    let grid = pixel_grid();
+
     // The row's links, taken out of `text` before its spans are moved into the paragraph
     // below, since the handlers need them.
-    let Drawn { inline, runs } = text
-        .as_mut()
-        .map(|text| std::mem::take(&mut text.links))
-        .unwrap_or_default();
-    // Whether the element inside the text is a link *now*: the element's own answer, the
-    // one it lights itself by, so the hand is shown over exactly what is drawn as a link.
-    // Asked at the pointer's move and not subscribed to, the icon being set from
-    // handlers.
-    let hand: Rc<dyn Fn() -> bool> = match &inline {
-        Some((_, is_link)) => is_link.clone(),
-        None => Rc::new(|| false),
-    };
-    let inline = inline.map(|(element, _)| element);
-    // The links in the row's own text, and what a press on one follows.
-    let (links, follow) = match runs {
-        Some((columns, follow)) => (columns, Some(follow)),
-        None => (Vec::new(), None),
-    };
+    let (links, inline) = Links::taken(&mut text);
     // Every name on the row and what to say about the one under the pointer, taken out
     // of `text` for the same reason the links are.
-    let names: Vec<Range<usize>> = text
+    let names = text
         .as_ref()
         .map(|text| text.names.clone())
         .unwrap_or_default();
     let on_hover = text.as_ref().and_then(|text| text.on_hover.clone());
-    // Which of them the pointer is on. A cell and not a state: hovering a name changes
-    // nothing this row draws, and only the box is redrawn for it.
-    let named = use_hook(|| Rc::new(Cell::new(None::<usize>)));
-    // Which of them the pointer is over, or `None`. Written with `set_if_modified`, so a
-    // row is drawn again when the pointer crosses a link's edge and not as it moves along
-    // one.
-    let mut over = use_state(|| None::<usize>);
-    // Alt says a press on a link is not a door, so what is under the pointer is text.
-    let held = move || alt.is_some_and(|alt| *alt.peek());
-    let at_link = {
-        let links = Rc::new(links.clone());
-        move |column: Option<usize>| -> Option<usize> {
-            let column = column?;
-            links.iter().position(|link| link.contains(&column))
-        }
-    };
-    // Say which name the pointer is on, where it is drawn, and say it only when the
-    // answer has changed: a move along one name arrives many times over.
-    let tell = {
-        let (holder, text_x, row_y) = (holder.clone(), text_x.clone(), row_y.clone());
-        let (names, named, on_hover) = (names.clone(), named.clone(), on_hover.clone());
-        Rc::new(move |on: Option<usize>| {
-            // Off a name, only the crossing is worth saying: that there is nothing under
-            // the pointer stays true however far it moves. **On** one, every move is said,
-            // a move being what puts the wait for it back to the beginning
-            // (`src/ui/hovering.rs`).
-            let crossed = named.replace(on) != on;
-            if !crossed && on.is_none() {
-                return;
-            }
-            let Some(tell) = on_hover.as_ref() else {
-                return;
-            };
-            let Some(columns) = on.and_then(|on| names.get(on)).cloned() else {
-                return tell(Under::Off);
-            };
-            let holder = holder.read();
-            let edge = |column| caret_x(&holder, column).map(|x| text_x.get() + x);
-            // A row whose paragraph is not laid out yet answers no column, and a box
-            // placed against nothing would be drawn in the window's corner.
-            let (Some(left), Some(right)) = (edge(columns.start), edge(columns.end)) else {
-                return tell(Under::Off);
-            };
-            tell(Under::Name(
-                columns,
-                Area::new(
-                    (left, row_y.get()).into(),
-                    Size2D::new(right - left, code_row_height()),
-                ),
-            ));
-        })
-    };
-
-    // Whether the paragraph has been laid out, which is when the holder can answer where
-    // a column is: the caret is drawn from the render after that.
-    let mut laid = use_state(|| false);
-    let grid = pixel_grid();
-
-    let Chrome {
-        pane,
-        row,
-        file,
-        paired,
-        wash,
-        measured,
-    } = chrome;
+    let tell = tell_hover(&cells, names, on_hover.clone());
     // The widest row of the listing the list is drawing now, and the listing itself: this
     // row's floor and what it reports its own width under, read once so the two agree.
     let (widest, listing_key) = (listing.widest, listing.key());
-    let has_text = text.is_some();
-
-    // The column under `at`, a location relative to the row: `None` left of the text on
-    // a press, which is the gutter and picks rows out alone; and on a sweep column 0,
-    // since a pointer left of the text is where the line starts.
-    let column = {
-        let holder = holder.clone();
-        let (row_x, text_x) = (row_x.clone(), text_x.clone());
-        move |at: CursorPoint, press: bool| -> Option<usize> {
-            if !has_text {
-                return None;
-            }
-            let x = at.x as f32 - (text_x.get() - row_x.get());
-            if x < 0.0 {
-                return if press { None } else { Some(0) };
-            }
-            caret_col(&holder.read(), x, at.y as f32)
-        }
-    };
-
-    // Lent to the list, for a sweep that has left the rows to ask this one where a
-    // column is.
-    if has_text {
-        listing.texts.borrow_mut().insert(
-            row,
-            RowText {
-                holder: Rc::downgrade(&holder.read().0),
-                text_x: text_x.clone(),
-            },
-        );
-    }
+    cells.lend(&listing, chrome.row);
 
     let lit = over();
-    let paragraph = text.map(|text| {
+    let drawn = text.map(|text| {
         let units = text.line.units();
-        let highlight = text
-            .chars
-            .highlight
-            .map(|(from, to)| (from.min(units), to.min(units)));
-        let text_x = text_x.clone();
-        // Where a column is, from the row's padded edge, once the paragraph has been laid
-        // out and the holder can say.
-        let column_x = {
-            let holder = holder.clone();
-            let (row_x, text_x) = (row_x.clone(), text_x.clone());
-            move |col: usize| -> Option<f32> {
-                laid().then_some(())?;
-                let x = caret_x(&holder.read(), col.min(units))?;
-                Some(text_x.get() - row_x.get() - ROW_PAD + x)
-            }
+        let (selected, caret) = marks(&cells, &listing, grid, text.chars, units);
+        let inline = inline.map(|element| link_box(&cells, &links, element));
+        (
+            selected,
+            text_paragraph(&cells, text, &links, lit, inline),
+            caret,
+        )
+    });
+
+    let el = rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        // As wide as the pane or the listing's widest row, whichever is more, and what
+        // it holds measured under it -- which is what lets the list scroll sideways to a
+        // long row while the wash still runs the whole width. The width reported is the
+        // content's, not the laid-out one: see `ui/width.rs`.
+        .width(Widest::row_width(widest.floor(listing_key), listing_key))
+        .on_sized(on_measured(
+            &cells,
+            on_hover,
+            widest,
+            listing_key,
+            chrome.measured,
+        ))
+        .height(Size::px(code_row_height()))
+        // Horizontally only: the gutter's lines run to the row's own top and bottom
+        // edges, and padding there would break every line in the column once per row.
+        .padding(Gaps::new_symmetric(0.0, ROW_PAD))
+        .assembly_font()
+        // Nothing of this row's own under the pointer: it is lit by the other pane's run,
+        // where it is the same place, and by this pane's, where it is in it.
+        .background(row_background(chrome.paired.is_some(), chrome.wash))
+        .maybe(chrome.paired.is_some_and(Edges::any), |el| {
+            el.border(pair_border(chrome.paired.unwrap_or_default()))
+        })
+        .on_pointer_down(on_down(&cells, &chrome, &links, menu, marked, shift, alt))
+        .on_pointer_move(on_move(
+            &cells,
+            &chrome,
+            &links,
+            tell.clone(),
+            over,
+            marked,
+            alt,
+        ))
+        .on_pointer_out(move |_| {
+            over.set_if_modified(None);
+            tell(None);
+            set_icon(CursorIcon::Default);
+        })
+        .children(before);
+
+    // The selection before the paragraph in the tree, so it is painted under the text --
+    // and **always there**, as is the caret's slot: freya matches siblings by position,
+    // so a rect appearing before the paragraph on the press would move the paragraph
+    // along one and remount it, link and all, between the down and the up, and the press
+    // meant for the link would never fire.
+    match drawn {
+        Some((selected, paragraph, caret)) => el.child(selected).child(paragraph).child(caret),
+        None => el,
+    }
+}
+
+/// Say which name the pointer is on, where it is drawn, and say it only when the answer
+/// has changed: a move along one name arrives many times over. A column goes in: the row
+/// knows where its names are drawn, and the pane knows what place one is.
+fn tell_hover(
+    cells: &RowCells,
+    names: Vec<Range<usize>>,
+    on_hover: Option<Rc<dyn Fn(Under)>>,
+) -> Rc<dyn Fn(Option<usize>)> {
+    let cells = cells.clone();
+    Rc::new(move |column: Option<usize>| {
+        let on = column.and_then(|column| names.iter().position(|name| name.contains(&column)));
+        // Off a name, only the crossing is worth saying: that there is nothing under the
+        // pointer stays true however far it moves. **On** one, every move is said, a move
+        // being what puts the wait for it back to the beginning (`src/ui/hovering.rs`).
+        let crossed = cells.named.replace(on) != on;
+        if !crossed && on.is_none() {
+            return;
+        }
+        let Some(tell) = on_hover.as_ref() else {
+            return;
         };
-        // The highlight: a rect of the row's own from the first column's x to the last's,
-        // the row's whole height, on the grid -- so one row's meets the next's on a pixel
-        // edge. An empty row inside the run shows as a stub, or the run would read as
-        // broken there.
-        let selected = highlight.and_then(|(from, to)| {
-            let (left, right) = (column_x(from)?, column_x(to)?);
+        let Some(columns) = on.and_then(|on| names.get(on)).cloned() else {
+            return tell(Under::Off);
+        };
+        let holder = cells.holder.read();
+        let edge = |column| caret_x(&holder, column).map(|x| cells.text_x.get() + x);
+        // A row whose paragraph is not laid out yet answers no column, and a box placed
+        // against nothing would be drawn in the window's corner.
+        let (Some(left), Some(right)) = (edge(columns.start), edge(columns.end)) else {
+            return tell(Under::Off);
+        };
+        tell(Under::Name(
+            columns,
+            Area::new(
+                (left, cells.row_y.get()).into(),
+                Size2D::new(right - left, code_row_height()),
+            ),
+        ));
+    })
+}
+
+/// The two marks a row draws around its text: the selection's, painted under it, and the
+/// caret's, over it. Both are always drawn -- [`nothing`] where there is no mark -- since
+/// freya matches siblings by position (see the children at the foot of [`row`]).
+///
+/// Neither is interactive: a mark answers no press and no move.
+fn marks(
+    cells: &RowCells,
+    listing: &Listing,
+    grid: Grid,
+    chars: RowChars,
+    units: usize,
+) -> (Rect, Rect) {
+    // The highlight: a rect of the row's own from the first column's x to the last's, the
+    // row's whole height, on the grid -- so one row's meets the next's on a pixel edge. An
+    // empty row inside the run shows as a stub, or the run would read as broken there.
+    let selected = chars
+        .highlight
+        .map(|(from, to)| (from.min(units), to.min(units)))
+        .and_then(|(from, to)| {
+            let (left, right) = (cells.column_x(from, units)?, cells.column_x(to, units)?);
             let right = if right > left {
                 right
             } else if units == 0 {
@@ -577,7 +692,6 @@ fn row(
                 return None;
             };
             let span = grid.span(left, right);
-            // Not interactive, and nor is the caret: a mark answers no press and no move.
             Some(
                 rect()
                     .interactive(false)
@@ -587,246 +701,259 @@ fn row(
                     .background(palette().text_select_bg),
             )
         });
-        // The caret, where the run's lead is on this row and no sweep has picked
-        // characters out: a stroke of the row's own, on the device pixel grid, where the
-        // engine's would sit on the glyph's fractional edge and two pixels wide.
-        // Drawn over a selection too, at its lead: it is where the next key moves from.
-        let caret = text.chars.cursor.and_then(column_x).map(|x| {
-            // A caret past the pane's edge brings the list sideways to it: the
-            // keyboard walks the caret along a row longer than the pane, and the
-            // pane has to follow. From a task and not the render, since a scroll
-            // is a write; the list answers with a layout, whose `on_sized` moves
-            // `visible`, and a caret then inside asks for nothing more.
-            let seen = listing.bounds.get();
-            if seen.width() > 0.0 {
-                let at = row_x.get() + ROW_PAD + x;
-                let shove = if at < seen.min_x() {
-                    Some(seen.min_x() - at + CARET_INSET)
-                } else if at + 1.0 > seen.max_x() {
-                    Some(seen.max_x() - at - 1.0 - CARET_INSET)
-                } else {
-                    None
-                };
-                if let Some(shove) = shove.filter(|shove| shove.abs() >= 1.0) {
-                    let mut controller = listing.controller;
-                    // Nothing to bring in from the left of the row's own start.
-                    let shove = shove.min(-(row_x.get() - seen.min_x()).min(0.0));
-                    spawn(async move {
-                        let (x0, _) = <(i32, i32)>::from(controller);
-                        let target = (x0 + shove.round() as i32).min(0);
-                        if target != x0 {
-                            controller.scroll_to_x(target);
-                        }
-                    });
-                }
-            }
-            // From the column rightward, so a caret on column 0 starts where the
-            // text does.
-            let stroke = grid.span(x, x + CARET_WIDTH);
-            rect()
-                .interactive(false)
-                .position(Position::new_absolute().left(stroke.near).top(0.0))
-                .width(Size::px(stroke.thick))
-                .height(Size::px(code_row_height()))
-                .background(palette().caret_fg)
-        });
-        // The link, in a box that says when the pointer is over it: the hand is the
-        // link's and the I-beam the text's, and the row sets both (`set_icon`).
-        let inline = inline.map(|inline| {
-            let (entered, left) = (over_link.clone(), over_link.clone());
-            let hand = hand.clone();
-            rect()
-                .on_pointer_over(move |_| {
-                    entered.set(true);
-                    set_icon(if hand() {
-                        CursorIcon::Pointer
-                    } else {
-                        CursorIcon::Text
-                    });
-                })
-                .on_pointer_out(move |_| {
-                    left.set(false);
-                    set_icon(CursorIcon::Text);
-                })
-                .child(inline)
-        });
-        let paragraph = paragraph()
-            .max_lines(1)
-            // The row's whole height, so the highlight -- which the engine expands to
-            // the paragraph's box -- runs from one row into the next with no gap.
-            .height(Size::fill())
-            .holder(holder.read().clone())
-            .on_sized(move |e: Event<SizedEventData>| {
-                text_x.set(e.area.min_x());
-                laid.set_if_modified(true);
-            })
-            .vertical_align(VerticalAlign::Center)
-            .spans_iter(
-                light(
-                    cut_at(text.head, &links),
-                    lit.and_then(|lit| links.get(lit)),
-                )
-                .into_iter(),
-            )
-            .maybe_child(inline)
-            .spans_iter(text.tail.into_iter());
-        (paragraph, selected, caret)
-    });
-    let (paragraph, selected, caret) = match paragraph {
-        Some((paragraph, selected, caret)) => (Some(paragraph), selected, caret),
-        None => (None, None, None),
-    };
 
+    // The caret, where the run's lead is on this row and no sweep has picked characters
+    // out: a stroke of the row's own, on the device pixel grid, where the engine's would
+    // sit on the glyph's fractional edge and two pixels wide. Drawn over a selection too,
+    // at its lead: it is where the next key moves from.
+    let at = chars.cursor.and_then(|col| cells.column_x(col, units));
+    if let Some(x) = at {
+        bring_caret_into_view(listing, cells.row_x.get(), cells.row_x.get() + ROW_PAD + x);
+    }
+    let caret = at.map(|x| {
+        // From the column rightward, so a caret on column 0 starts where the text does.
+        let stroke = grid.span(x, x + CARET_WIDTH);
+        rect()
+            .interactive(false)
+            .position(Position::new_absolute().left(stroke.near).top(0.0))
+            .width(Size::px(stroke.thick))
+            .height(Size::px(code_row_height()))
+            .background(palette().caret_fg)
+    });
+
+    (
+        selected.unwrap_or_else(nothing),
+        caret.unwrap_or_else(nothing),
+    )
+}
+
+/// A caret at window x `at`, on a row whose own left edge is `row_left`, brought into the
+/// pane's sight: the keyboard walks the caret along a row longer than the pane, and the
+/// pane has to follow. From a task and not the render, since a scroll is a write; the list
+/// answers with a layout, whose `on_sized` moves `visible`, and a caret then inside asks
+/// for nothing more.
+///
+/// The one write drawing a row makes.
+fn bring_caret_into_view(listing: &Listing, row_left: f32, at: f32) {
+    let seen = listing.bounds.get();
+    if seen.width() <= 0.0 {
+        return;
+    }
+    let shove = if at < seen.min_x() {
+        Some(seen.min_x() - at + CARET_INSET)
+    } else if at + 1.0 > seen.max_x() {
+        Some(seen.max_x() - at - 1.0 - CARET_INSET)
+    } else {
+        None
+    };
+    let Some(shove) = shove.filter(|shove| shove.abs() >= 1.0) else {
+        return;
+    };
+    let mut controller = listing.controller;
+    // Nothing to bring in from the left of the row's own start.
+    let shove = shove.min(-(row_left - seen.min_x()).min(0.0));
+    spawn(async move {
+        let (x0, _) = <(i32, i32)>::from(controller);
+        let target = (x0 + shove.round() as i32).min(0);
+        if target != x0 {
+            controller.scroll_to_x(target);
+        }
+    });
+}
+
+/// The link inside the text, in a box that says when the pointer is over it: the hand is
+/// the link's and the I-beam the text's, and the row sets both ([`set_icon`]).
+fn link_box(cells: &RowCells, links: &Links, element: Element) -> Rect {
+    let (entered, left) = (cells.over_link.clone(), cells.over_link.clone());
+    let hand = links.hand.clone();
     rect()
-        .horizontal()
-        .cross_align(Alignment::Center)
-        // As wide as the pane or the listing's widest row, whichever is more, and what
-        // it holds measured under it -- which is what lets the list scroll sideways to a
-        // long row while the wash still runs the whole width. The width reported is the
-        // content's, not the laid-out one: see `ui/width.rs`.
-        .width(Widest::row_width(widest.floor(listing_key), listing_key))
-        .on_sized({
-            let (row_x, row_y) = (row_x.clone(), row_y.clone());
-            let (named, on_hover) = (named.clone(), on_hover.clone());
-            move |e: Event<SizedEventData>| {
-                row_x.set(e.area.min_x());
-                // A row that has moved -- a scroll, a resize, a listing redrawn -- takes
-                // any box drawn against it with it. Watched here rather than at the
-                // wheel: a `VirtualScrollView` stops the wheel event it acted on, so the
-                // pane never sees the one that matters, and this covers the keyboard, the
-                // sweep's autoscroll and a font change as well.
-                if row_y.replace(e.area.min_y()) != e.area.min_y() && named.take().is_some() {
-                    if let Some(tell) = on_hover.as_ref() {
-                        tell(Under::Moved);
+        .on_pointer_over(move |_| {
+            entered.set(true);
+            set_icon(if hand() {
+                CursorIcon::Pointer
+            } else {
+                CursorIcon::Text
+            });
+        })
+        .on_pointer_out(move |_| {
+            left.set(false);
+            set_icon(CursorIcon::Text);
+        })
+        .child(element)
+}
+
+/// The row's text as one paragraph: the spans before the link, the link itself, and the
+/// spans after it. `lit` is the run of the row's own text under the pointer, which is drawn
+/// as a link.
+fn text_paragraph(
+    cells: &RowCells,
+    text: Text<Drawn>,
+    links: &Links,
+    lit: Option<usize>,
+    inline: Option<Rect>,
+) -> Paragraph {
+    let (text_x, mut laid) = (cells.text_x.clone(), cells.laid);
+    paragraph()
+        .max_lines(1)
+        // The row's whole height, so the highlight -- which the engine expands to the
+        // paragraph's box -- runs from one row into the next with no gap.
+        .height(Size::fill())
+        .holder(cells.holder.read().clone())
+        .on_sized(move |e: Event<SizedEventData>| {
+            text_x.set(e.area.min_x());
+            laid.set_if_modified(true);
+        })
+        .vertical_align(VerticalAlign::Center)
+        .spans_iter(
+            light(
+                cut_at(text.head, &links.columns),
+                lit.and_then(|lit| links.columns.get(lit)),
+            )
+            .into_iter(),
+        )
+        .maybe_child(inline)
+        .spans_iter(text.tail.into_iter())
+}
+
+/// The row's `on_sized`: where it was laid out, whether it has moved out from under a box
+/// drawn against it, and its width reported to the listing's [`Widest`].
+fn on_measured(
+    cells: &RowCells,
+    on_hover: Option<Rc<dyn Fn(Under)>>,
+    widest: Widest,
+    listing: u64,
+    measured: bool,
+) -> impl FnMut(Event<SizedEventData>) + 'static {
+    let cells = cells.clone();
+    move |e: Event<SizedEventData>| {
+        cells.row_x.set(e.area.min_x());
+        // A row that has moved -- a scroll, a resize, a listing redrawn -- takes any box
+        // drawn against it with it. Watched here rather than at the wheel: a
+        // `VirtualScrollView` stops the wheel event it acted on, so the pane never sees
+        // the one that matters, and this covers the keyboard, the sweep's autoscroll and
+        // a font change as well.
+        if cells.row_y.replace(e.area.min_y()) != e.area.min_y() && cells.named.take().is_some() {
+            if let Some(tell) = on_hover.as_ref() {
+                tell(Under::Moved);
+            }
+        }
+        if measured {
+            widest.note(listing, e.inner_sizes.width);
+        }
+    }
+}
+
+/// The row's `on_pointer_down`: a link followed, a run started, or the menu.
+///
+/// The *down* and not the press: a drag is over by the time a press fires, so a selection
+/// swept out with the button held has to begin as it goes down. The right button's down is
+/// the menu, **in the same handler**: `on_secondary_down` is `on_pointer_down` under
+/// another name and would replace this one ([`secondary`]).
+fn on_down(
+    cells: &RowCells,
+    chrome: &Chrome,
+    links: &Links,
+    menu: Option<Rc<dyn Fn(Event<PressEventData>, Option<usize>)>>,
+    marked: State<Marks>,
+    shift: State<bool>,
+    alt: Option<State<bool>>,
+) -> impl FnMut(Event<PointerEventData>) + 'static {
+    let (cells, links) = (cells.clone(), links.clone());
+    let (pane, row, file) = (chrome.pane, chrome.row, chrome.file.clone());
+    move |e: Event<PointerEventData>| {
+        if e.button() == Some(MouseButton::Left) {
+            let at = cells.column(e.element_location(), true);
+            // freya counts the presses in one place, and **asking is counting**: a press
+            // it was not asked about is one the next reads as a double. So it is asked
+            // exactly once, whatever the press turns out to be.
+            let presses = EventsCombos::pressed(e.global_location());
+            // A link is followed on a single press with nothing held: two presses on a
+            // name are what take the word, and Alt says this one is not a door.
+            let link = links
+                .at(at)
+                .filter(|_| presses == PressEventType::Single && !held(alt))
+                .zip(links.follow.clone());
+            if let Some((link, follow)) = link {
+                // And it picks no line out: the press is the question and not a place in
+                // the file.
+                follow(links.columns[link].clone());
+                return;
+            }
+            let press = at.map(|col| {
+                // Two presses on a word take the word, three the row's text, as the text
+                // engine divides them.
+                match presses {
+                    PressEventType::Double => word_at(&cells.holder.read(), col)
+                        .map(|(from, to)| Press::Span(from, to))
+                        .unwrap_or(Press::At(col)),
+                    PressEventType::Triple | PressEventType::Quadruple => {
+                        Press::Span(0, usize::MAX)
                     }
+                    PressEventType::Single => Press::At(col),
                 }
-                if measured {
-                    widest.note(listing_key, e.inner_sizes.width);
-                }
-            }
-        })
-        .height(Size::px(code_row_height()))
-        // Horizontally only: the gutter's lines run to the row's own top and bottom
-        // edges, and padding there would break every line in the column once per row.
-        .padding(Gaps::new_symmetric(0.0, ROW_PAD))
-        .assembly_font()
-        // Nothing of this row's own under the pointer: it is lit by the other pane's run,
-        // where it is the same place, and by this pane's, where it is in it.
-        .background(row_background(paired.is_some(), wash))
-        .maybe(paired.is_some_and(Edges::any), |el| {
-            el.border(pair_border(paired.unwrap_or_default()))
-        })
-        // The *down* and not the press: a drag is over by the time a press fires, so a
-        // selection swept out with the button held has to begin as it goes down. The
-        // right button's down is the menu, **in the same handler**: `on_secondary_down`
-        // is `on_pointer_down` under another name and would replace this one
-        // (`secondary`).
-        .on_pointer_down({
-            let column = column.clone();
-            let holder = holder.clone();
-            let at_link = at_link.clone();
-            let links = links.clone();
-            move |e: Event<PointerEventData>| {
-                if e.button() == Some(MouseButton::Left) {
-                    let at = column(e.element_location(), true);
-                    // freya counts the presses in one place, and **asking is counting**:
-                    // a press it was not asked about is one the next reads as a double.
-                    // So it is asked exactly once, whatever the press turns out to be.
-                    let presses = EventsCombos::pressed(e.global_location());
-                    // A link is followed on a single press with nothing held: two presses
-                    // on a name are what take the word, and Alt says this one is not a
-                    // door.
-                    let link = at_link(at)
-                        .filter(|_| presses == PressEventType::Single && !held())
-                        .zip(follow.clone());
-                    if let Some((link, follow)) = link {
-                        // And it picks no line out: the press is the question and not a
-                        // place in the file.
-                        follow(links[link].clone());
-                        return;
-                    }
-                    let press = at.map(|col| {
-                        // Two presses on a word take the word, three the row's text, as
-                        // the text engine divides them.
-                        match presses {
-                            PressEventType::Double => word_at(&holder.read(), col)
-                                .map(|(from, to)| Press::Span(from, to))
-                                .unwrap_or(Press::At(col)),
-                            PressEventType::Triple | PressEventType::Quadruple => {
-                                Press::Span(0, usize::MAX)
-                            }
-                            PressEventType::Single => Press::At(col),
-                        }
-                    });
-                    mark_press(marked, *shift.peek(), pane, file.clone(), row, press);
-                    return;
-                }
-                // The column before the event is turned into a press: what the menu is
-                // asked about is where the pointer was.
-                let at = column(e.element_location(), true);
-                let Some(e) = secondary(e) else {
-                    return;
-                };
-                if let Some(menu) = &menu {
-                    menu(e, at);
-                }
-            }
-        })
-        // Sweeping a selection out to here, and to the column under the pointer. Every
-        // move and not `pointer_over`, which fires once on entry: a sweep along a row
-        // has to follow the pointer. And the icon: an I-beam over the text and right of
-        // it, the hand over the link, the arrow over the gutter.
-        .on_pointer_move({
-            let (row_x, text_x) = (row_x.clone(), text_x.clone());
-            let tell = tell.clone();
-            move |e: Event<PointerEventData>| {
-                let at = e.element_location();
-                let column = column(at, false);
-                mark_drag(marked, pane, row, column);
-                // Not while a selection is being swept out: a drag along a line would
-                // otherwise underline every name it passed under.
-                let hovered = match dragging(marked, pane) || held() {
-                    true => None,
-                    false => at_link(column),
-                };
-                over.set_if_modified(hovered);
-                // Which name the pointer is on, followed or not: a name where one is
-                // defined is not a link and is still something to ask the server about.
-                // The same guard as the link's, for the same reason.
-                tell(match dragging(marked, pane) || held() {
-                    true => None,
-                    false => column
-                        .and_then(|column| names.iter().position(|name| name.contains(&column))),
-                });
-                let on_text = has_text && at.x as f32 >= text_x.get() - row_x.get();
-                set_icon(if (over_link.get() && hand()) || hovered.is_some() {
-                    CursorIcon::Pointer
-                } else if on_text {
-                    CursorIcon::Text
-                } else {
-                    CursorIcon::Default
-                });
-            }
-        })
-        .on_pointer_out({
-            let tell = tell.clone();
-            move |_| {
-                over.set_if_modified(None);
-                tell(None);
-                set_icon(CursorIcon::Default);
-            }
-        })
-        .children(before)
-        // Before the paragraph in the tree, so it is painted under the text -- and
-        // **always there**, as is the caret's slot: freya matches siblings by position,
-        // so a rect appearing before the paragraph on the press would move the paragraph
-        // along one and remount it, link and all, between the down and the up, and the
-        // press meant for the link would never fire.
-        .maybe(has_text, |el| {
-            el.child(selected.unwrap_or_else(nothing))
-                .maybe_child(paragraph)
-                .child(caret.unwrap_or_else(nothing))
-        })
+            });
+            mark_press(marked, *shift.peek(), pane, file.clone(), row, press);
+            return;
+        }
+        // The column before the event is turned into a press: what the menu is asked
+        // about is where the pointer was.
+        let at = cells.column(e.element_location(), true);
+        let Some(e) = secondary(e) else {
+            return;
+        };
+        if let Some(menu) = &menu {
+            menu(e, at);
+        }
+    }
+}
+
+/// The row's `on_pointer_move`: the sweep out to the column under the pointer, which name
+/// is under it, and the pointer's icon -- an I-beam over the text and right of it, the
+/// hand over a link, the arrow over the gutter.
+///
+/// Every move and not `pointer_over`, which fires once on entry: a sweep along a row has
+/// to follow the pointer.
+fn on_move(
+    cells: &RowCells,
+    chrome: &Chrome,
+    links: &Links,
+    tell: Rc<dyn Fn(Option<usize>)>,
+    mut over: State<Option<usize>>,
+    marked: State<Marks>,
+    alt: Option<State<bool>>,
+) -> impl FnMut(Event<PointerEventData>) + 'static {
+    let (cells, links) = (cells.clone(), links.clone());
+    let (pane, row) = (chrome.pane, chrome.row);
+    move |e: Event<PointerEventData>| {
+        let at = e.element_location();
+        let column = cells.column(at, false);
+        mark_drag(marked, pane, row, column);
+        // Neither the link under the pointer nor the name is answered while a selection
+        // is being swept out: a drag along a line would otherwise underline every name it
+        // passed under. The name is said whether it is a link or not -- a name where one
+        // is defined is not a link and is still something to ask the server about -- but
+        // under the same guard, for the same reason.
+        let sweeping = dragging(marked, pane) || held(alt);
+        let hovered = (!sweeping).then(|| links.at(column)).flatten();
+        over.set_if_modified(hovered);
+        tell(if sweeping { None } else { column });
+        let on_text = cells.has_text && at.x as f32 >= cells.text_x.get() - cells.row_x.get();
+        set_icon(
+            if (cells.over_link.get() && (links.hand)()) || hovered.is_some() {
+                CursorIcon::Pointer
+            } else if on_text {
+                CursorIcon::Text
+            } else {
+                CursorIcon::Default
+            },
+        );
+    }
+}
+
+/// Alt held, which says a press on a link is not a door, so what is under the pointer is
+/// text.
+fn held(alt: Option<State<bool>>) -> bool {
+    alt.is_some_and(|alt| *alt.peek())
 }
 
 /// `head` cut so that every run in `links` is exactly one span of it, splitting a span
