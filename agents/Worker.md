@@ -19,10 +19,10 @@ a `OnceLock`, so the losers would block on the winner instead of running in para
 parallelism `notes/Goals.md` asks for is parsing many objects at once, a different job.)
 
 **The thread, the two channels and the task taking the answers are not this worker's own**
-(`src/ui/worker.rs`). `use_worker` is the shape the four request/answer workers are started in --
-this one, the build, the scratchpad and the language server, which takes the answer sender back
-with it -- and `stream` the shape of the two one-shot ones, the search and the binary loader,
-worked once for one question and stopped by the receiver going. What differs stays with each
+(`src/ui/worker.rs`). `use_worker` is the shape the five request/answer workers are started in --
+this one, the source reader, the build, the scratchpad and the language server, which takes the
+answer sender back with it -- and `stream` the shape of the two one-shot ones, the search and the
+binary loader, worked once for one question and stopped by the receiver going. What differs stays with each
 worker: the drain policy (`newest` here), the work, and the state each answer lands in. The work is an argument on every one of them, which is the seam the headless tests
 substitute a worker of their own through. Naming the thread belongs to the mechanism now, and that
 is what it is for: the scaffolding was written out seven times before it was written once, and by
@@ -196,9 +196,11 @@ here because of what this worker's queue holds: a listing is seconds of DWARF, a
 behind one would arrive long after the tab it belongs to -- where the two questions a source
 document opens with, its text and which of its lines have code, are asked at the same moment and
 answered by two threads at once. Nothing crosses between them: the reader touches no `Analyzed` and
-the analysis touches no file. It is the one worker still written out where it stands, and what it
-is written out as is `use_worker`'s shape. The reader's answer goes into a cache rather than into the state it
-is asked through, which is what keeps a file already read instant; the rest is in `agents/Panes.md`.
+the analysis touches no file. It is `use_worker`'s shape with a drain of its own, keeping the
+newest ask and dropping the rest. Its answer carries nothing: the parse is in the cache by then,
+and what crosses back is only that there is something new to look for. That cache, rather than the
+state it is asked through, is what keeps a file already read instant; the rest is in
+`agents/Panes.md`.
 
 **`compiled::pick` ranks by where the reader has been, newest first, with the symbol on screen at
 its head.** The head is the load-bearing part: nothing is recorded between two clicks in one

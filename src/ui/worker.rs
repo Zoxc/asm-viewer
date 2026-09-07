@@ -7,10 +7,11 @@
 //! [`use_worker`] is the **request/answer** shape: one thread for the app's lifetime, fed
 //! jobs and answering them one at a time. What is queued behind the job in hand is the
 //! `drain` policy's, which is where superseding lives and is per worker -- the analysis
-//! keeps the newest question of each kind, the build drops nothing, the scratchpad
-//! supersedes a save only by a job writing the same pad's package, and the language server
-//! keeps the last question of each consumer. Dropped **before** it is started and not
-//! after the fact, which is the whole point of doing it here.
+//! keeps the newest question of each kind, the source reader the newest of the one kind it
+//! has, the build drops nothing, the scratchpad supersedes a save only by a job writing the
+//! same pad's package, and the language server keeps the last question of each consumer.
+//! Dropped **before** it is started and not after the fact, which is the whole point of
+//! doing it here.
 //!
 //! [`stream`] is the **one-shot** shape: one question, worked once, answering with events
 //! until it has nothing more to say. Nothing has to arrange cancelling: the task taking

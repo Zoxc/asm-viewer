@@ -4,9 +4,10 @@
 //! **None of that is the UI thread's.** Reading a file and parsing it are the two things a
 //! source pane costs, and both used to run in `render`, so the frame that first drew a
 //! file paid for them -- which is what a reader felt between picking a file out of Ctrl+P
-//! and seeing it. [`use_source_reading`] moves them onto a worker of the app's own, the
-//! shape `use_analysis` has: one thread for the app's lifetime, a channel drained to its
-//! newest question, and a pane that draws what it has until the answer lands.
+//! and seeing it. [`use_source_reading`] moves them onto a worker of the app's own, in
+//! the app's one worker shape ([`use_worker`], `src/ui/worker.rs`): one thread for the
+//! app's lifetime, a queue drained to its newest question, and a pane that draws what it
+//! has until the answer lands.
 //!
 //! **A worker of its own and not the analysis one**, which is the seconds of DWARF work a
 //! click costs (`agents/Worker.md`): a file queued behind that would arrive long after the
@@ -264,9 +265,12 @@ pub(crate) fn use_source_reading(sourced: State<Sourced>) {
 
 /// The same, with the reading itself an argument.
 ///
-/// One thread for the app's lifetime and a queue drained to its newest question: a reader
-/// going down the file finder's list asks for one file per arrow press and wants only the
-/// last, and what they pressed past is dropped before it is started.
+/// [`use_worker`]'s shape (`src/ui/worker.rs`), with the drain that keeps the newest: a
+/// reader going down the file finder's list asks for one file per arrow press and wants
+/// only the last, and what they pressed past is dropped before it is started.
+///
+/// The answer carries nothing. The parse is in [`HIGHLIGHTED`] by the time it is sent, so
+/// what crosses back is only that there is something new to look for.
 ///
 /// The work is an argument so that a test can hold it still: what the pane draws while a
 /// file is being read cannot be asserted against a reader that answers as fast as it is
@@ -275,50 +279,26 @@ pub(crate) fn use_source_reading_with(
     sourced: State<Sourced>,
     work: impl Fn(&SourceAsk) + Send + 'static,
 ) {
-    let requests = use_hook(move || {
-        let (requests, jobs) = async_channel::unbounded::<SourceAsk>();
-        let (answered, answers) = async_channel::unbounded::<SourceAsk>();
-
-        // A `std::thread` and not a spawned task: this reads a file off disk and parses
-        // it, and freya's executor is the UI thread.
-        // Named, so that a panic on it says which worker died (`crate::panics`).
-        let started = std::thread::Builder::new()
-            .name("the source reader".to_owned())
-            .spawn(move || {
-                while let Ok(ask) = jobs.recv_blocking() {
-                    // Everything the reader moved past while the last file was read,
-                    // dropped without being started rather than after the fact. One kind
-                    // of question, so the newest is the last of them.
-                    let ask = std::iter::from_fn(|| jobs.try_recv().ok())
-                        .last()
-                        .unwrap_or(ask);
-                    work(&ask);
-                    // A send that fails is the app shutting down.
-                    if answered.send_blocking(ask).is_err() {
-                        return;
-                    }
-                }
-            });
-        if let Err(error) = started {
-            log::warn!("the source reader could not be started: {error}");
-        }
-
-        spawn(async move {
+    let requests = use_worker(
+        "the source reader",
+        // Everything the reader moved past while the last file was read, dropped without
+        // being started rather than after the fact. One kind of question, so the newest
+        // is the last of them.
+        |ask, queued, _| vec![std::iter::from_fn(queued).last().unwrap_or(ask)],
+        move |ask| {
+            work(&ask);
+            Some(())
+        },
+        move |(), _| {
             let mut sourced = sourced;
-            while answers.recv().await.is_ok() {
-                // The parse is in the cache; this is the write that has the pane look
-                // there again. Bound before the write, the peek being a read.
-                let answered = sourced.peek().answers.wrapping_add(1);
-                sourced.write().answers = answered;
-            }
-        });
+            // The parse is in the cache; this is the write that has the pane look there
+            // again. Bound before the write, the peek being a read.
+            let answered = sourced.peek().answers.wrapping_add(1);
+            sourced.write().answers = answered;
+        },
+    );
 
-        requests
-    });
-
-    use_source_asking(sourced, move |ask| {
-        let _ = requests.try_send(ask);
-    });
+    use_source_asking(sourced, move |ask| requests.send(ask));
 }
 
 /// Ask for whatever the pane is showing and has not been read: the effect both readers
