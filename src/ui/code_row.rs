@@ -8,11 +8,12 @@
 //! node to it, so the link keeps its own hover, cursor and press, and to the text engine it
 //! is one unit of the row (`Piece::Inline`). The character selection is the app's own
 //! (`src/chars.rs`); freya supplies one primitive a paragraph has anyway, the skia
-//! hit-test behind its [`ParagraphHolder`], which answers both where a pointer is
-//! (`caret_col`) and where a column is (`caret_x`). No editor, no rope -- and no engine
-//! paint either: the highlight and the caret are rects of the row's own, placed by the
-//! column's x and the row's height on the device pixel grid, where the engine's highlight
-//! is the glyphs' tight box and leaves a seam between one row's and the next's.
+//! hit-test behind its [`ParagraphHolder`], wrapped at the head of this file as the probes
+//! that answer where a pointer is (`caret_col`), where a column is (`caret_x`) and where a
+//! word ends (`word_at`). No editor, no rope -- and no engine paint either: the highlight
+//! and the caret are rects of the row's own, placed by the column's x and the row's height
+//! on the device pixel grid, where the engine's highlight is the glyphs' tight box and
+//! leaves a seam between one row's and the next's.
 //!
 //! **A link is drawn one way wherever it is** -- the wash, the rounded corner, the rule
 //! under it and the lit colour of `link_chrome` -- and is drawn as one only while a press
@@ -52,6 +53,7 @@ use std::cell::Cell;
 use std::rc::Weak;
 
 use freya::elements::paragraph::ParagraphHolderInner;
+use freya::engine::prelude::{RectHeightStyle, RectWidthStyle};
 
 use super::*;
 
@@ -80,6 +82,73 @@ fn set_icon(icon: CursorIcon) {
             Cursor::set(icon);
         }
     });
+}
+
+/// The column of a laid-out paragraph under a point `x`, `y` in its own logical
+/// coordinates, in the UTF-16 units the text engine counts in. A point left of the text is
+/// column 0 and one right of it is the end. `None` before the paragraph has been laid out,
+/// which is a holder freya's own code unwraps and which a press cannot reach, the row
+/// having nothing to press on until it is drawn.
+fn caret_col(holder: &ParagraphHolder, x: f32, y: f32) -> Option<usize> {
+    let inner = holder.0.borrow();
+    let inner = inner.as_ref()?;
+    let scale = inner.scale_factor as f32;
+    let at = inner
+        .paragraph
+        .get_glyph_position_at_coordinate(((x * scale) as i32, (y * scale) as i32));
+    Some(at.position.max(0) as usize)
+}
+
+/// Where column `col` of a laid-out paragraph is, in logical pixels from its left edge: the
+/// left of the character there, or the right of the last one for the column past the end,
+/// and 0 for an empty text. `None` before layout, as [`caret_col`] is.
+fn caret_x(holder: &ParagraphHolder, col: usize) -> Option<f32> {
+    let inner = holder.0.borrow();
+    let inner = inner.as_ref()?;
+    let scale = inner.scale_factor as f32;
+    let rects = |from: usize, to: usize| {
+        inner
+            .paragraph
+            .get_rects_for_range(from..to, RectHeightStyle::Tight, RectWidthStyle::Tight)
+    };
+    let x = match rects(col, col + 1).first() {
+        Some(text) => text.rect.left,
+        None => match col
+            .checked_sub(1)
+            .and_then(|before| rects(before, col).first().map(|text| text.rect.right))
+        {
+            Some(right) => right,
+            None => 0.0,
+        },
+    };
+    Some(x / scale)
+}
+
+/// The word around column `col` of a laid-out paragraph, as the text engine divides
+/// words; `None` before layout, as [`caret_col`] is.
+fn word_at(holder: &ParagraphHolder, col: usize) -> Option<(usize, usize)> {
+    let inner = holder.0.borrow();
+    let inner = inner.as_ref()?;
+    let range = inner
+        .paragraph
+        .get_word_boundary(col.min(u32::MAX as usize) as u32);
+    Some((range.start, range.end))
+}
+
+/// The right button's half of a `pointer_down`, as the press a context menu opens from,
+/// or `None` for any other button.
+///
+/// freya's `on_secondary_down` is `on_pointer_down` under another name, and an element
+/// keeps one handler per event, so a row that picks itself out on the down and opens a
+/// menu on the down has to do both in one handler -- the later of the two would replace
+/// the earlier and the press would pick out nothing (`notes/upstream/freya.md`).
+fn secondary(e: Event<PointerEventData>) -> Option<Event<PressEventData>> {
+    e.try_map(|data| match data {
+        PointerEventData::Mouse(mouse) if mouse.button == Some(MouseButton::Right) => {
+            Some(PressEventData::Mouse(mouse))
+        }
+        _ => None,
+    })
 }
 
 /// What a row's text is: the pieces the clipboard sees, the spans the paragraph draws,

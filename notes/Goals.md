@@ -373,7 +373,7 @@ leaves this list when it is. That is a move made on request, like everything els
 
 - [ ] Count a drawn row's columns in bytes as well, which needs skia to. `src/chars.rs`
   measures a place as a row and a column in UTF-16 units because the three calls behind the
-  pointer are skia's — `caret_col`, `caret_x` and `word_at` (`src/ui/marks.rs`) are
+  pointer are skia's — `caret_col`, `caret_x` and `word_at` (`src/ui/code_row.rs`) are
   `get_glyph_position_at_coordinate`, `get_rects_for_range` and `get_word_boundary` — and skia
   indexes a paragraph in UTF-16 code units. So `code_row::utf16_slice` and the `len_utf16`
   loops in `chars.rs` stay, and the source pane converts each way as it draws and as it is

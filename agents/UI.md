@@ -86,7 +86,8 @@ language server is running, and what would stop it -- `agents/Lsp.md`); `SplitRa
 **A context lives with the mechanism that owns it, and so does the bundle that groups it.**
 `src/ui/state.rs` holds only what belongs to no one mechanism -- the objects, the store, the
 project, the window -- and each of the others sits beside the code it is about: `Marked` in
-`marks.rs`, `Doors` in `focus.rs`, the `Pad*` family in `pad.rs`.
+`marks.rs`, `Doors` in `focus.rs`, `Shift`/`Ctrl`/`Alt` in `keys.rs`, the `Pad*` family in
+`pad.rs`.
 
 **A group the code passes around is a context of its own**, so a state added to it is a field
 and not a parameter threaded through every function of the group. Beside `Open` there are three,

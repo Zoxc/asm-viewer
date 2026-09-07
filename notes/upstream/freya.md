@@ -19,7 +19,7 @@ it installs a `pointer_down` handler that forwards the right button), and an ele
 one handler per event, so an element given both keeps whichever was set last. The two code
 panes' rows set both -- the left button's down starts the picked-out run, the right's opens
 the menu -- and the row's run silently never started. **Cost:** one `on_pointer_down`
-doing both, the right button mapped by `secondary` (`ui/marks.rs`);
+doing both, the right button mapped by `secondary` (`ui/code_row.rs`);
 `picking_out_a_row_below_a_separator_lights_that_rows_own_branch` presses a row and would
 have caught it.
 
@@ -160,7 +160,7 @@ then the modifiers, so a modifier's own press and release arrive over the mask a
 them. What it cost here: a Caps Lock KDE has made into Ctrl (`caps:ctrl_modifier`, which keeps
 the keysym and adds a Control *action*, unlike `ctrl:nocaps`) names itself Caps Lock over a mask
 without Ctrl on the way down and with Ctrl on the way up, so the app's Ctrl was never set by the
-press and left set by the release. `ModifierKeys` (`src/ui/marks.rs`) learns such a Caps Lock from
+press and left set by the release. `ModifierKeys` (`src/ui/keys.rs`) learns such a Caps Lock from
 its first release. The fix upstream is either forwarding `ModifiersChanged` as a global event or
 carrying the current modifiers on pointer events. Not reported yet.
 

@@ -224,16 +224,18 @@ command.
   project's directory under it, and the one worker that walks them and picks them out. The
   walked files never reach the UI thread; the rows a query picked out are what cross.
 - `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes,
-  `Doors` (what every door out of one place into another is given), and where each side of a
-  tab was left.
+  `Doors` (what every door out of one place into another is given), what each tab keeps of
+  where it was left and of its runs, and the effects that spend a landing.
 - `src/ui/follow.rs` — following a name in the source to what it names: the question put to
   the language server, and the place its answer opens, with the caret it lands on.
 - `src/ui/linking.rs` — which names in the file the Source pane is showing are links: what
   it has asked the server, what came back, and why the asking waits until the server is
   ready; and which files the server has been told the reader has open, which is what makes
   it answer about them.
-- `src/ui/marks.rs` — the run of rows selected in each pane, the pair it lights on the other
-  side, the scroll it owes, and what Ctrl+C copies.
+- `src/ui/keys.rs` — whether Shift, Ctrl and Alt are held, kept by the root's global key
+  handlers because a pointer event carries no modifiers.
+- `src/ui/marks.rs` — the run picked out in each pane, the pair it lights on the other
+  side, the scroll it owes, the keyboard's moves over it, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file read and parsed off the UI thread: the reader's worker
   thread, the cache its answers land in, and what the pane draws until one does.
 - `src/ui/hovering.rs` — the name the pointer is on in the source, the question the server is
@@ -263,7 +265,8 @@ command.
 - `src/ui/files_view.rs` — the Files view: the project's directory as a tree, a file's row
   opening it as source and its menu offering it as a binary.
 - `src/ui/code_row.rs` — one row of a code listing as all three listings draw theirs: the
-  shared width, wash and pointer handlers, and the one paragraph a row's text is.
+  shared width, wash and pointer handlers, the one paragraph a row's text is, and the
+  hit-tests that ask it where a pointer is and where a column is.
 - `src/ui/list_box.rs` — the box a code listing is drawn in, one box for all three of them:
   the hooks a list opens with and the rect it closes around its rows.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.

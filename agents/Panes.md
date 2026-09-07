@@ -434,8 +434,9 @@ first, though a label's row is a row of no file. It is the one link Ctrl decides
 anything else it could mean: the rows the symbol is compiled into are the rows under the label, so a
 plain press has nowhere to go. Which is why the label is drawn as a link only while Ctrl is held.
 Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift` and `Alt`, all three kept by
-`ModifierKeys`), a freya pointer event carrying no modifiers. A Caps Lock the desktop has made
-into Ctrl names itself Caps Lock in every event, so it is learnt from its first release
+`ModifierKeys` in `ui/keys.rs`), a freya pointer event carrying no modifiers. A Caps Lock the
+desktop has made into Ctrl names itself Caps Lock in every event, so it is learnt from its first
+release
 (`ModifierKeys`' doc, `notes/upstream/freya.md`). **The third door is the address an instruction
 goes to when nothing names it**: a call into the middle of a function, a call to a function a
 stripped image has no symbol for, a jump out of the symbol in a listing with no row for it
@@ -932,7 +933,7 @@ highlight in, and a `Line` is the row's text in pieces so a column into what is 
 into what is copied: `instruction_line`, `source_line` and `code_line` are built from the same
 splits the rows draw from, and `asm_line` is the address plus `instruction_line`. freya supplies
 exactly the two primitives a paragraph has anyway: the hit-test behind its `ParagraphHolder`
-(`caret_col`, `word_at`, in `ui/marks.rs`; `None` before layout where freya's own code would unwrap)
+(`caret_col`, `word_at`, in `ui/code_row.rs`; `None` before layout where freya's own code would unwrap)
 and the highlight paint (`highlights`, `text_select_bg`, `CursorMode::Expanded` so it fills the
 row). No `use_editable`, no rope of the listing: the editor's model wants one rope and a line per
 row, and an object's code is estimated rows that are counted afresh with every answer. **Gutter

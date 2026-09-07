@@ -106,6 +106,8 @@ mod hover_view;
 pub(crate) use hover_view::*;
 mod hovering;
 pub(crate) use hovering::*;
+mod keys;
+pub(crate) use keys::*;
 mod language;
 pub(crate) use language::*;
 mod linking;
