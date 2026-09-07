@@ -254,12 +254,13 @@ and only ever grows at the end. The lines are read off the disk there, since the
 nothing about the text: each file once, on the language worker with the ask -- a read blocks,
 and that is the thread that may block; a file that will not read leaves its references the
 number they already have. The panels draw one row too (`ui::place_row`), down to the line's
-text with the name marked in it (`search::drawn` cuts a long line for both, `marked_spans`
-marks both): a list of line numbers says where a name is used and not how. `Folding` is what
-is left of the difference -- which state a press on a file row writes its fold to, and
-whether a press on a place may refuse the path. The filter matches the file's path, applied
-where the rows are built rather than through `Filtered`'s memo -- that is for the thousands a
-line's symbols can be, and a name's references are tens.
+text with the name marked in it (`search::drawn` cuts a long line for both, `found_line`
+washes what matched in both): a list of line numbers says where a name is used and not how.
+`Folding` is what is left of the difference -- which state a press on a file row writes its
+fold to, whether a press on a place may refuse the path, and which panel's pick the row is
+drawn against. The filter matches the file's path, applied where the rows are built rather than
+through `Filtered`'s memo -- that is for the thousands a line's symbols can be, and a name's
+references are tens.
 
 **A place row opens through `open_source_place`** (`agents/Panes.md`), the arrival every door
 into a place in a source file makes, so a hit opens exactly as a reference does, down to the tab's
@@ -272,9 +273,16 @@ on the **match** and not just its line: a `Landing` carries the columns to selec
 makes them the row's `CharSelection` where a door naming no columns leaves a caret at column 0. So
 Ctrl+C there copies the match, `copy_text` preferring characters to rows. The columns are the
 *file's* line in UTF-16 units, counted before the line is trimmed for drawing and counted in units
-rather than bytes, or a multi-byte character ahead of the match would move it. The matched parts of
-the line are drawn **bold in `match_fg`** and not on a background: a span inside a paragraph carries
-a colour and a weight and no fill, so the selection's own highlight is not available here.
+rather than bytes, or a multi-byte character ahead of the match would move it. What matched is drawn
+as a **wash behind it**, `match_bg`'s desaturated green -- the paragraph's own highlight, since a
+span carries a colour and a weight and no fill of its own. It was a bold orange on the characters,
+which made a match a thing of its own rather than a place in a line and cut the row's text into
+three pieces to carry it; the wash leaves the text one piece and says the same thing over a
+picked-out row as over a plain one. **A filtered list marks the same way**: `Matcher::marks` hands
+back where the pattern is in a name, the panel compiles the filter once per render and shares it
+with the rows it builds (`Marking`), and each row washes what matched in the name it draws -- which
+is what says why a row is in a list that has been narrowed. The marks are byte ranges everywhere
+outside the text engine and UTF-16 units inside it, `marked_units` being the one place the two meet.
 
 **Ctrl+Shift+F is one more line in the key handler the root already has** (`root_key_down`), never a
 second one: an element keeps one handler per event name, so a second `on_global_key_down` would
@@ -443,18 +451,54 @@ closing the file clears one. So does the **folder dialog** behind "Choose...": t
 portal it is not modal to the window, the app keeps taking input while it is up, and a reader who
 raised another tab meanwhile got the directory they had before and nothing to say why.
 
-**Every list row is one frame.** `list_row` (`src/ui/parts.rs`) is the chrome the ten
-sidebar-style rows open with: the height the scroll view over them uses as its `item_size`, the
-padding and the spacing their columns are laid on, and the three-way background -- picked out, under
-the pointer, or nothing. A row appends its own press, its menu and its children, and keeps its own
-hover state, since a hook may not run in a plain function and there is no `.hover()` pseudo-state to
-read instead. The ten copies had drifted into two paddings, two spacings and two hover colours, and
-folding them together settled each. The two washes looked like one per pane ground -- the green over
-`pane_bg`, the cream over `symbol_pane_bg` -- but the Locations panel drew its reference rows in one
-and its location rows in the other on the same ground, which is what makes it drift and not a rule.
-So one wash lights a row wherever it is drawn, and it is the green: a step from the pane's white and
-from the symbol pane's cream alike, where the cream is barely a step from the white.
-`dead_list_row` is the same frame with no hover, for the bookmark whose place does not resolve.
+**Every list row is one frame.** `list_row` (`src/ui/parts.rs`) is the chrome the ten sidebar-style
+rows open with: the height the scroll view over them uses as its `item_size`, the padding and the
+spacing their columns are laid on, and the three-way background -- picked out, under the pointer, or
+nothing. A row appends its own press, its menu and its children, and keeps its own hover state,
+since a hook may not run in a plain function and there is no `.hover()` pseudo-state to read
+instead. The ten copies had drifted into two paddings, two spacings and two hover colours, and
+folding them together settled each. The two washes looked like one per pane ground -- one over
+`pane_bg`, another over the cream four of the panels sat on -- but the Locations panel drew its
+reference rows in one and its location rows in the other on the same ground, which is what makes it
+drift and not a rule. So one wash lights a row wherever it is drawn. The grounds went next: **every
+panel is on `pane_bg`** and the cream is out of the palette, and no caller names a surface any more
+-- `use_filter_pane` and `use_search_pane` took one as an argument, which is what let the three tabs
+of one sidebar disagree. `dead_list_row` is the same frame with no hover, for the bookmark whose
+place does not resolve.
+
+**What a list lights is its own pick.** A lit row used to be one fact -- the row *is* what the tab
+on screen shows -- so four lists lit one row each, four lit none, and there was no way to point at a
+row without opening it. **Alt+press picks a row out and opens nothing**, the same Alt that says a
+press on a link in a code row is not a door, and that needs a selection the list owns: nothing about
+the tabs has moved for one to be derived from. `src/ui/picks.rs` is the whole of it. A list draws
+its own pick where it has one and the row the tab shows where it has not; a press in the list is the
+only thing that moves that list's pick, so a tab switched to or a link followed leaves it where the
+reader put it. The cost is stated rather than hidden: a list that has been pressed in no longer
+follows the tabs. A `Pick` is one enum over what the eight lists each call a row -- an object, a
+symbol, a visit, a bookmark, a path, a place in a file -- compared by `Arc` pointer identity where
+there is an `Arc` behind it, and the table is one per `Panel`, held at the root because a panel that
+is not its dock tab's is unmounted. **The keyboard picks the colour**: the list holding it draws its
+pick in `text_select_bg`, the code panes' own selection, and every other list draws its in
+`selected_bg`'s grey, so what the next key would act on is the one thing in blue. What answers for a
+list is the focusable rows box its pane already mints for Ctrl+F, handed down as `RowsBox`; the
+Files tree, which has no filter bar to mint one, grew one of its own. The hover is a grey too, and
+the palette test holds it fainter than either -- the pointer passing over a row must not read as the
+reader having chosen it. The file finder is not a panel and keeps its own pick, its keyboard row
+being one already: an Alt+press there moves the arrows' row and leaves the panel up. **The pick is
+the list's cursor**, which is what makes a list something the keyboard can be used in at all: Up and
+Down move it, the list scrolling to keep it in view, and Enter opens it the way pressing its row
+would. What each list answers with is a `ListKeys` -- how many rows, which row is at a place, and
+what pressing the row at a place does -- built by the panel, since the panel is the only thing that
+knows its rows, and answered once on the box they are drawn in. Two closures and not a `Vec<Pick>`:
+the Symbols list is 115k rows. The place a pick was made at is remembered with it for the same
+reason, finding one again being a walk of the whole list per keystroke; a place goes stale when the
+list moves under it, which the keys notice and start again from the end the arrow came from.
+**Opening a tab hands it the keyboard**, however the row was opened: a reader who has put a listing
+on screen is reading it, so the next key is answered there and not in the list behind it, and the
+pick left behind goes grey saying so. Which is why acting on a row answers with a `Pressed`: a row
+that only folded a group opened nothing and keeps the keyboard, as does a press with Alt held, which
+opens nothing at all -- and those are what leave a list holding the keyboard for its arrows and its
+Enter to be used in.
 
 **Tooltips** are how a cut row is read, so `cut_tooltip` mounts nothing where the name fitted: a
 tooltip repeating what is already on screen is noise the pointer drags down the list. What decides

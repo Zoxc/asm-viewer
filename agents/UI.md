@@ -328,19 +328,34 @@ been what did that before -- it wraps a header in a `DropZone` around a
 asks whether it was a **double press**
 (`EventsCombos::pressed`, freya's own count of 500 ms and 5 px), which promotes the temporal tab.
 The × still has to `stop_propagation`, now so the press does not reach the chip under it and switch
-to the tab being closed -- and the same `TabClose` ends every row of the tab list, where the press it
-must not reach is the row's own. A press on a chip also **takes the keyboard into the tab**
-(`ask_for_keyboard`), so what the reader chose is what the arrow keys and Ctrl+C are about; the ask
-is spent by an effect at the root rather than by the press, because the box to focus is a pane the
-press has only just mounted. The temporal tab is told from one that stays by its name being **italic**
-(`font_slant`) and by nothing else, the chip reading the flag out of the table beside the document.
-Every tab has a ×, pages included, because there is a way back to one now: the **menu at the top
-left of the window** (`PagesButton`), which is the whole of it. It lists all three and marks the
-ones that are open rather than listing only the closed ones -- a menu whose rows come and go is one
-a reader has to read every time, where a list that is always the same three is one they learn -- and
-picking an open one shows it. A page opens **beside the tab on screen**, the way anything else the
-reader opens does. What a closed page was showing is state at the root of the app, so closing one
-loses nothing: a build or a run it started goes on, and it comes back as it was.
+to the tab being closed -- and the same `TabClose` ends every row of the tab list, where the press
+it must not reach is the row's own. A press on a chip also **takes the keyboard into the tab**
+(`ask_for_keyboard`), as opening a row of any list does (`agents/Sidebar.md`), so what the reader
+chose is what the arrow keys and Ctrl+C are about. The ask is spent by an effect at the root rather
+than by the press, because the box to focus is a pane the press has only just mounted -- and it is
+**kept** until there is one: a tab opened from a list draws a sentence until the worker answers, and
+a pane with nothing to show registers no box at all, so an ask spent on the `None` it found in that
+pass was every ask a row ever made. The effect reads the boxes as well as the ask, which is what
+wakes it when the pane arrives. What keeps a kept ask from being spent on somebody else's pane later
+is that putting the keyboard in a list by hand drops it (`unask_keyboard`). It is spent on **the
+pane that leads the tab on screen** (`leading`, shared with `DocumentBody` so the two cannot drift)
+and not on whichever box registered first: a pane holds its box for as long as it is mounted and the
+temporal tab's panes outlive the documents they draw, so the first box registered is the pane that
+led whichever tab opened first -- which is how a reader who opened a file and then a symbol had the
+keyboard put in the file beside the listing they had just asked for. And spending an ask **puts a
+caret in that pane** where it has no run of its own (`mark_top`): nothing was clicked in it, and a
+listing with no run draws no caret, so the arrows, Home, End and Ctrl+C would have nothing to act on
+and a pane that had just been handed the keyboard would read as though it had not. Only the ask does
+this, never a press -- a press in a pane says where the caret goes, including the press under the
+last row that deliberately picks nothing out. The temporal tab is told from one that stays by its
+name being **italic** (`font_slant`) and by nothing else, the chip reading the flag out of the table
+beside the document. Every tab has a ×, pages included, because there is a way back to one now: the
+**menu at the top left of the window** (`PagesButton`), which is the whole of it. It lists all three
+and marks the ones that are open rather than listing only the closed ones -- a menu whose rows come
+and go is one a reader has to read every time, where a list that is always the same three is one
+they learn -- and picking an open one shows it. A page opens **beside the tab on screen**, the way
+anything else the reader opens does. What a closed page was showing is state at the root of the app,
+so closing one loses nothing: a build or a run it started goes on, and it comes back as it was.
 
 **The tab on screen wears a rule along its top**, two pixels of it, and the colour says where the
 keyboard is: the source gutter's own `compiled_fg` purple while it is inside the tab, and

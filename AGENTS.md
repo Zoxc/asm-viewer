@@ -302,8 +302,10 @@ command.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
 - `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes.
+- `src/ui/picks.rs` — the row each list has picked out: what a pick is, the one per panel,
+  the Alt that picks without opening, and which of two colours a picked row wears.
 - `src/ui/place_row.rs` — the row the Search and Locations panels both draw: a file, or one
-  place found in it, and the two things the panels differ in.
+  place found in it, and the three things the panels differ in.
 - `src/ui/place_target.rs` — the place a diagnostic names, drawn as a target: the one
   component the Scratchpad pane and the Project view both press to get there, with the
   press handed in.

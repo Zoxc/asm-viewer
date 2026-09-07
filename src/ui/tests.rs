@@ -617,6 +617,13 @@ macro_rules! project_wiring {
         $runner.provide_root_context(|| Ctrl(State::create(false)));
         // And whether it is a door at all: Alt held says it is not.
         $runner.provide_root_context(|| Alt(State::create(false)));
+        // Likewise: every list row reads its own list's pick out of it, and writes it
+        // when it is pressed.
+        $runner.provide_root_context(|| Picks(State::create(HashMap::new())));
+        // Likewise: the root spends an ask for the keyboard on the caret the pane it hands
+        // it to wants. Provided and not returned -- a harness about the runs themselves
+        // provides its own after this one and hands that back (`listing_states!`).
+        $runner.provide_root_context(|| Marked(State::create(Marks::default())));
         // Likewise: a recent project's row hands it to the switch, which is one of the two
         // places a file can be moved aside.
         $runner.provide_root_context(|| Rescued(State::create(Vec::new())));
@@ -2289,10 +2296,14 @@ fn a_tab_is_dragged_along_the_bar_to_move_it() {
 /// puts the keyboard inside the tab, and nothing else here can take it.
 fn marker_harness() -> impl IntoElement {
     let a11y = use_a11y();
-    use_tab_keyboard(a11y);
+    use_tab_keyboard(Some(Pane::Assembly), a11y);
     // What `app()` calls at the root: the press on a chip asks for the keyboard, and this
     // is what spends the ask once the tab has mounted what it has.
-    use_keyboard_asked(use_consume::<Keyboard>().0);
+    use_keyboard_asked(
+        use_consume::<Keyboard>().0,
+        use_open(),
+        use_consume::<Marked>().0,
+    );
 
     rect()
         .expanded()
@@ -4957,8 +4968,8 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
     settle(&mut test);
 
     // The row draws the line it is on, as a search hit's row does -- the file was read
-    // where the answer was taken -- cut into the name and what is around it, so the name
-    // can be marked.
+    // where the answer was taken. One piece and not three: what was matched is washed
+    // rather than recoloured, so it is not a cut in the text.
     let drawn = labels(&test);
     let line: Vec<String> = drawn
         .iter()
@@ -4968,7 +4979,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
         .collect();
     assert_eq!(
         line,
-        ["let n = ", "helper", "(1);"],
+        ["let n = helper(1);"],
         "the use's line is not drawn: {drawn:?}"
     );
 
@@ -6204,12 +6215,9 @@ fn the_row_lit_is_the_symbol_drawn_and_not_the_active_document() {
         .map(|(_, area)| area)
         .collect();
     assert_eq!(rows.len(), 2, "two rows are drawn");
-    let lit = |test: &TestingRunner| -> Vec<f32> {
-        test.find_many(|node, element| {
-            (element.style().background == Fill::Color(palette().selected_bg))
-                .then_some(node.layout().area.origin.y)
-        })
-    };
+    // In either colour a picked row is drawn in: this is about *which* row is lit, and
+    // nothing here has put the keyboard in the list, so its pick is the idle grey.
+    let lit = |test: &TestingRunner| -> Vec<f32> { picked_rows(test) };
     let holds = |row: &Area, y: f32| row.origin.y >= y && row.origin.y < y + list_row_height();
 
     // Nothing drawn: nothing lit, though a tab is active.
@@ -11613,16 +11621,15 @@ fn every_foreground_is_legible_on_its_own_surface() {
             );
         }
 
-        // The five the source pane has to itself, and the Search panel's mark, which is
-        // read on a sidebar row: a disassembly holds no strings, comments, attributes,
-        // types or call names, so these are only ever read on `pane_bg`.
+        // The five the source pane has to itself: a disassembly holds no strings,
+        // comments, attributes, types or call names, so these are only ever read on
+        // `pane_bg`.
         for (name, color) in [
             ("string_fg", palette.string_fg),
             ("comment_fg", palette.comment_fg),
             ("attribute_fg", palette.attribute_fg),
             ("type_fg", palette.type_fg),
             ("function_fg", palette.function_fg),
-            ("match_fg", palette.match_fg),
         ] {
             let ratio = contrast(color, palette.pane_bg);
             assert!(ratio >= 3.0, "{theme} {name} on pane_bg: {ratio:.2}");
@@ -11656,24 +11663,35 @@ fn every_foreground_is_legible_on_its_own_surface() {
             assert!(ratio >= 3.0, "{theme} {name} on server_bg: {ratio:.2}");
         }
 
-        // The chrome, on all three of the surfaces it is written over. `address_fg` is
-        // here as well as over the code panes above: it is the app's dim text everywhere,
-        // and the Assembly pane's bar draws a symbol's mangled spelling in it on
-        // `header_bg`.
-        for (name, color) in [
+        // The chrome, on the two plain surfaces it is written over. `address_fg` is here
+        // as well as over the code panes above: it is the app's dim text everywhere, and
+        // the Assembly pane's bar draws a symbol's mangled spelling in it on `header_bg`.
+        let chrome = [
             ("text_fg", palette.text_fg),
             ("icon_fg", palette.icon_fg),
             ("invalid_fg", palette.invalid_fg),
             ("address_fg", palette.address_fg),
-        ] {
+        ];
+        for (name, color) in chrome {
             for (surface, background) in [
                 ("pane_bg", palette.pane_bg),
                 ("header_bg", palette.header_bg),
-                ("symbol_pane_bg", palette.symbol_pane_bg),
             ] {
                 let ratio = contrast(color, background);
                 assert!(ratio >= 3.0, "{theme} {name} on {surface}: {ratio:.2}");
             }
+        }
+
+        // And the same chrome on a picked-out row, which a list draws its name and its
+        // dim second column straight through. The floor is the code's over the same wash
+        // and for the same reason: the selection is what says the row is the one being
+        // acted on, and a column that recedes on the pane recedes through it too.
+        for (name, color) in chrome {
+            let ratio = contrast(color, blend(palette.text_select_bg, palette.pane_bg));
+            assert!(
+                ratio >= 2.0,
+                "{theme} {name} on a picked-out row: {ratio:.2}"
+            );
         }
 
         // The × on a tab comes up to the interface text under the pointer, over a wash
@@ -11755,6 +11773,25 @@ fn every_wash_reads_against_the_pane_under_it() {
                 blend(palette.pair_bg, palette.asm_pane_bg),
             ),
             ("pair_edge", palette.pair_edge, palette.asm_pane_bg),
+            // The three washes a list row can take, all over the one ground a panel is
+            // on: the selection, where the keyboard is in the row's list; the grey it
+            // wears where the keyboard is elsewhere; and the grey under the pointer.
+            (
+                "text_select_bg over a list",
+                palette.text_select_bg,
+                palette.pane_bg,
+            ),
+            ("selected_bg", palette.selected_bg, palette.pane_bg),
+            ("row_hover_bg", palette.row_hover_bg, palette.pane_bg),
+            // What a search or a filter matched, over the ground its row is on and over
+            // the selection, a picked-out row's matches being marked the same as any
+            // other's.
+            ("match_bg", palette.match_bg, palette.pane_bg),
+            (
+                "match_bg over a picked row",
+                palette.match_bg,
+                blend(palette.text_select_bg, palette.pane_bg),
+            ),
             ("drop_preview_bg", palette.drop_preview_bg, palette.pane_bg),
             // Under the file finder's panel, falling on whatever the window was showing:
             // a pane and, where the finder is wider than one, the chrome around it.
@@ -11793,6 +11830,16 @@ fn every_wash_reads_against_the_pane_under_it() {
         // it edges: `step` of an opaque colour is its distance from the pane.
         let edge = step(palette.pair_edge, palette.asm_pane_bg);
         assert!(edge > pair + 10, "{theme} pair {pair} vs edge {edge}");
+
+        // A row under the pointer must not read as a row the reader chose. Both are
+        // greys once the keyboard has left the list, so the hover is held the fainter of
+        // the two -- and fainter than the selection a list holding the keyboard draws,
+        // which is the same claim in the list being typed in.
+        let hover = step(palette.row_hover_bg, palette.pane_bg);
+        let idle = step(palette.selected_bg, palette.pane_bg);
+        let live = step(palette.text_select_bg, palette.pane_bg);
+        assert!(hover < idle, "{theme} hover {hover} vs a pick {idle}");
+        assert!(hover < live, "{theme} hover {hover} vs a live pick {live}");
 
         // And the × has to be told apart from the tab under it, which is lit at the same
         // time: the two hovers differ by strength on the same surface, the close moving
@@ -18739,11 +18786,17 @@ fn history_menu_harness() -> impl IntoElement {
 /// The project's states plus the `Symbols` memo, built over the objects the way `app()`
 /// builds it.
 macro_rules! symbol_states {
+    // The closure `TestingRunner::new` wants, and the same over a runner already in
+    // hand -- which is what a test that provides something of its own beside these
+    // writes, a closure inside a closure inferring neither's runner.
     () => {
-        |runner: &mut _| {
-            let states = project_states!(runner);
+        |runner: &mut _| symbol_states!(runner)
+    };
+    ($runner:expr) => {{
+        {
+            let states = project_states!($runner);
             let objects = states.objects;
-            runner.provide_root_context(move || {
+            $runner.provide_root_context(move || {
                 Symbols(Memo::create(move || {
                     SymbolList(Arc::new(
                         objects
@@ -18761,7 +18814,7 @@ macro_rules! symbol_states {
             });
             states
         }
-    };
+    }};
 }
 
 /// Presses the one entry of the menu a right-click at `row` opened, and says what it read.
@@ -22525,7 +22578,7 @@ fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
         let area = label_area(test, text).unwrap_or_else(|| panic!("{text:?} is drawn"));
         let middle = area.origin.y + area.height() / 2.0;
         test.find_many(|node, element| {
-            (element.style().background == Fill::Color(palette().object_hover_bg))
+            (element.style().background == Fill::Color(palette().row_hover_bg))
                 .then(|| node.layout().area)
         })
         .into_iter()
@@ -24642,6 +24695,720 @@ fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
 }
 
 // ---------------------------------------------------------------------------------------
+// The pick each list keeps.
+
+/// Where every row drawn as picked out is, in either of the two colours one is drawn in:
+/// the selection, where the keyboard is in that row's list, and the neutral grey where it
+/// is not. By the row's top edge, which is what a test compares against a label's.
+fn picked_rows(test: &TestingRunner) -> Vec<f32> {
+    let (live, idle) = (palette().text_select_bg, palette().selected_bg);
+    test.find_many(move |node, element| {
+        let style = element.style();
+        (style.background == Fill::Color(live) || style.background == Fill::Color(idle))
+            .then_some(node.layout().area.origin.y)
+    })
+}
+
+/// The row at `y`, drawn live, idle or not at all.
+fn drawn_at(test: &TestingRunner, y: f32) -> Chosen {
+    let holds = |area: &Area| area.origin.y <= y && y < area.origin.y + list_row_height();
+    let washed = |color: Color| rects_with(test, color).iter().any(holds);
+    match (
+        washed(palette().text_select_bg),
+        washed(palette().selected_bg),
+    ) {
+        (true, _) => Chosen::Live,
+        (_, true) => Chosen::Idle,
+        _ => Chosen::No,
+    }
+}
+
+/// The Symbols list beside the History list: two lists on screen, and only one of them can
+/// hold the keyboard.
+fn two_lists_harness() -> impl IntoElement {
+    rect()
+        .expanded()
+        .horizontal()
+        .child(
+            rect()
+                .width(Size::percent(50.0))
+                .height(Size::fill())
+                .child(SymbolsPanel),
+        )
+        .child(
+            rect()
+                .width(Size::percent(50.0))
+                .height(Size::fill())
+                .child(HistoryPanel),
+        )
+}
+
+/// **Alt+press picks a row out and opens nothing**, where the same press without it opens
+/// the row and picks it out too. The row lights either way: what Alt takes away is the
+/// door, which is what it takes away from a link in a code row.
+///
+/// Headless because none of it is visible to a unit test: that the press reaches
+/// `Picking::press` at all, that the modifier is read from the `Alt` context and not from
+/// the pointer event, which carries none, and that the row draws itself from a pick it did
+/// not have before.
+#[test]
+fn alt_makes_a_press_pick_the_row_out_and_open_nothing() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, alt)) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| {
+            let states = symbol_states!(runner);
+            // After the macro, which provides an `Alt` of its own that this replaces.
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (states, alt)
+        },
+        1.,
+    );
+    let (mut objects, mut alt) = (states.objects, alt);
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    let row = centre_of(&test, "sum_to");
+    let top = label_area(&test, "sum_to")
+        .expect("the row is drawn")
+        .origin
+        .y;
+    assert_eq!(drawn_at(&test, top), Chosen::No, "a row is lit already");
+
+    alt.set(true);
+    settle(&mut test);
+    press_at(&mut test, row);
+    settle(&mut test);
+
+    assert!(states.open.active().is_none(), "Alt+press opened a tab");
+    assert_ne!(
+        drawn_at(&test, top),
+        Chosen::No,
+        "the row was not picked out"
+    );
+
+    // And the same press with the key up is the door it always was.
+    alt.set(false);
+    settle(&mut test);
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert!(
+        states.open.active().is_some(),
+        "a plain press opened nothing"
+    );
+}
+
+/// **A list's pick is where the reader put it.** With no pick the list lights the row the
+/// tab on screen shows, which is what every list did before there were picks; once a press
+/// has moved the pick, the list draws that row and goes on drawing it while the tabs move
+/// under it.
+#[test]
+fn a_lists_pick_is_its_own_and_the_tab_is_only_the_fallback() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let named = |name: &str| {
+        symbols
+            .iter()
+            .find(|symbol| symbol.data.name == name)
+            .unwrap_or_else(|| panic!("the fixture holds {name}"))
+            .clone()
+    };
+    let second = named("twice");
+
+    let (mut test, (states, alt)) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| {
+            let states = symbol_states!(runner);
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (states, alt)
+        },
+        1.,
+    );
+    let (mut objects, mut alt) = (states.objects, alt);
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    let top = |test: &TestingRunner, name: &str| {
+        label_area(test, name)
+            .unwrap_or_else(|| panic!("{name} is drawn"))
+            .origin
+            .y
+    };
+
+    // No pick: the row the tab shows is the one lit.
+    let opened = |test: &mut TestingRunner, symbol: &Symbol| {
+        open_document(
+            states.open,
+            states.visits,
+            Document::Assembly(Selection::Symbol(symbol.clone())),
+            Reach::Preview,
+        );
+        settle(test);
+    };
+    opened(&mut test, &second);
+    assert_ne!(drawn_at(&test, top(&test, "twice")), Chosen::No);
+    assert_eq!(drawn_at(&test, top(&test, "sum_to")), Chosen::No);
+
+    // Picked with Alt: the pick is lit and the tab, which has not moved, is not.
+    alt.set(true);
+    settle(&mut test);
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert_ne!(drawn_at(&test, top(&test, "sum_to")), Chosen::No);
+    assert_eq!(
+        drawn_at(&test, top(&test, "twice")),
+        Chosen::No,
+        "the tab's row is lit beside the pick"
+    );
+
+    // And the pick stays where it was put while the tabs move under it.
+    opened(&mut test, &named("add"));
+    assert_ne!(
+        drawn_at(&test, top(&test, "sum_to")),
+        Chosen::No,
+        "the pick followed the tab"
+    );
+    assert_eq!(drawn_at(&test, top(&test, "add")), Chosen::No);
+}
+
+/// **The keyboard picks the colour.** The list it is in draws its pick in the selection,
+/// and a list it is not in draws its pick in the grey -- so two panels side by side say
+/// which of them the next key would act on.
+#[test]
+fn the_list_with_the_keyboard_draws_its_pick_live_and_the_other_grey() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let file = Document::Source(Arc::from("/src/main.rs"));
+
+    let (mut test, (states, alt)) = TestingRunner::new(
+        two_lists_harness,
+        (600., 300.).into(),
+        |runner: &mut _| {
+            let states = symbol_states!(runner);
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (states, alt)
+        },
+        1.,
+    );
+    let (mut objects, mut alt) = (states.objects, alt);
+    objects.set(vec![object]);
+    // A place in the History list to press, made without touching either list.
+    open_document(states.open, states.visits, file, Reach::NewTab);
+    settle(&mut test);
+
+    // Alt throughout: what is being read here is the picks and not what they opened.
+    alt.set(true);
+    settle(&mut test);
+
+    let symbol_row = centre_of(&test, "sum_to");
+    press_at(&mut test, symbol_row);
+    settle(&mut test);
+    let symbol_top = label_area(&test, "sum_to")
+        .expect("the row is drawn")
+        .origin
+        .y;
+    assert_eq!(
+        drawn_at(&test, symbol_top),
+        Chosen::Live,
+        "the list just pressed in does not hold the keyboard"
+    );
+
+    // The keyboard moves to the other list, and the first goes grey without losing its
+    // place.
+    let history_row = centre_of(&test, "main.rs");
+    press_at(&mut test, history_row);
+    settle(&mut test);
+    assert_eq!(
+        drawn_at(&test, symbol_top),
+        Chosen::Idle,
+        "the list the keyboard left is still drawn live"
+    );
+    let history_top = label_area(&test, "main.rs")
+        .expect("the row is drawn")
+        .origin
+        .y;
+    assert_eq!(drawn_at(&test, history_top), Chosen::Live);
+}
+
+/// Every paragraph drawn with something washed in it: the text it holds, and the runs of
+/// that text the wash is over, in the UTF-16 units freya takes them in.
+fn marked_runs(test: &TestingRunner) -> Vec<(String, Vec<(usize, usize)>)> {
+    use freya::elements::paragraph::ParagraphElement;
+    use std::any::Any;
+
+    test.find_many(|node, _element| {
+        (node.element().as_ref() as &dyn Any)
+            .downcast_ref::<ParagraphElement>()
+            .filter(|paragraph| !paragraph.highlights.is_empty())
+            .map(|paragraph| {
+                (
+                    paragraph
+                        .spans
+                        .iter()
+                        .map(|span| span.text.to_string())
+                        .collect::<String>(),
+                    paragraph.highlights.clone(),
+                )
+            })
+    })
+}
+
+/// **A filtered row marks what the filter matched in it**, which is what says why the row
+/// is in a list that has been narrowed. The mark is the paragraph's own wash and not a
+/// colour on the characters, so the name is one piece of text either way.
+#[test]
+fn a_filtered_row_marks_what_the_filter_matched() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, states) =
+        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let mut objects = states.objects;
+    objects.set(vec![object]);
+    settle(&mut test);
+    assert!(
+        marked_runs(&test).is_empty(),
+        "a row is marked with nothing typed"
+    );
+
+    // Through the box, as a reader reaches it: a press on a row puts the keyboard on the
+    // rows and Ctrl+F takes it from there into the box.
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("um_t");
+    settle(&mut test);
+
+    let marked = marked_runs(&test);
+    assert!(
+        marked.contains(&("sum_to".to_owned(), vec![(1, 5)])),
+        "the row did not mark what the filter matched: {marked:?}"
+    );
+}
+
+/// The Symbols list over a stand-in for the tab's pane: a box the keyboard can be in,
+/// registered as a real pane registers itself, and the ask spent as `app()` spends it.
+fn list_and_pane_harness() -> impl IntoElement {
+    let a11y = use_a11y();
+    use_tab_keyboard(Some(Pane::Assembly), a11y);
+    use_keyboard_asked(
+        use_consume::<Keyboard>().0,
+        use_open(),
+        use_consume::<Marked>().0,
+    );
+
+    rect()
+        .expanded()
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .child(SymbolsPanel),
+        )
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(40.0))
+                .a11y_id(a11y)
+                .a11y_focusable(true)
+                .on_pointer_down(move |_| a11y.request_focus())
+                .child(label().text("the pane")),
+        )
+}
+
+/// Two boxes the keyboard can be in, registered **source first**: the order the panes of a
+/// source-driven tab register in, and the order they keep for as long as they are mounted.
+fn two_panes_harness() -> impl IntoElement {
+    let (source, assembly) = (use_a11y(), use_a11y());
+    use_keyboard_asked(
+        use_consume::<Keyboard>().0,
+        use_open(),
+        use_consume::<Marked>().0,
+    );
+
+    rect()
+        .expanded()
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(120.0))
+                .child(SymbolsPanel),
+        )
+        .child(SideBox {
+            pane: Pane::Source,
+            a11y: source,
+        })
+        .child(SideBox {
+            pane: Pane::Assembly,
+            a11y: assembly,
+        })
+}
+
+/// A pane as far as the keyboard is concerned, saying whether it has it.
+#[derive(Clone, PartialEq)]
+struct SideBox {
+    pane: Pane,
+    a11y: AccessibilityId,
+}
+
+impl Component for SideBox {
+    fn render(&self) -> impl IntoElement {
+        let (pane, a11y) = (self.pane, self.a11y);
+        use_tab_keyboard(Some(pane), a11y);
+        let said = match (pane, a11y.is_focused()) {
+            (Pane::Source, true) => "source has it",
+            (Pane::Source, false) => "source has not",
+            (Pane::Assembly, true) => "assembly has it",
+            (Pane::Assembly, false) => "assembly has not",
+        };
+
+        rect()
+            .width(Size::fill())
+            .height(Size::px(40.0))
+            .a11y_id(a11y)
+            .a11y_focusable(true)
+            .child(label().text(said.to_owned()))
+    }
+}
+
+/// **A pane handed the keyboard has a caret put in it.** Nothing was clicked in it -- a
+/// row of a list opened the tab -- and a listing with no run draws no caret, so the arrows,
+/// Home, End and Ctrl+C would have nothing to act on and the pane would read as though the
+/// keyboard were somewhere else, which is what a reader sees as the tab not being focused.
+/// A door that landed on a place keeps the place it landed on.
+#[test]
+fn a_pane_handed_the_keyboard_gets_a_caret_in_it() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, marked)) = TestingRunner::new(
+        two_panes_harness,
+        (300., 400.).into(),
+        |runner: &mut _| {
+            let states = symbol_states!(runner);
+            // After the macro, which provides a `Marked` of its own that this replaces.
+            let marked = runner
+                .provide_root_context(|| Marked(State::create(Marks::default())))
+                .0;
+            (states, marked)
+        },
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![object]);
+    settle(&mut test);
+    assert!(
+        marked.peek().of(Pane::Assembly).is_none(),
+        "a caret before anything was opened"
+    );
+
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    let caret = marked
+        .peek()
+        .of(Pane::Assembly)
+        .clone()
+        .expect("the pane the keyboard went to has no caret in it");
+    assert_eq!(caret.chars.rows(), 0..=0, "the caret is not at the top");
+    assert!(caret.chars.is_empty(), "the caret picked characters out");
+}
+
+/// **The ask is spent on the pane that leads the tab**, and not on whichever box happened
+/// to register first. A pane keeps its box for as long as it is mounted and the temporal
+/// tab's panes outlive the documents they draw, so the first box registered is the pane
+/// that led whichever tab opened first -- which is how a reader who opened a file and then
+/// a symbol had the keyboard put in the file beside the listing they had just asked for.
+#[test]
+fn the_ask_goes_to_the_pane_that_leads_the_tab() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, keyboard)) = TestingRunner::new(
+        two_panes_harness,
+        (300., 400.).into(),
+        |runner: &mut _| {
+            let states = symbol_states!(runner);
+            // After the macro, which provides a `Keyboard` of its own that this replaces.
+            let keyboard = runner
+                .provide_root_context(|| Keyboard(State::create(Keys::default())))
+                .0;
+            (states, keyboard)
+        },
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    // A symbol is an assembly-driven tab, so the assembly side leads it -- and it is the
+    // second box, the source pane having registered first.
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"assembly has it".to_owned()),
+        "the leading pane did not take the keyboard: {drawn:?}"
+    );
+    assert!(drawn.contains(&"source has not".to_owned()), "{drawn:?}");
+
+    // And a file is a source-driven tab, so the source side leads that one.
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(Arc::from("/src/main.rs")),
+        Reach::NewTab,
+    );
+    // Asked for as a press on the tab's chip asks for it.
+    ask_for_keyboard(keyboard);
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"source has it".to_owned()), "{drawn:?}");
+}
+
+/// The same two, over a pane that mounts late: what the app does, a tab opening before the
+/// worker has anything for its assembly side, so the pane draws a sentence and registers no
+/// box until it has a listing.
+fn late_pane_harness() -> impl IntoElement {
+    let a11y = use_a11y();
+    use_keyboard_asked(
+        use_consume::<Keyboard>().0,
+        use_open(),
+        use_consume::<Marked>().0,
+    );
+    let mounted = use_consume::<PaneMounted>().0;
+
+    rect()
+        .expanded()
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .child(SymbolsPanel),
+        )
+        .maybe(mounted(), move |body| body.child(LatePane { a11y }))
+}
+
+/// Whether the pane below is drawn yet, which a test writes when the worker would have
+/// answered.
+#[derive(Clone, Copy)]
+struct PaneMounted(State<bool>);
+
+/// A pane as far as the keyboard is concerned: it registers its box when it mounts, and
+/// takes it away with it.
+#[derive(Clone, PartialEq)]
+struct LatePane {
+    a11y: AccessibilityId,
+}
+
+impl Component for LatePane {
+    fn render(&self) -> impl IntoElement {
+        let a11y = self.a11y;
+        use_tab_keyboard(Some(Pane::Assembly), a11y);
+
+        rect()
+            .width(Size::fill())
+            .height(Size::px(40.0))
+            .a11y_id(a11y)
+            .a11y_focusable(true)
+            .on_pointer_down(move |_| a11y.request_focus())
+            .child(label().text("the pane"))
+    }
+}
+
+/// **An ask outlives the render that made it.** A row opens a tab whose pane has nothing to
+/// draw yet -- the worker has not answered -- so there is no box to focus in the pass the
+/// press ran in. The ask is not spent on nothing: it is spent when the pane arrives.
+#[test]
+fn the_keyboard_is_asked_for_until_there_is_a_pane_to_put_it_in() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, mounted)) = TestingRunner::new(
+        late_pane_harness,
+        (300., 400.).into(),
+        |runner: &mut _| {
+            let states = symbol_states!(runner);
+            let mounted = runner
+                .provide_root_context(|| PaneMounted(State::create(false)))
+                .0;
+            (states, mounted)
+        },
+        1.,
+    );
+    let (mut objects, mut mounted) = (states.objects, mounted);
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    let row = centre_of(&test, "sum_to");
+    let top = label_area(&test, "sum_to")
+        .expect("the row is drawn")
+        .origin
+        .y;
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert!(states.open.active().is_some(), "the press opened nothing");
+    assert_eq!(
+        drawn_at(&test, top),
+        Chosen::Live,
+        "the keyboard went somewhere with no pane to go to"
+    );
+
+    // The pane arrives, and the ask made for it is spent.
+    mounted.set(true);
+    settle(&mut test);
+    assert_eq!(
+        drawn_at(&test, top),
+        Chosen::Idle,
+        "the ask was spent on nothing and the tab never took the keyboard"
+    );
+}
+
+/// **Opening a tab hands it the keyboard**, by press and by Enter alike: a reader who has
+/// put a listing on screen is reading it. The pick stays where it was and goes grey, which
+/// is what says the list is no longer where a key would land -- and a press with Alt held,
+/// which opens nothing, keeps the keyboard in the list for its arrows to be used.
+#[test]
+fn opening_a_tab_hands_it_the_keyboard() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, alt)) = TestingRunner::new(
+        list_and_pane_harness,
+        (300., 400.).into(),
+        |runner: &mut _| {
+            let states = symbol_states!(runner);
+            // After the macro, which provides an `Alt` of its own that this replaces.
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (states, alt)
+        },
+        1.,
+    );
+    let (mut objects, mut alt) = (states.objects, alt);
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    let row = centre_of(&test, "sum_to");
+    let top = label_area(&test, "sum_to")
+        .expect("the row is drawn")
+        .origin
+        .y;
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert!(states.open.active().is_some(), "the press opened nothing");
+    assert_eq!(
+        drawn_at(&test, top),
+        Chosen::Idle,
+        "the press left the keyboard in the list it opened from"
+    );
+
+    // Alt+press opens nothing, so there is nowhere for the keyboard to go: it lands back
+    // on the rows, where the arrows and Enter are answered.
+    alt.set(true);
+    settle(&mut test);
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert_eq!(drawn_at(&test, top), Chosen::Live);
+
+    // And Enter from there opens the row and hands the tab the keyboard, as the press did.
+    alt.set(false);
+    settle(&mut test);
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    assert_eq!(
+        drawn_at(&test, top),
+        Chosen::Idle,
+        "Enter left the keyboard in the list"
+    );
+}
+
+/// **The arrows move the pick and Enter opens it**, which is what makes a list something
+/// the keyboard can be used in at all: the pick is the cursor, and Enter is the press.
+#[test]
+fn the_arrows_move_the_pick_and_enter_opens_the_row() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, alt)) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| {
+            let states = symbol_states!(runner);
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            (states, alt)
+        },
+        1.,
+    );
+    let (mut objects, mut alt) = (states.objects, alt);
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    // The rows as they are drawn, top down: which symbol is which row is the list's own
+    // order and not this test's business.
+    let mut rows: Vec<(String, Area)> = labels_with_areas(&test)
+        .into_iter()
+        .filter(|(text, _)| symbols.iter().any(|symbol| symbol.data.name == *text))
+        .collect();
+    rows.sort_by(|(_, ours), (_, theirs)| ours.origin.y.total_cmp(&theirs.origin.y));
+    assert!(rows.len() >= 2, "{rows:?}");
+
+    // The first row picked out with Alt, which opens nothing and leaves the keyboard on
+    // the rows -- where a key is answered at all.
+    alt.set(true);
+    settle(&mut test);
+    let first = rows[0].1.origin.y;
+    let second = rows[1].1.origin.y;
+    press_at(
+        &mut test,
+        (
+            (rows[0].1.origin.x + rows[0].1.width() / 2.0) as f64,
+            (first + rows[0].1.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+    assert_eq!(drawn_at(&test, first), Chosen::Live);
+
+    // Down moves it, and Up brings it back.
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    assert_eq!(drawn_at(&test, first), Chosen::No, "the pick did not move");
+    assert_eq!(drawn_at(&test, second), Chosen::Live);
+    key_with(&mut test, Key::Named(NamedKey::ArrowUp), Modifiers::empty());
+    assert_eq!(drawn_at(&test, first), Chosen::Live);
+    // And stops at the list rather than counting on past it.
+    key_with(&mut test, Key::Named(NamedKey::ArrowUp), Modifiers::empty());
+    key_with(&mut test, Key::Named(NamedKey::ArrowUp), Modifiers::empty());
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    assert_eq!(
+        drawn_at(&test, second),
+        Chosen::Live,
+        "Up counted on above the list and Down was spent coming back"
+    );
+
+    // Enter opens the row the pick is on, as pressing it would.
+    assert!(states.open.active().is_none(), "something opened already");
+    alt.set(false);
+    settle(&mut test);
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    let open = states.open.active().expect("Enter opened nothing");
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == rows[1].0)
+        .expect("the row is one of the fixture's symbols")
+        .clone();
+    assert!(
+        open == Document::Assembly(Selection::Symbol(wanted)),
+        "Enter opened something else"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
 // The file finder.
 
 /// The finder over a walk the test hands in, so that one can be held still: a real walk
@@ -24696,6 +25463,10 @@ fn finder_over(
                 )
             });
             let states = project_states!(runner);
+            // The Alt a row reads is the one `ModifierKeys` writes, as it is in the real
+            // window: a test holds the key down through `keys` and the rows see it.
+            // After the macro, which provides an `Alt` of its own that this replaces.
+            runner.provide_root_context(move || Alt(held.2));
             // The same context again, so the chord is pressed with the handle the
             // sidebar reads: the root answers Ctrl+P and Ctrl+Shift+F in the one
             // handler, and the second of them reaches for the dock.
@@ -24765,7 +25536,7 @@ fn finder_rows_drawn(test: &TestingRunner) -> Vec<(String, Area)> {
 /// nothing is lit, and where the lit row is outside the rows on screen.
 fn finder_selected(test: &TestingRunner) -> Option<String> {
     let lit: Vec<f32> = test.find_many(|node, element| {
-        (element.style().background == Fill::Color(palette().selected_bg))
+        (element.style().background == Fill::Color(palette().text_select_bg))
             .then_some(node.layout().area.origin.y)
     });
     let top = *lit.first()?;
@@ -24884,6 +25655,51 @@ fn an_empty_box_lists_the_files_opened_most_recently() {
         rows,
         ["second.rs", "first.rs"],
         "newest first, and only these"
+    );
+}
+
+/// Alt in the finder is the word it is everywhere else: the press picks the row out and
+/// opens nothing, so the panel stays up. The finder's pick **is** its keyboard row, the
+/// arrows' own, so pointing at a row with the pointer is moving the keyboard to it.
+#[test]
+fn alt_in_the_finder_moves_to_the_row_and_opens_nothing() {
+    let (mut test, states, finder, keys, _directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "first.rs"));
+            let _ = emit(walked_file(root, "second.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
+
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+    type_into_finder(&mut test, finder, "s");
+
+    // Whichever of the two rows the keyboard is not on: the ranking decides which, and
+    // what is being read here is that the press moves the keyboard to the row pressed.
+    let on_row = finder_selected(&test).expect("the keyboard is on a row");
+    let wanted = finder_rows_drawn(&test)
+        .into_iter()
+        .find(|(row, _)| *row != on_row)
+        .expect("the walk found two files");
+
+    keys.down(&Key::Named(NamedKey::Alt), Modifiers::empty());
+    settle(&mut test);
+    let at = wanted.1;
+    press_at(
+        &mut test,
+        (
+            (at.origin.x + at.width() / 2.0) as f64,
+            (at.origin.y + at.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+
+    assert!(finder.peek().open, "an Alt+press closed the finder");
+    assert!(states.open.active().is_none(), "an Alt+press opened a file");
+    assert_eq!(
+        finder_selected(&test).as_deref(),
+        Some(wanted.0.as_str()),
+        "the keyboard did not move to the row"
     );
 }
 
@@ -25317,9 +26133,9 @@ fn pressing_a_row_opens_its_file() {
     pump(&mut test, || !finder.peek().walking);
     type_into_finder(&mut test, finder, "kept");
 
-    // The row's second span: the first is the marked run, which the box's own text also
-    // reads, and the box is drawn above the list.
-    let row = centre_of(&test, ".rs");
+    // By its whole name: the box above the list holds what was typed, and a row is one
+    // piece of text now that a match is washed rather than cut out of it.
+    let row = centre_of(&test, "kept.rs");
     press_at(&mut test, row);
     settle(&mut test);
 

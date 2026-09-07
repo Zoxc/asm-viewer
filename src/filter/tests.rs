@@ -206,3 +206,33 @@ fn case_folding_does_not_change_the_rank() {
     };
     assert!(sensitive.matcher().rank("ITER::x").is_none());
 }
+
+/// **What matched, and where.** Every occurrence and not only the first, since a name is
+/// marked wherever the pattern is in it; nothing at all for a filter that lets everything
+/// through, which is what an empty box is; and nothing for a pattern that will not
+/// compile, which matches nothing to begin with.
+#[test]
+fn the_marks_are_every_occurrence_and_nothing_where_nothing_was_typed() {
+    let marks = |filter: &Filter, text: &str| filter.matcher().marks(text);
+
+    assert_eq!(marks(&plain("iter"), "iter::iter_mut"), [0..4, 6..10]);
+    assert!(marks(&plain("nope"), "iter::iter_mut").is_empty());
+    assert!(marks(&Filter::default(), "iter").is_empty());
+    let invalid = Filter {
+        regex: true,
+        ..plain("core::(iter")
+    };
+    assert!(marks(&invalid, "core::iter").is_empty());
+
+    // Case folds by default, so a mark lands where the fold matched and not where the
+    // pattern would have.
+    assert_eq!(marks(&plain("iter"), "ITER"), [0..4]);
+
+    // A pattern that can match nothing marks nothing: a wash of no width is not a mark,
+    // and `find_iter` would hand back one at every position.
+    let empty = Filter {
+        regex: true,
+        ..plain("x*")
+    };
+    assert_eq!(marks(&empty, "axxb"), [1..3]);
+}

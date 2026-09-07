@@ -13,6 +13,28 @@ use super::*;
 /// One opened file that contributed several objects -- an archive -- and the row its
 /// members fold under. It has no `Object` behind it, so it selects nothing: pressing it
 /// folds it open or shut.
+/// Fold the file row's group away, or open it: what pressing an archive row does, and
+/// what Enter on one does. A file that has contributed no object yet has no group and so
+/// nothing to fold, and one the filter is holding open (`Forced`) would hide the rows the
+/// filter put on screen.
+fn fold_archive(
+    mut expanded: State<HashSet<usize>>,
+    group: Option<usize>,
+    expansion: Expansion,
+) -> Pressed {
+    let Some(group) = group else {
+        return Pressed::Folded;
+    };
+    if expansion == Expansion::Forced {
+        return Pressed::Folded;
+    }
+    let mut expanded = expanded.write();
+    if !expanded.remove(&group) {
+        expanded.insert(group);
+    }
+    Pressed::Folded
+}
+
 #[derive(Clone)]
 struct ArchiveRow {
     name: String,
@@ -27,6 +49,11 @@ struct ArchiveRow {
     /// [`None`] for a file that has contributed nothing yet, there being nothing to fold.
     group: Option<usize>,
     expanded: State<HashSet<usize>>,
+    /// Where this row is in the list as it is drawn, which is what the arrows step and
+    /// what a press writes down with the pick (`ui/picks.rs`).
+    at: usize,
+    /// Where the filter matched in the name, for the row to mark.
+    marks: Vec<Range<usize>>,
     key: DiffKey,
 }
 
@@ -38,6 +65,8 @@ impl PartialEq for ArchiveRow {
             && self.expansion == other.expansion
             && self.loading == other.loading
             && self.group == other.group
+            && self.at == other.at
+            && self.marks == other.marks
     }
 }
 
@@ -50,13 +79,16 @@ impl KeyExt for ArchiveRow {
 impl Component for ArchiveRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
-        let mut expanded = self.expanded;
+        let at = self.at;
+        let expanded = self.expanded;
         let group = self.group;
         let expansion = self.expansion;
         // Consumed here, in the render, because the handler that uses them may not run a
         // hook.
         let states = use_project_states();
+        let picking = use_picking(Panel::Objects);
         let path = self.path.clone();
+        let pick = Pick::Path(self.path.clone());
 
         // `Forced` draws no triangle, only the space one would have taken: the filter is
         // holding the file open and folding it would hide the rows the filter put on
@@ -76,20 +108,13 @@ impl Component for ArchiveRow {
 
         extra_tooltip(
             self.path.display().to_string(),
-            // Nothing is ever picked out here: an archive row has no object behind it.
-            list_row(hovering, false)
+            // An archive row has no object behind it, so nothing about the tab on screen
+            // ever picks one out: it lights when the reader pressed it and not otherwise.
+            list_row(hovering, picking.drawn(&pick, false))
                 .on_press(move |_| {
-                    // A file that has contributed no object yet has nothing to fold.
-                    let Some(group) = group else {
-                        return;
-                    };
-                    if expansion == Expansion::Forced {
-                        return;
-                    }
-                    let mut expanded = expanded.write();
-                    if !expanded.remove(&group) {
-                        expanded.insert(group);
-                    }
+                    picking.press(pick.clone(), at, || {
+                        fold_archive(expanded, group, expansion)
+                    });
                 })
                 // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
                 // without it panics.
@@ -98,7 +123,7 @@ impl Component for ArchiveRow {
                 })
                 .child(disclosure(open))
                 .child(tag_label(tag))
-                .child(tree_name(self.name.clone(), self.loading))
+                .child(tree_name(self.name.clone(), self.loading, &self.marks))
                 // How many objects came out of this file, which under a filter is how many
                 // of them matched -- the one thing about an archive that is not visible
                 // while it is folded shut. A file that has produced nothing yet shows no
@@ -141,6 +166,10 @@ struct ObjectRow {
     /// what the tooltip says: a member's own name gets cut off, while a lone object is
     /// named after its file and the useful extra is where that file is.
     member: bool,
+    /// Where this row is in the list as it is drawn.
+    at: usize,
+    /// Where the filter matched in the name, for the row to mark.
+    marks: Vec<Range<usize>>,
     key: DiffKey,
 }
 
@@ -149,6 +178,8 @@ impl PartialEq for ObjectRow {
         Arc::ptr_eq(&self.object, &other.object)
             && self.selected == other.selected
             && self.member == other.member
+            && self.at == other.at
+            && self.marks == other.marks
     }
 }
 
@@ -165,6 +196,9 @@ impl Component for ObjectRow {
         let states = use_project_states();
         let (open, visits) = (states.open, states.visits);
         let ctrl = use_consume::<Ctrl>().0;
+        let picking = use_picking(Panel::Objects);
+        let pick = Pick::Object(self.object.clone());
+        let at = self.at;
         let object = self.object.clone();
         let path = self.object.path.clone();
 
@@ -178,13 +212,16 @@ impl Component for ObjectRow {
             fitted.cut(),
             &self.object.name,
             tooltip,
-            list_row(hovering, self.selected)
+            list_row(hovering, picking.drawn(&pick, self.selected))
                 // What pressing an object opens is all of its code as one listing --
                 // the one thing an object has to show that a symbol does not. A row is
                 // a click from outside the panes: a preview, or a tab of its own with
-                // Ctrl.
+                // Ctrl. With Alt it opens nothing and the row is only picked out.
                 .on_press(move |_| {
-                    open_document(open, visits, Document::Code(object.clone()), reach(ctrl));
+                    picking.press(pick.clone(), at, || {
+                        open_document(open, visits, Document::Code(object.clone()), reach(ctrl));
+                        Pressed::Opened
+                    });
                 })
                 // A lone object *is* the file it came out of, so it closes like one. A
                 // member was never opened on its own, and closing one would take the 195
@@ -202,7 +239,12 @@ impl Component for ObjectRow {
                     chevron_width()
                 })))
                 .child(tag_label(format_tag(self.object.format)))
-                .child(tree_name_fitted(fitted, self.object.name.clone(), false)),
+                .child(tree_name_fitted(
+                    fitted,
+                    self.object.name.clone(),
+                    false,
+                    &self.marks,
+                )),
         )
     }
 
@@ -214,8 +256,13 @@ impl Component for ObjectRow {
 #[derive(Clone)]
 struct SymbolRow {
     symbols: SymbolList,
+    /// Which symbol this is, in the list the filter narrowed.
     index: usize,
     selected: bool,
+    /// Where this row is in the list as it is drawn, which under a filter is not `index`.
+    at: usize,
+    /// Where the filter matched in the name, for the row to mark.
+    marks: Vec<Range<usize>>,
     key: DiffKey,
 }
 
@@ -224,6 +271,8 @@ impl PartialEq for SymbolRow {
         self.symbols == other.symbols
             && self.index == other.index
             && self.selected == other.selected
+            && self.at == other.at
+            && self.marks == other.marks
     }
 }
 
@@ -244,7 +293,10 @@ impl Component for SymbolRow {
         // whole list on every bookmark made.
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
+        let picking = use_picking(Panel::Symbols);
+        let at = self.at;
         let symbol = self.symbols.0[self.index].clone();
+        let pick = Pick::Symbol(symbol.clone());
         let text = symbol
             .data
             .demangled
@@ -256,14 +308,17 @@ impl Component for SymbolRow {
         cut_tooltip(
             fitted.cut(),
             text.clone(),
-            list_row(hovering, self.selected)
+            list_row(hovering, picking.drawn(&pick, self.selected))
                 .on_press(move |_| {
-                    open_document(
-                        open,
-                        visits,
-                        Document::Assembly(Selection::Symbol(symbol.clone())),
-                        reach(ctrl),
-                    );
+                    picking.press(pick.clone(), at, || {
+                        open_document(
+                            open,
+                            visits,
+                            Document::Assembly(Selection::Symbol(symbol.clone())),
+                            reach(ctrl),
+                        );
+                        Pressed::Opened
+                    });
                 })
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(
@@ -271,7 +326,7 @@ impl Component for SymbolRow {
                         bookmark_menu(bookmarked, objects, document.clone()),
                     );
                 })
-                .child(tree_name_fitted(fitted, text, false)),
+                .child(tree_name_fitted(fitted, text, false, &self.marks)),
         )
     }
 
@@ -288,12 +343,19 @@ struct HistoryRow {
     entry: Document,
     /// Whether this is what the tab on screen shows.
     current: bool,
+    /// Where this row is in the list as it is drawn.
+    at: usize,
+    /// Where the filter matched in the name, for the row to mark.
+    marks: Vec<Range<usize>>,
     key: DiffKey,
 }
 
 impl PartialEq for HistoryRow {
     fn eq(&self, other: &Self) -> bool {
-        self.entry == other.entry && self.current == other.current
+        self.entry == other.entry
+            && self.current == other.current
+            && self.at == other.at
+            && self.marks == other.marks
     }
 }
 
@@ -314,9 +376,12 @@ impl Component for HistoryRow {
         let ctrl = use_consume::<Ctrl>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
+        let picking = use_picking(Panel::History);
+        let at = self.at;
         let text = entry_text(&self.entry);
         let entry = self.entry.clone();
         let target = self.entry.clone();
+        let pick = Pick::Visit(self.entry.clone());
 
         let drawn = text.clone();
 
@@ -324,9 +389,12 @@ impl Component for HistoryRow {
             fitted.cut(),
             &drawn,
             entry_tooltip(&self.entry),
-            list_row(hovering, self.current)
+            list_row(hovering, picking.drawn(&pick, self.current))
                 .on_press(move |_| {
-                    open_document(open, visits, target.clone(), reach(ctrl));
+                    picking.press(pick.clone(), at, || {
+                        open_document(open, visits, target.clone(), reach(ctrl));
+                        Pressed::Opened
+                    });
                 })
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(
@@ -335,7 +403,7 @@ impl Component for HistoryRow {
                     );
                 })
                 .child(entry_icon(&self.entry))
-                .child(tree_name_fitted(fitted, text, false)),
+                .child(tree_name_fitted(fitted, text, false, &self.marks)),
         )
     }
 
@@ -396,6 +464,12 @@ impl Component for ObjectsPanel {
         let objects = use_consume::<Objects>().0;
         let loading = use_consume::<Loading>().0;
         let filter = use_state(Filter::default);
+        let pane = use_list_pane(Panel::Objects);
+        // What Enter on a row reaches through, consumed here because the handler that
+        // uses them runs no hook.
+        let doors = use_doors();
+        let (open, visits) = (doors.open, doors.visits);
+        let ctrl = use_consume::<Ctrl>().0;
         // Which files the reader has folded open: a view of a list and not part of the
         // session, so a `use_state` here. The set holds group keys, which are `Arc`
         // pointers, so an entry left behind by a closed file is harmless.
@@ -427,19 +501,53 @@ impl Component for ObjectsPanel {
             _ => None,
         };
         let length = tree.len();
+        // The filter compiled once for the rows to mark what it matched in them, beside
+        // the memo above which compiles one of its own to narrow the list with.
+        let marking = Marking::new(filter.read().matcher());
+        // One more clone of the rows, shared by the two closures the keys are: the arrows
+        // ask what a row is and Enter asks what pressing one does, and both are the tree
+        // the panel is drawing and not one worked out again.
+        let rows = Rc::new(tree.clone());
+        let keys = ListKeys {
+            length,
+            at: {
+                let rows = rows.clone();
+                Box::new(move |at| {
+                    (at < rows.len()).then(|| match &rows[at] {
+                        TreeRow::File { path, .. } => Pick::Path(path.clone()),
+                        TreeRow::Object { object, .. } => Pick::Object(object.clone()),
+                    })
+                })
+            },
+            open: Box::new(move |at| {
+                if at >= rows.len() {
+                    return Pressed::Folded;
+                }
+                match &rows[at] {
+                    TreeRow::File {
+                        group, expansion, ..
+                    } => fold_archive(expanded, *group, *expansion),
+                    TreeRow::Object { object, .. } => {
+                        open_document(open, visits, Document::Code(object.clone()), reach(ctrl));
+                        Pressed::Opened
+                    }
+                }
+            }),
+        };
 
-        let pane = use_filter_pane(
+        let pane = pane.filtered(
             filter,
-            palette().pane_bg,
+            keys,
             // `new_with_data`, never a capture: the builder closure is not compared across
             // renders.
             VirtualScrollView::new_with_data(
-                (tree, selected, expanded),
+                (tree, selected, expanded, marking),
                 |row,
-                 (tree, selected, expanded): &(
+                 (tree, selected, expanded, marking): &(
                     ObjectTree,
                     Option<usize>,
                     State<HashSet<usize>>,
+                    Marking,
                 )| {
                     match &tree[row] {
                         TreeRow::File {
@@ -457,6 +565,8 @@ impl Component for ObjectsPanel {
                             loading: *loading,
                             group: *group,
                             expanded: *expanded,
+                            at: row,
+                            marks: marking.marks(name),
                             key: DiffKey::None,
                         }
                         // The path as well as the group, since a file with nothing behind
@@ -467,6 +577,8 @@ impl Component for ObjectsPanel {
                             object: object.clone(),
                             selected: *selected == Some(Arc::as_ptr(object).addr()),
                             member: *member,
+                            at: row,
+                            marks: marking.marks(&object.name),
                             key: DiffKey::None,
                         }
                         .key(Arc::as_ptr(object).addr())
@@ -475,7 +587,8 @@ impl Component for ObjectsPanel {
                 },
             )
             .length(length)
-            .item_size(list_row_height()),
+            .item_size(list_row_height())
+            .scroll_controller(pane.controller),
         );
 
         rect()
@@ -499,6 +612,12 @@ impl Component for SymbolsPanel {
     fn render(&self) -> impl IntoElement {
         let symbols = use_consume::<Symbols>().0;
         let filter = use_state(Filter::default);
+        let pane = use_list_pane(Panel::Symbols);
+        // What Enter on a row reaches through, consumed here because the handler that
+        // uses them runs no hook.
+        let doors = use_doors();
+        let (open, visits) = (doors.open, doors.visits);
+        let ctrl = use_consume::<Ctrl>().0;
         // The one list where the filtering has to be a memo: 115k names on
         // `viewer-sample`, and the `VirtualScrollView` has to be told its length before it
         // builds any row.
@@ -516,13 +635,38 @@ impl Component for SymbolsPanel {
             _ => None,
         };
         let length = filtered.len();
+        // The filter compiled once for the rows to mark what it matched in them.
+        let marking = Marking::new(filter.read().matcher());
+        // Cheap to hand to both closures: a `Filtered` is the list behind an `Arc` and
+        // the indices the filter kept.
+        let rows = Rc::new(filtered.clone());
+        let symbol_at = move |rows: &Filtered, at: usize| {
+            (at < rows.len()).then(|| rows.symbols.0[rows.index(at)].clone())
+        };
+        let stepped = rows.clone();
+        let keys = ListKeys {
+            length,
+            at: Box::new(move |at| symbol_at(&stepped, at).map(Pick::Symbol)),
+            open: Box::new(move |at| match symbol_at(&rows, at) {
+                Some(symbol) => {
+                    open_document(
+                        open,
+                        visits,
+                        Document::Assembly(Selection::Symbol(symbol)),
+                        reach(ctrl),
+                    );
+                    Pressed::Opened
+                }
+                None => Pressed::Folded,
+            }),
+        };
 
-        use_filter_pane(
+        pane.filtered(
             filter,
-            palette().symbol_pane_bg,
+            keys,
             VirtualScrollView::new_with_data(
-                (filtered, selected),
-                |row, (filtered, selected): &(Filtered, Option<Symbol>)| {
+                (filtered, selected, marking),
+                |row, (filtered, selected, marking): &(Filtered, Option<Symbol>, Marking)| {
                     // The row's place in the filtered list is not the symbol's place in the
                     // list it was filtered out of, and everything below is about the
                     // symbol.
@@ -532,6 +676,8 @@ impl Component for SymbolsPanel {
                         symbols: filtered.symbols.clone(),
                         index,
                         selected: selected.as_ref() == Some(symbol),
+                        at: row,
+                        marks: marking.marks(symbol.data.display()),
                         key: DiffKey::None,
                     }
                     .key(Arc::as_ptr(&symbol.data).addr())
@@ -539,7 +685,8 @@ impl Component for SymbolsPanel {
                 },
             )
             .length(length)
-            .item_size(list_row_height()),
+            .item_size(list_row_height())
+            .scroll_controller(pane.controller),
         )
     }
 }
@@ -558,6 +705,11 @@ impl Component for HistoryPanel {
             .clone()
             .map(|(_, stop)| stop.document);
         let filter = use_state(Filter::default);
+        let pane = use_list_pane(Panel::History);
+        // What Enter on a row reaches through, consumed here because the handler that
+        // uses them runs no hook.
+        let open = use_open();
+        let ctrl = use_consume::<Ctrl>().0;
         // A session's record is a couple of hundred places at most, so it is filtered
         // where the rows are built rather than through a memo.
         let matcher = filter.read().matcher();
@@ -565,19 +717,28 @@ impl Component for HistoryPanel {
         // `visited` is asked of the whole record rather than of the rows, because an
         // empty list means two different things -- nowhere has been visited yet, or
         // nothing visited matches -- and the two are worth different words.
-        let (rows, visited): (Vec<Element>, bool) = {
+        let (rows, listed, visited): (Vec<Element>, Vec<Document>, bool) = {
             let visits = visits.read();
             let visited = !visits.entries().is_empty();
-            let rows = visits
+            // The places the rows are of, kept beside them: a couple of hundred at most,
+            // and what the arrows step and Enter opens.
+            let listed: Vec<Document> = visits
                 .entries()
                 .iter()
                 // The whole name and not the shortened one the row draws: the generic
                 // arguments a tab has no room for are still worth searching for.
                 .filter(|entry| matcher.matches(&entry_name(entry)))
-                .map(|entry| {
+                .cloned()
+                .collect();
+            let rows = listed
+                .iter()
+                .enumerate()
+                .map(|(at, entry)| {
                     HistoryRow {
                         entry: entry.clone(),
                         current: current.as_ref() == Some(entry),
+                        at,
+                        marks: matcher.marks(&entry_text(entry)),
                         key: DiffKey::None,
                     }
                     .key(entry_key(entry))
@@ -585,18 +746,32 @@ impl Component for HistoryPanel {
                 })
                 .collect();
 
-            (rows, visited)
+            (rows, listed, visited)
+        };
+        let keys = {
+            let stepped = listed.clone();
+            ListKeys {
+                length: listed.len(),
+                at: Box::new(move |at| stepped.get(at).cloned().map(Pick::Visit)),
+                open: Box::new(move |at| match listed.get(at) {
+                    Some(entry) => {
+                        open_document(open, visits, entry.clone(), reach(ctrl));
+                        Pressed::Opened
+                    }
+                    None => Pressed::Folded,
+                }),
+            }
         };
 
         // A plain `ScrollView` rather than a `VirtualScrollView`: a handful of one-label
         // rows, built straight from the state instead of routed through `new_with_data`.
-        use_filter_pane(
+        pane.filtered(
             filter,
-            palette().symbol_pane_bg,
+            keys,
             match (visited, rows.is_empty()) {
                 (false, _) => placeholder("Nothing visited yet"),
                 (true, true) => placeholder("No matches"),
-                (true, false) => ScrollView::new()
+                (true, false) => ScrollView::new_controlled(pane.controller)
                     .child(rect().width(Size::fill()).children(rows).into_element())
                     .into_element(),
             },

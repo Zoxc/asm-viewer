@@ -104,6 +104,13 @@ pub(crate) fn info_line_in(text: String, color: Color) -> impl IntoElement {
 /// picked out, under the pointer, or nothing. The caller appends its own press, its menu
 /// and its children, and hands the result to [`row_tooltip`].
 ///
+/// A row that is picked out wears the selection, `text_select_bg`, which is what a sweep
+/// paints under the characters it took in a code pane: being picked out says the same
+/// thing in a list as in the code. That is while the keyboard is in the list; a list it
+/// is not in draws its pick in the neutral grey instead, so the blue is always what the
+/// next key would act on (`ui/picks.rs`). Both beat the hover, which is why the match
+/// below is on the selection first.
+///
 /// **The hover state stays the caller's.** There is no `.hover()` pseudo-state, so a row
 /// that lights under the pointer holds a `use_state` of its own, and a hook may only run
 /// while a component renders, which this is not. Reading it here is what subscribes the
@@ -112,13 +119,12 @@ pub(crate) fn info_line_in(text: String, color: Color) -> impl IntoElement {
 /// The height is [`list_row_height`] and nothing else: a row and the `VirtualScrollView`
 /// over it must agree about `item_size`, or scrolling misaligns. [`dead_list_row`] is the
 /// same frame with nothing to answer the pointer with.
-pub(crate) fn list_row(mut hovering: State<bool>, selected: bool) -> Rect {
-    let background = if selected {
-        palette().selected_bg
-    } else if hovering() {
-        palette().object_hover_bg
-    } else {
-        Color::TRANSPARENT
+pub(crate) fn list_row(mut hovering: State<bool>, chosen: Chosen) -> Rect {
+    let background = match chosen {
+        Chosen::Live => palette().text_select_bg,
+        Chosen::Idle => palette().selected_bg,
+        Chosen::No if hovering() => palette().row_hover_bg,
+        Chosen::No => Color::TRANSPARENT,
     };
     row_frame(background)
         .on_pointer_over(move |_| hovering.set_if_modified(true))
@@ -291,13 +297,69 @@ pub(crate) fn one_line(text: String) -> Paragraph {
         .span(Span::new(text))
 }
 
+/// What a search or a filter matched in `text`, as the pairs a paragraph highlights by:
+/// **UTF-16 units**, which is what skia indexes a paragraph in and what a column is
+/// counted in everywhere else that meets it (`src/chars.rs`). Byte ranges in, since
+/// everything outside the text engine is bytes.
+///
+/// A mark that is not on a character boundary, or runs off the end, is dropped rather than
+/// panicking: these come from a regex over the same string, but a row draws a *cut* line
+/// where a hit was found in the whole one.
+pub(crate) fn marked_units(text: &str, marks: &[Range<usize>]) -> Vec<(usize, usize)> {
+    marks
+        .iter()
+        .filter(|mark| {
+            mark.end <= text.len()
+                && text.is_char_boundary(mark.start)
+                && text.is_char_boundary(mark.end)
+        })
+        .map(|mark| {
+            (
+                chars::units(&text[..mark.start]),
+                chars::units(&text[..mark.end]),
+            )
+        })
+        .collect()
+}
+
+/// One line of a file as a hit or a reference row draws it: cut with an ellipsis where the
+/// room runs out, and washed where a search found something.
+///
+/// **No span at all where there is no text**, which is the row of a file that would not
+/// read: an empty span is a piece of the row all the same, and a row with one in it is a
+/// row that says it has text.
+pub(crate) fn found_line(text: &str, marks: &[Range<usize>]) -> Paragraph {
+    let line = paragraph()
+        .width(Size::fill())
+        .max_lines(1)
+        .text_overflow(TextOverflow::Ellipsis);
+    let line = match text.is_empty() {
+        true => line,
+        false => line.span(Span::new(text.to_owned())),
+    };
+    marked(line, text, marks)
+}
+
+/// A line with what matched in it marked: the wash behind those runs, and nothing else
+/// about the text changed. The paragraph's own highlight, freya giving a span no
+/// background of its own.
+pub(crate) fn marked(line: Paragraph, text: &str, marks: &[Range<usize>]) -> Paragraph {
+    match marks.is_empty() {
+        true => line,
+        false => line
+            .highlights(marked_units(text, marks))
+            .highlight_color(palette().match_bg),
+    }
+}
+
 /// What a row is called, taking whatever width the columns beside it left.
 ///
 /// The text sits in a box of its own rather than being the `flex` child itself: a `flex`
 /// child is measured from its content first, so a line placed there directly takes the
 /// width of its whole name and pushes the count off the row.
-pub(crate) fn tree_name(text: String, dim: bool) -> impl IntoElement {
-    name_box(one_line(text), dim)
+pub(crate) fn tree_name(text: String, dim: bool, marks: &[Range<usize>]) -> impl IntoElement {
+    let line = marked(one_line(text.clone()), &text, marks);
+    name_box(line, dim)
 }
 
 /// The same line, measured: `fitted` is told whether it was cut.
@@ -306,8 +368,14 @@ pub(crate) fn one_line_fitted(fitted: Fitted, text: String) -> Paragraph {
 }
 
 /// The same, measured, for a row whose tooltip is only shown where the name was cut.
-pub(crate) fn tree_name_fitted(fitted: Fitted, text: String, dim: bool) -> impl IntoElement {
-    name_box(one_line_fitted(fitted, text), dim)
+pub(crate) fn tree_name_fitted(
+    fitted: Fitted,
+    text: String,
+    dim: bool,
+    marks: &[Range<usize>],
+) -> impl IntoElement {
+    let line = marked(one_line_fitted(fitted, text.clone()), &text, marks);
+    name_box(line, dim)
 }
 
 fn name_box(line: Paragraph, dim: bool) -> impl IntoElement {

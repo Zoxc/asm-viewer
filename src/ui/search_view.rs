@@ -169,46 +169,16 @@ async fn take_hits(
     }
 }
 
-/// A line cut into the runs that were found and the runs that were not, the found ones
-/// bold and in the palette's own colour for them. `marked` are byte ranges into `text`
-/// and in order, so this is one walk.
-///
-/// Shared with the file finder, and with the rows both grouped panels draw
-/// (`ui::place_row`), which mark the name the same way.
-pub(crate) fn marked_spans(text: &str, marked: &[Range<usize>]) -> Vec<Span<'static>> {
-    marked_spans_in(text, marked, None)
-}
-
-/// The same over a `base` the unmatched runs are drawn in, for a row that draws part of
-/// its text dimmed: the file finder's, whose directories are a step back from the name.
-/// `None` leaves them the colour they inherit.
-pub(crate) fn marked_spans_in(
-    text: &str,
-    marked: &[Range<usize>],
-    base: Option<Color>,
-) -> Vec<Span<'static>> {
-    let plain = |text: &str| {
-        let span = Span::new(text.to_owned());
-        match base {
-            Some(colour) => span.color(colour),
-            None => span,
-        }
-    };
-    let mut spans = Vec::new();
-    let mut at = 0;
-    for span in marked {
-        if span.start > at {
-            spans.push(plain(&text[at..span.start]));
-        }
-        spans.push(
-            Span::new(text[span.clone()].to_owned())
-                .color(palette().match_fg)
-                .font_weight(FontWeight::BOLD),
-        );
-        at = span.end;
-    }
-    if at < text.len() {
-        spans.push(plain(&text[at..]));
+/// A line and the two colours it is drawn in: the run before the cut in whatever the row
+/// inherits, and the rest in `base`. What marked it is not here at all -- a match is the
+/// paragraph's own wash now (`marked`, `ui/parts.rs`), not a colour on the characters --
+/// so this is only for a row that draws part of its text dimmed: the file finder's, whose
+/// directories are a step back from the name.
+pub(crate) fn dimmed_after(text: &str, at: usize, base: Color) -> Vec<Span<'static>> {
+    let (head, tail) = text.split_at(at.min(text.len()));
+    let mut spans = vec![Span::new(head.to_owned())];
+    if !tail.is_empty() {
+        spans.push(Span::new(tail.to_owned()).color(base));
     }
     spans
 }
@@ -222,6 +192,12 @@ impl Component for SearchPanel {
         let searched = use_consume::<Searching>().0;
         let dock = use_consume::<SidebarDock>().0;
         let proj = use_consume::<Proj>().0;
+        let pane = use_list_pane(Panel::Search);
+        // What Enter on a row reaches through, consumed here because the handler that
+        // uses them runs no hook.
+        let doors = use_doors();
+        let places = use_places();
+        let ctrl = use_consume::<Ctrl>().0;
         // The box is the panel's own and not the session's, as a filter is; it starts as
         // whatever was last searched for, so a panel dragged between areas or reached
         // again keeps saying what is on screen under it.
@@ -262,6 +238,19 @@ impl Component for SearchPanel {
             );
         });
 
+        // The rows the arrows step and Enter presses, shared by the two closures: a
+        // `SearchRows` is the rows behind an `Arc`, so this is a pointer each.
+        let listed = rows.clone();
+        let stepped = listed.clone();
+        let keys = ListKeys {
+            length: rows.len(),
+            at: Box::new(move |at| stepped.get(at).map(place_pick)),
+            open: Box::new(move |at| match listed.get(at) {
+                Some(row) => press_place(doors, places, ctrl, Folding::Hits(searched), row),
+                None => Pressed::Folded,
+            }),
+        };
+
         let body: Element = match (&directory, &state.asked) {
             (None, _) => placeholder("No project directory. Set one in the Project view."),
             (Some(_), None) => placeholder("Nothing searched for yet."),
@@ -285,6 +274,7 @@ impl Component for SearchPanel {
                                     PlaceRow {
                                         row: rows[index].clone(),
                                         folding: Folding::Hits(*searched),
+                                        at: index,
                                         key: DiffKey::None,
                                     }
                                     .key(&index)
@@ -292,14 +282,15 @@ impl Component for SearchPanel {
                                 },
                             )
                             .length(length)
-                            .item_size(list_row_height()),
+                            .item_size(list_row_height())
+                            .scroll_controller(pane.controller),
                         ),
                     )
                     .into_element()
             }
         };
 
-        let (pane, box_id) = use_search_pane(filter, submits, palette().pane_bg, body);
+        let (pane, box_id) = pane.searched(filter, submits, keys, body);
 
         // The caret the chord asked for, spent here: the panel is mounted by now, which
         // is the whole reason the chord leaves a flag rather than asking for the focus

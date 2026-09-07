@@ -7,6 +7,16 @@
 
 use super::*;
 
+/// Which pane leads a tab of `document`: the side it is driven from, which is the
+/// left-hand half of the split and the one an ask for the keyboard is spent on
+/// (`ui/focus.rs`). A fact about the *document* and not about the panels it is drawn in.
+pub(crate) fn leading(document: &Document) -> Pane {
+    match document {
+        Document::Source(_) => Pane::Source,
+        Document::Assembly(_) | Document::Code(_) => Pane::Assembly,
+    }
+}
+
 /// Whether the pane a tab is not driven from is up: what the reader last said about this
 /// tab, and where they have said nothing, what its document opens with.
 ///
@@ -192,7 +202,7 @@ impl Component for DocumentBody {
         // `peek` and not `read`: `initial_size` is consulted once, in the panel's own
         // `use_hook` at mount, so subscribing here would be a subscription to nothing --
         // and a loop with the effect above.
-        let leading = ratio.peek().clamp(1.0, 99.0);
+        let wide = ratio.peek().clamp(1.0, 99.0);
 
         // Not reachable -- the tab and the table entry are closed together -- but a render
         // is no place to panic.
@@ -212,8 +222,8 @@ impl Component for DocumentBody {
         // stay with the two places, the reader's side and the side that follows it, so
         // switching between the two kinds of tab leaves the handle where it was rather
         // than jumping it across the split.
-        let (leads, follows) = match &document {
-            Document::Source(_) => (
+        let (leads, follows) = match leading(&document) {
+            Pane::Source => (
                 SourcePane {
                     tab,
                     document: document.clone(),
@@ -221,7 +231,7 @@ impl Component for DocumentBody {
                 .into_element(),
                 AssemblyPane { tab, document }.into_element(),
             ),
-            Document::Assembly(_) | Document::Code(_) => (
+            Pane::Assembly => (
                 AssemblyPane {
                     tab,
                     document: document.clone(),
@@ -244,12 +254,12 @@ impl Component for DocumentBody {
                 // `min_size` given rather than left to default: freya's default is a
                 // quarter of the initial size, so it would move with the reader's own
                 // drag instead of staying the floor.
-                ResizablePanel::new(PanelSize::percent(leading))
+                ResizablePanel::new(PanelSize::percent(wide))
                     .min_size(10.0)
                     .child(leads),
             )
             .panel(
-                ResizablePanel::new(PanelSize::percent(100.0 - leading))
+                ResizablePanel::new(PanelSize::percent(100.0 - wide))
                     .min_size(10.0)
                     .child(follows),
             )

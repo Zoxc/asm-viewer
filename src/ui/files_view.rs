@@ -11,12 +11,42 @@ use super::*;
 struct EntryRow {
     row: FileRow,
     tree: State<Option<FileTree>>,
+    /// Where this row is in the tree as it is drawn, which is what the arrows step and
+    /// what a press writes down with the pick (`ui/picks.rs`).
+    at: usize,
     key: DiffKey,
 }
 
 impl PartialEq for EntryRow {
     fn eq(&self, other: &Self) -> bool {
-        self.row == other.row
+        self.row == other.row && self.at == other.at
+    }
+}
+
+/// What pressing a row does: a folder folds, and a file opens as source. Shared by the
+/// press and by Enter on the row the arrows left the pick on.
+///
+/// Anything the pane could show opens; what the file *is* is not judged. A file past the
+/// source cache's bound is left alone rather than opened into a tab that would only say
+/// so, which is `open_source_file`'s own guard.
+fn press_entry(
+    states: ProjectStates,
+    mut tree: State<Option<FileTree>>,
+    ctrl: State<bool>,
+    fold: Option<Fold>,
+    path: &Path,
+) -> Pressed {
+    match fold {
+        Some(_) => {
+            if let Some(tree) = tree.write().as_mut() {
+                tree.toggle(path);
+            }
+            Pressed::Folded
+        }
+        None => {
+            open_source_file(states, path, reach(ctrl));
+            Pressed::Opened
+        }
     }
 }
 
@@ -29,7 +59,7 @@ impl KeyExt for EntryRow {
 impl Component for EntryRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
-        let mut tree = self.tree;
+        let tree = self.tree;
         // Consumed here, in the render, because the handlers that use them may not run a
         // hook.
         let states = use_project_states();
@@ -37,9 +67,12 @@ impl Component for EntryRow {
         let rescued = use_consume::<Rescued>().0;
         let unopened = use_consume::<Unopened>().0;
         let ctrl = use_consume::<Ctrl>().0;
+        let picking = use_picking(Panel::Files);
+        let at = self.at;
         let fold = self.row.fold;
         let path = self.row.path.clone();
         let pressed = path.clone();
+        let pick = Pick::Path(path.clone());
 
         // A failed directory keeps its triangle: pressing it tries the read again.
         let open = match fold {
@@ -57,21 +90,13 @@ impl Component for EntryRow {
         extra_tooltip(
             self.row.path.display().to_string(),
             // A file the reader has open is not picked out here: this list is the
-            // directory, not what is on screen.
-            list_row(hovering, false)
-                .on_press(move |_| match fold {
-                    Some(_) => {
-                        if let Some(tree) = tree.write().as_mut() {
-                            tree.toggle(&pressed);
-                        }
-                    }
-                    // Anything the pane could show opens; what the file *is* is not
-                    // judged. A file past the source cache's bound is left alone rather
-                    // than opened into a tab that would only say so, which is
-                    // `open_source_file`'s own guard.
-                    None => {
-                        open_source_file(states, &pressed, reach(ctrl));
-                    }
+            // directory, not what is on screen. What lights a row is the reader having
+            // pressed it.
+            list_row(hovering, picking.drawn(&pick, false))
+                .on_press(move |_| {
+                    picking.press(pick.clone(), at, || {
+                        press_entry(states, tree, ctrl, fold, &pressed)
+                    });
                 })
                 // Every row's menu. A file's opens with the binary item: opening a
                 // binary is a deliberate act, so it is not the press, and whether the
@@ -117,7 +142,7 @@ impl Component for EntryRow {
                 .child(rect().width(Size::px(self.row.depth as f32 * TREE_INDENT)))
                 .child(disclosure(open))
                 .child(document_glyph(glyph))
-                .child(tree_name(self.row.name.clone(), failed)),
+                .child(tree_name(self.row.name.clone(), failed, &[])),
         )
     }
 
@@ -137,6 +162,11 @@ pub(crate) struct FilesPanel;
 impl Component for FilesPanel {
     fn render(&self) -> impl IntoElement {
         let proj = use_consume::<Proj>().0;
+        let pane = use_list_pane(Panel::Files);
+        // What Enter on a row reaches through, consumed here because the handler that
+        // uses them runs no hook.
+        let states = use_project_states();
+        let ctrl = use_consume::<Ctrl>().0;
         // Read, not peeked: a keystroke in the Project view's directory box is a change
         // of what this is a tree of, and costs one `read_dir` of a half-typed path.
         let directory = given(&proj.read().directory).map(str::to_owned);
@@ -159,11 +189,29 @@ impl Component for FilesPanel {
         let rows = use_memo(move || tree.read().as_ref().map(FileTree::rows));
         let rows = rows.read().clone();
 
+        let mut keys = ListKeys::none();
         let body = match (directory, rows) {
             (None, _) => placeholder("No project directory. Set one in the Project view."),
             (Some(directory), None) => placeholder(format!("Not a directory: {directory}")),
             (Some(_), Some(rows)) => {
                 let length = rows.len();
+                // The rows the arrows step and Enter presses: the tree as it is drawn,
+                // shared by both closures rather than walked again.
+                let listed = rows.clone();
+                let stepped = listed.clone();
+                keys = ListKeys {
+                    length,
+                    at: Box::new(move |at| {
+                        (at < stepped.len()).then(|| Pick::Path(stepped[at].path.clone()))
+                    }),
+                    open: Box::new(move |at| match at < listed.len() {
+                        true => {
+                            let row = &listed[at];
+                            press_entry(states, tree, ctrl, row.fold, &row.path)
+                        }
+                        false => Pressed::Folded,
+                    }),
+                };
                 // `new_with_data`, never a capture: the builder closure is not compared
                 // across renders.
                 VirtualScrollView::new_with_data(
@@ -173,6 +221,7 @@ impl Component for FilesPanel {
                         EntryRow {
                             row: row.clone(),
                             tree: *tree,
+                            at: index,
                             key: DiffKey::None,
                         }
                         .key(&row.path)
@@ -181,10 +230,13 @@ impl Component for FilesPanel {
                 )
                 .length(length)
                 .item_size(list_row_height())
+                .scroll_controller(pane.controller)
                 .into_element()
             }
         };
 
-        rect().expanded().background(palette().pane_bg).child(body)
+        // The same box every other panel gets from its filter pane, minus the bar: this
+        // one has nothing to filter by.
+        pane.plain(keys, body)
     }
 }

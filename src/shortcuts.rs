@@ -113,11 +113,21 @@ pub static SECTIONS: &[Section] = &[
         gestures: &[
             gesture(
                 "Click a row",
-                "Open it in the temporal tab, the one the next row reuses. An archive or a \
-                 folder folds instead.",
+                "Open it in the temporal tab, the one the next row reuses, and put the \
+                 keyboard in that tab. An archive or a folder folds instead.",
             ),
             gesture("Ctrl+click a row", "Open it in a tab that stays."),
+            gesture(
+                "Alt+click a row",
+                "Pick it out and open nothing, so the keyboard stays on the list. A folder \
+                 or an archive does not fold either.",
+            ),
             gesture("Right-click a row", "The row's menu."),
+            gesture("Up, Down", "Move the pick to another row."),
+            gesture(
+                "Enter",
+                "Open the row the pick is on, exactly as pressing it would.",
+            ),
             gesture("Ctrl+F", "Put the caret in the filter box over the list."),
         ],
     },
@@ -138,6 +148,7 @@ pub static SECTIONS: &[Section] = &[
             gesture("Up, Down", "Move to another file."),
             gesture("Enter", "Open the file."),
             gesture("Click a row", "Open that file."),
+            gesture("Alt+click a row", "Move to it and open nothing."),
             gesture("Escape, or click outside", "Close the finder."),
         ],
     },

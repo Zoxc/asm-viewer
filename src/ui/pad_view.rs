@@ -206,7 +206,7 @@ impl Component for SourceEditor {
     fn render(&self) -> impl IntoElement {
         let text = use_consume::<PadText>().0;
         let a11y_id = use_hook(AccessibilityId::new_unique);
-        use_tab_keyboard(a11y_id);
+        use_tab_keyboard(None, a11y_id);
         let (reading, writing) = (self.pad.clone(), self.pad.clone());
         let text = text.into_writable().map(
             move |buffers: &PadBuffers| buffers.get(&reading),
@@ -656,9 +656,9 @@ impl Component for DeletePopup {
 /// One row of the pad list: a scratchpad that can be switched to, drawn by the name the
 /// reader gave it — never by the id it is filed under.
 ///
-/// The whole row is the press target, as a recent project's is; the shown pad wears
-/// `selected_bg` and the one under the pointer `object_hover_bg`, which is what every list
-/// in the sidebar already does. The name is a prop and the id is a prop, so a rename in the
+/// The whole row is the press target, as a recent project's is; the shown pad wears the
+/// selection, `text_select_bg`, and the one under the pointer `row_hover_bg`, which is
+/// what every list in the sidebar already does. The name is a prop and the id is a prop, so a rename in the
 /// box beside it redraws the row and nothing else has to be told.
 #[derive(Clone, PartialEq)]
 struct PadRow {
@@ -683,8 +683,8 @@ impl Component for PadRow {
         let (id, deleting) = (self.id.clone(), self.id.clone());
 
         let background = match (self.shown, hovering()) {
-            (true, _) => palette().selected_bg,
-            (false, true) => palette().object_hover_bg,
+            (true, _) => palette().text_select_bg,
+            (false, true) => palette().row_hover_bg,
             (false, false) => Color::TRANSPARENT,
         };
 
@@ -712,7 +712,7 @@ impl Component for PadRow {
                 })
                 // Dimmed when it is the placeholder and not something the reader wrote,
                 // which is how the recent-projects list draws a project with no name.
-                .child(tree_name_fitted(fitted, label, unnamed)),
+                .child(tree_name_fitted(fitted, label, unnamed, &[])),
         )
     }
 

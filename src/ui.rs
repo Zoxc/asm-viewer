@@ -136,6 +136,8 @@ mod palette;
 pub(crate) use palette::*;
 mod parts;
 pub(crate) use parts::*;
+mod picks;
+pub(crate) use picks::*;
 mod place_row;
 pub(crate) use place_row::*;
 mod place_target;
@@ -424,14 +426,20 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // Everything kept per place, which every closer forgets together.
     let places = use_provide_context(Places::create);
     use_provide_context(|| Expanded(State::create(HashSet::new())));
+    // The row each list has picked out. At the root and not in the panels: a panel that is
+    // not its dock tab's is unmounted, and a pick outlives the reader looking elsewhere.
+    use_provide_context(|| Picks(State::create(HashMap::new())));
     let keyboard = use_provide_context(|| Keyboard(State::create(Keys::default()))).0;
-    use_keyboard_asked(keyboard);
     use_provide_context(|| Follows(State::create(HashMap::new())));
     // The Shortcuts page's box. Provided here for the reason the type gives: the page is
     // unmounted whenever another tab is on screen.
     use_provide_context(|| Shortcuts(State::create(Filter::default())));
     let bookmarks = use_provide_context(|| Bookmarked(State::create(Bookmarks::default()))).0;
     let marked = use_provide_context(|| Marked(State::create(Marks::default()))).0;
+    // The ask an opened row or a pressed chip leaves, spent on the leading pane of the tab
+    // on screen -- which is why it is handed `open` -- and on the caret that pane wants.
+    // After `marked` and not beside the other keyboard state, being what it writes.
+    use_keyboard_asked(keyboard, open, marked);
     // What a door is given, after the two states it shares with the rest of the app: it
     // owns only the two halves of a landing.
     let doors = use_provide_context(move || Doors {

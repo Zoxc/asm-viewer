@@ -1298,9 +1298,9 @@ impl Component for ServerButton {
 /// that did nothing. It is a band and not a window over the app, and it lays out as
 /// nothing while there is nothing to ask.
 ///
-/// It wears the Symbols list's surface rather than the bar's, so that a question standing
-/// in front of the app is a surface of its own and not more of the bar it hangs under.
-/// Both colours it writes are already held legible on that one by the contrast tests.
+/// It wears a pane's surface rather than the bar's, so that a question standing in front
+/// of the app is a surface of its own and not more of the bar it hangs under. Both
+/// colours it writes are already held legible on that one by the contrast tests.
 ///
 /// The directory is written out, because it is what is being agreed to.
 #[derive(Clone, PartialEq)]
@@ -1324,7 +1324,7 @@ impl Component for TrustPrompt {
             .content(Content::Flex)
             .spacing(8.0)
             .padding(Gaps::new_symmetric(6.0, 12.0))
-            .background(palette().symbol_pane_bg)
+            .background(palette().pane_bg)
             .border(bottom_hairline())
             .child(
                 rect()

@@ -7,6 +7,8 @@
 //! same regex ranks: where its first match starts in a name is the [`Rank`] a list under a
 //! filter orders its rows by.
 
+use std::ops::Range;
+
 use regex::{Regex, RegexBuilder};
 
 /// One list's filter: what was typed, and the three toggles that say how to read it.
@@ -77,6 +79,24 @@ impl Matcher {
             Matcher::Everything => true,
             Matcher::Pattern(regex) => regex.is_match(text),
             Matcher::Invalid(_) => false,
+        }
+    }
+
+    /// Where in `text` the pattern matched, as byte ranges in order. What a row marks, so
+    /// a reader can see why it is in the list.
+    ///
+    /// Empty for a filter that matches everything -- nothing was typed, so nothing is
+    /// marked -- and for one that will not compile. An empty match is dropped rather than
+    /// marked: a pattern like `a*` matches nothing at every position, and a mark of no
+    /// width is a wash of no width.
+    pub fn marks(&self, text: &str) -> Vec<Range<usize>> {
+        match self {
+            Matcher::Everything | Matcher::Invalid(_) => Vec::new(),
+            Matcher::Pattern(regex) => regex
+                .find_iter(text)
+                .filter(|found| !found.is_empty())
+                .map(|found| found.range())
+                .collect(),
         }
     }
 

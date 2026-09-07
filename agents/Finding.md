@@ -101,20 +101,33 @@ clicked in:
   takes the press outside, and every press the finder answers goes into it. `placeholder` is
   `expanded`, which is why the finder draws its own lines instead.
 
+**A row is one line drawn in two colours and washed in a third.** The name first and the directories
+above it after it, which is not the order a path is written in: the name is what a reader looks for
+down a list, and a column of names all starting `src/ui/` says nothing. What the query matched is
+washed rather than recoloured (`match_bg`), so the marks have to be moved into the order the line is
+*drawn* in -- the hits in the name are the line's own, and the hits in the directories are shifted
+along by the name and the gap after it (`row_line`). The wash is the paragraph's own highlight, in
+UTF-16 units, where everything upstream of it is bytes.
+
 **The app behind it is not dimmed.** A reader choosing a file is reading the window under the
 finder, so nothing there is taken away; the panel's shadow is the whole of what says the finder
 is over it, which is why it is a soft blur and not a hairline.
 
-**The selection remembers its query.** `Finder` holds the row the keyboard is on *and* what was
-in the box when it was moved there, and the row is read by comparing them. The obvious version —
-an effect that resets the row when the box changes — is wrong in a way only a headless test
-catches: a deps effect runs a render late, so a Down pressed in the same pass as the typing is
-undone by the reset arriving after it. Nothing here needs an effect at all once the row carries
-the query it belongs to. The row is **clamped where it is moved**, not only where it is drawn:
-counting on past the last row left it above the list, and the reader who held Down then spent an
-Up per overshoot before the highlight moved at all. The count that clamps it is the drawn list's:
-the key handler is handed the memo, so a press reads the list the panel is showing rather than
-working one out for itself.
+**The selection remembers its query.** `Finder` holds the row the keyboard is on *and* what was in
+the box when it was moved there, and the row is read by comparing them. The obvious version — an
+effect that resets the row when the box changes — is wrong in a way only a headless test catches: a
+deps effect runs a render late, so a Down pressed in the same pass as the typing is undone by the
+reset arriving after it. Nothing here needs an effect at all once the row carries the query it
+belongs to. The row is **clamped where it is moved**, not only where it is drawn: counting on past
+the last row left it above the list, and the reader who held Down then spent an Up per overshoot
+before the highlight moved at all. The count that clamps it is the drawn list's: the key handler is
+handed the memo, so a press reads the list the panel is showing rather than working one out for
+itself. That row is also the finder's **pick**, in the sense every list in the app now has one
+(`agents/Sidebar.md`): an Alt+press moves the keyboard to the row under the pointer and opens
+nothing, where a plain press opens the file and closes the panel. It is drawn in the selection while
+the box holds the keyboard, which it does from the moment the chord opens the finder, and in the
+grey a list not being typed in draws its pick with -- so the finder needs no rule of its own for
+either, only the box handed down as `RowsBox`.
 
 **The list follows that row.** The panel is `FINDER_ROWS` tall and the arrows walk past it, so the
 list is given a `ScrollController` and each move ends in `reveal_caret` -- the code panes' own

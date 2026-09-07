@@ -37,7 +37,7 @@ impl Component for BinaryRow {
                 .cross_align(Alignment::Center)
                 .spacing(8.0)
                 .content(Content::Flex)
-                .child(tree_name_fitted(fitted, text, false))
+                .child(tree_name_fitted(fitted, text, false, &[]))
                 .child(
                     label()
                         .text(match self.objects {
@@ -123,7 +123,7 @@ impl Component for ArtifactRow {
                     .spacing(8.0)
                     .content(Content::Flex)
                     .background(match hovering() {
-                        true => palette().object_hover_bg,
+                        true => palette().row_hover_bg,
                         false => Color::TRANSPARENT,
                     })
                     .on_pointer_over(move |_| hovering.set_if_modified(true))
@@ -150,7 +150,7 @@ impl Component for ArtifactRow {
                             open_binaries(objects, loading, vec![path]).await;
                         });
                     })
-                    .child(tree_name_fitted(fitted, text, false))
+                    .child(tree_name_fitted(fitted, text, false, &[]))
                     .child(label().text(about).color(palette().address_fg).max_lines(1)),
             ),
         )
@@ -269,7 +269,7 @@ impl Component for RecentRow {
                 .spacing(8.0)
                 .content(Content::Flex)
                 .background(match hovering() {
-                    true => palette().object_hover_bg,
+                    true => palette().row_hover_bg,
                     false => Color::TRANSPARENT,
                 })
                 .on_pointer_over(move |_| hovering.set_if_modified(true))

@@ -530,6 +530,7 @@ impl Component for LocationsPanel {
     fn render(&self) -> impl IntoElement {
         let located = use_consume::<Locations>().0;
         let filter = use_state(Filter::default);
+        let pane = use_list_pane(Panel::Locations);
         let filtered = use_memo(move || {
             let symbols = located
                 .read()
@@ -560,7 +561,20 @@ impl Component for LocationsPanel {
             .as_ref()
             .map(|shown| shown.studied.symbol.clone());
         let state = located.read().clone();
+        // What Enter on a row reaches through, and the two facts a location row opens
+        // with: the line the question was asked from, and the tab it was asked in.
+        let to = use_landings();
+        // What Enter on a reference row reaches through beside those: a place in a file
+        // is opened the way both grouped panels open one (`ui/place_row.rs`).
+        let places = use_places();
+        let asked_at = state.found.as_ref().map(|found| found.of.at.clone());
+        let subject = state.subject.clone();
 
+        // The filter compiled once for the rows to mark what it matched in them, beside
+        // the memos above which compile one of their own to narrow the lists with.
+        let marking = Marking::new(filter.read().matcher());
+
+        let mut keys = ListKeys::none();
         let body: Element = match (&state.asked, state.pending(), &state.found) {
             (None, _, _) => placeholder("Nothing looked for yet"),
             (Some(_), Some(query), _) => placeholder(format!(
@@ -577,6 +591,20 @@ impl Component for LocationsPanel {
                 let heading =
                     query.heading(found.places().map_or(0, references::References::count));
                 let length = used.len();
+                // The rows the arrows step and Enter presses: a `ReferenceRows` is the
+                // rows behind an `Arc`, so this is a pointer each.
+                let listed = used.clone();
+                let stepped = listed.clone();
+                keys = ListKeys {
+                    length,
+                    at: Box::new(move |at| stepped.get(at).map(place_pick)),
+                    open: Box::new(move |at| match listed.get(at) {
+                        Some(row) => {
+                            press_place(to.doors, places, to.ctrl, Folding::Places(located), row)
+                        }
+                        None => Pressed::Folded,
+                    }),
+                };
                 rect()
                     .expanded()
                     .content(Content::Flex)
@@ -592,13 +620,15 @@ impl Component for LocationsPanel {
                                     PlaceRow {
                                         row: used[row].clone(),
                                         folding: Folding::Places(*located),
+                                        at: row,
                                         key: DiffKey::None,
                                     }
                                     .into()
                                 },
                             )
                             .length(length)
-                            .item_size(list_row_height()),
+                            .item_size(list_row_height())
+                            .scroll_controller(pane.controller),
                         ),
                     )
                     .into()
@@ -613,6 +643,24 @@ impl Component for LocationsPanel {
                 // the answer to anything until the question is in view with them.
                 let heading = query.heading(found.symbols().map_or(0, |symbols| symbols.0.len()));
                 let length = filtered.len();
+                // The rows the arrows step and Enter presses: a `Filtered` is the list
+                // behind an `Arc` and the indices the filter kept.
+                let rows = Rc::new(filtered.clone());
+                let symbol_at = move |rows: &Filtered, at: usize| {
+                    (at < rows.len()).then(|| rows.symbols.0[rows.index(at)].clone())
+                };
+                let stepped = rows.clone();
+                let (at_asked, subject) = (asked_at.clone(), subject.clone());
+                keys = ListKeys {
+                    length,
+                    at: Box::new(move |at| symbol_at(&stepped, at).map(Pick::Symbol)),
+                    open: Box::new(move |at| match symbol_at(&rows, at) {
+                        Some(symbol) => {
+                            press_location(to, at_asked.clone(), subject.clone(), symbol)
+                        }
+                        None => Pressed::Folded,
+                    }),
+                };
                 rect()
                     .expanded()
                     .content(Content::Flex)
@@ -623,14 +671,21 @@ impl Component for LocationsPanel {
                     .child(
                         rect().width(Size::fill()).height(Size::flex(1.0)).child(
                             VirtualScrollView::new_with_data(
-                                (filtered, selected),
-                                |row, (filtered, selected): &(Filtered, Option<Symbol>)| {
+                                (filtered, selected, marking),
+                                |row,
+                                 (filtered, selected, marking): &(
+                                    Filtered,
+                                    Option<Symbol>,
+                                    Marking,
+                                )| {
                                     let index = filtered.index(row);
                                     let symbol = &filtered.symbols.0[index];
                                     LocationRow {
                                         symbols: filtered.symbols.clone(),
                                         index,
                                         selected: selected.as_ref() == Some(symbol),
+                                        at: row,
+                                        marks: marking.marks(symbol.data.display()),
                                         key: DiffKey::None,
                                     }
                                     // The symbol *and* its object: one file parsed
@@ -643,7 +698,8 @@ impl Component for LocationsPanel {
                                 },
                             )
                             .length(length)
-                            .item_size(list_row_height()),
+                            .item_size(list_row_height())
+                            .scroll_controller(pane.controller),
                         ),
                     )
                     .into()
@@ -652,7 +708,7 @@ impl Component for LocationsPanel {
             (Some(_), None, None) => placeholder("Nothing looked for yet"),
         };
 
-        use_filter_pane(filter, palette().symbol_pane_bg, body)
+        pane.filtered(filter, keys, body)
     }
 }
 
@@ -662,9 +718,14 @@ impl Component for LocationsPanel {
 #[derive(Clone)]
 struct LocationRow {
     symbols: SymbolList,
+    /// Which symbol this is, in the list the filter narrowed.
     index: usize,
     /// Whether this is the symbol the panes are drawing.
     selected: bool,
+    /// Where this row is in the list as it is drawn, which under a filter is not `index`.
+    at: usize,
+    /// Where the filter matched in the name, for the row to mark.
+    marks: Vec<Range<usize>>,
     key: DiffKey,
 }
 
@@ -673,6 +734,8 @@ impl PartialEq for LocationRow {
         self.symbols == other.symbols
             && self.index == other.index
             && self.selected == other.selected
+            && self.at == other.at
+            && self.marks == other.marks
     }
 }
 
@@ -682,20 +745,103 @@ impl KeyExt for LocationRow {
     }
 }
 
+/// Everything a location row's press reaches through: what a door is given, and the two
+/// states beyond it a chosen symbol is written to. A struct because both the row and the
+/// panel's Enter hand over the same set.
+#[derive(Clone, Copy)]
+struct Landings {
+    doors: Doors,
+    driven: State<Driven>,
+    ctrl: State<bool>,
+}
+
+/// The three, consumed in the render as every context-consuming function must be.
+fn use_landings() -> Landings {
+    Landings {
+        doors: use_doors(),
+        driven: use_places().driven,
+        ctrl: use_consume::<Ctrl>().0,
+    }
+}
+
+/// What pressing a location row does: open the symbol, on the line the question was asked
+/// from where there was one. Shared by the press and by Enter on the row the arrows left
+/// the pick on.
+///
+/// `at` is the answer's own line, peeked when the row was built: a row is a row of one
+/// answer and cannot outlive it. `subject` is the source-driven tab the question was asked
+/// from, where it is still open and still on the file.
+fn press_location(
+    to: Landings,
+    at: Option<LinePos>,
+    subject: Option<(DocId, Arc<str>)>,
+    symbol: Symbol,
+) -> Pressed {
+    let Landings {
+        doors,
+        driven,
+        ctrl,
+    } = to;
+    let open = doors.open;
+    let symbol_tab = Document::Assembly(Selection::Symbol(symbol.clone()));
+    let Some(at) = at else {
+        open_document(open, doors.visits, symbol_tab, reach(ctrl));
+        return Pressed::Opened;
+    };
+    // Chosen for the tab the question was asked from. The choice is that entry's, and the
+    // entry is driven from the line the question was asked from, so the tab's assembly
+    // side becomes this symbol -- for an instance, provided the instance holds code from
+    // that line, which `compiled::pick` falls back from where it does not. Bound to a
+    // `let` so the table's guard is gone before `driven` is written.
+    let subject = subject
+        .filter(|(id, file)| open.docs.peek().get(*id) == Some(&Document::Source(file.clone())));
+    match subject {
+        Some((id, file)) => {
+            // The place that tab is at, not the file: a drive written under a stop the
+            // trail does not hold is a drive nothing reads. The guard is gone before
+            // `driven` is written.
+            let at_place = place_at(&open.docs.peek(), id, &Document::Source(file));
+            let entry = (id, at_place);
+            {
+                let mut driven = driven;
+                let mut driven = driven.write();
+                driven.remember(entry.clone(), at.line);
+                driven.choose(entry, symbol);
+            }
+            land_on(doors, id, at);
+        }
+        None => {
+            // A line and no instruction: the row names a place in a file, and the
+            // assembly pane's caret is the pair's.
+            land(
+                doors,
+                Landing {
+                    tab: symbol_tab,
+                    at: Some(at),
+                    address: None,
+                    columns: None,
+                },
+                reach(ctrl),
+            );
+        }
+    }
+    Pressed::Opened
+}
+
 impl Component for LocationRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         // The two texts a row draws, each measured: the symbol's name and the object it
         // is in.
         let (named, about) = (use_fitted(), use_fitted());
-        let doors = use_doors();
-        let open = doors.open;
-        let ctrl = use_consume::<Ctrl>().0;
-        let driven = use_places().driven;
+        let to = use_landings();
         let located = use_consume::<Locations>().0.peek().clone();
         let at = located.found.as_ref().map(|found| found.of.at.clone());
         let subject = located.subject.clone();
+        let picking = use_picking(Panel::Locations);
+        let row = self.at;
         let symbol = self.symbols.0[self.index].clone();
+        let pick = Pick::Symbol(symbol.clone());
         let name = symbol.data.display().to_owned();
         let object = symbol.object.name.clone();
 
@@ -703,57 +849,13 @@ impl Component for LocationRow {
         cut_tooltip(
             named.cut() || about.cut(),
             format!("{name} \u{2014} {object}"),
-            list_row(hovering, self.selected)
+            list_row(hovering, picking.drawn(&pick, self.selected))
                 .on_press(move |_| {
-                    let symbol_tab = Document::Assembly(Selection::Symbol(symbol.clone()));
-                    // The line is the answer's own, peeked when the row was built: a row
-                    // is a row of one answer and cannot outlive it.
-                    let Some(at) = at.clone() else {
-                        open_document(open, doors.visits, symbol_tab, reach(ctrl));
-                        return;
-                    };
-                    // Asked from a source-driven tab that is still open and still on the
-                    // file: chosen for it. The choice is that entry's, and the entry is
-                    // driven from the line the question was asked from, so the tab's
-                    // assembly side becomes this symbol -- for an instance, provided the
-                    // instance holds code from that line, which `compiled::pick` falls
-                    // back from where it does not. Bound to a `let` so the table's guard
-                    // is gone before `driven` is written.
-                    let subject = subject.clone().filter(|(id, file)| {
-                        open.docs.peek().get(*id) == Some(&Document::Source(file.clone()))
+                    picking.press(pick.clone(), row, || {
+                        press_location(to, at.clone(), subject.clone(), symbol.clone())
                     });
-                    match subject {
-                        Some((id, file)) => {
-                            // The place that tab is at, not the file: a drive written
-                            // under a stop the trail does not hold is a drive nothing
-                            // reads. The guard is gone before `driven` is written.
-                            let at_place = place_at(&open.docs.peek(), id, &Document::Source(file));
-                            let entry = (id, at_place);
-                            {
-                                let mut driven = driven;
-                                let mut driven = driven.write();
-                                driven.remember(entry.clone(), at.line);
-                                driven.choose(entry, symbol.clone());
-                            }
-                            land_on(doors, id, at);
-                        }
-                        None => {
-                            // A line and no instruction: the row names a place in a
-                            // file, and the assembly pane's caret is the pair's.
-                            land(
-                                doors,
-                                Landing {
-                                    tab: symbol_tab,
-                                    at: Some(at),
-                                    address: None,
-                                    columns: None,
-                                },
-                                reach(ctrl),
-                            );
-                        }
-                    }
                 })
-                .child(tree_name_fitted(named, name, false))
+                .child(tree_name_fitted(named, name, false, &self.marks))
                 // Capped rather than measured, or a long member name would take the row
                 // and leave the symbol it is about with nothing.
                 .child(

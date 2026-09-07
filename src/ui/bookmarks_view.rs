@@ -9,15 +9,24 @@ use super::*;
 /// does not shrink behind their back.
 #[derive(Clone)]
 struct BookmarkRow {
+    /// Which bookmark this is, in the reader's own list -- what its menu removes by.
     index: usize,
     bookmark: Bookmark,
     live: Option<Document>,
+    /// Where this row is in the list as it is drawn, which under a filter is not `index`.
+    at: usize,
+    /// Where the filter matched in the label, for the row to mark.
+    marks: Vec<Range<usize>>,
     key: DiffKey,
 }
 
 impl PartialEq for BookmarkRow {
     fn eq(&self, other: &Self) -> bool {
-        self.index == other.index && self.bookmark == other.bookmark && self.live == other.live
+        self.index == other.index
+            && self.bookmark == other.bookmark
+            && self.live == other.live
+            && self.at == other.at
+            && self.marks == other.marks
     }
 }
 
@@ -37,7 +46,10 @@ impl Component for BookmarkRow {
         let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
+        let picking = use_picking(Panel::Bookmarks);
         let index = self.index;
+        let at = self.at;
+        let pick = Pick::Bookmark(index);
         let dead = self.live.is_none();
 
         // Drawn from the bookmark whether or not the place is live, so a row does not
@@ -58,13 +70,18 @@ impl Component for BookmarkRow {
         };
 
         // A dead row has no handlers at all, like a dimmed history button: nothing to go
-        // to, so nothing to light up for. Nothing is picked out in this list either -- a
-        // bookmark is a place, not a selection.
+        // to, so nothing to light up for, and nothing to pick out either. Nothing about
+        // the tab on screen picks a live row out -- a bookmark is a place and the tab may
+        // be anywhere -- so a row here lights when the reader pressed it and not
+        // otherwise.
         let row = match &self.live {
             Some(live) => {
                 let live = live.clone();
-                list_row(hovering, false).on_press(move |_| {
-                    open_document(open, visits, live.clone(), reach(ctrl));
+                list_row(hovering, picking.drawn(&pick, false)).on_press(move |_| {
+                    picking.press(pick.clone(), at, || {
+                        open_document(open, visits, live.clone(), reach(ctrl));
+                        Pressed::Opened
+                    });
                 })
             }
             None => dead_list_row(),
@@ -78,7 +95,7 @@ impl Component for BookmarkRow {
                 ContextMenu::open_from_event(&e, remove_menu(bookmarked, index));
             })
             .child(saved_icon(&self.bookmark.document))
-            .child(tree_name_fitted(fitted, text, dead)),
+            .child(tree_name_fitted(fitted, text, dead, &self.marks)),
         )
     }
 
@@ -134,40 +151,73 @@ impl Component for BookmarksPanel {
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
         let filter = use_state(Filter::default);
+        let pane = use_list_pane(Panel::Bookmarks);
+        // What Enter on a row reaches through, consumed here because the handler that
+        // uses them runs no hook.
+        let doors = use_doors();
+        let (open, visits) = (doors.open, doors.visits);
+        let ctrl = use_consume::<Ctrl>().0;
         let matcher = filter.read().matcher();
 
         // Resolved where the rows are built, against the objects as they are now: reading
         // both is what re-resolves every row when a binary is opened or closed, which is
         // the whole of how a bookmark comes back to life. A handful of rows, so no memo.
-        let (rows, any): (Vec<Element>, bool) = {
+        let (rows, listed, any): (Vec<Element>, Vec<(usize, Option<Document>)>, bool) = {
             let bookmarked = bookmarked.read();
             let objects = objects.read();
             let entries = bookmarked.entries();
-            let rows = entries
+            // What the rows are of, kept beside them: each row's bookmark and the place it
+            // resolved to, which is what the arrows step and Enter opens. A dead one keeps
+            // its row and opens nothing, as pressing it does.
+            let listed: Vec<(usize, Option<Document>)> = entries
                 .iter()
                 .enumerate()
                 .filter(|(_, bookmark)| matcher.matches(&bookmark.label()))
-                .map(|(index, bookmark)| {
+                .map(|(index, bookmark)| (index, bookmark.document.resolve_by_name(&objects)))
+                .collect();
+            let rows = listed
+                .iter()
+                .enumerate()
+                .map(|(at, (index, live))| {
+                    let bookmark = &entries[*index];
                     BookmarkRow {
-                        index,
+                        index: *index,
                         bookmark: bookmark.clone(),
-                        live: bookmark.document.resolve_by_name(&objects),
+                        live: live.clone(),
+                        at,
+                        marks: matcher.marks(&bookmark.label()),
                         key: DiffKey::None,
                     }
-                    .key((index, bookmark))
+                    .key((*index, bookmark))
                     .into()
                 })
                 .collect();
-            (rows, !entries.is_empty())
+            (rows, listed, !entries.is_empty())
+        };
+        let keys = {
+            let stepped = listed.clone();
+            ListKeys {
+                length: listed.len(),
+                at: Box::new(move |at| stepped.get(at).map(|(index, _)| Pick::Bookmark(*index))),
+                open: Box::new(
+                    move |at| match listed.get(at).and_then(|(_, live)| live.clone()) {
+                        Some(live) => {
+                            open_document(open, visits, live, reach(ctrl));
+                            Pressed::Opened
+                        }
+                        None => Pressed::Folded,
+                    },
+                ),
+            }
         };
 
-        use_filter_pane(
+        pane.filtered(
             filter,
-            palette().symbol_pane_bg,
+            keys,
             match (any, rows.is_empty()) {
                 (false, _) => placeholder("No bookmarks"),
                 (true, true) => placeholder("No matches"),
-                (true, false) => ScrollView::new()
+                (true, false) => ScrollView::new_controlled(pane.controller)
                     .child(rect().width(Size::fill()).children(rows).into_element())
                     .into_element(),
             },

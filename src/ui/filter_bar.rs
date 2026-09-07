@@ -248,81 +248,199 @@ impl Component for FilterBar {
     }
 }
 
-/// A list under its own filter bar. The bar takes its height off the top of the pane
-/// rather than out of the list, so a `VirtualScrollView` inside still starts at a row
-/// boundary however tall the bar turns out to be -- it grows a line for a bad pattern.
+/// The box a panel's list is drawn in: the rows' own focusable node, the box over them,
+/// the scroll the arrows move, and how tall the rows came out.
 ///
-/// **Ctrl+F puts the keyboard in the box over the list it is pressed in**, and nowhere
-/// else: the binding is on the rows and not on the root, so a code pane keeps its keys
-/// and its own Ctrl+F for the source search. A press on the rows is what focuses them,
-/// or a list could not be reached with the keyboard at all and the chord would have
-/// nothing to fire from. In the box the chord does nothing, the box being where it
-/// leads; the bar declines it there so it is not typed in as an `f`.
-///
-/// The handler goes on the rows themselves rather than over both halves of the pane
-/// because a key event is emitted only for a **focused node that listens for it** --
-/// bubbling to an ancestor's handler comes after that, and never happens when the
-/// focused node has no handler of its own (`notes/upstream/freya.md`).
-///
-/// The two ids are minted here and not in the bar, the pane being what holds them both.
-/// `use_hook`, so this is a `use_` function: it is called once and unconditionally by
-/// each of the five tabs, at the end of a render.
-pub(crate) fn use_filter_pane(
-    filter: State<Filter>,
-    background: Color,
-    list: impl IntoElement,
-) -> Element {
-    use_boxed_pane(filter, "Filter", None, background, list).0
+/// The list's counterpart to [`ListBox`] (`ui/list_box.rs`), which is the same four things
+/// for a code listing, and minted the same way: before the list is built, the scroll view
+/// being handed the controller. `use_hook`, so [`use_list_pane`] is a `use_` function and
+/// is called once and unconditionally by each panel.
+#[derive(Clone, Copy)]
+pub(crate) struct ListPane {
+    /// The rows' own node: what a press focuses, what the keys are answered on, and what
+    /// [`RowsBox`] hands down so a row knows whether the keyboard is in its list.
+    rows: AccessibilityId,
+    /// The filter box over them, where the pane has one.
+    box_id: AccessibilityId,
+    /// The scroll the arrows move, handed to the panel's own scroll view.
+    pub(crate) controller: ScrollController,
+    /// How tall the rows' box is, which is what says whether the row an arrow moved to is
+    /// on screen at all. A `VirtualScrollView` measures itself but keeps the answer, so
+    /// the box around it is what is measured -- [`ListBox`]'s own reason.
+    viewport: State<f32>,
+    picking: Picking,
 }
 
-/// The Search panel's list under its own box: [`use_filter_pane`] where Enter asks a
-/// question rather than the typing filtering as it goes, and where the box's id comes
-/// back, since the chord that reaches it is answered at the root and not on the rows.
-pub(crate) fn use_search_pane(
-    filter: State<Filter>,
-    submits: State<u64>,
-    background: Color,
-    list: impl IntoElement,
-) -> (Element, AccessibilityId) {
-    use_boxed_pane(filter, "Search", Some(submits), background, list)
-}
-
-/// The two panes above: the pane, and the id of the box in it.
-fn use_boxed_pane(
-    filter: State<Filter>,
-    placeholder: &'static str,
-    submits: Option<State<u64>>,
-    background: Color,
-    list: impl IntoElement,
-) -> (Element, AccessibilityId) {
+/// The box for the list `panel` draws.
+pub(crate) fn use_list_pane(panel: Panel) -> ListPane {
     let rows = use_hook(AccessibilityId::new_unique);
-    let box_id = use_hook(AccessibilityId::new_unique);
-    let pane = rect()
-        .expanded()
-        .content(Content::Flex)
-        .background(background)
-        .child(FilterBar {
-            filter,
-            a11y: box_id,
-            placeholder,
-            submits,
-        })
-        .child(
-            rect()
-                .width(Size::fill())
-                .height(Size::flex(1.0))
-                .a11y_id(rows)
-                .a11y_focusable(true)
-                .on_pointer_down(move |_| rows.request_focus())
-                .on_key_down(move |e: Event<KeyboardEventData>| {
-                    if is_find_chord(&e.key, e.modifiers) {
-                        box_id.request_focus();
-                    }
-                })
-                .child(list),
+    // Provided rather than passed as a prop: it is one fact about the pane and every row
+    // of every list in it wants it (`ui/picks.rs`).
+    use_provide_context(|| RowsBox(rows));
+    ListPane {
+        rows,
+        box_id: use_hook(AccessibilityId::new_unique),
+        controller: use_scroll_controller(ScrollConfig::default),
+        viewport: use_state(|| 0.0f32),
+        picking: use_picking(panel),
+    }
+}
+
+impl ListPane {
+    /// A list under its own filter bar. The bar takes its height off the top of the pane
+    /// rather than out of the list, so a `VirtualScrollView` inside still starts at a row
+    /// boundary however tall the bar turns out to be -- it grows a line for a bad pattern.
+    pub(crate) fn filtered(
+        &self,
+        filter: State<Filter>,
+        keys: ListKeys,
+        list: impl IntoElement,
+    ) -> Element {
+        self.boxed(Some((filter, "Filter", None)), keys, list)
+    }
+
+    /// The Search panel's list under its own box: [`ListPane::filtered`] where Enter asks a
+    /// question rather than the typing filtering as it goes, and where the box's id comes
+    /// back, since the chord that reaches it is answered at the root and not on the rows.
+    pub(crate) fn searched(
+        &self,
+        filter: State<Filter>,
+        submits: State<u64>,
+        keys: ListKeys,
+        list: impl IntoElement,
+    ) -> (Element, AccessibilityId) {
+        (
+            self.boxed(Some((filter, "Search", Some(submits))), keys, list),
+            self.box_id,
         )
-        .into();
-    (pane, box_id)
+    }
+
+    /// A list with no bar over it: the Files tree, which has nothing to filter by. Ctrl+F
+    /// leads to a box, so it does nothing here.
+    pub(crate) fn plain(&self, keys: ListKeys, list: impl IntoElement) -> Element {
+        self.boxed(None, keys, list)
+    }
+
+    /// All three: the pane on the one ground every panel is drawn on, the bar where there
+    /// is one, and the rows under it.
+    fn boxed(
+        &self,
+        bar: Option<(State<Filter>, &'static str, Option<State<u64>>)>,
+        keys: ListKeys,
+        list: impl IntoElement,
+    ) -> Element {
+        rect()
+            .expanded()
+            .content(Content::Flex)
+            .background(palette().pane_bg)
+            .maybe(bar.is_some(), |pane| {
+                let (filter, placeholder, submits) = bar.expect("the bar is there");
+                pane.child(FilterBar {
+                    filter,
+                    a11y: self.box_id,
+                    placeholder,
+                    submits,
+                })
+            })
+            .child(self.rows(keys, list))
+            .into()
+    }
+
+    /// The rows: the focusable node the list is drawn in, and every key it answers.
+    ///
+    /// **Ctrl+F puts the keyboard in the box over the list it is pressed in**, and nowhere
+    /// else: the binding is on the rows and not on the root, so a code pane keeps its keys
+    /// and its own Ctrl+F for the source search. A press on the rows is what focuses them,
+    /// or a list could not be reached with the keyboard at all and the chord would have
+    /// nothing to fire from. In the box the chord does nothing, the box being where it
+    /// leads; the bar declines it there so it is not typed in as an `f`.
+    ///
+    /// The handler goes on the rows themselves rather than over both halves of the pane
+    /// because a key event is emitted only for a **focused node that listens for it** --
+    /// bubbling to an ancestor's handler comes after that, and never happens when the
+    /// focused node has no handler of its own (`notes/upstream/freya.md`).
+    fn rows(&self, keys: ListKeys, list: impl IntoElement) -> Rect {
+        let (rows, box_id, picking) = (self.rows, self.box_id, self.picking);
+        let (controller, viewport) = (self.controller, self.viewport);
+        let mut measured = viewport;
+        rect()
+            .width(Size::fill())
+            .height(Size::flex(1.0))
+            .a11y_id(rows)
+            .a11y_focusable(true)
+            .on_pointer_down(move |_| {
+                rows.request_focus();
+                picking.unasked();
+            })
+            .on_sized(move |e: Event<SizedEventData>| {
+                measured.set_if_modified(e.area.height());
+            })
+            .on_key_down(move |e: Event<KeyboardEventData>| {
+                answer(picking, &keys, controller, viewport, box_id, &e);
+            })
+            .child(list)
+    }
+}
+
+/// What a focused list does with a key: the chord to its box, the arrows over its rows,
+/// and Enter on the row they left the pick on.
+///
+/// The scroll follows the arrows for the finder's reason: the panel is a screenful of rows
+/// and the arrows walk past it, so a pick nobody can see is a row Enter opens unnamed.
+fn answer(
+    picking: Picking,
+    keys: &ListKeys,
+    mut controller: ScrollController,
+    viewport: State<f32>,
+    box_id: AccessibilityId,
+    e: &Event<KeyboardEventData>,
+) {
+    if is_find_chord(&e.key, e.modifiers) {
+        box_id.request_focus();
+        return;
+    }
+    let by = match &e.key {
+        Key::Named(NamedKey::ArrowDown) => 1,
+        Key::Named(NamedKey::ArrowUp) => -1,
+        Key::Named(NamedKey::Enter) => return picking.entered(keys),
+        _ => return,
+    };
+    if let Some(at) = picking.stepped(keys, by) {
+        reveal_caret(
+            &mut controller,
+            *viewport.peek(),
+            list_row_height(),
+            keys.length,
+            at,
+        );
+    }
+}
+
+/// The compiled filter, as the rows of a list are handed it: made once per render of the
+/// panel and shared by every row it builds, since compiling a regex per row is not free.
+///
+/// Compared by the pointer, as everything else in the UI with an `Rc` or an `Arc` behind
+/// it is. A fresh one every render is not equal to the last, so the scroll view builds its
+/// rows again -- which costs the rows themselves nothing, their own props being what says
+/// whether one has to be drawn again.
+#[derive(Clone)]
+pub(crate) struct Marking(Rc<Matcher>);
+
+impl PartialEq for Marking {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Marking {
+    pub(crate) fn new(matcher: Matcher) -> Self {
+        Self(Rc::new(matcher))
+    }
+
+    /// Where the filter matched in `text`, for the row to mark.
+    pub(crate) fn marks(&self, text: &str) -> Vec<Range<usize>> {
+        self.0.marks(text)
+    }
 }
 
 /// What a filter leaves of the symbol list: the list itself, and where in it the names

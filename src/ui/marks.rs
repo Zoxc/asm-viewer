@@ -58,6 +58,12 @@ impl Owed {
         source: true,
     };
 
+    /// A run neither pane has to scroll to: it is where the listing already is.
+    pub(crate) const NEITHER: Owed = Owed {
+        assembly: false,
+        source: false,
+    };
+
     /// A scroll owed by `pane` alone.
     pub(crate) fn by(pane: Pane) -> Owed {
         match pane {
@@ -293,6 +299,24 @@ fn row_pick(file: Option<Arc<str>>, row: usize, owed: Owed) -> Picked {
         file,
         owed,
     }
+}
+
+/// Put a caret at the top of `pane`'s listing: what a pane the keyboard was *handed* does,
+/// nothing in it having been clicked.
+///
+/// A listing with no run has no caret, so the arrows, Home, End and Ctrl+C have nothing to
+/// act on and a pane that has just been given the keyboard reads as though it had not. The
+/// file is left unsaid: this is a place in the listing and not a line of a file, so it
+/// pairs with nothing on the other side and owes no scroll -- the top is where the listing
+/// already is.
+pub(crate) fn mark_top(marked: State<Marks>, pane: Pane) {
+    update(marked, |marks| {
+        let picked = row_pick(None, 0, Owed::NEITHER);
+        match pane {
+            Pane::Assembly => marks.assembly = Some(picked),
+            Pane::Source => marks.source = Some(picked),
+        }
+    });
 }
 
 /// Pick out the one row `line` of `file` in the source pane, as a click from outside the

@@ -104,7 +104,7 @@ impl Component for GestureRow {
                 .cross_align(Alignment::Center)
                 .content(Content::Flex)
                 .spacing(8.0)
-                .child(tree_name_fitted(fitted, does, false))
+                .child(tree_name_fitted(fitted, does, false, &[]))
                 .child(
                     // Clipped, which is `field_row`'s lesson: a label given a width paints
                     // past it, and there is nothing between this column and the text

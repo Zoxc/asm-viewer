@@ -61,7 +61,7 @@ pub(crate) fn use_list_box(pane: Pane, listing: u64) -> ListBox {
     // A `pointer_down` anywhere inside the box bubbles to it and asks for focus, which is
     // what makes Ctrl+C mean this listing.
     let a11y = use_a11y();
-    use_tab_keyboard(a11y);
+    use_tab_keyboard(Some(pane), a11y);
     let controller = use_scroll_controller(ScrollConfig::default);
     let viewport = use_state(|| 0.0f32);
     // The widest row drawn, under the listing's identity: what every row is at least as

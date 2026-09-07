@@ -19,14 +19,18 @@ pub(crate) struct Palette {
     pub(crate) text_fg: Color,
     pub(crate) header_bg: Color,
     pub(crate) hairline: Color,
+    /// The neutral grey: a row picked out in a list the keyboard is **not** in, the half
+    /// of a panel a dragged tab would land in, and the copy of a tab or a panel header
+    /// that follows the cursor. A list holding the keyboard draws its pick in
+    /// `text_select_bg` instead, so the blue is what the next key acts on and the grey is
+    /// a place a list is remembering (`ui/picks.rs`).
     pub(crate) selected_bg: Color,
-    /// The wash a row takes under the pointer, in every list in the app and on either of
-    /// the two grounds a list is drawn on -- named for the Objects list it started in.
-    /// One colour and not one per pane: a row that lights says the same thing wherever it
-    /// is, and this green is a step from the pane's white and from the symbol pane's
-    /// cream alike, where a wash mixed for the cream is barely a step from the white.
-    pub(crate) object_hover_bg: Color,
-    pub(crate) symbol_pane_bg: Color,
+    /// The wash a row takes under the pointer, in every list in the app. One colour and
+    /// not one per pane: a row that lights says the same thing wherever it is. A grey and
+    /// a *faint* one -- fainter than either colour a picked row wears, which the palette
+    /// test says outright: the pointer passing over a row must not look like the reader
+    /// having chosen it.
+    pub(crate) row_hover_bg: Color,
     pub(crate) asm_pane_bg: Color,
     /// The pair: the rows of this pane that are the same place as the run picked out in
     /// the other one -- the instructions a selected source line was compiled from, the
@@ -76,9 +80,12 @@ pub(crate) struct Palette {
     /// width of the pane, where the gutter's stroke is a few pixels -- so it is quieter
     /// against the pane than `branch_fg` is, and the palette test says so.
     pub(crate) block_rule: Color,
-    /// The selection, in either pane: the characters a sweep picked out, drawn by the row
-    /// under its text. A translucent blue-grey, a shade off the pane and a hue off the
-    /// pair's green.
+    /// The selection, wherever there is one: the characters a sweep picked out in either
+    /// pane, drawn by the row under its text, and the row picked out in the list holding
+    /// the keyboard. A translucent blue-grey, a shade off the pane and a hue off the
+    /// pair's green. Being translucent, it is a different colour over each of the two
+    /// grounds it lands on -- a list's `pane_bg` and a code pane's `asm_pane_bg` -- and
+    /// says the same thing over both.
     pub(crate) text_select_bg: Color,
     /// The row the caret is on, where a press on the text has left one and no sweep has
     /// followed: the selection's colour, faded.
@@ -140,10 +147,13 @@ pub(crate) struct Palette {
     /// reader is choosing a file by what they can see of the window under it, so nothing
     /// there is taken away.
     pub(crate) panel_shadow: Color,
-    /// The part of a Search row's line that the pattern matched, drawn bold in this on
-    /// top of the row's own colour. A colour and a weight and not a background: a span
-    /// inside a paragraph can carry no fill of its own.
-    pub(crate) match_fg: Color,
+    /// The wash behind what a search or a filter matched: a desaturated green, low enough
+    /// to read straight through. A wash and not a colour on the characters, which is what
+    /// this was -- a bold orange -- because a match is a *place in* a name and not a thing
+    /// of its own, and because it then says the same thing over a picked-out row as over a
+    /// plain one. It is the paragraph's own highlight, freya giving a span no background
+    /// (`ui/parts.rs`), so a row marks its matches in the one unit skia indexes text by.
+    pub(crate) match_bg: Color,
 }
 
 impl Palette {
@@ -153,8 +163,7 @@ impl Palette {
         header_bg: Color::from_rgb(245, 245, 245), // WHITE_SMOKE
         hairline: Color::from_rgb(211, 211, 211),  // LIGHT_GRAY
         selected_bg: Color::from_rgb(211, 211, 211),
-        object_hover_bg: Color::from_rgb(144, 238, 144), // LIGHT_GREEN
-        symbol_pane_bg: Color::from_rgb(243, 243, 228),
+        row_hover_bg: Color::from_rgb(235, 235, 236),
         asm_pane_bg: Color::from_rgb(248, 248, 248),
         pair_bg: Color::from_argb(160, 228, 237, 216),
         pair_selected_bg: Color::from_argb(190, 197, 214, 184),
@@ -189,7 +198,7 @@ impl Palette {
         name_hover_fg: Color::from_rgb(105, 89, 132),
 
         invalid_fg: Color::from_rgb(176, 0, 32),
-        match_fg: Color::from_rgb(166, 92, 0),
+        match_bg: Color::from_argb(64, 120, 160, 110),
     };
 
     /// The same palette at dark-mode lightness: every value is the one in `LIGHT` turned
@@ -201,8 +210,7 @@ impl Palette {
         header_bg: Color::from_rgb(40, 40, 43),
         hairline: Color::from_rgb(62, 62, 66),
         selected_bg: Color::from_rgb(66, 66, 72),
-        object_hover_bg: Color::from_rgb(48, 92, 52),
-        symbol_pane_bg: Color::from_rgb(38, 38, 33),
+        row_hover_bg: Color::from_rgb(46, 46, 49),
         asm_pane_bg: Color::from_rgb(34, 34, 36),
         // The three translucent ones, each stated as what it should come out as over the
         // pane rather than as the light value flipped: `blend` puts 30/30/32 under them.
@@ -241,7 +249,7 @@ impl Palette {
         name_hover_fg: Color::from_rgb(190, 168, 224),
 
         invalid_fg: Color::from_rgb(240, 110, 120),
-        match_fg: Color::from_rgb(232, 174, 90),
+        match_bg: Color::from_argb(80, 120, 160, 110),
     };
 
     /// This palette in the shape `freya-code-editor`'s highlighter wants, so the source

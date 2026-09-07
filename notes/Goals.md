@@ -121,7 +121,6 @@ leaves this list when it is. That is a move made on request, like everything els
   stay drawn while the keyboard is elsewhere, or a reader could not see what they had selected
   before reaching for the other pane. So the caret goes and the highlight stays, and whether the
   highlight dims instead is the second question.
-
 ## Navigation
 
 - [ ] A door into the source shows no in-between state. Following a name puts the pane on the
@@ -332,23 +331,22 @@ leaves this list when it is. That is a move made on request, like everything els
   `placeholder` is shared with the panels that are on `pane_bg` correctly (Files, Search,
   Bookmarks, Locations, an empty dock panel), so what has to change is the caller and not the
   helper.
-- [ ] One ground and one selection for every panel. Four of them sit on `symbol_pane_bg`, a
-  cream a shade off the interface white — Symbols, History, Bookmarks, Locations — where
-  Objects, the tab beside the first two, and Files, Search, Project, Settings and the
-  scratchpad sit on `pane_bg`. Nothing decides which, and the split does not hold even across
-  the three tabs of one sidebar. Take the tint off: every panel on `pane_bg`, and
-  `symbol_pane_bg` out of the palette. The hovers go with it, there being two of those as
-  well — `object_hover_bg`, a light green, in the Objects, Files, Search, Project and
-  scratchpad lists, and `symbol_hover_bg`, the cream deepened, in the other four — where one
-  wash over one ground is what the panels want, and which of the two survives is the
-  decision. And a row that is picked out should be the colour a selection already is:
-  `text_select_bg`, what a sweep in the Source pane paints under the characters it took, in
-  place of `selected_bg`'s neutral grey, so being picked out says the same thing in a list as
-  in the code. `selected_bg` is the dock's drop target and dragged tab besides, which are not
-  selections and can keep it. Two things this has to hold on to: the palette tests put every
-  wash a visible step from the ground it sits on, and those grounds are what this moves; and
-  `text_select_bg` is translucent on purpose, so a row wash over `pane_bg` is not the colour
-  the same field draws over a code pane.
+- [x] One ground and one selection for every panel. Every panel is on `pane_bg` and
+  `symbol_pane_bg` is out of the palette. Symbols, History, Bookmarks and Locations sat on a
+  cream a shade off the interface white where the other seven sat on the pane's own, and the
+  split did not hold across the three tabs of one sidebar. Nothing decided it because nothing
+  could: `use_filter_pane` and `use_search_pane` took the ground as an argument, so each panel
+  named its own, and they no longer take one. The cream's other reader, the band that asks
+  whether a language server may read the directory, wears the pane's white instead and still
+  stands off the bar it hangs under. The two hovers the item expected were one green already,
+  folded together when `list_row` was. And **a row that is picked out wears `text_select_bg`**,
+  what a sweep in a code pane paints under the characters it took, in place of `selected_bg`'s
+  neutral grey, so being picked out says the same thing in a list as in the code; the grey is
+  left to the dock's drop target and the dragged tab and header, which are not selections. It
+  is translucent, so the contrast test holds the four chrome colours legible on what it comes
+  out as over `pane_bg` — at the floor the code already takes through the same wash, a list's
+  dim second column receding on the pane and through the selection alike — and the wash test
+  puts it and the hover a visible step from that ground.
 - [x] Draw the disclosure triangles as icons, not as glyphs. All five sites -- the Objects
   tree's archive rows, the Files tree, the Search and Locations panels and the symbol bar's
   section -- draw one `disclosure` (`src/ui/parts.rs`) now: the lucide `chevron_down` or
@@ -468,12 +466,20 @@ leaves this list when it is. That is a move made on request, like everything els
   it names arrives — which also means deciding what such a tab does if the load finishes and the
   object never comes, where the answer is probably the same drop the restore does now, only
   later and visibly.
-- [ ] Reach the panels from the keyboard. Only the code panes answer to more than one key: the
-  tab chips are pointer targets, a focused list has a cursor in neither sense — no row is
-  current, and nothing moves between rows — and Ctrl+F goes from a list to the box over it and
-  never back, which is the ranked-search item above seen from the other side. Note what it needs
-  deciding first: what "the focused pane" means, the sidebar's panels being arrangeable and the
-  bar's tabs not.
+- [x] A cursor in every list, and the arrows and Enter on it. A focused list had a cursor in
+  neither sense — no row was current and nothing moved between rows — because the only lit row
+  was whatever the tab on screen showed. A list holds its own pick now (`src/ui/picks.rs`): Up
+  and Down move it, the list scrolling to keep it in view, and Enter opens it the way pressing
+  its row would, the keyboard included: opening a tab hands it the keyboard however the row
+  was opened, and what leaves it in a list is a row that only folds and a press with Alt
+  held, which opens nothing. Every panel answers, the Files tree having grown the focusable
+  box the other six get from their filter pane.
+- [ ] Reach the panels from the keyboard: getting *to* one. The rows answer the arrows and
+  Enter once the keyboard is in them, but the only ways in are a press on a row and Ctrl+F,
+  which goes from a list to the box over it and never back. What is left is a chord that
+  reaches a panel from anywhere and a way back out of the box, and what it needs deciding
+  first is what "the focused pane" means, the sidebar's panels being arrangeable and the bar's
+  tabs not.
 
 - [ ] Two clicks on a row in a panel open it as a tab of its own. A sidebar item opens in
   the temporal tab, which the next item reuses, and the ways out of that are Ctrl+click, a
@@ -513,7 +519,6 @@ leaves this list when it is. That is a move made on request, like everything els
   is no longer what is loaded. Outdated means the content differs: the digest taken when the
   binary was opened against the file the build named. The reader reopens one when they choose
   to, and that is what clears the mark.
-
 ## Startup
 
 ## Fonts and settings

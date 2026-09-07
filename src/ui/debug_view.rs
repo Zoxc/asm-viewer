@@ -76,7 +76,7 @@ fn panic_row(name: &str, press: impl FnMut(Event<PressEventData>) + 'static) -> 
         .cross_align(Alignment::Center)
         .content(Content::Flex)
         .spacing(8.0)
-        .child(tree_name(name.to_owned(), false))
+        .child(tree_name(name.to_owned(), false, &[]))
         .child(Button::new().on_press(press).child("Panic"))
 }
 
@@ -127,7 +127,7 @@ impl Component for FileRow {
             .padding(Gaps::new_symmetric(0.0, 4.0))
             .corner_radius(4.0)
             .background(match hovering() {
-                true => palette().object_hover_bg,
+                true => palette().row_hover_bg,
                 false => Color::TRANSPARENT,
             })
             .on_pointer_over(move |_| hovering.set_if_modified(true))
@@ -135,7 +135,7 @@ impl Component for FileRow {
             // `spawn_forever` is not needed: nothing here takes this row down, and the
             // call is a thread of `reveal`'s own either way.
             .on_press(move |_| reveal::reveal(path.clone()))
-            .child(tree_name(name, false))
+            .child(tree_name(name, false, &[]))
     }
 }
 

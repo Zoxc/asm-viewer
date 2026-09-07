@@ -519,7 +519,12 @@ impl Component for FinderOverlay {
         let finder = use_consume::<Finding>().0;
         let states = use_project_states();
         let visits = states.visits;
+        let keyboard = use_consume::<Keyboard>().0;
         let box_id = use_hook(AccessibilityId::new_unique);
+        // The panel's one focusable node is its box, so it is the box that answers for
+        // the list under it: the rows are drawn live while the reader is typing at them,
+        // and in the grey if the keyboard has gone elsewhere (`ui/picks.rs`).
+        use_provide_context(|| RowsBox(box_id));
         // The list's own scroll. The arrows move a row the view knows nothing about, so
         // without a controller to follow it the row goes under the panel's edge at the
         // thirteenth press, and Enter opens a file the reader never saw named.
@@ -544,11 +549,20 @@ impl Component for FinderOverlay {
         });
 
         let state = finder.read().clone();
-        // The caret in the box, asked for once each time the overlay is drawn: the box
-        // has no node to focus until then, `reach_search`'s own reason for asking through
-        // the state.
-        use_side_effect_with_deps(&state.open, move |open: &bool| {
-            if *open {
+        // The caret in the box, asked for whenever the box does not have it and the
+        // overlay is up. When it opens, the box has no node to focus until then --
+        // `reach_search`'s own reason for asking through the state. After that it is a
+        // press on a row: a row cannot hold the keyboard, and freya takes the focus out
+        // of the panel **after** the row's handler has run, so an Alt+press would leave a
+        // finder nobody could type in and the row it picked drawn as a list nobody is in.
+        // Both states are read and not peeked, which is what subscribes the effect, and
+        // the focus is what it has to be woken by. Asking in the handler instead is too
+        // early: the platform's focus is written at the end of the pass that handler ran
+        // in, so the ask is made while the box still counts as focused and
+        // `request_focus` declines it.
+        use_side_effect(move || {
+            let focused = box_id.is_focused();
+            if finder.read().open && !focused {
                 box_id.request_focus();
             }
         });
@@ -650,7 +664,7 @@ impl Component for FinderOverlay {
                             // below move a list the box does not hold, and the box
                             // declines them so that they arrive here at all.
                             .on_global_key_down(move |e: Event<KeyboardEventData>| {
-                                finder_key(finder, states, list, listed, &e.key);
+                                finder_key(finder, states, keyboard, list, listed, &e.key);
                             })
                             .child(FinderBox {
                                 finder,
@@ -684,6 +698,7 @@ fn note(text: &str) -> Element {
 fn finder_key(
     finder: State<Finder>,
     states: ProjectStates,
+    keyboard: State<Keys>,
     list: ScrollController,
     listed: Memo<Listed>,
     key: &Key,
@@ -699,7 +714,7 @@ fn finder_key(
                 listed.peek().path(at)
             };
             if let Some(path) = opened {
-                open_found(states, &path);
+                open_found(states, keyboard, &path);
                 close_finder(finder);
             }
         }
@@ -732,6 +747,17 @@ fn moved(mut finder: State<Finder>, rows: usize, by: isize) -> (usize, usize) {
     (state.at, rows)
 }
 
+/// Put the keyboard on `index` and leave the finder open: what an Alt+press on a row
+/// does. The box's text is remembered with it, as [`moved`] remembers it, so the row is
+/// this list's as the query stands and not a row of the next one typed.
+fn pick_row(mut finder: State<Finder>, index: usize) {
+    // Bound before the write, so the read guard is gone by then.
+    let typed = finder.peek().typed.clone();
+    let mut state = finder.write();
+    state.at = index;
+    state.at_for = typed;
+}
+
 /// Scroll the list so the row the keyboard was moved to is one of the rows drawn: the
 /// panel is [`FINDER_ROWS`] tall and the arrows walk past that, and a row nobody can see
 /// is a file Enter opens unnamed.
@@ -753,8 +779,12 @@ fn followed(mut list: ScrollController, (at, rows): (usize, usize)) {
 /// reader who typed the path out and picked it off the list has chosen the file. A tab
 /// already showing it is raised. The Files row's own door, so it carries that guard too:
 /// a file the source pane would refuse opens nothing at all.
-fn open_found(states: ProjectStates, path: &Path) {
+/// The keyboard goes with it, as it does out of every list a row is opened from
+/// (`ui/picks.rs`), and here it has nowhere else to be: the panel is closing and the box it
+/// was in goes with it.
+fn open_found(states: ProjectStates, keyboard: State<Keys>, path: &Path) {
     open_source_file(states, path, Reach::NewTab);
+    ask_for_keyboard(keyboard);
 }
 
 /// The box at the top of the overlay.
@@ -847,6 +877,10 @@ impl Component for FoundRow {
         let states = use_project_states();
         let finder = self.finder;
 
+        let alt = use_consume::<Alt>().0;
+        let keyboard = use_consume::<Keyboard>().0;
+        let index = self.index;
+
         let Some((file, marks)) = self.listed.row(self.index) else {
             return rect().into_element();
         };
@@ -858,20 +892,31 @@ impl Component for FoundRow {
             fitted.cut(),
             file.path.display().to_string(),
             // The keyboard's row is what is picked out here; the pointer's is the hover.
-            list_row(hovering, self.on_row)
+            list_row(hovering, chosen(self.on_row, keyboard_in_list()))
                 .on_press(move |_| {
-                    open_found(states, &pressed);
+                    // Alt says this press is not a door, as it does on a link and in
+                    // every list: the row is picked out and the finder stays open. The
+                    // finder's pick *is* its keyboard row, so pointing at a row is
+                    // moving the keyboard to it.
+                    if *alt.peek() {
+                        pick_row(finder, index);
+                        return;
+                    }
+                    open_found(states, keyboard, &pressed);
                     close_finder(finder);
                 })
-                .child(
-                    fitted.measuring(
+                .child({
+                    let (spans, drawn, hits) = row_line(file, marks);
+                    fitted.measuring(marked(
                         paragraph()
                             .width(Size::fill())
                             .max_lines(1)
                             .text_overflow(TextOverflow::Ellipsis)
-                            .spans_iter(row_spans(file, marks).into_iter()),
-                    ),
-                ),
+                            .spans_iter(spans.into_iter()),
+                        &drawn,
+                        &hits,
+                    ))
+                }),
         )
     }
 
@@ -880,40 +925,56 @@ impl Component for FoundRow {
     }
 }
 
-/// A row's one paragraph: the file's name, then the directories above it dimmed, with
-/// what the query matched marked in whichever it fell in.
+/// A row's one paragraph: the file's name, then the directories above it dimmed -- and the
+/// line as it is drawn, with what the query matched in it, which the row washes.
 ///
 /// The name first and the path after it, which is not the order the path is written in:
 /// the name is what a reader is looking for down a list, and a column of names all
 /// starting with `src/ui/` says nothing.
-fn row_spans(file: &Found, marks: &[Range<usize>]) -> Vec<Span<'static>> {
+fn row_line(
+    file: &Found,
+    marks: &[Range<usize>],
+) -> (Vec<Span<'static>>, String, Vec<Range<usize>>) {
     let name_at = file.name_at;
-    let in_name: Vec<Range<usize>> = marks
+    let name = file.name();
+    // Where the query hit the name, as offsets into the name -- which is where the drawn
+    // line starts, so they are the drawn line's own.
+    let mut drawn_marks: Vec<Range<usize>> = marks
         .iter()
         .filter(|mark| mark.end > name_at)
         .map(|mark| mark.start.max(name_at) - name_at..mark.end - name_at)
         .collect();
-    let mut spans = marked_spans_in(file.name(), &in_name, None);
 
     // The trailing separator goes with the directories, and a file in the project's own
     // directory has neither.
     let directory = file.directory().trim_end_matches('/');
     if directory.is_empty() {
-        return spans;
+        return (
+            vec![Span::new(name.to_owned())],
+            name.to_owned(),
+            drawn_marks,
+        );
     }
-    let above: Vec<Range<usize>> = marks
-        .iter()
-        .filter(|mark| mark.start < directory.len())
-        .map(|mark| mark.start..mark.end.min(directory.len()))
-        .collect();
-    spans.push(Span::new("  ".to_owned()).color(palette().address_fg));
-    spans.extend(marked_spans_in(
-        directory,
-        &above,
-        Some(palette().address_fg),
-    ));
-    spans
+
+    // And where it hit the directories, moved along by the name and the gap before them:
+    // the line is drawn in neither the path's order nor its shape.
+    let drawn = format!("{name}{GAP}{directory}");
+    let along = name.len() + GAP.len();
+    drawn_marks.extend(
+        marks
+            .iter()
+            .filter(|mark| mark.start < directory.len())
+            .map(|mark| along + mark.start..along + mark.end.min(directory.len())),
+    );
+    (
+        dimmed_after(&drawn, name.len(), palette().address_fg),
+        drawn,
+        drawn_marks,
+    )
 }
+
+/// What sits between the name and the directories above it.
+const GAP: &str = "  ";
 
 #[cfg(test)]
 mod tests;
