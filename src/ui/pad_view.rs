@@ -600,21 +600,40 @@ struct PadToDelete {
 /// It says what will go and where it is, the name being the reader's word for the pad and
 /// the path being where they would look to get any of it back. There is nothing to get
 /// back: no pad is kept anywhere else, and the app has no undo.
+///
+/// It reads [`Pads::confirming`] itself rather than being handed it, so the pad being asked
+/// about is looked up where it is drawn and nowhere else.
 #[derive(Clone, PartialEq)]
-struct DeletePopup {
-    asking: Option<PadToDelete>,
-}
+struct DeletePopup;
 
 impl Component for DeletePopup {
     fn render(&self) -> impl IntoElement {
         let mut pad = use_consume::<Pad>().0;
         let text = use_consume::<PadText>().0;
         let jobs = use_consume::<PadJobs>();
+        let store = use_consume::<Storage>().0;
+
+        // The pad the reader is being asked about, which need not be the shown one: any
+        // row can be right-clicked.
+        let asking = {
+            let pads = pad.read();
+            pads.confirming.clone().map(|id| {
+                let scratchpad = pads.get(&id).map(|state| state.scratchpad.clone());
+                PadToDelete {
+                    name: scratchpad
+                        .as_ref()
+                        .map(|scratchpad| scratchpad.name.clone())
+                        .unwrap_or_default(),
+                    package: package_path(&store.peek(), scratchpad.as_ref()),
+                    id,
+                }
+            })
+        };
 
         Popup::new()
             .width(Size::px(DELETE_WIDTH))
             .on_close_request(move |_| pad.write().confirming = None)
-            .map(self.asking.clone(), |popup, asking| {
+            .map(asking, |popup, asking| {
                 let id = asking.id.clone();
                 popup
                     .child(
@@ -901,51 +920,377 @@ impl Component for PadAssembly {
     }
 }
 
+/// The panel down the side: every pad there is, the New button over them, and under them
+/// the sentence the last New or Delete was refused with.
+///
+/// It reads the order, a name per pad and [`Pads::refused`], and nothing else. A name each
+/// and not a state each: the table holds every pad, and a row wants a string per pad, not a
+/// source per pad.
+#[derive(Clone, PartialEq)]
+struct PadList;
+
+impl Component for PadList {
+    fn render(&self) -> impl IntoElement {
+        let pad = use_consume::<Pad>().0;
+        let jobs = use_consume::<PadJobs>();
+
+        let (rows, refused) = {
+            let pads = pad.read();
+            let shown = pads.shown().clone();
+            let rows: Vec<Element> = pads
+                .order
+                .ids()
+                .iter()
+                .map(|id| {
+                    let name = pads
+                        .get(id)
+                        .map(|state| state.scratchpad.name.clone())
+                        .unwrap_or_default();
+                    PadRow {
+                        shown: *id == shown,
+                        id: id.clone(),
+                        name,
+                        key: DiffKey::None,
+                    }
+                    .key(id.as_str().to_owned())
+                    .into()
+                })
+                .collect();
+            (rows, pads.refused.clone())
+        };
+
+        rect()
+            .width(Size::px(PAD_LIST_WIDTH))
+            .height(Size::fill())
+            .border(right_hairline())
+            .child(section_heading(
+                "Scratchpads",
+                Some(
+                    Button::new()
+                        .compact()
+                        .on_press(move |_| request_new_pad(&jobs))
+                        .child("New")
+                        .into_element(),
+                ),
+            ))
+            // A plain `ScrollView` and not a `VirtualScrollView`: these are one-label rows
+            // and there are a handful of them, which is the History list's shape rather
+            // than the symbol list's.
+            .child(
+                ScrollView::new().child(rect().width(Size::fill()).children(rows).into_element()),
+            )
+            // What the panel can be told no about: a New, and a delete. Under the list
+            // rather than over it, so a list that fills the panel is not pushed down by a
+            // line that is there once in a blue moon.
+            .maybe_child(refused.map(|refused| {
+                rect()
+                    .width(Size::fill())
+                    .padding(Gaps::new_symmetric(2.0, 6.0))
+                    .overflow(Overflow::Clip)
+                    .child(
+                        label()
+                            .text(refused)
+                            .color(palette().invalid_fg)
+                            .max_lines(1),
+                    )
+            }))
+    }
+}
+
+/// The heading over the pad, and the pad's own strip of controls: Build, Run and the one
+/// that puts the listing away.
+///
+/// **One Run button, because there is one program.** While something is running the only
+/// thing to want from it is to stop it.
+#[derive(Clone, PartialEq)]
+struct PadHeader;
+
+impl Component for PadHeader {
+    fn render(&self) -> impl IntoElement {
+        let pad = use_consume::<Pad>().0;
+        let jobs = use_consume::<PadJobs>();
+        let run_jobs = jobs.clone();
+
+        let (opened, building, running, runnable) = {
+            let pads = pad.read();
+            let state = pads.state();
+            (
+                state.opened,
+                state.building,
+                state.is_running(),
+                state.executable().is_some(),
+            )
+        };
+
+        section_heading(
+            "Scratchpad",
+            Some(
+                rect()
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .spacing(6.0)
+                    .child(
+                        Button::new()
+                            // "Two builds cannot be started at once" and "nothing is
+                            // written until the disk has been read", on the control as
+                            // well as in `request_build`.
+                            .enabled(opened && !building)
+                            .on_press(move |_| request_build(pad, &jobs))
+                            .child(match building {
+                                true => "Building...",
+                                false => "Build",
+                            }),
+                    )
+                    .child(
+                        Button::new()
+                            .enabled(running || (runnable && !building))
+                            .on_press(move |_| match running {
+                                true => stop_run(pad),
+                                false => request_run(pad, &run_jobs),
+                            })
+                            .child(match running {
+                                true => "Stop",
+                                false => "Run",
+                            }),
+                    )
+                    // The control that puts the listing away, where a document's sits on
+                    // the leading pane's bar: this heading row is the pad's own strip of
+                    // controls and the one thing here that is always up, the editor having
+                    // no bar.
+                    .child(PaneToggle { of: Toggling::Pad })
+                    .into_element(),
+            ),
+        )
+    }
+}
+
+/// What the pad is called, where its package is, and where the last build got to.
+#[derive(Clone, PartialEq)]
+struct PadDetails;
+
+impl Component for PadDetails {
+    fn render(&self) -> impl IntoElement {
+        // The one line of this pane that is a path and so can outrun its column.
+        let packaged = use_fitted();
+        let pad = use_consume::<Pad>().0;
+        let store = use_consume::<Storage>().0;
+
+        let (shown, package, status) = {
+            let pads = pad.read();
+            let state = pads.state();
+            (
+                pads.shown().clone(),
+                package_path(&store.peek(), Some(&state.scratchpad)),
+                state.status(),
+            )
+        };
+
+        rect()
+            .width(Size::fill())
+            .spacing(6.0)
+            // An ordinary bound box, exactly the project view's: the name is a value in the
+            // pad's own package and nothing is filed under it, so a keystroke is a state
+            // change the save effect writes out and there is nothing to refuse, nothing to
+            // apply and no gesture to discover. It is what the id being hidden buys.
+            .child(field_row(
+                "Name",
+                Input::new(pad.into_writable().map(
+                    |pads: &Pads| &pads.state().scratchpad.name,
+                    |pads: &mut Pads| &mut pads.state_mut().scratchpad.name,
+                ))
+                .compact()
+                // The label the list is drawing, so an empty box says what the pad is
+                // called elsewhere rather than a word that is true of any of them -- and
+                // typing replaces it, where a seeded name would have to be cleared first.
+                .placeholder(pad_label(&shown, ""))
+                .width(Size::flex(1.0)),
+            ))
+            // Where it is on disk: the package cargo is handed *is* the storage. In a
+            // tooltip too, a state directory being longer than any pane.
+            .child(cut_tooltip(
+                packaged.cut(),
+                package.clone(),
+                field_row(
+                    "Package",
+                    one_line_fitted(packaged, package)
+                        .width(Size::flex(1.0))
+                        .color(palette().address_fg),
+                ),
+            ))
+            .maybe_child(status.map(|(text, bad)| {
+                rect()
+                    .padding(Gaps::new(2.0, 0.0, 2.0, 0.0))
+                    .overflow(Overflow::Clip)
+                    .child(
+                        label()
+                            .text(text)
+                            .color(match bad {
+                                true => palette().invalid_fg,
+                                false => palette().address_fg,
+                            })
+                            .max_lines(1),
+                    )
+            }))
+    }
+}
+
+/// The `[dependencies]` rows, the Add over them, and the two lines that say the package on
+/// disk is not what is on screen: why nothing was written, and cargo's own words when they
+/// are about these rows.
+#[derive(Clone, PartialEq)]
+struct DependencyList;
+
+impl Component for DependencyList {
+    fn render(&self) -> impl IntoElement {
+        let mut pad = use_consume::<Pad>().0;
+
+        let (rows, unsaved, refusal) = {
+            let pads = pad.read();
+            let state = pads.state();
+            // The problems are the list's -- `Repeated` is about two rows -- so they are
+            // worked out here and each row is handed its own. Every bad row is marked, not
+            // the first.
+            let problems: HashMap<usize, Problem> =
+                state.scratchpad.problems().into_iter().collect();
+            let rows: Vec<Element> = state
+                .scratchpad
+                .dependencies
+                .iter()
+                .enumerate()
+                .map(|(index, dependency)| {
+                    DependencyRow {
+                        index,
+                        dependency: dependency.clone(),
+                        problem: problems.get(&index).cloned(),
+                        key: DiffKey::None,
+                    }
+                    .key(index)
+                    .into()
+                })
+                .collect();
+            (
+                rows,
+                state.unsaved.clone(),
+                state
+                    .refusal()
+                    .map(|message| text_block(message, palette().text_fg)),
+            )
+        };
+
+        rect()
+            .width(Size::fill())
+            .spacing(6.0)
+            .child(section_heading(
+                "Dependencies",
+                Some(
+                    Button::new()
+                        .compact()
+                        .on_press(move |_| {
+                            pad.write()
+                                .state_mut()
+                                .scratchpad
+                                .dependencies
+                                .push(Dependency::default());
+                        })
+                        .child("Add")
+                        .into_element(),
+                ),
+            ))
+            .child(match rows.is_empty() {
+                true => info_line("No crates asked for".to_owned()).into_element(),
+                false => rect().width(Size::fill()).children(rows).into_element(),
+            })
+            .maybe_child(unsaved.map(|failure| {
+                rect()
+                    .padding(Gaps::new(2.0, 0.0, 2.0, 0.0))
+                    .overflow(Overflow::Clip)
+                    .child(
+                        label()
+                            .text(format!("Not saved: {failure}"))
+                            .color(palette().invalid_fg)
+                            .max_lines(1),
+                    )
+            }))
+            .maybe_child(refusal)
+    }
+}
+
+/// What the compiler said about the last build, under the source it is about.
+///
+/// A plain `ScrollView` and never a virtual one, which is what lets the blocks in it wrap:
+/// a virtual list steps by one `item_size`, and a row that wraps is a row whose height is
+/// not known until it has been laid out. A build says dozens of things, so there is nothing
+/// to virtualise away.
+#[derive(Clone, PartialEq)]
+struct DiagnosticsPane;
+
+impl Component for DiagnosticsPane {
+    fn render(&self) -> impl IntoElement {
+        let pad = use_consume::<Pad>().0;
+
+        let blocks: Vec<Element> = {
+            let pads = pad.read();
+            let shown = pads.shown().clone();
+            pads.state()
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic_block(diagnostic, pad_place(&shown, diagnostic)))
+                .collect()
+        };
+
+        match blocks.is_empty() {
+            // Nothing said, nothing drawn: a bare rect measures nothing and takes no
+            // share of the column, exactly as leaving the child out did.
+            true => rect().into_element(),
+            false => rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .background(palette().asm_pane_bg)
+                .child(
+                    ScrollView::new().child(
+                        rect()
+                            .width(Size::fill())
+                            .padding(Gaps::new_symmetric(4.0, 12.0))
+                            .children(blocks)
+                            .into_element(),
+                    ),
+                )
+                .into_element(),
+        }
+    }
+}
+
 /// The Scratchpad pane: the pads there are down one side, and beside it the shown one --
 /// a source file the reader edits, the crates it asks for, a build, and what the compiler
 /// said about it. What it *builds* goes through `open_files` like any other binary.
+///
+/// The skeleton and no more. Each piece of it reads the slice of [`Pads`] it draws, so
+/// nothing here copies a pad's state out whole for the pieces below to pick over.
 #[derive(PartialEq)]
 pub(crate) struct ScratchpadTab;
 
 impl Component for ScratchpadTab {
     fn render(&self) -> impl IntoElement {
-        // The one line of this pane that is a path and so can outrun its column.
-        let packaged = use_fitted();
-        let mut pad = use_consume::<Pad>().0;
-        let store = use_consume::<Storage>().0;
-        let jobs = use_consume::<PadJobs>();
-        let new_jobs = jobs.clone();
-        // The shown pad's own state and no more: the table holds every pad, and cloning
-        // all of them on every render would clone every source the app is holding. The
-        // rows want a name each, which is a string per pad and not a source per pad.
-        let pads = pad.read();
-        let (shown, state) = (pads.shown().clone(), pads.state().clone());
-        let listed: Vec<(PadId, String)> = pads
-            .order
-            .ids()
-            .iter()
-            .map(|id| {
-                let name = pads.get(id).map(|state| state.scratchpad.name.clone());
-                (id.clone(), name.unwrap_or_default())
-            })
-            .collect();
-        let refused = pads.refused.clone();
-        // The pad the reader is being asked about, which need not be the shown one: any row
-        // can be right-clicked.
-        let asking = pads.confirming.clone().map(|id| {
-            let scratchpad = pads.get(&id).map(|state| state.scratchpad.clone());
-            PadToDelete {
-                name: scratchpad
-                    .as_ref()
-                    .map(|scratchpad| scratchpad.name.clone())
-                    .unwrap_or_default(),
-                package: package_path(&store.peek(), scratchpad.as_ref()),
-                id,
-            }
-        });
-        drop(pads);
-
+        let pad = use_consume::<Pad>().0;
         let text = use_consume::<PadText>().0;
+
+        // What the editor and the listing under it are drawn of: which pad, the program
+        // it last built, and where its run got to. The rest of the pad is read by the
+        // piece that draws it.
+        let (shown, program, building, stale, ran) = {
+            let pads = pad.read();
+            let state = pads.state();
+            (
+                pads.shown().clone(),
+                state.program.clone(),
+                state.building,
+                state.out_of_date(),
+                state
+                    .run_status()
+                    .map(|(status, bad)| (status, bad, state.output.clone())),
+            )
+        };
+
         let editing = text.read().holds(&shown).then(|| shown.clone());
 
         let mut ratio = use_consume::<PadSplit>().0;
@@ -963,114 +1308,18 @@ impl Component for ScratchpadTab {
         // `use_hook` at mount, so subscribing here would be a subscription to nothing --
         // and a loop with the effect above.
         let leading = ratio.peek().clamp(1.0, 99.0);
-        let program = state.program.clone();
 
-        let problems: HashMap<usize, Problem> = state.scratchpad.problems().into_iter().collect();
-        let rows: Vec<Element> = state
-            .scratchpad
-            .dependencies
-            .iter()
-            .enumerate()
-            .map(|(index, dependency)| {
-                DependencyRow {
-                    index,
-                    dependency: dependency.clone(),
-                    problem: problems.get(&index).cloned(),
-                    key: DiffKey::None,
-                }
-                .key(index)
-                .into()
-            })
-            .collect();
-
-        let diagnostics: Vec<Element> = state
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| diagnostic_block(diagnostic, pad_place(&shown, diagnostic)))
-            .collect();
-        let refusal = state
-            .refusal()
-            .map(|message| text_block(message, palette().text_fg));
-        let package = package_path(&store.peek(), Some(&state.scratchpad));
-
-        // **One button, because there is one program.** While something is running the
-        // only thing to want from it is to stop it.
-        let running = state.is_running();
-        let run_jobs = jobs.clone();
-        let run = Button::new()
-            .enabled(running || (state.executable().is_some() && !state.building))
-            .on_press(move |_| match running {
-                true => stop_run(pad),
-                false => request_run(pad, &run_jobs),
-            })
-            .child(match running {
-                true => "Stop",
-                false => "Run",
-            })
-            .into_element();
-
-        let output = state.run_status().map(|(text, bad)| {
+        let output = ran.map(|(status, bad, lines)| {
             OutputPane {
                 pad: shown.clone(),
-                lines: state.output.clone(),
-                status: text,
+                lines,
+                status,
                 bad,
                 key: DiffKey::None,
             }
             .key(shown.as_str().to_owned())
             .into_element()
         });
-
-        // A plain `ScrollView` and not a `VirtualScrollView`: these are one-label rows and
-        // there are a handful of them, which is the History list's shape rather than the
-        // symbol list's.
-        let pads: Vec<Element> = listed
-            .into_iter()
-            .map(|(id, name)| {
-                let key = id.as_str().to_owned();
-                PadRow {
-                    shown: id == shown,
-                    id,
-                    name,
-                    key: DiffKey::None,
-                }
-                .key(key)
-                .into()
-            })
-            .collect();
-
-        let panel = rect()
-            .width(Size::px(PAD_LIST_WIDTH))
-            .height(Size::fill())
-            .border(right_hairline())
-            .child(section_heading(
-                "Scratchpads",
-                Some(
-                    Button::new()
-                        .compact()
-                        .on_press(move |_| request_new_pad(&new_jobs))
-                        .child("New")
-                        .into_element(),
-                ),
-            ))
-            .child(
-                ScrollView::new().child(rect().width(Size::fill()).children(pads).into_element()),
-            )
-            // What the panel can be told no about: a New, and a delete. Under the list
-            // rather than over it, so a list that fills the panel is not pushed down by a
-            // line that is there once in a blue moon.
-            .maybe_child(refused.map(|refused| {
-                rect()
-                    .width(Size::fill())
-                    .padding(Gaps::new_symmetric(2.0, 6.0))
-                    .overflow(Overflow::Clip)
-                    .child(
-                        label()
-                            .text(refused)
-                            .color(palette().invalid_fg)
-                            .max_lines(1),
-                    )
-            }));
 
         // The reader's own side of the split: the file, then what the compiler said about
         // the file directly above it, then what the program it built printed.
@@ -1088,26 +1337,7 @@ impl Component for ScratchpadTab {
                     // while the worker is still reading the disk.
                     .maybe_child(editing.map(|pad| SourceEditor { pad }.into_element())),
             )
-            // A plain `ScrollView` and never a virtual one, which is what lets the blocks
-            // in it wrap: a virtual list steps by one `item_size`, and a row that wraps is
-            // a row whose height is not known until it has been laid out. A build says
-            // dozens of things, so there is nothing to virtualise away.
-            .maybe_child((!diagnostics.is_empty()).then(|| {
-                rect()
-                    .width(Size::fill())
-                    .height(Size::flex(1.0))
-                    .background(palette().asm_pane_bg)
-                    .child(
-                        ScrollView::new().child(
-                            rect()
-                                .width(Size::fill())
-                                .padding(Gaps::new_symmetric(4.0, 12.0))
-                                .children(diagnostics)
-                                .into_element(),
-                        ),
-                    )
-                    .into_element()
-            }))
+            .child(DiagnosticsPane)
             // Under the diagnostics rather than over them: what the compiler said is about
             // the source directly above it, and what the program said is the newest thing
             // in the pane.
@@ -1117,13 +1347,13 @@ impl Component for ScratchpadTab {
         // What the split's other side draws: the program the pad built, or the one line
         // saying why there is none. Always something while the listing is up, so the
         // handle does not jump when a build lands.
-        let assembly = match (&program, state.building) {
+        let assembly = match (&program, building) {
             (Some(program), _) => PadAssembly {
                 object: program.object.clone(),
                 opening: program.opening,
                 file: program.file.clone(),
                 pad: shown.clone(),
-                stale: state.out_of_date(),
+                stale,
             }
             .into_element(),
             (None, true) => placeholder("Building..."),
@@ -1165,112 +1395,9 @@ impl Component for ScratchpadTab {
                     .width(Size::fill())
                     .padding(Gaps::new_symmetric(8.0, 12.0))
                     .spacing(6.0)
-                    .child(section_heading(
-                        "Scratchpad",
-                        Some(
-                            rect()
-                                .horizontal()
-                                .cross_align(Alignment::Center)
-                                .spacing(6.0)
-                                .child(
-                                    Button::new()
-                                        // "Two builds cannot be started at once" and
-                                        // "nothing is written until the disk has been
-                                        // read", on the control as well as in
-                                        // `request_build`.
-                                        .enabled(state.opened && !state.building)
-                                        .on_press(move |_| request_build(pad, &jobs))
-                                        .child(match state.building {
-                                            true => "Building...",
-                                            false => "Build",
-                                        }),
-                                )
-                                .child(run)
-                                // The control that puts the listing away, where a
-                                // document's sits on the leading pane's bar: this heading
-                                // row is the pad's own strip of controls and the one
-                                // thing here that is always up, the editor having no bar.
-                                .child(PaneToggle { of: Toggling::Pad })
-                                .into_element(),
-                        ),
-                    ))
-                    // An ordinary bound box, exactly the project view's: the name is a
-                    // value in the pad's own package and nothing is filed under it, so a
-                    // keystroke is a state change the save effect writes out and there is
-                    // nothing to refuse, nothing to apply and no gesture to discover. It
-                    // is what the id being hidden buys.
-                    .child(field_row(
-                        "Name",
-                        Input::new(pad.into_writable().map(
-                            |pads: &Pads| &pads.state().scratchpad.name,
-                            |pads: &mut Pads| &mut pads.state_mut().scratchpad.name,
-                        ))
-                        .compact()
-                        // The label the row is drawing, so an empty box says what the pad
-                        // is called elsewhere rather than a word that is true of any of
-                        // them -- and typing replaces it, where a seeded name would have
-                        // to be cleared first.
-                        .placeholder(pad_label(&shown, ""))
-                        .width(Size::flex(1.0)),
-                    ))
-                    // Where it is on disk: the package cargo is handed *is* the storage. In
-                    // a tooltip too, a state directory being longer than any pane.
-                    .child(cut_tooltip(
-                        packaged.cut(),
-                        package.clone(),
-                        field_row(
-                            "Package",
-                            one_line_fitted(packaged, package)
-                                .width(Size::flex(1.0))
-                                .color(palette().address_fg),
-                        ),
-                    ))
-                    .maybe_child(state.status().map(|(text, bad)| {
-                        rect()
-                            .padding(Gaps::new(2.0, 0.0, 2.0, 0.0))
-                            .overflow(Overflow::Clip)
-                            .child(
-                                label()
-                                    .text(text)
-                                    .color(match bad {
-                                        true => palette().invalid_fg,
-                                        false => palette().address_fg,
-                                    })
-                                    .max_lines(1),
-                            )
-                    }))
-                    .child(section_heading(
-                        "Dependencies",
-                        Some(
-                            Button::new()
-                                .compact()
-                                .on_press(move |_| {
-                                    pad.write()
-                                        .state_mut()
-                                        .scratchpad
-                                        .dependencies
-                                        .push(Dependency::default());
-                                })
-                                .child("Add")
-                                .into_element(),
-                        ),
-                    ))
-                    .child(match rows.is_empty() {
-                        true => info_line("No crates asked for".to_owned()).into_element(),
-                        false => rect().width(Size::fill()).children(rows).into_element(),
-                    })
-                    .maybe_child(state.unsaved.map(|failure| {
-                        rect()
-                            .padding(Gaps::new(2.0, 0.0, 2.0, 0.0))
-                            .overflow(Overflow::Clip)
-                            .child(
-                                label()
-                                    .text(format!("Not saved: {failure}"))
-                                    .color(palette().invalid_fg)
-                                    .max_lines(1),
-                            )
-                    }))
-                    .maybe_child(refusal),
+                    .child(PadHeader)
+                    .child(PadDetails)
+                    .child(DependencyList),
             )
             .child(split);
 
@@ -1281,8 +1408,8 @@ impl Component for ScratchpadTab {
             .background(palette().pane_bg)
             // Over both of them, and drawn as nothing at all until a row has been asked
             // about.
-            .child(DeletePopup { asking })
-            .child(panel)
+            .child(DeletePopup)
+            .child(PadList)
             .child(body)
     }
 }

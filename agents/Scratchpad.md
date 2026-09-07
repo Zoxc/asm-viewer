@@ -147,6 +147,16 @@ a second document list (a chip there is a *place in a binary*). What it **builds
 and not the project's: the program is held in the pad's state, drawn by the pad's pane, and is in
 neither the Objects panel nor the paths a project saves.
 
+**`ScratchpadTab` is a skeleton, and every piece of the pane reads the slice of `Pads` it draws.**
+The pad list, the heading with Build and Run, the name and package rows, the dependency rows, the
+diagnostics and the delete question are each a component; the tab itself reads only what the editor
+and the listing beside it are drawn of -- which pad is shown, the program it last built, and where
+its run got to. It was one function drawing all of them, and it copied the shown `PadState` out
+whole first: the source, every dependency and every diagnostic cloned on every keystroke. **The
+split buys no renders.** freya subscribes a scope to the whole of a state it read, so a keystroke in
+the name box still wakes every piece that read `Pads`. What it takes away is that clone, and a
+function nobody could read a piece of without scrolling past the rest.
+
 **What a build made is written into the package, so a pad opens on its program.** Nothing the
 app holds about a build survives a restart, and the artifact's path may never be derived --
 `target/debug/<id>` is silently wrong beneath a `CARGO_TARGET_DIR`, a config above the directory,
