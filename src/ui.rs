@@ -51,8 +51,8 @@ pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::positions::{Driven, Positions, Spot};
 pub(crate) use crate::process::{self, Ended, OutputLine, RunEvent, RunOutput, Stream};
 pub(crate) use crate::project::{
-    self, Cargo, Details, Document, OnScreen, Project, Recent, RestoredTab, SavedDock,
-    SavedDocument, SavedShown, SavedUi, SavingTab, Selection, Session,
+    self, Cargo, Details, Document, OnScreen, Project, Recent, RestoredEntry, RestoredTab,
+    SavedDock, SavedDocument, SavedShown, SavedUi, SavingTab, Selection, Session,
 };
 pub(crate) use crate::references::{self, ReferenceRows};
 pub(crate) use crate::reveal;

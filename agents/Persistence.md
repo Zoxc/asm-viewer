@@ -299,7 +299,7 @@ trail.
 every other kind: that listing's rows are counted afresh as it is decoded, so a row there is no
 place to come back to and an address is (`agents/UI.md`, `Places::code_at`). It is a claim about a layout, so
 a rebuilt binary takes it with the rows. How many rows past the address the tab was is not saved, a
-label being a fine place to come back to. The rows travel with their place because `resolve_tabs`
+label being a fine place to come back to. The rows travel with their place because a restore
 drops the places that no longer resolve, which would shift every later row of a parallel array onto
 the wrong place. They are rows and not pixel offsets so that a font change does not move every saved
 position, and they are hints and not facts: `#[serde(default)]`, and clamped to what the tab holds
@@ -316,7 +316,7 @@ binary keeps it. The file states the halves apart and so can state a pairing tha
 a line of an object's code, an address in a file -- which a `history::Stop` cannot hold. So
 `RestoredEntry::stop` is where they are put back with the document each belongs to, and a half that
 does not belong to its document is the whole document rather than a guess. It is the last place the
-two are seen apart; nothing past it carries them. `resolve_tabs` answers with a `RestoredTab`, a
+two are seen apart; nothing past it carries them. A restore answers with a `RestoredTab` per tab, a
 page or a document, rather than a tuple, since the rows and the line no longer survive the same things: the live trail,
 `History::rebuilt` over the places that resolved with the saved cursor carried past the ones that
 did not, and a `RestoredEntry` per surviving place. A tab with nothing left on its trail is dropped
@@ -418,19 +418,24 @@ resolved against the objects by name, and resolving one against a half-filled li
 tabs whose object had not landed yet. The **pages go back before any of that and synchronously**, at the
 places they had in the bar and with the one that was on screen raised: a page resolves against no
 object, so a session whose only tab was Settings has nothing to wait for and a project with no
-binaries at all still comes back as it was left. The documents are then restored. `restore_project`
-sets the visits, then for each saved tab opens its trail whole (`Docs::open_trail`, temporal flag
-and all), writes its rows and puts it in the bar at the place it had -- counted over what survived,
-so the tabs that resolved keep their order around the pages already there -- and then opens the
-active document with `Reach::NewTab`, which raises the tab already showing it and, for one that
-degraded, opens a tab. Two orderings are load-bearing. The **rows go
-into the `Positions` maps, and the driven line into `Driven`, per entry and before the tab is
-shown**: those maps are the one thing the restore writes directly, and a pane puts its view back
-when it notices the place it is showing has changed, so a row arriving after the tab is on screen
-arrives after the only moment anything looks at it. And tabs go before the active document, because
+binaries at all still comes back as it was left. The documents are then restored. **The visits, the
+tabs and the active document are one question and are answered as one**, by `Session::restore`: it
+walks the saved digests once and resolves all three under that one `Rebuilt`, so a tab and the
+active document cannot be read against two different answers about which binaries have changed, and
+a caller cannot take one and forget the others. `Session::pages` and `shown_page` stay outside it,
+being the synchronous half. `restore_project` sets the visits, then for each restored tab opens its
+trail whole (`Docs::open_trail`, temporal flag and all), calls `place_entries` and puts the tab in
+the bar at the place it had -- counted over what survived, so the tabs that resolved keep their
+order around the pages already there -- and then opens the active document with `Reach::NewTab`,
+which raises the tab already showing it and, for one that degraded, opens a tab. Two orderings are
+load-bearing. The **rows go into the `Positions` maps, and the driven line into `Driven`, per entry
+and before the tab is shown**: those maps are the one thing the restore writes directly, which is
+why the writes have a name of their own (`place_entries`), and a pane puts its view back when it
+notices the place it is showing has changed, so a row arriving after the tab is on screen arrives
+after the only moment anything looks at it. And tabs go before the active document, because
 `open_document` opens what it cannot find and would otherwise put it beside whichever tab was on
-screen instead of finding it in place. The saved order is stated outright rather than
-reproduced by opening each tab beside the one before it. A place that no longer
+screen instead of finding it in place. The saved order is stated outright rather than reproduced by
+opening each tab beside the one before it. A place that no longer
 resolves is **dropped** off its trail, like a visit, and a tab left with none is dropped. A
 source-driven place is never resolved at all, so a file that has been deleted comes back as a tab
 over the pane's own "Source file not found" rather than silently vanishing.

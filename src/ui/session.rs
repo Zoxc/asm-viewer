@@ -237,8 +237,6 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         visits,
         ..
     } = states;
-    let (mut asm_at, mut src_at) = (places.asm_at, places.src_at);
-    let (mut code_at, mut driven) = (places.code_at, places.driven);
 
     // The pages, at the places they had in the bar, and the one that was on screen.
     // Before the two returns below, both of which are about binaries.
@@ -274,26 +272,23 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         }
 
         // Resolved against everything now loaded rather than just what this load
-        // produced. All three computed before any is set, so no read guard is live when
+        // produced, and in one call: the visits, the tabs and the active document are one
+        // question. Answered before any of it is set, so no read guard is live when
         // anything is notified.
-        let (restored_visits, restored_tabs, restored_active) = {
+        let restored = {
             let loaded = objects.read();
-            (
-                session.resolve_history(&loaded),
-                session.resolve_tabs(&loaded),
-                session.resolve(&loaded),
-            )
+            session.restore(&loaded)
         };
 
         // The record first, so the opening below finds the active place already at its
         // top and records nothing over it.
-        visits.set(restored_visits);
+        visits.set(restored.visits);
         let (mut strip, mut docs) = (open.strip, open.docs);
         // Where in the bar the next tab goes. Counted over what survived rather than read
         // off the saved list, so the tabs that resolved keep their order around the pages
         // already put back.
         let mut position = 0;
-        for tab in restored_tabs {
+        for tab in restored.tabs {
             let RestoredTab::Document {
                 temporal,
                 trail,
@@ -311,28 +306,7 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
             let Some(id) = id else {
                 continue;
             };
-            // Where each side of each place was left, and what drove it, go in before
-            // the tab is shown. The line for the same reason the rows are: a pane looks
-            // at what it has been told exactly once, when it notices the place it is
-            // showing has changed.
-            {
-                let (mut asm, mut src, mut from) = (asm_at.write(), src_at.write(), driven.write());
-                let mut places = code_at.write();
-                for entry in entries {
-                    // The place itself, address and line and all: two stops in one
-                    // object's code, or in one file, are two keys, as they were when
-                    // they were saved.
-                    let key = (id, entry.stop());
-                    asm.remember(key.clone(), entry.asm_row);
-                    src.remember(key.clone(), entry.src_row);
-                    if let Some(line) = entry.line {
-                        from.remember(key.clone(), line);
-                    }
-                    if let Some(address) = entry.address {
-                        places.remember(key, Spot { address, rows: 0 });
-                    }
-                }
-            }
+            place_entries(places, id, entries);
             // Reopening a tab is not visiting it. Put at the place it had rather than
             // beside the tab on screen: the saved order is stated outright.
             strip.write().insert(Tab::Document(id), position);
@@ -340,10 +314,44 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         }
         // The document the app lands on is a place it went: the tab showing it is
         // raised, or -- degraded to its object, say -- it opens in a tab of its own.
-        if let Some(active) = restored_active {
+        if let Some(active) = restored.active {
             open_document(open, visits, active, Reach::NewTab);
         }
     });
+}
+
+/// Where each side of every place on one restored tab was left, and what drove it, into
+/// the maps a pane reads them back out of.
+///
+/// **Those maps are the one thing a restore writes directly**, everything else it does
+/// going through `open_document`, so the writes have a name rather than sitting four
+/// levels deep in the loop above. They go in before the tab is put in the bar: a pane
+/// puts its view back when it notices the place it is showing has changed, so a row
+/// arriving after the tab is on screen arrives after the only moment anything looks at
+/// it.
+fn place_entries(places: Places, id: DocId, entries: Vec<RestoredEntry>) {
+    let Places {
+        mut asm_at,
+        mut src_at,
+        mut code_at,
+        mut driven,
+        ..
+    } = places;
+    let (mut asm, mut src, mut from) = (asm_at.write(), src_at.write(), driven.write());
+    let mut code = code_at.write();
+    for entry in entries {
+        // The place itself, address and line and all: two stops in one object's code, or
+        // in one file, are two keys, as they were when they were saved.
+        let key = (id, entry.stop());
+        asm.remember(key.clone(), entry.asm_row);
+        src.remember(key.clone(), entry.src_row);
+        if let Some(line) = entry.line {
+            from.remember(key.clone(), line);
+        }
+        if let Some(address) = entry.address {
+            code.remember(key, Spot { address, rows: 0 });
+        }
+    }
 }
 
 /// Empty the app of everything that belonged to the project being left, through the

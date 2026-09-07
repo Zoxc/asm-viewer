@@ -623,9 +623,9 @@ pub enum OnScreen<'a> {
 /// The whole trail and not the current place alone, so that Back works across a
 /// restart: reopening after a rebuild is this app's daily loop, and a trail lost on every
 /// restart would be worth little. The entries travel *with* the tab rather than in lists
-/// beside [`Session::tabs`], because [`Session::resolve_tabs`] drops the entries and the
-/// tabs that no longer resolve, which would shift every later row of a parallel array
-/// onto the wrong tab. Field order is load-bearing: `page`, `temporal` and `cursor` are
+/// beside [`Session::tabs`], because a restore drops the entries and the tabs that no
+/// longer resolve, which would shift every later row of a parallel array onto the wrong
+/// tab. Field order is load-bearing: `page`, `temporal` and `cursor` are
 /// plain values and `entries` is written as an array of tables.
 ///
 /// A row with a `page` is a page tab and has no trail; every other field is what a
@@ -685,8 +685,18 @@ pub struct SavedEntry {
     pub document: SavedDocument,
 }
 
+/// Everything a restore puts back, which [`Session::restore`] answers in one call.
+pub struct Restored {
+    /// The record of visits.
+    pub visits: Visits,
+    /// The tabs that still resolve, in the order the bar was in.
+    pub tabs: Vec<RestoredTab>,
+    /// The document that was on screen, degraded rather than dropped.
+    pub active: Option<Document>,
+}
+
 /// One tab a restore opens: a page, or a document with something left on its trail. What
-/// [`Session::resolve_tabs`] hands back, in the order the bar was in.
+/// [`Restored::tabs`] holds, in the order the bar was in.
 ///
 /// A document's trail is live, its cursor carried past the entries that no longer
 /// resolve; `entries` holds the rows of every place still on it, in the trail's own
@@ -1259,12 +1269,30 @@ impl Session {
         }
     }
 
+    /// The record of visits, the tabs and the active document against the objects that
+    /// are now loaded.
+    ///
+    /// **One call, because the three are one question.** They share a [`Rebuilt`] -- one
+    /// walk of the saved digests against the objects loaded now -- so a tab and the active
+    /// document cannot be resolved under two different answers about which binaries have
+    /// changed, and a caller cannot take one and forget the others. [`Session::pages`] and
+    /// [`Session::shown_page`] stay outside it: they resolve against no object and go back
+    /// before any binary has been read.
+    pub fn restore(&self, objects: &[Arc<Object>]) -> Restored {
+        let rebuilt = Rebuilt::of(self, objects);
+        Restored {
+            visits: self.resolve_history(objects, &rebuilt),
+            tabs: self.resolve_tabs(objects, &rebuilt),
+            active: self.resolve_active(objects, &rebuilt),
+        }
+    }
+
     /// The saved active document against the objects that are now loaded. Degrades
     /// silently: a symbol that is gone falls back to its object, an object that is gone
     /// to nothing.
-    pub fn resolve(&self, objects: &[Arc<Object>]) -> Option<Document> {
+    fn resolve_active(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Document> {
         let saved = self.active.as_ref()?;
-        saved.resolve_or_degrade(objects, &Rebuilt::of(self, objects))
+        saved.resolve_or_degrade(objects, rebuilt)
     }
 
     /// The page that was on screen, where one was and this build still has it.
@@ -1287,8 +1315,7 @@ impl Session {
     /// -- the same walk closing a file goes through, so the two cannot drift -- and a tab
     /// with nothing left on its trail is dropped: a strip whose tabs all degraded onto
     /// the same object would collapse into one.
-    pub fn resolve_tabs(&self, objects: &[Arc<Object>]) -> Vec<RestoredTab> {
-        let rebuilt = Rebuilt::of(self, objects);
+    fn resolve_tabs(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Vec<RestoredTab> {
         self.tabs
             .iter()
             .filter_map(|saved| {
@@ -1301,7 +1328,7 @@ impl Session {
                     .entries
                     .iter()
                     .map(|entry| {
-                        let document = entry.document.resolve(objects, &rebuilt)?;
+                        let document = entry.document.resolve(objects, rebuilt)?;
                         // A row is a claim about a listing, so a rebuilt listing takes
                         // both its rows with it; the place itself survives. A file has
                         // no binary path and so is never rebuilt. The driven line is a
@@ -1347,13 +1374,12 @@ impl Session {
     /// The saved record of visits as a live one. A place that no longer resolves is
     /// dropped: a list of places the reader cannot get back to is worse than a short
     /// list.
-    pub fn resolve_history(&self, objects: &[Arc<Object>]) -> Visits {
-        let rebuilt = Rebuilt::of(self, objects);
+    fn resolve_history(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Visits {
         Visits::restored(
             self.history
                 .entries
                 .iter()
-                .filter_map(|saved| saved.resolve(objects, &rebuilt))
+                .filter_map(|saved| saved.resolve(objects, rebuilt))
                 .collect(),
         )
     }

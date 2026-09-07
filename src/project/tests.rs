@@ -164,10 +164,11 @@ fn as_document(tab: &RestoredTab) -> (bool, &History, &[RestoredEntry]) {
     }
 }
 
-/// What [`Session::resolve`] answers, as the selection inside it.
+/// The restored active document, as the selection inside it.
 fn resolve_selection(session: &Session, objects: &[Arc<Object>]) -> Option<Selection> {
     session
-        .resolve(objects)
+        .restore(objects)
+        .active
         .and_then(|document| match document {
             Document::Assembly(selection) => Some(selection),
             Document::Source(_) | Document::Code(_) => None,
@@ -413,7 +414,7 @@ fn saves_and_restores_the_visits() {
     let session = from_state(&objects, None, &visits);
     assert_eq!(session.history.entries.len(), 3);
 
-    let restored = session.resolve_history(&objects);
+    let restored = session.restore(&objects).visits;
     assert!(restored.entries() == visits.entries());
 }
 
@@ -454,7 +455,7 @@ fn history_entries_that_no_longer_resolve_are_dropped() {
         saved_object("b.o"),
     ]);
 
-    let restored = session.resolve_history(&objects);
+    let restored = session.restore(&objects).visits;
     assert!(restored.entries() == [tab(&objects[0]), tab(&objects[1]),]);
 }
 
@@ -468,7 +469,7 @@ fn a_saved_history_with_duplicates_restores_without_them() {
         saved_object("a.o"),
     ]);
 
-    let restored = session.resolve_history(&objects);
+    let restored = session.restore(&objects).visits;
     // Collapsed onto the newest occurrence, which is the first.
     assert!(restored.entries() == [tab(&objects[0]), tab(&objects[1]),]);
 }
@@ -513,7 +514,7 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
         assert_eq!(session.tabs[0].entries.len(), 3);
         let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
 
-        let restored = session.resolve_tabs(&objects);
+        let restored = session.restore(&objects).tabs;
         assert_eq!(restored.len(), 1);
         assert!(*as_document(&restored[0]).1 == trail);
         assert!(
@@ -530,7 +531,7 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
             assert_eq!(entry.src_row, 20 + place);
         }
         // What the restore raises is the tab showing the restored active document.
-        assert!(session.resolve(&objects).as_ref() == Some(&current));
+        assert!(session.restore(&objects).active.as_ref() == Some(&current));
     }
 }
 
@@ -571,7 +572,7 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
         ..Session::default()
     };
 
-    let restored = session.resolve_tabs(&objects);
+    let restored = session.restore(&objects).tabs;
     assert_eq!(restored.len(), 1);
     assert!(as_document(&restored[0]).0);
     let entries: Vec<Document> = as_document(&restored[0])
@@ -617,8 +618,8 @@ fn a_partial_file_still_loads() {
 
     let objects = objects();
     assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
-    assert!(session.resolve_history(&objects).entries().is_empty());
-    assert!(session.resolve_tabs(&objects).is_empty());
+    assert!(session.restore(&objects).visits.entries().is_empty());
+    assert!(session.restore(&objects).tabs.is_empty());
 }
 
 /// The rename is the last thing `write_atomically` does, so nothing that goes wrong on the
@@ -746,7 +747,7 @@ fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
     })
 }
 
-/// A tab as [`Session::resolve_tabs`] hands it back: one place on its trail, and nothing
+/// A tab as [`Session::restore`] hands it back: one place on its trail, and nothing
 /// driving it.
 fn restored(document: &Document, asm_row: usize, src_row: usize) -> RestoredTab {
     let mut trail = History::default();
@@ -808,7 +809,7 @@ fn saves_and_resolves_the_open_tabs() {
         ]
     );
     assert!(
-        session.resolve_tabs(&objects)
+        session.restore(&objects).tabs
             == [
                 restored(&tabs[0], 0, 0),
                 restored(&tabs[1], 0, 0),
@@ -847,7 +848,7 @@ fn open_tabs_that_no_longer_resolve_are_dropped() {
     };
 
     assert!(
-        session.resolve_tabs(&objects)
+        session.restore(&objects).tabs
             == [
                 restored(&tab(&objects[0]), 3, 0),
                 restored(&file_tab("/no/such/file.rs"), 0, 9),
@@ -876,7 +877,7 @@ fn the_rows_come_back_against_the_tabs_they_belong_to() {
 
     let (mut asm, mut src): (Positions<Document>, Positions<Document>) =
         (Positions::default(), Positions::default());
-    for tab in session.resolve_tabs(&objects) {
+    for tab in session.restore(&objects).tabs {
         for entry in as_document(&tab).2 {
             asm.remember(entry.document.clone(), entry.asm_row);
             src.remember(entry.document.clone(), entry.src_row);
@@ -912,7 +913,7 @@ fn a_saved_tab_with_no_rows_opens_at_the_top() {
 
     let objects = objects();
     assert!(
-        session.resolve_tabs(&objects)
+        session.restore(&objects).tabs
             == [
                 restored(&tab(&objects[0]), 0, 0),
                 restored(&file_tab("/src/main.rs"), 0, 0),
@@ -945,7 +946,7 @@ fn a_source_file_that_is_no_longer_there_still_comes_back() {
         session.active,
         Some(SavedDocument::Source { path: path.into() })
     );
-    assert!(session.resolve(&objects) == Some(file_tab(path)));
+    assert!(session.restore(&objects).active == Some(file_tab(path)));
 }
 
 /// The field-order trap, which only a real serialization catches: a saved tab's two rows
@@ -1022,7 +1023,7 @@ fn the_line_a_source_tab_was_driven_from_comes_back() {
     let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
 
     let mut lines: Vec<(Document, Option<u32>)> = Vec::new();
-    for tab in session.resolve_tabs(&objects) {
+    for tab in session.restore(&objects).tabs {
         for entry in as_document(&tab).2 {
             lines.push((entry.document.clone(), entry.line));
         }
@@ -1030,7 +1031,7 @@ fn the_line_a_source_tab_was_driven_from_comes_back() {
     // Only the tab that was driven. An assembly-driven tab is never one.
     assert!(lines == [(tabs[0].clone(), Some(42)), (tabs[1].clone(), None)]);
     assert_eq!(
-        as_document(&session.resolve_tabs(&objects)[0]).2[0].asm_row,
+        as_document(&session.restore(&objects).tabs[0]).2[0].asm_row,
         7
     );
 }
@@ -1091,7 +1092,7 @@ fn the_bar_saves_its_pages_where_they_stand() {
         "the page name after an entries table\n{text}"
     );
     let session: Session = toml::from_str(&text).expect("reading back");
-    let restored = session.resolve_tabs(&objects);
+    let restored = session.restore(&objects).tabs;
     let names: Vec<Option<Page>> = restored
         .iter()
         .map(|tab| match tab {
@@ -1127,7 +1128,7 @@ fn a_page_this_build_does_not_have_is_dropped() {
         ..Session::default()
     };
 
-    let restored = session.resolve_tabs(&objects);
+    let restored = session.restore(&objects).tabs;
     assert_eq!(restored.len(), 2);
     assert!(matches!(restored[0], RestoredTab::Page(Page::Settings)));
     assert_eq!(as_document(&restored[1]).2[0].asm_row, 3);
@@ -1195,9 +1196,9 @@ fn an_unchanged_binary_is_still_matched_on_the_address() {
                 data: objects[0].symbols_sorted[1].clone(),
             }))
     );
-    assert_eq!(session.resolve_tabs(&objects).len(), 1);
+    assert_eq!(session.restore(&objects).tabs.len(), 1);
     assert_eq!(
-        as_document(&session.resolve_tabs(&objects)[0]).2[0].asm_row,
+        as_document(&session.restore(&objects).tabs[0]).2[0].asm_row,
         42
     );
 
@@ -1208,8 +1209,8 @@ fn an_unchanged_binary_is_still_matched_on_the_address() {
         42,
     );
     assert!(resolve_selection(&moved, &objects) == Some(Selection::Object(objects[0].clone())));
-    assert!(moved.resolve_tabs(&objects).is_empty());
-    assert!(moved.resolve_history(&objects).entries().is_empty());
+    assert!(moved.restore(&objects).tabs.is_empty());
+    assert!(moved.restore(&objects).visits.entries().is_empty());
 }
 
 /// The file has been rebuilt under the session, so a symbol that merely moved comes back
@@ -1239,8 +1240,8 @@ fn a_rebuilt_binary_matches_by_name_and_forgets_the_row() {
     });
     assert!(resolve_selection(&session, &objects) == Some(expected.clone()));
     let document = Document::Assembly(expected.clone());
-    assert!(session.resolve_tabs(&objects) == [restored(&document, 0, 0)]);
-    assert!(session.resolve_history(&objects).entries() == [document]);
+    assert!(session.restore(&objects).tabs == [restored(&document, 0, 0)]);
+    assert!(session.restore(&objects).visits.entries() == [document]);
 }
 
 /// The refusal rather than the recovery: two symbols of one name in a rebuilt object and
@@ -1261,8 +1262,8 @@ fn a_rebuilt_binary_will_not_guess_between_two_symbols_of_one_name() {
     );
     // The selection degrades to the object; the tab and the history entry drop.
     assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
-    assert!(session.resolve_tabs(&objects).is_empty());
-    assert!(session.resolve_history(&objects).entries().is_empty());
+    assert!(session.restore(&objects).tabs.is_empty());
+    assert!(session.restore(&objects).visits.entries().is_empty());
 
     // And where the address still names one of them, it is still the tie-breaker.
     let exact = saved_against(
@@ -1292,7 +1293,7 @@ fn a_binary_with_no_saved_digest_is_believed_exactly_as_before() {
 
     let session = saved_against(None, saved_symbol("a.o", "target", 6), 42);
     assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
-    assert!(session.resolve_tabs(&objects).is_empty());
+    assert!(session.restore(&objects).tabs.is_empty());
 }
 
 /// A digest for a path that is not loaded, and a loaded path with no digest, are both
@@ -1310,7 +1311,7 @@ fn a_digest_for_a_binary_that_is_not_open_says_nothing() {
         .insert(PathBuf::from("/tmp/some.dll"), digest_of(b"whatever"));
 
     assert_eq!(
-        as_document(&session.resolve_tabs(&objects)[0]).2[0].asm_row,
+        as_document(&session.restore(&objects).tabs[0]).2[0].asm_row,
         42
     );
 }
@@ -2631,13 +2632,13 @@ fn an_objects_symbols_and_its_code_come_back_as_two_tabs() {
     assert!(text.contains(r#"shown = "Code""#), "{text}");
 
     let session: Session = toml::from_str(&text).expect("reading back");
-    let restored = session.resolve_tabs(&objects);
+    let restored = session.restore(&objects).tabs;
     let documents: Vec<Document> = restored
         .iter()
         .map(|tab| as_document(tab).2[0].document.clone())
         .collect();
     assert!(documents == tabs, "the two tabs came back as one kind");
-    assert!(session.resolve(&objects) == Some(tabs[1].clone()));
+    assert!(session.restore(&objects).active == Some(tabs[1].clone()));
 }
 
 /// A place in a source file is the line of it, written before its document as the address
@@ -2683,7 +2684,7 @@ fn a_source_places_line_is_written_before_its_document_and_comes_back() {
     assert!(line < document, "{text}");
 
     let back: Session = toml::from_str(&text).expect("parses back");
-    let restored = back.resolve_tabs(&objects);
+    let restored = back.restore(&objects).tabs;
     assert!(
         *as_document(&restored[0]).1 == trail,
         "the lines did not come back"
@@ -2727,7 +2728,7 @@ fn a_code_tabs_address_is_written_before_its_document() {
     assert_eq!(back.tabs, session.tabs);
 
     // And it comes back as the tab's address, the rows past it being a nicety.
-    let restored = session.resolve_tabs(&objects);
+    let restored = session.restore(&objects).tabs;
     assert!(as_document(&restored[0]).2[0].document == code);
     assert_eq!(as_document(&restored[0]).2[0].address, Some(0x30));
 }
@@ -2788,7 +2789,7 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
     assert_eq!(session.tabs[0].entries.len(), 2, "the places collapsed");
     let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
 
-    let restored = session.resolve_tabs(&objects);
+    let restored = session.restore(&objects).tabs;
     assert!(
         as_document(&restored[0]).1.entries()
             == [
@@ -2832,7 +2833,7 @@ fn a_saved_place_whose_half_is_not_its_documents_is_the_whole_document() {
         "#;
     let session: Session = toml::from_str(text).expect("deserializing");
 
-    let restored = session.resolve_tabs(&objects());
+    let restored = session.restore(&objects()).tabs;
     assert!(
         as_document(&restored[0]).1.entries() == [Stop::whole(file_tab("/src/main.rs"))],
         "an address in a source file made a place of its own"
@@ -2865,7 +2866,7 @@ fn a_rebuilt_binary_takes_the_saved_address_with_it() {
         built("/tmp/lib.a", "a.o", &[("caller", 0)], b"the second build"),
         built("/tmp/lib.a", "b.o", &[("caller", 0)], b"the second build"),
     ];
-    let restored = session.resolve_tabs(&rebuilt);
+    let restored = session.restore(&rebuilt).tabs;
     assert_eq!(restored.len(), 1);
     assert!(as_document(&restored[0]).2[0].document == Document::Code(rebuilt[1].clone()));
     assert_eq!(as_document(&restored[0]).2[0].address, None);
