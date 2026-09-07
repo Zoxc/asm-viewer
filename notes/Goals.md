@@ -121,6 +121,23 @@ leaves this list when it is. That is a move made on request, like everything els
   stay drawn while the keyboard is elsewhere, or a reader could not see what they had selected
   before reaching for the other pane. So the caret goes and the highlight stays, and whether the
   highlight dims instead is the second question.
+- [ ] Swap the side a document is driven from, from a menu item and a shortcut. Which pane leads
+  is read straight off the document's kind (`src/ui/split.rs`): a source tab puts the file on the
+  left and what it compiled into on the right, an assembly or code tab the other way about, and
+  nothing but opening the other kind of tab changes it. So a reader deep in a symbol who wants to
+  read down the file it came from, or one reading a file who wants the listing to lead, has to
+  open a second tab for it. The decision is what a swap *is*. Either it *rewrites the tab's
+  document* -- a source tab becoming the assembly tab of the symbol its other half is drawing,
+  which is what `Driven::chosen` already names, and an assembly tab becoming the source tab of
+  the file its listing is on -- or *which side leads becomes a fact of its own* beside the
+  document, one more thing every tab carries and every session stores. The first keeps one
+  meaning for a tab and writes a trail entry the reader did not ask for; the second leaves the
+  document alone and makes what a tab is two things instead of one. Then: what becomes of
+  `Driven`'s line and its chosen symbol across a swap, the followed side being the leading one
+  afterwards; whether a tab whose following pane is put away swaps at all, having only the one
+  side; and where the gesture lives -- the tab's menu, the pane's bar, or both -- with its row in
+  `src/shortcuts.rs` and on the Shortcuts page either way.
+
 ## Navigation
 
 - [ ] A door into the source shows no in-between state. Following a name puts the pane on the
@@ -474,6 +491,22 @@ leaves this list when it is. That is a move made on request, like everything els
   was opened, and what leaves it in a list is a row that only folds and a press with Alt
   held, which opens nothing. Every panel answers, the Files tree having grown the focusable
   box the other six get from their filter pane.
+- [ ] Ctrl+F in a tab: find in what the pane is showing. The chord means "the filter box over
+  this list" in the sidebar and nothing at all in a code pane, which is where a reader coming
+  from any editor will press it first -- and the app's answer to "find this text" is
+  Ctrl+Shift+F, which searches the project's files on a worker and says nothing about the
+  listing on screen. What is wanted is the editor's: a small bar in the tab, the pane's own
+  rows searched as they are drawn, every match washed the way a filter's is (`match_bg`), and
+  Enter and Shift+Enter stepping between them with the listing scrolling to each. The pieces
+  are there -- `Matcher` compiles the box, `marked_units` puts a wash on a row's paragraph,
+  and `reveal_caret` scrolls a listing to a row. What has to be decided is what a pane's text
+  *is* for this: an assembly listing is rows of spans a worker decoded and a source file is a
+  rope the highlighter parsed, so either each pane answers "which of my rows hold this" in its
+  own terms or both are asked through one seam; whether the search runs over the whole listing
+  or only what has been decoded, an object's code being decoded a window at a time; whether a
+  match is a selection the caret sits in, which would make Ctrl+C after it copy the match, or
+  only a wash; and where the bar goes, the pane's bar being full and the split putting two
+  panes side by side.
 - [ ] Reach the panels from the keyboard: getting *to* one. The rows answer the arrows and
   Enter once the keyboard is in them, but the only ways in are a press on a row and Ctrl+F,
   which goes from a list to the box over it and never back. What is left is a chord that
@@ -519,6 +552,21 @@ leaves this list when it is. That is a move made on request, like everything els
   is no longer what is loaded. Outdated means the content differs: the digest taken when the
   binary was opened against the file the build named. The reader reopens one when they choose
   to, and that is what clears the mark.
+- [ ] Open what is dropped on the window. freya 0.4 has the events already -- `on_file_drop` on
+  an element, and `global_file_hover` / `global_file_hover_cancelled` while a drag is anywhere
+  over the window -- so what is missing is what the app makes of a path. The doors it has say
+  most of it: a binary or an archive is what the Objects panel's Add opens, a source file is
+  `open_source_file`'s question, and a directory is a project's own. What has to be decided is
+  which of those a drop takes, since the parse is what says whether a file is an object and it
+  is not asked until a reader chooses to open one -- so a drop guesses from the extension, tries
+  the parse and falls back to source, or asks; whether where it lands matters, a drop on the
+  Objects panel meaning a binary and one on a code pane meaning source, against one rule for the
+  whole window; what a dropped directory does with a project already open, which is
+  `switch_project`'s question and not a new one; and what the window says while a file is over
+  it, which is what the two hover events are for. winit hands over one event per file, so a
+  multi-file drop arrives as a run of them and not as a list, and dropping five objects still
+  has to read as one act.
+
 ## Startup
 
 ## Fonts and settings
