@@ -857,6 +857,127 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
     }
 }
 
+/// What the place-keeping effect remembers between runs, none of it rendered from.
+#[derive(Default)]
+struct Held {
+    tab: Option<Entry>,
+    built: Option<u64>,
+    /// The place last derived from the offset, to tell a scroll from a write made
+    /// from outside.
+    derived: Option<Spot>,
+    /// The map's value as this last saw it: a write from outside is a *change* of
+    /// it, and answered once. Not "the map disagrees with the view", which it does
+    /// for good whenever the view cannot be put exactly where the map says -- a
+    /// listing of millions of rows sits past where an `f32` offset is exact -- and
+    /// which answered every time was a move that woke this into another move for
+    /// ever.
+    known: Option<Spot>,
+    /// The move issued and not yet seen arrive.
+    moving: Option<Move>,
+}
+
+/// A move the hook made and has not seen the view arrive at.
+///
+/// The view mounts a pass after the rows first exist and resets the offset as it does,
+/// and it clamps a target past its content: either would otherwise read as a scroll of
+/// the reader's and be written down over the place they asked for. So a move is
+/// re-issued until a run finds the view there, a few times and no more.
+#[derive(Clone, Copy)]
+struct Move {
+    /// The place the move was to.
+    to: Spot,
+    /// How often it has been issued again.
+    tries: usize,
+}
+
+impl Move {
+    /// How often a move is re-issued before the view is taken at its word.
+    const TRIES: usize = 3;
+
+    /// Whether the view is where the move was to, or has been told often enough.
+    ///
+    /// By row and not by spot, since a place written from outside can be an address
+    /// inside a row -- a call's target in the middle of an instruction -- which no spot
+    /// derived from the offset will ever spell.
+    fn arrived(&self, built: &Built, row: usize) -> bool {
+        row_of(built, self.to) == Some(row) || self.tries >= Self::TRIES
+    }
+
+    /// The row to issue the move at again, counting the try. [`None`] where the place
+    /// has no row in the rows there are now; the run stops there all the same, the move
+    /// still owed.
+    fn retry(&mut self, built: &Built) -> Option<usize> {
+        self.tries += 1;
+        row_of(built, self.to)
+    }
+}
+
+/// One run of the effect as its stages share it: what the run is about, and what the
+/// stages before have found.
+struct Step<'a> {
+    tab: &'a Entry,
+    /// The reading generation the rows are counted at.
+    generation: u64,
+    /// The rows are counted afresh this run, the generation having changed.
+    rebuilt: bool,
+    /// The tab is not the one the last run was for.
+    switching: bool,
+    /// The rows drawn until now, which are what the offset was scrolled against.
+    before: Option<Arc<Built>>,
+    /// The places kept for the tab's run, which a carry goes through first.
+    kept: Option<Kept>,
+    /// Whether this run put the tab's own run back, or planted one, which makes it this
+    /// tab's run to write down whether or not the tab is being switched to.
+    carried: bool,
+}
+
+/// Where the view is, worked out once from the offset for the stages that need it.
+struct At {
+    /// The row at the top of the pane, before it is clamped: the offset was scrolled
+    /// against the rows there were, and a rebuild clamps it against those instead.
+    scrolled: usize,
+    /// That row among the rows this run has.
+    row: usize,
+    /// How far past the top row's edge the view is.
+    remainder: f64,
+    /// The place the top row stands for.
+    derived: Option<Spot>,
+    /// The place the map holds for the tab.
+    known: Option<Spot>,
+    /// `known` has changed since the last run, which is a write from outside.
+    written: bool,
+}
+
+impl At {
+    /// Where the view is against the rows this run has, with the map's place for the tab
+    /// beside it and whether that has changed since `was`.
+    ///
+    /// The map is **read** and not peeked, unlike `use_kept_position`'s: a place written
+    /// from outside while the tab is on top -- an instruction shown among its neighbours
+    /// -- has to be answered, and the run this wakes on its own write finds nothing moved
+    /// and writes nothing.
+    fn of(
+        step: &Step,
+        built: &Built,
+        places: State<Positions<Entry, Spot>>,
+        was: Option<Spot>,
+        top: f64,
+        height: f64,
+    ) -> At {
+        let scrolled = (top / height) as usize;
+        let row = scrolled.min(built.len().saturating_sub(1));
+        let known = places.read().at(step.tab);
+        At {
+            scrolled,
+            row,
+            remainder: top - row as f64 * height,
+            derived: spot_at(built, row),
+            known,
+            written: known != was,
+        }
+    }
+}
+
 /// Keep `controller` pointed at the place `tab` was left at, and keep [`CodeAt`] told
 /// where it is now -- and produce the rows the place is kept against.
 ///
@@ -868,64 +989,26 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
 /// the pass that first draws new rows draws them at the corrected offset rather than one
 /// frame early.
 ///
-/// The picked-out run is kept the same way, in `marks_at` beside the runs `use_land`
-/// keeps by rows: the place each of its rows stands for, written whenever the run or the
-/// rows change ([`Kept::spots`], stamped with the generation), and read back when the
-/// rows are built **for the first time since the reading was reset** -- the run
-/// `use_land` put back is by rows of a listing that is gone, and is carried through
-/// those places to the rows there are now ([`Kept::carry`]). That run is always
-/// `use_land`'s: the reset is a change of the active entry, which `use_land` answers a
-/// pass after the memo, and the rows come a pass after the reading follows it. On the
-/// run that switches tab the marks on screen are still the last tab's, so nothing is
-/// written then unless this run carried a run of its own, or planted one.
-///
-/// **A door's instruction is planted here** ([`Planting`]), in the first run that has
-/// rows and finds a planting naming this document -- over the kept run, a landing
-/// winning -- on the row at or below its address (`Rows::body_row_for`), and the address
-/// itself is what is kept for the caret's row: a guessed row's own place is its share of
-/// an undecoded stretch, and re-placing the caret by that once the stretch decodes would
-/// land it on the row nearest the guess rather than on the instruction holding the byte.
-/// So a place kept for a row of the run **stays** for as long as it still names the row
-/// (`row_of` over the rows on screen), the exact address a planting gave and the derived
-/// one alike, and only a row with none is given its own; and the carry across a recount
-/// goes through the kept place before the derived one for the same reason. The pane owes
-/// the planted caret no scroll: the tab's place is the same address, written by the same
-/// door, and is what scrolls the view to it.
+/// **One effect, because the order is the whole of it**: [`rebuild`] the rows and carry
+/// the run across, plant the caret a door left ([`plant_caret`]), name the run's file
+/// ([`name_run`]), write down the places its rows stand for ([`keep_spots`]), work out
+/// where the view is ([`At`]), re-issue a move the view has not made ([`Move`]), choose a
+/// target ([`target_of`]), publish the rows, and then pay the reveal or scroll. Each
+/// stage is a function over the [`Step`] they share -- what one stage tells the next is a
+/// field of it -- and the rule a stage keeps is written on the stage.
 fn use_kept_place(
-    mut places: State<Positions<Entry, Spot>>,
+    places: State<Positions<Entry, Spot>>,
     is_open: impl Fn(&Entry) -> bool + 'static,
     mut reveal: impl FnMut(&mut ScrollController, &Built) -> bool + 'static,
     reading: State<Reading>,
     marked: State<Marks>,
-    mut marks_at: State<Positions<Entry, Kept>>,
-    mut plant: State<Option<Planting>>,
+    marks_at: State<Positions<Entry, Kept>>,
+    plant: State<Option<Planting>>,
     mut rows: State<Option<Arc<Built>>>,
     mut controller: ScrollController,
     tab: &Entry,
     generation: Option<u64>,
 ) {
-    /// What the hook remembers between runs, none of it rendered from.
-    #[derive(Default)]
-    struct Held {
-        tab: Option<Entry>,
-        built: Option<u64>,
-        /// The place last derived from the offset, to tell a scroll from a write made
-        /// from outside.
-        derived: Option<Spot>,
-        /// The map's value as this last saw it: a write from outside is a *change* of
-        /// it, and answered once. Not "the map disagrees with the view", which it does
-        /// for good whenever the view cannot be put exactly where the map says -- a
-        /// listing of millions of rows sits past where an `f32` offset is exact -- and
-        /// which answered every time was a move that woke this into another move for
-        /// ever.
-        known: Option<Spot>,
-        /// The place a move was issued to and not yet seen, and how often it has been
-        /// re-issued.
-        moving: Option<Spot>,
-        tries: usize,
-    }
-    /// How often a move is re-issued before the view is taken at its word.
-    const MOVE_TRIES: usize = 3;
     let held = use_hook(|| Rc::new(RefCell::new(Held::default())));
 
     use_side_effect_with_deps(
@@ -950,221 +1033,49 @@ fn use_kept_place(
             };
 
             let mut state = held.borrow_mut();
-            let rebuilt = state.built != Some(generation);
-            let switching = state.tab.as_ref() != Some(tab);
-            // The rows drawn until now, which are what the offset was scrolled against.
-            let before = rows.peek().clone();
-            // Whether this run put the tab's own run back, or planted one, which makes
-            // it this tab's run to write down whether or not the tab is being switched
-            // to.
-            let mut carried = false;
-            // The places kept for the run's rows, which a carry goes through first.
-            let kept = marks_at.peek().at(tab);
-            let built = if rebuilt {
-                let reading = reading.peek();
-                let Some(code) = reading.code.clone() else {
-                    if before.is_some() {
-                        rows.set(None);
-                    }
-                    return;
-                };
-                let built = Arc::new(Built {
-                    rows: Rows::new(code, |flat| reading.body(flat)),
-                    reading: (*reading).clone(),
-                });
-                state.built = Some(generation);
-                match before.as_ref() {
-                    // The run picked out over the old rows, carried to the new: each of
-                    // its rows through the address it stood for, the way the reader's
-                    // place is kept across the same recount -- the place kept for the
-                    // row where it still names it, which is exact, else the row's own.
-                    Some(before) => carry_assembly(marked, |row| {
-                        let spot = kept
-                            .as_ref()
-                            .and_then(|kept| kept.spot_of(row))
-                            .filter(|spot| row_of(before, *spot) == Some(row))
-                            .or_else(|| spot_at(before, row))?;
-                        row_of(&built, spot)
-                    }),
-                    // The first rows since the reading was reset: the run kept for this
-                    // place, carried through the places kept with it, and nothing where
-                    // nothing was kept -- a run left over from a listing this tab is not
-                    // showing goes.
-                    None => {
-                        let replanted = kept
-                            .as_ref()
-                            .and_then(|kept| kept.carry(|spot| row_of(&built, spot)));
-                        carried = replanted.is_some();
-                        set_assembly(marked, replanted);
-                    }
-                }
-                built
-            } else {
-                match before.clone() {
-                    Some(built) => built,
-                    None => return,
-                }
+            let mut step = Step {
+                tab,
+                generation,
+                rebuilt: state.built != Some(generation),
+                switching: state.tab.as_ref() != Some(tab),
+                before: rows.peek().clone(),
+                kept: marks_at.peek().at(tab),
+                carried: false,
             };
 
-            // The caret a door left to be planted, if it is this document's: on the row
-            // at or below the address, and spent whether or not there is one -- an
-            // address in no stretch is dropped rather than left for ever. Read and not
-            // peeked, so a door opened while the tab is on top wakes this. The address
-            // goes with the row into the places kept below, exactly.
-            //
-            // The pane owes the caret its reveal, as the symbol pane owes its own
-            // planting one: the reveal below wins over the place the door wrote, and
-            // keeps `CONTEXT_ROWS` above the row where the place alone put the
-            // instruction against the top of the pane with nothing before it. The place
-            // is still the exact address, so a stretch decoding under the view re-places
-            // it on the instruction itself; what the reveal gives is where the view sits
-            // when the door opens, which is the only moment the reader is reading it.
-            let mut planted: Option<(usize, Spot)> = None;
-            let planting = plant.read().clone();
-            if let Some(planting) = planting.filter(|planting| planting.tab == tab.1.document) {
-                plant.set(None);
-                if let Some(row) = built.body_row_for(planting.address) {
-                    land_row(marked, file_at(&built, row), row, Owed::by(Pane::Assembly));
-                    let first = built.row_for(planting.address).unwrap_or(row);
-                    planted = Some((
-                        row,
-                        Spot {
-                            address: planting.address,
-                            rows: row.saturating_sub(first),
-                        },
-                    ));
-                    carried = true;
-                }
-            }
+            let Some(built) = rebuild(&mut step, &mut state, reading, marked, rows) else {
+                return;
+            };
+            let planted = plant_caret(&mut step, &built, plant, marked);
+            name_run(&built, marked);
+            keep_spots(&step, &built, planted, marked, marks_at, &is_open);
 
-            // The file the run is a run of, worked out again while it has none. A run is
-            // planted the moment there are rows, which is the skeleton, where the row it
-            // lands on is a guess and names no file -- and a carry maps row indices and
-            // keeps the rest of the run as it was, so nothing else would ever fill it in.
-            // The unified view draws no symbol of its own, so this run's file is the
-            // whole of what the Source pane beside it has to show (`source_side`): left
-            // unfilled, a tab the reader opened *at* an instruction says "Click an
-            // instruction" for as long as it is open.
-            //
-            // **Filled in, never cleared.** A row that has gone back to a guess keeps the
-            // file it was decoded with, and a run that names one is left alone, so this
-            // is one write on the pass a stretch decodes under the run and none after.
-            let unnamed = marked
-                .peek()
-                .assembly
-                .as_ref()
-                .filter(|picked| picked.file.is_none())
-                .map(|picked| picked.chars.anchor().row);
-            if let Some(anchor) = unnamed {
-                if let Some(file) = file_at(&built, anchor) {
-                    let named = marked.peek().assembly.as_ref().map(|picked| Picked {
-                        file: Some(file),
-                        ..picked.clone()
-                    });
-                    set_assembly(marked, named);
-                }
-            }
+            let at = At::of(&step, &built, places, state.known, top, height);
+            state.known = at.known;
 
-            // The places the run's rows stand for, written down as they change and only
-            // for a run that is this tab's own -- and for a tab still open, as the place
-            // below is. A place already kept that still names the row stays, the exact
-            // address a planting gave among them; a row with none gets its own.
-            if (!switching || carried) && is_open(tab) {
-                let spots = Kept::spots_of(marked.peek().assembly.as_ref(), |row| {
-                    planted
-                        .filter(|(at, _)| *at == row)
-                        .map(|(_, spot)| spot)
-                        .or_else(|| {
-                            kept.as_ref()?
-                                .spots
-                                .iter()
-                                .map(|(_, spot)| *spot)
-                                .find(|spot| row_of(&built, *spot) == Some(row))
-                        })
-                        .or_else(|| spot_at(&built, row))
-                });
-                let was = kept.clone();
-                let kept = Kept {
-                    spots,
-                    generation: Some(generation),
-                    marks: was
-                        .as_ref()
-                        .map(|was| was.marks.clone())
-                        .unwrap_or_default(),
-                };
-                if was.as_ref() != Some(&kept) {
-                    marks_at.write().remember(tab.clone(), kept);
-                }
-            }
-
-            let scrolled = (top / height) as usize;
-            let row = scrolled.min(built.len().saturating_sub(1));
-            let remainder = top - row as f64 * height;
-            let derived = spot_at(&built, row);
-            // Read and not peeked, unlike `use_kept_position`'s map: a place written from
-            // outside while the tab is on top -- an instruction shown among its
-            // neighbours -- has to be answered, and the run this wakes on its own write
-            // finds nothing moved and writes nothing.
-            let known = places.read().at(tab);
-            let written = known != state.known;
-            state.known = known;
-
-            // A move this hook made and has not seen arrive yet. The view mounts a pass
-            // after the rows first exist and resets the offset as it does, and it clamps
-            // a target past its content: either would otherwise read as a scroll of the
-            // reader's and be written down over the place they asked for. So a move is
-            // re-issued until a run finds the view there, a few times and no more.
-            if let Some(moving) = state.moving {
-                // Arrived when the view's top row is the row the place names -- by row
-                // and not by spot, since a place written from outside can be an address
-                // inside a row, a call's target in the middle of an instruction, which
-                // no spot derived from the offset will ever spell.
-                if row_of(&built, moving) == Some(row) || state.tries >= MOVE_TRIES {
+            // A move made and not seen arrive: issued again until a run finds the view
+            // there, and left where it is on a run that switches tab or counts the rows
+            // afresh, which chooses its own target below.
+            if let Some(mut moving) = state.moving {
+                if moving.arrived(&built, at.row) {
                     state.moving = None;
-                } else if !switching && !rebuilt {
-                    state.tries += 1;
-                    if let Some(to) = row_of(&built, moving) {
+                } else if !step.switching && !step.rebuilt {
+                    let to = moving.retry(&built);
+                    state.moving = Some(moving);
+                    if let Some(to) = to {
                         controller.scroll_to_y(to_offset(to as f64));
                     }
                     return;
                 }
             }
 
-            // Where this run has to move the view to, if anywhere.
-            let target: Option<Spot> = if switching {
-                known
-            } else if rebuilt {
-                // The rows changed under the reader: back to the place they were at --
-                // the map's own place where the view was at it, as well as the old rows
-                // could tell, since a place written from outside is exact and a row's
-                // share of an undecoded stretch is a guess. A target in a stretch the
-                // worker had not reached lands on its own row once the stretch is
-                // decoded, and not on the row its guess was nearest.
-                let exact = known.filter(|known| {
-                    before.as_ref().is_some_and(|old| {
-                        row_of(old, *known) == Some(scrolled.min(old.len().saturating_sub(1)))
-                    })
-                });
-                exact.or(state.derived).or(known)
-            } else if derived != state.derived && known != derived {
-                // A scroll: write it down, for a tab that is still open. The run after
-                // a close is still holding the tab and would put it straight back.
-                if let Some(derived) = derived.filter(|_| is_open(tab)) {
-                    places.write().remember(tab.clone(), derived);
-                }
-                None
-            } else if written && known.is_some() && known != derived {
-                // Written from outside -- a landing -- while the tab is on top.
-                known
-            } else {
-                None
-            };
+            let target = target_of(&state, &step, &at, places, &is_open);
 
-            if switching {
+            if step.switching {
                 state.tab = Some(tab.clone());
             }
-            state.derived = derived;
-            if rebuilt {
+            state.derived = at.derived;
+            if step.rebuilt {
                 rows.set(Some(built.clone()));
             }
             // The reveal first, as `use_kept_position` has it: a scroll it makes is where
@@ -1173,22 +1084,246 @@ fn use_kept_place(
                 state.moving = None;
                 return;
             }
-            if let Some(target) = target {
-                let Some(to) = row_of(&built, target) else {
-                    return;
-                };
-                if to != row || (rebuilt && switching) {
-                    // Keeping the sub-row remainder, so a chunk landing above does not
-                    // snap the view to a row edge.
-                    let keep = if switching { 0.0 } else { remainder };
-                    controller.scroll_to_y(to_offset(to as f64 + keep / height));
-                    state.derived = spot_at(&built, to);
-                    state.moving = Some(target);
-                    state.tries = 0;
-                }
+            let Some(target) = target else {
+                return;
+            };
+            let Some(to) = row_of(&built, target) else {
+                return;
+            };
+            if to != at.row || (step.rebuilt && step.switching) {
+                // Keeping the sub-row remainder, so a chunk landing above does not snap
+                // the view to a row edge.
+                let keep = if step.switching { 0.0 } else { at.remainder };
+                controller.scroll_to_y(to_offset(to as f64 + keep / height));
+                state.derived = spot_at(&built, to);
+                state.moving = Some(Move {
+                    to: target,
+                    tries: 0,
+                });
             }
         },
     );
+}
+
+/// The rows this run keeps a place against: the ones on screen, or, where the reading's
+/// generation has changed, counted afresh -- and, where they are, the picked-out run
+/// carried over to them.
+///
+/// The run is carried the way the reader's place is: each of its rows through the address
+/// that row stood for, the place kept for the row where it still names the row, which is
+/// exact, and the row's own place otherwise. The kept place goes first because the exact
+/// address a door planted is kept there ([`plant_caret`]).
+///
+/// On the first rows since the reading was reset there are no old rows to carry from, and
+/// the run comes back through the places kept for the tab instead ([`Kept::carry`]); a
+/// run left over from a listing this tab is not showing goes. That run is always
+/// `use_land`'s: the reset is a change of the active entry, which `use_land` answers a
+/// pass after the memo, and the rows come a pass after the reading follows it.
+///
+/// [`None`] ends the run: there is no code to count rows from, or there are no rows at
+/// all and nothing to keep a place against.
+fn rebuild(
+    step: &mut Step,
+    held: &mut Held,
+    reading: State<Reading>,
+    marked: State<Marks>,
+    mut rows: State<Option<Arc<Built>>>,
+) -> Option<Arc<Built>> {
+    if !step.rebuilt {
+        return step.before.clone();
+    }
+    let reading = reading.peek();
+    let Some(code) = reading.code.clone() else {
+        if step.before.is_some() {
+            rows.set(None);
+        }
+        return None;
+    };
+    let built = Arc::new(Built {
+        rows: Rows::new(code, |flat| reading.body(flat)),
+        reading: (*reading).clone(),
+    });
+    held.built = Some(step.generation);
+    if let Some(before) = step.before.as_ref() {
+        carry_assembly(marked, |row| {
+            let spot = step
+                .kept
+                .as_ref()
+                .and_then(|kept| kept.spot_of(row))
+                .filter(|spot| row_of(before, *spot) == Some(row))
+                .or_else(|| spot_at(before, row))?;
+            row_of(&built, spot)
+        });
+    } else {
+        let replanted = step
+            .kept
+            .as_ref()
+            .and_then(|kept| kept.carry(|spot| row_of(&built, spot)));
+        step.carried = replanted.is_some();
+        set_assembly(marked, replanted);
+    }
+    Some(built)
+}
+
+/// Plant the caret a door left for this document ([`Planting`]), in the first run that
+/// has rows to plant it in -- over the kept run, a landing winning -- on the row at or
+/// below its address (`Rows::body_row_for`), and spend it whether or not there was a row:
+/// an address in no stretch is dropped rather than left for ever. The planting is read
+/// and not peeked, so a door opened while the tab is on top wakes the effect.
+///
+/// What comes back is that row and the **exact** address for it, which is what
+/// [`keep_spots`] keeps for the caret's row: a guessed row's own place is its share of an
+/// undecoded stretch, and re-placing the caret by that once the stretch decodes would
+/// land it on the row nearest the guess rather than on the instruction holding the byte.
+///
+/// The pane owes the caret its reveal, as the symbol pane owes its own planting one: the
+/// reveal wins over the place the door wrote, and keeps `CONTEXT_ROWS` above the row
+/// where the place alone put the instruction against the top of the pane with nothing
+/// before it. The place is still the exact address, so a stretch decoding under the view
+/// re-places it on the instruction itself; what the reveal gives is where the view sits
+/// when the door opens, which is the only moment the reader is reading it.
+fn plant_caret(
+    step: &mut Step,
+    built: &Built,
+    mut plant: State<Option<Planting>>,
+    marked: State<Marks>,
+) -> Option<(usize, Spot)> {
+    let planting = plant.read().clone();
+    let planting = planting.filter(|planting| planting.tab == step.tab.1.document)?;
+    plant.set(None);
+    let row = built.body_row_for(planting.address)?;
+    land_row(marked, file_at(built, row), row, Owed::by(Pane::Assembly));
+    let first = built.row_for(planting.address).unwrap_or(row);
+    step.carried = true;
+    Some((
+        row,
+        Spot {
+            address: planting.address,
+            rows: row.saturating_sub(first),
+        },
+    ))
+}
+
+/// The file the run is a run of, worked out again while it has none.
+///
+/// A run is planted the moment there are rows, which is the skeleton, where the row it
+/// lands on is a guess and names no file -- and a carry maps row indices and keeps the
+/// rest of the run as it was, so nothing else would ever fill it in. The unified view
+/// draws no symbol of its own, so this run's file is the whole of what the Source pane
+/// beside it has to show (`source_side`): left unfilled, a tab the reader opened *at* an
+/// instruction says "Click an instruction" for as long as it is open.
+///
+/// **Filled in, never cleared.** A row that has gone back to a guess keeps the file it
+/// was decoded with, and a run that names one is left alone, so this is one write on the
+/// pass a stretch decodes under the run and none after.
+fn name_run(built: &Built, marked: State<Marks>) {
+    let unnamed = marked
+        .peek()
+        .assembly
+        .as_ref()
+        .filter(|picked| picked.file.is_none())
+        .map(|picked| picked.chars.anchor().row);
+    let Some(anchor) = unnamed else {
+        return;
+    };
+    let Some(file) = file_at(built, anchor) else {
+        return;
+    };
+    let named = marked.peek().assembly.as_ref().map(|picked| Picked {
+        file: Some(file),
+        ..picked.clone()
+    });
+    set_assembly(marked, named);
+}
+
+/// Write down the places the run's rows stand for ([`Kept::spots`], stamped with the
+/// generation), which is how the run is carried across a recount and put back after a
+/// switch -- `marks_at` beside the runs `use_land` keeps by rows.
+///
+/// Only for a run that is this tab's own, and for a tab still open, as the place is. On
+/// the run that switches tab the marks on screen are still the last tab's, so nothing is
+/// written then unless this run carried a run of its own, or planted one.
+///
+/// A place already kept **stays** for as long as it still names the row (`row_of` over
+/// the rows on screen), the exact address a planting gave and a derived one alike, and
+/// only a row with none is given its own.
+fn keep_spots(
+    step: &Step,
+    built: &Built,
+    planted: Option<(usize, Spot)>,
+    marked: State<Marks>,
+    mut marks_at: State<Positions<Entry, Kept>>,
+    is_open: &dyn Fn(&Entry) -> bool,
+) {
+    if (step.switching && !step.carried) || !is_open(step.tab) {
+        return;
+    }
+    let spots = Kept::spots_of(marked.peek().assembly.as_ref(), |row| {
+        planted
+            .filter(|(at, _)| *at == row)
+            .map(|(_, spot)| spot)
+            .or_else(|| {
+                step.kept
+                    .as_ref()?
+                    .spots
+                    .iter()
+                    .map(|(_, spot)| *spot)
+                    .find(|spot| row_of(built, *spot) == Some(row))
+            })
+            .or_else(|| spot_at(built, row))
+    });
+    let was = step.kept.as_ref();
+    let kept = Kept {
+        spots,
+        generation: Some(step.generation),
+        marks: was.map(|was| was.marks.clone()).unwrap_or_default(),
+    };
+    if was != Some(&kept) {
+        marks_at.write().remember(step.tab.clone(), kept);
+    }
+}
+
+/// Where this run has to move the view to, if anywhere. Four answers in order: a switch
+/// goes to the map's place; a recount goes back to where the rows were; a scroll is the
+/// reader's own, written down here and moving nothing; and a place written from outside
+/// while the tab is on top is gone to.
+fn target_of(
+    held: &Held,
+    step: &Step,
+    at: &At,
+    mut places: State<Positions<Entry, Spot>>,
+    is_open: &dyn Fn(&Entry) -> bool,
+) -> Option<Spot> {
+    if step.switching {
+        return at.known;
+    }
+    if step.rebuilt {
+        // The rows changed under the reader: back to the place they were at -- the map's
+        // own place where the view was at it, as well as the old rows could tell, since a
+        // place written from outside is exact and a row's share of an undecoded stretch
+        // is a guess. A target in a stretch the worker had not reached lands on its own
+        // row once the stretch is decoded, and not on the row its guess was nearest.
+        let exact = at.known.filter(|known| {
+            step.before.as_ref().is_some_and(|old| {
+                row_of(old, *known) == Some(at.scrolled.min(old.len().saturating_sub(1)))
+            })
+        });
+        return exact.or(held.derived).or(at.known);
+    }
+    if at.derived != held.derived && at.known != at.derived {
+        // A scroll: write it down, for a tab that is still open. The run after a close is
+        // still holding the tab and would put it straight back.
+        if let Some(derived) = at.derived.filter(|_| is_open(step.tab)) {
+            places.write().remember(step.tab.clone(), derived);
+        }
+        return None;
+    }
+    // Written from outside -- a landing -- while the tab is on top.
+    if at.written && at.known != at.derived {
+        at.known
+    } else {
+        None
+    }
 }
 
 /// Show the instruction at `address` -- placed, in `object`'s code -- among its

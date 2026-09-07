@@ -587,16 +587,18 @@ reading the state so a door opened over the tab on top wakes it. **In an object'
 `use_kept_place` plants it in the first run that has rows and finds a planting naming its document,
 over the kept run: on the row **holding the byte** (`Rows::body_row_for`, `row_for` past a
 stretch's header and labels, since the view is better shown the label over a function and a caret
-is not), and with `Owed::default()`. The tab's place is the same address, written by the same door,
-and it is what scrolls the view there; a reveal beside it would cancel the place's move
-(`use_kept_place` returns after a reveal) and put the row three rows down instead of at the top. The
-place is authoritative in that pane, and the line's run, where the door left one, stops owing this
-pane the pair for the same reason (`land_row`). The planted address is what is kept for the caret's
-row (`Kept::spots`): a guessed row's own place is its share of an undecoded stretch, and carrying
-the caret by that once the stretch decoded put it on the row nearest the guess, one row off the
-instruction. So a place already kept for a row of the run **stays** for as long as it still names
-the row on screen (`row_of`), the exact address a planting gave and a derived one alike, and the
-carry across a recount goes through the kept place before the derived one. **In a symbol's listing**
+is not), and with `Owed::by(Assembly)`: the reveal is what puts the view there, over the place the
+same door wrote (`use_kept_place` returns after a reveal), the place alone having put the
+instruction against the top of the pane with nothing before it, where every other door lands the
+reader at a row with the rows before it still in view. The place is still the exact address, so a
+stretch decoding under the view re-places the caret on the instruction. The line's run, where the
+door left one, stops owing this pane the pair (`land_row`): the caret is that pair. The planted
+address is what is kept for the caret's row (`Kept::spots`): a guessed row's own place is its share
+of an undecoded stretch, and carrying the caret by that once the stretch decoded put it on the row
+nearest the guess, one row off the instruction. So a place already kept for a row of the run
+**stays** for as long as it still names the row on screen (`row_of`), the exact address a planting
+gave and a derived one alike, and the carry across a recount goes through the kept place before the
+derived one. **In a symbol's listing**
 `InstructionList`'s planting effect, keyed on the entry the drawn answer is of (not the tab's
 document, since the pane draws the listing being left until the worker answers), plants it on the
 row of the instruction at or below the address and owes the pane the reveal, `Owed::by(Assembly)`,
