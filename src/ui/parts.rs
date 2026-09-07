@@ -481,18 +481,6 @@ pub(crate) fn diagnostic_place(span: &cargo::Span, whole: bool) -> String {
     format!("{file}:{}:{}", span.line, span.column)
 }
 
-/// The item that shows a file, or a folder, where the rest of the reader's tools are: on
-/// a document's tab, and on a Files row. One item everywhere, since the path is all it is
-/// about; which of the two it names is worked out where the call is made.
-///
-/// The call is a subprocess and is made on a thread of its own (`crate::reveal`), so
-/// there is no task here for the press that closes the menu to drop.
-pub(crate) fn reveal_item(path: PathBuf) -> MenuButton {
-    MenuButton::new()
-        .on_press(move |_| reveal::reveal(path.clone()))
-        .child("Show in file manager")
-}
-
 /// The dot a code row is marked with, at its left edge: a source line that produced code,
 /// an instruction the debug info places on a source line.
 ///

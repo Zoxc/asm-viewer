@@ -86,8 +86,8 @@ language server is running, and what would stop it -- `agents/Lsp.md`); `SplitRa
 **A context lives with the mechanism that owns it, and so does the bundle that groups it.**
 `src/ui/state.rs` holds only what belongs to no one mechanism -- the objects, the store, the
 project, the window -- and each of the others sits beside the code it is about: `Marked` in
-`marks.rs`, `Doors` in `focus.rs`, `Shift`/`Ctrl`/`Alt` in `keys.rs`, the `Pad*` family in
-`pad.rs`.
+`marks.rs`, `Doors` in `focus.rs`, `Shift`/`Ctrl`/`Alt` in `keys.rs`, `Loading` in
+`loading.rs`, the `Pad*` family in `pad.rs`.
 
 **A group the code passes around is a context of its own**, so a state added to it is a field
 and not a parameter threaded through every function of the group. Beside `Open` there are four,
@@ -681,10 +681,10 @@ the freeze the first scroll through the app's own binary produced. The hook's ow
 reason: the view resets the controller as it mounts, and a move made before that was read back as
 the reader's own scroll and written over the place they asked for.
 
-**Opening a binary is the one path in, and it streams.** `open_binaries` is `close_binary`'s
-opposite number and the only thing that ever adds to `Objects`. The toolbar's Open, a session
-restore and a scratchpad's rebuild all go through it, so they cannot differ about what opening a
-file means. It is a `stream` (`agents/Worker.md`), but the answers come back one at a time: `Loads::begin` registers the paths **before a byte is read**, so the
+**Opening a binary is the one path in, and it streams.** `open_binaries` (`src/ui/loading.rs`) is
+`close_binary`'s opposite number and the only thing that ever adds to `Objects`. The toolbar's
+Open, a session restore and a scratchpad's rebuild all go through it, so they cannot differ about
+what opening a file means. It is a `stream` (`agents/Worker.md`), but the answers come back one at a time: `Loads::begin` registers the paths **before a byte is read**, so the
 sidebar has a row for the whole of the wait rather than from whenever the first answer lands, and
 `take_load` writes each batch of objects in as it arrives. The channel is **unbounded and drained in
 batches**: unbounded because backpressure is exactly wrong here (the worker is the thing that should

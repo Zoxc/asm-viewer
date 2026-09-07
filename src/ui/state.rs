@@ -2,7 +2,8 @@
 //! app is passed around in.
 //!
 //! **A context lives with the mechanism that owns it**, and so does the bundle that groups
-//! it: [`Doors`] in `focus.rs`, [`Marked`] in `marks.rs`, the `Pad*` family in `pad.rs`.
+//! it: [`Doors`] in `focus.rs`, [`Marked`] in `marks.rs`, [`Loading`] in `loading.rs`, the
+//! `Pad*` family in `pad.rs`.
 //! What is left is here -- the objects, the store, the project, the window's arrangement --
 //! with [`Open`], [`Places`] and [`ProjectStates`], each of which spans three modules or
 //! more and is owned by none.
@@ -40,13 +41,6 @@ pub(crate) fn recents_of(store: State<Option<Store>>) -> Vec<Recent> {
         .map(project::recent_projects)
         .unwrap_or_default()
 }
-
-/// The files being read into [`Objects`] right now, so the sidebar can say so. A state of
-/// its own because it is about what that list has *not* got: a file appears here when it
-/// is asked for and leaves when nothing more is coming out of it, whether or not it
-/// produced anything at all. See [`Loads`] and [`open_binaries`].
-#[derive(Clone, Copy)]
-pub(crate) struct Loading(pub(crate) State<Loads>);
 
 /// The active tab and the document it shows, shared through context.
 ///

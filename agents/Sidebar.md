@@ -156,7 +156,7 @@ goes. That is the **stored name**, except for a symbol the app named rather than
 stores no name and spells itself from what was saved (`agents/Persistence.md`).
 Right-click offers **Remove bookmark**, by index rather than by place, because a dead row is exactly
 the one that resolves to no place and the one it is most wanted on. **A bookmark is made wherever
-the thing it is about is under the pointer**, through one `bookmark_item` (`bookmarks_view.rs`): a
+the thing it is about is under the pointer**, through one `bookmark_item` (`src/ui/menus.rs`): a
 right-click on a Symbols row or a History row (`bookmark_menu`, that item alone), on a document's
 tab (`agents/UI.md`), or on an instruction row in either assembly listing (`agents/Panes.md`). It
 says "Add bookmark" or "Remove bookmark" by `Bookmarks::matching` at the press, so a symbol that

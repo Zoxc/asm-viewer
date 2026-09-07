@@ -102,7 +102,7 @@ fn saved_icon(saved: &SavedDocument) -> Element {
 
 /// The menu a bookmark row opens on a right-click: one item, removing that row. By index
 /// and not by place, because a dead row is exactly the one that resolves to no place and
-/// the one this is most wanted on. Built per press, as every menu here is.
+/// the one this is most wanted on. Built per press, as every menu is (`menus.rs`).
 fn remove_menu(bookmarked: State<Bookmarks>, index: usize) -> Menu {
     Menu::new().child(
         MenuButton::new()
@@ -114,43 +114,8 @@ fn remove_menu(bookmarked: State<Bookmarks>, index: usize) -> Menu {
     )
 }
 
-/// The one menu item every bookmark gesture is: adding a bookmark of `document`, or
-/// removing the one that points at it, whichever is true at the press. Which it is comes
-/// from `Bookmarks::matching` -- by resolution, so a symbol that moved under a rebuild still
-/// reads as bookmarked -- and the name a new one gets is the whole `entry_name`, what the
-/// row's tooltip says. `add` is what the item says when there is none yet: a sidebar row
-/// and a tab say "Add bookmark", an instruction row "Bookmark symbol", since the row is not
-/// the symbol and has to say what it would bookmark. Built per press; the states come in
-/// as arguments because no hook may run in an event handler.
-pub(crate) fn bookmark_item(
-    bookmarked: State<Bookmarks>,
-    objects: State<Vec<Arc<Object>>>,
-    document: Document,
-    add: &'static str,
-) -> MenuButton {
-    let bookmarked_already = bookmarked
-        .peek()
-        .matching(&document, &objects.peek())
-        .is_some();
-    let text = match bookmarked_already {
-        true => "Remove bookmark",
-        false => add,
-    };
-    MenuButton::new()
-        .on_press(move |_| {
-            let mut bookmarked = bookmarked;
-            // The objects are peeked before the list is written: two different states,
-            // and the write wakes the panel.
-            let loaded = objects.peek().clone();
-            bookmarked
-                .write()
-                .toggle(&document, entry_name(&document), &loaded);
-        })
-        .child(text)
-}
-
-/// The menu a Symbols or History row opens on a right-click: the item above and nothing
-/// else.
+/// The menu a Symbols or History row opens on a right-click: [`bookmark_item`] and
+/// nothing else.
 pub(crate) fn bookmark_menu(
     bookmarked: State<Bookmarks>,
     objects: State<Vec<Arc<Object>>>,

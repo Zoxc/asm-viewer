@@ -217,8 +217,8 @@ command.
 - `src/ui/palette.rs` — every colour, the theme it is resolved from, and the compositing rules.
 - `src/ui/state.rs` — what the root provides and no one mechanism owns, and the bundles the
   whole app is passed around in. A context lives with the mechanism it belongs to (`Marked` in
-  `marks.rs`, `Doors` in `focus.rs`, the `Pad*` family in `pad.rs`), and so does the bundle that
-  groups it; the rest is here.
+  `marks.rs`, `Doors` in `focus.rs`, `Loading` in `loading.rs`, the `Pad*` family in `pad.rs`),
+  and so does the bundle that groups it; the rest is here.
 - `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
 - `src/ui/finder.rs` — the file finder: the box Ctrl+P opens over the app, the files of the
   project's directory under it, and the one worker that walks them and picks them out. The
@@ -255,7 +255,14 @@ command.
 - `src/ui/language.rs` — whether a language server is running, what the project's own
   settings said, the worker that talks to it, and the control in the top bar that starts and
   stops it.
-- `src/ui/documents.rs` — what opening, closing and moving between documents means.
+- `src/ui/documents.rs` — what opening, closing and moving between documents means: the
+  doors in, the closers, and a step along a tab's trail.
+- `src/ui/entries.rs` — what a document is called and drawn as wherever a list names one:
+  the short spelling and the whole one, the glyph, and the key a row is drawn under.
+- `src/ui/loading.rs` — reading binaries onto the objects list: the one path anything is
+  ever added by, the one thread, the batches, and which load an answer belongs to.
+- `src/ui/menus.rs` — the menus a right-click opens over a tab and over a file row, and the
+  two items more than one menu is built of. Each is built per press, in an event handler.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, and the rows each is built of.
 - `src/ui/building.rs` — building the project's own workspace: what is held about it, the one
   worker thread, which binaries a finished build replaces, and which of the files its
