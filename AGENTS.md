@@ -178,9 +178,11 @@ command.
   place the tab has shown with a cursor on the one it shows, and which tab is the temporal one.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.
 - `src/tabs.rs` — `Strip`, the open tabs in the reader's order and which is on screen, and what
-  a tab is: a document, or one of the pages; `landing`, the rule a close obeys; `Positions`,
-  where each tab was left; `Driven`, which line a source-driven tab's assembly side follows and
-  which symbol was chosen.
+  a tab is: a document, or one of the pages; `landing`, the rule a close obeys.
+- `src/positions.rs` — where each place on each tab was left: `Positions`, the map all of it
+  is kept in; `Spot`, a place in the listing of an object's whole code; and `Driven`, two of
+  those maps -- which line a source-driven tab's assembly side follows and which symbol was
+  chosen.
 - `src/history.rs` — one tab's back/forward trail.
 - `src/visits.rs` — everywhere the reader has been, across every tab: what the History panel
   lists.

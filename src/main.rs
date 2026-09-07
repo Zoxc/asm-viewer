@@ -15,6 +15,7 @@ mod lsp;
 mod naming;
 mod panics;
 mod pixels;
+mod positions;
 mod process;
 mod project;
 mod references;

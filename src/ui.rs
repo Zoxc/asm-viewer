@@ -48,6 +48,7 @@ pub(crate) use crate::links;
 pub(crate) use crate::lsp;
 pub(crate) use crate::naming::short_name;
 pub(crate) use crate::pixels::Grid;
+pub(crate) use crate::positions::{Driven, Positions, Spot};
 pub(crate) use crate::process::{self, Ended, OutputLine, RunEvent, RunOutput, Stream};
 pub(crate) use crate::project::{
     self, Cargo, Details, Document, OnScreen, Project, Recent, RestoredTab, SavedDock,
@@ -63,7 +64,7 @@ pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
 pub(crate) use crate::source::{self, SourceFile};
 pub(crate) use crate::store::{self, Store};
-pub(crate) use crate::tabs::{Driven, Page, Positions, Spot, Strip, Tab};
+pub(crate) use crate::tabs::{Page, Strip, Tab};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };

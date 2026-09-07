@@ -13,8 +13,8 @@
 //! -- and asks for it through `Window`, which the analysis worker's sender reads.
 
 use super::*;
+use crate::positions::Spot;
 use crate::section::{Row, Rows, GAP_BYTES_PER_ROW};
-use crate::tabs::Spot;
 
 /// How many screens above and below the viewport are decoded ahead, so that a page up or
 /// down lands on rows already there and empty rows are seen only by a reader outrunning

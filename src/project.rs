@@ -37,8 +37,9 @@ use crate::bookmarks::Bookmark;
 use crate::cargo::Profile;
 use crate::docs::{DocId, Entry};
 use crate::history::{History, Stop};
+use crate::positions::{Driven, Positions, Spot};
 use crate::store::{Order, Store, RECENTS_FILE};
-use crate::tabs::{Driven, Page, Positions, Spot};
+use crate::tabs::Page;
 use crate::visits::Visits;
 
 /// What a project file is called. TOML inside, like everything else this app writes; the
