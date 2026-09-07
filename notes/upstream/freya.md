@@ -105,6 +105,39 @@ remount on a key change rather than swap props under a stale closure, and the de
 duplicate-key check (`path_element.rs:180-197`) exempts exactly the default keys that cause
 it.
 
+## A scroll view corrects an offset past its end and leaves the controller holding it
+
+`ScrollController::scroll_to_y` writes the number it is given and clamps nothing
+(`use_scroll_controller.rs:243-245`). The correction is the view's, made as it draws:
+`get_corrected_scroll_position` (`shared.rs:38-58`) pins the offset to
+`-(content - viewport)`, and it is that corrected number the rows are laid out at
+(`virtual_scrollview.rs:546-560`) while the controller keeps what it was told. Four
+handlers write a corrected number back -- the wheel (`:384-404`), the content drag
+(`:412-450`), the scrollbar (`:455-475`) and the arrow keys (`:483-513`) -- and until the
+reader reaches one of them, reading the controller gives a place the rows are not at. The
+key handler is itself a producer: `handle_key_event`'s `End` writes `-inner_height` and
+not `-(inner_height - viewport)` (`shared.rs:180-186`), so freya over-scrolls its own
+controller by a viewport.
+
+What it cost here: `reveal_row` scrolls to `row - CONTEXT_ROWS` and a kept place is put
+back at `row * code_row_height()`, both past the end for a row in the last screenful.
+Either left the controller up to a screenful below the rows, and the sweep beyond the rows
+turns an offset into a row: every point inside the pane then read as a row past the last of
+the listing, so a sweep from anywhere in it picked out everything down to the end of the
+file with the pointer in the middle of the text (`src/chars.rs`, `beyond`).
+
+**Cost:** `scroll_extent` (`src/ui/list_box.rs`) is the one statement of how far a code
+listing goes. Everything that scrolls one clamps to it before writing, everything that
+reads a scroll back as a row clamps to it after (`Listing::scrolled`, `reveal_row`,
+`reveal_caret`), and `use_kept_position` puts the controller back inside the listing where
+it finds it outside -- which covers the writers above this app, `End` included, and the one
+restore it makes itself before the pane has been measured and has an extent to speak of.
+`a_sweep_reads_the_scroll_the_rows_are_drawn_at` pins the sweep's half. The one writer left
+unclamped is the place-keeper for an object's whole code (`src/ui/section_view.rs`), which
+works in `f64` for the reason the section below gives and would need an extent of its own;
+what it can leave behind is a screenful at the very bottom of a binary, which every reader
+now clamps away. Not reported.
+
 ## The scroll offset is an `f32`
 
 `ScrollController`'s position is read back as an `i32` but is held and laid out as an `f32`, so

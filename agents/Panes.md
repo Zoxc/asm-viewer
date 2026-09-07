@@ -361,7 +361,13 @@ is a request, answered once**: `Picked::owed` says which panes have yet to scrol
 `owed_reveal` only *looks*, `reveal_made` is what clears a pane's flag, and `reveal_row` does
 nothing when the row is already on screen -- measured against the offset it would write and not
 against the context rows alone, a row in the first few of a listing having nowhere to put them, so
-that measured that way it was never in view. It writes nothing at all in a pane it has no answer
+that measured that way it was never in view -- and with a pixel of slack, an offset being a whole
+number of pixels where a listing of rows is not, so a view clamped hard against its end stands a
+fraction short of showing its last row entire and would be asked for it again on every call. The
+offset it writes is held to the listing's own length, and so is the one it reads back:
+`row - margin` is past the end for any row in the last screenful, and the view corrects an offset
+it cannot honour without telling the controller (`scroll_extent`, `notes/upstream/freya.md`). It
+writes nothing at all in a pane it has no answer
 for, a viewport of 0 being a pane not measured yet, which is what a fresh pane's effect runs with
 on the desktop, where tasks are polled before the first layout. Either was a write per wake and a
 wake per write inside one pass, a scroll write notifying the caller that reads the scroll whether
@@ -671,7 +677,11 @@ pass a door arrives on. Read as room, it puts the row flush against the top, whi
 answer the margin exists to avoid, and `reveal_made` spends the debt so nothing corrects it. So
 `reveal_row` says it did nothing and the caller keeps what it owes. The callers **read** their
 viewport rather than peeking it, which is what wakes them when the measurement lands; peeked, the
-debt would be kept and never paid.
+debt would be kept and never paid. `use_kept_position` reads its own for the same reason and one
+more: the row it puts back is the one write in the panes that cannot be held to an extent, an
+unmeasured pane having no extent to be held to, so the run the measurement wakes is what puts the
+controller back inside the listing -- which is also what mends an offset left past the end by
+anything else, freya's own End key included (`notes/upstream/freya.md`).
 
 **Every stroke in it is put on the device pixel grid by its edges.** freya lays a window out in
 logical pixels and multiplies the whole tree by the window's scale factor on the way to Skia,
@@ -932,13 +942,20 @@ to what came in, for as long as the button is down and the pointer stays past an
 last place is kept in a cell, since nothing arrives from a pointer that is not moving
 (`use_sweep_beyond`, a hook so the cells outlive the handler a render remakes; one task at a time).
 **The rows and the key the extent is asked under are the render's**, and neither is carried by the
-task: the row count goes in a cell the hook keeps and each render writes, and the key is the
-`Listing`'s own cell, written by every render of the list. A list is not mounted again when its
-listing changes -- a link followed in place, a symbol previewed into the temporal tab, a companion
-file switching, the worker answering -- and a task outlives the render that spawned it and the
-sweep that started it. So a key made once, at the mount or in the task, named a listing that was
-gone: `Widest` answered nothing for it, and every tick put the pane back at its left edge instead
-of scrolling right. The release is the root's
+task: both are the `Listing`'s own cells, written by every render of the list. A list is not
+mounted again when its listing changes -- a link followed in place, a symbol previewed into the
+temporal tab, a companion file switching, the worker answering -- and a task outlives the render
+that spawned it and the sweep that started it. So a key made once, at the mount or in the task,
+named a listing that was gone: `Widest` answered nothing for it, and every tick put the pane back
+at its left edge instead of scrolling right. **And the offset a row is worked out from is where the
+rows are drawn and not what the controller holds** (`Listing::scrolled`): a scroll view corrects an
+offset past its end as it draws and leaves the controller with the one it was given
+(`notes/upstream/freya.md`), which is what `reveal_row` and a kept place both write for a row in
+the last screenful, so a pane that had just landed on such a row read every point inside itself as
+past the end of the listing and a sweep anywhere in it ran to the last row. `scroll_extent`
+(`src/ui/list_box.rs`) is the one statement of how far a listing goes: what writes a scroll clamps
+to it, and what reads one back clamps to it too -- `Listing::scrolled` here, `reveal_row` and
+`reveal_caret` for the keyboard. The release is the root's
 `on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar thumb
 cancels. **A control the sweep passes over does not answer the pointer**: the companion header
 and the symbol bar's names are `interactive(false)` while a sweep is under way (`sweeping`), since

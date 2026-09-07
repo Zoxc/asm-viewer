@@ -91,6 +91,10 @@ fn scrolling_harness() -> impl IntoElement {
     let controller = use_scroll_controller(ScrollConfig::default);
     let showing = tab.read().clone();
     let rows = *length.read();
+    // How tall the pane says it is, which is all the hook wants a viewport for: how far
+    // the listing can be scrolled, so neither the row it takes from the offset nor the
+    // offset it writes for a row is one the view could not be at.
+    let viewport = use_state(|| VIEWPORT);
     use_kept_position(
         at,
         move |tab: &String| open.peek().contains(tab),
@@ -98,6 +102,7 @@ fn scrolling_harness() -> impl IntoElement {
         // No landing machinery here, so no landing to take.
         |_: &Landing, _: &mut ScrollController| false,
         controller,
+        viewport,
         &showing,
         rows,
         // One listing throughout: nothing here is owed a reveal.
@@ -241,6 +246,9 @@ fn revealing_harness() -> impl IntoElement {
     // What the pane has been measured as, which a test may say is nothing yet. Held as
     // the panes hold theirs and read inside the closure, so the measurement wakes it.
     let seen = try_consume_context::<KeptViewport>().map(|kept| kept.0);
+    // What `use_kept_position` is told the pane is, for a test that provides no viewport
+    // of its own: the same number the reveal below falls back to.
+    let assumed = use_state(|| VIEWPORT);
     use_kept_position(
         at,
         move |tab: &String| open.peek().contains(tab),
@@ -259,7 +267,7 @@ fn revealing_harness() -> impl IntoElement {
                 }
             };
             let measured = seen.map_or(VIEWPORT, |kept| *kept.read());
-            if !reveal_row(controller, measured, row) {
+            if !reveal_row(controller, measured, *length.peek(), row) {
                 return false;
             }
             reveal_made(marked, Pane::Assembly);
@@ -268,6 +276,7 @@ fn revealing_harness() -> impl IntoElement {
         // No landing machinery here, so no landing to take.
         |_: &Landing, _: &mut ScrollController| false,
         controller,
+        seen.unwrap_or(assumed),
         &showing,
         rows,
         drawn,
@@ -19469,6 +19478,7 @@ fn sweeping_harness() -> impl IntoElement {
     let listing_ctx = use_provide_context(|| Listing::new(controller, widest, nudge));
     // Every render, as each list tells its own.
     listing_ctx.drawing(listing);
+    listing_ctx.counting(4);
     let bounds = listing_ctx.bounds.clone();
 
     // What a row of the arriving listing reports as it is laid out. The app's rows report
@@ -19488,7 +19498,6 @@ fn sweeping_harness() -> impl IntoElement {
             marked,
             Pane::Assembly,
             listing_ctx.clone(),
-            4,
         ))
 }
 
@@ -19544,6 +19553,109 @@ fn a_sweep_past_the_edge_scrolls_the_listing_the_pane_is_drawing_now() {
         second < first,
         "the sweep put the new listing at {second}, having left the old one at {first}"
     );
+}
+
+/// How many rows [`over_scrolled_harness`] draws, and how big its window is: enough rows
+/// that the listing is taller than the box, so the view has somewhere to scroll and an
+/// offset can be past the end of it.
+const OVER_ROWS: usize = 40;
+const OVER_BOX: f32 = 200.0;
+
+/// The `Listing` [`over_scrolled_harness`] sweeps over, put out for the test to scroll.
+#[derive(Clone)]
+struct OverListing(Rc<RefCell<Option<Listing>>>);
+
+/// A code pane as a sweep sees it, with no `VirtualScrollView` under it: the rows counted,
+/// the box measured, and the sweep's global handler on it. What is under test is what the
+/// sweep makes of the offset the controller holds, and the test is what puts one there --
+/// a real view would leave the same offset behind, having corrected only what it draws.
+fn over_scrolled_harness() -> impl IntoElement {
+    let marked = use_consume::<Marked>().0;
+    let widest = use_widest();
+    let controller = use_scroll_controller(ScrollConfig::default);
+    let nudge = use_state(|| 0.0f32);
+    let listing = use_provide_context(|| Listing::new(controller, widest, nudge));
+    listing.drawing(1);
+    listing.counting(OVER_ROWS);
+    let out = use_consume::<OverListing>().0;
+    use_hook(|| *out.borrow_mut() = Some(listing.clone()));
+    let bounds = listing.bounds.clone();
+
+    rect()
+        .expanded()
+        .on_sized(move |e: Event<SizedEventData>| bounds.set(e.area))
+        .on_global_pointer_move(use_sweep_beyond(marked, Pane::Assembly, listing.clone()))
+}
+
+/// A sweep reads the scroll the rows are **drawn at**, and not the one the controller
+/// holds.
+///
+/// `VirtualScrollView` corrects an offset past the end as it draws and leaves the
+/// controller with whatever it was given (`notes/upstream/freya.md`), and the app writes
+/// one for any row in the last screenful -- `reveal_row`, and a place put back at such a
+/// row. The pane was then a screenful out for as long as nothing touched the wheel: every
+/// point inside the rows read as a row past the last of the listing, so a sweep from
+/// anywhere in it picked out everything down to the end of the file, with the pointer in
+/// the middle of the text.
+///
+/// The pointer stays **inside** the box throughout, which is where the bug was and which
+/// starts no autoscroll: a task ticking between two assertions moves the rows under them
+/// (`agents/Headless.md`).
+#[test]
+fn a_sweep_reads_the_scroll_the_rows_are_drawn_at() {
+    let (mut test, (marked, held)) = TestingRunner::new(
+        over_scrolled_harness,
+        (OVER_BOX, OVER_BOX).into(),
+        |runner| {
+            (
+                runner
+                    .provide_root_context(|| Marked(State::create(Marks::default())))
+                    .0,
+                runner
+                    .provide_root_context(|| OverListing(Rc::new(RefCell::new(None))))
+                    .0,
+            )
+        },
+        1.,
+    );
+    settle(&mut test);
+    let listing = held.borrow().clone().expect("the harness kept no listing");
+    let height = code_row_height();
+    let extent = scroll_extent(OVER_ROWS, height, listing.bounds.get().height());
+    assert!(
+        extent > 0.0,
+        "the listing fits its box, so there is no offset past its end to be given"
+    );
+
+    // The controller left five rows past the end, which is what a reveal to a row in the
+    // last screenful leaves behind.
+    let mut controller = listing.controller;
+    controller.scroll_to_y(-((extent + 5.0 * height) as i32));
+    settle(&mut test);
+
+    // A pointer among the rows then reaches nothing at all: the row under it answers for
+    // itself. A sweep a screenful out read every one of them as past the listing's end
+    // and took the run to the last row of the file.
+    mark_press(marked, false, Pane::Assembly, None, 0, None);
+    test.move_cursor((100.0, (OVER_BOX / 2.0) as f64));
+    settle(&mut test);
+    let lead = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the press started no run")
+        .chars
+        .lead()
+        .row;
+    mark_release(marked);
+    assert_eq!(
+        lead, 0,
+        "the sweep reached out from a pointer that was over the rows"
+    );
+
+    // Which is because the rows are read where they are drawn: at the end of the listing,
+    // whatever the controller was told.
+    assert_eq!(listing.scrolled(), -extent);
 }
 
 /// The text every row of [`lending_harness`] draws: wide enough that a column well inside
@@ -23823,7 +23935,7 @@ fn a_reveal_in_an_unmeasured_pane_writes_nothing_and_wakes_nothing() {
             if runs > 5 {
                 return;
             }
-            reveal_row(&mut controller, 0.0, 149);
+            reveal_row(&mut controller, 0.0, 200, 149);
         });
         rect().expanded()
     }

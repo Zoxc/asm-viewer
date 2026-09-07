@@ -16,6 +16,20 @@
 
 use super::*;
 
+/// How far a listing of `length` rows, each `height` tall, can be scrolled in a viewport
+/// `viewport` tall: the pixels of it that do not fit, and none at all for a listing that
+/// does. Scroll offsets count down from zero, so what the view can be at is
+/// `-extent ..= 0`.
+///
+/// **The scroll controller is not held to it.** freya corrects an offset past the end as
+/// it draws and leaves the controller holding whatever it was given
+/// (`notes/upstream/freya.md`), so everything that scrolls a code listing clamps to this
+/// before writing, and everything that reads a scroll back as a row clamps to it after
+/// ([`Listing::scrolled`]).
+pub(crate) fn scroll_extent(length: usize, height: f32, viewport: f32) -> f32 {
+    (length as f32 * height - viewport).max(0.0)
+}
+
 /// One listing's box, as the list draws its rows against and closes over.
 #[derive(Clone)]
 pub(crate) struct ListBox {
@@ -30,7 +44,7 @@ pub(crate) struct ListBox {
     /// answer, so the box around it is what is measured.
     pub(crate) viewport: State<f32>,
     /// The list as its rows and a sweep past its edge know it: its scroll, its box, the
-    /// paragraphs the rows lend it, its widest row and its nudge.
+    /// paragraphs the rows lend it, its widest row, how many rows it has and its nudge.
     listing: Listing,
     /// The device pixel grid, read at the render so the `on_sized` handler asks nothing
     /// of the runtime.
@@ -87,6 +101,9 @@ impl ListBox {
         let (a11y, grid) = (self.a11y, self.grid);
         let mut viewport = self.viewport;
         let listing = self.listing.clone();
+        // How many rows the list is drawing, told to the listing as its key is: what the
+        // sweep beyond the rows reaches over and what the scroll is clamped to.
+        listing.counting(length);
         let bounds = listing.bounds.clone();
 
         rect()
@@ -103,7 +120,7 @@ impl ListBox {
                     bounds.set(e.area);
                 }
             })
-            .on_global_pointer_move(use_sweep_beyond(marked, self.pane, listing.clone(), length))
+            .on_global_pointer_move(use_sweep_beyond(marked, self.pane, listing.clone()))
             // On the grid: see `Listing::padding`.
             .padding(listing.padding())
             .child(

@@ -528,7 +528,12 @@ impl Component for DoorLabel {
                         // The row is reached by a press, so the pane is on screen and
                         // measured.
                         let mut controller = listing.controller;
-                        let _ = reveal_row(&mut controller, listing.bounds.get().height(), *to);
+                        let _ = reveal_row(
+                            &mut controller,
+                            listing.bounds.get().height(),
+                            listing.rows(),
+                            *to,
+                        );
                         // The row landed on becomes the picked-out one, replacing the row
                         // the press started on -- which `pointer_down` has already marked,
                         // that being the one handler a stopped press does not undo. The
@@ -1172,7 +1177,7 @@ impl Component for InstructionList {
                             data.lanes().row_of(index)
                         }
                     };
-                    if !reveal_row(controller, *viewport.read(), row) {
+                    if !reveal_row(controller, *viewport.read(), length, row) {
                         return false;
                     }
                     reveal_made(marked, Pane::Assembly);
@@ -1184,6 +1189,7 @@ impl Component for InstructionList {
             // and spent below, never taken here.
             |_: &Landing, _: &mut ScrollController| false,
             controller,
+            viewport,
             &entry,
             length,
             listing,
@@ -1264,7 +1270,15 @@ impl Component for InstructionList {
                         .unwrap_or_default()
                 },
                 // The caret's row, brought on screen after a key has moved it.
-                move |row| reveal_caret(&mut controller, *viewport.peek(), code_row_height(), row),
+                move |row| {
+                    reveal_caret(
+                        &mut controller,
+                        *viewport.peek(),
+                        code_row_height(),
+                        length,
+                        row,
+                    )
+                },
             )
         };
 

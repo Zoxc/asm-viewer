@@ -609,7 +609,7 @@ impl Component for SourceList {
                     if index >= length {
                         return false;
                     }
-                    if !reveal_row(controller, *viewport.read(), index) {
+                    if !reveal_row(controller, *viewport.read(), length, index) {
                         return false;
                     }
                     reveal_made(marked, Pane::Source);
@@ -640,10 +640,11 @@ impl Component for SourceList {
                     // Answered only where the pane could go there: a landing is gone
                     // to once, so one taken by a pane with no measurement yet would be
                     // remembered as answered and never made good.
-                    reveal_row(controller, *viewport.read(), index)
+                    reveal_row(controller, *viewport.read(), length, index)
                 }
             },
             controller,
+            viewport,
             &entry,
             length,
             listing,
@@ -680,7 +681,13 @@ impl Component for SourceList {
                 move |index| source_line(&drawn, index),
                 // The caret's row, brought on screen after a key has moved it.
                 move |index| {
-                    reveal_caret(&mut controller, *viewport.peek(), code_row_height(), index)
+                    reveal_caret(
+                        &mut controller,
+                        *viewport.peek(),
+                        code_row_height(),
+                        length,
+                        index,
+                    )
                 },
             )
         };

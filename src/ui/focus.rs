@@ -80,11 +80,13 @@ pub(crate) struct Planting {
 #[derive(Clone, Copy)]
 pub(crate) struct Plant(pub(crate) State<Option<Planting>>);
 
-/// Bring the row at `index` into view, and leave the scroll alone when it already is.
+/// Bring the row at `index` of a listing of `length` rows into view, and leave the scroll
+/// alone when it already is.
 ///
-/// A `VirtualScrollView` counts its offset *down* from zero and clamps whatever is set
-/// here against the content on the next layout, so the arithmetic need not know how long
-/// the list is.
+/// A `VirtualScrollView` counts its offset *down* from zero, and the controller can be
+/// holding one past the end that the view corrects only as it draws ([`scroll_extent`]).
+/// Hence `length`: the offset read back is held to it, and so is the one written, which
+/// `row - margin` puts past the end for any row in the last screenful.
 ///
 /// Answers whether the row could be positioned at all: [`false`] only for a pane that has
 /// not been measured, where the caller must keep whatever it owes. A caller keeping one
@@ -97,7 +99,12 @@ pub(crate) struct Plant(pub(crate) State<Option<Planting>>);
 /// list: the scroll went to 0, the next call measured it against the same impossible
 /// margin, and found it wanting again. That is a write per call for ever, and the caller
 /// that reads the scroll to make it is woken by it (`use_kept_position`).
-pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index: usize) -> bool {
+pub(crate) fn reveal_row(
+    controller: &mut ScrollController,
+    viewport: f32,
+    length: usize,
+    index: usize,
+) -> bool {
     // **Nothing is known before the pane has been laid out.** A viewport of zero is not a
     // pane with no room, it is a pane not measured yet -- its first pass, which is the one
     // a door arrives on -- and the clamp below would read it as a pane too short to hold
@@ -108,9 +115,12 @@ pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index
     if viewport <= 0.0 {
         return false;
     }
-    let (_, scrolled) = <(i32, i32)>::from(*controller);
-    let top = -scrolled as f32;
     let height = code_row_height();
+    // How far the listing goes, which both the offset read here and the one written
+    // below are held to (`scroll_extent`).
+    let extent = scroll_extent(length, height, viewport);
+    let (_, scrolled) = <(i32, i32)>::from(*controller);
+    let top = -(scrolled as f32).clamp(-extent, 0.0);
     let row = index as f32 * height;
     let margin = CONTEXT_ROWS * height;
     // The context rows are what the caller wants, never what it asks for: a caller hands
@@ -123,11 +133,21 @@ pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index
     // two rows tall showed the two rows *before* the instruction a door had just opened
     // it on. It is also what makes the offset written here satisfy the test above on the
     // next call, in every viewport -- which is what keeps a caller that is woken by its
-    // own scroll from asking again for ever (`notes/upstream/freya.md`).
+    // own scroll from asking again for ever (`notes/upstream/freya.md`); the slack below
+    // is the other half of that.
+    //
+    // **And never past the end of the listing**, which `row - margin` is for any row in
+    // the last screenful. `lowest` is already inside the extent, so the clamp only ever
+    // takes the margin back.
     let lowest = row + height - viewport;
-    let wanted = (row - margin).max(lowest).min(row).max(0.0);
+    let wanted = (row - margin).max(lowest).min(row).clamp(0.0, extent);
 
-    if top <= wanted && row + height <= top + viewport {
+    // The pixel of slack is the rounding, and is what keeps the test satisfiable at the
+    // end of a listing: an offset is a whole number of pixels where a listing of rows is
+    // not, so a view clamped hard against its end stands a fraction of a pixel short of
+    // showing its last row entire. Asked for strictly, that row is asked for again on
+    // every call, for ever where anything repeats the ask.
+    if top <= wanted && row + height <= top + viewport + 1.0 {
         return true;
     }
 
@@ -141,15 +161,18 @@ pub(crate) fn reveal_row(controller: &mut ScrollController, viewport: f32, index
 /// comes to its top, one below to its bottom, as an editor's does.
 ///
 /// The row height is the caller's, this being the one rule the finder's list follows as
-/// well as a code pane's, and the two are measured in different fonts.
+/// well as a code pane's, and the two are measured in different fonts; `length` is the
+/// list's rows, which is what the offset read back is held to, for the reason
+/// [`reveal_row`] gives.
 pub(crate) fn reveal_caret(
     controller: &mut ScrollController,
     viewport: f32,
     height: f32,
+    length: usize,
     index: usize,
 ) {
     let (_, scrolled) = <(i32, i32)>::from(*controller);
-    let top = -scrolled as f32;
+    let top = -(scrolled as f32).clamp(-scroll_extent(length, height, viewport), 0.0);
     let row = index as f32 * height;
 
     if row < top {
@@ -233,6 +256,13 @@ enum Move {
 /// measuring the row it owes against the file the pane drew then, refuse it, and leave
 /// the pane to fall back to the top.
 ///
+/// `viewport` is how tall the pane is, which is all the row arithmetic here needs of it:
+/// how far the pane can be scrolled, so neither the row taken from the offset nor the
+/// offset written for a row is a place the view could not be at (`reveal_row`). It is
+/// **read**, so the first measurement wakes this: a restore made before it landed is the
+/// one write here that could not be held to an extent, and the run the measurement wakes
+/// is what puts the pane back inside the listing.
+///
 /// `listing` is the key of what the pane is drawing (`Widest::key`), a dep and nothing
 /// else. The effect runs when a dep differs or a state it read is written, never because
 /// the pane rendered; without the key, an answer arriving at the same tab with the same
@@ -245,6 +275,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     reveal: impl FnMut(&mut ScrollController) -> bool + 'static,
     coming: impl FnMut(&Landing, &mut ScrollController) -> bool + 'static,
     mut controller: ScrollController,
+    viewport: State<f32>,
     tab: &T,
     length: usize,
     listing: u64,
@@ -294,10 +325,29 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
         move |(tab, length, _): &(T, usize, u64)| {
             // Subscribes this effect to the pane's scroll, so it comes before any return.
             let (_, offset) = <(i32, i32)>::from(controller);
+            let height = code_row_height();
+            // How far the pane can be scrolled, which every offset here is held to: a
+            // row taken from an uncorrected one is a row the reader is not looking at
+            // (`scroll_extent`). **Read and not peeked**, so the first measurement wakes
+            // this: until it lands there is no extent to speak of -- that of an
+            // unmeasured pane is the whole listing -- and the move this run makes is the
+            // one write here that could not be held to one.
+            let seen = *viewport.read();
+            let extent = scroll_extent(*length, height, seen);
+            // Which puts the pane back inside the listing where something has left it
+            // past the end -- the restore below made before the pane was measured,
+            // freya's own End key, a listing that has grown shorter. The view has drawn
+            // the corrected offset all along, so this moves nothing on screen: it makes
+            // the number the controller holds the one the rows are at. Written once, the
+            // run it wakes finding the offset inside and nothing to do.
+            let inside = (offset as f32).clamp(-extent, 0.0) as i32;
+            if seen > 0.0 && inside != offset {
+                controller.scroll_to_y(inside);
+            }
             // The row at the top of the pane. `code_row_height` and not the list's, this
             // being a code pane; rounded down, so a row half on screen is the row the reader
             // is looking at.
-            let row = ((-offset).max(0) as f32 / code_row_height()) as usize;
+            let row = ((-inside).max(0) as f32 / height) as usize;
 
             // Cloned out of the borrow rather than held across the `borrow_mut` below.
             let holding = held.borrow().clone();
@@ -403,7 +453,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
                 None => None,
             };
             if let Some(row) = top {
-                controller.scroll_to_y(-((row as f32 * code_row_height()) as i32));
+                controller.scroll_to_y(-((row as f32 * height).min(extent) as i32));
             }
         },
     );

@@ -740,7 +740,13 @@ fn followed(mut list: ScrollController, (at, rows): (usize, usize)) {
         return;
     }
     let height = list_row_height();
-    reveal_caret(&mut list, rows.min(FINDER_ROWS) as f32 * height, height, at);
+    reveal_caret(
+        &mut list,
+        rows.min(FINDER_ROWS) as f32 * height,
+        height,
+        rows,
+        at,
+    );
 }
 
 /// Open a file the finder listed: a source-driven tab of its own that stays, since a

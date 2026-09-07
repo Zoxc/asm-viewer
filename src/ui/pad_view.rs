@@ -362,7 +362,7 @@ fn use_follow_tail(mut controller: ScrollController, viewport: f32, output: usiz
             }
 
             let height = code_row_height();
-            let bottom = -((length as f32 * height - viewport).max(0.0) as i32);
+            let bottom = -(scroll_extent(length, height, viewport) as i32);
 
             if seen.replace(Some(output)) != Some(output) {
                 // Only when it moves: `scroll_to_y` notifies whether or not the position

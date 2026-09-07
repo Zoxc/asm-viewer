@@ -258,14 +258,17 @@ impl RowChars {
 /// box and not the row's own `visible_area`, which freya reports unclipped, the whole row
 /// wide -- the paragraphs its rows have lent it, for a sweep that has left the rows to ask
 /// a row where a column is, the widest row drawn, which every row is floored to and which
-/// is the sideways extent, and the nudge that puts the rows on the device pixel grid.
+/// is the sideways extent, how many rows it has, which is how far it scrolls and how far a
+/// sweep reaches, and the nudge that puts the rows on the device pixel grid.
 ///
-/// The listing that width is held under is a **cell**, written by every render of the
-/// list ([`Listing::drawing`]) and read where it is wanted. A list is not mounted again
-/// when its listing changes -- a link followed in place, a symbol previewed into the
-/// temporal tab, a companion file switching, the worker answering -- and this context is
-/// made once, so a key stored at the mount would go on naming the listing the list
-/// started on, for which [`Widest`] answers nothing.
+/// The listing that width is held under, and how many rows it has, are **cells**, written
+/// by every render of the list ([`Listing::drawing`], [`Listing::counting`]) and read
+/// where they are wanted. A list is not mounted again when its listing changes -- a link
+/// followed in place, a symbol previewed into the temporal tab, a companion file
+/// switching, the worker answering -- and this context is made once, so a key stored at
+/// the mount would go on naming the listing the list started on, for which [`Widest`]
+/// answers nothing. The same holds a step harder for the sweep's autoscroll, a task that
+/// outlives the render that spawned it and reads both at every tick.
 #[derive(Clone)]
 pub(crate) struct Listing {
     pub(crate) controller: ScrollController,
@@ -273,6 +276,8 @@ pub(crate) struct Listing {
     pub(crate) texts: Rc<RefCell<HashMap<usize, RowText>>>,
     pub(crate) widest: Widest,
     key: Rc<Cell<u64>>,
+    /// How many rows the list is drawing: see [`Listing::counting`].
+    rows: Rc<Cell<usize>>,
     /// How far down the rows are pushed to sit on the device pixel grid: see
     /// [`Listing::padding`].
     nudge: State<f32>,
@@ -300,6 +305,7 @@ impl Listing {
             texts: Rc::new(RefCell::new(HashMap::new())),
             widest,
             key: Rc::new(Cell::new(0)),
+            rows: Rc::new(Cell::new(0)),
             nudge,
         }
     }
@@ -335,6 +341,35 @@ impl Listing {
     /// That listing, as a row and a sweep ask for it.
     pub(crate) fn key(&self) -> u64 {
         self.key.get()
+    }
+
+    /// How many rows the list is drawing, told to this by every render of it as the
+    /// listing is: what a sweep beyond the rows reaches over, and what the scroll can
+    /// go as far as.
+    pub(crate) fn counting(&self, rows: usize) {
+        self.rows.set(rows);
+    }
+
+    /// That count, as a sweep asks for it.
+    pub(crate) fn rows(&self) -> usize {
+        self.rows.get()
+    }
+
+    /// Where the rows actually sit, in pixels down the listing: the controller's offset
+    /// held to [`scroll_extent`], which is **not** always what the controller says.
+    /// Turning an uncorrected one into a row put the sweep past the end of the listing
+    /// with the pointer in the middle of the rows, and every row from the press to the
+    /// last was picked out.
+    pub(crate) fn scrolled(&self) -> f32 {
+        let (_, scrolled) = <(i32, i32)>::from(self.controller);
+        let extent = scroll_extent(self.rows(), code_row_height(), self.bounds.get().height());
+        (scrolled as f32).clamp(-extent, 0.0)
+    }
+
+    /// Where row 0's top is, relative to the box's top: the nudge that puts the rows on
+    /// the grid, plus the scroll, which counts down from zero.
+    fn rows_top(&self) -> f32 {
+        self.nudge() + self.scrolled()
     }
 
     /// The column at window x `x` on row `row`, off the paragraph the row lent: 0 for a
@@ -1095,13 +1130,11 @@ fn dragging(marked: State<Marks>, pane: Pane) -> bool {
 }
 
 /// Where a sweep at `at`, a window location, reaches once it has left the rows of
-/// `listing`: [`beyond`], with the rows' top worked out from the list's scroll and its
-/// nudge, and the column off the paragraph the row lent. `None` while the pointer is over
-/// a row, which answers for itself.
-fn reach(listing: &Listing, length: usize, at: CursorPoint) -> Option<Caret> {
+/// `listing`: [`beyond`], with the rows' top worked out from where the rows sit
+/// ([`Listing::rows_top`]), and the column off the paragraph the row lent. `None` while
+/// the pointer is over a row, which answers for itself.
+fn reach(listing: &Listing, at: CursorPoint) -> Option<Caret> {
     let area = listing.bounds.get();
-    let (_, scrolled) = <(i32, i32)>::from(listing.controller);
-    let rows_top = listing.nudge() + scrolled as f32;
     let bounds = Bounds {
         left: area.min_x(),
         top: area.min_y(),
@@ -1110,9 +1143,9 @@ fn reach(listing: &Listing, length: usize, at: CursorPoint) -> Option<Caret> {
     };
     let reached = beyond(
         bounds,
-        rows_top,
+        listing.rows_top(),
         code_row_height(),
-        length,
+        listing.rows(),
         at.x as f32,
         at.y as f32,
     )?;
@@ -1127,8 +1160,7 @@ fn reach(listing: &Listing, length: usize, at: CursorPoint) -> Option<Caret> {
 /// a button is held wherever it goes, freya forwards every move and sends its global move
 /// to every listener without hit-testing (`notes/upstream/freya.md`), so this goes on the
 /// listing's box as `on_global_pointer_move` and asks [`beyond`] where the sweep reaches:
-/// nothing while the pointer is over a row, which answers for itself. `length` is the
-/// listing's rows.
+/// nothing while the pointer is over a row, which answers for itself.
 ///
 /// Held past an edge of the box, the sweep **scrolls the view**: a task moves it every
 /// [`AUTOSCROLL_TICK`] towards the pointer -- a row up or down, a row's height sideways --
@@ -1138,28 +1170,24 @@ fn reach(listing: &Listing, length: usize, at: CursorPoint) -> Option<Caret> {
 /// hook, for the cells to outlive the handler a render makes afresh; one task at a time,
 /// the flag says.
 ///
-/// `length` is the listing's rows, this render's, and it goes in a cell each render
-/// writes and the task reads rather than into the task: a task outlives the render that
-/// spawned it and the sweep that started it, so a task holding the count it began with
-/// goes on scrolling a listing the pane has stopped drawing. The sideways extent is
-/// asked under the listing the [`Listing`] says is being drawn, a cell for the same
-/// reason and read at the tick: `Widest` answers nothing for a listing it does not hold,
-/// which is a sideways extent of zero and a pane pinned to its left edge.
+/// **The rows and the key are the render's**, and neither is carried into the task: both
+/// are the [`Listing`]'s own cells, written by every render of the list and read at the
+/// tick. A task outlives the render that spawned it and the sweep that started it, so a
+/// task holding the count it began with goes on scrolling a listing the pane has stopped
+/// drawing, and one holding the key finds `Widest` answering nothing for a listing it no
+/// longer holds -- a sideways extent of zero and a pane pinned to its left edge.
 pub(crate) fn use_sweep_beyond(
     marked: State<Marks>,
     pane: Pane,
     listing: Listing,
-    length: usize,
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
     let last = use_hook(|| Rc::new(Cell::new(None::<CursorPoint>)));
     let running = use_hook(|| Rc::new(Cell::new(false)));
-    let drawing = use_hook(|| Rc::new(Cell::new(length)));
-    drawing.set(length);
 
     move |e: Event<PointerEventData>| {
         let at = e.global_location();
         last.set(Some(at));
-        if let Some(caret) = reach(&listing, length, at) {
+        if let Some(caret) = reach(&listing, at) {
             mark_drag(marked, pane, caret.row, Some(caret.col));
         }
 
@@ -1173,11 +1201,9 @@ pub(crate) fn use_sweep_beyond(
         }
         running.set(true);
         let (last, running, listing) = (last.clone(), running.clone(), listing.clone());
-        let drawing = drawing.clone();
         spawn(async move {
             loop {
                 Timer::after(AUTOSCROLL_TICK).await;
-                let length = drawing.get();
                 let Some(at) = last.get() else { break };
                 if !dragging(marked, pane) {
                     break;
@@ -1199,10 +1225,13 @@ pub(crate) fn use_sweep_beyond(
                     break;
                 }
                 let step = code_row_height() as i32;
-                let (x, y) = <(i32, i32)>::from(listing.controller);
+                let (x, _) = <(i32, i32)>::from(listing.controller);
+                // Where the rows are and not where the controller says, so a tick steps
+                // from what the reader can see (`Listing::scrolled`).
+                let y = listing.scrolled() as i32;
                 let mut controller = listing.controller;
                 if down != 0 {
-                    let extent = (length as f32 * code_row_height() - area.height()).max(0.0);
+                    let extent = scroll_extent(listing.rows(), code_row_height(), area.height());
                     let target = (y + down * step).clamp(-(extent as i32), 0);
                     if target != y {
                         controller.scroll_to_y(target);
@@ -1215,7 +1244,7 @@ pub(crate) fn use_sweep_beyond(
                         controller.scroll_to_x(target);
                     }
                 }
-                if let Some(caret) = reach(&listing, length, at) {
+                if let Some(caret) = reach(&listing, at) {
                     mark_drag(marked, pane, caret.row, Some(caret.col));
                 }
             }
