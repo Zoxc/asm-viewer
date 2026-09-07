@@ -86,13 +86,23 @@ on it already covers a protocol rather than a file.
 
 **One request is in flight at a time**, so there is no table of outstanding ids: a request
 waits for an answer carrying the id it asked under. The four questions about a place are
-one shape -- a place in, places out -- so they share the asking and the reading of an
-answer, and what tells one from the other is a `Wanted` the job carries and the answer
-names.
+one shape -- a place in, places out -- so they are one method, `Talk::places`, and what
+tells them apart is an `lsp::Question` it takes.
+
+**`Question` is the one type for "which question", from the link to the wire.** A link
+carries the half of it that can be followed (`links::Link::asks`), the job carries the
+whole of it, `Question::method` and `Question::params` are what goes out, and nothing maps
+between them by hand. It splits by **what an answer is for**, which is what the consumers
+are: `Question::Followed` is a definition or a declaration, one place for `ui::follow` to
+open; `Question::Listed` is implementations or references, a list for the Locations panel
+to draw. The answer splits the same way (`Reply::Followed`, `Reply::Listed`), so a question
+of one kind cannot come back as the other's answer -- which the older pairing left to
+convention, and which both consumers had an unreachable arm for, turning a real mismatch
+into "nothing found".
 
 **A hover is a place in and contents out**, so it is none of those four: it has its own
-job, its own answer and its own parse. Not a fifth `Wanted` for a plainer reason as well --
-those are bucketed by consumer, and a hover is a third consumer. The pointer crossing a
+job, its own answer and its own parse. Not a fifth `Question` for a plainer reason as well
+-- those are bucketed by consumer, and a hover is a third consumer. The pointer crossing a
 line asks about every name on the way, and only the last of them is worth a round trip; but
 none of them is a reader taking back the definition they clicked for, and a click is not a
 reader taking back the name under their pointer.
@@ -101,9 +111,19 @@ reader taking back the name under their pointer.
 `ui::follow` takes a definition or a declaration, the Locations panel draws implementations
 or references, and the source pane holds one file's links. A reader asking one of the
 panel's two has taken back the other, since the panel shows one at a time; neither takes
-back a name being followed. The match over `LspJob` there is exhaustive on purpose -- the
-`_ => true` it used to end with would let a question added later queue behind every one of
-its own kind in silence.
+back a name being followed. The rule is written once, in `superseded_as`, whose `match`
+over `LspJob` is exhaustive on purpose -- the `_ => true` it once ended with would let a
+question added later queue behind every one of its own kind in silence. `worth_doing` then
+keeps the last job of each kind, and everything `superseded_as` gives no kind at all.
+
+**"Not now" is decided once, and so is "gone".** `Talk::asked` sits between `request` and
+every question a reader asks: it turns the `-32801` and `-32800` codes into a null answer,
+which every reader of an answer already takes as nothing found. `request` itself is left
+raw for the handshake, which needs the refusal, and for `semantic_tokens`, where a refusal
+is a question to put again. On the worker, `language::asked` wraps every job that says
+anything to a server: no server is no answer, and a `Broken` conversation is dropped there
+rather than in each arm. Both were copied per question before, and the copy a new question
+forgot would be the one that leaves a dead conversation in `talking`.
 
 **A reader thread owns the server's output.** It began without one -- a request read frames
 until its own answer came back -- and that was enough right up to the moment the app needed
@@ -524,9 +544,10 @@ offered there too.
 An item in a trait `impl` is the one name that asks a different question. Its *definition*
 is itself, so `textDocument/definition` on it goes nowhere the reader is not already; its
 *declaration* is the trait's. `declaration` and `trait` together say so, and that is the
-only thing `Wanted::Declaration` is for. The two genuinely disagree elsewhere, which is why
-neither can replace the other: a **call** to a trait method is defined in the `impl` that
-runs and declared in the trait, and a reader following it wants the code that runs.
+only thing `lsp::Followed::Declaration` is for. The two genuinely disagree elsewhere,
+which is why neither can replace the other: a **call** to a trait method is defined in the
+`impl` that runs and declared in the trait, and a reader following it wants the code that
+runs.
 
 **The question is only put to a server that has finished reading the project**
 (`Language::ready`, `src/ui/linking.rs`). Not for tidiness: a request holds the one
@@ -549,7 +570,7 @@ of the project.
 A **references** answer goes to the Locations panel instead (`agents/Sidebar.md`), and is
 asked for from the same place a definition is: the row's file and the pressed column, at the
 right-click rather than the press. It comes back grouped and with each line's text, both
-done on the worker: the reply is `Reply::Referenced` where a definition's is `Reply::Defined`,
+done on the worker: the reply is `Reply::Listed` where a definition's is `Reply::Followed`,
 since reading those lines is a file read and belongs on the thread that already blocks. The
 read handed to `references::of` is `source::read_text` and not a `read_to_string` of its
 own: a path a server answers with is file input, and a second rule for what a source file

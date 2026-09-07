@@ -238,10 +238,10 @@ impl Component for SourceRow {
                     // the declaration, since its definition is itself and the trait is
                     // where a reader following it wants to go (`src/links.rs`).
                     let column = columns.start as u32;
-                    let want = match links.at(row + 1, column).and_then(|link| link.asks) {
-                        Some(links::Asks::Declaration) => Wanted::Declaration,
-                        _ => Wanted::Definition,
-                    };
+                    let want = links
+                        .at(row + 1, column)
+                        .and_then(|link| link.asks)
+                        .unwrap_or(lsp::Followed::Definition);
                     follow_name(
                         language,
                         follow,
@@ -359,44 +359,45 @@ impl Component for SourceRow {
                                         &jobs,
                                         open,
                                         asked_at(&at, column),
-                                        Wanted::Definition,
+                                        lsp::Followed::Definition,
                                         Reach::InPlace,
                                     )
                                 })
                                 .child("Go to definition")
                         };
+                        // The two list questions are one shape; only which one differs.
+                        let named = NameAt {
+                            at: at.clone(),
+                            name: name.clone(),
+                            column,
+                        };
                         let references = {
-                            let (at, jobs, spelled) = (at.clone(), jobs.clone(), name.clone());
+                            let (named, jobs) = (named.clone(), jobs.clone());
                             MenuButton::new()
                                 .on_press(move |_| {
-                                    find_references(
+                                    find_listed(
                                         located,
                                         dock,
                                         language,
                                         &jobs,
-                                        at.clone(),
-                                        spelled.clone(),
-                                        column,
+                                        named.clone(),
+                                        lsp::Listed::References,
                                     )
                                 })
                                 .child(format!("Find references to {name}"))
                         };
-                        let implementations = {
-                            let (at, spelled) = (at.clone(), name.clone());
-                            MenuButton::new()
-                                .on_press(move |_| {
-                                    find_implementations(
-                                        located,
-                                        dock,
-                                        language,
-                                        &jobs,
-                                        at.clone(),
-                                        spelled.clone(),
-                                        column,
-                                    )
-                                })
-                                .child("Find implementations")
-                        };
+                        let implementations = MenuButton::new()
+                            .on_press(move |_| {
+                                find_listed(
+                                    located,
+                                    dock,
+                                    language,
+                                    &jobs,
+                                    named.clone(),
+                                    lsp::Listed::Implementations,
+                                )
+                            })
+                            .child("Find implementations");
                         vec![definition, references, implementations]
                     })
                     .unwrap_or_default();

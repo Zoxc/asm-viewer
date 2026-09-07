@@ -142,6 +142,64 @@ pub struct Place {
     pub columns: Range<u32>,
 }
 
+/// Which of the four questions about a place is being asked.
+///
+/// One type from the link the reader presses to the method that goes out, so nothing is
+/// mapped from one spelling of "which question" to another by hand (`src/links.rs`,
+/// `src/ui/language.rs`). It splits by **what an answer is for**, which is what tells the
+/// consumers apart: a followed question names one place to open, a listed one a list to
+/// draw, and an answer splits the same way (`ui::language::Reply`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Question {
+    /// One place to open, which `ui::follow` opens.
+    Followed(Followed),
+    /// A list to draw, which the Locations panel draws.
+    Listed(Listed),
+}
+
+/// A question whose answer is a door. Only one of the two is ever asked of a name, and
+/// both open the same one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Followed {
+    /// Where the name is defined, which is nearly every link.
+    Definition,
+    /// Where it is **declared**: an item in a trait `impl`, whose definition is itself and
+    /// whose declaration is the trait's (`src/links.rs`).
+    Declaration,
+}
+
+/// A question whose answer is a list. The panel draws one of the two at a time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Listed {
+    /// What implements the name.
+    Implementations,
+    /// Everywhere it is used.
+    References,
+}
+
+impl Question {
+    /// The method it goes out under.
+    fn method(self) -> &'static str {
+        match self {
+            Question::Followed(Followed::Definition) => "textDocument/definition",
+            Question::Followed(Followed::Declaration) => "textDocument/declaration",
+            Question::Listed(Listed::Implementations) => "textDocument/implementation",
+            Question::Listed(Listed::References) => "textDocument/references",
+        }
+    }
+
+    /// What is sent with it: the place, and for references the one thing that is not
+    /// asked for -- where the name is **defined**. A reader looking at the name has that
+    /// under the pointer already, and following the link is the door to it.
+    fn params(self, file: &Path, line: u32, column: u32) -> Value {
+        let mut params = asked_at(file, line, column);
+        if matches!(self, Question::Listed(Listed::References)) {
+            params["context"] = json!({ "includeDeclaration": false });
+        }
+        params
+    }
+}
+
 /// What a name is, in the server's own words: what it wrote about it, and the columns of
 /// the name it answered about.
 ///
@@ -362,37 +420,18 @@ impl Server {
         })
     }
 
-    /// Where what is at `line` and `column` of `file` is defined.
+    /// Put `question` about what is at `line` and `column` of `file`.
     ///
     /// `line` counts from zero and `column` is in UTF-16 units, which is what the protocol
     /// takes and what `src/chars.rs` already counts in.
-    pub fn definition(
+    pub fn places(
         &mut self,
+        question: Question,
         file: &Path,
         line: u32,
         column: u32,
     ) -> Result<Vec<Place>, Failure> {
-        self.talk.definition(file, line, column)
-    }
-
-    /// Where what is at `line` and `column` of `file` is declared, in the same units.
-    pub fn declaration(
-        &mut self,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Place>, Failure> {
-        self.talk.declaration(file, line, column)
-    }
-
-    /// What implements what is at `line` and `column` of `file`, in the same units.
-    pub fn implementations(
-        &mut self,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Place>, Failure> {
-        self.talk.implementations(file, line, column)
+        self.talk.places(question, file, line, column)
     }
 
     /// Every name in `file`, as the server classifies them.
@@ -403,16 +442,6 @@ impl Server {
     /// What it said it would spell those with.
     pub fn legend(&self) -> &Legend {
         self.talk.legend()
-    }
-
-    /// Every use of what is at `line` and `column` of `file`, in the same units.
-    pub fn references(
-        &mut self,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Place>, Failure> {
-        self.talk.references(file, line, column)
     }
 
     /// What the name at `line` and `column` of `file` is, in the same units.
@@ -576,67 +605,36 @@ impl<W: Write + Send + 'static> Talk<W> {
         self.notify("initialized", json!({}))
     }
 
-    /// Where what is at `line` and `column` of `file` is defined.
+    /// Put `question` about what is at `line` and `column` of `file`: the places it is
+    /// answered with, and an empty answer where the server said "not now".
+    ///
+    /// The four are one shape -- a place in, places out -- so they are one method, and
+    /// [`Question`] says which. They are genuinely four: an item in a trait `impl` is
+    /// defined where it is written and declared in the trait, and a call to a trait method
+    /// is defined in the `impl` that runs and declared in the trait as well, so no two of
+    /// them can stand in for each other.
     ///
     /// The file has been opened first ([`Talk::opened`]), which is what makes a server
     /// answer about it at all rather than when its own reading of the directory catches
     /// up. A file the app never opened -- one outside the project, or of a language this
     /// server is not for -- answers whatever the server can work out on its own, which
     /// is often nothing, and nothing is what a question with no answer gets anyway.
-    pub fn definition(
+    pub fn places(
         &mut self,
+        question: Question,
         file: &Path,
         line: u32,
         column: u32,
     ) -> Result<Vec<Place>, Failure> {
-        self.places_at("textDocument/definition", asked_at(file, line, column))
-    }
-
-    /// Where what is at `line` and `column` of `file` is **declared**, in the same units.
-    ///
-    /// A different question from [`Talk::definition`] and not a fallback for it: an item
-    /// in a trait `impl` is defined where it is written and declared in the trait, and a
-    /// call to a trait method is defined in the `impl` that runs and declared in the trait
-    /// as well. So the two disagree wherever a trait is involved, and which of them a name
-    /// asks is `src/links.rs`'s to say.
-    pub fn declaration(
-        &mut self,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Place>, Failure> {
-        self.places_at("textDocument/declaration", asked_at(file, line, column))
-    }
-
-    /// What implements what is at `line` and `column` of `file`, in the same units.
-    pub fn implementations(
-        &mut self,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Place>, Failure> {
-        self.places_at("textDocument/implementation", asked_at(file, line, column))
-    }
-
-    /// Every use of what is at `line` and `column` of `file`, in the same units.
-    ///
-    /// Where it is **defined** is not one: a reader who is looking at the name has that
-    /// under the pointer already, and following the link is the door to it.
-    pub fn references(
-        &mut self,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Place>, Failure> {
-        let mut params = asked_at(file, line, column);
-        params["context"] = json!({ "includeDeclaration": false });
-        self.places_at("textDocument/references", params)
+        let params = question.params(file, line, column);
+        self.asked(question.method(), params)
+            .map(|value| places(&value))
     }
 
     /// What the name at `line` and `column` of `file` is, in the server's own words, and
-    /// nothing where it has none to say. The units are [`Talk::definition`]'s.
+    /// nothing where it has none to say. The units are [`Talk::places`]'s.
     ///
-    /// The file has been opened first, for [`Talk::definition`]'s reason.
+    /// The file has been opened first, for [`Talk::places`]'s reason.
     ///
     /// **A refusal is an empty answer**, as it is for a place and not as it is for the
     /// names in a file: the pointer resting on the name again is what asks anew, and it
@@ -647,11 +645,8 @@ impl<W: Write + Send + 'static> Talk<W> {
         line: u32,
         column: u32,
     ) -> Result<Option<Hovered>, Failure> {
-        match self.request("textDocument/hover", asked_at(file, line, column)) {
-            Ok(value) => Ok(hovered(&value, line, column)),
-            Err(Failure::Refused { code, .. }) if NOT_NOW.contains(&code) => Ok(None),
-            Err(failure) => Err(failure),
-        }
+        self.asked("textDocument/hover", asked_at(file, line, column))
+            .map(|value| hovered(&value, line, column))
     }
 
     /// Every name in `file`, as the server classifies them.
@@ -659,7 +654,7 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// One request for the whole file rather than one per name: it is the only way to be
     /// told what a name **is** without asking about each in turn, and asking about each
     /// would be a round trip per name down a conversation that holds one question at a
-    /// time. The file has been opened first, for [`Talk::definition`]'s reason.
+    /// time. The file has been opened first, for [`Talk::places`]'s reason.
     ///
     /// A server that declared no legend is one that answers none of this, and is not
     /// asked.
@@ -730,16 +725,22 @@ impl<W: Write + Send + 'static> Talk<W> {
         &self.legend
     }
 
-    /// The half every question about a place shares: the places an answer names, and the
-    /// codes that are not an answer at all.
-    fn places_at(&mut self, method: &str, params: Value) -> Result<Vec<Place>, Failure> {
+    /// One request whose refusal may be a "not now", which is the layer between
+    /// [`Talk::request`] and every question a reader asks.
+    ///
+    /// A [`NOT_NOW`] code is answered with [`Value::Null`] rather than an error: the
+    /// server is still reading the project, or what was asked about changed under the
+    /// question. Not a failure to report and not an answer -- a click is a question, not a
+    /// promise -- and every reader of an answer takes a value of the wrong shape as
+    /// nothing found.
+    ///
+    /// Two things go straight to [`Talk::request`] instead. The handshake needs the
+    /// refusal itself, and [`Talk::semantic_tokens`] passes one on so the caller can ask
+    /// again.
+    fn asked(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
         match self.request(method, params) {
-            Ok(value) => Ok(places(&value)),
-            // "Ask again": the server is still reading the project, or what was asked
-            // about changed under the question. Not a failure to report and not an
-            // answer -- a click is a question, not a promise.
-            Err(Failure::Refused { code, .. }) if NOT_NOW.contains(&code) => Ok(Vec::new()),
-            Err(failure) => Err(failure),
+            Err(Failure::Refused { code, .. }) if NOT_NOW.contains(&code) => Ok(Value::Null),
+            answer => answer,
         }
     }
 

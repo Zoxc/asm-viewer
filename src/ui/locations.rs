@@ -54,22 +54,17 @@ pub(crate) enum Scope {
         name: String,
         lines: RangeInclusive<u32>,
     },
-    /// Every reference to the name at [`Query::at`], as the language server answers it.
+    /// One of the language server's two list questions about the name at [`Query::at`]:
+    /// everywhere it is used, or what implements it. One variant because the two are one
+    /// shape and the panel draws one of them at a time; `of` is which.
     ///
     /// `column` is where the name was asked about, in the UTF-16 units the protocol
     /// takes; `run` is the server run it was asked in, since an answer from a server
     /// started since is not an answer to this question; and `id` is the question's own,
     /// since neither is a run when two questions are asked in one -- which is the
     /// ordinary case, a run lasting as long as the server.
-    References {
-        name: String,
-        column: u32,
-        run: u64,
-        id: u64,
-    },
-    /// What implements the name at [`Query::at`], as the language server answers it, with
-    /// `column`, `run` and `id` meaning what they mean above.
-    Implementations {
+    Listed {
+        of: lsp::Listed,
         name: String,
         column: u32,
         run: u64,
@@ -97,22 +92,10 @@ impl Query {
         }
     }
 
-    /// The question about every reference to `name`, asked at `column` of `at` as the
-    /// question `id` of the server run `run`.
-    pub(crate) fn references(at: LinePos, name: String, column: u32, run: u64, id: u64) -> Query {
-        Query {
-            at,
-            scope: Scope::References {
-                name,
-                column,
-                run,
-                id,
-            },
-        }
-    }
-
-    /// The question about what implements `name`, asked the same way.
-    pub(crate) fn implementations(
+    /// The question `of` about `name`, asked at `column` of `at` as the question `id` of
+    /// the server run `run`.
+    pub(crate) fn listed(
+        of: lsp::Listed,
         at: LinePos,
         name: String,
         column: u32,
@@ -121,7 +104,8 @@ impl Query {
     ) -> Query {
         Query {
             at,
-            scope: Scope::Implementations {
+            scope: Scope::Listed {
+                of,
                 name,
                 column,
                 run,
@@ -136,9 +120,7 @@ impl Query {
     pub(crate) fn asked(&self) -> Option<(u64, u64)> {
         match &self.scope {
             Scope::Line | Scope::Function { .. } => None,
-            Scope::References { run, id, .. } | Scope::Implementations { run, id, .. } => {
-                Some((*run, *id))
-            }
+            Scope::Listed { run, id, .. } => Some((*run, *id)),
         }
     }
 
@@ -148,8 +130,14 @@ impl Query {
         match self.scope {
             Scope::Line => ("location for", "locations for"),
             Scope::Function { .. } => ("instance of", "instances of"),
-            Scope::References { .. } => ("reference to", "references to"),
-            Scope::Implementations { .. } => ("implementation of", "implementations of"),
+            Scope::Listed {
+                of: lsp::Listed::References,
+                ..
+            } => ("reference to", "references to"),
+            Scope::Listed {
+                of: lsp::Listed::Implementations,
+                ..
+            } => ("implementation of", "implementations of"),
         }
     }
 
@@ -159,7 +147,7 @@ impl Query {
         match &self.scope {
             Scope::Line => Some(self.at.line..=self.at.line),
             Scope::Function { lines, .. } => Some(lines.clone()),
-            Scope::References { .. } | Scope::Implementations { .. } => None,
+            Scope::Listed { .. } => None,
         }
     }
 
@@ -167,9 +155,7 @@ impl Query {
     fn spell(&self) -> String {
         match &self.scope {
             Scope::Line => spell(&self.at),
-            Scope::Function { name, .. }
-            | Scope::References { name, .. }
-            | Scope::Implementations { name, .. } => name.clone(),
+            Scope::Function { name, .. } | Scope::Listed { name, .. } => name.clone(),
         }
     }
 
@@ -182,9 +168,7 @@ impl Query {
                 format!("{}:{}\u{2013}{}", self.at.file, lines.start(), lines.end())
             }
             // Where it was asked about, which is the one thing a name alone does not say.
-            Scope::References { .. } | Scope::Implementations { .. } => {
-                format!("{}:{}", self.at.file, self.at.line)
-            }
+            Scope::Listed { .. } => format!("{}:{}", self.at.file, self.at.line),
         }
     }
 
@@ -401,71 +385,31 @@ pub(crate) fn find_locations(
     raise_panel(dock, Panel::Locations);
 }
 
-/// Ask where the name at `column` of `at` is used, and bring the panel to the front.
-pub(crate) fn find_references(
-    located: State<Located>,
-    dock: State<DockArea>,
-    language: State<Language>,
-    jobs: &LspJobs,
-    at: LinePos,
-    name: String,
-    column: u32,
-) {
-    find_places(
-        located,
-        dock,
-        language,
-        jobs,
-        at,
-        name,
-        column,
-        Wanted::References,
-        Query::references,
-    );
+/// The name a question for the server is about: the row it is on, what it is called, and
+/// which column of that row it starts at.
+#[derive(Clone, PartialEq)]
+pub(crate) struct NameAt {
+    pub(crate) at: LinePos,
+    pub(crate) name: String,
+    pub(crate) column: u32,
 }
 
-/// Ask what implements the name at `column` of `at`, and bring the panel to the front.
-pub(crate) fn find_implementations(
-    located: State<Located>,
-    dock: State<DockArea>,
-    language: State<Language>,
-    jobs: &LspJobs,
-    at: LinePos,
-    name: String,
-    column: u32,
-) {
-    find_places(
-        located,
-        dock,
-        language,
-        jobs,
-        at,
-        name,
-        column,
-        Wanted::Implementations,
-        Query::implementations,
-    );
-}
-
-/// The half the panel's two questions for the server share: ask it, hold the question,
-/// and raise the panel.
+/// Ask the server question `of` about `named`, hold the question, and bring the panel to
+/// the front.
 ///
 /// The question is the server's, so it is sent here rather than from the effect that
 /// sends the worker's: what it is asked in is a server run, and there is nothing to ask
 /// with no server -- a question is not what starts one, that being the control the reader
 /// presses (`follow_name`'s rule).
-#[allow(clippy::too_many_arguments)]
-fn find_places(
-    mut located: State<Located>,
+pub(crate) fn find_listed(
+    located: State<Located>,
     dock: State<DockArea>,
     language: State<Language>,
     jobs: &LspJobs,
-    at: LinePos,
-    name: String,
-    column: u32,
-    want: Wanted,
-    query: fn(LinePos, String, u32, u64, u64) -> Query,
+    named: NameAt,
+    of: lsp::Listed,
 ) {
+    let NameAt { at, name, column } = named;
     let lookup = Lookup {
         file: PathBuf::from(&*at.file),
         // The protocol counts lines from zero, where a `LinePos` is 1-based; the column
@@ -473,24 +417,17 @@ fn find_places(
         line: at.line.saturating_sub(1),
         column,
     };
-    let Some((run, id)) = ask_where(language, jobs, lookup, want) else {
+    let asked = ask_where(language, jobs, lookup, lsp::Question::Listed(of));
+    let Some((run, id)) = asked else {
         return;
     };
-    let query = query(at, name, column, run, id);
-
-    // Asking again drops the answer that stands, which is what makes this question
-    // pending; `find_locations`' rule, and here it cannot even be the same question,
-    // since the id it was asked under is part of it.
-    let mut next = located.peek().clone();
-    if next.found.as_ref().is_some_and(|found| found.of == query) {
-        next.found = None;
-    }
-    next.asked = Some(query);
     // These answers are places in files: no row of one chooses a symbol for a tab.
-    next.subject = None;
-    located.set(next);
-
-    raise_panel(dock, Panel::Locations);
+    find_locations(
+        located,
+        dock,
+        Query::listed(of, at, name, column, run, id),
+        None,
+    );
 }
 
 /// The menu a source row or an instruction row opens on a right-click: the line's

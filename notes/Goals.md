@@ -481,7 +481,7 @@ leaves this list when it is. That is a move made on request, like everything els
 - [ ] Run a language server over a scratchpad's package, so a pad's editor gets what the Source
   pane has: a name followed to what it names, its references, and what the server sees wrong
   before a build does. Two things are in the way, both because the pad is the one place the app
-  writes. `Talk::definition` opens no file — "this app only ever shows what is on disk, so
+  writes. `Talk::places` opens no file — "this app only ever shows what is on disk, so
   telling it about one would put an overlay over the file that has to be taken back off again
   and can only go stale" (`src/lsp.rs`) — and a pad's buffer is *not* on disk, its save being
   queued behind the keystroke, so a server reading the package answers about the file as it was

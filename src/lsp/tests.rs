@@ -441,8 +441,13 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
             }));
         },
         |talk| {
-            talk.definition(Path::new("/p/src/main.rs"), 41, 17)
-                .expect("an answer")
+            talk.places(
+                Question::Followed(Followed::Definition),
+                Path::new("/p/src/main.rs"),
+                41,
+                17,
+            )
+            .expect("an answer")
         },
     );
 
@@ -780,8 +785,13 @@ fn implementations_are_asked_for_where_the_reader_pointed() {
             }));
         },
         |talk| {
-            talk.implementations(Path::new("/p/src/main.rs"), 4, 11)
-                .expect("an answer")
+            talk.places(
+                Question::Listed(Listed::Implementations),
+                Path::new("/p/src/main.rs"),
+                4,
+                11,
+            )
+            .expect("an answer")
         },
     );
 
@@ -813,8 +823,13 @@ fn references_are_asked_for_where_the_reader_pointed_and_leave_the_definition_ou
             }));
         },
         |talk| {
-            talk.references(Path::new("/p/src/main.rs"), 41, 17)
-                .expect("an answer")
+            talk.places(
+                Question::Listed(Listed::References),
+                Path::new("/p/src/main.rs"),
+                41,
+                17,
+            )
+            .expect("an answer")
         },
     );
 
@@ -858,7 +873,12 @@ fn what_arrives_before_the_answer_is_dealt_with_and_the_answer_is_still_the_answ
         },
         |talk| {
             let places = talk
-                .definition(Path::new("/p/src/main.rs"), 0, 0)
+                .places(
+                    Question::Followed(Followed::Definition),
+                    Path::new("/p/src/main.rs"),
+                    0,
+                    0,
+                )
                 .expect("an answer");
             assert_eq!(places, Vec::new());
         },
@@ -893,8 +913,13 @@ fn what_the_server_says_unasked_is_whether_it_is_working() {
             fake.say(json!({ "jsonrpc": "2.0", "id": message["id"].clone(), "result": null }));
         },
         |talk| {
-            talk.definition(Path::new("/p/src/main.rs"), 0, 0)
-                .expect("an answer");
+            talk.places(
+                Question::Followed(Followed::Definition),
+                Path::new("/p/src/main.rs"),
+                0,
+                0,
+            )
+            .expect("an answer");
         },
     );
 
@@ -921,8 +946,13 @@ fn a_server_that_says_it_has_settled_is_heard_saying_so() {
             fake.say(json!({ "jsonrpc": "2.0", "id": message["id"].clone(), "result": null }));
         },
         |talk| {
-            talk.definition(Path::new("/p/src/main.rs"), 0, 0)
-                .expect("an answer");
+            talk.places(
+                Question::Followed(Followed::Definition),
+                Path::new("/p/src/main.rs"),
+                0,
+                0,
+            )
+            .expect("an answer");
         },
     );
 
@@ -945,7 +975,12 @@ fn a_server_that_is_still_reading_the_project_is_no_answer_and_not_a_failure() {
         },
         |talk| {
             let places = talk
-                .definition(Path::new("/p/src/main.rs"), 0, 0)
+                .places(
+                    Question::Followed(Followed::Definition),
+                    Path::new("/p/src/main.rs"),
+                    0,
+                    0,
+                )
                 .expect("no failure");
             assert_eq!(places, Vec::new());
         },
@@ -964,7 +999,12 @@ fn any_other_error_is_the_failure_the_server_named() {
         },
         |talk| {
             assert_eq!(
-                talk.definition(Path::new("/p/src/main.rs"), 0, 0),
+                talk.places(
+                    Question::Followed(Followed::Definition),
+                    Path::new("/p/src/main.rs"),
+                    0,
+                    0
+                ),
                 Err(Failure::Refused {
                     code: -32603,
                     said: "it panicked".to_owned(),
@@ -982,7 +1022,12 @@ fn a_server_that_stops_answering_ends_the_conversation() {
     drop(fake);
 
     assert!(matches!(
-        talk.definition(Path::new("/p/src/main.rs"), 0, 0),
+        talk.places(
+            Question::Followed(Followed::Definition),
+            Path::new("/p/src/main.rs"),
+            0,
+            0
+        ),
         Err(Failure::Broken(_))
     ));
 }

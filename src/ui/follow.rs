@@ -36,7 +36,7 @@ struct Asked {
     at: Lookup,
     /// Which question was put, which only matters for what an answer naming the line it
     /// was asked on means. See [`Follow::answer`].
-    want: Wanted,
+    want: lsp::Followed,
     reach: Reach,
     /// The tab the press was made in, so that a [`Reach::InPlace`] answer replaces what
     /// **that** tab shows and not what the tab on screen when it lands does. `None` with
@@ -74,7 +74,7 @@ impl Follow {
         // outcome -- and one that lands on the line it was asked from is a name defined
         // where it is used, which is a place like any other.
         let nowhere = |place: &&lsp::Place| {
-            asked.want == Wanted::Declaration
+            asked.want == lsp::Followed::Declaration
                 && place.file == asked.at.file
                 && place.line == asked.at.line.saturating_add(1)
         };
@@ -122,10 +122,11 @@ pub(crate) fn follow_name(
     jobs: &LspJobs,
     open: Open,
     at: Lookup,
-    want: Wanted,
+    want: lsp::Followed,
     reach: Reach,
 ) {
-    let Some((run, id)) = ask_where(language, jobs, at.clone(), want) else {
+    let asked = ask_where(language, jobs, at.clone(), lsp::Question::Followed(want));
+    let Some((run, id)) = asked else {
         return;
     };
     // Bound before the write, the reads above being of other states.

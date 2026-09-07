@@ -48,24 +48,33 @@ fn token(kind: &str, modifiers: &[&str]) -> lsp::Token {
     }
 }
 
-fn asks(kind: &str, modifiers: &[&str]) -> Option<Asks> {
+fn asks(kind: &str, modifiers: &[&str]) -> Option<lsp::Followed> {
     asked_by(&legend(), &token(kind, modifiers))
 }
 
 #[test]
 fn a_name_the_server_placed_is_a_link() {
-    assert_eq!(asks("method", &["reference"]), Some(Asks::Definition));
-    assert_eq!(asks("struct", &["public"]), Some(Asks::Definition));
-    assert_eq!(asks("property", &["public"]), Some(Asks::Definition));
-    assert_eq!(asks("interface", &["public"]), Some(Asks::Definition));
-    assert_eq!(asks("typeAlias", &[]), Some(Asks::Definition));
+    assert_eq!(
+        asks("method", &["reference"]),
+        Some(lsp::Followed::Definition)
+    );
+    assert_eq!(asks("struct", &["public"]), Some(lsp::Followed::Definition));
+    assert_eq!(
+        asks("property", &["public"]),
+        Some(lsp::Followed::Definition)
+    );
+    assert_eq!(
+        asks("interface", &["public"]),
+        Some(lsp::Followed::Definition)
+    );
+    assert_eq!(asks("typeAlias", &[]), Some(lsp::Followed::Definition));
 }
 
 /// The reader asked for locals as links: the server places a `let` binding as readily as
 /// it places an item, and following one goes to where it was bound.
 #[test]
 fn a_local_is_a_link_where_it_is_used() {
-    assert_eq!(asks("variable", &[]), Some(Asks::Definition));
+    assert_eq!(asks("variable", &[]), Some(lsp::Followed::Definition));
     // Where it is *bound* it is a declaration, and so is not one.
     assert_eq!(asks("variable", &["declaration"]), None);
 }
@@ -85,11 +94,11 @@ fn a_name_where_one_is_defined_is_not_a_link() {
 fn an_item_in_a_trait_impl_asks_for_the_declaration() {
     assert_eq!(
         asks("method", &["declaration", "trait"]),
-        Some(Asks::Declaration)
+        Some(lsp::Followed::Declaration)
     );
     // `trait` without `declaration` is a call to a trait method, which is an ordinary
     // link: its definition is the `impl` that runs, which is where the reader wants to go.
-    assert_eq!(asks("method", &["trait"]), Some(Asks::Definition));
+    assert_eq!(asks("method", &["trait"]), Some(lsp::Followed::Definition));
     // `declaration` without `trait` is an inherent `impl`'s own method, which is defined
     // where it is written and declared nowhere else.
     assert_eq!(asks("method", &["declaration"]), None);
@@ -111,10 +120,13 @@ fn what_the_server_places_nowhere_is_not_a_link() {
 fn a_name_from_the_standard_library_is_a_link() {
     assert_eq!(
         asks("struct", &["defaultLibrary"]),
-        Some(Asks::Definition),
+        Some(lsp::Followed::Definition),
         "a std type is placed where std defines it"
     );
-    assert_eq!(asks("method", &["defaultLibrary"]), Some(Asks::Definition));
+    assert_eq!(
+        asks("method", &["defaultLibrary"]),
+        Some(lsp::Followed::Definition)
+    );
 }
 
 /// A type index the legend never declared says nothing, so it is nothing to follow. A
@@ -144,7 +156,10 @@ fn a_modifier_the_legend_does_not_have_is_never_said() {
     assert!(!legend.says(&every_bit, "declaration"));
     // So a name whose declaration cannot be spoken of is taken as a use, which is the
     // link the reader can follow rather than the one they cannot.
-    assert_eq!(asked_by(&legend, &every_bit), Some(Asks::Definition));
+    assert_eq!(
+        asked_by(&legend, &every_bit),
+        Some(lsp::Followed::Definition)
+    );
 }
 
 /// The rows are found by a binary search, so the order matters more than the count.

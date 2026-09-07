@@ -4688,7 +4688,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
 
 /// A uses answer as the panel takes one: the question, and the places the server named.
 fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)]) -> Located {
-    let query = Query::references(at, name.to_owned(), 0, 7, 1);
+    let query = Query::listed(lsp::Listed::References, at, name.to_owned(), 0, 7, 1);
     let places: Vec<lsp::Place> = places
         .iter()
         .map(|(file, line, columns)| lsp::Place {
@@ -4727,7 +4727,14 @@ fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
     };
     settle(&mut test);
 
-    located.write().asked = Some(Query::references(at.clone(), "helper".to_owned(), 12, 7, 1));
+    located.write().asked = Some(Query::listed(
+        lsp::Listed::References,
+        at.clone(),
+        "helper".to_owned(),
+        12,
+        7,
+        1,
+    ));
     settle(&mut test);
     assert!(
         labels(&test).contains(&"Finding references to helper\u{2026}".to_owned()),
@@ -4829,7 +4836,14 @@ fn a_references_question_that_answers_nothing_says_there_are_none() {
     // An answer under a run this did not ask in is an answer to nobody: the question
     // stands and the panel is still looking for it.
     let mut asking = Located {
-        asked: Some(Query::references(at, "helper".to_owned(), 12, 7, 1)),
+        asked: Some(Query::listed(
+            lsp::Listed::References,
+            at,
+            "helper".to_owned(),
+            12,
+            7,
+            1,
+        )),
         ..Located::default()
     };
     assert!(
@@ -4865,10 +4879,24 @@ fn a_locations_answer_lands_on_the_question_it_was_asked_of() {
 
     // The uses of `foo`, and then what implements `bar` before the first came back.
     let mut located = Located {
-        asked: Some(Query::references(at(2), "foo".to_owned(), 4, 7, 1)),
+        asked: Some(Query::listed(
+            lsp::Listed::References,
+            at(2),
+            "foo".to_owned(),
+            4,
+            7,
+            1,
+        )),
         ..Located::default()
     };
-    let second = Query::implementations(at(9), "bar".to_owned(), 8, 7, 2);
+    let second = Query::listed(
+        lsp::Listed::Implementations,
+        at(9),
+        "bar".to_owned(),
+        8,
+        7,
+        2,
+    );
     located.asked = Some(second.clone());
 
     assert!(
@@ -6099,7 +6127,7 @@ fn word_point(test: &TestingRunner, word: &str) -> (f64, f64) {
 fn next_ask(
     test: &mut TestingRunner,
     asks: &async_channel::Receiver<AskedOfServer>,
-) -> Option<(Lookup, Wanted)> {
+) -> Option<(Lookup, lsp::Question)> {
     // The press writes; the worker is handed its job a pass later.
     settle(test);
     while let Some(job) = next_job(asks) {
@@ -6134,8 +6162,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                want,
-                reply: Ok(Reply::Defined(vec![place.clone()])),
+                reply: replied(want, Ok(vec![place.clone()]), |_| None),
             }),
             _ => None,
         },
@@ -6209,8 +6236,7 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                want,
-                reply: Ok(Reply::Defined(vec![place.clone()])),
+                reply: replied(want, Ok(vec![place.clone()]), |_| None),
             }),
             _ => None,
         },
@@ -6267,8 +6293,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                want,
-                reply: Ok(Reply::Defined(vec![place.clone()])),
+                reply: replied(want, Ok(vec![place.clone()]), |_| None),
             }),
             _ => None,
         },
@@ -6355,8 +6380,7 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
                 Some(LspAnswer::Answered {
                     run,
                     id,
-                    want,
-                    reply: Ok(Reply::Defined(vec![place])),
+                    reply: replied(want, Ok(vec![place]), |_| None),
                 })
             }
             _ => None,
@@ -6429,8 +6453,7 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
                 Some(LspAnswer::Answered {
                     run,
                     id,
-                    want,
-                    reply: Ok(Reply::Defined(vec![place.clone()])),
+                    reply: replied(want, Ok(vec![place.clone()]), |_| None),
                 })
             }
             _ => None,
@@ -7017,7 +7040,7 @@ fn a_right_click_on_a_link_offers_the_names_references() {
     // The question the panel now holds: the name, and where it was asked about.
     let asked = location.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 2, "the question is about the wrong line");
-    let Scope::References { name, column, .. } = &asked.scope else {
+    let Scope::Listed { name, column, .. } = &asked.scope else {
         panic!("the question is not about a name's references");
     };
     assert_eq!(name, "helper");
@@ -7172,8 +7195,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                want,
-                reply: Ok(Reply::Defined(vec![place.clone()])),
+                reply: replied(want, Ok(vec![place.clone()]), |_| None),
             }),
             _ => None,
         },
@@ -7251,8 +7273,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                want,
-                reply: Ok(Reply::Defined(vec![place.clone()])),
+                reply: replied(want, Ok(vec![place.clone()]), |_| None),
             }),
             _ => None,
         },
@@ -7813,8 +7834,7 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                want,
-                reply: Ok(Reply::Defined(vec![itself.clone()])),
+                reply: replied(want, Ok(vec![itself.clone()]), |_| None),
             }),
             _ => None,
         },
@@ -7959,7 +7979,7 @@ fn an_item_in_a_trait_impl_asks_the_server_for_its_declaration() {
     assert_eq!((asked.line, asked.column), (1, 12));
     assert_eq!(
         want,
-        Wanted::Declaration,
+        lsp::Question::Followed(lsp::Followed::Declaration),
         "a trait impl's item asked where it is defined, which is itself"
     );
 }
@@ -8001,7 +8021,7 @@ fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
     // supersede each other in the panel, which is why they are told apart at all.
     let asked = location.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 2, "the question is about the wrong line");
-    let Scope::Implementations { name, column, .. } = &asked.scope else {
+    let Scope::Listed { name, column, .. } = &asked.scope else {
         panic!("the question is not about what implements a name");
     };
     assert_eq!(name, "helper");
@@ -8042,7 +8062,7 @@ fn a_right_click_on_a_definitions_own_name_offers_its_references() {
 
     let asked = location.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 1);
-    let Scope::References { name, column, .. } = &asked.scope else {
+    let Scope::Listed { name, column, .. } = &asked.scope else {
         panic!("the question is not about a name's references");
     };
     assert_eq!(name, "main");
@@ -8061,11 +8081,14 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                want,
-                reply: Err(lsp::Failure::Refused {
-                    code: -32603,
-                    said: "file not found".to_owned(),
-                }),
+                reply: replied(
+                    want,
+                    Err(lsp::Failure::Refused {
+                        code: -32603,
+                        said: "file not found".to_owned(),
+                    }),
+                    |_| None,
+                ),
             }),
             _ => None,
         },
@@ -8168,7 +8191,7 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
     );
     // An ordinary name asks where it is defined. The other question is for an item in a
     // trait `impl`, whose definition is itself.
-    assert_eq!(want, Wanted::Definition);
+    assert_eq!(want, lsp::Question::Followed(lsp::Followed::Definition));
     assert!(
         location.marked.peek().source.is_none(),
         "the press picked a line out"
@@ -22082,7 +22105,7 @@ struct ServerAsking(State<Option<LspJobs>>);
 #[derive(Debug, PartialEq, Eq)]
 enum AskedOfServer {
     Start(PathBuf),
-    Ask(Lookup, Wanted),
+    Ask(Lookup, lsp::Question),
     Tokens(Arc<str>),
     Hover(Lookup),
     Opened(Arc<str>),
@@ -22562,7 +22585,12 @@ fn a_question_asked_with_no_server_running_asks_nobody() {
         line: 12,
         column: 4,
     };
-    ask_where(language, &jobs, at.clone(), Wanted::Definition);
+    ask_where(
+        language,
+        &jobs,
+        at.clone(),
+        lsp::Question::Followed(lsp::Followed::Definition),
+    );
     settle(&mut test);
     assert!(
         nothing_pressed(&asks),
@@ -22583,7 +22611,12 @@ fn a_question_asked_with_no_server_running_asks_nobody() {
         Some(AskedOfServer::Start(PathBuf::from("/p")))
     );
 
-    ask_where(language, &jobs, at, Wanted::Definition);
+    ask_where(
+        language,
+        &jobs,
+        at,
+        lsp::Question::Followed(lsp::Followed::Definition),
+    );
     settle(&mut test);
     assert!(
         nothing_pressed(&asks),
@@ -22853,7 +22886,12 @@ fn a_question_asked_while_it_is_starting_waits_for_it() {
         line: 3,
         column: 0,
     };
-    ask_where(language, &jobs, at.clone(), Wanted::Definition);
+    ask_where(
+        language,
+        &jobs,
+        at.clone(),
+        lsp::Question::Followed(lsp::Followed::Definition),
+    );
 
     assert_eq!(
         next_job(&asks),
@@ -22861,7 +22899,10 @@ fn a_question_asked_while_it_is_starting_waits_for_it() {
     );
     assert_eq!(
         next_job(&asks),
-        Some(AskedOfServer::Ask(at, Wanted::Definition))
+        Some(AskedOfServer::Ask(
+            at,
+            lsp::Question::Followed(lsp::Followed::Definition)
+        ))
     );
 }
 
@@ -22965,14 +23006,14 @@ fn the_queue_keeps_the_last_question_and_every_press() {
             run: 1,
             id: 1,
             at: at(1),
-            want: Wanted::Definition,
+            want: lsp::Question::Followed(lsp::Followed::Definition),
         },
         vec![
             LspJob::Ask {
                 run: 1,
                 id: 2,
                 at: at(2),
-                want: Wanted::Definition,
+                want: lsp::Question::Followed(lsp::Followed::Definition),
             },
             LspJob::ReadSettings {
                 directory: PathBuf::from("/old"),
@@ -22993,7 +23034,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
                 run: 2,
                 id: 3,
                 at: at(3),
-                want: Wanted::Definition,
+                want: lsp::Question::Followed(lsp::Followed::Definition),
             },
         ]
         .into_iter(),
@@ -23008,7 +23049,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
             run: 1,
             id: 9,
             at: at(9),
-            want: Wanted::Definition,
+            want: lsp::Question::Followed(lsp::Followed::Definition),
         },
         std::iter::empty(),
     );
@@ -23039,27 +23080,30 @@ fn a_question_about_references_does_not_cancel_one_about_a_definition() {
             run: 1,
             id: 1,
             at: at(1),
-            want: Wanted::Definition,
+            want: lsp::Question::Followed(lsp::Followed::Definition),
         },
         vec![
             LspJob::Ask {
                 run: 1,
                 id: 2,
                 at: at(2),
-                want: Wanted::References,
+                want: lsp::Question::Listed(lsp::Listed::References),
             },
             LspJob::Ask {
                 run: 1,
                 id: 3,
                 at: at(3),
-                want: Wanted::References,
+                want: lsp::Question::Listed(lsp::Listed::References),
             },
         ]
         .into_iter(),
     );
     // The definition asked for first is still asked, and the second of the two
     // references questions is the one that stands.
-    assert_eq!(names(&drained), ["Definition 1", "References 3"]);
+    assert_eq!(
+        names(&drained),
+        ["Followed(Definition) 1", "Listed(References) 3"]
+    );
 }
 
 /// A start over a directory nobody has agreed to is a question and not a start: a server

@@ -28,16 +28,6 @@ use std::ops::Range;
 use crate::lsp;
 use crate::shared::Shared;
 
-/// Which question following a link asks the server.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Asks {
-    /// Where the name is defined, which is nearly every link.
-    Definition,
-    /// Where it is **declared**: an item in a trait `impl`, whose definition is itself and
-    /// whose declaration is the trait's.
-    Declaration,
-}
-
 /// One name the server placed, or could have: where it is, and what following it asks.
 ///
 /// A name with nothing to follow is kept rather than dropped, because the reader can still
@@ -50,7 +40,9 @@ pub struct Link {
     /// The columns of the name on `line`, in UTF-16 units.
     pub columns: Range<u32>,
     /// What following it asks the server, and `None` where there is nothing to follow.
-    pub asks: Option<Asks>,
+    /// The server's own type, so nothing maps a link's question onto a wire one
+    /// (`lsp::Question`).
+    pub asks: Option<lsp::Followed>,
 }
 
 /// Every name in one file the server had something to say about, in the order they are
@@ -156,16 +148,18 @@ fn is_name(legend: &lsp::Legend, token: &lsp::Token) -> bool {
 }
 
 /// What following the name at `token` asks, and `None` where there is nothing to follow.
-fn asked_by(legend: &lsp::Legend, token: &lsp::Token) -> Option<Asks> {
+fn asked_by(legend: &lsp::Legend, token: &lsp::Token) -> Option<lsp::Followed> {
     if !is_name(legend, token) {
         return None;
     }
     if !legend.says(token, "declaration") {
-        return Some(Asks::Definition);
+        return Some(lsp::Followed::Definition);
     }
     // A definition, so there is nothing to follow -- unless it is an item in a trait
     // `impl`, where the trait declares what this one writes out.
-    legend.says(token, "trait").then_some(Asks::Declaration)
+    legend
+        .says(token, "trait")
+        .then_some(lsp::Followed::Declaration)
 }
 
 #[cfg(test)]

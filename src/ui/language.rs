@@ -382,36 +382,6 @@ pub(crate) struct Lookup {
     pub(crate) column: u32,
 }
 
-/// Which question about a place is being asked. They all go out the same way and come
-/// back the same way, so this is what tells one answer from the other -- and what keeps a
-/// reader asking for references from cancelling a definition still in flight
-/// (`worth_doing`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Wanted {
-    /// Where the name is defined, which `ui::follow` opens.
-    Definition,
-    /// Where it is **declared**, which `ui::follow` opens as well. A different question of
-    /// the server with the same answer and the same door, asked for an item in a trait
-    /// `impl`, whose definition is itself and whose declaration is the trait's
-    /// (`src/links.rs`).
-    Declaration,
-    /// What implements it, which the Locations panel lists.
-    Implementations,
-    /// Everywhere it is used, which the Locations panel lists.
-    References,
-}
-
-impl Wanted {
-    /// Whether the answer is a place to go to rather than a list to draw, which is what
-    /// `worth_doing` buckets by: the panel's two questions supersede each other because
-    /// the panel draws one of them at a time, and neither takes back a followed name.
-    /// A definition and a declaration are one kind for the same reason -- only ever one
-    /// of the two is asked of a name, and both open the same door.
-    pub(crate) fn followed(self) -> bool {
-        matches!(self, Wanted::Definition | Wanted::Declaration)
-    }
-}
-
 /// What the worker is asked to do.
 pub(crate) enum LspJob {
     /// Start a server over `directory` and shake hands with it. The channel is what the
@@ -433,23 +403,23 @@ pub(crate) enum LspJob {
     /// here rather than on the UI thread; it is this worker's and not the build worker's
     /// because what it answers is what a start has to carry.
     ReadSettings { directory: PathBuf },
-    /// What is at a place: which of the four questions is in `want`. `id` is the
-    /// question's own, minted by [`ask_where`] and copied into the answer: a run says
-    /// which server was asked and nothing about which question this is.
+    /// What is at a place: which of the four questions is in `want` (`lsp::Question`).
+    /// `id` is the question's own, minted by [`ask_where`] and copied into the answer: a
+    /// run says which server was asked and nothing about which question this is.
     Ask {
         run: u64,
         id: u64,
         at: Lookup,
-        want: Wanted,
+        want: lsp::Question,
     },
     /// What every name in one file is, which is a question about the file and not about
     /// a place in it. The file travels as the `Arc<str>` a document is named by, since
     /// that is what the answer has to be matched against.
     Tokens { run: u64, file: Arc<str> },
     /// What the name under the pointer is. A question about a place like [`LspJob::Ask`]'s
-    /// four, and **not** a fifth `Wanted`: those are bucketed by consumer, of which this
-    /// is a third, and a pointer crossing a name must neither take back a definition the
-    /// reader clicked for nor be taken back by one.
+    /// four, and **not** a fifth `lsp::Question`: those are bucketed by consumer, of which
+    /// this is a third, and a pointer crossing a name must neither take back a definition
+    /// the reader clicked for nor be taken back by one.
     Hover { run: u64, id: u64, at: Lookup },
     /// The app is showing this file, or has stopped showing it. Not a question: the
     /// server answers neither, and what they change is what every other question about
@@ -481,14 +451,9 @@ pub(crate) enum LspAnswer {
         run: u64,
         server: Result<process::Handle, lsp::Failure>,
     },
-    /// What one question came back with, and which question it was. `id` is the
-    /// [`LspJob::Ask`]'s, carried through untouched.
-    Answered {
-        run: u64,
-        id: u64,
-        want: Wanted,
-        reply: Result<Reply, lsp::Failure>,
-    },
+    /// What one question about a place came back with. Which question it was is the
+    /// [`Reply`]'s to say; `id` is the [`LspJob::Ask`]'s, carried through untouched.
+    Answered { run: u64, id: u64, reply: Reply },
     /// What every name in one file is, and which file. Its own answer and not a `Reply`,
     /// since it is the one question about a file rather than about a place in one.
     Linked {
@@ -515,14 +480,55 @@ pub(crate) enum LspAnswer {
     },
 }
 
-/// What an answer holds, which is what was asked for.
+/// What an answer holds, which is what was asked for: one variant per consumer, each
+/// carrying the shape that consumer takes.
 ///
-/// A definition is places and nothing more -- what opens one is a file and a line.
-/// References are grouped and carry the text of every line they are on, since the lines
-/// are **read here**: the read blocks, and this is the thread that may block.
+/// The kind is the variant and not a field beside it, so a question of one kind cannot
+/// come back as the other's answer, and neither consumer needs an arm for one that did.
+/// A followed question is places and nothing more -- what opens one is a file and a line.
+/// A listed one is grouped and carries the text of every line it names, since the lines
+/// are **read on the worker**: the read blocks, and that is the thread that may block.
 pub(crate) enum Reply {
-    Defined(Vec<lsp::Place>),
-    Referenced(references::References),
+    Followed(Result<Vec<lsp::Place>, lsp::Failure>),
+    Listed(Result<references::References, lsp::Failure>),
+}
+
+/// The answer to `want`, out of what the server said. The one place the shape of an
+/// answer is decided, and it is decided by the question.
+///
+/// `read` is how a named file's text is got, [`source::read_text`] on the worker: a path a
+/// server answers with is file input, and two rules for what a source file is would be two
+/// ideas of which files this app can show.
+pub(crate) fn replied(
+    want: lsp::Question,
+    places: Result<Vec<lsp::Place>, lsp::Failure>,
+    read: impl Fn(&Path) -> Option<String>,
+) -> Reply {
+    match want {
+        lsp::Question::Followed(_) => Reply::Followed(places),
+        // Grouped and their lines read with the ask, since that is what the panel draws.
+        lsp::Question::Listed(_) => {
+            Reply::Listed(places.map(|places| references::of(&places, read)))
+        }
+    }
+}
+
+/// Put one question to the server there is, and let go of a conversation that has ended.
+///
+/// [`None`] with no server: there is nobody to ask, so there is no answer to send. A
+/// [`lsp::Failure::Broken`] is the conversation itself ending, so the server is dropped
+/// here -- the one place that decision is made -- and reported as the failure it is. Every
+/// job that says anything to a server goes through this, so a question added later cannot
+/// leave a dead conversation in `talking` for the next one to fail against.
+fn asked<T>(
+    talking: &mut Option<lsp::Server>,
+    ask: impl FnOnce(&mut lsp::Server) -> Result<T, lsp::Failure>,
+) -> Option<Result<T, lsp::Failure>> {
+    let answer = ask(talking.as_mut()?);
+    if matches!(answer, Err(lsp::Failure::Broken(_))) {
+        *talking = None;
+    }
+    Some(answer)
 }
 
 /// The blocking half, and the only part that talks to a server.
@@ -576,59 +582,29 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 Some(LspAnswer::Started { run, server })
             }
             LspJob::Ask { run, id, at, want } => {
-                let talk = talking.as_mut()?;
-                let places = match want {
-                    Wanted::Definition => talk.definition(&at.file, at.line, at.column),
-                    Wanted::Declaration => talk.declaration(&at.file, at.line, at.column),
-                    Wanted::Implementations => talk.implementations(&at.file, at.line, at.column),
-                    Wanted::References => talk.references(&at.file, at.line, at.column),
-                };
-                // A conversation that ended is a server that is gone, so it is let go of
-                // here and reported as the failure it is.
-                if matches!(places, Err(lsp::Failure::Broken(_))) {
-                    *talking = None;
-                }
-                // The references are grouped and their lines read here, with the ask: the
-                // reading is what the panel draws and a file read is what this thread is
-                // for.
-                let reply = places.map(|places| match want {
-                    Wanted::Definition | Wanted::Declaration => Reply::Defined(places),
-                    Wanted::Implementations | Wanted::References => {
-                        // Read by the rule the Source pane reads a file by
-                        // (`source::read_text`) and not by one of this thread's own: a
-                        // path a server answers with is file input, and two rules would
-                        // be two ideas of which files this app can show.
-                        Reply::Referenced(references::of(&places, source::read_text))
-                    }
-                });
+                let places = asked(&mut talking, |talk| {
+                    talk.places(want, &at.file, at.line, at.column)
+                })?;
                 Some(LspAnswer::Answered {
                     run,
                     id,
-                    want,
-                    reply,
+                    reply: replied(want, places, source::read_text),
                 })
             }
             LspJob::Tokens { run, file } => {
-                let talk = talking.as_mut()?;
                 // Classified here rather than on the UI thread: it is a walk of every
                 // name in the file, and this is the thread that may take its time. Done
                 // while the conversation is still in hand, the legend being its.
-                let links = talk
-                    .semantic_tokens(Path::new(&*file))
-                    .map(|tokens| links::Links::of(talk.legend(), &tokens));
-                // A conversation that ended is a server that is gone, as above.
-                if matches!(links, Err(lsp::Failure::Broken(_))) {
-                    *talking = None;
-                }
+                let links = asked(&mut talking, |talk| {
+                    talk.semantic_tokens(Path::new(&*file))
+                        .map(|tokens| links::Links::of(talk.legend(), &tokens))
+                })?;
                 Some(LspAnswer::Linked { run, file, links })
             }
             LspJob::Hover { run, id, at } => {
-                let talk = talking.as_mut()?;
-                let said = talk.hover(&at.file, at.line, at.column);
-                // A conversation that ended is a server that is gone, as above.
-                if matches!(said, Err(lsp::Failure::Broken(_))) {
-                    *talking = None;
-                }
+                let said = asked(&mut talking, |talk| {
+                    talk.hover(&at.file, at.line, at.column)
+                })?;
                 Some(LspAnswer::Hovered { run, id, said })
             }
             LspJob::Opened {
@@ -636,30 +612,24 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 file,
                 language,
             } => {
-                let talk = talking.as_mut()?;
-                // Asked before the file is read: a server that takes no documents is one
-                // this reads nothing for.
-                if !talk.opens() {
-                    return None;
-                }
                 let path = PathBuf::from(&*file);
-                let text = std::fs::read_to_string(&path).ok()?;
-                if matches!(
-                    talk.opened(&path, &language, &text),
-                    Err(lsp::Failure::Broken(_))
-                ) {
-                    *talking = None;
-                }
+                let told = asked(&mut talking, |talk| {
+                    // Asked before the file is read: a server that takes no documents is
+                    // one this reads nothing for.
+                    if !talk.opens() {
+                        return Ok(false);
+                    }
+                    let Ok(text) = std::fs::read_to_string(&path) else {
+                        return Ok(false);
+                    };
+                    talk.opened(&path, &language, &text).map(|()| true)
+                })?;
                 // Everything the server said about this file before it had it is what it
                 // could work out from the disk, which may have been nothing at all.
-                Some(LspAnswer::Reopened { run, file })
+                matches!(told, Ok(true)).then_some(LspAnswer::Reopened { run, file })
             }
             LspJob::Closed { file } => {
-                let talk = talking.as_mut()?;
-                let path = PathBuf::from(&*file);
-                if matches!(talk.closed(&path), Err(lsp::Failure::Broken(_))) {
-                    *talking = None;
-                }
+                asked(&mut talking, |talk| talk.closed(Path::new(&*file)));
                 None
             }
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
@@ -674,52 +644,69 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
     }
 }
 
+/// Whose answer a job is, for [`superseded_as`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Kind {
+    Following,
+    Listing,
+    Linking,
+    Hovering,
+    Settings,
+}
+
+/// Which consumer a job's answer is for, and [`None`] for a job that is never dropped.
+///
+/// **A kind is a consumer and not a question**: `ui::follow` takes a definition or a
+/// declaration, never both at once, and the Locations panel draws implementations or
+/// references in the one place. A hover is a third consumer and not a fifth question --
+/// the pointer crossing a line asks about every name on the way, and only the one it came
+/// to rest on is worth a round trip, but none of them is a reader taking back the
+/// definition they clicked for. The source pane holds one file's links; a directory typed
+/// a letter at a time asks for the project's settings once a keystroke, and only the last
+/// of those is about the project that is open.
+///
+/// The `match` is exhaustive on purpose, and this is the only place the rule is written:
+/// a job added with nothing said about superseding would otherwise queue behind every one
+/// of its own kind in silence.
+fn superseded_as(job: &LspJob) -> Option<Kind> {
+    match job {
+        LspJob::Ask {
+            want: lsp::Question::Followed(_),
+            ..
+        } => Some(Kind::Following),
+        LspJob::Ask {
+            want: lsp::Question::Listed(_),
+            ..
+        } => Some(Kind::Listing),
+        LspJob::Tokens { .. } => Some(Kind::Linking),
+        LspJob::Hover { .. } => Some(Kind::Hovering),
+        LspJob::ReadSettings { .. } => Some(Kind::Settings),
+        // Never dropped. The two documents are not questions: they are the difference
+        // between what the server holds and what the reader has open, and a dropped one
+        // leaves the two disagreeing for good. A start and a stop are what the reader
+        // pressed.
+        LspJob::Opened { .. } | LspJob::Closed { .. } | LspJob::Start { .. } | LspJob::Stop => None,
+    }
+}
+
 /// The jobs worth doing, of the one taken off the channel and everything queued behind it.
 ///
-/// Only the last question **of each kind** is asked: a reader clicking twice wants the
+/// Only the last question **of each kind** is kept: a reader clicking twice wants the
 /// second answer, and the first is a conversation the second would only wait behind -- but
 /// a reader who asks for a name's references has not taken back the definition they asked
-/// for, and the two are answered by different parts of the app. A kind is a **consumer**
-/// and not a question: `ui::follow` takes a definition or a declaration, never both at
-/// once, and the Locations panel draws implementations or references in the one place. The
-/// same for reading the project's settings, which a directory typed a letter at a time
-/// asks for once a keystroke and only the last of which is about the project that is open.
-/// Starting and stopping are never dropped -- they are what the reader pressed.
-///
-/// The match over `LspJob` is exhaustive on purpose: a job added with nothing said about
-/// superseding would otherwise queue behind every one of its own kind in silence.
+/// for, and the two are answered by different parts of the app. What a kind is,
+/// [`superseded_as`] says.
 pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -> Vec<LspJob> {
     let jobs: Vec<LspJob> = std::iter::once(first).chain(queued).collect();
-    let last = |wanted: &dyn Fn(&LspJob) -> bool| jobs.iter().rposition(|job| wanted(job));
-    let asked = |followed: bool| {
-        last(&|job| matches!(job, LspJob::Ask { want, .. } if want.followed() == followed))
-    };
-    let (following, listing) = (asked(true), asked(false));
-    let read = last(&|job| matches!(job, LspJob::ReadSettings { .. }));
-    // One pane shows one file, so a question about another is a question about what the
-    // reader has already left.
-    let linking = last(&|job| matches!(job, LspJob::Tokens { .. }));
-    // A bucket of its own, and the reason `LspJob::Hover` is not a fifth `Wanted`: the
-    // pointer crossing a line asks about every name on the way, and only the name it came
-    // to rest on is worth a round trip -- but none of them is a reader taking back the
-    // definition they clicked for.
-    let hovering = last(&|job| matches!(job, LspJob::Hover { .. }));
+    let mut last: HashMap<Kind, usize> = HashMap::new();
+    for (at, job) in jobs.iter().enumerate() {
+        if let Some(kind) = superseded_as(job) {
+            last.insert(kind, at);
+        }
+    }
     jobs.into_iter()
         .enumerate()
-        .filter(|(at, job)| match job {
-            LspJob::Ask { want, .. } => match want.followed() {
-                true => Some(*at) == following,
-                false => Some(*at) == listing,
-            },
-            LspJob::ReadSettings { .. } => Some(*at) == read,
-            LspJob::Tokens { .. } => Some(*at) == linking,
-            LspJob::Hover { .. } => Some(*at) == hovering,
-            // Never dropped, and not questions: they are the difference between what the
-            // server holds and what the reader has open, and a dropped one leaves the two
-            // disagreeing for good.
-            LspJob::Opened { .. } | LspJob::Closed { .. } => true,
-            LspJob::Start { .. } | LspJob::Stop => true,
-        })
+        .filter(|(at, job)| superseded_as(job).is_none_or(|kind| last.get(&kind) == Some(at)))
         .map(|(_, job)| job)
         .collect()
 }
@@ -748,6 +735,15 @@ impl LspJobs {
 
     pub(crate) fn send(&self, job: LspJob) {
         self.jobs.send(job);
+    }
+}
+
+/// A result taken apart, so an answer can be handed on and the failure behind it kept:
+/// what came back, and why nothing did.
+fn split<T>(reply: Result<T, lsp::Failure>) -> (Option<T>, Option<lsp::Failure>) {
+    match reply {
+        Ok(answer) => (Some(answer), None),
+        Err(why) => (None, Some(why)),
     }
 }
 
@@ -890,62 +886,49 @@ pub(crate) fn use_language_with(
                 write_if(hover, |waiting| waiting.answer(run, id, None));
                 write_if(language, |held| held.failed(run, why.to_string()));
             }
-            LspAnswer::Answered {
-                run,
-                id,
-                want,
-                reply,
-            } => {
+            LspAnswer::Answered { run, id, reply } => {
                 // An answer from a server that has been stopped is an answer to nobody.
                 // Bound to a `let` of its own, the writes below being of this state.
                 let mine = language.peek().run == run;
                 if !mine {
                     return;
                 }
-                // Whichever question it was, whoever asked it takes the answer, and gives
-                // up on it where there is none.
-                let take = |reply: Option<Reply>| match want {
-                    Wanted::Definition | Wanted::Declaration => {
-                        let places = match &reply {
-                            Some(Reply::Defined(places)) => places.as_slice(),
-                            _ => &[],
-                        };
-                        write_if(follow, |waiting| match reply.is_some() {
-                            true => waiting.answer(run, id, places),
-                            false => waiting.give_up(run, id),
+                // Whoever asked takes the answer, and gives up on it where there is none.
+                // The reply's own shape says which of them, so neither can be handed the
+                // other's. An answer naming nowhere is an answer: the click was a
+                // question, not a promise.
+                let why = match reply {
+                    Reply::Followed(reply) => {
+                        let (places, why) = split(reply);
+                        write_if(follow, |waiting| match &places {
+                            Some(places) => waiting.answer(run, id, places),
+                            None => waiting.give_up(run, id),
                         });
+                        why
                     }
-                    Wanted::Implementations | Wanted::References => {
-                        let found = match reply {
-                            Some(Reply::Referenced(found)) => found,
-                            _ => references::References::default(),
-                        };
+                    Reply::Listed(reply) => {
+                        let (found, why) = split(reply);
                         // Nothing found and nothing to be found both leave the panel
                         // saying so: a question that stayed pending would say it was
                         // still looking for ever.
-                        write_if(located, |waiting| waiting.answer_places(run, id, found));
+                        write_if(located, |waiting| {
+                            waiting.answer_places(run, id, found.unwrap_or_default())
+                        });
+                        why
                     }
                 };
-                let why = match reply {
-                    Ok(reply) => {
-                        // An answer naming nowhere is an answer: the click was a
-                        // question, not a promise.
-                        take(Some(reply));
-                        return;
-                    }
-                    // The server refused the question -- it is still reading the project,
-                    // or has no such file of its own. Nothing found, and not a server to
-                    // say anything about: it is answering.
-                    Err(failure @ lsp::Failure::Refused { .. }) => {
-                        log::warn!("the language server refused a question: {failure}");
-                        take(None);
-                        return;
-                    }
-                    Err(failure) => failure,
+                let Some(why) = why else {
+                    return;
                 };
+                // The server refused the question -- it is still reading the project, or
+                // has no such file of its own. Nothing found, and not a server to say
+                // anything about: it is answering.
+                if matches!(why, lsp::Failure::Refused { .. }) {
+                    log::warn!("the language server refused a question: {why}");
+                    return;
+                }
                 // What is left is a server that stopped answering, which is the one thing
                 // the control has to show.
-                take(None);
                 write_if(language, |held| held.failed(run, why.to_string()));
             }
         },
@@ -1123,7 +1106,7 @@ pub(crate) fn ask_where(
     language: State<Language>,
     jobs: &LspJobs,
     at: Lookup,
-    want: Wanted,
+    want: lsp::Question,
 ) -> Option<(u64, u64)> {
     let held = language.peek().clone();
     if !held.started() {
