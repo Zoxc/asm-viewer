@@ -181,9 +181,11 @@ at the Project view and never puts the working directory in its place. The read 
 one `read_dir` of one level per fold, the `pads_in` precedent: nothing is *analysed*, and a listing
 is what a file dialog does; a worker is the upgrade if a network mount ever makes a fold slow. Rows
 are directories first and then files, each sorted by name without regard to case, and hidden entries
-are shown; `.git` and `target` fold away with one click. There is no filter bar: a filter over a
-lazily read tree can only see what is unfolded, and the search stories are the Symbols filter and
-`notes/Goals.md`'s source search.
+are shown; `.git` and `target` fold away with one click. **A symlink is not a row**, whatever it
+points at: the kind is the one `read_dir` hands back and is never followed, which is what the walk
+does and what `source::showable` answers (`agents/Finding.md`), so a row here is a row a press
+opens. There is no filter bar: a filter over a lazily read tree can only see what is unfolded, and
+the search stories are the Symbols filter and `notes/Goals.md`'s source search.
 
 **The Search panel is the Files panel's other half** (`src/ui/search_view.rs` over
 `src/search.rs`): the Files view answers *what is here*, this one answers *where is that*. A panel
@@ -205,14 +207,16 @@ typed and a pattern it refuses are both no search.
 
 **The walk is ripgrep's** (`ignore`, `grep-searcher`, `grep-regex`), which is where the ignore
 rules, the binary detection and the line-at-a-time reading come from rather than being written here.
-Four decisions are the app's. `require_git(false)`, since a project directory is usually not a git
+Five decisions are the app's. `require_git(false)`, since a project directory is usually not a git
 working tree and the crate's default would then walk `target/` whole. The sort puts a directory's
 own files before the directories under it, which costs a `symlink_metadata` per comparison and buys
 the one thing a reader watching a list grow needs: it only ever grows at its end. `max_filesize` is
 `source::MAX_SIZE`, so the search reads only what the source pane could show and every hit can be
-opened. And a hit's line is decoded, **then** matched, **then** trimmed and cut, with the spans
-moved afterwards: matching a trimmed line changes what `^` and `\b` answer, and match offsets taken
-from raw bytes are wrong the moment a lossy decode replaces one.
+opened. `follow_links(false)` is the crate's default written out, being the app's rule and not the
+crate's: a symlink is not a project file anywhere (`agents/Finding.md`). And a hit's line is
+decoded, **then** matched, **then** trimmed and cut, with the spans moved afterwards: matching a
+trimmed line changes what `^` and `\b` answer, and match offsets taken from raw bytes are wrong the
+moment a lossy decode replaces one.
 
 **A search is a thread and a channel of its own, and cancelling one is letting the receiver go.**
 `start_search` writes state and nothing else -- the id bumped, the hits emptied -- and an effect in

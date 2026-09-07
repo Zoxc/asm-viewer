@@ -240,3 +240,25 @@ fn a_directory_that_cannot_be_read_is_a_failed_row_that_tries_again() {
         ]
     );
 }
+
+/// The Files view lists what the walk lists: a symlink is not an entry here either,
+/// whatever it points at, so no row is drawn for a file a press could not open
+/// (`source::showable`). The two are one decision, which is what the last assertion says.
+#[cfg(unix)]
+#[test]
+fn a_symlink_is_not_a_row() {
+    use std::os::unix::fs::symlink;
+
+    let root = project("links");
+    let link = root.join("Cargo.link.toml");
+    symlink(root.join("Cargo.toml"), &link).expect("the temp directory is writable");
+    symlink(root.join("src"), root.join("source")).expect("the temp directory is writable");
+    symlink(root.join("gone.rs"), root.join("broken.rs")).expect("the temp directory is writable");
+
+    let tree = FileTree::new(&root).expect("a readable directory");
+    assert_eq!(
+        described(&tree.rows()),
+        ["root/ -", "  src/ +", "  Cargo.toml"]
+    );
+    assert!(!crate::source::showable(&link));
+}

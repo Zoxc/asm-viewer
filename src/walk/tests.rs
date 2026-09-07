@@ -153,3 +153,39 @@ fn a_walk_stops_when_the_callback_says_to() {
         "a walk nobody is waiting for does not report an end"
     );
 }
+
+/// The app follows no symlink (`source::fits`), so one is not a project file here: a link
+/// to a source file, a link to a directory and a link with nothing behind it are all
+/// skipped, and the directory is not descended through the link either. What the finder
+/// offers and what a press opens are the same set.
+#[cfg(unix)]
+#[test]
+fn a_symlink_is_not_walked() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_dir("links");
+    write(&root.join("real.rs"), "");
+    write(&root.join("under/inner.rs"), "");
+    symlink(root.join("real.rs"), root.join("link.rs")).expect("the temp directory is writable");
+    symlink(root.join("under"), root.join("linked")).expect("the temp directory is writable");
+    symlink(root.join("gone.rs"), root.join("broken.rs")).expect("the temp directory is writable");
+
+    assert_eq!(walked(&root), ["real.rs", "under/inner.rs"]);
+}
+
+/// The root is the one thing that is resolved: a project directory reached through a
+/// symlink is walked whole, and it is the entries under it that are not followed. Without
+/// this the rule above would make such a project empty.
+#[cfg(unix)]
+#[test]
+fn a_project_reached_through_a_symlink_is_walked() {
+    use std::os::unix::fs::symlink;
+
+    let real = temp_dir("linked-root");
+    write(&real.join("main.rs"), "");
+    let outer = temp_dir("linked-root-through");
+    let through = outer.join("project");
+    symlink(real.to_path_buf(), &through).expect("the temp directory is writable");
+
+    assert_eq!(walked(&through), ["main.rs"]);
+}

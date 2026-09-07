@@ -152,19 +152,26 @@ impl Node {
 
 /// One directory's entries: directories first, then files, each by name without regard to
 /// case and then with it, so `Makefile` and `main.rs` sit where a reader looks for them.
-/// A symlink is whichever kind of thing it points at, and nothing is followed further than
-/// that: a cycle costs one click per level.
+///
+/// **A symlink is not an entry**, whatever it points at: the kind is the one the read
+/// hands back, and nothing here follows one. That is [`source::showable`]'s rule and the
+/// walk's (`crate::walk`), so a row here is a row a press opens rather than one drawn
+/// dead. An entry whose kind cannot be read is dropped too: nothing is known of what its
+/// row would open.
 fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
     let mut nodes: Vec<Node> = fs::read_dir(directory)?
         .filter_map(|entry| entry.ok())
-        .map(|entry| {
-            let path = entry.path();
-            Node {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                directory: path.is_dir(),
-                path,
-                children: Children::Unread,
+        .filter_map(|entry| {
+            let kind = entry.file_type().ok()?;
+            if kind.is_symlink() {
+                return None;
             }
+            Some(Node {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                path: entry.path(),
+                directory: kind.is_dir(),
+                children: Children::Unread,
+            })
         })
         .collect();
     nodes.sort_by(|a, b| {

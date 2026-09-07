@@ -6,13 +6,21 @@ project's directory share.
 **One walk, in `walk.rs`.** The `ignore` builder used to sit inside `search.rs`. It is out here
 because a second reader of the same directory arrived: a file the Search panel finds a hit in but
 the finder will not offer, or the other way round, is the app telling a reader two things about
-one project. `require_git(false)`, the source pane's size bound and the order a directory's
-entries come back in are settled once, and `search::search` and `walk::walk_files` both take
-them. `Found` — the path, the path written from the project's directory with `/` separators, and
+one project. `require_git(false)`, the source pane's size bound, symlinks left unfollowed and the
+order a directory's entries come back in are settled once, and `search::search` and
+`walk::walk_files` both take them. `Found` — the path, the path written from the project's
+directory with `/` separators, and
 where the name starts in it — is built on the walking thread, because it is what every keystroke
 is matched against and taking a path apart per file per character is work the match should not
 be doing. It never leaves that side: the finder's worker holds the walk, and only the rows a
 query picked out cross to the UI.
+
+**A symlink is not a project file.** `source::fits` asks `symlink_metadata` and refuses one, the
+walk does not follow one, and the Files view drops one from a level it reads (`agents/Sidebar.md`).
+One rule in three places rather than three rules: a symlinked source file used to be invisible to
+the finder and to Search and openable from a Files row, which is the app saying two things about
+one file. The project's root is still resolved, so a project reached through a symlinked directory
+is walked whole; it is the entries under it that are taken as they are found.
 
 **Characters in order, not a regex.** `fuzzy.rs` is its own module and not a fourth toggle on
 `filter.rs`: a filter bar asks whether a name *contains* a pattern and compiles to one

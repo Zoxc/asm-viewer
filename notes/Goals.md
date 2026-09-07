@@ -487,6 +487,15 @@ leaves this list when it is. That is a move made on request, like everything els
   opened or opens another, which is the same question as what a double-click on a row
   already showing means.
 
+- [x] One answer about a symlink wherever a file is reached from. A symlinked source file
+  was skipped by the file finder and by the Search panel, which walk the project's
+  directory with `ignore` and do not follow one, and opened from a Files view row, which
+  reads the directory itself and gated the press on `source::showable` -- so one file was
+  invisible in two places and openable in a third. It is skipped everywhere now:
+  `source::fits` asks `symlink_metadata`, which answers about the path and not what it
+  points at, and the Files view drops a symlink from a level it reads. The project's own
+  root is still resolved, so a project reached through a symlinked directory is read whole.
+
 ## Projects
 
 - [?] Maybe store LSP output in a more compact index given we expect source to not be modified?

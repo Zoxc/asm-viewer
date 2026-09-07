@@ -28,6 +28,11 @@ pub fn walker(root: &Path) -> Walk {
         // `ignore`'s default is to read `.gitignore` only inside a git working tree, so
         // without this a project directory that is not one has its `target/` walked whole.
         .require_git(false)
+        // Written out rather than left to the default, being the app's rule and not the
+        // crate's: no symlink is followed anywhere (`source::fits`), so what is offered
+        // here is what a press on it would open. The root itself is still resolved, so a
+        // project reached through a symlinked directory is walked whole.
+        .follow_links(false)
         // The bound the source pane reads by: a file it would refuse to show is a file no
         // hit in it could open, and one the finder could not open either.
         .max_filesize(Some(crate::source::MAX_SIZE))
@@ -78,12 +83,14 @@ pub enum WalkEvent {
 
 /// Walk `root` and report every file under it that the rules above allow.
 ///
-/// Directories are not reported and neither is anything that is not a plain file: what
-/// this answers is which files a reader could open, and the tree they sit in is the Files
-/// view's question, not this one.
+/// Directories are not reported and neither is anything that is not a plain file --
+/// a symlink included, whatever it points at: what this answers is which files a reader
+/// could open, and the tree they sit in is the Files view's question, not this one.
 pub fn walk_files(root: &Path, emit: &mut dyn FnMut(WalkEvent) -> ControlFlow<()>) {
     for entry in walker(root).flatten() {
-        // An entry whose kind is unknown is one `ignore` could not stat, so it is skipped.
+        // The entry's own kind, the walk following no symlink, so a symlink fails this
+        // as it fails `source::showable`. An entry whose kind is unknown is one `ignore`
+        // could not stat, and is skipped too.
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }

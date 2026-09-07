@@ -317,8 +317,8 @@ pub fn read_text(path: &Path) -> Option<String> {
     contents(path, MAX_SIZE).map(|(_, text)| text)
 }
 
-/// Whether [`load`] would read `path`: a regular file within [`MAX_SIZE`], asked of the
-/// metadata and never of the bytes.
+/// Whether [`load`] would read `path`: a regular file within [`MAX_SIZE`], and not a
+/// symlink to one. Asked of the metadata and never of the bytes.
 ///
 /// The gate the UI puts in front of opening a file as source, and [`contents`]' own first
 /// step, so the two cannot drift apart: a row opens because the reader would read it.
@@ -331,10 +331,18 @@ pub fn showable(path: &Path) -> bool {
 /// `is_file` is asked before the size, and both before any read: a directory opens happily
 /// on Linux and a fifo blocks the reader until someone writes to it, and neither may reach
 /// a UI thread.
+///
+/// **`symlink_metadata` and not `metadata`**: this answers about the path itself, so a
+/// symlink is not a file here whatever it points at. **The app follows none anywhere**,
+/// and this is where that is written. The walk of a project's directory (`crate::walk`)
+/// and the Files view's read of one level (`crate::files`) list no symlink to match, so a
+/// file is offered by all three or by none. Not following also costs one `lstat` on a
+/// broken link or a loop, where following would chase the loop to the kernel's limit for
+/// the same answer.
 fn fits(path: &Path, max_size: u64) -> bool {
     #[cfg(test)]
     TOUCHES.with(|touches| touches.set(touches.get() + 1));
-    fs::metadata(path)
+    fs::symlink_metadata(path)
         .map(|metadata| metadata.is_file() && metadata.len() <= max_size)
         .unwrap_or(false)
 }

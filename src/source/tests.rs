@@ -68,6 +68,37 @@ fn only_a_regular_file_within_the_bound_is_shown() {
     assert!(!fits(&missing, u64::MAX));
 }
 
+/// The app follows no symlink. `fits` asks about the path itself, so a link to a file the
+/// pane would happily read is refused as the link it is -- the rule the walk and the Files
+/// view keep to as well, by listing no symlink.
+///
+/// The broken link and the pair pointing at each other are the other half: a link is file
+/// input, and the answer is no off one `lstat` rather than a chase or a panic.
+#[cfg(unix)]
+#[test]
+fn a_symlink_is_not_shown_whatever_it_points_at() {
+    use std::os::unix::fs::symlink;
+
+    let real = write("linked.rs", b"fn main() {}\n");
+    let link = temp_path("link.rs");
+    symlink(&*real, &*link).expect("the temp directory is writable");
+
+    assert!(fits(&real, MAX_SIZE));
+    assert!(!fits(&link, MAX_SIZE));
+    // And the read behind the gate, so a caller that skipped it gets the same answer.
+    assert!(read_text(&link).is_none());
+
+    let broken = temp_path("broken.rs");
+    symlink(temp_path("nothing.rs").to_path_buf(), &*broken)
+        .expect("the temp directory is writable");
+    assert!(!fits(&broken, MAX_SIZE));
+
+    let (first, second) = (temp_path("loop-a.rs"), temp_path("loop-b.rs"));
+    symlink(second.to_path_buf(), &*first).expect("the temp directory is writable");
+    symlink(first.to_path_buf(), &*second).expect("the temp directory is writable");
+    assert!(!fits(&first, MAX_SIZE));
+}
+
 /// `read_text` is the pane's rule without the cache, so what the pane refuses it refuses:
 /// a language server answering with a directory must not open it.
 #[test]
