@@ -412,6 +412,16 @@ impl EditedFont {
 #[derive(Clone, Copy)]
 pub(crate) struct Prefs(pub(crate) State<EditedSettings>);
 
+/// What the Shortcuts page's box is filtering by. A root context and not state inside the
+/// page, for [`Prefs`]'s reason twice over: a page is a tab that may not be open, and only
+/// the tab on screen is mounted -- so a filter owned by the page would be emptied by a
+/// glance at another tab, which is exactly when a reader looks a gesture up.
+///
+/// Not saved with the session. It is what the reader is looking for now, and a box that
+/// came back filtered from a restart would read as a page with most of its rows missing.
+#[derive(Clone, Copy)]
+pub(crate) struct Shortcuts(pub(crate) State<Filter>);
+
 /// Where each file that would not parse was moved to, until the reader has been told: what
 /// [`RescuedPopup`] draws, and empty for every run in which nothing was moved.
 ///

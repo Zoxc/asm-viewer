@@ -27,6 +27,7 @@ mod search;
 mod section;
 mod settings;
 mod shared;
+mod shortcuts;
 mod shutdown;
 mod source;
 mod store;

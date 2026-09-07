@@ -431,15 +431,6 @@ leaves this list when it is. That is a move made on request, like everything els
   it names arrives — which also means deciding what such a tab does if the load finishes and the
   object never comes, where the answer is probably the same drop the restore does now, only
   later and visibly.
-- [ ] A shortcuts panel, listing every key and every mouse gesture the app answers to. There
-  is no way to find out what the app does today short of reading the source: Ctrl+C, Ctrl+A and
-  Escape in the two code panes, the mouse's side buttons going back and forward, shift-click
-  reaching a selection out, right-click's menus, and whatever the keyboard goal below adds.
-  A view like Settings, listing them by the view each belongs to. The one decision is whether
-  the list is written out by hand — honest, and wrong the first time someone adds a binding
-  without touching it — or generated from the handlers, which would mean bindings become data
-  the handlers read rather than matches they are written as. That refactor is the real content
-  of this item, and it is worth doing only if the keyboard goal below wants it too.
 - [ ] Reach the panels from the keyboard. Only the code panes answer to more than one key: the
   tab chips are pointer targets, a focused list has a cursor in neither sense — no row is
   current, and nothing moves between rows — and Ctrl+F goes from a list to the box over it and

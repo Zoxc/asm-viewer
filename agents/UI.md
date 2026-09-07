@@ -129,11 +129,28 @@ at all, so a tab moved along the bar does not re-render the window. The recents 
 list that grew after it was laid out would hang off the side of the window
 (`notes/upstream/freya.md`).
 
+**The Shortcuts page's list is written by hand** (`src/shortcuts.rs`,
+`src/ui/shortcuts_view.rs`). The goal that asked for it offered the other answer too: make
+bindings data the handlers read rather than matches they are written as, and generate the page
+from that. It is a refactor of every handler in the app, and it buys nothing until something
+else wants bindings as data -- the goal about reaching the panels from the keyboard, which is
+not started. So the list is written out, and the module says at the top that nothing checks it.
+The three chord predicates (`is_find_chord` and its two neighbours) are the only bindings that
+are already data, and a test over those three alone would be worse than none: it reads as the
+list having been checked when forty-odd rows were not.
+
+The rows are handed to the view as `&'static Gesture`, which is why `SECTIONS` is a `static`
+and not a `const` -- a `const` is a value copied into each place it is named rather than one
+with an address. The page is a plain `ScrollView`, as Settings and Debug are: a few dozen rows
+built into the binary need no virtual list, and outside one a row is free to be as tall as its
+text. Its filter box carries the same `on_pre_key_down` `FilterBar` does, declining the app's
+three chords, or the page that names Ctrl+P would be the one place Ctrl+P typed a `p`.
+
 **The window has a body and the body has two shapes** (`WindowBody`, `src/ui/no_project.rs`).
 With a project it is the sidebar beside `ContentArea`, which is what the app has always been.
 With none it is one screen, and no sidebar at all -- that one *is* a project's. The tab bar
-comes back for a page, Settings and the Scratchpad being nobody's project's, and goes again
-with the last of them. A component and not a
+comes back for a page that is nobody's project's, and goes again with the last of them. A
+component and not a
 `match` in `app()`, for two reasons that are both about the root: `Proj` is written by every
 keystroke in the Project view's boxes and the root must not re-render for those, so the read is
 a **memo** over the one thing the branch is about; and `app()` is mounted by no test, so a

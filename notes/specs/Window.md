@@ -7,8 +7,7 @@ server's control, and the back and forward chevrons.
 
 ## The menu
 
-At the very left. The ways in and out of a project, and under them Project, Settings and the
-Scratchpad.
+At the very left. The ways in and out of a project, and under them the app's pages.
 
 - "Open a project..." asks for a project file.
 - "Open recent" lists the projects the app has been in, most recent first, each by its name;
@@ -33,8 +32,8 @@ Delete there instead.
 The window is the top bar and a screen under it: no sidebar, no panes. The screen offers the
 menu's ways to open a project, with the recent projects under them.
 
-The bar keeps its menu, without Project, and the rest of it is dim. Settings and the
-Scratchpad open as tabs, so the tab bar comes back for them and goes when the last one closes.
+The bar keeps its menu, without Project, and the rest of it is dim. The other pages open as
+tabs, so the tab bar comes back for them and goes when the last one closes.
 
 ## Tooltips
 

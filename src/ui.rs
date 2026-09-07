@@ -62,6 +62,7 @@ pub(crate) use crate::scratchpad::{
 };
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
+pub(crate) use crate::shortcuts;
 pub(crate) use crate::source::{self, showable, SourceFile};
 pub(crate) use crate::store::{self, Store};
 pub(crate) use crate::tabs::{Page, Strip, Tab};
@@ -145,6 +146,8 @@ mod session;
 pub(crate) use session::*;
 mod settings_view;
 pub(crate) use settings_view::*;
+mod shortcuts_view;
+pub(crate) use shortcuts_view::*;
 mod sidebar;
 pub(crate) use sidebar::*;
 mod source_view;
@@ -415,6 +418,9 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     use_keyboard_asked(keyboard);
     use_provide_context(|| Follows(State::create(HashMap::new())));
     let visits = use_provide_context(|| Visited(State::create(Visits::default()))).0;
+    // The Shortcuts page's box. Provided here for the reason the type gives: the page is
+    // unmounted whenever another tab is on screen.
+    use_provide_context(|| Shortcuts(State::create(Filter::default())));
     let bookmarks = use_provide_context(|| Bookmarked(State::create(Bookmarks::default()))).0;
     let landing = use_provide_context(|| Land(State::create(None))).0;
     let plant = use_provide_context(|| Plant(State::create(None))).0;

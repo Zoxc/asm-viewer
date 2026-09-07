@@ -606,6 +606,9 @@ macro_rules! project_states {
         // Likewise: every pane registers its focusable box here, and every chip asks it
         // whether the keyboard is in the tab.
         $runner.provide_root_context(|| Keyboard(State::create(Keys::default())));
+        // Likewise: the Shortcuts page's box is at the root, since only the tab on screen
+        // is mounted.
+        $runner.provide_root_context(|| Shortcuts(State::create(Filter::default())));
         // Likewise: both panes' bars read it, and `DocumentBody` asks it which panes
         // there are. `PadFollows` beside it because one control asks both -- the toggle
         // is the same control on a document's bar and in the Scratchpad's heading row.
@@ -2331,8 +2334,8 @@ fn the_tab_on_screen_is_marked_and_the_mark_says_where_the_keyboard_is() {
     );
 }
 
-/// The menu at the top left is the whole of the way back to a closed page, so it lists all
-/// three whether or not they are open, marks the ones that are, and opens a closed one
+/// The menu at the top left is the whole of the way back to a closed page, so it lists them
+/// whether or not they are open, marks the ones that are, and opens a closed one
 /// beside the tab on screen. It is mounted alone: where it sits in the toolbar is not what
 /// this is about.
 
@@ -2806,6 +2809,102 @@ fn the_ui_threads_panic_button_panics_on_the_ui_thread() {
         ),
     );
     settle(&mut test);
+}
+
+/// The Shortcuts page draws the list `crate::shortcuts` holds, each gesture under the
+/// place it applies. The page is one press away from the menu and the menu is pinned
+/// above, so what is left is that the body under it is the list and not an empty rect.
+#[test]
+fn the_shortcuts_page_draws_each_gesture_under_the_place_it_applies() {
+    let (mut test, _states) = TestingRunner::new(
+        || page_body(Page::Shortcuts),
+        (700., 500.).into(),
+        project_states!(),
+        1.,
+    );
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    let first = &shortcuts::SECTIONS[0];
+    for text in [first.place, first.gestures[0].keys, first.gestures[0].does] {
+        assert!(
+            drawn.iter().any(|label| label == text),
+            "{text:?} is not on the page: {drawn:?}"
+        );
+    }
+}
+
+/// **A section the filter emptied is not drawn at all.** A heading with nothing under it
+/// says the app answers to nothing in that place, which is a lie on nearly every pattern.
+#[test]
+fn the_filter_drops_a_section_with_no_row_left() {
+    let (mut test, _states) = TestingRunner::new(
+        || page_body(Page::Shortcuts),
+        (700., 500.).into(),
+        project_states!(),
+        1.,
+    );
+    settle(&mut test);
+
+    let places: Vec<String> = shortcuts::SECTIONS
+        .iter()
+        .map(|section| section.place.to_owned())
+        .collect();
+    let drawn = labels(&test);
+    let missing: Vec<&String> = places
+        .iter()
+        .filter(|place| !drawn.contains(place))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "not drawn before the filter: {missing:?}"
+    );
+
+    let box_at = centre_of(&test, "Filter");
+    press_at(&mut test, box_at);
+    settle(&mut test);
+    // The wheel over the tab bar is the one row in the list that says it.
+    test.write_text("Scroll the bar");
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    let kept: Vec<&String> = places
+        .iter()
+        .filter(|place| drawn.contains(place))
+        .collect();
+    assert_eq!(kept, [&"The tab bar".to_owned()], "the places left");
+}
+
+/// **The box declines the chords the page itself names.** An `Input` types any character
+/// it has no chord of its own for, so without this the page that tells the reader about
+/// Ctrl+P is the one place in the app where Ctrl+P puts a `p` in a box instead.
+#[test]
+fn the_filter_box_declines_the_chords_the_page_names() {
+    let (mut test, _states) = TestingRunner::new(
+        || page_body(Page::Shortcuts),
+        (700., 500.).into(),
+        project_states!(),
+        1.,
+    );
+    settle(&mut test);
+
+    let box_at = centre_of(&test, "Filter");
+    press_at(&mut test, box_at);
+    settle(&mut test);
+    // A pattern nothing answers to, so what the box holds is the only place it is drawn.
+    test.write_text("zzz");
+    settle(&mut test);
+    key_with(&mut test, Key::Character("p".into()), Modifiers::CONTROL);
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|label| label == "zzz"),
+        "the box lost what was typed: {drawn:?}"
+    );
+    assert!(
+        !drawn.iter().any(|label| label == "zzzp"),
+        "Ctrl+P was typed into the box as a `p`"
+    );
 }
 
 /// Every open tab's chip, drawn as the bar draws them: what a press on one has to answer

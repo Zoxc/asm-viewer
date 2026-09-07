@@ -8,7 +8,7 @@ use crate::docs::DocId;
 
 /// One of the app's own pages: a tab that is not a document.
 ///
-/// Three of them, one of a kind, each drawn from state that lives at the root of the app
+/// Each is one of a kind, and each is drawn from state that lives at the root of the app
 /// rather than in the tab -- so closing one loses nothing, and it comes back as it was.
 ///
 /// [`Page::stored`] and not [`Page::title`] is what a session is written with: the title is
@@ -17,6 +17,10 @@ use crate::docs::DocId;
 pub enum Page {
     Project,
     Settings,
+    /// Every key and every mouse gesture the app answers to (`src/shortcuts.rs`). Beside
+    /// Settings, both being a page a reader opens to find out how the app is worked
+    /// rather than to read a binary with.
+    Shortcuts,
     Scratchpad,
     /// The ways to make the app misbehave on purpose, so that what it does about it can
     /// be looked at (`src/ui/debug_view.rs`). Last in every list here, being the one page
@@ -28,13 +32,20 @@ impl Page {
     /// Every page, in the order a menu lists them. Whether a menu lists the last of them
     /// is the menu's own question, and is asked of the keyboard rather than of this
     /// (`src/ui/strip.rs`).
-    pub const ALL: [Page; 4] = [Page::Project, Page::Settings, Page::Scratchpad, Page::Debug];
+    pub const ALL: [Page; 5] = [
+        Page::Project,
+        Page::Settings,
+        Page::Shortcuts,
+        Page::Scratchpad,
+        Page::Debug,
+    ];
 
     /// What the tab is called.
     pub fn title(self) -> &'static str {
         match self {
             Page::Project => "Project",
             Page::Settings => "Settings",
+            Page::Shortcuts => "Shortcuts",
             Page::Scratchpad => "Scratchpad",
             Page::Debug => "Debug",
         }
@@ -45,6 +56,7 @@ impl Page {
         match self {
             Page::Project => "project",
             Page::Settings => "settings",
+            Page::Shortcuts => "shortcuts",
             Page::Scratchpad => "scratchpad",
             Page::Debug => "debug",
         }

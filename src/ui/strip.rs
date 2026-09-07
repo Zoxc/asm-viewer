@@ -373,6 +373,7 @@ fn page_icon(page: Page) -> Element {
     match page {
         Page::Project => bar_icon(("folder-open", lucide::folder_open())),
         Page::Settings => bar_icon(("settings", lucide::settings())),
+        Page::Shortcuts => bar_icon(("keyboard", lucide::keyboard())),
         Page::Scratchpad => bar_icon(("notebook-pen", lucide::notebook_pen())),
         Page::Debug => bar_icon(("bug", lucide::bug())),
     }
@@ -384,6 +385,7 @@ pub(crate) fn page_body(page: Page) -> Element {
     match page {
         Page::Project => ProjectTab.into_element(),
         Page::Settings => SettingsTab.into_element(),
+        Page::Shortcuts => ShortcutsTab.into_element(),
         Page::Scratchpad => ScratchpadTab.into_element(),
         Page::Debug => DebugTab.into_element(),
     }

@@ -126,6 +126,20 @@ pub(crate) fn field_label_width() -> f32 {
     fonts().ui.size() * 6.0
 }
 
+/// How wide the column of gestures on the Shortcuts page is.
+///
+/// [`field_label_width`]'s reasoning, against the **fixed-width** font: the gestures are
+/// drawn in it, so the column follows it rather than the interface font beside them.
+///
+/// Fifteen times the size, which is what the longest gesture takes: they run to 24
+/// characters (`Escape, or click outside`), and a fixed-width character is about six
+/// tenths of its size wide. The column is what the gestures need and not a share of the
+/// page, because a gesture cut in half is the one thing on the row a reader cannot guess
+/// the rest of.
+pub(crate) fn gesture_width() -> f32 {
+    fonts().mono.size() * 15.0
+}
+
 /// How wide the Scratchpad view's list of pads is.
 ///
 /// A fixed width and not a `ResizableContainer`, which is what the two splits in this app

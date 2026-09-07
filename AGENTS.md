@@ -137,6 +137,8 @@ command.
   programs each platform is asked with, in the order they are tried, and the thread they
   are run on.
 - `src/settings.rs` — the user's own settings (`settings.toml`): the font overrides and the theme.
+- `src/shortcuts.rs` — every key and every mouse gesture the app answers to, under the place
+  each applies: the list the Shortcuts page draws, written by hand.
 - `src/shutdown.rs` — everything that has to happen before the process ends, in the one
   order both the window's close hook and the panic hook's shutdown thread run it in: the
   projects flushed, then every program the app started stopped.
@@ -280,6 +282,8 @@ command.
 - `src/ui/no_project.rs` — the window with no project open: what is drawn under the top bar
   either way, and the screen that offers the ways into one.
 - `src/ui/settings_view.rs` — the settings page: the theme choice and the two font overrides.
+- `src/ui/shortcuts_view.rs` — the Shortcuts page: the gestures under the place each applies,
+  and the box that filters them.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
 - `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes.
@@ -294,10 +298,10 @@ command.
   the drain policy that supersedes and the task that takes the answers, in the two shapes
   every worker in the app is one of.
 
-Eleven `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
-`project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `pad`, `analyzed`, `building`,
-`language`, `linking`, `strip`); `Panel` is imported by name beside the glob,
-freya's prelude having one of its own. The rest is in `agents/UI.md`.
+Twelve `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
+`project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `shortcuts_view`, `pad`,
+`analyzed`, `building`, `language`, `linking`, `strip`); `Panel` is imported by name beside
+the glob, freya's prelude having one of its own. The rest is in `agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's
 tests are a file of their own**: `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at

@@ -3,13 +3,15 @@
 The tab bar sits over the documents; it cannot be folded or split, and a tab cannot be dragged
 out of it.
 
-A tab is one open document — a function, an object or a source file — or one of Project,
-Settings and the Scratchpad. A document tab is assembly-driven, showing a symbol, or
-source-driven, showing a file; an icon tells them apart. Clicking a tab switches to it and
-focuses it. Its × closes it and switches to the neighbour; closing the last shows the
-placeholder, and with no project open takes the bar with it. The × has a square target with
-four pixels of air around it, and is highlighted under the pointer. The tabs are saved with
-the session in their order.
+A tab is one open document — a function, an object or a source file — or one of the app's pages.
+A document tab is assembly-driven, showing a symbol, or source-driven, showing a file; an
+icon tells them apart.
+Clicking a tab switches to it and focuses it.
+Its × closes it and switches to the neighbour; closing the last shows the placeholder, and
+with no project open takes the bar with it.
+The × has a square target with four pixels of air around it, and is highlighted under the
+pointer.
+The tabs are saved with the session in their order.
 
 The tab on screen has a two-pixel rule along its top: lit while the tab has focus, dim
 otherwise. Every other tab's name is fainter.
@@ -27,9 +29,10 @@ one activates it, and each row's × closes that tab.
 A tab's context menu has "Close" and "Close other tabs", which closes every other tab whatever
 its kind. If the tab on screen was closed, the kept tab is shown.
 
-## Project, Settings and the Scratchpad
+## The pages
 
-The three are tabs. A menu at the top left of the window lists them, the open ones marked.
+Project, Settings, Shortcuts and the Scratchpad. Each is a tab, and a menu at the top left of
+the window lists them, the open ones marked.
 Picking a closed one opens it beside the tab on screen, and picking an open one shows it. A
 closed one keeps its state: a build or a run it started goes on, and it comes back as it was.
 
