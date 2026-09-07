@@ -92,26 +92,18 @@ enum Part<'a> {
     Annotation(&'a str),
 }
 
-/// The segments of a path, split on the `::` that are not inside a group. Each comes back
-/// whole, generic arguments and all; [`reduce`] is what makes a name of one.
+/// The segments of a path, split on the `::` outside every group and quoted run. Each
+/// comes back whole, generic arguments and all; [`reduce`] is what makes a name of one.
 fn split_path(name: &str) -> Vec<&str> {
     let bytes = name.as_bytes();
     let mut segments = Vec::new();
     let mut start = 0;
-    let mut at = 0;
-    while at < bytes.len() {
-        if let Some(end) = operator_token(name, at) {
-            at = end;
-            continue;
-        }
-        match bytes[at] {
-            b'<' | b'(' | b'[' => at = skip_group(name, at),
-            b':' if bytes.get(at + 1) == Some(&b':') => {
-                segments.push(&name[start..at]);
-                at += 2;
-                start = at;
-            }
-            _ => at += 1,
+    for (at, top) in top_level(name) {
+        // Both bytes of a `::` are yielded, so a colon before `start` is the second of a
+        // pair already cut on.
+        if matches!(top, Top::Byte(b':')) && at >= start && bytes.get(at + 1) == Some(&b':') {
+            segments.push(&name[start..at]);
+            start = at + 2;
         }
     }
     segments.push(&name[start..]);
@@ -201,44 +193,24 @@ fn inside(group: &str) -> &str {
     &group[1..if closed { end - 1 } else { end }]
 }
 
-/// The two sides of a `<Type as Trait>`, split on the ` as ` that is not inside a group --
-/// `<<A as B>::C as D>` has two and only the second one splits it.
+/// The two sides of a `<Type as Trait>`, split on the ` as ` outside every group and
+/// quoted run -- `<<A as B>::C as D>` has two and only the second one splits it.
 fn split_as(inside: &str) -> Option<(&str, &str)> {
     const AS: &str = " as ";
-    let bytes = inside.as_bytes();
-    let mut at = 0;
-    while at < bytes.len() {
-        if let Some(end) = operator_token(inside, at) {
-            at = end;
-            continue;
-        }
-        match bytes[at] {
-            b'<' | b'(' | b'[' => at = skip_group(inside, at),
-            _ if inside.as_bytes()[at..].starts_with(AS.as_bytes()) => {
-                return Some((&inside[..at], &inside[at + AS.len()..]))
-            }
-            _ => at += 1,
-        }
-    }
-    None
+    top_level(inside)
+        .find(|(at, top)| {
+            matches!(top, Top::Byte(b' ')) && inside.as_bytes()[*at..].starts_with(AS.as_bytes())
+        })
+        .map(|(at, _)| (&inside[..at], &inside[at + AS.len()..]))
 }
 
 /// A segment up to the first group that hangs off it: the generic arguments, the C++
 /// argument list, and with them the ` const` and the `&` that follow one.
 fn head(segment: &str) -> &str {
-    let bytes = segment.as_bytes();
-    let mut at = 0;
-    while at < bytes.len() {
-        if let Some(end) = operator_token(segment, at) {
-            at = end;
-            continue;
-        }
-        match bytes[at] {
-            b'<' | b'(' | b'[' => return &segment[..at],
-            _ => at += 1,
-        }
+    match top_level(segment).find(|(_, top)| matches!(top, Top::Group { .. })) {
+        Some((at, _)) => &segment[..at],
+        None => segment,
     }
-    segment
 }
 
 /// The last space-separated word of a segment, which is what drops a C++ return type
@@ -261,43 +233,86 @@ fn is_legacy_hash(segment: &str) -> bool {
     hex.len() == 16 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// The end of the group opening at `open`, one past its closing bracket -- or the end of
-/// the string, for a name whose brackets do not balance. The three bracket kinds share
-/// one depth, since nothing here has to tell a well-formed name from a broken one.
-fn skip_group(name: &str, open: usize) -> usize {
-    let bytes = name.as_bytes();
-    let mut depth = 0usize;
-    let mut at = open;
-    while at < bytes.len() {
-        if let Some(end) = operator_token(name, at) {
-            at = end;
-            continue;
-        }
-        match bytes[at] {
-            b'"' => {
-                at = skip_string(name, at);
+/// What is at a top-level offset of a name.
+enum Top {
+    /// A byte outside every group.
+    Byte(u8),
+    /// A bracket group, yielded at the offset it opens on.
+    Group {
+        /// One past its closing bracket, or the end of the name when it never closes.
+        end: usize,
+    },
+}
+
+/// Every offset of `name` that is not inside a bracket group, a quoted run or an
+/// `operator` token, in order, with what is there: a byte, or a whole group at the offset
+/// it opens on.
+///
+/// The one walk in this file. The three bracket kinds share a depth, since nothing here
+/// has to tell a well-formed name from a broken one, and the rules about what does *not*
+/// open or close a group are kept here rather than once per searcher, which is where they
+/// drifted apart.
+fn top_level(name: &str) -> TopLevel<'_> {
+    TopLevel { name, at: 0 }
+}
+
+struct TopLevel<'a> {
+    name: &'a str,
+    at: usize,
+}
+
+impl Iterator for TopLevel<'_> {
+    type Item = (usize, Top);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let bytes = self.name.as_bytes();
+        let mut depth = 0usize;
+        let mut open = 0;
+        while self.at < bytes.len() {
+            let at = self.at;
+            if let Some(end) = operator_token(self.name, at) {
+                self.at = end;
                 continue;
             }
-            b'<' | b'(' | b'[' => depth += 1,
-            // The `>` of a `->`: `fn(*mut c_void) -> *mut c_void` is a type, and its
-            // arrow closes nothing.
-            b'>' if at > open && bytes[at - 1] == b'-' => {}
-            b'>' | b')' | b']' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return at + 1;
+            self.at = at + 1;
+            match bytes[at] {
+                b'"' => self.at = skip_string(self.name, at),
+                b'<' | b'(' | b'[' => {
+                    if depth == 0 {
+                        open = at;
+                    }
+                    depth += 1;
                 }
+                // The `>` of a `->`: `fn(*mut c_void) -> *mut c_void` is a type, and its
+                // arrow closes nothing.
+                b'>' if depth > 0 && at > 0 && bytes[at - 1] == b'-' => {}
+                b'>' | b')' | b']' if depth > 0 => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((open, Top::Group { end: at + 1 }));
+                    }
+                }
+                byte if depth == 0 => return Some((at, Top::Byte(byte))),
+                _ => {}
             }
-            _ => {}
         }
-        at += 1;
+        // A group the name never closes runs to its end.
+        (depth > 0).then_some((open, Top::Group { end: bytes.len() }))
     }
-    bytes.len()
+}
+
+/// The end of the group opening at `open`, one past its closing bracket -- or the end of
+/// the string, for a name whose brackets do not balance.
+fn skip_group(name: &str, open: usize) -> usize {
+    match top_level(&name[open..]).next() {
+        Some((_, Top::Group { end })) => open + end,
+        _ => name.len(),
+    }
 }
 
 /// Past a `"..."`, which is where an `extern "C"` in a type puts a run of anything at
-/// all. `'` is not a string here: it opens a Rust lifetime far more often than a
-/// character.
+/// all -- brackets and `::` included, none of which mean anything there. `'` is not a
+/// string here: it opens a Rust lifetime far more often than a character.
 fn skip_string(name: &str, open: usize) -> usize {
     let bytes = name.as_bytes();
     let mut at = open + 1;
@@ -312,8 +327,8 @@ fn skip_string(name: &str, open: usize) -> usize {
 }
 
 /// One past a C++ `operator` and the symbol it names, when one starts at `at`. This is
-/// what keeps `operator<<` from opening a group and `operator>` from closing one, so it
-/// is asked before every bracket in this file.
+/// what keeps `operator<<` from opening a group and `operator>` from closing one, so
+/// [`top_level`] asks it before every byte it reads.
 fn operator_token(name: &str, at: usize) -> Option<usize> {
     const KEYWORD: &str = "operator";
     /// Longest first: `<<=` must not match as `<<`.

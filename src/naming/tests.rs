@@ -214,6 +214,18 @@ fn a_function_type_inside_the_arguments_does_not_end_them() {
     );
 }
 
+/// A quoted run holds anything at all, brackets and `::` included, and it is skipped
+/// wherever it is rather than only inside a group: neither the `::` nor the ` as ` in one
+/// is a place to cut. Written by hand -- the binary only ever quotes inside a group.
+#[test]
+fn a_quoted_run_is_never_cut_on() {
+    assert_eq!(short_name("winit::extern \"a::b\" fn(u8)"), "winit::fn");
+    assert_eq!(
+        short_name("<extern \"a as b\" fn() as core::fmt::Debug>::fmt"),
+        "fn::fmt"
+    );
+}
+
 /// A name no demangler would take is drawn exactly as the file states it, the way the
 /// rest of the app draws one.
 #[test]

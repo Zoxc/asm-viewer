@@ -441,13 +441,19 @@ covered without being named here.
 It is real parsing and not a `rsplit("::")`: `::` appears inside generic arguments, `operator<<`
 writes an angle bracket that opens no group, `fn(*mut c_void) -> *mut T` writes one that closes
 none, and an `extern "C"` puts a quoted run in the middle of a type. So it is a scanner,
-framework-free with its own `tests.rs`, written against names taken out of that binary. It lives in
-the app rather than beside the demangling in `analysis`, because the crate has no use for it: it
-hands out the name the file states and the name the demangler made of it, and *how much of one to
-draw* is a question only a view has. `entry_text` is where it is applied and is the one spelling a
-document tab and a History row share; `entry_name` beside it is the whole name, which is what a
-tooltip says where the two differ and what the History filter matches, so a generic argument no
-tab draws is still something a reader can search for.
+framework-free with its own `tests.rs`, written against names taken out of that binary. Those rules
+live in **one walk**, `top_level`, which hands out a name's top-level bytes and its groups whole,
+skipping whatever is inside a group, a quoted run or an `operator` token. Splitting a path on `::`,
+dividing a qualifier on ` as `, cutting a segment at its arguments and skipping a group are written
+against it. They were four loops once, and had drifted: only the last skipped a quoted run, so a
+`::` inside an `extern "C"` cut a path in two anywhere but inside a group. It lives in the app
+rather than beside the demangling in `analysis`, because the crate has no use for it: it hands out
+the name the file states and the name the demangler made of it, and *how much of one to draw* is a
+question only a view has.
+`entry_text` is where it is applied and is the one spelling a document tab and a History row
+share; `entry_name` beside it is the whole name, which is what a tooltip says where the two differ
+and what the History filter matches, so a generic argument no tab draws is still something a reader
+can search for.
 
 **Nothing in that scanner recurses.** A name is file input, and reading a `<Type as Trait>`
 qualifier used to be one call per group: a symbol of a hundred thousand `<` -- which a string table
