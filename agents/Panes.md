@@ -169,10 +169,11 @@ measured from its content first, so a label placed there takes the width of its 
 ellipsis never happens.
 
 **The bar is the collapsed state of a section**, opened by a disclosure triangle in a column of its
-own, the Objects tree's idiom down to the two glyphs, a triangle being the toggle where a name is a
-copy. What it opens is the rest of what is known: for a symbol its section, address, declared size,
-extent and the object it came from; for an object the format, the symbol count and the path. Each
-fact is a `field_row` cut to one line for the reason the names are.
+own -- the Objects tree's idiom down to the mark itself, which is `disclosure`'s
+(`src/ui/parts.rs`) -- a triangle being the toggle where a name is a copy. What it opens is the
+rest of what is known: for a symbol its section, address, declared size, extent and the object it
+came from; for an object the format, the symbol count and the path. Each fact is a `field_row` cut
+to one line for the reason the names are.
 
 **The leading pane's bar carries the control that puts the following pane away** (`PaneToggle`, in
 `src/ui/split.rs` beside the `DocumentBody` that mounts the panes), and only that bar: it names the

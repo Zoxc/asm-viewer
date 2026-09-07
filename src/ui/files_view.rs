@@ -115,7 +115,7 @@ impl Component for EntryRow {
                     ContextMenu::open_from_event(&e, menu);
                 })
                 .child(rect().width(Size::px(self.row.depth as f32 * TREE_INDENT)))
-                .child(chevron(open))
+                .child(disclosure(open))
                 .child(document_glyph(glyph))
                 .child(tree_name(self.row.name.clone(), failed)),
         )

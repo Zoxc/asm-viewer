@@ -96,7 +96,7 @@ impl Component for ArchiveRow {
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(&e, close_menu(states, path.clone()));
                 })
-                .child(chevron(open))
+                .child(disclosure(open))
                 .child(tag_label(tag))
                 .child(tree_name(self.name.clone(), self.loading))
                 // How many objects came out of this file, which under a filter is how many
@@ -197,9 +197,9 @@ impl Component for ObjectRow {
                 // The column a file row's triangle sits in, kept empty so the tags of a
                 // file and of a lone object line up; a member is indented past it.
                 .child(rect().width(Size::px(if self.member {
-                    CHEVRON_WIDTH + TREE_INDENT
+                    chevron_width() + TREE_INDENT
                 } else {
-                    CHEVRON_WIDTH
+                    chevron_width()
                 })))
                 .child(tag_label(format_tag(self.object.format)))
                 .child(tree_name_fitted(fitted, self.object.name.clone(), false)),

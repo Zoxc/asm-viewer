@@ -210,7 +210,7 @@ impl Component for SymbolBar {
             .into()],
         };
 
-        // The objects tree's own disclosure idiom, down to the glyphs: a triangle in a
+        // The objects tree's own disclosure idiom, down to the mark: a triangle in a
         // fixed column, which is the toggle where a name is a copy.
         let triangle = {
             let mut expanded = expanded;
@@ -218,7 +218,7 @@ impl Component for SymbolBar {
 
             CursorArea::new().child(
                 rect()
-                    .width(Size::px(CHEVRON_WIDTH))
+                    .width(Size::px(chevron_width()))
                     .height(Size::px(list_row_height()))
                     .main_align(Alignment::Center)
                     .maybe(hovering(), |column| {
@@ -232,12 +232,7 @@ impl Component for SymbolBar {
                             expanded.insert(tab);
                         }
                     })
-                    .child(
-                        label()
-                            .text(if open { "\u{25be}" } else { "\u{25b8}" })
-                            .color(palette().address_fg)
-                            .max_lines(1),
-                    ),
+                    .child(disclosure(Some(open))),
             )
         };
 
@@ -252,7 +247,7 @@ impl Component for SymbolBar {
             .border(bottom_hairline())
             // The triangle takes the first row's height and no more, so it sits beside the
             // demangled name rather than centred down a bar that has grown a section.
-            .child(rect().width(Size::px(CHEVRON_WIDTH)).child(triangle))
+            .child(rect().width(Size::px(chevron_width())).child(triangle))
             .child(
                 // A box of its own and not the names as the `flex` child directly: a flex
                 // child is measured from its content first, so a label placed there takes

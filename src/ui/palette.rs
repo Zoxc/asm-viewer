@@ -45,7 +45,8 @@ pub(crate) struct Palette {
     pub(crate) pair_edge: Color,
     /// The wash over the half of a panel a dragged tab would land in.
     pub(crate) drop_preview_bg: Color,
-    /// A Lucide glyph in a tab header, a step lighter than the title beside it.
+    /// A Lucide glyph in a tab header, or the disclosure triangle a list that folds draws
+    /// in its own column, a step lighter than the text beside it.
     pub(crate) icon_fg: Color,
     /// A filter toggle that is on, and one the pointer is over: two shades of the header's
     /// own grey.

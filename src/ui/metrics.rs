@@ -108,9 +108,26 @@ pub(crate) fn icon_size() -> f32 {
         .min(list_row_height() - 8.0)
 }
 
-/// The column a file row's disclosure triangle sits in, kept by every row of the objects
-/// tree so the tags line up whether or not a row has one.
-pub(crate) const CHEVRON_WIDTH: f32 = 14.0;
+/// The side of the disclosure triangle a list that folds draws: half a list row, which is
+/// 12 pixels at the app's own interface font.
+///
+/// A function of the font and not a `const`, [`list_row_height`]'s reasoning: the mark was
+/// a character in the interface font until it became an icon, so it grew with it, and an
+/// icon fixed at one size is one a reader at 16pt has to hunt for. Half a row rather than
+/// [`icon_size`], which the file glyph beside it in the Files tree takes: a triangle says
+/// which way a row folds and nothing more, so it is the smaller of the two marks on a row.
+pub(crate) fn chevron_size() -> f32 {
+    (list_row_height() / 2.0).round()
+}
+
+/// The column a row's disclosure triangle sits in, kept by every row of the list whether
+/// or not it has one, so the tags and the names line up down the list.
+///
+/// The triangle and a pixel either side, which at the app's own interface font is the 14
+/// it was fixed at.
+pub(crate) fn chevron_width() -> f32 {
+    chevron_size() + 2.0
+}
 
 /// How far an archive member is indented past the file it belongs to.
 pub(crate) const TREE_INDENT: f32 = 16.0;

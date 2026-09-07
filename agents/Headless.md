@@ -155,6 +155,13 @@ let labels: Vec<String> = test.find_many(|node, _| {
 Verified: that reads a `label().text(..)`, and the `ParagraphElement` equivalent reads
 `p.spans[..].text`, which is what an `InstructionRow` is made of.
 
+**Nothing in it reads an icon either, and downcasting does not help.** An `SvgViewer` rasterises
+its SVG into an image and hands the element tree an `image` holding a Skia handle, so two icons are
+one shape there and which one was drawn cannot be recovered. What is reachable is
+`element.accessibility().builder`, the `accesskit::Node` the app built, and an icon that has to be
+told apart is one that should be saying so there anyway: the disclosure triangles carry `expanded`,
+and `disclosures` in `ui/tests.rs` is that read back.
+
 **`is_visible()` is the honest answer to "is this on screen".** A plain `ScrollView` keeps every
 child in the tree: 40 rows in a 100px viewport are all found by `find_many`, all have real layout
 areas, and exactly the five that fit answer `true`. A `VirtualScrollView` is the other case. It only

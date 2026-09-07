@@ -182,6 +182,43 @@ pub(crate) fn name_tooltip(cut: bool, text: &str, whole: String, row: impl IntoE
     }
 }
 
+/// The disclosure triangle a row that folds draws, in the [`chevron_width`] column every
+/// row of its list keeps: the Lucide chevron, pointing down where the row is open and
+/// right where it is shut. `None` is that column with nothing in it, which is what a row
+/// that cannot fold draws.
+///
+/// An icon and not the `\u{25b8}`/`\u{25be}` characters it was, so the shape is the app's
+/// rather than whatever interface font the desktop names: it is sized against the row and
+/// not against the text, it is centred in the row instead of sitting on its baseline, and
+/// it is Lucide, as every other small mark here already is.
+///
+/// **Whether it is open is said in accessibility's own `expanded` and nowhere else.** An
+/// `SvgViewer` rasterises to an image, so which chevron it drew is not in the element tree
+/// at all; the flag is what a screen reader is told and what `disclosures`
+/// (`src/ui/tests.rs`) finds the triangles by.
+pub(crate) fn disclosure(open: Option<bool>) -> Element {
+    let side = chevron_size();
+
+    rect()
+        .width(Size::px(chevron_width()))
+        .center()
+        .map(open, |column, open| {
+            column
+                .a11y_builder(move |node| node.set_expanded(open))
+                .child(
+                    SvgViewer::new(match open {
+                        true => ("chevron-down", lucide::chevron_down()),
+                        false => ("chevron-right", lucide::chevron_right()),
+                    })
+                    .width(Size::px(side))
+                    .height(Size::px(side))
+                    .color(palette().icon_fg)
+                    .show_loader(false),
+                )
+        })
+        .into_element()
+}
+
 /// The short tag saying what kind of file a row is, in the column every row of the objects
 /// tree keeps for it.
 pub(crate) fn tag_label(tag: &str) -> impl IntoElement {
@@ -190,21 +227,6 @@ pub(crate) fn tag_label(tag: &str) -> impl IntoElement {
         .width(Size::px(TAG_WIDTH))
         .font_size(TAG_FONT_SIZE)
         .color(palette().address_fg)
-        .max_lines(1)
-}
-
-/// The disclosure triangle of a row that folds, in the column every list of them keeps
-/// for one: open, shut, or -- for a row with nothing behind it to fold -- the empty
-/// column, so the names below it still line up.
-pub(crate) fn chevron(open: Option<bool>) -> impl IntoElement {
-    label()
-        .text(match open {
-            Some(true) => "\u{25be}",
-            Some(false) => "\u{25b8}",
-            None => "",
-        })
-        .width(Size::px(CHEVRON_WIDTH))
-        .color(palette().icon_fg)
         .max_lines(1)
 }
 

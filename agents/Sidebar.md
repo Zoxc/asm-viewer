@@ -85,6 +85,17 @@ looks like part of the number. The headless test compares a 150px pane against a
 than against an absolute width, because text is really shaped under the runner and a digit measures
 whatever fonts the machine has.
 
+**The triangle is an icon**, the Lucide chevron `disclosure` (`src/ui/parts.rs`) draws, which the
+Files tree, the Search and Locations panels and the symbol bar all take from the same place. It was
+`\u{25b8}`/`\u{25be}` in the interface font, so its shape, its size and its baseline were the
+desktop's rather than the app's -- the last small mark here drawn as text. It follows the font
+anyway, and so does its column: `chevron_size` is half a list row and `chevron_width` is that and a
+pixel either side, which at the app's own interface font is the 14 the column was fixed at. A
+`const` would be a mark a reader at 21pt has to hunt for, `field_label_width`'s reasoning. What an
+icon cannot say is which one it is -- an `SvgViewer` rasterises to an image -- so open or shut is
+carried as accessibility's own `expanded` on the column, which is both what a screen reader reads
+and what the headless tests find a triangle by (`disclosures`, `src/ui/tests.rs`).
+
 **A file being read is a row before it has an object**, which is `notes/specs/Sidebar.md`'s file
 still being read. The state is on the **file**, not on an object, because an object that has not
 been parsed does not exist: the unit part-way through is the one the reader opened, the one

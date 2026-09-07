@@ -193,7 +193,7 @@ fn row_children<T: Place>(row: &Row<T>) -> Vec<Element> {
             folded,
             ..
         } => vec![
-            chevron(Some(!*folded)).into_element(),
+            disclosure(Some(!*folded)),
             tree_name(name.clone(), false).into_element(),
             label()
                 .text(count.to_string())

@@ -339,17 +339,20 @@ leaves this list when it is. That is a move made on request, like everything els
   wash a visible step from the ground it sits on, and those grounds are what this moves; and
   `text_select_bg` is translucent on purpose, so a row wash over `pane_bg` is not the colour
   the same field draws over a code pane.
-- [ ] Draw the disclosure triangles as icons, not as glyphs. A triangle is a character in
-  the interface font -- `\u{25b8}` shut and `\u{25be}` open -- in `parts::chevron`, which
-  every list that folds draws its own with, and again in the symbol bar's section
-  (`src/ui/symbol_bar.rs`). So the shape is the font's rather than the app's: it is sized and
-  coloured as text, it sits on the text baseline instead of in the row's middle, and it
-  changes with whatever interface font the desktop or the settings page names. The rest
-  of the app's small marks are already lucide icons through `icons-lucide`, `chevron_right`
-  and `chevron_down` among them, so the fix is those two sites drawing one of those in the
-  `CHEVRON_WIDTH` column they already keep. The decisions are what size an icon is against
-  `list_row_height`, and that the headless tests find a triangle by its label text
-  (`triangle_of`, `src/ui/tests.rs`), so each has to be given another way to point at one.
+- [x] Draw the disclosure triangles as icons, not as glyphs. All five sites -- the Objects
+  tree's archive rows, the Files tree, the Search and Locations panels and the symbol bar's
+  section -- draw one `disclosure` (`src/ui/parts.rs`) now: the lucide `chevron_down` or
+  `chevron_right` in `icon_fg`, centred in the column, and nothing for a row that cannot
+  fold. Each spelled its own triangle as a character in the interface font before this
+  (`\u{25b8}` shut, `\u{25be}` open), so the shape was the font's rather than the app's --
+  sized and coloured as text, sitting on the text baseline instead of in the row's middle,
+  and changing with whatever the desktop or the settings page named. The mark is half a
+  list row and the column is that and a pixel either side (`chevron_size` and
+  `chevron_width`, `src/ui/metrics.rs`), so both follow the interface font where the column
+  was a `const` 14 -- which is what they still come to at the app's own font. Which chevron
+  was drawn is not in the element tree at all, an `SvgViewer` rasterising to an image, so
+  the column carries accessibility's own `expanded`: what a screen reader reads, and what
+  the headless tests find a triangle by (`disclosures`, `src/ui/tests.rs`).
 
 - [x] Count a column in UTF-8 bytes, not UTF-16 units, everywhere but the drawing. The
   handshake asks for `positionEncoding: utf-8` and converts where a server keeps UTF-16, so

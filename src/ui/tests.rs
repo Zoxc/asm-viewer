@@ -15,7 +15,7 @@ use crate::search::{Hit, SearchEvent, SearchQuery};
 use crate::source::Seeded;
 use crate::temporary::Temporary;
 use crate::walk::WalkEvent;
-use freya_testing::TestingRunner;
+use freya_testing::{TestingNode, TestingRunner};
 
 /// Three rows wired exactly the way the two panes are: the press that starts a run, the
 /// `pointer_move` that sweeps it, and the release watched globally at the root, because the
@@ -5115,18 +5115,18 @@ fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
         listed,
         [
             "3 references to helper",
-            "\u{25be}",
             "main.rs",
             "2",
             "2",
             "7",
-            "\u{25be}",
             "other.rs",
             "1",
             "9",
         ],
         "{drawn:?}"
     );
+    // The fold each file row draws, which is an icon and so says nothing in the text.
+    assert_eq!(disclosures(&test), [true, true], "a file came up folded");
 
     // The file row folds its uses away, and the count stays.
     let file_row = centre_of(&test, "main.rs");
@@ -5142,15 +5142,18 @@ fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
             "3 references to helper",
             // Folded, and its count stays: the heading and the row both count what was
             // found and not what is drawn.
-            "\u{25b8}",
             "main.rs",
             "2",
-            "\u{25be}",
             "other.rs",
             "1",
             "9",
         ],
         "the fold did not take main.rs's uses away"
+    );
+    assert_eq!(
+        disclosures(&test),
+        [false, true],
+        "the pressed row's triangle did not turn"
     );
 }
 
@@ -10383,12 +10386,16 @@ fn an_object_tab_is_named_by_its_object() {
     );
 }
 
-/// The bar's disclosure triangle, wherever it was laid out.
+/// The bar's disclosure triangle, wherever it was laid out, as a point to press.
 fn triangle_of(test: &TestingRunner) -> (f64, f64) {
-    match label_area(test, "\u{25b8}") {
-        Some(_) => centre_of(test, "\u{25b8}"),
-        None => centre_of(test, "\u{25be}"),
-    }
+    let area = disclosure_column(test)
+        .expect("the bar draws a disclosure triangle")
+        .layout()
+        .area;
+    (
+        (area.origin.x + area.width() / 2.0) as f64,
+        (area.origin.y + area.height() / 2.0) as f64,
+    )
 }
 
 /// The section under the bar says what the Info pane said, and a little more -- the address
@@ -12023,6 +12030,52 @@ fn a_field_names_column_follows_the_interface_font() {
     set_fonts(fixed_fonts(9.0, 10.5));
 }
 
+/// **A disclosure triangle follows the interface font, column and all.** The mark was a
+/// character in that font and grew with it; as an icon it grows only because
+/// `chevron_size` is written against the row, and the column it sits in only because
+/// `chevron_width` is written against the mark. A `const` either way is a triangle a
+/// reader at 21pt has to hunt for, or one drawn past the column the tags line up in.
+///
+/// Asserted through a real [`disclosure`], since the numbers are worth nothing if the mark
+/// is not built from them: the column is the node carrying the `expanded` flag and the
+/// icon is what it holds.
+#[test]
+fn a_disclosure_triangle_follows_the_interface_font() {
+    set_fonts(fixed_fonts(9.0, 10.5));
+
+    let (mut test, ()) = TestingRunner::new(
+        || rect().expanded().child(disclosure(Some(true))),
+        (200., 100.).into(),
+        |_| (),
+        1.,
+    );
+    test.sync_and_update();
+
+    let drawn = |test: &TestingRunner| {
+        let column = disclosure_column(test).expect("the triangle is drawn");
+        let children = column.children();
+        let icon = children.first().expect("the column holds an icon");
+        (column.layout().area.width(), icon.layout().area.width())
+    };
+
+    // 9pt is a 24px row, so the mark is 12 in the 14 the column has always been.
+    assert_eq!((chevron_size(), chevron_width()), (12.0, 14.0));
+    assert_eq!(drawn(&test), (14.0, 12.0));
+
+    // 21pt is a 40px row, and both go with it rather than staying where the mark is a
+    // speck beside a name twice its height.
+    set_fonts(fixed_fonts(21.0, 10.5));
+    test.sync_and_update();
+    assert_eq!((chevron_size(), chevron_width()), (20.0, 22.0));
+    assert_eq!(
+        drawn(&test),
+        (22.0, 20.0),
+        "the triangle was built from a number the font no longer agrees with"
+    );
+
+    set_fonts(fixed_fonts(9.0, 10.5));
+}
+
 /// A `VirtualScrollView`'s `item_size` and the height its rows actually draw at must be the
 /// same number, or scrolling misaligns silently. Two claims since the height was split in
 /// two, so it is asserted over a code pane and a sidebar list.
@@ -12440,6 +12493,28 @@ fn labels(test: &TestingRunner) -> Vec<String> {
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// Every disclosure triangle on screen, in document order, each saying whether the row it
+/// belongs to is open.
+///
+/// The triangle is an icon, and an `SvgViewer` rasterises to an image, so which chevron it
+/// drew is not in the element tree at all. What is there is the `expanded` flag
+/// `disclosure` (`src/ui/parts.rs`) puts on the column, which is accessibility's own way
+/// of saying it and the only way to read one back.
+fn disclosures(test: &TestingRunner) -> Vec<bool> {
+    test.find_many(|node, _element| node.element().accessibility().builder.is_expanded())
+}
+
+/// The first of those columns as a node, for a test that measures one or presses it.
+fn disclosure_column(test: &TestingRunner) -> Option<TestingNode> {
+    test.find(|node, _element| {
+        node.element()
+            .accessibility()
+            .builder
+            .is_expanded()
+            .map(|_| node)
+    })
 }
 
 /// What the code editor is drawing, as one string: every paragraph on screen with its own
