@@ -22201,6 +22201,16 @@ macro_rules! mount_project {
     }};
 }
 
+/// A finished build as the worker answers with one, naming no diagnostic file: what a
+/// build's places may open is worked out there (`building::openable`), and these builds
+/// say nothing.
+fn done(run: cargo::Run) -> BuildAnswer {
+    BuildAnswer::Done {
+        run,
+        sources: HashSet::new(),
+    }
+}
+
 /// A build whose artifacts are the two committed fixtures, so what is opened is a file
 /// that really parses.
 fn built(artifacts: &[PathBuf]) -> cargo::Run {
@@ -22225,7 +22235,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job {
-            BuildJob::Build { .. } => BuildAnswer::Done(built(&[artifact.clone()])),
+            BuildJob::Build { .. } => done(built(&[artifact.clone()])),
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
@@ -22387,7 +22397,7 @@ fn an_artifact_load_survives_the_view_being_left() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job {
-            BuildJob::Build { .. } => BuildAnswer::Done(built(&[artifact.clone()])),
+            BuildJob::Build { .. } => done(built(&[artifact.clone()])),
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
@@ -22455,7 +22465,7 @@ fn a_finished_build_forgets_the_workspace_sources() {
 
     // Nothing is opened: what a build produced is another rule, tested above.
     let (mut test, states, _language, asking, _asks) = mount_project!(|job: BuildJob| match job {
-        BuildJob::Build { .. } => BuildAnswer::Done(built(&[])),
+        BuildJob::Build { .. } => done(built(&[])),
         _ => BuildAnswer::Read {
             manifest: None,
             profiles: None,
@@ -22500,7 +22510,7 @@ fn a_build_replaces_what_the_build_before_it_produced() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job {
-            BuildJob::Build { .. } => BuildAnswer::Done(built(&[artifact.clone()])),
+            BuildJob::Build { .. } => done(built(&[artifact.clone()])),
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
@@ -22697,7 +22707,10 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     // The section is drawn once the manifest has been read, which is a worker's answer away.
     pump(&mut test, || states.build.peek().manifest.is_some());
     let mut build = states.build;
+    // Both halves of what the worker answers with: the run, and the diagnostic files it
+    // picked out as ones this pane may open (`building::openable`).
     build.write().built = Some(run);
+    build.write().sources = HashSet::from([directory.join("src/main.rs")]);
     settle(&mut test);
 
     // Both places are drawn, each spelled as the file, the line and the column.
@@ -22724,6 +22737,65 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     assert!(
         states.open.documents() == [Document::Source(file)],
         "the place did not open the file it names"
+    );
+}
+
+/// **Drawing the diagnostics touches no file.** Whether a place can be opened is the
+/// build's answer and not the row's, so a hundred of them are a hundred labels and not a
+/// hundred `stat`s -- on the thread that draws, once a frame, for as long as the section
+/// is on screen.
+///
+/// The count is per thread and `freya-testing` runs the app on this one, so what it counts
+/// is exactly what the UI thread did.
+#[test]
+fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let file = directory.join("src/main.rs");
+    let said = |line: usize| cargo::Diagnostic {
+        level: Level::Warning,
+        message: "unused variable".to_owned(),
+        rendered: "warning: unused variable".to_owned(),
+        span: Some(cargo::Span {
+            file: "src/main.rs".to_owned(),
+            line,
+            column: 1,
+        }),
+    };
+    let run = cargo::Run::Built {
+        artifacts: Vec::new(),
+        diagnostics: (1..=100).map(said).collect(),
+    };
+
+    let manifest = directory.join("Cargo.toml");
+    let (mut test, states, _language, _asking, _asks) =
+        mount_project!(move |_: BuildJob| BuildAnswer::Read {
+            manifest: Some(manifest.clone()),
+            profiles: None,
+            debug_lines: true,
+        });
+
+    let mut proj = states.proj;
+    proj.write().directory = directory.to_string_lossy().into_owned();
+    pump(&mut test, || states.build.peek().manifest.is_some());
+
+    let mut build = states.build;
+    build.write().built = Some(run);
+    build.write().sources = HashSet::from([file]);
+
+    let before = source::touches();
+    settle(&mut test);
+    assert_eq!(
+        source::touches(),
+        before,
+        "the rows asked the filesystem about the files they name"
+    );
+
+    // Not vacuous: every place was drawn, and drawn as one this pane can reach, which is
+    // the case that used to do the asking.
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "src/main.rs:100:1"),
+        "{drawn:?}"
     );
 }
 

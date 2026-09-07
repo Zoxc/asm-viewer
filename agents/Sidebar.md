@@ -373,6 +373,16 @@ rule survive a restart (`agents/Persistence.md`). A finished build also forgets 
 the sources under the project's directory, which nothing else in the app ever re-reads
 (`forget_source_under`, `agents/Panes.md`).
 
+**Which of a build's places can be opened is worked out beside the build.** cargo spells a
+file relative to where it ran, so a diagnostic's place is the project's directory joined
+with it, and it is drawn as a target where that file is under the directory and the source
+cache would read it; a place in a dependency stays a plain label, a target that did nothing
+when pressed being worse than never offering one. Both questions are the worker's
+(`openable`), asked once per distinct file and carried back beside the run as
+`Builds::sources`. Asked at the row instead they were a `stat` per diagnostic per frame,
+for as long as the section was on screen, and a build says two hundred things as readily as
+two.
+
 The **debug-lines offer** is why the profile and the manifest are read together. Release is the
 default profile, since a reader inspecting a binary is usually asking what the optimiser did, and
 cargo's own default for release is *no* debug information -- which is a binary with no source side,

@@ -256,7 +256,8 @@ command.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, and the rows each is built of.
 - `src/ui/building.rs` — building the project's own workspace: what is held about it, the one
-  worker thread, and which binaries a finished build replaces.
+  worker thread, which binaries a finished build replaces, and which of the files its
+  diagnostics name the view may open.
 - `src/ui/bookmarks_view.rs` — the Bookmarks list: one row per bookmark, live against what is
   loaded and kept dimmed when it is not.
 - `src/ui/files_view.rs` — the Files view: the project's directory as a tree, a file's row
@@ -450,7 +451,8 @@ feature there with the substitute, so a release that brings it is noticed.
 `freya-testing` runs the whole app headless on the test's own thread. The binary's suite runs in
 under two seconds, so a test written to settle one point costs less than a `cargo run` and a
 look. It can be asked about any control, drag, scroll, keyboard binding, laid-out size, worker
-answer, or which component re-rendered; it cannot say how anything *looks*, measure text, or
-observe the platform. Keep the tests that pin a mechanism and delete the ones that only proved
+answer, or which component re-rendered, and, through `source::touches`, how many times the
+thread that draws asked the filesystem about a source file; it cannot say how anything
+*looks*, measure text, or observe the platform. Keep the tests that pin a mechanism and delete the ones that only proved
 the code just written does what it says. A headless test has to be made to fail first on the
 mechanism it claims to test. The rest is in `agents/UI.md` and `agents/Headless.md`.

@@ -332,6 +332,8 @@ pub fn showable(path: &Path) -> bool {
 /// on Linux and a fifo blocks the reader until someone writes to it, and neither may reach
 /// a UI thread.
 fn fits(path: &Path, max_size: u64) -> bool {
+    #[cfg(test)]
+    TOUCHES.with(|touches| touches.set(touches.get() + 1));
     fs::metadata(path)
         .map(|metadata| metadata.is_file() && metadata.len() <= max_size)
         .unwrap_or(false)
@@ -353,6 +355,23 @@ fn contents(path: &Path, max_size: u64) -> Option<(Vec<u8>, String)> {
     // file.
     let text = String::from_utf8_lossy(&bytes).into_owned();
     Some((bytes, text))
+}
+
+/// Test-only: how many times this thread has asked the filesystem about a source file.
+///
+/// Every read and every gate above goes through [`fits`], so counting there counts them
+/// all. A thread-local because `freya-testing` runs the whole app on the test's own
+/// thread, which makes this the one thing that can settle what no other test here can:
+/// that a render or an effect made no filesystem call at all. Nothing resets it -- a test
+/// takes the count before and after what it is about.
+#[cfg(test)]
+pub fn touches() -> usize {
+    TOUCHES.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TOUCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Every path asked about so far and what came back, `None` included. A `static` so that

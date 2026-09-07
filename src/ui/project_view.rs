@@ -165,9 +165,14 @@ impl Component for ArtifactRow {
 /// it: pressing it opens that file as source, on the line and column the compiler named.
 ///
 /// cargo spells the file relative to where it ran, so the place is the project's directory
-/// joined with it. A file **outside** that directory -- a dependency's, out of the registry
-/// -- keeps the plain label it would have had: the app opens a source file it can read, and
-/// a target that did nothing when pressed would be worse than never offering one.
+/// joined with it, and which of those files may be opened is [`Builds::sources`], picked
+/// out on the worker beside the build. A file it does not name -- a dependency's, out of
+/// the registry, or one the source cache would refuse -- keeps the plain label it would
+/// have had: a target that did nothing when pressed would be worse than never offering
+/// one.
+///
+/// The set is asked and never the filesystem. Deciding it here cost a `stat` per row per
+/// frame, and a build says two hundred things as readily as two.
 ///
 /// The states a press needs are the section's, consumed while it renders and handed down:
 /// a hook may only be called while a component renders, and this is called once per
@@ -175,14 +180,13 @@ impl Component for ArtifactRow {
 fn source_place(
     doors: Doors,
     ctrl: State<bool>,
+    build: &Builds,
     directory: Option<&Path>,
     diagnostic: &Diagnostic,
 ) -> Option<Element> {
     let span = diagnostic.span.as_ref()?;
     let file = directory.map(|directory| directory.join(&span.file));
-    let own = file
-        .as_deref()
-        .is_some_and(|file| file.starts_with(directory.unwrap_or(Path::new(""))) && showable(file));
+    let own = file.as_deref().is_some_and(|file| build.shows(file));
     let text = diagnostic_place(span, own);
 
     Some(match (own, file) {
@@ -443,7 +447,7 @@ impl Component for CargoSection {
             .diagnostics()
             .iter()
             .map(|diagnostic| {
-                let place = source_place(doors, ctrl, directory.as_deref(), diagnostic);
+                let place = source_place(doors, ctrl, &held, directory.as_deref(), diagnostic);
                 diagnostic_block(diagnostic, place)
             })
             .collect();

@@ -84,6 +84,17 @@ pub enum Run {
     NoCargo(String),
 }
 
+impl Run {
+    /// What the compiler said, whatever came of the build: the warnings of one that
+    /// succeeded and the errors of one that did not are the same list to a reader.
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        match self {
+            Run::Built { diagnostics, .. } | Run::Rejected { diagnostics, .. } => diagnostics,
+            Run::NoCargo(_) => &[],
+        }
+    }
+}
+
 /// One thing the compiler said, flattened out of cargo's JSON.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
