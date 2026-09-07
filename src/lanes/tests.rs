@@ -1,5 +1,12 @@
 use super::*;
 
+/// The edges that start or end at `row`. An edge merely passing through is not one of
+/// them: it has nothing to do with the row it crosses. The one-row case of
+/// [`Lanes::touching_any`], which is what the app asks; the tests ask row by row.
+fn touching(lanes: &Lanes, row: usize) -> Vec<PlacedEdge> {
+    lanes.touching_any(row..=row)
+}
+
 fn edges(pairs: &[(usize, usize)]) -> Vec<BranchEdge> {
     pairs
         .iter()
@@ -45,7 +52,7 @@ fn a_symbol_that_branches_nowhere_has_no_gutter() {
     let lanes = Lanes::new(&[], 4);
     assert_eq!(lanes.width, 0);
     assert_eq!(lanes.row(2), RowLanes::default());
-    assert!(lanes.touching(2).is_empty());
+    assert!(touching(&lanes, 2).is_empty());
 }
 
 /// The smallest honest picture, and the one `line_fixture.o`'s `sum_to` draws: a jump
@@ -69,11 +76,11 @@ fn a_branch_inside_another_is_drawn_inside_it() {
         let lanes = Lanes::new(&edges(&pairs), 10);
         assert_eq!(lanes.width, 2);
 
-        let inner = lanes.touching(3);
+        let inner = touching(&lanes, 3);
         assert_eq!(inner.len(), 1);
         assert_eq!(inner[0].lane, 0);
 
-        let outer = lanes.touching(0);
+        let outer = touching(&lanes, 0);
         assert_eq!(outer.len(), 1);
         assert_eq!(outer[0].lane, 1);
     }
@@ -86,9 +93,9 @@ fn overlapping_branches_that_do_not_nest_take_two_lanes() {
     let lanes = Lanes::new(&edges(&[(0, 5), (3, 8)]), 9);
 
     assert_eq!(lanes.width, 2);
-    assert_eq!(lanes.touching(0)[0].lane, lanes.touching(5)[0].lane);
-    assert_eq!(lanes.touching(3)[0].lane, lanes.touching(8)[0].lane);
-    assert_ne!(lanes.touching(0)[0].lane, lanes.touching(3)[0].lane);
+    assert_eq!(touching(&lanes, 0)[0].lane, touching(&lanes, 5)[0].lane);
+    assert_eq!(touching(&lanes, 3)[0].lane, touching(&lanes, 8)[0].lane);
+    assert_ne!(touching(&lanes, 0)[0].lane, touching(&lanes, 3)[0].lane);
 }
 
 /// Branches that share nothing but a row would read as one line passing through, so
@@ -110,7 +117,7 @@ fn branches_that_never_overlap_all_take_the_innermost_lane() {
     let lanes = Lanes::new(&edges(&[(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]), 10);
 
     assert_eq!(lanes.width, 1);
-    assert!(lanes.touching(4).iter().all(|edge| edge.lane == 0));
+    assert!(touching(&lanes, 4).iter().all(|edge| edge.lane == 0));
 }
 
 /// Past the cap the outermost lane is shared, and it is the longest branches that end up
@@ -123,7 +130,7 @@ fn more_branches_than_lanes_share_the_outermost_one() {
 
     assert_eq!(lanes.width, MAX_LANES);
 
-    let assigned: Vec<usize> = (0..6).map(|row| lanes.touching(row)[0].lane).collect();
+    let assigned: Vec<usize> = (0..6).map(|row| touching(&lanes, row)[0].lane).collect();
     assert_eq!(assigned, [4, 4, 3, 2, 1, 0]);
 
     for (row, lane) in assigned.iter().enumerate() {
@@ -137,36 +144,36 @@ fn more_branches_than_lanes_share_the_outermost_one() {
 #[test]
 fn lighting_a_row_lights_the_lanes_of_its_own_branches() {
     let lanes = Lanes::new(&edges(&[(1, 7), (3, 5)]), 9);
-    let touching = lanes.touching(1);
+    let outer = touching(&lanes, 1);
     let lane = [false, true, false, false, false];
 
-    assert_eq!(lit(&touching, 0), Lit::default());
+    assert_eq!(lit(&outer, 0), Lit::default());
     assert_eq!(
-        lit(&touching, 1),
+        lit(&outer, 1),
         Lit {
             lanes: lane,
             corner: true
         }
     );
     assert_eq!(
-        lit(&touching, 4),
+        lit(&outer, 4),
         Lit {
             lanes: lane,
             corner: false
         }
     );
     assert_eq!(
-        lit(&touching, 7),
+        lit(&outer, 7),
         Lit {
             lanes: lane,
             corner: true
         }
     );
-    assert_eq!(lit(&touching, 8), Lit::default());
+    assert_eq!(lit(&outer, 8), Lit::default());
 
     // The inner branch is not one of row 1's, even though its lane is lit at row 4.
     assert_eq!(
-        lit(&lanes.touching(3), 4).lanes,
+        lit(&touching(&lanes, 3), 4).lanes,
         [true, false, false, false, false]
     );
 }
@@ -202,8 +209,8 @@ fn a_run_of_rows_lights_the_branches_of_the_instructions_it_holds() {
     assert_eq!(backwards, None);
 
     // The branch from 1 to 7 is lit by a run holding either end and by none between.
-    assert_eq!(lanes.touching_any(0..=1), lanes.touching(1));
-    assert_eq!(lanes.touching_any(7..=8), lanes.touching(7));
+    assert_eq!(lanes.touching_any(0..=1), touching(&lanes, 1));
+    assert_eq!(lanes.touching_any(7..=8), touching(&lanes, 7));
     assert!(lanes.touching_any(2..=2).is_empty());
     assert_eq!(lanes.touching_any(0..=8).len(), 2);
 }
@@ -215,7 +222,7 @@ fn an_edge_past_the_end_is_not_drawn() {
     let lanes = Lanes::new(&edges(&[(0, 9), (1, 2)]), 4);
 
     assert_eq!(lanes.width, 1);
-    assert_eq!(lanes.touching(0).len(), 0);
+    assert_eq!(touching(&lanes, 0).len(), 0);
     assert!(!lanes.row(0).arrow);
 }
 

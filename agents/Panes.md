@@ -733,7 +733,7 @@ A `VirtualScrollView` is given one `item_size` for the whole listing, so the sep
 `code_row_height()` like every other row and the rule is drawn *inside* it, across its middle. What
 that costs is **two index spaces**, and `Lanes` is the only thing allowed to convert between them:
 `listing_rows`, `row_of` and `instruction_at`. An **instruction index** is what `AsmData::position`,
-the gutter, `Lanes::touching` and the branch edges speak; a **listing row** is what the scroll
+the gutter, `Lanes::touching_any` and the branch edges speak; a **listing row** is what the scroll
 (`reveal_row`, `use_kept_position`) and the selected run (`Marked`, `on_listing_key`) speak.
 `InstructionRow` carries both and never mixes them. A row is also told three things about the
 listing it is in, through `AsmData`, so that the same row serves a listing that is not one symbol's:
