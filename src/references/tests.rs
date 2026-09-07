@@ -86,7 +86,7 @@ fn a_name_used_twice_on_one_line_is_two_rows_each_with_its_own_columns() {
     let rows = all(&references);
     assert_eq!(references.count(), 2);
     assert_eq!(lines(&rows), vec![7, 7]);
-    let columns: Vec<Range<u32>> = (0..rows.len())
+    let columns: Vec<Range<usize>> = (0..rows.len())
         .filter_map(|at| match &rows[at] {
             Row::Item { item, .. } => Some(item.columns.clone()),
             Row::File { .. } => None,
@@ -158,11 +158,11 @@ fn a_line_the_file_does_not_have_is_the_number_alone() {
 }
 
 #[test]
-fn a_name_after_a_wide_character_is_marked_where_it_is_in_the_bytes() {
-    // The columns are UTF-16 units and the spans are bytes: an emoji is two units and
-    // four bytes, and a name after one is marked wrongly by anything that confuses them.
-    // `// ` is three units, the crab is two more, then a space: the name starts at six.
-    let references = of(&[place("/p/src/main.rs", 1, 6..12)], |_| {
+fn a_name_after_a_wide_character_is_marked_in_bytes_and_counted_in_units() {
+    // The answer's columns are bytes and a pane's are UTF-16 units, and an emoji is
+    // where the two part: four bytes, two units. `// ` is three of each, then the crab,
+    // then a space, so the name begins at byte 8 and at column 6.
+    let references = of(&[place("/p/src/main.rs", 1, 8..14)], |_| {
         Some("// \u{1f980} helper\n".to_owned())
     });
 
@@ -171,6 +171,29 @@ fn a_name_after_a_wide_character_is_marked_where_it_is_in_the_bytes() {
         panic!("the second row is the use");
     };
     assert_eq!(&item.text[item.spans[0].clone()], "helper");
+    assert_eq!(item.columns, 6..12);
+}
+
+#[test]
+fn columns_the_line_has_no_such_bytes_for_mark_nothing() {
+    // Half of a character, and a run past the end of the line: a line that has changed
+    // under the answer, or a server counting some other way. Both are marks that are not
+    // drawn, and neither is a slice taken off a character boundary.
+    let inside = of(&[place("/p/src/main.rs", 1, 4..6)], |_| {
+        Some("// \u{1f980} helper\n".to_owned())
+    });
+    let beyond = of(&[place("/p/src/main.rs", 1, 8..99)], |_| {
+        Some("// \u{1f980} helper\n".to_owned())
+    });
+
+    for references in [inside, beyond] {
+        let rows = all(&references);
+        let Row::Item { item, .. } = &rows[1] else {
+            panic!("the second row is the use");
+        };
+        assert_eq!(item.text, "// \u{1f980} helper");
+        assert!(item.spans.is_empty());
+    }
 }
 
 #[test]

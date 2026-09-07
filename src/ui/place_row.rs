@@ -56,7 +56,7 @@ impl Place for references::Reference {
     }
 
     fn columns(&self) -> Option<Range<usize>> {
-        Some(self.columns.start as usize..self.columns.end as usize)
+        Some(self.columns.clone())
     }
 }
 

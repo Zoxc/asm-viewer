@@ -6471,8 +6471,8 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
 fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
     let (file, directory) = calling_file("column");
     let defined = directory.file("helper.rs", "pub fn helper(n: u32) -> u32 {\n    n\n}\n");
-    // `helper` is the seventh column of the definition's first line, counted from zero
-    // in UTF-16 units, which is what the protocol answers in and what a row is drawn in.
+    // `helper` is at byte 7 of the definition's first line, counted from zero, which is
+    // what an answer's columns are (`src/lsp.rs`).
     let place = lsp::Place {
         file: defined.clone(),
         line: 1,
@@ -8405,9 +8405,9 @@ fn a_right_click_with_no_server_offers_no_references() {
 }
 
 /// A press on a call asks the server where the name is defined, at the place the pointer
-/// was on and in the units the protocol takes -- the line counted from zero and the
-/// column in UTF-16 units, which is what a source row's columns already are. And it picks
-/// no line out: the press is the question and not a place in the file.
+/// was on and in the units a question takes -- the line counted from zero and the column
+/// as a byte offset into it. And it picks no line out: the press is the question and not
+/// a place in the file.
 #[test]
 fn a_press_on_a_call_asks_where_the_name_is_defined() {
     let (file, _directory) = calling_file("asks");
@@ -8443,6 +8443,47 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
         location.marked.peek().source.is_none(),
         "the press picked a line out"
     );
+}
+
+/// A press after a character wider than one byte asks about the **byte** it is at.
+///
+/// A row is drawn in UTF-16 units, since that is what the text engine counts in, and a
+/// language server is asked in bytes (`src/lsp.rs`): `é` is one unit and two bytes, so a
+/// name after one is a different number in each, and a pane that let the two stand for
+/// each other would ask about a place a little to the left of the name.
+#[test]
+fn a_press_after_a_wide_character_asks_at_its_byte() {
+    let directory = Seeded::directory("wide");
+    // The second row draws `    // é helper(1);`: `helper` is at byte 10 and at column 9.
+    let file = directory.named("calls.rs", "fn main() {\n    // é helper(1);\n}\n");
+    let legend = lsp::Legend::of(&["function"], &["declaration"]);
+    let links = links::Links::of(
+        &legend,
+        &[lsp::Token {
+            line: 2,
+            columns: 10..16,
+            kind: 0,
+            modifiers: 0,
+        }],
+    );
+    let (mut test, states, language, _location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone(), links);
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    settle(&mut test);
+
+    let (asked, _want) = next_ask(&mut test, &asks).expect("the press asked the server");
+    assert_eq!(asked.column, 10, "the byte and not the column");
 }
 
 /// With no server there is nothing to ask, so a press on the same name is a press on the

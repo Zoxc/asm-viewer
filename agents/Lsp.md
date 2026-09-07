@@ -145,12 +145,12 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   anything else a malformed header, and dies.
 - `initialized` must be the very next message after the `initialize` answer. Anything else
   first and the server gives up on the conversation.
-- **The declared capabilities are three lines long**, and what is left out is the decision.
+- **The declared capabilities are four lines long**, and what is left out is the decision.
   Every request rust-analyzer makes of a client -- for configuration, to register a file
   watcher -- is opt-in through a capability, so declaring none of those leaves a
-  conversation this app only ever speaks first in. Nothing is said about positions or about
-  definitions either: UTF-16 and plain locations are the defaults, both are what is wanted,
-  and naming them would only be a chance to name them wrongly. Semantic tokens are not
+  conversation this app only ever speaks first in. Nothing is said about definitions:
+  plain locations are the default and are what is wanted, and naming that would only be a
+  chance to name it wrongly. Semantic tokens are not
   declared either, though they are asked for: rust-analyzer offers them and sends its whole
   legend to a client that says nothing, which was watched against a real one. The one thing
   asked for is progress, since it is the only account of a server that is still reading the
@@ -158,8 +158,10 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   server that asks something anyway is answered -- an empty configuration, nothing for a
   progress token, and "not a method this client has" for the rest -- because a server
   waiting on a reply is a conversation that stops.
-- **The third line asks the server to say when it has settled**, which is the one thing
+- **The fourth line asks the server to say when it has settled**, which is the one thing
   the protocol has no way to ask. See below.
+- **The third line is how a column is counted**, and it is a default worth refusing.
+  See below.
 - **The second line is the format a hover is written in**, which is the one default not
   worth taking. Measured against a real server, over the same name, both ways: a client
   that names none is answered `plaintext`, with the fences gone and the doc comment's list
@@ -217,12 +219,41 @@ Things learned from rust-analyzer's own transport, each of which is a test:
   "file not found", which is neither of the two "ask again" codes and is left as the
   refusal it is; what the consumer makes of that is below.
 
-Positions go out as the protocol takes them -- a line counted from zero and a column in
-UTF-16 units, which is what `src/chars.rs` already counts in -- and a `Place` comes back
-with a **1-based** line, the unit line information is in everywhere else in the app. The
-conversion is in one place and happens once. The column comes back as it was given, a
-UTF-16 unit counted from zero, since that is the unit a pane counts columns in; an answer
-that leaves it out is column 0 and not no place at all, the line being what opens the file.
+## How a column is counted
+
+Lines go out as the protocol takes them, counted from zero, and a `Place` comes back with
+a **1-based** line, the unit line information is in everywhere else in the app. That
+conversion is in one place and happens once.
+
+The column is asked about. The protocol's own unit is a UTF-16 code unit, which is what
+skia counts a drawn row in and so what `src/chars.rs` counts in -- but it is not what
+anything else in the app counts in, and a byte offset is what the text itself is indexed
+by. So the handshake declares `positionEncodings: ["utf-8", "utf-16"]`, in that order,
+because the order is the preference and a server takes the first it knows. **Every column
+crossing `src/lsp.rs` is then a byte offset into its line**, whichever the server chose,
+and the app has one meaning for a column outside the drawing.
+
+`positionEncoding` arrived in **3.17**, so a server that says nothing has kept UTF-16 --
+and so has one that answers something this app never offered. Both are read as UTF-16 and
+converted, which is the reading that costs a conversion rather than the one that trusts a
+word nobody said. Never a failure: a server is not broken for being older.
+
+**Converting takes the line's text**, and `Lines` is what reads it: the question's own
+file, and, for an answer, whatever file it named -- a definition in another crate, a
+reference in a file no tab shows. Each file once per answer, through `source::read_text`,
+the app's one rule for reading a source file; the read blocks, which is why every question
+here is a worker's. A file that will not read leaves the number alone, which is the right
+answer for a line of ASCII and the nearest one for the rest. **Where the server took
+`utf-8` nothing is read at all**: the numbers are already the app's.
+
+The drawing side converts the other way, since skia is what wants units: the source pane
+counts a link's columns into the row it draws and a press back into a byte offset
+(`src/ui/source_view.rs`), and `references::of` counts the columns it hands the Locations
+panel, the line having been read there anyway. The conversion itself is
+`chars::columns_of` and `chars::bytes_of` and is written once.
+
+An answer that names no column at all is column 0 and not no place at all, the line being
+what opens the file.
 
 **A path comes back spelled the way it went out.** The `file:` URI is written and read
 here by hand, and a round trip does not give back what it took: a URI's separator is `/`

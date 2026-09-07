@@ -136,30 +136,25 @@ fn source_pieces(source: &SourceText, index: usize) -> Vec<(Color, String)> {
 
 /// The text of `columns` on row `index`, or `None` where they name nothing of it.
 ///
-/// The columns are the UTF-16 units the language server counts in, which is what a source
-/// row's columns are everywhere else in the app (`src/chars.rs`); the row's own text is
-/// what a menu built from a press calls the name, so what the reader right-clicked is what
-/// the menu says.
+/// The columns are the byte offsets a language server counts in (`src/links.rs`), counted
+/// back into the units the row draws in and cut out of the row's own text -- which is
+/// what a menu built from a press calls the name, so what the reader right-clicked is
+/// what the menu says.
 pub(crate) fn name_at(source: &SourceText, index: usize, columns: &Range<u32>) -> Option<String> {
-    if columns.start >= columns.end {
-        return None;
-    }
-    let line = source.0.rope.get_line(index)?.to_string();
-    let (mut from, mut to) = (None, None);
-    let mut units = 0u32;
-    for (at, character) in line.char_indices() {
-        if units == columns.start {
-            from = Some(at);
-        }
-        if units == columns.end {
-            to = Some(at);
-        }
-        units = units.saturating_add(character.len_utf16() as u32);
-    }
-    if units == columns.end {
-        to = Some(line.len());
-    }
-    Some(line[from?..to?].to_owned())
+    let line = source_line(source, index);
+    let drawn = drawn_columns(&line.to_string(), columns);
+    let name = line.slice(drawn.start, drawn.end);
+    (!name.is_empty()).then_some(name)
+}
+
+/// A run of a name's byte columns as the UTF-16 units the row `text` is drawn in.
+fn drawn_columns(text: &str, columns: &Range<u32>) -> Range<usize> {
+    chars::columns_of(text, columns.start as usize..columns.end as usize)
+}
+
+/// A column of the row's `text` as the byte offset a language server is asked at.
+fn byte_column(text: &str, column: usize) -> u32 {
+    u32::try_from(chars::bytes_of(text, column..column).start).unwrap_or(u32::MAX)
 }
 
 /// The text row `index` draws, as the clipboard sees a character selection of it.
@@ -206,6 +201,16 @@ impl Component for SourceRow {
         };
 
         let pieces = source_pieces(&self.source, index);
+        // The row's text as it is drawn, which the columns below are counted through: a
+        // link's are byte offsets into the file's line (`src/links.rs`) and a row's are
+        // the UTF-16 units the text engine answers in. The drawn text and not the rope's,
+        // and the two agree wherever a column can land: what the row draws differently is
+        // the indentation, one space per character of it.
+        let row_text: Rc<str> = pieces
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<String>()
+            .into();
         let text = Text {
             line: {
                 let mut line = Line::default();
@@ -229,6 +234,7 @@ impl Component for SourceRow {
                 let file = self.file.clone();
                 let row = self.index as u32;
                 let links = self.links.clone();
+                let pressed = row_text.clone();
                 let follow_link = move |columns: Range<usize>| {
                     let reach = match *ctrl.peek() {
                         true => Reach::NewTab,
@@ -237,7 +243,7 @@ impl Component for SourceRow {
                     // Which question this name asks. An item in a trait `impl` asks for
                     // the declaration, since its definition is itself and the trait is
                     // where a reader following it wants to go (`src/links.rs`).
-                    let column = columns.start as u32;
+                    let column = byte_column(&pressed, columns.start);
                     let want = links
                         .at(row + 1, column)
                         .and_then(|link| link.asks)
@@ -250,7 +256,7 @@ impl Component for SourceRow {
                         Lookup {
                             file: PathBuf::from(&*file),
                             // The protocol counts lines from zero, where a row's line is
-                            // 1-based; the column is already what it takes.
+                            // 1-based; the column is a byte offset either way.
                             line: row,
                             column,
                         },
@@ -262,8 +268,8 @@ impl Component for SourceRow {
                     columns: self
                         .links
                         .followed_on(self.index as u32 + 1)
-                        .into_iter()
-                        .map(|columns| columns.start as usize..columns.end as usize)
+                        .iter()
+                        .map(|columns| drawn_columns(&row_text, columns))
                         .collect(),
                     follow: Rc::new(follow_link),
                 }
@@ -276,13 +282,14 @@ impl Component for SourceRow {
                 .links
                 .on_line(self.index as u32 + 1)
                 .iter()
-                .map(|link| link.columns.start as usize..link.columns.end as usize)
+                .map(|link| drawn_columns(&row_text, &link.columns))
                 .collect(),
             // What the pointer on one of them says. Consumed in the render, as everything
             // a handler here reaches for is: a handler may not run a hook.
             on_hover: hover.map(|hover| {
                 let file = self.file.clone();
                 let row = self.index as u32;
+                let row_text = row_text.clone();
                 Rc::new(move |under: Under| {
                     let mut hover = hover;
                     let mut waiting = hover.peek().clone();
@@ -291,9 +298,9 @@ impl Component for SourceRow {
                             at: Lookup {
                                 file: PathBuf::from(&*file),
                                 // The protocol counts lines from zero, where a row's line
-                                // is 1-based; the column is already what it takes.
+                                // is 1-based; the column is a byte offset either way.
                                 line: row,
-                                column: columns.start as u32,
+                                column: byte_column(&row_text, columns.start),
                             },
                             drawn,
                         }),
@@ -327,12 +334,13 @@ impl Component for SourceRow {
             let asking = (!self.links.is_empty())
                 .then(|| following.clone())
                 .flatten();
+            let row_text = row_text.clone();
             move |e: Event<PressEventData>, column| {
                 let function = functions::enclosing(&source.0.functions, at.line).cloned();
                 // The name the press was on, which the three questions are about. Looked
                 // for on the press and not per render, as the function is.
                 let named = column
-                    .and_then(|column| links.at(index as u32 + 1, column as u32))
+                    .and_then(|column| links.at(index as u32 + 1, byte_column(&row_text, column)))
                     .and_then(|link| {
                         let name = name_at(&source, index, &link.columns)?;
                         Some((link.columns.clone(), name))
@@ -344,7 +352,7 @@ impl Component for SourceRow {
                             Lookup {
                                 file: PathBuf::from(&*at.file),
                                 // The protocol counts lines from zero, where a `LinePos`
-                                // is 1-based; the column is already what it takes.
+                                // is 1-based; the column is a byte offset either way.
                                 line: at.line.saturating_sub(1),
                                 column,
                             }

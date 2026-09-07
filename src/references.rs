@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::Path;
 
+use crate::chars;
 use crate::grouped::{self, Grouped};
 use crate::lsp;
 use crate::search;
@@ -28,11 +29,13 @@ use crate::search;
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Reference {
     pub line: u32,
-    /// Where the name is in the **file's own line**, in UTF-16 units, which is what a
-    /// pane counts columns in: what opening the reference selects there. Kept apart from
-    /// `spans`, which are offsets into the text a row draws and say nothing about the
-    /// whitespace trimmed off the front of it (`search::Hit`'s rule, for its reason).
-    pub columns: Range<u32>,
+    /// Where the name is in the **file's own line**, in the UTF-16 units a pane counts
+    /// columns in: what opening the reference selects there. The server's own columns are
+    /// bytes (`lsp::Place`), and this is the one place they are converted, the line
+    /// having been read here anyway. Kept apart from `spans`, which are offsets into the
+    /// text a row draws and say nothing about the whitespace trimmed off the front of it
+    /// (`search::Hit`'s rule, for its reason).
+    pub columns: Range<usize>,
     /// The line as the row draws it, and empty where the file would not read.
     pub text: String,
     /// Where the name is in `text`, as byte ranges into it. Empty where the cut left none
@@ -90,43 +93,38 @@ pub fn of(places: &[lsp::Place], read: impl Fn(&Path) -> Option<String>) -> Refe
 /// the row is then the number alone, which is what it would be for a file that would not
 /// read at all.
 fn reference(place: &lsp::Place, line: Option<&str>) -> Reference {
-    let (text, spans) = match line {
+    let bytes = place.columns.start as usize..place.columns.end as usize;
+    let (columns, text, spans) = match line {
         Some(line) => {
-            let name = bytes_of(line, &place.columns);
-            search::drawn(line, name.into_iter().collect())
+            let name = span_of(line, bytes.clone());
+            let (text, spans) = search::drawn(line, name.into_iter().collect());
+            (chars::columns_of(line, bytes), text, spans)
         }
-        None => (String::new(), Vec::new()),
+        // No line to count in, so the bytes stand: the right answer for a line of ASCII
+        // and the nearest one for the rest.
+        None => (bytes, String::new(), Vec::new()),
     };
     Reference {
         line: place.line,
-        columns: place.columns.clone(),
+        columns,
         text,
         spans,
     }
 }
 
-/// Where `columns` -- UTF-16 units into `line` -- is in its bytes, and `None` where they
-/// name nothing of it: an empty run, or one the line is too short for, which is a line
-/// that has changed under the answer.
-fn bytes_of(line: &str, columns: &Range<u32>) -> Option<Range<usize>> {
-    if columns.start >= columns.end {
-        return None;
-    }
-    let (mut from, mut to) = (None, None);
-    let mut units = 0u32;
-    for (at, character) in line.char_indices() {
-        if units == columns.start {
-            from = Some(at);
-        }
-        if units == columns.end {
-            to = Some(at);
-        }
-        units += search::units(character.encode_utf8(&mut [0; 4]) as &str) as u32;
-    }
-    if units == columns.end {
-        to = Some(line.len());
-    }
-    Some(from?..to?)
+/// `bytes` as a range of `line` really has, and `None` where it names nothing of it: an
+/// empty run, one the line is too short for -- which is a line that has changed under the
+/// answer -- or one whose ends are not character boundaries.
+///
+/// Checked rather than trusted: what is cut out of the line here is cut by these numbers,
+/// a slice taken off a character boundary panics, and a server's answer is input
+/// (`AGENTS.md`).
+fn span_of(line: &str, bytes: Range<usize>) -> Option<Range<usize>> {
+    let fits = bytes.start < bytes.end
+        && bytes.end <= line.len()
+        && line.is_char_boundary(bytes.start)
+        && line.is_char_boundary(bytes.end);
+    fits.then_some(bytes)
 }
 
 #[cfg(test)]

@@ -1104,7 +1104,7 @@ pub(crate) fn show_pad(mut pad: State<Pads>, jobs: &PadJobs, name: PadId) {
 ///
 /// The offset is worked out against the buffer **as it is now** and not against whatever
 /// was compiled, so it is always a place in this text and nothing here can be out of range
-/// — `Span::offset_in` carries the clamping and the reasoning for it. Any selection is
+/// — `chars::offset_of` carries the clamping and the reasoning for it. Any selection is
 /// cleared first: `TextSelection::move_to` moves only the far end of a range, so a jump
 /// made while something was selected would stretch the selection to the span instead of
 /// going there.
@@ -1126,7 +1126,7 @@ pub(crate) fn jump_to_span(mut text: State<PadBuffers>, pad: &PadId, span: &carg
     // guard hazard this repo's headless tests were first written for.
     drop(buffers);
 
-    let offset = span.offset_in(&source);
+    let offset = chars::offset_of(&source, span.line, span.column);
     let mut buffers = text.write();
     let editor = buffers.get_mut(pad);
     editor.clear_selection();

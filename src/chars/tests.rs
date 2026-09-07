@@ -437,3 +437,98 @@ fn a_mapped_run_keeps_its_lead_and_its_goal() {
     assert_eq!(mapped.lead(), caret(2, 3));
     assert_eq!(moved(mapped, Motion::Down, false).lead(), caret(3, 4));
 }
+
+// A cursor put where the compiler pointed (`src/ui/pad.rs`).
+
+/// A diagnostic's place is a line and a column the way rustc counts them; a cursor is one
+/// number the way an editor counts it. This is the whole of the conversion, and the unit
+/// is UTF-16 code units because that is what a cursor position is.
+#[test]
+fn a_span_is_a_cursor_position() {
+    let source = "fn main() {\n    let x = 1;\n}\n";
+
+    // One-based, both halves: line 2 column 5 is the `l` of `let`, which is char 16.
+    assert_eq!(offset_of(source, 2, 5), 16);
+    // The first character of the file, which is where a span with no useful place lands.
+    assert_eq!(offset_of(source, 1, 1), 0);
+    // The line break is not on the line: the last line is the empty one after it.
+    assert_eq!(offset_of(source, 3, 1), 27);
+    assert_eq!(offset_of(source, 4, 1), source.len());
+}
+
+/// A column is counted in characters and a cursor in UTF-16 code units, so a line with an
+/// astral character in it is where the two disagree — one character, two code units. A
+/// cursor placed by character count would sit one place left of the span for every one of
+/// them before it.
+#[test]
+fn a_column_is_characters_and_a_cursor_is_code_units() {
+    // `é` is one char and one code unit; `𝄞` is one char and two.
+    let source = "// é𝄞 x\nlet y = 2;\n";
+
+    // Column 7 is the `x`: six characters before it — `/`, `/`, ` `, `é`, `𝄞`, ` ` — which
+    // are seven code units, the `𝄞` being two.
+    assert_eq!(offset_of(source, 1, 7), 7);
+    // And the line below starts after the whole of the line above, its break included:
+    // eight characters, nine code units.
+    assert_eq!(offset_of(source, 2, 1), 9);
+}
+
+/// The source is edited under a diagnostic — the reader has usually typed since the build —
+/// so a span that no longer fits is clamped rather than dropped. Nowhere near a panic and
+/// never past the end of the text.
+#[test]
+fn a_span_the_source_has_outgrown_is_clamped() {
+    let source = "fn main() {}\n";
+
+    // Past the end of its line: the end of that line, and not the line below.
+    assert_eq!(offset_of(source, 1, 500), 12);
+    // Past the end of the file: the end of the file.
+    assert_eq!(offset_of(source, 99, 1), source.len());
+    // Nothing to point at at all.
+    assert_eq!(offset_of("", 1, 1), 0);
+    // Zero is not a line rustc writes, and is the first line rather than a subtraction
+    // that wraps.
+    assert_eq!(offset_of(source, 0, 0), 0);
+}
+
+// The two units a column is counted in, and the conversion between them
+// (`src/lsp.rs`, `src/ui/source_view.rs`).
+
+/// A line where the two units part company: an emoji is four bytes and two UTF-16 units,
+/// so every column after one is a different number in each. `// ` is three of both.
+const WIDE: &str = "// \u{1f980} helper";
+
+#[test]
+fn a_byte_offset_and_a_column_are_the_same_number_until_a_wide_character() {
+    // Before the crab the two agree, after it they are two apart.
+    assert_eq!(columns_of(WIDE, 0..3), 0..3);
+    assert_eq!(columns_of(WIDE, 8..14), 6..12);
+    assert_eq!(bytes_of(WIDE, 6..12), 8..14);
+    // And a line of nothing but ASCII never tells them apart.
+    assert_eq!(columns_of("let x = 1;", 4..5), 4..5);
+    assert_eq!(bytes_of("let x = 1;", 4..5), 4..5);
+}
+
+#[test]
+fn a_column_inside_a_character_is_that_characters_start() {
+    // Half of the crab, from either side: each end comes back at the start of the
+    // character it is inside, and never at a boundary a slice would panic on. Column 4
+    // is the crab's second unit, so it rounds back to the crab; byte 5 is inside it too.
+    assert_eq!(columns_of(WIDE, 4..6), 3..3);
+    assert_eq!(bytes_of(WIDE, 4..5), 3..7);
+    // The units are what the row draws, so a whole crab is two of them.
+    assert_eq!(columns_of(WIDE, 3..7), 3..5);
+}
+
+#[test]
+fn a_run_the_line_is_too_short_for_stops_at_its_end() {
+    // A line that changed under the answer, and one that has nothing to point at at all.
+    assert_eq!(columns_of(WIDE, 90..99), 12..12);
+    assert_eq!(bytes_of(WIDE, 90..99), 14..14);
+    assert_eq!(columns_of("", 0..4), 0..0);
+    assert_eq!(bytes_of("", 0..4), 0..0);
+    // Ends the wrong way round come back as an empty run and not as a range that panics
+    // where it is used.
+    assert_eq!(columns_of(WIDE, 14..8), 12..12);
+    assert_eq!(bytes_of(WIDE, 12..6), 14..14);
+}

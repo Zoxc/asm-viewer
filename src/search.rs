@@ -13,6 +13,7 @@
 //! The pattern is [`Filter::expression`], the same expression the sidebar's filter bars
 //! compile, so a toggle means one thing in both places.
 
+use crate::chars;
 use crate::filter::{Filter, Matcher};
 use crate::grouped::{self, Grouped};
 use grep_matcher::Matcher as _;
@@ -62,10 +63,10 @@ pub struct Hit {
     /// Where the matches are in `text`, as byte ranges into it. Empty when the cut left
     /// none of them in view.
     pub spans: Vec<Range<usize>>,
-    /// The first match's place in the **file's own line**, in UTF-16 units, which is what
-    /// a pane counts columns in: what opening the hit picks out in the source. Kept apart
-    /// from `spans`, which are offsets into the text a row draws and say nothing about
-    /// the whitespace trimmed off the front of it.
+    /// The first match's place in the **file's own line**, in the UTF-16 units a pane
+    /// counts columns in (`chars::columns_of`): what opening the hit picks out in the
+    /// source. Kept apart from `spans`, which are offsets into the text a row draws and
+    /// say nothing about the whitespace trimmed off the front of it.
     pub columns: Option<Range<usize>>,
 }
 
@@ -214,7 +215,7 @@ fn hit_from(matcher: &RegexMatcher, line: &[u8], number: u64) -> Hit {
     // over the file's line, where the spans below are cut down to what the row draws.
     let first = spans.first().cloned();
 
-    let columns = first.map(|found| units(&text[..found.start])..units(&text[..found.end]));
+    let columns = first.map(|found| chars::columns_of(&text, found));
     let (text, spans) = drawn(&text, spans);
 
     Hit {
@@ -244,11 +245,6 @@ pub fn drawn(line: &str, spans: Vec<Range<usize>>) -> (String, Vec<Range<usize>>
         .filter(|span| span.start < span.end)
         .collect();
     (line[start..end].to_owned(), spans)
-}
-
-/// How many UTF-16 units `text` is, the unit a pane counts columns in.
-pub fn units(text: &str) -> usize {
-    text.encode_utf16().count()
 }
 
 /// Where to cut `text` to keep `characters` of it: a byte index, always on a character

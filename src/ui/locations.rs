@@ -58,8 +58,8 @@ pub(crate) enum Scope {
     /// everywhere it is used, or what implements it. One variant because the two are one
     /// shape and the panel draws one of them at a time; `of` is which.
     ///
-    /// `column` is where the name was asked about, in the UTF-16 units the protocol
-    /// takes; `run` is the server run it was asked in, since an answer from a server
+    /// `column` is where the name was asked about, as a byte offset into its line
+    /// (`src/lsp.rs`); `run` is the server run it was asked in, since an answer from a server
     /// started since is not an answer to this question; and `id` is the question's own,
     /// since neither is a run when two questions are asked in one -- which is the
     /// ordinary case, a run lasting as long as the server.

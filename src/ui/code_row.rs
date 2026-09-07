@@ -979,7 +979,7 @@ pub(crate) fn cut_at(head: Vec<Span<'static>>, links: &[Range<usize>]) -> Vec<Sp
     let mut cut = Vec::with_capacity(head.len());
     let mut column = 0;
     for span in head {
-        let units = span.text.encode_utf16().count();
+        let units = chars::units(&span.text);
         let (from, to) = (column, column + units);
         column = to;
         // Where inside this span a link begins or ends, in the order they are drawn.
@@ -1059,7 +1059,7 @@ fn light(head: Vec<Span<'static>>, columns: Option<&Range<usize>>) -> Vec<Span<'
     let mut column = 0;
     head.into_iter()
         .map(|span| {
-            let units = span.text.encode_utf16().count();
+            let units = chars::units(&span.text);
             let at = column;
             column += units;
             match at >= columns.start && column <= columns.end && at < column {

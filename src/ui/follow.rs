@@ -184,10 +184,8 @@ pub(crate) fn use_follow(
 
         // An empty run at the column the name starts at: a caret at the head of the
         // definition and not at the head of its line, the reader being taken there to
-        // read it and not to copy it. Those columns and a row's are both UTF-16 units,
-        // so nothing is converted.
-        let start = place.columns.start as usize;
-        let caret = start..start;
+        // read it and not to copy it.
+        let caret = caret_at(&place.file, place.line, place.columns.start);
         open_source_place(
             open,
             visits,
@@ -201,6 +199,27 @@ pub(crate) fn use_follow(
             reach,
         );
     });
+}
+
+/// The empty run a followed name lands on: `column` of `line`, counted into the units the
+/// source pane draws in.
+///
+/// The answer's column is a byte offset into its line (`src/lsp.rs`) where a pane's is a
+/// UTF-16 unit of the row it draws, so the line itself is what tells them apart. It is
+/// the file this door is about to open, which the pane reads a moment later anyway and
+/// which [`source::load`] remembers, so the read is brought forward rather than added --
+/// and it is behind a round trip to a server that took hundreds of milliseconds. A file
+/// that will not read leaves the number alone, which is the same column on any line of
+/// ASCII.
+fn caret_at(file: &Path, line: u32, column: u32) -> Range<usize> {
+    let at = column as usize;
+    let start = source::load(file)
+        .and_then(|read| {
+            let row = read.text().lines().nth((line as usize).checked_sub(1)?)?;
+            Some(chars::columns_of(row, at..at).start)
+        })
+        .unwrap_or(at);
+    start..start
 }
 
 /// Open `path` as a source-driven tab on `line`, `columns` of it selected, and let the

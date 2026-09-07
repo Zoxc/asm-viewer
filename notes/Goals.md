@@ -321,22 +321,22 @@ leaves this list when it is. That is a move made on request, like everything els
   `list_row_height`, and that the headless tests find a triangle by its label text
   (`triangle_of`, `src/ui/tests.rs`), so each has to be given another way to point at one.
 
-- [ ] Count a column in UTF-8 bytes, not UTF-16 units. `src/chars.rs` measures a place as a row
-  and a column in UTF-16 units, and every consumer follows: the language server's places, a
-  search hit, a rustc span, a link's extent. The unit is skia's rather than the protocol's --
-  `caret_col`, `caret_x` and `word_at` (`src/ui/marks.rs`) are
-  `get_glyph_position_at_coordinate`, `get_rects_for_range` and `get_word_boundary`, and skia
-  indexes a paragraph in UTF-16 code units. LSP's default encoding agrees by luck, which is why
-  `initialize` names no `positionEncoding`. Everything else here is bytes, so a converter sits
-  at each meeting: `search::units`, `references::bytes_of`, `cargo::Span::offset_in`,
-  `source_view::name_at`, `code_row::utf16_slice`, and the `len_utf16` loops in `chars.rs`.
-  Switching deletes those and lets rope slices and regex spans pass through untranslated.
-  Against that: the three skia calls each want a conversion against the paragraph's drawn text,
-  and that text is a piece list and not a `str` — an inline link is one unit to skia (U+FFFC)
-  with no UTF-8 spelling — so the conversion has to walk the pieces; and the language server
-  wants one per request and reply, or `positionEncoding: utf-8` negotiated, which `src/lsp.rs`
-  declines today. The keyboard caret already steps by character and not by unit, so UTF-16 is
-  only how a column is stored.
+- [x] Count a column in UTF-8 bytes, not UTF-16 units, everywhere but the drawing. The
+  handshake asks for `positionEncoding: utf-8` and converts where a server keeps UTF-16, so
+  every column crossing `src/lsp.rs` is a byte offset into its line; the four converters that
+  each had their own arithmetic — `search::units`, `references::bytes_of`,
+  `cargo::Span::offset_in`, `source_view::name_at` — are one pair of functions in
+  `src/chars.rs`.
+
+- [ ] Count a drawn row's columns in bytes as well, which needs skia to. `src/chars.rs`
+  measures a place as a row and a column in UTF-16 units because the three calls behind the
+  pointer are skia's — `caret_col`, `caret_x` and `word_at` (`src/ui/marks.rs`) are
+  `get_glyph_position_at_coordinate`, `get_rects_for_range` and `get_word_boundary` — and skia
+  indexes a paragraph in UTF-16 code units. So `code_row::utf16_slice` and the `len_utf16`
+  loops in `chars.rs` stay, and the source pane converts each way as it draws and as it is
+  pressed. Against doing it: a conversion has to walk the row's *pieces* and not a `str`, an
+  inline link being one unit to skia (U+FFFC) with no UTF-8 spelling. `notes/upstream/freya.md`
+  has the ask.
 
 ## Panels and tabs
 

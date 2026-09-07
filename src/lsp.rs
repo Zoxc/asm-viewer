@@ -49,6 +49,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::chars;
 use crate::process::{self, Handle};
 
 /// The largest message that will be read, so a server that says it is about to send a
@@ -126,19 +127,33 @@ pub enum Note {
     Settled(bool),
 }
 
+/// How the server counts a column, agreed on in the handshake ([`Talk::initialize`]).
+///
+/// The app counts a column in **bytes**, so a server that took `utf-8` leaves nothing to
+/// convert. UTF-16 is the protocol's own default and what a server that says nothing has
+/// kept -- `positionEncoding` arrived in 3.17 -- so it is what anything else is read as.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Encoding {
+    /// A column is a byte offset into the line, which is what the app counts in.
+    Utf8,
+    /// A column is a UTF-16 unit, which is what every column crossing this module is
+    /// converted from and to.
+    Utf16,
+}
+
 /// Where something is: a file, a **1-based** line in it, and the columns of the name on
 /// that line.
 ///
 /// The protocol counts lines from zero and this counts from one, the unit line information
 /// is in everywhere else in the app (`Object::symbols_from_lines`), so the conversion
-/// happens here and once. The columns are already the UTF-16 units a pane counts in
-/// (`src/chars.rs`) and are left as they came.
+/// happens here and once. The columns are **byte offsets into that line**, whichever way
+/// the server counted them ([`Encoding`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Place {
     pub file: PathBuf,
     pub line: u32,
-    /// The columns of the name on `line`. Empty where the answer's range spans lines: a
-    /// name does not, and an empty run selects nothing.
+    /// The columns of the name on `line`, in bytes. Empty where the answer's range spans
+    /// lines: a name does not, and an empty run selects nothing.
     pub columns: Range<u32>,
 }
 
@@ -212,8 +227,9 @@ pub struct Hovered {
     pub text: String,
     /// 1-based, as a [`Place`]'s line is and for its reason.
     pub line: u32,
-    /// The columns of the name the answer is about, in UTF-16 units. The server need not
-    /// say, and where it does not these are the columns the question was asked at, empty.
+    /// The columns of the name the answer is about, in bytes as a [`Place`]'s are. The
+    /// server need not say, and where it does not these are the columns the question was
+    /// asked at, empty.
     pub columns: Range<u32>,
 }
 
@@ -274,7 +290,7 @@ impl Legend {
 pub struct Token {
     /// 1-based, as a [`Place`]'s line is and for its reason.
     pub line: u32,
-    /// The columns of the name on `line`, in UTF-16 units.
+    /// The columns of the name on `line`, in bytes as a [`Place`]'s are.
     pub columns: Range<u32>,
     /// Which of the legend's types, by index.
     pub kind: u32,
@@ -422,8 +438,8 @@ impl Server {
 
     /// Put `question` about what is at `line` and `column` of `file`.
     ///
-    /// `line` counts from zero and `column` is in UTF-16 units, which is what the protocol
-    /// takes and what `src/chars.rs` already counts in.
+    /// `line` counts from zero, as the protocol does, and `column` is a byte offset into
+    /// that line, as every column in the app is ([`Place`]).
     pub fn places(
         &mut self,
         question: Question,
@@ -521,6 +537,13 @@ pub struct Talk<W> {
     /// Whether it said it takes documents from the client, from the same reply. False
     /// until then, so nothing is sent to a server that has not been asked yet.
     opens: bool,
+    /// Which way it counts a column, from the same reply. [`Encoding::Utf16`] until then,
+    /// which is the protocol's default and the one that is converted.
+    encoding: Encoding,
+    /// How a file a conversion needs is read. `source::read_text` outside the tests,
+    /// which hand over text rather than write a file for it. Never called at all where
+    /// the server took `utf-8`.
+    read: fn(&Path) -> Option<String>,
 }
 
 impl<W: Write + Send + 'static> Talk<W> {
@@ -540,18 +563,27 @@ impl<W: Write + Send + 'static> Talk<W> {
             id: 0,
             legend: Legend::default(),
             opens: false,
+            encoding: Encoding::Utf16,
+            read: crate::source::read_text,
         }
+    }
+
+    /// Read the files a conversion needs with `read` rather than off the disk: what a
+    /// test hands over instead of writing one.
+    #[cfg(test)]
+    pub fn reading(&mut self, read: fn(&Path) -> Option<String>) {
+        self.read = read;
     }
 
     /// The handshake: `initialize`, then the `initialized` notification, which the
     /// server waits for and which nothing may come before.
     ///
-    /// The capabilities are **two lines long**, and what is left out is the decision. Every
-    /// request rust-analyzer would make of a client -- for configuration, to register a
-    /// watcher -- is opt-in through a capability, so declaring none of those leaves a
-    /// conversation this app only ever speaks first in. Nothing is said about positions or
-    /// about definitions either: UTF-16 and plain locations are the defaults, both are
-    /// what is wanted, and naming them would only be a chance to name them wrongly.
+    /// The capabilities are **four lines long**, and what is left out is the decision.
+    /// Every request rust-analyzer would make of a client -- for configuration, to
+    /// register a watcher -- is opt-in through a capability, so declaring none of those
+    /// leaves a conversation this app only ever speaks first in. Nothing is said about
+    /// definitions: plain locations are the default and are what is wanted, and naming
+    /// that would only be a chance to name it wrongly.
     ///
     /// The first is progress, because it is the only way to know the server is still
     /// reading the project -- an answer before that is done is empty and says nothing
@@ -563,6 +595,13 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// and the doc comment's list run together into one word; one that names markdown is
     /// answered with the signature fenced and the comment as it was written. Measured
     /// against a real server both ways, over the same name.
+    ///
+    /// The third is how a column is counted, and it is the other default not worth
+    /// taking. The app counts a column in bytes, the protocol's default is UTF-16, and a
+    /// server offered both takes the first it knows: `utf-8` costs nothing on either side
+    /// and leaves nothing here to convert. **The order is the preference**, and a server
+    /// that says nothing back has kept UTF-16 -- `positionEncoding` arrived in 3.17 -- so
+    /// anything but a plain `utf-8` is read as UTF-16 and converted ([`Encoding`]).
     ///
     /// Semantic tokens are **not** declared either, though they are asked for: rust-analyzer
     /// offers them and sends its whole legend to a client that says nothing, which was
@@ -595,6 +634,7 @@ impl<W: Write + Send + 'static> Talk<W> {
                 "capabilities": {
                     "window": { "workDoneProgress": true },
                     "textDocument": { "hover": { "contentFormat": ["markdown"] } },
+                    "general": { "positionEncodings": ["utf-8", "utf-16"] },
                     "experimental": { "serverStatusNotification": true },
                 },
                 "initializationOptions": options,
@@ -602,6 +642,7 @@ impl<W: Write + Send + 'static> Talk<W> {
         )?;
         self.legend = legend_of(&said);
         self.opens = opens_documents(&said);
+        self.encoding = encoding_of(&said);
         self.notify("initialized", json!({}))
     }
 
@@ -626,9 +667,16 @@ impl<W: Write + Send + 'static> Talk<W> {
         line: u32,
         column: u32,
     ) -> Result<Vec<Place>, Failure> {
-        let params = question.params(file, line, column);
-        self.asked(question.method(), params)
-            .map(|value| places(&value))
+        let mut lines = self.lines();
+        let params = question.params(file, line, lines.out(file, line, column));
+        let mut found = self
+            .asked(question.method(), params)
+            .map(|value| places(&value))?;
+        for place in &mut found {
+            let at = place.line.saturating_sub(1);
+            place.columns = lines.back(&place.file, at, place.columns.clone());
+        }
+        Ok(found)
     }
 
     /// What the name at `line` and `column` of `file` is, in the server's own words, and
@@ -645,8 +693,16 @@ impl<W: Write + Send + 'static> Talk<W> {
         line: u32,
         column: u32,
     ) -> Result<Option<Hovered>, Failure> {
-        self.asked("textDocument/hover", asked_at(file, line, column))
-            .map(|value| hovered(&value, line, column))
+        let mut lines = self.lines();
+        let column = lines.out(file, line, column);
+        let mut said = self
+            .asked("textDocument/hover", asked_at(file, line, column))
+            .map(|value| hovered(&value, line, column))?;
+        if let Some(said) = said.as_mut() {
+            let at = said.line.saturating_sub(1);
+            said.columns = lines.back(file, at, said.columns.clone());
+        }
+        Ok(said)
     }
 
     /// Every name in `file`, as the server classifies them.
@@ -668,8 +724,15 @@ impl<W: Write + Send + 'static> Talk<W> {
             return Ok(Vec::new());
         }
         let params = json!({ "textDocument": { "uri": uri_of(file) } });
-        self.request("textDocument/semanticTokens/full", params)
-            .map(|value| tokens(&value))
+        let mut found = self
+            .request("textDocument/semanticTokens/full", params)
+            .map(|value| tokens(&value))?;
+        let mut lines = self.lines();
+        for token in &mut found {
+            let at = token.line.saturating_sub(1);
+            token.columns = lines.back(file, at, token.columns.clone());
+        }
+        Ok(found)
     }
 
     /// Tell the server the app is showing `file`, whose text is `text` and whose language
@@ -723,6 +786,16 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// What the server said it would spell its semantic tokens with.
     pub fn legend(&self) -> &Legend {
         &self.legend
+    }
+
+    /// The lines one question's conversion may need. Empty, and never filled at all where
+    /// the server took `utf-8`.
+    fn lines(&self) -> Lines {
+        Lines {
+            encoding: self.encoding,
+            read: self.read,
+            files: BTreeMap::new(),
+        }
     }
 
     /// One request whose refusal may be a "not now", which is the layer between
@@ -797,6 +870,83 @@ impl<W: Write + Send + 'static> Talk<W> {
 
     fn write(&mut self, body: &Value) -> Result<(), Failure> {
         write_to(&self.to, body)
+    }
+}
+
+/// The lines one question's columns are converted through, each file read once.
+///
+/// A column crossing this module is a byte offset into its line and a column on the wire
+/// is whatever the handshake agreed on, so converting between them takes the line's text.
+/// The question's own file is one the app has open; an answer can name any file at all --
+/// a definition in another crate, a reference in a file no tab shows -- so the text is
+/// read rather than remembered, through the app's one rule for reading a source file
+/// (`source::read_text`). The read blocks, which is why every question here is a worker's
+/// (`src/ui/language.rs`).
+///
+/// **Nothing is read where the server took `utf-8`**: the numbers are already the app's,
+/// and nothing here has an answer to give.
+struct Lines {
+    encoding: Encoding,
+    read: fn(&Path) -> Option<String>,
+    /// What each file said, a miss included, so an answer naming one file twenty times
+    /// reads it once.
+    files: BTreeMap<PathBuf, Option<String>>,
+}
+
+impl Lines {
+    /// The text of `line` -- counted from zero, as the protocol counts -- of `file`, and
+    /// nothing where there is no converting to do, the file would not read, or it is too
+    /// short for the line.
+    fn at(&mut self, file: &Path, line: u32) -> Option<&str> {
+        if self.encoding == Encoding::Utf8 {
+            return None;
+        }
+        let read = self.read;
+        let text = self
+            .files
+            .entry(file.to_path_buf())
+            .or_insert_with(|| read(file));
+        text.as_deref()?.lines().nth(line as usize)
+    }
+
+    /// A byte column as the server counts one: what goes out with a question.
+    fn out(&mut self, file: &Path, line: u32, column: u32) -> u32 {
+        let Some(text) = self.at(file, line) else {
+            return column;
+        };
+        let at = column as usize;
+        narrowed(chars::columns_of(text, at..at).start)
+    }
+
+    /// The server's columns as bytes: what comes back with an answer.
+    fn back(&mut self, file: &Path, line: u32, columns: Range<u32>) -> Range<u32> {
+        let Some(text) = self.at(file, line) else {
+            return columns;
+        };
+        let bytes = chars::bytes_of(text, columns.start as usize..columns.end as usize);
+        narrowed(bytes.start)..narrowed(bytes.end)
+    }
+}
+
+/// A column as it is held here. A line of four billion bytes is not one this app draws,
+/// so the count clamps rather than wraps.
+fn narrowed(column: usize) -> u32 {
+    u32::try_from(column).unwrap_or(u32::MAX)
+}
+
+/// Which way the server said it counts a column.
+///
+/// Anything but a plain `utf-8` is UTF-16: it is the protocol's default, it is what a
+/// server older than 3.17 has kept, and it is the reading that converts rather than the
+/// one that trusts a word this app did not offer.
+fn encoding_of(said: &Value) -> Encoding {
+    let chosen = said
+        .get("capabilities")
+        .and_then(|value| value.get("positionEncoding"))
+        .and_then(Value::as_str);
+    match chosen {
+        Some("utf-8") => Encoding::Utf8,
+        _ => Encoding::Utf16,
     }
 }
 

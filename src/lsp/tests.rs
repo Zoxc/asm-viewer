@@ -1,4 +1,5 @@
 use std::io::{Cursor, PipeReader, PipeWriter};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
 use crate::temporary::Temporary;
@@ -293,17 +294,19 @@ fn the_handshake_is_initialize_and_then_initialized() {
     // itself, and a message before it ends the conversation.
     assert_eq!(methods, ["initialize", "initialized"]);
     assert_eq!(said[0]["params"]["rootUri"], json!("file:///p"));
-    // Three things are declared and nothing else: progress, which is how far a server
-    // that says nothing else about itself has got; the format a hover is written in,
-    // which rust-analyzer flattens to plain text for a client that names none; and the
-    // notification a server sends when it has settled, which no specification has and
-    // which a server without one simply never sends. None of them is what would have it
-    // ask this app for configuration or for a file watcher.
+    // Four things are declared and nothing else: progress, which is how far a server that
+    // says nothing else about itself has got; the format a hover is written in, which
+    // rust-analyzer flattens to plain text for a client that names none; how a column is
+    // counted, which the app counts in bytes; and the notification a server sends when it
+    // has settled, which no specification has and which a server without one simply never
+    // sends. None of them is what would have it ask this app for configuration or for a
+    // file watcher.
     assert_eq!(
         said[0]["params"]["capabilities"],
         json!({
             "window": { "workDoneProgress": true },
             "textDocument": { "hover": { "contentFormat": ["markdown"] } },
+            "general": { "positionEncodings": ["utf-8", "utf-16"] },
             "experimental": { "serverStatusNotification": true },
         })
     );
@@ -424,6 +427,135 @@ fn a_relative_project_directory_is_named_to_the_server_as_an_absolute_one() {
     assert_eq!(params["workspaceFolders"][0]["uri"], json!(root));
     let here = handshake_over(Path::new("."));
     assert_ne!(here["workspaceFolders"][0]["name"], json!(""));
+}
+
+/// The one line the conversion tests are about: `// \u{1f980} helper`, where the crab is
+/// four bytes and two UTF-16 units, so `helper` begins at byte 8 and at column 6.
+const WIDE_LINE: &str = "// \u{1f980} helper\n";
+
+fn reads_wide(_: &Path) -> Option<String> {
+    Some(WIDE_LINE.to_owned())
+}
+
+/// How many files [`counts_reads`] was asked for, for the test that a server counting in
+/// bytes has nothing read for it.
+static READS: AtomicU32 = AtomicU32::new(0);
+
+fn counts_reads(path: &Path) -> Option<String> {
+    READS.fetch_add(1, Ordering::SeqCst);
+    reads_wide(path)
+}
+
+/// A handshake against a server that answers `positionEncoding` with `chose`, or with
+/// nothing at all for [`Value::Null`]: what was offered, and what the client made of the
+/// answer.
+fn encoding_chosen(chose: Value) -> (Value, Encoding) {
+    let (said, taken, _notes) = against(
+        move |fake, message| {
+            if message["method"] == json!("initialize") {
+                let mut capabilities = json!({});
+                if !chose.is_null() {
+                    capabilities["positionEncoding"] = chose.clone();
+                }
+                fake.say(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"].clone(),
+                    "result": { "capabilities": capabilities },
+                }));
+            }
+        },
+        |talk| {
+            talk.initialize(Path::new("/p"), &wanted())
+                .expect("a handshake");
+            talk.encoding
+        },
+    );
+    (said[0]["params"]["capabilities"]["general"].clone(), taken)
+}
+
+#[test]
+fn the_handshake_asks_for_bytes_and_believes_what_it_is_answered() {
+    // Both are offered and bytes come first, the order being the preference. A server
+    // that takes them leaves nothing here to convert.
+    let (offered, taken) = encoding_chosen(json!("utf-8"));
+    assert_eq!(offered, json!({ "positionEncodings": ["utf-8", "utf-16"] }));
+    assert_eq!(taken, Encoding::Utf8);
+
+    // UTF-16 is the protocol's default, so it is what a server that says nothing has
+    // kept -- `positionEncoding` arrived in 3.17 -- and what anything this app never
+    // offered is read as. Never an error: a server is not broken for being older.
+    assert_eq!(encoding_chosen(Value::Null).1, Encoding::Utf16);
+    assert_eq!(encoding_chosen(json!("utf-16")).1, Encoding::Utf16);
+    assert_eq!(encoding_chosen(json!("utf-32")).1, Encoding::Utf16);
+    assert_eq!(encoding_chosen(json!(8)).1, Encoding::Utf16);
+}
+
+/// A conversation with a server that answered `encoding`, asked about byte 8 of the first
+/// line and answering with `columns` of it: what went out, and what came back.
+fn asked_over_wide_line(
+    encoding: &'static str,
+    columns: Range<u32>,
+    read: fn(&Path) -> Option<String>,
+) -> (Value, Vec<Place>) {
+    let (said, found, _notes) = against(
+        move |fake, message| {
+            let result = match message["method"] == json!("initialize") {
+                true => json!({ "capabilities": { "positionEncoding": encoding } }),
+                false => json!([{
+                    "uri": "file:///p/src/main.rs",
+                    "range": {
+                        "start": { "line": 0, "character": columns.start },
+                        "end": { "line": 0, "character": columns.end },
+                    },
+                }]),
+            };
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "result": result,
+            }));
+        },
+        move |talk| {
+            talk.reading(read);
+            talk.initialize(Path::new("/p"), &wanted())
+                .expect("a handshake");
+            talk.places(
+                Question::Followed(Followed::Definition),
+                Path::new("/p/src/main.rs"),
+                0,
+                8,
+            )
+            .expect("an answer")
+        },
+    );
+    let asked = said
+        .iter()
+        .find(|message| message["method"] == json!("textDocument/definition"))
+        .expect("the question");
+    (asked["params"]["position"].clone(), found)
+}
+
+#[test]
+fn a_server_that_kept_utf_16_has_every_column_converted() {
+    // The app counts a column in bytes and this server counts in units, so the two
+    // numbers differ by the crab: byte 8 is column 6, and the columns of `helper` are
+    // 6..12 to the server and 8..14 here.
+    let (asked, found) = asked_over_wide_line("utf-16", 6..12, reads_wide);
+
+    assert_eq!(asked, json!({ "line": 0, "character": 6 }));
+    assert_eq!(found[0].columns, 8..14);
+}
+
+#[test]
+fn a_server_that_took_utf_8_is_asked_in_bytes_and_reads_nothing() {
+    READS.store(0, Ordering::SeqCst);
+    let (asked, found) = asked_over_wide_line("utf-8", 8..14, counts_reads);
+
+    // Both numbers go through untouched, and no file is opened to touch them: what a
+    // conversion would cost is what asking for bytes is for.
+    assert_eq!(asked, json!({ "line": 0, "character": 8 }));
+    assert_eq!(found[0].columns, 8..14);
+    assert_eq!(READS.load(Ordering::SeqCst), 0);
 }
 
 #[test]

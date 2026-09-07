@@ -35,7 +35,7 @@ pub(crate) use analysis::{
 
 pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};
 pub(crate) use crate::cargo::{self, Diagnostic, Level, Profile};
-pub(crate) use crate::chars::{beyond, Bounds, Caret, CharSelection, Line, Motion};
+pub(crate) use crate::chars::{self, beyond, Bounds, Caret, CharSelection, Line, Motion};
 pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs, Entry};
 pub(crate) use crate::files::{shows_as_source, FileRow, FileRows, FileTree, Fold};

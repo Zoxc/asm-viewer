@@ -126,6 +126,8 @@ command.
   that lets a panic hook tell one of those from a panic that has broken the app.
 - `src/cargo.rs` — running cargo and reading what it said: the artifacts it names, the
   diagnostics it reports, and the profile's debug information in the manifest being built.
+  Plain data about someone else's file: what a diagnostic's place means to a cursor is
+  `src/chars.rs`.
 - `src/project.rs` — projects: their identity, the two files each is stored in, the save policy,
   and which language server each is read with.
 - `src/store.rs` — everything the app stores: the directory it goes in and the variable that
@@ -163,8 +165,9 @@ command.
   the fold, and flattened into the rows the Files view draws.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
 - `src/lsp.rs` — the language server: the program the project names started over its
-  directory, the messages spoken to it, the project's own `.vscode/settings.json` read into
-  what it is told, and the process a stop kills.
+  directory, the messages spoken to it, which way it counts a column and the conversion
+  where that is not the app's, the project's own `.vscode/settings.json` read into what it
+  is told, and the process a stop kills.
 - `src/references.rs` — the places a language server answered a question with, grouped
   under the file each is in and with the text of the line each is on: what the Locations
   panel draws.
@@ -176,7 +179,8 @@ command.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
 - `src/chars.rs` — the run a sweep over a listing selects: a place is a row and a column in
   UTF-16 units, a row's text is pieces, and what each row draws, what the rows it touches
-  are, and what it copies.
+  are, and what it copies. Also the one conversion between those units and the byte
+  offsets a column is everywhere else, and where a compiler's line and column put a cursor.
 - `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
   a stretch is decoded, the symbol's own after, and an address for every one.
 - `src/docs.rs` — `Docs`, the table mapping a document tab's `DocId` to the trail behind it: every

@@ -488,8 +488,9 @@ one whether or not it has a line or a door.
 **A call in the source is a door of its own, and it is text and not an element.** A row's
 paragraph takes one inline child, and an inline is one *unit* to the text engine
 (`src/chars.rs`), so a name made into an element would stop a source row's columns being the
-file's own -- which is the whole reason a press on one can say where it was in the terms the
-language server takes, with nothing converted. So the door is decided from the pressed
+file's own line counted in units -- which is what lets a press on one be counted straight
+into the byte offset the language server is asked at (`chars::bytes_of`, and the links'
+own columns back the other way). So the door is decided from the pressed
 column instead: the row's `TextLinks` carries the columns of every link in it and what a press
 on one follows, `code_row` hit-tests the pointer against them for the hand and for the press,
 and lighting one changes a span's style and never where the spans are cut. A boundary that

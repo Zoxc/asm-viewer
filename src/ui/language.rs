@@ -373,8 +373,9 @@ impl Language {
 /// is. The program's own name is in the tooltip and in the Project view.
 const SERVER_NAME: &str = "LSP";
 
-/// A place in a source file, as the protocol takes one: the line counts from zero and the
-/// column is in UTF-16 units, which is what the rows are measured in (`src/chars.rs`).
+/// A place in a source file, as the language server is asked about one: the line counts
+/// from zero, as the protocol counts, and the column is a byte offset into that line, as
+/// every column outside the drawing is (`src/lsp.rs`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Lookup {
     pub(crate) file: PathBuf,

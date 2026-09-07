@@ -3,14 +3,18 @@
 //! run of **characters**, and the rows it touches are the run of rows -- the place the two
 //! panes point at each other through ([`CharSelection::rows`]).
 //!
-//! A column is a **UTF-16 unit** into the row's text as the row draws it, which is the
-//! unit the text engine answers a pointer in and takes a highlight in; nothing here
-//! converts. A row's text is a [`Line`] of pieces, because a row can hold an element that
-//! is not text -- a relocation link -- which the engine counts as one unit and which copies
-//! as the whole name it shows.
+//! A column here is a **UTF-16 unit** into the row's text as the row draws it, which is
+//! the unit the text engine answers a pointer in and takes a highlight in. A row's text is
+//! a [`Line`] of pieces, because a row can hold an element that is not text -- a relocation
+//! link -- which the engine counts as one unit and which copies as the whole name it shows.
+//!
+//! Everywhere else in the app a column is a **byte offset** into the file's line, which is
+//! what a language server is asked in and answers in (`src/lsp.rs`). So this module owns
+//! both counts and the one conversion between them ([`columns_of`], [`bytes_of`]): the
+//! drawing side converts, and nothing else has to know how a character is counted.
 
 use std::fmt;
-use std::ops::RangeInclusive;
+use std::ops::{Range, RangeInclusive};
 
 /// A place in a listing: a row, and a column in UTF-16 units of that row's text. Ordered
 /// by row first, which is what puts the two ends of a selection in listing order.
@@ -304,6 +308,86 @@ impl CharSelection {
 /// row's units wherever a column is drawn or copied.
 pub const END: usize = usize::MAX;
 
+/// How many UTF-16 units `text` is: the unit a row's columns are counted in.
+pub fn units(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// The UTF-16 columns of the byte range `bytes` in `line`: a run of the file's line as
+/// the row drawing it counts one.
+///
+/// Both ends are clamped into the line and rounded **down** to a character boundary, so a
+/// range out of a stale answer names a run of the line rather than panicking
+/// (`AGENTS.md`: never panic on file input, and a server's answer is one).
+pub fn columns_of(line: &str, bytes: Range<usize>) -> Range<usize> {
+    let at = |byte: usize| units(&line[..boundary(line, byte)]);
+    let start = at(bytes.start);
+    start..at(bytes.end).max(start)
+}
+
+/// The byte range of the UTF-16 columns `columns` in `line`: the other way round, and the
+/// same rounding -- a column inside a character two units wide is that character's start.
+pub fn bytes_of(line: &str, columns: Range<usize>) -> Range<usize> {
+    let start = byte_at(line, columns.start);
+    start..byte_at(line, columns.end).max(start)
+}
+
+/// The last character boundary of `line` at or before `byte`, and the line's length for a
+/// byte past its end.
+fn boundary(line: &str, byte: usize) -> usize {
+    let mut at = byte.min(line.len());
+    while !line.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
+/// Where UTF-16 column `column` is in `line`'s bytes: the start of the character it is
+/// in, and the line's length for a column past its end.
+fn byte_at(line: &str, column: usize) -> usize {
+    let mut units = 0;
+    for (at, character) in line.char_indices() {
+        if units + character.len_utf16() > column {
+            return at;
+        }
+        units += character.len_utf16();
+    }
+    line.len()
+}
+
+/// Where the one-based `line` and `column` **rustc** counts in is in `text`, as a UTF-16
+/// offset from its start: what an editor moves a cursor to (`src/ui/pad.rs`).
+///
+/// rustc counts a column in *characters*, so a tab is one and an accented letter is one,
+/// and it separates lines by `\n` alone, having normalised `\r\n` before it numbered
+/// anything.
+///
+/// Two clamps, and they are the same decision twice. `text` is the source **as it is
+/// now**, which is not necessarily the source the build was told about -- the reader has
+/// usually typed since -- so a column past the end of its line lands at the end of that
+/// line, and a line past the end of the text at the end of the text. Being taken to
+/// roughly the right place beats not being taken anywhere, and there is nothing here that
+/// can fail.
+pub fn offset_of(text: &str, line: usize, column: usize) -> usize {
+    let line = line.saturating_sub(1);
+    let column = column.saturating_sub(1);
+    // A character at a time, since the column being counted from is a character count.
+    let upto = |row: &str, take: usize| row.chars().take(take).map(char::len_utf16).sum::<usize>();
+
+    let mut offset = 0;
+    for (index, row) in text.split_inclusive('\n').enumerate() {
+        if index == line {
+            // The line break is no part of the line: a column past the end of the text on
+            // it stops before the break rather than landing on the line below.
+            let row = row.trim_end_matches('\n').trim_end_matches('\r');
+            return offset + upto(row, column);
+        }
+        offset += units(row);
+    }
+
+    offset
+}
+
 /// A listing's box on screen, in logical pixels.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Bounds {
@@ -380,7 +464,7 @@ pub enum Piece {
 impl Piece {
     fn units(&self) -> usize {
         match self {
-            Piece::Text(text) => text.encode_utf16().count(),
+            Piece::Text(text) => units(text),
             Piece::Inline(_) => 1,
         }
     }

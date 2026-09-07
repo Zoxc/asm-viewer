@@ -449,3 +449,12 @@ and `true` for a name whose `max_intrinsic_width` was 422px (`Fitted`, `ui/parts
 behind the measurement, so a row is drawn once before it knows. 0.5.0-rc.4 changes none of
 it -- the same three fields, and `Label` still has no holder. A flag on `SizedEventData`, or
 a `Label::holder`, would do it.
+
+**A paragraph that answers in bytes.** Its hit test and its highlight both speak UTF-16 code
+units (`caret_col`, `highlights`), skia's own unit, so a column of a drawn row is a UTF-16
+unit and cannot be anything else. **Cost:** the app counts a column in bytes everywhere else
+-- a language server is asked in them, a line is indexed by them -- so the source pane
+converts each way as it draws and as it is pressed, and a followed definition reads the line
+it lands on to count its caret's column (`src/ui/follow.rs`). The conversion is one function
+each way (`src/chars.rs`) and the cost is a walk of a short line, but it is a walk that a
+byte-offset hit test would remove.

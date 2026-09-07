@@ -37,7 +37,8 @@ use crate::shared::Shared;
 pub struct Link {
     /// 1-based, as every line in the app is.
     pub line: u32,
-    /// The columns of the name on `line`, in UTF-16 units.
+    /// The columns of the name on `line`, as byte offsets into it -- the server's own
+    /// units (`lsp::Token`). The pane converts them to the columns it draws in.
     pub columns: Range<u32>,
     /// What following it asks the server, and `None` where there is nothing to follow.
     /// The server's own type, so nothing maps a link's question onto a wire one
@@ -73,7 +74,7 @@ impl Links {
     }
 
     /// The columns of the names on `line` that can be followed, in the order they are
-    /// drawn: what a row draws as links.
+    /// drawn: what a row draws as links, once the pane has counted them in its own units.
     pub fn followed_on(&self, line: u32) -> Vec<Range<u32>> {
         self.on_line(line)
             .iter()
@@ -90,8 +91,8 @@ impl Links {
         &rest[..to]
     }
 
-    /// The name `column` is inside on `line`, and `None` where it is over none. Followed
-    /// or not: where a name is defined is where a reader asks what refers to it.
+    /// The name byte `column` is inside on `line`, and `None` where it is over none.
+    /// Followed or not: where a name is defined is where a reader asks what refers to it.
     pub fn at(&self, line: u32, column: u32) -> Option<&Link> {
         self.on_line(line)
             .iter()
