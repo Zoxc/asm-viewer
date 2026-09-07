@@ -717,6 +717,23 @@ pub struct RestoredEntry {
     pub src_line: Option<u32>,
 }
 
+impl RestoredEntry {
+    /// The place this is, as a trail holds one ([`Stop`]).
+    ///
+    /// **The one place the saved halves are paired back with the document they belong
+    /// to.** A file states them apart -- an address, a line and a document, each its own
+    /// value -- and can therefore state a pairing that means nothing, so a place whose
+    /// half does not belong to its document is the document itself and not a guess. Past
+    /// here nothing carries the halves.
+    pub fn stop(&self) -> Stop {
+        match (&self.document, self.address, self.src_line) {
+            (Document::Code(object), Some(address), _) => Stop::at(object.clone(), address),
+            (Document::Source(file), _, Some(line)) => Stop::on(file.clone(), line),
+            _ => Stop::whole(self.document.clone()),
+        }
+    }
+}
+
 /// The record of visits in saved form: every place visited, newest first. No cursor --
 /// the cursors are the tabs' -- so nothing has to precede the array of tables.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -860,26 +877,34 @@ impl Rebuilt {
 /// refusal on a value that was UTF-8 all along.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SavedDocument {
+    /// The whole of an object, shown one of the two ways it can be.
     Object {
         path: PathBuf,
         object_name: String,
+        /// Which of the two ([`SavedShown`]). A plain value, like the two above it: the
+        /// path and the name say both, and this is all that tells them apart.
+        shown: SavedShown,
     },
     Symbol {
         path: PathBuf,
         object_name: String,
         address: u64,
-        /// Last, and after `address`: a name the file stated is written as a table of its
-        /// own, and a table cannot precede a plain value ([`Store::write_toml`]).
+        /// Last, and after `address`: a saved name is written as a table of its own, and
+        /// a table cannot precede a plain value ([`Store::write_toml`]).
         symbol_name: SavedName,
     },
     Source {
         path: String,
     },
-    /// All of an object's code, named the way its object is.
-    Code {
-        path: PathBuf,
-        object_name: String,
-    },
+}
+
+/// Which of the two ways the whole of an object is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SavedShown {
+    /// The symbols it holds, which is what a binary's own tab lists.
+    Symbols,
+    /// All of its code, as one listing.
+    Code,
 }
 
 /// What a saved symbol is called: the file's own name for it, or, for one the app named
@@ -891,10 +916,22 @@ pub enum SavedDocument {
 /// again on the way back. A bookmark on `<function 0x140001000>` therefore survives the app
 /// deciding to spell that some other way: a saved string would quietly stop matching the
 /// symbol it was made on, and a bookmark that resolves to nothing is a bookmark gone.
+///
+/// The two are separate types because they are the two answers, and neither has the
+/// other's half: a name the app made up has no string to save, and one the file stated
+/// has no [`MadeUp`] to render.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SavedName {
     /// The file's own name, spelled as the file spells it.
     File(String),
+    /// A name the app made up: which one, the spelling being a function of that and the
+    /// address ([`SavedMadeUp`]).
+    MadeUp(SavedMadeUp),
+}
+
+/// Which name the app made up: [`MadeUp`] without the address, which is saved beside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SavedMadeUp {
     /// The app's name for the entry point.
     EntryPoint,
     /// The app's name for a function at the saved address.
@@ -903,16 +940,35 @@ pub enum SavedName {
     Fragment,
 }
 
+impl SavedMadeUp {
+    /// The saved form of `made_up`. Every variant of [`MadeUp`] is named here, so a
+    /// fourth made-up name is a compile error and not a spelling silently written to a
+    /// file.
+    fn of(made_up: MadeUp) -> SavedMadeUp {
+        match made_up {
+            MadeUp::EntryPoint => SavedMadeUp::EntryPoint,
+            MadeUp::Function(_) => SavedMadeUp::Function,
+            MadeUp::Fragment(_) => SavedMadeUp::Fragment,
+        }
+    }
+
+    /// The name this is, borne by a symbol at `address`: the other half of
+    /// [`SavedMadeUp::of`], and where the address the spelling needs comes back.
+    fn at(self, address: u64) -> MadeUp {
+        match self {
+            SavedMadeUp::EntryPoint => MadeUp::EntryPoint,
+            SavedMadeUp::Function => MadeUp::Function(address),
+            SavedMadeUp::Fragment => MadeUp::Fragment(address),
+        }
+    }
+}
+
 impl SavedName {
-    /// The saved form of `name`, borne by a symbol at `address`. Every variant of
-    /// [`MadeUp`] is named here, so a fourth made-up name is a compile error and not a
-    /// spelling silently written to a file.
+    /// The saved form of `name`, borne by a symbol at `address`.
     pub fn of(name: &str, address: u64) -> SavedName {
         match MadeUp::of(name, address) {
             None => SavedName::File(name.to_owned()),
-            Some(MadeUp::EntryPoint) => SavedName::EntryPoint,
-            Some(MadeUp::Function(_)) => SavedName::Function,
-            Some(MadeUp::Fragment(_)) => SavedName::Fragment,
+            Some(made_up) => SavedName::MadeUp(SavedMadeUp::of(made_up)),
         }
     }
 
@@ -920,23 +976,19 @@ impl SavedName {
     /// made-up one spelled the way the app spells it today. What the symbol is looked up
     /// by.
     pub fn text(&self, address: u64) -> Cow<'_, str> {
-        match (self.made_up(address), self) {
-            (Some(made_up), _) => Cow::Owned(made_up.to_string()),
-            (None, SavedName::File(name)) => Cow::Borrowed(name),
-            // [`SavedName::made_up`] answers `None` for `File` and for nothing else.
-            (None, _) => Cow::Borrowed(""),
+        match self {
+            SavedName::File(name) => Cow::Borrowed(name),
+            SavedName::MadeUp(made_up) => Cow::Owned(made_up.at(address).to_string()),
         }
     }
 
     /// Which name the app made up, for a symbol at `address`; [`None`] where the name is
-    /// the file's own. The other half of [`SavedName::of`], and what says a saved place
-    /// can spell itself without the file it points into being open.
+    /// the file's own. What says a saved place can spell itself without the file it
+    /// points into being open.
     pub fn made_up(&self, address: u64) -> Option<MadeUp> {
         match self {
             SavedName::File(_) => None,
-            SavedName::EntryPoint => Some(MadeUp::EntryPoint),
-            SavedName::Function => Some(MadeUp::Function(address)),
-            SavedName::Fragment => Some(MadeUp::Fragment(address)),
+            SavedName::MadeUp(made_up) => Some(made_up.at(address)),
         }
     }
 }
@@ -945,13 +997,15 @@ impl SavedDocument {
     /// The saved form of `document`.
     pub fn from_document(document: &Document) -> SavedDocument {
         match document {
-            Document::Code(object) => SavedDocument::Code {
+            Document::Code(object) => SavedDocument::Object {
                 path: object.path.clone(),
                 object_name: object.name.clone(),
+                shown: SavedShown::Code,
             },
             Document::Assembly(Selection::Object(object)) => SavedDocument::Object {
                 path: object.path.clone(),
                 object_name: object.name.clone(),
+                shown: SavedShown::Symbols,
             },
             Document::Assembly(Selection::Symbol(symbol)) => SavedDocument::Symbol {
                 path: symbol.object.path.clone(),
@@ -979,14 +1033,24 @@ impl SavedDocument {
         }
     }
 
-    /// The binary this names, or `None` for a file.
-    fn binary_path(&self) -> Option<&Path> {
+    /// The object this names: its file, and the name it is known in that file by.
+    /// `None` for a source file, which names no binary. One question, so nothing that
+    /// wants the object answers for a source file as well.
+    fn binary(&self) -> Option<(&Path, &str)> {
         match self {
-            SavedDocument::Object { path, .. }
-            | SavedDocument::Symbol { path, .. }
-            | SavedDocument::Code { path, .. } => Some(path),
+            SavedDocument::Object {
+                path, object_name, ..
+            }
+            | SavedDocument::Symbol {
+                path, object_name, ..
+            } => Some((path, object_name)),
             SavedDocument::Source { .. } => None,
         }
+    }
+
+    /// The binary this names, or `None` for a file.
+    fn binary_path(&self) -> Option<&Path> {
+        self.binary().map(|(path, _)| path)
     }
 
     /// The same to write into: what [`Project::against`] rewrites, and `None` for a source
@@ -994,22 +1058,14 @@ impl SavedDocument {
     /// filesystem was asked about.
     fn binary_path_mut(&mut self) -> Option<&mut PathBuf> {
         match self {
-            SavedDocument::Object { path, .. }
-            | SavedDocument::Symbol { path, .. }
-            | SavedDocument::Code { path, .. } => Some(path),
+            SavedDocument::Object { path, .. } | SavedDocument::Symbol { path, .. } => Some(path),
             SavedDocument::Source { .. } => None,
         }
     }
 
     /// The loaded object this names, if it is still there.
     fn find_object<'a>(&self, objects: &'a [Arc<Object>]) -> Option<&'a Arc<Object>> {
-        let path = self.binary_path()?;
-        let name = match self {
-            SavedDocument::Object { object_name, .. }
-            | SavedDocument::Symbol { object_name, .. }
-            | SavedDocument::Code { object_name, .. } => object_name.as_str(),
-            SavedDocument::Source { .. } => return None,
-        };
+        let (path, name) = self.binary()?;
         objects
             .iter()
             .find(|object| object.path == path && object.name == name)
@@ -1023,34 +1079,34 @@ impl SavedDocument {
     /// A source-driven entry resolves against nothing and so cannot fail: a deleted file
     /// comes back as a tab over the pane's own "Source file not found".
     fn resolve(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Document> {
-        if let SavedDocument::Source { path } = self {
-            return Some(Document::Source(Arc::from(path.as_str())));
-        }
-
-        let object = self.find_object(objects)?;
-        let selection = match self {
-            SavedDocument::Code { .. } => return Some(Document::Code(object.clone())),
-            SavedDocument::Object { .. } => Selection::Object(object.clone()),
+        match self {
+            SavedDocument::Source { path } => Some(Document::Source(Arc::from(path.as_str()))),
+            SavedDocument::Object { shown, .. } => {
+                let object = self.find_object(objects)?.clone();
+                Some(match shown {
+                    SavedShown::Symbols => Document::Assembly(Selection::Object(object)),
+                    SavedShown::Code => Document::Code(object),
+                })
+            }
             SavedDocument::Symbol {
                 path,
                 symbol_name,
                 address,
                 ..
-            } => SavedDocument::find_symbol(
-                object,
-                &symbol_name.text(*address),
-                *address,
-                rebuilt.changed(path),
-            )
-            .map(|data| {
-                Selection::Symbol(Symbol {
+            } => {
+                let object = self.find_object(objects)?;
+                let data = SavedDocument::find_symbol(
+                    object,
+                    &symbol_name.text(*address),
+                    *address,
+                    rebuilt.changed(path),
+                )?;
+                Some(Document::Assembly(Selection::Symbol(Symbol {
                     object: object.clone(),
                     data: data.clone(),
-                })
-            })?,
-            SavedDocument::Source { .. } => unreachable!("answered above"),
-        };
-        Some(Document::Assembly(selection))
+                })))
+            }
+        }
     }
 
     /// What this names against whatever is loaded, believing the **name** over the address
@@ -1191,7 +1247,7 @@ impl Session {
                                     src_row: src_rows.at(&entry).unwrap_or(0),
                                     line: driven.line(&entry),
                                     asm_address: places.at(&entry).map(|spot| spot.address),
-                                    src_line: stop.line,
+                                    src_line: stop.line(),
                                     document: SavedDocument::from_document(&stop.document),
                                 }
                             })
@@ -1270,13 +1326,9 @@ impl Session {
                     })
                     .collect();
                 let trail = History::rebuilt(
-                    resolved.iter().map(|entry| {
-                        entry.as_ref().map(|entry| Stop {
-                            document: entry.document.clone(),
-                            address: entry.address,
-                            line: entry.src_line,
-                        })
-                    }),
+                    resolved
+                        .iter()
+                        .map(|entry| entry.as_ref().map(RestoredEntry::stop)),
                     saved.cursor,
                 );
                 trail.current()?;

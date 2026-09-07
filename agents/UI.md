@@ -570,9 +570,13 @@ saved documents and `SavedDocument` needs no answer for it. What a scratchpad *b
 offset the one leaving had. `Places::asm_at`/`src_at` are two `Positions` maps, **both
 keyed by an `Entry`**, the tab's `DocId` and a `Stop` on its trail -- a document, plus where in it
 the tab was: the address for an object's code, the line for a source file, and neither for a
-document opened at no place in particular. So an entry means "this side of this place on this tab"
-for exactly as long as the tab is open and the place is on its trail, and going Back comes back to
-the rows that were left. **A place and not a document** is what makes following a link inside the
+document opened at no place in particular. **Where a stop is goes with the kind of document it is
+in**, and a `Stop` holds the two together: `Stop::at` takes the object whose code the address is in
+and `Stop::on` the file the line is of, the place itself is private, and `Stop::place` hands the
+pair back -- so a line of an object's code is a state nothing can build and no reader of a stop
+needs an arm for one. So an entry means "this side of this place on this tab" for exactly as long
+as the tab is open and the place is on its trail, and going Back comes back to the rows that were
+left. **A place and not a document** is what makes following a link inside the
 unified view, or a name inside a file, a step Back returns from: the two addresses, or the two
 lines, are two entries, and a step between them is a switch to every pane, which is the whole of
 the behaviour -- there is no second mechanism for moving the view inside one listing. Which is

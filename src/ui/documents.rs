@@ -461,11 +461,12 @@ pub(crate) fn place_at(docs: &Docs, tab: DocId, document: &Document) -> Stop {
 /// where in its own terms, and a symbol's landing is the one place its document is: an
 /// address there is a caret in it and a line is a row of the file beside it.
 fn stop_of(landing: &Landing) -> Stop {
-    let tab = landing.tab.clone();
     match (&landing.tab, landing.address, &landing.at) {
-        (Document::Code(_), Some(address), _) => Stop::at(tab, address),
-        (Document::Source(file), _, Some(at)) if at.file == *file => Stop::on(tab, at.line),
-        _ => Stop::whole(tab),
+        (Document::Code(object), Some(address), _) => Stop::at(object.clone(), address),
+        (Document::Source(file), _, Some(at)) if at.file == *file => {
+            Stop::on(file.clone(), at.line)
+        }
+        _ => Stop::whole(landing.tab.clone()),
     }
 }
 
@@ -709,15 +710,13 @@ pub(crate) async fn take_load(
 /// give and is the object's. A place in a file is the file and the line, which is all
 /// that tells two of them apart.
 pub(crate) fn stop_text(stop: &Stop) -> String {
-    match (&stop.document, stop.address, stop.line) {
-        (Document::Code(object), Some(address), _) => match object.symbol_at(address) {
+    match stop.place() {
+        Place::Code(object, address) => match object.symbol_at(address) {
             Some(symbol) => short_name(symbol.display()),
             None => entry_text(&stop.document),
         },
-        (document @ Document::Source(_), _, Some(line)) => {
-            format!("{}:{line}", entry_text(document))
-        }
-        (document, _, _) => entry_text(document),
+        Place::Source(line) => format!("{}:{line}", entry_text(&stop.document)),
+        Place::Whole => entry_text(&stop.document),
     }
 }
 

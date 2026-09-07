@@ -13,7 +13,12 @@ fn selection(name: &str) -> Stop {
 
 /// The document inside one of those.
 fn document(name: &str) -> Document {
-    Document::Assembly(Selection::Object(Arc::new(Object {
+    Document::Assembly(Selection::Object(object(name)))
+}
+
+/// A distinct object: two calls with the same `name` still produce different `Arc`s.
+fn object(name: &str) -> Arc<Object> {
+    Arc::new(Object {
         path: PathBuf::from("/tmp/lib.a"),
         name: name.to_owned(),
         format: BinaryFormat::Elf,
@@ -24,7 +29,7 @@ fn document(name: &str) -> Document {
         data: ObjectData::from(&b""[..]),
         debug_info: Default::default(),
         by_address: Default::default(),
-    })))
+    })
 }
 
 #[test]
@@ -345,15 +350,16 @@ fn retaining_drops_what_it_rejects_and_leaves_the_cursor_where_it_was() {
 /// same listing twice is not.
 #[test]
 fn two_places_in_one_document_are_two_entries() {
-    let code = document("code");
+    let object = object("code");
+    let code = Document::Code(object.clone());
     let mut history = History::default();
     history.push(Stop::whole(code.clone()));
-    history.push(Stop::at(code.clone(), 0x10));
-    history.push(Stop::at(code.clone(), 0x40));
+    history.push(Stop::at(object.clone(), 0x10));
+    history.push(Stop::at(object.clone(), 0x40));
 
     assert_eq!(history.entries().len(), 3);
-    assert!(history.current() == Some(&Stop::at(code.clone(), 0x40)));
-    assert!(history.back() == Some(Stop::at(code.clone(), 0x10)));
+    assert!(history.current() == Some(&Stop::at(object.clone(), 0x40)));
+    assert!(history.back() == Some(Stop::at(object.clone(), 0x10)));
     assert!(history.back() == Some(Stop::whole(code.clone())));
     assert!(!history.can_back());
 
@@ -361,12 +367,12 @@ fn two_places_in_one_document_are_two_entries() {
     // revisited document is: going back to 0x10 the long way leaves one entry for it.
     history.forward();
     history.forward();
-    history.push(Stop::at(code.clone(), 0x10));
+    history.push(Stop::at(object.clone(), 0x10));
     assert!(
         history.entries()
             == [
-                Stop::at(code.clone(), 0x10),
-                Stop::at(code.clone(), 0x40),
+                Stop::at(object.clone(), 0x10),
+                Stop::at(object, 0x40),
                 Stop::whole(code)
             ],
         "the place was recorded twice"

@@ -1181,12 +1181,29 @@ fn entry_of(states: &ProjectStates, document: &Document) -> Entry {
     )
 }
 
+/// The object whose code `document` is. A test naming a place in a listing needs it,
+/// since a stop in one is made of the object and the address together.
+fn object_of(document: &Document) -> Arc<Object> {
+    match document {
+        Document::Code(object) => object.clone(),
+        _ => panic!("not an object's code"),
+    }
+}
+
+/// The file `document` is, for the same reason.
+fn file_of(document: &Document) -> Arc<str> {
+    match document {
+        Document::Source(file) => file.clone(),
+        _ => panic!("not a source file"),
+    }
+}
+
 /// The entry of a place *inside* an object's code: the tab showing it, and the stop at
 /// `address`, which is what two places in one listing are told apart by.
 fn code_entry_of(states: &ProjectStates, document: &Document, address: u64) -> Entry {
     (
         tab_showing(states, document).expect("the document is open"),
-        Stop::at(document.clone(), address),
+        Stop::at(object_of(document), address),
     )
 }
 
@@ -4993,7 +5010,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
             .places
             .driven
             .peek()
-            .line(&(id, Stop::on(document, 2))),
+            .line(&(id, Stop::on(file_of(&document), 2))),
         Some(2),
         "the assembly side follows no line"
     );
@@ -5410,8 +5427,8 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     assert!(
         stops_of(&states, id)
             == vec![
-                Stop::on(document.clone(), 40),
-                Stop::on(document.clone(), 20),
+                Stop::on(file_of(&document), 40),
+                Stop::on(file_of(&document), 20),
                 Stop::whole(document.clone()),
             ],
         "the two lines are not two places behind the file"
@@ -5442,7 +5459,7 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     navigate(states.open, Nav::Back);
     settle(&mut test);
     assert!(
-        states.open.active_stop().map(|(_, stop)| stop) == Some(Stop::on(document.clone(), 20)),
+        states.open.active_stop().map(|(_, stop)| stop) == Some(Stop::on(file_of(&document), 20)),
         "Back left the file it was inside"
     );
     navigate(states.open, Nav::Back);
@@ -6486,13 +6503,13 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
         "the answer opened nothing"
     );
     assert!(
-        states.open.active_stop().map(|(_, stop)| stop.line) == Some(Some(1)),
+        states.open.active_stop().map(|(_, stop)| stop.line()) == Some(Some(1)),
         "the place is the file and not the line in it"
     );
     // The assembly side follows that line, which is what a source-driven tab is driven
     // from -- and it is written under the place, not the file.
     let id = states.open.active_id().expect("a tab");
-    let entry = (id, Stop::on(document, 1));
+    let entry = (id, Stop::on(file_of(&document), 1));
     assert_eq!(
         location
             .doors
@@ -7595,7 +7612,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
         states
             .open
             .active_stop()
-            .is_some_and(|(_, stop)| stop.line.is_some())
+            .is_some_and(|(_, stop)| stop.line().is_some())
     });
 
     assert!(
@@ -7603,7 +7620,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
         "the answer's spelling opened a file the reader already had open"
     );
     assert_eq!(
-        states.open.active_stop().map(|(_, stop)| stop.line),
+        states.open.active_stop().map(|(_, stop)| stop.line()),
         Some(Some(1)),
         "the tab did not move to the line the answer named"
     );
@@ -7673,7 +7690,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
         states
             .open
             .active_stop()
-            .is_some_and(|(_, stop)| stop.line.is_some())
+            .is_some_and(|(_, stop)| stop.line().is_some())
     });
 
     assert!(
@@ -7681,7 +7698,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
         "the answer's spelling opened a file the reader already had open"
     );
     assert_eq!(
-        states.open.active_stop().map(|(_, stop)| stop.line),
+        states.open.active_stop().map(|(_, stop)| stop.line()),
         Some(Some(1)),
         "the tab did not move to the line the answer named"
     );
@@ -17016,11 +17033,14 @@ fn a_place_in_a_listing_is_named_by_the_symbol_there() {
         .wrapping_add(twice.section.as_ref().map_or(0, |section| section.bias));
 
     assert_eq!(stop_text(&Stop::whole(code.clone())), object.name);
-    assert_eq!(stop_text(&Stop::at(code.clone(), placed)), "twice");
+    assert_eq!(stop_text(&Stop::at(object.clone(), placed)), "twice");
     // A place no symbol starts at is the object again: a call to a function lands on its
     // first byte and is named, and an address into the middle of one has no name to give.
-    assert_eq!(stop_text(&Stop::at(code.clone(), placed + 1)), object.name);
-    assert_eq!(stop_text(&Stop::at(code, u64::MAX)), object.name);
+    assert_eq!(
+        stop_text(&Stop::at(object.clone(), placed + 1)),
+        object.name
+    );
+    assert_eq!(stop_text(&Stop::at(object.clone(), u64::MAX)), object.name);
 }
 
 /// Following a link inside an object's code is a place on the tab's trail, so Back comes
@@ -17099,7 +17119,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     assert!(
         trail
             == [
-                Stop::at(code.clone(), add.address),
+                Stop::at(object_of(&code), add.address),
                 Stop::whole(code.clone())
             ],
         "the place followed is not on the trail"
@@ -22034,7 +22054,7 @@ fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
             .places
             .driven
             .peek()
-            .line(&(id, Stop::on(document, 2))),
+            .line(&(id, Stop::on(file_of(&document), 2))),
         Some(2),
         "the assembly side follows no line"
     );

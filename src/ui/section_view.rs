@@ -1346,12 +1346,12 @@ pub(crate) fn show_in_code(
     at: Option<LinePos>,
     reach: Reach,
 ) {
-    let code = Document::Code(object);
+    let code = Document::Code(object.clone());
     // The stop `land` makes of the landing below, kept for the place written down after
     // it. Moving inside the listing the reader is already in is put on the trail there,
     // so Back comes back to the instruction that was followed and not to where the jump
     // landed, and the place left keeps its own rows and runs, being an entry of its own.
-    let stop = Stop::at(code.clone(), address);
+    let stop = Stop::at(object, address);
     let id = land(
         doors,
         Landing {

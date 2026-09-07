@@ -60,13 +60,16 @@ pub(crate) fn ask(active: Option<&Entry>, driven: &Driven) -> Option<Ask> {
     match &entry.1.document {
         Document::Assembly(Selection::Symbol(symbol)) => Some(Ask::Symbol(symbol.clone())),
         Document::Assembly(Selection::Object(_)) | Document::Code(_) => None,
-        Document::Source(file) => driven.line(entry).or(entry.1.line).map(|line| Ask::Source {
-            at: LinePos {
-                file: file.clone(),
-                line,
-            },
-            chosen: driven.choice(entry),
-        }),
+        Document::Source(file) => driven
+            .line(entry)
+            .or(entry.1.line())
+            .map(|line| Ask::Source {
+                at: LinePos {
+                    file: file.clone(),
+                    line,
+                },
+                chosen: driven.choice(entry),
+            }),
     }
 }
 

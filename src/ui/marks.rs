@@ -1127,7 +1127,7 @@ pub(crate) fn use_land(
                             ..
                         },
                     ),
-                ) => driven.peek().line(entry).or(entry.1.line).map(|line| {
+                ) => driven.peek().line(entry).or(entry.1.line()).map(|line| {
                     // A run already on that very row was put there by a door with
                     // more to say than the line -- a column, or a run of the row --
                     // and a line is the whole of what this knows. Keeping it is what

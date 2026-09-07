@@ -49,7 +49,11 @@ impl Component for BookmarkRow {
         };
         let tooltip = match &self.bookmark.document {
             SavedDocument::Source { path } => path.clone(),
-            SavedDocument::Code { path, .. } => path.display().to_string(),
+            SavedDocument::Object {
+                path,
+                shown: SavedShown::Code,
+                ..
+            } => path.display().to_string(),
             _ => label.to_string(),
         };
 
@@ -86,9 +90,12 @@ impl Component for BookmarkRow {
 /// Which kind of place a saved document is, as the glyph its live tab would wear.
 fn saved_icon(saved: &SavedDocument) -> Element {
     let (name, svg) = match saved {
+        SavedDocument::Object {
+            shown: SavedShown::Code,
+            ..
+        } => ("scroll-text", lucide::scroll_text()),
         SavedDocument::Object { .. } | SavedDocument::Symbol { .. } => ("binary", lucide::binary()),
         SavedDocument::Source { .. } => ("file-code", lucide::file_code()),
-        SavedDocument::Code { .. } => ("scroll-text", lucide::scroll_text()),
     };
     document_glyph((name, svg))
 }

@@ -322,14 +322,7 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
                     // The place itself, address and line and all: two stops in one
                     // object's code, or in one file, are two keys, as they were when
                     // they were saved.
-                    let key = (
-                        id,
-                        Stop {
-                            document: entry.document,
-                            address: entry.address,
-                            line: entry.src_line,
-                        },
-                    );
+                    let key = (id, entry.stop());
                     asm.remember(key.clone(), entry.asm_row);
                     src.remember(key.clone(), entry.src_row);
                     if let Some(line) = entry.line {

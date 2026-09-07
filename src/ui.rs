@@ -42,7 +42,7 @@ pub(crate) use crate::files::{FileRow, FileRows, FileTree, Fold};
 pub(crate) use crate::filter::{Filter, Matcher, Rank};
 pub(crate) use crate::fonts::{self, Font, Fonts};
 pub(crate) use crate::functions::{self, Function};
-pub(crate) use crate::history::{History, Stop};
+pub(crate) use crate::history::{History, Place, Stop};
 pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
 pub(crate) use crate::links;
 pub(crate) use crate::lsp;
@@ -52,7 +52,7 @@ pub(crate) use crate::positions::{Driven, Positions, Spot};
 pub(crate) use crate::process::{self, Ended, OutputLine, RunEvent, RunOutput, Stream};
 pub(crate) use crate::project::{
     self, Cargo, Details, Document, OnScreen, Project, Recent, RestoredTab, SavedDock,
-    SavedDocument, SavedUi, SavingTab, Selection, Session,
+    SavedDocument, SavedShown, SavedUi, SavingTab, Selection, Session,
 };
 pub(crate) use crate::references::{self, ReferenceRows};
 pub(crate) use crate::reveal;

@@ -6,6 +6,10 @@
 //! compared by `Arc` pointer, so entries made before a re-parse never compare equal to
 //! ones made after it. Persisted as [`crate::project::SavedTab`].
 
+use std::sync::Arc;
+
+use analysis::Object;
+
 use crate::order::Order;
 use crate::project::Document;
 
@@ -19,18 +23,46 @@ const MAX_ENTRIES: usize = 50;
 /// terms: an object's code by the address, a source file by the line. Following a link
 /// into either moves what is drawn rather than opening anything, so the trail is the
 /// only record that the reader was somewhere else in it a moment ago. A symbol *is* the
-/// place, and carries neither.
+/// place, and carries neither, nor does a document opened at no place in particular -- a
+/// file a reader asked for by name is the file and not a line of it.
 ///
-/// Both are `None` for a document opened at no place in particular -- a file a reader
-/// asked for by name is the file and not a line of it -- which is why they are options
-/// and not a default of zero.
+/// **Where a stop is goes with the kind of document it is in**, so the two are written
+/// together: [`Stop::at`] takes the object whose code the address is in, [`Stop::on`] the
+/// file the line is of, and [`Stop::whole`] neither. Those three are the only ways to
+/// make one, and the place itself is private, so a line of an object's code and an
+/// address in a file are states no caller can build -- which is what lets [`Stop::place`]
+/// hand back the pair and spares every reader an arm for a place that cannot happen.
 #[derive(Clone, PartialEq)]
 pub struct Stop {
     pub document: Document,
-    /// The placed address the tab was at, for a stop in an object's code.
-    pub address: Option<u64>,
-    /// The line the tab was at, for a stop in a source file. 1-based, as DWARF's are.
-    pub line: Option<u32>,
+    /// Where in `document`, and [`None`] for the document itself.
+    place: Option<Inside>,
+}
+
+/// The half of a place a [`Stop`] stores; the `document` beside it is the other half.
+#[derive(Clone, Copy, PartialEq)]
+enum Inside {
+    /// A placed address, only ever beside a [`Document::Code`].
+    Address(u64),
+    /// A line, only ever beside a [`Document::Source`].
+    Line(u32),
+}
+
+/// Where a stop is inside its document: what [`Stop::place`] hands back, so that nothing
+/// reading a stop has to say what an address in a source file or a line of an object's
+/// code would mean.
+///
+/// The document is [`Stop::document`] and is not repeated -- except the **object**, which
+/// a reader of an address wants and could otherwise take off the document only through an
+/// arm for the object that is not there.
+#[derive(Clone, Copy)]
+pub enum Place<'a> {
+    /// The document itself, at no place in particular.
+    Whole,
+    /// A placed address in an object's code, and the object whose code it is.
+    Code(&'a Arc<Object>, u64),
+    /// A line of a source file. 1-based, as DWARF's are.
+    Source(u32),
 }
 
 impl From<Document> for Stop {
@@ -45,26 +77,45 @@ impl Stop {
     pub fn whole(document: Document) -> Stop {
         Stop {
             document,
-            address: None,
-            line: None,
+            place: None,
         }
     }
 
-    /// A place in an object's code.
-    pub fn at(document: Document, address: u64) -> Stop {
+    /// A place in `object`'s code, at a placed address.
+    pub fn at(object: Arc<Object>, address: u64) -> Stop {
         Stop {
-            document,
-            address: Some(address),
-            line: None,
+            document: Document::Code(object),
+            place: Some(Inside::Address(address)),
         }
     }
 
-    /// A place in a source file.
-    pub fn on(document: Document, line: u32) -> Stop {
+    /// A place in the source file `file`, on a line. 1-based, as DWARF's are.
+    pub fn on(file: Arc<str>, line: u32) -> Stop {
         Stop {
-            document,
-            address: None,
-            line: Some(line),
+            document: Document::Source(file),
+            place: Some(Inside::Line(line)),
+        }
+    }
+
+    /// Where this is inside its document.
+    pub fn place(&self) -> Place<'_> {
+        match (&self.document, self.place) {
+            (Document::Code(object), Some(Inside::Address(address))) => {
+                Place::Code(object, address)
+            }
+            (Document::Source(_), Some(Inside::Line(line))) => Place::Source(line),
+            // The constructors write the place beside the document it belongs to and
+            // nothing else writes it, so what is left is the documents that carry none.
+            _ => Place::Whole,
+        }
+    }
+
+    /// The line of the file this is, for a stop in a source file, and [`None`] for every
+    /// other place.
+    pub fn line(&self) -> Option<u32> {
+        match self.place() {
+            Place::Source(line) => Some(line),
+            Place::Whole | Place::Code(..) => None,
         }
     }
 
@@ -72,7 +123,7 @@ impl Stop {
     /// What decides whether arriving at it is a move worth putting on the trail: a door
     /// that names only a document has nothing to come back to that the document is not.
     pub fn inside(&self) -> bool {
-        self.address.is_some() || self.line.is_some()
+        self.place.is_some()
     }
 }
 

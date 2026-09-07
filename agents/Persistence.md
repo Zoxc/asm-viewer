@@ -263,17 +263,21 @@ has nothing to forget.
 Inside those files, identity is **path + object name + symbol name + address** for a place in a
 binary and **the path itself** for a source file, never pointers. The symbol name is a `SavedName`:
 the file's own spelling, or — for one of the names the app made up (`agents/Analysis.md`) — which
-of them it is, the address beside it being the rest of what such a name says. Those are rendered
-again on the way back, by whatever `MadeUp` spells them now, which is what lets the app rename them
-without dropping the places saved on them; a saved string would quietly stop matching. That mapping
-lives in exactly two places, `SavedDocument::from_document` and `::resolve`. A source file's path
-is a `String`, since it is what the debug info said rather than something this filesystem was
-asked about.
+of them it is (`SavedMadeUp`), the address beside it being the rest of what such a name says. The
+two are separate types because neither carries the other's half: a made-up name has no string to
+save and the file's own has no `MadeUp` to render, so nothing has to answer for a name that is
+neither. Those are rendered again on the way back, by whatever `MadeUp` spells them now, which is
+what lets the app rename them without dropping the places saved on them; a saved string would
+quietly stop matching. That mapping lives in exactly two places, `SavedDocument::from_document`
+and `::resolve`. A source file's path is a `String`, since it is what the debug info said rather
+than something this filesystem was asked about.
 
 **One `tabs` list of every kind, not a `tabs` and a `sources` beside it**, because there is one
-bar. `SavedDocument::Code`, an object's whole code, is saved by its object's path and name exactly
-as the object is and joins the same list. The reader's own interleaved order is what comes back, and
-the one document that was on screen is `active` whichever kind it is. It is written out in full
+bar. An object's whole code is saved by its object's path and name exactly as the object's own tab
+is, and joins the same list: **one `SavedDocument::Object` with a `shown` saying which of the
+two**. The path and the name say both, so `shown` is the whole of what tells them apart. The
+reader's own interleaved order is what comes back, and the one document that was on screen is
+`active` whichever kind it is. It is written out in full
 rather than as an index, since a tab that no longer resolves is *dropped* (which would shift the
 index) while the active one *degrades*. **A page is a tab in that same list**, a row with a `page`
 and no trail, so the bar comes back as it stood rather than with Project, Settings and the
@@ -308,18 +312,21 @@ it is which line of the file the **place** is, where the place is one in a file,
 back to. The two part company the moment the reader clicks elsewhere in the file, which is why one
 cannot be spelled with the other; the place's own is what the drive falls back to when nothing was
 clicked (`agents/Panes.md`). It is no more a claim about a layout than a file is, so a rebuilt
-binary keeps it. `resolve_tabs` answers with a `RestoredTab`, a page or a document,
-rather than a tuple, since the rows and the line no longer survive the same things: the live trail,
+binary keeps it. The file states the halves apart and so can state a pairing that means nothing --
+a line of an object's code, an address in a file -- which a `history::Stop` cannot hold. So
+`RestoredEntry::stop` is where they are put back with the document each belongs to, and a half that
+does not belong to its document is the whole document rather than a guess. It is the last place the
+two are seen apart; nothing past it carries them. `resolve_tabs` answers with a `RestoredTab`, a
+page or a document, rather than a tuple, since the rows and the line no longer survive the same things: the live trail,
 `History::rebuilt` over the places that resolved with the saved cursor carried past the ones that
 did not, and a `RestoredEntry` per surviving place. A tab with nothing left on its trail is dropped
 whole, and so is a page this build does not have. **Field order within these structs is load-bearing**: TOML emits plain values before tables,
 so `binaries` sits beside the id only because every other field of `Project` is a plain value and
 `bookmarks`, the one array of tables in that file, comes last; `SavedTab`'s `temporal` and `cursor`
 must precede its `entries`, a `SavedEntry`'s rows its `document`, a `SavedDocument::Symbol`'s
-`address` its `symbol_name` (a `SavedName` is written as a table where it holds the file's own
-name), and a `Bookmark`'s `name` its `document` (`SavedHistory` has no plain field at all).
-Getting it wrong fails at *runtime*, not at compile time, and a round trip through real TOML per
-struct is what holds it.
+`address` its `symbol_name` (a `SavedName` is written as a table either way), and a `Bookmark`'s
+`name` its `document` (`SavedHistory` has no plain field at all). Getting it wrong fails at
+*runtime*, not at compile time, and a round trip through real TOML per struct is what holds it.
 
 `Session::digests` is the digest each binary had when the session was saved, keyed by path. It is in
 the *other* file from `binaries` and not a field beside them, because `binaries` is the list to

@@ -271,11 +271,13 @@ fn a_missing_object_falls_back_to_nothing() {
         SavedDocument::Object {
             path: PathBuf::from("/tmp/other.a"),
             object_name: "a.o".into(),
+            shown: SavedShown::Symbols,
         },
         // Right path, but that member is no longer in the archive.
         SavedDocument::Object {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "c.o".into(),
+            shown: SavedShown::Symbols,
         },
         SavedDocument::Symbol {
             path: PathBuf::from("/tmp/lib.a"),
@@ -355,6 +357,7 @@ fn writes_atomically_and_reads_back() {
         active: Some(SavedDocument::Object {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "a.o".into(),
+            shown: SavedShown::Symbols,
         }),
         history: SavedHistory::default(),
         ..Session::default()
@@ -429,6 +432,7 @@ fn saved_object(name: &str) -> SavedDocument {
     SavedDocument::Object {
         path: PathBuf::from("/tmp/lib.a"),
         object_name: name.to_owned(),
+        shown: SavedShown::Symbols,
     }
 }
 
@@ -603,6 +607,7 @@ fn a_partial_file_still_loads() {
             [active.Object]
             path = "/tmp/lib.a"
             object_name = "a.o"
+            shown = "Symbols"
         "#;
     let session: Session = toml::from_str(text).expect("deserializing");
 
@@ -896,6 +901,7 @@ fn a_saved_tab_with_no_rows_opens_at_the_top() {
             [tabs.entries.document.Object]
             path = "/tmp/lib.a"
             object_name = "a.o"
+            shown = "Symbols"
 
             [[tabs]]
             [[tabs.entries]]
@@ -1974,6 +1980,7 @@ fn a_path_under_the_project_file_is_written_relative_to_it() {
             document: SavedDocument::Object {
                 path: directory.join("target/debug/vmlinux"),
                 object_name: "vmlinux".into(),
+                shown: SavedShown::Symbols,
             },
         }],
     };
@@ -2556,9 +2563,10 @@ fn a_code_document_is_saved_by_its_object_and_found_again() {
     let saved = SavedDocument::from_document(&document);
     assert_eq!(
         saved,
-        SavedDocument::Code {
+        SavedDocument::Object {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "b.o".into(),
+            shown: SavedShown::Code,
         }
     );
     let found = saved.resolve(&objects, &Rebuilt::Paths(Default::default()));
@@ -2598,6 +2606,40 @@ fn a_code_document_closes_with_its_file() {
     assert!(code.symbol().is_none(), "no symbol to ask the worker about");
 }
 
+/// The two ways an object is shown are one saved document telling them apart, so a
+/// session holding both still opens both after a round trip through the file.
+#[test]
+fn an_objects_symbols_and_its_code_come_back_as_two_tabs() {
+    let objects = objects();
+    let tabs = [
+        Document::Assembly(Selection::Object(objects[0].clone())),
+        Document::Code(objects[0].clone()),
+    ];
+    let session = session_of(
+        &objects,
+        &tabs,
+        &[],
+        &[],
+        &[],
+        &[],
+        Some(&tabs[1]),
+        &Visits::default(),
+    );
+
+    let text = round_trip(&session);
+    assert!(text.contains(r#"shown = "Symbols""#), "{text}");
+    assert!(text.contains(r#"shown = "Code""#), "{text}");
+
+    let session: Session = toml::from_str(&text).expect("reading back");
+    let restored = session.resolve_tabs(&objects);
+    let documents: Vec<Document> = restored
+        .iter()
+        .map(|tab| as_document(tab).2[0].document.clone())
+        .collect();
+    assert!(documents == tabs, "the two tabs came back as one kind");
+    assert!(session.resolve(&objects) == Some(tabs[1].clone()));
+}
+
 /// A place in a source file is the line of it, written before its document as the address
 /// is, and it comes back as the place the tab is at -- so a trail through two lines of one
 /// file survives a restart with both.
@@ -2607,7 +2649,7 @@ fn a_source_places_line_is_written_before_its_document_and_comes_back() {
     let file = file_tab("/src/main.rs");
     let mut trail = History::default();
     trail.push(Stop::whole(file.clone()));
-    trail.push(Stop::on(file.clone(), 42));
+    trail.push(Stop::on("/src/main.rs".into(), 42));
     assert_eq!(
         trail.entries().len(),
         2,
@@ -2702,7 +2744,10 @@ fn a_code_tabs_address_is_written_before_its_document() {
 fn a_trail_through_one_listing_comes_back_with_both_places() {
     let objects = objects();
     let code = Document::Code(objects[1].clone());
-    let (first, second) = (Stop::whole(code.clone()), Stop::at(code.clone(), 0x40));
+    let (first, second) = (
+        Stop::whole(code.clone()),
+        Stop::at(objects[1].clone(), 0x40),
+    );
 
     let mut docs = Docs::default();
     let id = docs.open(first.clone());
@@ -2746,7 +2791,10 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
     let restored = session.resolve_tabs(&objects);
     assert!(
         as_document(&restored[0]).1.entries()
-            == [Stop::at(code.clone(), 0x40), Stop::at(code.clone(), 0x10)],
+            == [
+                Stop::at(objects[1].clone(), 0x40),
+                Stop::at(objects[1].clone(), 0x10)
+            ],
         "the trail came back as one place"
     );
     // Each place with the row it was left at: the newer where the jump landed, the older
@@ -2757,6 +2805,38 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
         .map(|entry| entry.address)
         .collect();
     assert_eq!(addresses, [Some(0x40), Some(0x10)]);
+}
+
+/// A place is where it is *in the document it is in*, so a saved entry whose half does
+/// not belong to its document is the document itself and not a place of its own.
+///
+/// A file states the halves apart -- an address, a line and a document, each its own
+/// value -- and so can state a pairing that means nothing. `RestoredEntry::stop` is where
+/// they are put back together and the last place they are ever seen apart: two source
+/// entries carrying an address are one place, where two addresses in an object's code are
+/// two.
+#[test]
+fn a_saved_place_whose_half_is_not_its_documents_is_the_whole_document() {
+    let text = r#"
+            [[tabs]]
+
+            [[tabs.entries]]
+            asm_address = 16
+            [tabs.entries.document.Source]
+            path = "/src/main.rs"
+
+            [[tabs.entries]]
+            asm_address = 32
+            [tabs.entries.document.Source]
+            path = "/src/main.rs"
+        "#;
+    let session: Session = toml::from_str(text).expect("deserializing");
+
+    let restored = session.resolve_tabs(&objects());
+    assert!(
+        as_document(&restored[0]).1.entries() == [Stop::whole(file_tab("/src/main.rs"))],
+        "an address in a source file made a place of its own"
+    );
 }
 
 /// An address is a claim about a layout: a rebuilt binary takes it with the rows and
@@ -2920,7 +3000,7 @@ fn a_bookmark_on_a_made_up_name_outlives_its_spelling() {
         path: PathBuf::from("/tmp/lib.a"),
         object_name: "a.o".into(),
         address: ADDRESS,
-        symbol_name: SavedName::Function,
+        symbol_name: SavedName::MadeUp(SavedMadeUp::Function),
     };
     let found = structure.resolve_by_name(&objects).expect("the symbol");
     assert!(
@@ -2955,7 +3035,7 @@ fn a_bookmark_on_a_made_up_name_writes_no_spelling() {
             path: PathBuf::from("/tmp/lib.a"),
             object_name: "a.o".into(),
             address: 0x10,
-            symbol_name: SavedName::Function,
+            symbol_name: SavedName::MadeUp(SavedMadeUp::Function),
         },
         spelling.clone(),
     );
@@ -2969,7 +3049,7 @@ fn a_bookmark_on_a_made_up_name_writes_no_spelling() {
     let written = &text[text.find("[[bookmarks]]").expect("a bookmark")..];
     assert!(!written.contains(&spelling), "the spelling is in\n{text}");
     assert!(!written.contains("\nname = "), "a name of its own\n{text}");
-    assert!(written.contains("symbol_name = \"Function\""), "{text}");
+    assert!(written.contains("MadeUp = \"Function\""), "{text}");
 }
 
 /// A bookmarks change is written at once and to `project.toml` alone, like a rename: it
