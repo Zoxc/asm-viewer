@@ -317,19 +317,34 @@ pub fn read_text(path: &Path) -> Option<String> {
     contents(path, MAX_SIZE).map(|(_, text)| text)
 }
 
+/// Whether [`load`] would read `path`: a regular file within [`MAX_SIZE`], asked of the
+/// metadata and never of the bytes.
+///
+/// The gate the UI puts in front of opening a file as source, and [`contents`]' own first
+/// step, so the two cannot drift apart: a row opens because the reader would read it.
+pub fn showable(path: &Path) -> bool {
+    fits(path, MAX_SIZE)
+}
+
+/// [`showable`] with the bound as a parameter, so a test need not write 16 MiB.
+///
+/// `is_file` is asked before the size, and both before any read: a directory opens happily
+/// on Linux and a fifo blocks the reader until someone writes to it, and neither may reach
+/// a UI thread.
+fn fits(path: &Path, max_size: u64) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.len() <= max_size)
+        .unwrap_or(false)
+}
+
 /// The bytes of `path` and those bytes decoded, or [`None`] for anything that is not a
 /// readable regular file within `max_size`. **The one rule** for reading a source file by
 /// path; both readers above are this plus what they keep.
 ///
-/// The size is checked *before* the bytes are read, and `is_file` before that: a directory
-/// opens happily on Linux and a fifo blocks the reader until someone writes to it, and
-/// neither may reach a UI thread.
-///
 /// The bytes come back beside the text because the digests are of the bytes as read: the
 /// compiler hashed those, and a lossy decode is not reversible.
 fn contents(path: &Path, max_size: u64) -> Option<(Vec<u8>, String)> {
-    let metadata = fs::metadata(path).ok()?;
-    if !metadata.is_file() || metadata.len() > max_size {
+    if !fits(path, max_size) {
         return None;
     }
 

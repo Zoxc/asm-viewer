@@ -52,6 +52,22 @@ fn a_directory_is_not_a_source_file() {
     assert!(SourceFile::read(&std::env::temp_dir(), MAX_SIZE).is_none());
 }
 
+/// The gate a press is put through, which is the read's own first step: a regular file
+/// within the bound, and nothing else.
+#[test]
+fn only_a_regular_file_within_the_bound_is_shown() {
+    let long = write("long.txt", &b"x".repeat(100));
+    let empty = write("empty.rs", b"");
+    let missing = std::env::temp_dir().join("viewer-source-nothing-here");
+
+    assert!(fits(&long, 100));
+    assert!(!fits(&long, 99));
+    // An empty file is within every bound, zero included.
+    assert!(fits(&empty, 0));
+    assert!(!fits(&std::env::temp_dir(), u64::MAX));
+    assert!(!fits(&missing, u64::MAX));
+}
+
 /// `read_text` is the pane's rule without the cache, so what the pane refuses it refuses:
 /// a language server answering with a directory must not open it.
 #[test]

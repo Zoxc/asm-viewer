@@ -243,7 +243,7 @@ line's symbols can be, and a name's references are tens.
 **A place row opens through `open_source_place`** (`agents/Panes.md`), the arrival every door
 into a place in a source file makes, so a hit opens exactly as a reference does, down to the tab's
 assembly side being driven from the line it landed on. A hit's press is guarded by
-`shows_as_source` in front of that call, so a row cannot open a tab the pane would refuse: that
+`source::showable` in front of that call, so a row cannot open a tab the pane would refuse: that
 path came off a walk of the directory, where the guard is the Files row's own. A reference's is
 not, the other doors into that arrival taking a path a server or the debug info named, for which
 opening the file and letting the pane say what is wrong with it is the honest answer. It lands
@@ -268,11 +268,13 @@ it raises the panel and leaves a flag the panel's effect spends once it has a no
 a file *is* is not judged here: not by extension (this project's own binaries have none) and not by
 reading its head, which was tried and taken out because it made the view a second opinion about what
 an object is, and the parser already has the one that counts. So a press opens anything the source
-cache would read (`files::shows_as_source`: a regular file within `source::MAX_SIZE`, asked of the
-metadata, the one bound so a press cannot open a tab the pane would refuse), as `open_document` on a
-`Document::Source` spelled as **the project directory joined with each entry's own name, never
-canonicalised**. Both of those rules live in `open_source_file` (`ui/documents.rs`) and are written
-nowhere else: the finder's Enter and its rows are the same door (`agents/Finding.md`).
+cache would read (`source::showable`: a regular file within `source::MAX_SIZE`, asked of the
+metadata and never of the bytes), as `open_document` on a `Document::Source` spelled as **the
+project directory joined with each entry's own name, never canonicalised**. That gate is not a
+copy of the cache's rule but the call the cache itself makes before it reads, so it cannot fall
+behind: a refusal added to the reader is one every press already obeys. Both of those rules
+live in `open_source_file` (`ui/documents.rs`) and are written nowhere else: the finder's
+Enter and its rows are the same door (`agents/Finding.md`).
 `compiled_from` matches a file on the exact string `addr2line` renders, `DW_AT_comp_dir` joined
 with the file entry, so a tree-opened file matches the debug info's, and
 shares a tab with a companion-opened one, exactly when the project directory is the directory the

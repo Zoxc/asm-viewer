@@ -65,17 +65,17 @@ pub(crate) fn reach_inside(ctrl: State<bool>) -> Reach {
 /// The one door for a path taken off a listing of the filesystem -- a Files row, a finder
 /// row -- where there is no line to land on. Two rules live here and are written nowhere
 /// else. **A file the source pane would refuse opens nothing at all**
-/// (`files::shows_as_source`: a regular file within the bound the source cache reads), so a
-/// press cannot make a tab that only says why it is empty. And the document is named by
-/// `path`'s own spelling, **never canonicalised**, since a [`Document::Source`] and a
-/// [`LinePos`] are compared as text: reduced here, a line the debug info names would be
-/// picked out in nothing (`src/project.rs`).
+/// (`source::showable`, the reader's own first step: a regular file within the bound the
+/// source cache reads), so a press cannot make a tab that only says why it is empty. And
+/// the document is named by `path`'s own spelling, **never canonicalised**, since a
+/// [`Document::Source`] and a [`LinePos`] are compared as text: reduced here, a line the
+/// debug info names would be picked out in nothing (`src/project.rs`).
 ///
 /// A path that names a *place* -- a hit, a reference, a definition -- goes through
 /// [`open_source_place`] instead, which lands on the line and drives the assembly side
 /// from it.
 pub(crate) fn open_source_file(states: ProjectStates, path: &Path, reach: Reach) -> bool {
-    if !shows_as_source(path) {
+    if !showable(path) {
         return false;
     }
     let file = Document::Source(Arc::from(&*path.to_string_lossy()));

@@ -240,18 +240,3 @@ fn a_directory_that_cannot_be_read_is_a_failed_row_that_tries_again() {
         ]
     );
 }
-
-/// A press opens what the source cache would read: a regular file within its bound. A
-/// directory, a missing path, or a file past the bound opens nothing.
-#[test]
-fn a_press_opens_what_the_source_cache_would_read() {
-    let root = project("bound");
-    let long = root.join("long.txt");
-    fs::write(&long, "x".repeat(100)).expect("writable");
-
-    assert!(shows_as_source_within(&long, 100));
-    assert!(!shows_as_source_within(&long, 99));
-    assert!(shows_as_source_within(&root.join("Cargo.toml"), 0));
-    assert!(!shows_as_source_within(&root, u64::MAX));
-    assert!(!shows_as_source_within(&root.join("missing"), u64::MAX));
-}

@@ -16,22 +16,6 @@ use std::{
 use crate::shared::Shared;
 use crate::source;
 
-/// Whether a press on `path` opens it as a source file: a regular file within the
-/// [`source::MAX_SIZE`](crate::source::MAX_SIZE) the source cache will read, asked of the
-/// metadata and never of the bytes. What a file *is* is not judged here at all: a press
-/// opens anything the pane could show, and whether it is an object is the parser's
-/// question, asked when the reader chooses to open it as one.
-pub fn shows_as_source(path: &Path) -> bool {
-    shows_as_source_within(path, crate::source::MAX_SIZE)
-}
-
-/// [`shows_as_source`] with the bound as a parameter, so a test need not write 16 MiB.
-fn shows_as_source_within(path: &Path, max_size: u64) -> bool {
-    fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.len() <= max_size)
-        .unwrap_or(false)
-}
-
 /// What is known of a directory's contents.
 #[derive(Clone, Debug)]
 enum Children {

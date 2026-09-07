@@ -184,9 +184,9 @@ fn source_place(
 ) -> Option<Element> {
     let span = diagnostic.span.as_ref()?;
     let file = directory.map(|directory| directory.join(&span.file));
-    let own = file.as_deref().is_some_and(|file| {
-        file.starts_with(directory.unwrap_or(Path::new(""))) && shows_as_source(file)
-    });
+    let own = file
+        .as_deref()
+        .is_some_and(|file| file.starts_with(directory.unwrap_or(Path::new(""))) && showable(file));
     let text = diagnostic_place(span, own);
 
     Some(match (own, file) {

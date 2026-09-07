@@ -38,7 +38,7 @@ pub(crate) use crate::cargo::{self, Diagnostic, Level, Profile};
 pub(crate) use crate::chars::{self, beyond, Bounds, Caret, CharSelection, Line, Motion};
 pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs, Entry};
-pub(crate) use crate::files::{shows_as_source, FileRow, FileRows, FileTree, Fold};
+pub(crate) use crate::files::{FileRow, FileRows, FileTree, Fold};
 pub(crate) use crate::filter::{Filter, Matcher, Rank};
 pub(crate) use crate::fonts::{self, Font, Fonts};
 pub(crate) use crate::functions::{self, Function};
@@ -62,7 +62,7 @@ pub(crate) use crate::scratchpad::{
 };
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
-pub(crate) use crate::source::{self, SourceFile};
+pub(crate) use crate::source::{self, showable, SourceFile};
 pub(crate) use crate::store::{self, Store};
 pub(crate) use crate::tabs::{Page, Strip, Tab};
 pub(crate) use crate::tree::{

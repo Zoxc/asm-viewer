@@ -97,7 +97,7 @@ impl Folding {
     /// the way would silently swallow a move inside a tab already open.
     fn opens(self, path: &Path) -> bool {
         match self {
-            Folding::Hits(_) => shows_as_source(path),
+            Folding::Hits(_) => showable(path),
             Folding::Places(_) => true,
         }
     }
