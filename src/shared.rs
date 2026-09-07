@@ -7,6 +7,10 @@ use std::{fmt, ops::Deref, sync::Arc};
 /// they are the same build, never when they are two builds of equal rows. Handing one to a
 /// `VirtualScrollView` is then a pointer compare and not a walk of ten thousand rows.
 ///
+/// The handing over only: building the list is still a walk of it. One made again
+/// whenever it grows -- the Search panel's, once a batch -- wants rows that are cheap to
+/// make, which is why the items under [`crate::grouped::Grouped`] are shared too.
+///
 /// It derefs to its slice, so the length, the indexing and the iteration are the slice's
 /// own.
 pub struct Shared<T>(Arc<[T]>);

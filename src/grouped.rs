@@ -6,8 +6,15 @@
 //!
 //! What differs between the two is the caller's: how a list is built -- a search appends
 //! as it walks, a server's answer is grouped whole when it lands -- and what an item is.
+//!
+//! **An item is held under an `Arc` from the moment it is pushed**, so building a row is
+//! a pointer bump. The rows are made again whole every time the list grows, and a search
+//! grows a batch at a time up to [`crate::search::MAX_HITS`]: copying each item into each
+//! rebuild would be work that squares over one search, on the UI thread, for rows whose
+//! contents never change once pushed.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::filter::Matcher;
 use crate::shared::Shared;
@@ -24,7 +31,7 @@ pub struct Grouped<T> {
 struct InFile<T> {
     path: PathBuf,
     name: String,
-    items: Vec<T>,
+    items: Vec<Arc<T>>,
     folded: bool,
 }
 
@@ -49,7 +56,7 @@ impl<T> Grouped<T> {
             grouped.files.push(InFile {
                 name: crate::source::name_of(&path),
                 path,
-                items,
+                items: items.into_iter().map(Arc::new).collect(),
                 folded: false,
             });
         }
@@ -61,6 +68,7 @@ impl<T> Grouped<T> {
     /// against the last and not a lookup, and the files stay in the order they arrived.
     pub fn push(&mut self, path: &Path, item: T) {
         self.count += 1;
+        let item = Arc::new(item);
         if let Some(last) = self.files.last_mut() {
             if last.path == path {
                 last.items.push(item);
@@ -100,10 +108,10 @@ impl<T> Grouped<T> {
     ///
     /// A file is what a filter matches here: an item is a line of one, and a line number
     /// is nothing to type at.
-    pub fn rows(&self, keep: &Matcher) -> Rows<T>
-    where
-        T: Clone,
-    {
+    ///
+    /// Called for the whole list every time it grows, so an item row is an `Arc` clone
+    /// and never a copy of the item.
+    pub fn rows(&self, keep: &Matcher) -> Rows<T> {
         let mut rows = Vec::new();
         for file in self
             .files
@@ -138,7 +146,7 @@ pub enum Row<T> {
         folded: bool,
     },
     /// One item, with the file it is in: a row opens a place, and the place is both.
-    Item { path: PathBuf, item: T },
+    Item { path: PathBuf, item: Arc<T> },
 }
 
 /// The rows a panel draws, in order.

@@ -36,7 +36,7 @@ fn items_are_grouped_under_their_file_in_the_order_they_arrived() {
         rows[1],
         Row::Item {
             path: PathBuf::from("/p/a.rs"),
-            item: 1,
+            item: Arc::new(1),
         }
     );
 }

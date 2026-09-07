@@ -112,7 +112,9 @@ pub(crate) struct PlaceRow<T> {
 }
 
 /// The row is the whole of what is drawn: the states in [`Folding`] compare equal
-/// whatever they hold, and a row never moves from one panel to the other.
+/// whatever they hold, and a row never moves from one panel to the other. A [`Hit`] and a
+/// [`references::Reference`] are both [`Eq`], so two item rows holding the same `Arc`
+/// compare equal without reading it.
 impl<T: PartialEq> PartialEq for PlaceRow<T> {
     fn eq(&self, other: &Self) -> bool {
         self.row == other.row
