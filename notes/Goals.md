@@ -223,6 +223,22 @@ leaves this list when it is. That is a move made on request, like everything els
 
 ## UI
 
+- [ ] One rule for what a link is, one look for every link, and Ctrl meaning one thing. Today a
+  link is drawn three ways: an assembly operand takes a washed, rounded box with a bottom border
+  in the lit colour, a name in the source pane takes the colour and a plain underline, and a
+  label row in the object-code listing takes the colour alone -- with the I-beam still over it,
+  since the row asks for no link. Ctrl means two things: a tab of its own on a name or a label,
+  and *whether there is a link at all* on a bare address, whose press then goes through
+  `show_in_code` and can never ask for a tab. And Alt stops only the press, so a link goes on
+  lighting itself, and showing the hand, while it cannot be followed.
+
+  Settle all three. Every link takes the operand's look -- the wash, the corners, the border, the
+  lit colour and the hand -- wherever it is drawn. Alt turns the light and the cursor off with the
+  press, so nothing ever offers what it will not do. And a bare address becomes a link on its own,
+  opening in a tab of its own with Ctrl like every other operand link, which leaves Ctrl saying
+  one thing everywhere. The predicate behind it -- `Door::open_now` -- becomes the only answer to
+  "is this a link now", asked by the label, the row and the pointer alike.
+
 - [D] Bring back the floem-style thicker scrollbars. Deferred: freya 0.4 hardcodes the scrollbar
   sizes (its `ScrollBar` theme declares a `size` field that is never read, and `ScrollView` /
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only
