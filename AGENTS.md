@@ -269,10 +269,11 @@ command.
   the cargo build, the language server and the other projects, five sections each redrawn on
   its own.
 - `src/ui/session.rs` — the session as the UI keeps it in step with `project.rs`: what is
-  saved when, what a restore fills in, and what a switch empties.
+  saved when, what a restore fills in, and what a switch empties; and `settings.toml` wired
+  to the appearance and the fonts. Every hook `app()` calls that draws nothing.
 - `src/ui/no_project.rs` — the window with no project open: what is drawn under the top bar
   either way, and the screen that offers the ways into one.
-- `src/ui/settings_view.rs` — the settings page, and the three hooks behind the theme and fonts.
+- `src/ui/settings_view.rs` — the settings page: the theme choice and the two font overrides.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
 - `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes.

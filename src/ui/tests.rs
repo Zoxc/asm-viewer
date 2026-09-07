@@ -10,7 +10,7 @@ use super::*;
 // Named again: `use super::*` offers two `use_theme`s -- ours and freya's own out of the
 // prelude -- and two globs offering one name is an ambiguity rather than a shadowing. An
 // explicit import wins over a glob, so this is what the name means here: ours.
-use super::settings_view::use_theme;
+use super::session::use_theme;
 use crate::search::{Hit, SearchEvent, SearchQuery};
 use crate::source::Seeded;
 use crate::temporary::Temporary;

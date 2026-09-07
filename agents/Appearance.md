@@ -91,8 +91,8 @@ re-render does would repaint them. Each entry says which appearance it was parse
 is both what has the source reader read the file again and what lets the pane go on drawing the
 entry it has meanwhile (`agents/Panes.md`); a clear here would blank every source pane for as long
 as the reading took. `colours(appearance)` is the palette handed the theme rather than asking for
-it, which is how a parse made on a thread resolves its spans at all. The
-appearance is resolved by `use_theme` at the root of `app()` from two inputs, through the pure
+it, which is how a parse made on a thread resolves its spans at all. The appearance is resolved by
+`use_theme` (`src/ui/session.rs`) at the root of `app()` from two inputs, through the pure
 `resolve_appearance`: the stored choice (`settings.rs`, read once: it is a file) and
 `Platform::preferred_theme`, which freya keeps from winit's `Window::theme()` and re-sets on the
 OS's `ThemeChanged` event. Only `Theme::Desktop` is a question at all. **Not a `use_hook`**: the
@@ -204,8 +204,10 @@ is a `String` here and an `Option<String>` in the file, an empty box **is** how 
 have not said", and `EditedSettings::settings` is the one place the two spellings meet. A *size*
 gets no such treatment: it is a stepper and not a text box, so there is no half-typed state and no
 third answer for text that is not a number. That also keeps a reader from spending a keystroke at
-1pt on the way to typing 12. `use_settings` is the whole of the wiring. The write it makes is
-compared against **what the file currently says** rather than against what was loaded, `Saves`'
+1pt on the way to typing 12. `use_settings_with` is the whole of the wiring, and it sits in
+`src/ui/session.rs` with the app's other non-drawing hooks rather than on the page: `app()` calls
+it, and the page only draws the controls. The write it makes is compared against **what the file
+currently says** rather than against what was loaded, `Saves`'
 rule: a fixed baseline would leave the file holding the middle answer when a reader changes a
 setting and changes it back, and comparing at all is what stops a run that never opened the page
 from creating `settings.toml`. `use_settings_with` takes the write as an argument, since the real
