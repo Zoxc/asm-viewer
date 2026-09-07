@@ -424,6 +424,14 @@ from outside it only arrives when something else happens to re-render that view,
 position from an effect is a loop, since a write notifies every reader and the callback it reads
 through counts as one (`notes/upstream/freya.md`).
 
+**The measurements and the rules over them are one `Bar`** (`src/ui/strip.rs`): the four states and
+the count, with a method apiece for what a chip's measurement means, what the strip's own means,
+what the row's means, the wheel, a drag held at an edge, and the scroll all of them end in. Each
+carries the reason it is what it is, and `TabBar::render` is left as hooks, the bar, the reveal, the
+chips and the rect tree with one-line handlers. That is also what lets a rule be pinned on its own:
+beside the tests that drive the whole bar there is one per rule, calling it with no bar drawn
+(`src/ui/tests.rs`).
+
 A sidebar group's bar is a plain row, seven panels always fitting. Two things bite there. freya appends one child more than there are tabs, a
 `rect().expanded()` drop zone for "past the last tab", and `expanded()` is meaningless inside a
 horizontal scroll view, so it is given a width of its own. And a tab's name is elided **by character

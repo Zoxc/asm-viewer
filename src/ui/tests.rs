@@ -1957,6 +1957,245 @@ fn the_bar_forgets_the_place_of_a_chip_whose_tab_has_closed() {
     );
 }
 
+/// The bar's measurements, made in the runner's own scope: a `State` made outside a scope
+/// has nowhere to live, so a bar with nothing drawn around it needs a runner all the same.
+#[derive(Clone, Copy)]
+struct Rules(Bar);
+
+/// What that runner draws, which is nothing: these tests are about the bar's rules and not
+/// about its drawing, which the tests above cover.
+fn nothing_drawn() -> impl IntoElement {
+    rect()
+}
+
+/// A bar of its own, so that one rule at a time can be asked. `laid_out` is what a bar
+/// drawn once read of its count, which is what a new shape is counted from.
+fn bar_rules() -> (TestingRunner, Bar) {
+    let (test, bar) = TestingRunner::new(
+        nothing_drawn,
+        (200., 100.).into(),
+        |runner: &mut _| {
+            runner
+                .provide_root_context(|| {
+                    Rules(Bar {
+                        places: State::create(Vec::new()),
+                        viewport: State::create(None),
+                        content: State::create(0.0),
+                        offset: State::create(0.0),
+                        shape: State::create(0),
+                        laid_out: 0,
+                    })
+                })
+                .0
+        },
+        1.,
+    );
+    (test, bar)
+}
+
+/// The strip is never scrolled past either end: the first chip does not leave the left
+/// edge and the last does not leave the right. The floor is the chips against the window,
+/// so a bar that has lost one has to be put back inside its own end -- `scroll_by` clamps
+/// only as it moves, which leaves measuring the row to do it.
+#[test]
+fn the_strip_never_scrolls_past_either_end() {
+    let (_test, bar) = bar_rules();
+
+    // Nothing measured: there is no floor to clamp against and nothing moves.
+    bar.scroll_by(-50.0);
+    assert_eq!(*bar.offset.peek(), 0.0, "an unmeasured strip scrolled");
+
+    // 500 of chips in 200 of window.
+    bar.viewport_sized(0.0, 200.0);
+    bar.content_sized(500.0);
+    bar.scroll_by(40.0);
+    assert_eq!(
+        *bar.offset.peek(),
+        0.0,
+        "the first chip was scrolled off the left edge"
+    );
+    bar.scroll_by(-1000.0);
+    assert_eq!(
+        *bar.offset.peek(),
+        -300.0,
+        "the last chip was scrolled off the right edge"
+    );
+    bar.scroll_by(40.0);
+    assert_eq!(*bar.offset.peek(), -260.0, "the strip did not scroll back");
+
+    // A bar that has lost chips: the offset is past the floor a shorter bar has, and
+    // measuring the row is what puts it back.
+    bar.content_sized(220.0);
+    assert_eq!(
+        *bar.offset.peek(),
+        -20.0,
+        "a shorter bar was left scrolled past its own end"
+    );
+    // And one that now fits the window has no floor below nothing at all.
+    bar.content_sized(120.0);
+    assert_eq!(*bar.offset.peek(), 0.0, "a bar that fits was left slid");
+}
+
+/// A chip that changed width or moved along the row is the bar taking a new shape; the
+/// same chip carried along by a scroll is not. The reveal wakes on that count, so a scroll
+/// taken for a move would take the strip back off a reader who scrolled it to look
+/// elsewhere, and a move taken for a scroll would leave them reading a tab whose chip had
+/// slid off the bar.
+#[test]
+fn a_chip_that_moved_along_the_row_is_a_new_shape_and_one_carried_by_a_scroll_is_not() {
+    let (_test, bar) = bar_rules();
+    let tab = Tab::Page(Page::Settings);
+    bar.viewport_sized(0.0, 200.0);
+    bar.content_sized(500.0);
+
+    bar.chip_sized(tab, 0.0, 100.0);
+    assert_eq!(*bar.places.peek(), [(tab, 0.0, 100.0)], "the chip's place");
+
+    bar.scroll_by(-40.0);
+    // The count put back, so that what the measurements below wake is their own.
+    let mut shape = bar.shape;
+    shape.set(0);
+
+    // The row slid under the window: another place in the window, the same place along the
+    // row.
+    bar.chip_sized(tab, -40.0, 60.0);
+    assert_eq!(
+        *bar.places.peek(),
+        [(tab, 0.0, 100.0)],
+        "the scroll moved the chip along the row"
+    );
+    assert_eq!(
+        *bar.shape.peek(),
+        0,
+        "the strip being scrolled woke the reveal"
+    );
+
+    // The same chip, wider by 20.
+    bar.chip_sized(tab, -40.0, 80.0);
+    assert_eq!(
+        *bar.places.peek(),
+        [(tab, 0.0, 120.0)],
+        "the chip's new width was not kept"
+    );
+    assert_eq!(
+        *bar.shape.peek(),
+        1,
+        "a chip that changed width did not wake the reveal"
+    );
+
+    // And the same chip, the same width, further along the row: a chip before it has gone.
+    shape.set(0);
+    bar.chip_sized(tab, 20.0, 140.0);
+    assert_eq!(
+        *bar.places.peek(),
+        [(tab, 60.0, 180.0)],
+        "the chip's new place was not kept"
+    );
+    assert_eq!(
+        *bar.shape.peek(),
+        1,
+        "a chip that moved along the row did not wake the reveal"
+    );
+}
+
+/// The strip's own box is what a chip has to be inside to be in view, so a strip cut off
+/// somewhere else is a new shape and the reveal looks again. Measured again at the same
+/// size it is not: a layout is not a reason to take the strip back off the reader.
+#[test]
+fn the_strip_measured_at_another_size_is_a_new_shape() {
+    let (_test, bar) = bar_rules();
+
+    bar.viewport_sized(0.0, 200.0);
+    assert_eq!(*bar.viewport.peek(), Some((0.0, 200.0)), "the strip's box");
+    assert_eq!(*bar.shape.peek(), 1, "the first measurement woke nothing");
+
+    let mut shape = bar.shape;
+    shape.set(0);
+    bar.viewport_sized(0.0, 200.0);
+    assert_eq!(
+        *bar.shape.peek(),
+        0,
+        "the same box measured again was taken for a new shape"
+    );
+
+    bar.viewport_sized(0.0, 260.0);
+    assert_eq!(*bar.viewport.peek(), Some((0.0, 260.0)), "the wider strip");
+    assert_eq!(*bar.shape.peek(), 1, "a strip of another size woke nothing");
+}
+
+/// The wheel over the strip is the strip's own axis, whichever axis it arrives on: a bar
+/// has no second one, and a reader turning the wheel over it means "further along".
+#[test]
+fn the_wheel_over_the_strip_scrolls_it_on_whichever_axis_it_arrives() {
+    let (_test, bar) = bar_rules();
+    bar.viewport_sized(0.0, 200.0);
+    bar.content_sized(500.0);
+
+    // A plain wheel, which arrives on the vertical axis the strip does not have.
+    bar.wheel(0.0, -40.0);
+    assert_eq!(*bar.offset.peek(), -40.0, "the strip ignored a plain wheel");
+
+    // And a tilt, which is the greater of the two here.
+    bar.wheel(-30.0, 5.0);
+    assert_eq!(*bar.offset.peek(), -70.0, "the strip took the lesser axis");
+
+    // Clamped like any other scroll.
+    bar.wheel(0.0, -1000.0);
+    assert_eq!(
+        *bar.offset.peek(),
+        -300.0,
+        "the wheel scrolled past the end"
+    );
+}
+
+/// A drag held near either end of the strip scrolls it towards that end, which is the only
+/// way to reach the far end while carrying a tab. Held anywhere else, or held by nothing
+/// at all, it moves the strip nowhere: the handler is on the global move, so it is asked
+/// about every pointer that crosses the window.
+#[test]
+fn a_drag_held_near_either_end_scrolls_the_strip_towards_it() {
+    let (_test, bar) = bar_rules();
+    bar.viewport_sized(0.0, 200.0);
+    bar.content_sized(500.0);
+    bar.scroll_by(-100.0);
+
+    bar.drag_edge(false, DRAG_EDGE / 2.0);
+    assert_eq!(
+        *bar.offset.peek(),
+        -100.0,
+        "a pointer carrying nothing scrolled the strip"
+    );
+
+    bar.drag_edge(true, DRAG_EDGE / 2.0);
+    let back = *bar.offset.peek();
+    assert!(
+        back > -100.0,
+        "a drag held at the start did not scroll the strip back: {back}"
+    );
+
+    // Just past that end's own band, and in the middle: each asked on its own, or a rule
+    // that scrolled towards whichever half the pointer is in would cancel itself out.
+    bar.drag_edge(true, DRAG_EDGE + 1.0);
+    assert_eq!(
+        *bar.offset.peek(),
+        back,
+        "a drag held just past the near end scrolled the strip"
+    );
+    bar.drag_edge(true, 100.0);
+    assert_eq!(
+        *bar.offset.peek(),
+        back,
+        "a drag held in the middle scrolled the strip"
+    );
+
+    bar.drag_edge(true, 200.0 - DRAG_EDGE / 2.0);
+    let on = *bar.offset.peek();
+    assert!(
+        on < back,
+        "a drag held at the far end did not scroll the strip on: {back} to {on}"
+    );
+}
+
 /// A tab is dragged along the bar to move it, and the chip a drop would land on says so
 /// while the pointer is over it. The recipe is `agents/Headless.md`'s: the passes between
 /// the moves are what let the drop zones be measured after the drag has begun.

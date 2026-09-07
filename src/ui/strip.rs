@@ -866,24 +866,8 @@ impl Component for TabBar {
         let drag = use_drag::<Tab>();
         let over = drag.read().is_some().then(|| landing()).flatten();
 
-        let places = use_state(Vec::<(Tab, f32, f32)>::new);
-        // The test that asks what the bar still holds a place for hands it the list to
-        // keep them in, there being no reading a component's own state from outside.
-        #[cfg(test)]
-        let places = try_consume_context::<Measured>().map_or(places, |measured| measured.0);
-        let viewport = use_state(|| None::<(f32, f32)>);
-        let content = use_state(|| 0.0f32);
-        let mut shape = use_state(|| 0u64);
-        let laid_out = shape();
-        let bar = Bar {
-            places,
-            viewport,
-            content,
-            // Read here as well as written: the row of chips is drawn at this offset, so
-            // the bar has to be woken when it changes.
-            offset: use_state(|| 0.0f32),
-        };
-        use_reveal(strip, bar, laid_out);
+        let bar = use_bar();
+        use_reveal(strip, bar);
 
         let (tabs, active) = {
             let strip = strip.read();
@@ -893,7 +877,7 @@ impl Component for TabBar {
         // the rest of the session. It is dropped once its tab is no longer open, which
         // costs the reveal nothing: the tab on screen is one of these.
         use_side_effect_with_deps(&tabs, move |tabs: &Vec<Tab>| {
-            let mut places = places;
+            let mut places = bar.places;
             let closed = places.peek().iter().any(|(tab, ..)| !tabs.contains(tab));
             if closed {
                 places.write().retain(|(tab, ..)| tabs.contains(tab));
@@ -917,7 +901,6 @@ impl Component for TabBar {
                     key: DiffKey::None,
                 }
                 .key(tab);
-                let mut places = places;
                 drop_zone(
                     strip,
                     drag,
@@ -925,32 +908,7 @@ impl Component for TabBar {
                     index,
                     rect()
                         .on_sized(move |e: Event<SizedEventData>| {
-                            // Where the chip sits **along the row**: where it was laid out,
-                            // less how far the row is slid under the window.
-                            let slid = *bar.offset.peek();
-                            let at = (e.area.min_x() - slid, e.area.max_x() - slid);
-                            let held = places
-                                .peek()
-                                .iter()
-                                .find(|(open, ..)| *open == tab)
-                                .map(|(_, min, max)| (*min, *max));
-                            // A chip that moved along the row or changed width is the bar
-                            // taking a new shape -- a tab opened, closed or moved. The
-                            // strip being scrolled moves every chip in the window and none
-                            // along the row, and owes the reveal nothing. Under a pixel is
-                            // the subtraction above and not a move, each end being worked
-                            // out from whatever offset the row was drawn at.
-                            let shifted = held.is_none_or(|(min, max)| {
-                                (min - at.0).abs() >= 1.0 || (max - at.1).abs() >= 1.0
-                            });
-                            if !shifted {
-                                return;
-                            }
-                            let mut open = places.write();
-                            open.retain(|(open, ..)| *open != tab);
-                            open.push((tab, at.0, at.1));
-                            drop(open);
-                            shape.set(laid_out + 1);
+                            bar.chip_sized(tab, e.area.min_x(), e.area.max_x())
                         })
                         .child(
                             DragZone::new(tab, header.into_element())
@@ -961,8 +919,6 @@ impl Component for TabBar {
             })
             .collect();
 
-        let mut viewport = viewport;
-        let mut content = content;
         rect()
             .width(Size::fill())
             .height(Size::px(tab_row_height()))
@@ -972,22 +928,10 @@ impl Component for TabBar {
             .content(Content::Flex)
             .background(palette().header_bg)
             .border(bottom_hairline())
-            // A drag held near either end scrolls the strip towards it. On the global move
-            // because the pointer is over a chip, not over the strip's own box, for the
-            // whole of the gesture.
+            // On the global move because the pointer is over a chip, not over the strip's
+            // own box, for the whole of the gesture.
             .on_global_pointer_move(move |e: Event<PointerEventData>| {
-                if drag.peek().is_none() {
-                    return;
-                }
-                let Some((left, right)) = *viewport.peek() else {
-                    return;
-                };
-                let at = e.global_location().x as f32;
-                if at < left + DRAG_EDGE {
-                    scroll_by(bar, DRAG_STEP);
-                } else if at > right - DRAG_EDGE {
-                    scroll_by(bar, -DRAG_STEP);
-                }
+                bar.drag_edge(drag.peek().is_some(), e.global_location().x as f32)
             })
             .child(
                 rect()
@@ -996,41 +940,18 @@ impl Component for TabBar {
                     // What is past the strip's own edge is not drawn, this being what makes
                     // the offset below a scroll rather than a row hanging out of the window.
                     .overflow(Overflow::Clip)
-                    // Where the strip is cut off, which is what a chip is measured against.
                     .on_sized(move |e: Event<SizedEventData>| {
-                        let at = Some((e.area.min_x(), e.area.max_x()));
-                        if *viewport.peek() != at {
-                            viewport.set(at);
-                            shape.set(laid_out + 1);
-                        }
+                        bar.viewport_sized(e.area.min_x(), e.area.max_x())
                     })
-                    // The wheel over the strip is the strip's own axis: a bar has no second
-                    // one to scroll, and a reader turning the wheel over it means "further
-                    // along".
                     .on_wheel(move |e: Event<WheelEventData>| {
-                        let by = match e.delta_y.abs() > e.delta_x.abs() {
-                            true => e.delta_y,
-                            false => e.delta_x,
-                        };
-                        scroll_by(bar, by as f32);
+                        bar.wheel(e.delta_x as f32, e.delta_y as f32)
                     })
                     .child(
                         rect()
                             .horizontal()
                             .height(Size::fill())
-                            // How wide the chips are altogether, which is what says how far
-                            // the strip may be scrolled.
                             .on_sized(move |e: Event<SizedEventData>| {
-                                let width = e.area.width();
-                                if *content.peek() != width {
-                                    content.set(width);
-                                    // A bar that has lost a chip may now fit the window:
-                                    // a scroll of nothing puts the offset back inside the
-                                    // new floor, which `scroll_by` clamps against only as
-                                    // it moves. Otherwise a closed tab leaves empty ground
-                                    // past the last chip until something scrolls.
-                                    scroll_by(bar, 0.0);
-                                }
+                                bar.content_sized(e.area.width())
                             })
                             // The scroll itself: the row slides under the box above.
                             .offset_x(*bar.offset.read())
@@ -1055,25 +976,157 @@ impl Component for TabBar {
     }
 }
 
+/// Every measurement the bar keeps, made in one place: the hook [`TabBar`] opens with.
+fn use_bar() -> Bar {
+    let places = use_state(Vec::<(Tab, f32, f32)>::new);
+    // The test that asks what the bar still holds a place for hands it the list to keep
+    // them in, there being no reading a component's own state from outside.
+    #[cfg(test)]
+    let places = try_consume_context::<Measured>().map_or(places, |measured| measured.0);
+    let shape = use_state(|| 0u64);
+    Bar {
+        places,
+        viewport: use_state(|| None),
+        content: use_state(|| 0.0f32),
+        // Read as well as written: the row of chips is drawn at this offset, so the bar
+        // has to be woken when it changes.
+        offset: use_state(|| 0.0f32),
+        shape,
+        // A read, which is what subscribes the bar to a new shape.
+        laid_out: shape(),
+    }
+}
+
 /// The list a test hands the bar to measure its chips into, so that it can read them.
 #[cfg(test)]
 #[derive(Clone, Copy)]
 pub(crate) struct Measured(pub(crate) State<Vec<(Tab, f32, f32)>>);
 
-/// What the bar has been measured as, and how far along it is: passed about as one thing
-/// because nothing that scrolls can do without all of it.
+/// What the bar has been measured as, how far along it is, and every rule over the two:
+/// passed about as one thing because nothing that scrolls can do without all of it.
 #[derive(Clone, Copy)]
-struct Bar {
+pub(super) struct Bar {
     /// Every chip's two sides, along the row: where each was laid out, less the offset,
     /// so that scrolling the strip moves none of them. Only the open tabs: nothing
     /// measures a chip that has gone, so its entry is dropped when its tab closes.
-    places: State<Vec<(Tab, f32, f32)>>,
+    pub(super) places: State<Vec<(Tab, f32, f32)>>,
     /// The two sides of the strip: what a chip has to be inside to be in view.
-    viewport: State<Option<(f32, f32)>>,
+    pub(super) viewport: State<Option<(f32, f32)>>,
     /// How wide the chips are altogether.
-    content: State<f32>,
+    pub(super) content: State<f32>,
     /// How far the row of chips is slid to the left, which is never positive.
-    offset: State<f32>,
+    pub(super) offset: State<f32>,
+    /// Counts up whenever the bar takes a new shape, which is what wakes the reveal.
+    pub(super) shape: State<u64>,
+    /// What that count said as the bar was drawn. A new shape is counted from here rather
+    /// than from the count itself, so a whole layout's chips settling at once is one new
+    /// shape and not one apiece.
+    pub(super) laid_out: u64,
+}
+
+impl Bar {
+    /// Where a chip sits **along the row**: where it was laid out, less how far the row is
+    /// slid under the window.
+    ///
+    /// A chip that moved along the row or changed width is the bar taking a new shape -- a
+    /// tab opened, closed or moved. The strip being scrolled moves every chip in the
+    /// window and none along the row, and owes the reveal nothing. Under a pixel is the
+    /// subtraction and not a move, each end being worked out from whatever offset the row
+    /// was drawn at.
+    pub(super) fn chip_sized(self, tab: Tab, min_x: f32, max_x: f32) {
+        let slid = *self.offset.peek();
+        let at = (min_x - slid, max_x - slid);
+        let held = self
+            .places
+            .peek()
+            .iter()
+            .find(|(open, ..)| *open == tab)
+            .map(|(_, min, max)| (*min, *max));
+        let shifted =
+            held.is_none_or(|(min, max)| (min - at.0).abs() >= 1.0 || (max - at.1).abs() >= 1.0);
+        if !shifted {
+            return;
+        }
+        let mut places = self.places;
+        let mut open = places.write();
+        open.retain(|(open, ..)| *open != tab);
+        open.push((tab, at.0, at.1));
+        drop(open);
+        self.reshaped();
+    }
+
+    /// Where the strip is cut off, which is what a chip is measured against. A strip of
+    /// another size is a new shape: what was in view was in view of the old one.
+    pub(super) fn viewport_sized(self, min_x: f32, max_x: f32) {
+        let at = Some((min_x, max_x));
+        if *self.viewport.peek() == at {
+            return;
+        }
+        let mut viewport = self.viewport;
+        viewport.set(at);
+        self.reshaped();
+    }
+
+    /// How wide the chips are altogether, which is what says how far the strip may be
+    /// scrolled. A bar that has lost a chip may now fit the window: a scroll of nothing
+    /// puts the offset back inside the new floor, which [`Bar::scroll_by`] clamps against
+    /// only as it moves. Otherwise a closed tab leaves empty ground past the last chip
+    /// until something scrolls.
+    pub(super) fn content_sized(self, width: f32) {
+        if *self.content.peek() == width {
+            return;
+        }
+        let mut content = self.content;
+        content.set(width);
+        self.scroll_by(0.0);
+    }
+
+    /// The wheel over the strip is the strip's own axis, whichever axis it arrives on: a
+    /// bar has no second one, and a reader turning the wheel over it means "further
+    /// along".
+    pub(super) fn wheel(self, delta_x: f32, delta_y: f32) {
+        let by = match delta_y.abs() > delta_x.abs() {
+            true => delta_y,
+            false => delta_x,
+        };
+        self.scroll_by(by);
+    }
+
+    /// A drag held near either end of the strip scrolls it towards that end, `x` being
+    /// where the pointer is in the window. It is the only way to reach the far end while
+    /// carrying a tab, and a pointer held anywhere else moves nothing.
+    pub(super) fn drag_edge(self, dragging: bool, x: f32) {
+        if !dragging {
+            return;
+        }
+        let Some((left, right)) = *self.viewport.peek() else {
+            return;
+        };
+        if x < left + DRAG_EDGE {
+            self.scroll_by(DRAG_STEP);
+        } else if x > right - DRAG_EDGE {
+            self.scroll_by(-DRAG_STEP);
+        }
+    }
+
+    /// Move the strip `delta` pixels, positive being towards its start, and never past
+    /// either end: the first chip does not leave the left edge, and the last does not
+    /// leave the right.
+    pub(super) fn scroll_by(self, delta: f32) {
+        let Some((left, right)) = *self.viewport.peek() else {
+            return;
+        };
+        let floor = -(*self.content.peek() - (right - left)).max(0.0);
+        let want = (*self.offset.peek() + delta).clamp(floor, 0.0);
+        let mut offset = self.offset;
+        offset.set_if_modified(want);
+    }
+
+    /// The bar has taken a new shape, which is what the reveal wakes on.
+    fn reshaped(self) {
+        let mut shape = self.shape;
+        shape.set(self.laid_out + 1);
+    }
 }
 
 /// Bring the tab on screen into view when it changes, and when the bar takes a new shape
@@ -1083,10 +1136,10 @@ struct Bar {
 ///
 /// **Not on every layout**, which would take the strip back off the reader the moment they
 /// scrolled it to look at something else.
-fn use_reveal(strip: State<Strip>, bar: Bar, laid_out: u64) {
+fn use_reveal(strip: State<Strip>, bar: Bar) {
     let active = strip.read().active();
     use_side_effect_with_deps(
-        &(active, laid_out),
+        &(active, bar.laid_out),
         move |(active, _): &(Option<Tab>, u64)| {
             let Some(active) = *active else {
                 return;
@@ -1107,29 +1160,17 @@ fn use_reveal(strip: State<Strip>, bar: Bar, laid_out: u64) {
             let slid = *bar.offset.peek();
             let (min, max) = (min + slid, max + slid);
             if min < left {
-                scroll_by(bar, left - min);
+                bar.scroll_by(left - min);
             } else if max > right {
-                scroll_by(bar, right - max);
+                bar.scroll_by(right - max);
             }
         },
     );
 }
 
-/// Move the strip `delta` pixels, positive being towards its start, and never past either
-/// end: the first chip does not leave the left edge, and the last does not leave the right.
-fn scroll_by(bar: Bar, delta: f32) {
-    let Some((left, right)) = *bar.viewport.peek() else {
-        return;
-    };
-    let floor = -(*bar.content.peek() - (right - left)).max(0.0);
-    let want = (*bar.offset.peek() + delta).clamp(floor, 0.0);
-    let mut offset = bar.offset;
-    offset.set_if_modified(want);
-}
-
 /// How near either end of the strip a drag has to be held for it to scroll, and how far it
 /// goes per move of the pointer.
-const DRAG_EDGE: f32 = 24.0;
+pub(super) const DRAG_EDGE: f32 = 24.0;
 const DRAG_STEP: f32 = 12.0;
 
 /// One place a dragged tab may be dropped: `position` in the bar, which is where the chip
