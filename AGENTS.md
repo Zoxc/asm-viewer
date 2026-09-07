@@ -227,7 +227,7 @@ command.
   `Doors` (what every door out of one place into another is given), and where each side of a
   tab was left.
 - `src/ui/follow.rs` — following a name in the source to what it names: the question put to
-  the language server, and the place its answer opens.
+  the language server, and the place its answer opens, with the caret it lands on.
 - `src/ui/linking.rs` — which names in the file the Source pane is showing are links: what
   it has asked the server, what came back, and why the asking waits until the server is
   ready; and which files the server has been told the reader has open, which is what makes

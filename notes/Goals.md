@@ -276,21 +276,23 @@ leaves this list when it is. That is a move made on request, like everything els
   share — one thread for the app's lifetime, a queue drained to its newest entry where requests
   supersede, and a pane that goes on drawing what it has until an answer lands. Four things are
   across already: binary inspection, reading and parsing a binary, reading and parsing a source
-  file, and the scratchpad's build and run. A file read that had crept into a render is across
-  too: whether a diagnostic's place can be opened is the build worker's answer now
-  (`building::openable`), where the row asking it cost a `stat` a diagnostic a frame and a
-  build says two hundred things as readily as two. A headless test holds it to that, counting
+  file, and the scratchpad's build and run. Two file reads that had crept into a render and an
+  effect are across too. Whether a diagnostic's place can be opened is the build worker's
+  answer now (`building::openable`); the row asking it cost a `stat` a diagnostic a frame, and
+  a build says two hundred things as readily as two. And the caret a followed definition lands
+  on is counted on the language worker (`follow::Arrival`); the effect that opens the answer
+  read the file to count it, up to 4 ms cold for a megabyte, and for nobody — the pane's own
+  read of that file is the highlighter's worker. A headless test holds both to it, counting
   through `source::touches` what the thread that draws asked the filesystem. What is known not
   to be across — `project::flush` writes both TOML files from a timer task on the executor
   every thirty seconds, and again from the window's close hook; `fonts::resolve` spawns
   `kreadconfig`/`gsettings` subprocesses, on the first frame and again on a settings change
   (the answer is cached per process, so it is the first call that costs); startup reads
   `settings.toml`, `recents.toml` and the open project's two files synchronously inside
-  `app()`; the effect that opens a followed definition reads the file to count the caret's
-  column into the units a pane draws in (`ui::follow`); and two presses ask the filesystem once
-  each, a Search hit's checking `source::showable` before it opens (`ui::place_row`) and a
-  followed name canonicalising the path once per open source tab to find the tab it belongs to
-  (`follow::spelling`). None of those is measured, which is where this starts: the rule is worth keeping, and an atomic write
+  `app()`; and two presses ask the filesystem once each, a Search hit's checking
+  `source::showable` before it opens (`ui::place_row`) and a followed name canonicalising the
+  path once per open source tab to find the tab it belongs to (`follow::spelling`). None of
+  those is measured, which is where this starts: the rule is worth keeping, and an atomic write
   of a few hundred bytes may still be cheaper than the channel it would take to move it.
 - [x] Rank the finder's list on the worker beside the walk, not on the UI thread. The walked
   files are the worker's now, and what crosses to the UI is the rows it picked out for a query,

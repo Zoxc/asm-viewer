@@ -6576,6 +6576,80 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
     );
 }
 
+/// **The caret is counted on the worker, and the UI thread reads nothing.** The server's
+/// column is a byte offset into its line and a pane counts UTF-16 units, so converting it
+/// takes the line's text -- of a file the reader has never opened, which is a read of up
+/// to the source cache's whole bound. It happens where the ask does.
+///
+/// So the definition is a real file with a two-byte character ahead of the name: the caret
+/// lands on the name, and the count of what this thread asked the filesystem does not
+/// move. Both halves are needed -- a conversion that never happened would leave the count
+/// still and the caret a column out.
+#[test]
+fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
+    let (file, seeded) = calling_file("caret-worker");
+    let _ = &seeded;
+    // A file on disk and not in the cache, since a cached one is not read at all and
+    // there would be nothing to move off this thread.
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
+        "assembly-viewer-follow-caret-{}",
+        std::process::id()
+    )));
+    let defined = directory.join("helper.rs");
+    // `helper` begins at byte 19 of the first line and at column 18, the `ø` before it
+    // being two bytes and one unit.
+    std::fs::write(&defined, "let ø = 0; pub fn helper() {}\n").expect("the file is written");
+    let place = lsp::Place {
+        file: defined.clone(),
+        line: 1,
+        columns: 19..25,
+    };
+    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+        move |job: LspJob| match job {
+            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
+                run,
+                id,
+                // The worker's own read, as the app hands it in.
+                reply: replied(want, Ok(vec![place.clone()]), source::read_text),
+            }),
+            _ => None,
+        },
+        file.clone()
+    );
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let call = word_point(&test, "helper");
+    let before = source::touches();
+    press_at(&mut test, call);
+    pump(&mut test, || location.doors.marked.peek().source.is_some());
+
+    assert_eq!(
+        source::touches(),
+        before,
+        "the answer was opened with a read on the thread that draws"
+    );
+    let picked = location
+        .doors
+        .marked
+        .peek()
+        .source
+        .clone()
+        .expect("the definition's line was not picked out");
+    assert_eq!(
+        picked.chars.lead(),
+        Caret { row: 0, col: 18 },
+        "the caret is not on the name"
+    );
+}
+
 /// A name defined in the file the tab already shows lands the caret on it too. That door
 /// marks its line itself and leaves no landing, the document not having changed, so the
 /// new place woke the effect that rebuilds the runs and it found only the driven line --

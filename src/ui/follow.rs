@@ -24,7 +24,60 @@ pub(crate) struct Follow {
     /// Where the answer said the name is defined, until [`use_follow`] has taken it: the
     /// place the server named, where the press said it should open, and the tab it was
     /// made in.
-    arrived: Option<(lsp::Place, Reach, Option<DocId>)>,
+    arrived: Option<(Arrival, Reach, Option<DocId>)>,
+}
+
+/// A place a followed answer named, with the caret opening it plants already worked out.
+///
+/// The caret goes on the **name** and not at the head of its line, the reader being taken
+/// there to read it. The server counts that column in bytes ([`lsp::Place`]) where a pane
+/// counts UTF-16 units, so converting takes the line's text -- which is why the answer
+/// carries the caret and not the columns alone. The line is read where the ask is, on the
+/// language worker, for the reason the Locations panel's lines are (`src/references.rs`):
+/// a read blocks, and that is the thread that may block.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Arrival {
+    pub(crate) place: lsp::Place,
+    /// An empty run at the name's first column, in the units the source pane draws in: a
+    /// caret there, selecting nothing.
+    pub(crate) caret: Range<usize>,
+}
+
+impl Arrival {
+    /// The places an answer named, each with its caret. `read` answers a file's whole
+    /// text and is asked **once per file**, [`source::read_text`] on the worker: a path a
+    /// server answers with is file input, and two rules for what a source file is would
+    /// be two ideas of which files this app can show.
+    ///
+    /// A file that will not read leaves the column alone, which is the same column on any
+    /// line of ASCII.
+    ///
+    /// Every place is counted, though [`Follow::answer`] opens only the first: which one
+    /// that is, is its rule, and an answer names one place for nearly every name.
+    pub(crate) fn of(
+        places: Vec<lsp::Place>,
+        read: impl Fn(&Path) -> Option<String>,
+    ) -> Vec<Arrival> {
+        let mut texts: HashMap<PathBuf, Option<String>> = HashMap::new();
+        places
+            .into_iter()
+            .map(|place| {
+                let text = texts
+                    .entry(place.file.clone())
+                    .or_insert_with(|| read(&place.file));
+                let at = place.columns.start as usize;
+                let start = text
+                    .as_deref()
+                    .and_then(|text| text.lines().nth((place.line as usize).checked_sub(1)?))
+                    .map(|row| chars::columns_of(row, at..at).start)
+                    .unwrap_or(at);
+                Arrival {
+                    place,
+                    caret: start..start,
+                }
+            })
+            .collect()
+    }
 }
 
 /// A question put and not yet answered: which server run it was asked in and which
@@ -54,7 +107,7 @@ impl Follow {
     /// question and opens nothing: the click was a question and never a promise. So does
     /// a **declaration** placed on the line the question was asked on, which is somewhere
     /// the reader already is.
-    pub(crate) fn answer(&mut self, run: u64, id: u64, places: &[lsp::Place]) -> bool {
+    pub(crate) fn answer(&mut self, run: u64, id: u64, places: &[Arrival]) -> bool {
         let waiting = self
             .asked
             .as_ref()
@@ -73,15 +126,15 @@ impl Follow {
         // door -- the same file is a different path through `land` and not a different
         // outcome -- and one that lands on the line it was asked from is a name defined
         // where it is used, which is a place like any other.
-        let nowhere = |place: &&lsp::Place| {
+        let nowhere = |arrival: &&Arrival| {
             asked.want == lsp::Followed::Declaration
-                && place.file == asked.at.file
-                && place.line == asked.at.line.saturating_add(1)
+                && arrival.place.file == asked.at.file
+                && arrival.place.line == asked.at.line.saturating_add(1)
         };
         self.arrived = places
             .first()
-            .filter(|place| !nowhere(place))
-            .map(|place| (place.clone(), reach, tab));
+            .filter(|arrival| !nowhere(arrival))
+            .map(|arrival| (arrival.clone(), reach, tab));
         self.asked = None;
         true
     }
@@ -154,7 +207,7 @@ pub(crate) fn use_follow(mut follow: State<Follow>, doors: Doors, places: Places
         // Reading is what wakes this; the write below clears what it read, so the run
         // it wakes finds nothing and stops.
         let arrived = follow.read().arrived.clone();
-        let Some((place, reach, tab)) = arrived else {
+        let Some((arrival, reach, tab)) = arrived else {
             return;
         };
         follow.write().arrived = None;
@@ -175,33 +228,17 @@ pub(crate) fn use_follow(mut follow: State<Follow>, doors: Doors, places: Places
             raise(open, tab);
         }
 
-        // An empty run at the column the name starts at: a caret at the head of the
-        // definition and not at the head of its line, the reader being taken there to
-        // read it and not to copy it.
-        let caret = caret_at(&place.file, place.line, place.columns.start);
-        open_source_place(doors, places, &place.file, place.line, Some(caret), reach);
+        // The caret is the worker's, counted off the line it sits on there.
+        let place = &arrival.place;
+        open_source_place(
+            doors,
+            places,
+            &place.file,
+            place.line,
+            Some(arrival.caret.clone()),
+            reach,
+        );
     });
-}
-
-/// The empty run a followed name lands on: `column` of `line`, counted into the units the
-/// source pane draws in.
-///
-/// The answer's column is a byte offset into its line (`src/lsp.rs`) where a pane's is a
-/// UTF-16 unit of the row it draws, so the line itself is what tells them apart. It is
-/// the file this door is about to open, which the pane reads a moment later anyway and
-/// which [`source::load`] remembers, so the read is brought forward rather than added --
-/// and it is behind a round trip to a server that took hundreds of milliseconds. A file
-/// that will not read leaves the number alone, which is the same column on any line of
-/// ASCII.
-fn caret_at(file: &Path, line: u32, column: u32) -> Range<usize> {
-    let at = column as usize;
-    let start = source::load(file)
-        .and_then(|read| {
-            let row = read.text().lines().nth((line as usize).checked_sub(1)?)?;
-            Some(chars::columns_of(row, at..at).start)
-        })
-        .unwrap_or(at);
-    start..start
 }
 
 /// Open `path` as a source-driven tab on `line`, `columns` of it selected, and let the

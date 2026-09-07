@@ -248,9 +248,10 @@ answer for a line of ASCII and the nearest one for the rest. **Where the server 
 
 The drawing side converts the other way, since skia is what wants units: the source pane
 counts a link's columns into the row it draws and a press back into a byte offset
-(`src/ui/source_view.rs`), and `references::of` counts the columns it hands the Locations
-panel, the line having been read there anyway. The conversion itself is
-`chars::columns_of` and `chars::bytes_of` and is written once.
+(`src/ui/source_view.rs`), and both halves of an answer count theirs on the worker --
+`references::of` for the Locations panel's rows and `Arrival::of` for the caret a followed
+one plants, each with the line read there. The conversion itself is `chars::columns_of`
+and `chars::bytes_of` and is written once.
 
 An answer that names no column at all is column 0 and not no place at all, the line being
 what opens the file.
@@ -553,6 +554,15 @@ its match with (`agents/Sidebar.md`). A name defined in the file the tab already
 the other path through `land`, which marks the line itself and leaves no landing; what keeps
 the column there is in `agents/Panes.md`, under the doors.
 
+**That column is counted on the worker**, which is what `Arrival` is: the place the server
+named with the caret already worked out. The server counts in bytes and a pane in UTF-16
+units, so converting takes the line's text -- of a file the reader has never opened, since
+that is what a definition usually is. Counting it in the effect that opens the answer was
+up to four milliseconds of the thread that draws for a megabyte, and the defence that it
+was the read the pane would make anyway does not hold: the pane's is the highlighter's
+worker (`agents/Panes.md`), so the UI thread was doing it for nobody. It is read where the
+ask is, once per file, with the same `source::read_text` the Locations panel's lines are.
+
 **Which names are links is the server's to say, and it is asked once per file.**
 `textDocument/semanticTokens/full` classifies every name in a file at once -- one request,
 about ten milliseconds warm against a file of a thousand lines -- where asking about each
@@ -604,7 +614,8 @@ A **references** answer goes to the Locations panel instead (`agents/Sidebar.md`
 asked for from the same place a definition is: the row's file and the pressed column, at the
 right-click rather than the press. It comes back grouped and with each line's text, both
 done on the worker: the reply is `Reply::Listed` where a definition's is `Reply::Followed`,
-since reading those lines is a file read and belongs on the thread that already blocks. The
+and both carry what their lines said, reading a line being a file read and belonging on the
+thread that already blocks. The
 read handed to `references::of` is `source::read_text` and not a `read_to_string` of its
 own: a path a server answers with is file input, and a second rule for what a source file
 is would be a directory or a fifo opened on this thread, and a line the pane draws that the
