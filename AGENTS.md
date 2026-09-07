@@ -154,8 +154,10 @@ command.
   hit, and how well.
 - `src/walk.rs` — the project's directory walked: the rules both readers of it share, and
   the files that came back.
-- `src/search.rs` — the project's directory searched for a pattern: the match, and the hits
-  grouped under the file each is in.
+- `src/search.rs` — the project's directory searched for a pattern: the walk, the match,
+  and the cap.
+- `src/grouped.rs` — items under the file each is in, with a fold per file, flattened into
+  the rows a list draws: what a search's hits and a name's references are both held in.
 - `src/tree.rs` — the Objects list's tree shape, and which files are still being read into it.
 - `src/files.rs` — the project's directory as a tree: read one level per unfold, forgotten on
   the fold, and flattened into the rows the Files view draws.
@@ -163,8 +165,9 @@ command.
 - `src/lsp.rs` — the language server: the program the project names started over its
   directory, the messages spoken to it, the project's own `.vscode/settings.json` read into
   what it is told, and the process a stop kills.
-- `src/references.rs` — the places a language server answered a question with, under the
-  file each is in and with the text of the line each is on: what the Locations panel draws.
+- `src/references.rs` — the places a language server answered a question with, grouped
+  under the file each is in and with the text of the line each is on: what the Locations
+  panel draws.
 - `src/links.rs` — which names in a source file are links, out of what a language server
   calls them: the rule, and which of two questions following one asks.
 - `src/process.rs` — every program the app starts and must be able to end outright: the
@@ -271,6 +274,8 @@ command.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
 - `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes.
+- `src/ui/place_row.rs` — the row the Search and Locations panels both draw: a file, or one
+  place found in it, and the two things the panels differ in.
 - `src/ui/width.rs` — the widest row a code listing has drawn, and the width every row of
   it takes from that: what lets the code panes scroll sideways with their wash whole.
 - `src/ui/worker.rs` — how anything is asked of a thread: the named thread, the job sender,

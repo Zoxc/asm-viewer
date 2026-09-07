@@ -61,11 +61,11 @@ impl Component for ArchiveRow {
         // `Forced` draws no triangle, only the space one would have taken: the filter is
         // holding the file open and folding it would hide the rows the filter put on
         // screen. A row with no group has nothing behind it to fold.
-        let chevron = match expansion {
-            _ if self.group.is_none() => "",
-            Expansion::Collapsed => "\u{25b8}",
-            Expansion::Expanded => "\u{25be}",
-            Expansion::Forced => "",
+        let open = match expansion {
+            _ if self.group.is_none() => None,
+            Expansion::Collapsed => Some(false),
+            Expansion::Expanded => Some(true),
+            Expansion::Forced => None,
         };
         // Which format a file is is not known until it has been parsed.
         let tag = if self.loading {
@@ -96,13 +96,7 @@ impl Component for ArchiveRow {
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(&e, close_menu(states, path.clone()));
                 })
-                .child(
-                    label()
-                        .text(chevron)
-                        .width(Size::px(CHEVRON_WIDTH))
-                        .color(palette().address_fg)
-                        .max_lines(1),
-                )
+                .child(chevron(open))
                 .child(tag_label(tag))
                 .child(tree_name(self.name.clone(), self.loading))
                 // How many objects came out of this file, which under a filter is how many

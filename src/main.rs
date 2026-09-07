@@ -8,6 +8,7 @@ mod filter;
 mod fonts;
 mod functions;
 mod fuzzy;
+mod grouped;
 mod history;
 mod lanes;
 mod links;

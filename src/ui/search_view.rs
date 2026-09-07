@@ -15,7 +15,7 @@
 //! binary loader (`take_load`, `ui/documents.rs`) is stopped by the same line.
 
 use super::*;
-use crate::search::{Hit, SearchEvent, SearchHits, SearchQuery, SearchRow, SearchRows};
+use crate::search::{self, SearchEvent, SearchHits, SearchQuery, SearchRows};
 use std::ops::ControlFlow;
 
 /// What has been searched for and what it came to, shared through context.
@@ -26,7 +26,8 @@ pub(crate) struct Searching(pub(crate) State<Searched>);
 ///
 /// `id` numbers the searches so that a hit can say which one it belongs to: the answer
 /// arrives long after the question, and a reader who asked again is not waiting for the
-/// first. There is no `capped` field beside the hits, since [`SearchHits`] knows.
+/// first. There is no `capped` field beside the hits: [`search::capped`] answers that
+/// off the count.
 #[derive(Clone, Default)]
 pub(crate) struct Searched {
     /// Which search is on: bumped by every ask, and what a running task compares itself
@@ -56,7 +57,7 @@ impl Searched {
         }
         for event in batch {
             match event {
-                SearchEvent::Hit(hit) => self.hits.push(hit),
+                SearchEvent::Hit(path, hit) => self.hits.push(&path, hit),
                 SearchEvent::Finished => self.running = false,
             }
         }
@@ -168,113 +169,12 @@ async fn take_hits(
     }
 }
 
-/// One row of the answer: a file, or one of its matched lines.
-#[derive(Clone)]
-struct HitRow {
-    row: SearchRow,
-    searched: State<Searched>,
-    key: DiffKey,
-}
-
-impl PartialEq for HitRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.row == other.row
-    }
-}
-
-impl KeyExt for HitRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
-
-impl Component for HitRow {
-    fn render(&self) -> impl IntoElement {
-        let hovering = use_state(|| false);
-        // Consumed in the render and peeked in the handler, where no hook may run.
-        let states = use_project_states();
-        let ctrl = use_consume::<Ctrl>().0;
-        let land_at = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
-        let marked = use_consume::<Marked>().0;
-        let mut searched = self.searched;
-
-        let row = self.row.clone();
-        let pressed = row.clone();
-        let tooltip = match &row {
-            SearchRow::File { path, .. } => path.display().to_string(),
-            SearchRow::Match(hit) => format!("{}:{}", hit.path.display(), hit.line),
-        };
-
-        extra_tooltip(
-            tooltip,
-            list_row(hovering, false)
-                .on_press(move |_| match &pressed {
-                    SearchRow::File { path, .. } => {
-                        searched.write().hits.toggle(path);
-                    }
-                    SearchRow::Match(hit) => open_hit(states, land_at, plant, marked, ctrl, hit),
-                })
-                .children(row_children(&row)),
-        )
-    }
-
-    fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
-    }
-}
-
-/// What a row draws: a file row is its fold, its name and its count; a match row is its
-/// line number and the line, the matched parts of it bold and in `match_fg`.
-fn row_children(row: &SearchRow) -> Vec<Element> {
-    match row {
-        SearchRow::File {
-            name,
-            count,
-            folded,
-            ..
-        } => vec![
-            label()
-                .text(if *folded { "\u{25b8}" } else { "\u{25be}" })
-                .width(Size::px(CHEVRON_WIDTH))
-                .color(palette().icon_fg)
-                .into_element(),
-            tree_name(name.clone(), false).into_element(),
-            label()
-                .text(count.to_string())
-                .margin(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))
-                .color(palette().address_fg)
-                .max_lines(1)
-                .into_element(),
-        ],
-        SearchRow::Match(hit) => vec![
-            label()
-                .text(hit.line.to_string())
-                .width(Size::px(LINE_NUMBER_WIDTH))
-                .text_align(TextAlign::Right)
-                .color(palette().address_fg)
-                .max_lines(1)
-                .into_element(),
-            rect()
-                .width(Size::flex(1.0))
-                .overflow(Overflow::Clip)
-                .child(
-                    paragraph()
-                        .width(Size::fill())
-                        .max_lines(1)
-                        .text_overflow(TextOverflow::Ellipsis)
-                        .spans_iter(marked_spans(&hit.text, &hit.spans).into_iter()),
-                )
-                .into_element(),
-        ],
-    }
-}
-
 /// A line cut into the runs that were found and the runs that were not, the found ones
 /// bold and in the palette's own colour for them. `marked` are byte ranges into `text`
 /// and in order, so this is one walk.
 ///
-/// Shared with the uses list, whose rows mark the name the same way (`ui::locations`).
+/// Shared with the file finder, and with the rows both grouped panels draw
+/// (`ui::place_row`), which mark the name the same way.
 pub(crate) fn marked_spans(text: &str, marked: &[Range<usize>]) -> Vec<Span<'static>> {
     marked_spans_in(text, marked, None)
 }
@@ -313,44 +213,6 @@ pub(crate) fn marked_spans_in(
     spans
 }
 
-/// Open a hit: its file as a source-driven tab, landed on the match it was found at, in
-/// the temporal tab or a new one as `reach` says.
-///
-/// [`open_source_place`], the arrival every door into a place in a source file makes, so a
-/// hit opened here drives the tab's assembly side from its line exactly as the same row
-/// opened from the Locations panel does.
-///
-/// The guard is in front of that call and not inside it: this path came off a walk of the
-/// project's directory, where a file the source pane would refuse is a row a press should
-/// do nothing with, and the panel's other doors take a path a language server or the debug
-/// info named -- for those, opening the file and letting the pane say what is wrong with it
-/// is the honest answer, and a `stat` in the way would silently swallow a move inside a tab
-/// already open.
-fn open_hit(
-    states: ProjectStates,
-    land_at: State<Option<Landing>>,
-    plant: State<Option<Planting>>,
-    marked: State<Marks>,
-    ctrl: State<bool>,
-    hit: &Hit,
-) {
-    if !shows_as_source(&hit.path) {
-        return;
-    }
-    open_source_place(
-        states.open,
-        states.visits,
-        marked,
-        land_at,
-        plant,
-        states.driven,
-        &hit.path,
-        hit.line,
-        hit.columns.clone(),
-        reach(ctrl),
-    );
-}
-
 /// The Search view: a box over every hit the last search found.
 #[derive(PartialEq)]
 pub(crate) struct SearchPanel;
@@ -374,7 +236,7 @@ impl Component for SearchPanel {
         let submits = use_state(|| 0u64);
         let directory = given(&proj.read().directory).map(str::to_owned);
 
-        let rows = use_memo(move || searched.read().hits.rows());
+        let rows = use_memo(move || searched.read().hits.rows(&Matcher::Everything));
         let rows = rows.read().clone();
         let state = searched.read().clone();
 
@@ -403,10 +265,10 @@ impl Component for SearchPanel {
         let body: Element = match (&directory, &state.asked) {
             (None, _) => placeholder("No project directory. Set one in the Project view."),
             (Some(_), None) => placeholder("Nothing searched for yet."),
-            (Some(_), Some(query)) if state.running && state.hits.counts().0 == 0 => {
+            (Some(_), Some(query)) if state.running && state.hits.count() == 0 => {
                 placeholder(format!("Searching for {}\u{2026}", query.filter.pattern))
             }
-            (Some(_), Some(query)) if state.hits.counts().0 == 0 => {
+            (Some(_), Some(query)) if state.hits.count() == 0 => {
                 placeholder(format!("No matches for {}", query.filter.pattern))
             }
             (Some(_), Some(_)) => {
@@ -420,10 +282,9 @@ impl Component for SearchPanel {
                             VirtualScrollView::new_with_data(
                                 (rows, searched),
                                 |index, (rows, searched): &(SearchRows, State<Searched>)| {
-                                    let row = &rows[index];
-                                    HitRow {
-                                        row: row.clone(),
-                                        searched: *searched,
+                                    PlaceRow {
+                                        row: rows[index].clone(),
+                                        folding: Folding::Hits(*searched),
                                         key: DiffKey::None,
                                     }
                                     .key(&index)
@@ -458,13 +319,13 @@ impl Component for SearchPanel {
 /// What is said over the rows: how much was found, and whether the search is still going
 /// or stopped at its cap.
 fn heading(state: &Searched) -> String {
-    let (hits, files) = state.hits.counts();
+    let (hits, files) = (state.hits.count(), state.hits.files());
     let matches = if hits == 1 { "match" } else { "matches" };
     let files_word = if files == 1 { "file" } else { "files" };
     if state.running {
         return format!("{hits} {matches} in {files} {files_word}\u{2026}");
     }
-    if state.hits.capped() {
+    if search::capped(&state.hits) {
         return format!("First {hits} {matches} in {files} {files_word}");
     }
     format!("{hits} {matches} in {files} {files_word}")

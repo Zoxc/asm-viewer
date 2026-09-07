@@ -54,7 +54,7 @@ pub(crate) use crate::project::{
     self, Cargo, Details, Document, OnScreen, Project, Recent, RestoredTab, SavedDock,
     SavedDocument, SavedUi, SavingTab, Selection, Session,
 };
-pub(crate) use crate::references::{self, ReferenceRow, ReferenceRows};
+pub(crate) use crate::references::{self, ReferenceRows};
 pub(crate) use crate::reveal;
 pub(crate) use crate::scratchpad::{
     is_source_file, own_source, run_in, Build, Dependency, Failure, Half, PadId, PadListing,
@@ -127,6 +127,8 @@ mod palette;
 pub(crate) use palette::*;
 mod parts;
 pub(crate) use parts::*;
+mod place_row;
+pub(crate) use place_row::*;
 mod project_view;
 pub(crate) use project_view::*;
 mod reading;

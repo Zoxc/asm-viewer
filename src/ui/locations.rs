@@ -573,7 +573,7 @@ impl Component for LocationsPanel {
             let state = located.read();
             let found = state.found.as_ref().and_then(Found::places);
             found
-                .map(|found| found.rows_matching(&filter.read().matcher()))
+                .map(|found| found.rows(&filter.read().matcher()))
                 .unwrap_or_default()
         });
         let used = used.read().clone();
@@ -610,14 +610,17 @@ impl Component for LocationsPanel {
                     ))
                     .child(
                         rect().width(Size::fill()).height(Size::flex(1.0)).child(
-                            VirtualScrollView::new_with_data(used, |row, used: &ReferenceRows| {
-                                ReferencesRow {
-                                    rows: used.clone(),
-                                    index: row,
-                                    key: DiffKey::None,
-                                }
-                                .into()
-                            })
+                            VirtualScrollView::new_with_data(
+                                (used, located),
+                                |row, (used, located): &(ReferenceRows, State<Located>)| {
+                                    PlaceRow {
+                                        row: used[row].clone(),
+                                        folding: Folding::Places(*located),
+                                        key: DiffKey::None,
+                                    }
+                                    .into()
+                                },
+                            )
                             .length(length)
                             .item_size(list_row_height()),
                         ),
@@ -674,135 +677,6 @@ impl Component for LocationsPanel {
         };
 
         use_filter_pane(filter, palette().symbol_pane_bg, body)
-    }
-}
-
-/// One row of a references answer: a file, or one of the references under it.
-///
-/// `HitRow`'s shape (`ui::search_view`), for the same reason -- a flattened tree drawn by
-/// a scroll view -- and not its rows: a hit carries the line's text, which a search read
-/// off the disk and a language server never says.
-#[derive(Clone)]
-struct ReferencesRow {
-    rows: ReferenceRows,
-    index: usize,
-    key: DiffKey,
-}
-
-impl PartialEq for ReferencesRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.rows == other.rows && self.index == other.index
-    }
-}
-
-impl KeyExt for ReferencesRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
-
-impl Component for ReferencesRow {
-    fn render(&self) -> impl IntoElement {
-        let hovering = use_state(|| false);
-        let mut located = use_consume::<Locations>().0;
-        let open = use_open();
-        let visits = use_consume::<Visited>().0;
-        let ctrl = use_consume::<Ctrl>().0;
-        let marked = use_consume::<Marked>().0;
-        let landing = use_consume::<Land>().0;
-        let plant = use_consume::<Plant>().0;
-        let driven = use_consume::<Drives>().0;
-
-        let row = self.rows[self.index].clone();
-        let pressed = row.clone();
-        let tooltip = match &row {
-            ReferenceRow::File { path, .. } => path.display().to_string(),
-            ReferenceRow::Reference { path, reference } => {
-                format!("{}:{}", path.display(), reference.line)
-            }
-        };
-
-        extra_tooltip(
-            tooltip,
-            list_row(hovering, false)
-                .on_press(move |_| match &pressed {
-                    // Bound to a `let` of its own, so the guard the read hands back is
-                    // gone before the write.
-                    ReferenceRow::File { path, .. } => {
-                        let mut next = located.peek().clone();
-                        if next.fold(path) {
-                            located.set(next);
-                        }
-                    }
-                    ReferenceRow::Reference { path, reference } => open_source_place(
-                        open,
-                        visits,
-                        marked,
-                        landing,
-                        plant,
-                        driven,
-                        path,
-                        reference.line,
-                        Some(reference.columns.start as usize..reference.columns.end as usize),
-                        reach(ctrl),
-                    ),
-                })
-                .children(reference_row_children(&row)),
-        )
-    }
-
-    fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
-    }
-}
-
-/// What a references row draws: a file row is its fold, its name and its count, and a
-/// reference row its line number and the line, both as the Search panel's rows draw
-/// theirs.
-fn reference_row_children(row: &ReferenceRow) -> Vec<Element> {
-    match row {
-        ReferenceRow::File {
-            name,
-            count,
-            folded,
-            ..
-        } => vec![
-            label()
-                .text(if *folded { "\u{25b8}" } else { "\u{25be}" })
-                .width(Size::px(CHEVRON_WIDTH))
-                .color(palette().icon_fg)
-                .into_element(),
-            tree_name(name.clone(), false).into_element(),
-            label()
-                .text(count.to_string())
-                .margin(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))
-                .color(palette().address_fg)
-                .max_lines(1)
-                .into_element(),
-        ],
-        // The Search panel's match row: the line's number, and the line with the name
-        // marked in it. A file that would not read leaves the text empty, and the row is
-        // the number alone.
-        ReferenceRow::Reference { reference, .. } => vec![
-            label()
-                .text(reference.line.to_string())
-                .width(Size::px(LINE_NUMBER_WIDTH))
-                .text_align(TextAlign::Right)
-                .color(palette().address_fg)
-                .max_lines(1)
-                .into_element(),
-            rect()
-                .width(Size::flex(1.0))
-                .overflow(Overflow::Clip)
-                .child(
-                    paragraph()
-                        .width(Size::fill())
-                        .max_lines(1)
-                        .text_overflow(TextOverflow::Ellipsis)
-                        .spans_iter(marked_spans(&reference.text, &reference.spans).into_iter()),
-                )
-                .into_element(),
-        ],
     }
 }
 

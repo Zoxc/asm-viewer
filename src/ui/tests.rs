@@ -4702,7 +4702,7 @@ fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)])
         ..Located::default()
     };
     // Grouped as the worker groups it, reading each file's text off the disk.
-    let found = references::References::of(&places, |path| std::fs::read_to_string(path).ok());
+    let found = references::of(&places, |path| std::fs::read_to_string(path).ok());
     assert!(
         located.answer_places(7, 1, found),
         "the answer was not taken"
@@ -4853,7 +4853,7 @@ fn a_locations_answer_lands_on_the_question_it_was_asked_of() {
         line,
     };
     let places = |file: &str, line: u32| {
-        references::References::of(
+        references::of(
             &[lsp::Place {
                 file: PathBuf::from(file),
                 line,
@@ -20979,9 +20979,8 @@ fn search_with_modifiers(
 }
 
 /// One hit, spelled as the walk spells one.
-fn hit_at(path: &Path, line: u32, text: &str) -> Hit {
+fn hit_at(line: u32, text: &str) -> Hit {
     Hit {
-        path: path.to_path_buf(),
         line,
         text: text.to_owned(),
         spans: Vec::new(),
@@ -21012,9 +21011,9 @@ fn hits_arrive_under_their_file_and_fold() {
     let second = PathBuf::from("/project/two.rs");
     let (one, two) = (first.clone(), second.clone());
     let (mut test, states, directory, dock) = search_over(line!(), move |_query, emit| {
-        let _ = emit(SearchEvent::Hit(hit_at(&one, 3, "first hit")));
-        let _ = emit(SearchEvent::Hit(hit_at(&one, 9, "second hit")));
-        let _ = emit(SearchEvent::Hit(hit_at(&two, 1, "third hit")));
+        let _ = emit(SearchEvent::Hit(one.clone(), hit_at(3, "first hit")));
+        let _ = emit(SearchEvent::Hit(one.clone(), hit_at(9, "second hit")));
+        let _ = emit(SearchEvent::Hit(two.clone(), hit_at(1, "third hit")));
         let _ = emit(SearchEvent::Finished);
     });
 
@@ -21052,20 +21051,20 @@ fn a_hit_from_a_replaced_search_is_dropped() {
     let file = PathBuf::from("/project/one.rs");
     let (mut test, states, directory, dock) = search_over(line!(), move |query, emit| {
         if query.filter.pattern == "slow" {
-            let _ = emit(SearchEvent::Hit(hit_at(&file, 1, "early answer")));
+            let _ = emit(SearchEvent::Hit(file.clone(), hit_at(1, "early answer")));
             // Held until the test has asked for something else.
             let _ = held.lock().expect("the gate").recv();
-            let _ = emit(SearchEvent::Hit(hit_at(&file, 2, "late answer")));
+            let _ = emit(SearchEvent::Hit(file.clone(), hit_at(2, "late answer")));
             let _ = emit(SearchEvent::Finished);
             return;
         }
-        let _ = emit(SearchEvent::Hit(hit_at(&file, 5, "other answer")));
+        let _ = emit(SearchEvent::Hit(file.clone(), hit_at(5, "other answer")));
         let _ = emit(SearchEvent::Finished);
     });
 
     let searched = states.searched;
     ask_for(&states, dock, &directory, "slow");
-    pump(&mut test, || searched.peek().hits.counts().0 == 1);
+    pump(&mut test, || searched.peek().hits.count() == 1);
     assert!(labels(&test).iter().any(|label| label == "early answer"));
 
     ask_for(&states, dock, &directory, "other");
@@ -21109,27 +21108,27 @@ fn a_walk_of_the_project_left_cannot_answer_into_the_next() {
     let file = PathBuf::from("/project/one.rs");
     let (mut test, states, directory, dock) = search_over(line!(), move |query, emit| {
         if query.filter.pattern == "left" {
-            let _ = emit(SearchEvent::Hit(hit_at(&file, 1, "the old project")));
+            let _ = emit(SearchEvent::Hit(file.clone(), hit_at(1, "the old project")));
             // Held until the project has been switched and asked something of its own.
             let _ = held.lock().expect("the gate").recv();
-            let _ = emit(SearchEvent::Hit(hit_at(&file, 2, "the late answer")));
+            let _ = emit(SearchEvent::Hit(file.clone(), hit_at(2, "the late answer")));
             let _ = emit(SearchEvent::Finished);
             return;
         }
-        let _ = emit(SearchEvent::Hit(hit_at(&file, 5, "the new project")));
+        let _ = emit(SearchEvent::Hit(file.clone(), hit_at(5, "the new project")));
         let _ = waiting.lock().expect("the gate").recv();
     });
 
     let searched = states.searched;
     ask_for(&states, dock, &directory, "left");
-    pump(&mut test, || searched.peek().hits.counts().0 == 1);
+    pump(&mut test, || searched.peek().hits.count() == 1);
     assert!(labels(&test).iter().any(|label| label == "the old project"));
 
     // The project left, and one search asked of the one that replaced it.
     clear_project(states);
     settle(&mut test);
     ask_for(&states, dock, &directory, "new");
-    pump(&mut test, || searched.peek().hits.counts().0 == 1);
+    pump(&mut test, || searched.peek().hits.count() == 1);
     assert!(labels(&test).iter().any(|label| label == "the new project"));
 
     // The old walk goes on, and answers to the number it was given.
@@ -21169,11 +21168,14 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
             ..Filter::default()
         },
     });
-    searched.write().hits.push(Hit {
-        columns: Some(4..5),
-        ..hit_at(&path, 2, "int y;")
-    });
-    searched.write().hits.push(hit_at(&missing, 4, "gone"));
+    searched.write().hits.push(
+        &path,
+        Hit {
+            columns: Some(4..5),
+            ..hit_at(2, "int y;")
+        },
+    );
+    searched.write().hits.push(&missing, hit_at(4, "gone"));
     settle(&mut test);
 
     let at = centre_of(&test, "gone");
@@ -21226,7 +21228,7 @@ fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
             ..Filter::default()
         },
     });
-    searched.write().hits.push(hit_at(&path, 2, "int y;"));
+    searched.write().hits.push(&path, hit_at(2, "int y;"));
     settle(&mut test);
 
     let at = centre_of(&test, "int y;");
@@ -21248,11 +21250,10 @@ fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
 fn enter_in_the_box_asks_for_what_is_in_it() {
     let file = PathBuf::from("/project/one.rs");
     let (mut test, states, directory, _dock) = search_over(line!(), move |query, emit| {
-        let _ = emit(SearchEvent::Hit(hit_at(
-            &file,
-            1,
-            &format!("found {}", query.filter.pattern),
-        )));
+        let _ = emit(SearchEvent::Hit(
+            file.clone(),
+            hit_at(1, &format!("found {}", query.filter.pattern)),
+        ));
         let _ = emit(SearchEvent::Finished);
     });
     let searched = states.searched;

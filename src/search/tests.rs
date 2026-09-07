@@ -24,8 +24,8 @@ fn write(path: &Path, text: &str) {
     fs::write(path, text).expect("the temp directory is writable");
 }
 
-/// A plain search for `pattern` under `root`, every hit collected.
-fn found(root: &Path, pattern: &str) -> Vec<Hit> {
+/// A plain search for `pattern` under `root`: every hit, with the file it was found in.
+fn found(root: &Path, pattern: &str) -> Vec<(PathBuf, Hit)> {
     hits(root, filter(pattern))
 }
 
@@ -36,7 +36,7 @@ fn filter(pattern: &str) -> Filter {
     }
 }
 
-fn hits(root: &Path, filter: Filter) -> Vec<Hit> {
+fn hits(root: &Path, filter: Filter) -> Vec<(PathBuf, Hit)> {
     let query = SearchQuery {
         root: root.to_path_buf(),
         filter,
@@ -45,7 +45,7 @@ fn hits(root: &Path, filter: Filter) -> Vec<Hit> {
     let mut finished = false;
     search(&query, &mut |event| {
         match event {
-            SearchEvent::Hit(hit) => hits.push(hit),
+            SearchEvent::Hit(path, hit) => hits.push((path, hit)),
             SearchEvent::Finished => finished = true,
         }
         ControlFlow::Continue(())
@@ -56,10 +56,10 @@ fn hits(root: &Path, filter: Filter) -> Vec<Hit> {
 
 /// Each hit as `path:line`, the path relative to the root, which is what the order
 /// assertions are about.
-fn places(root: &Path, hits: &[Hit]) -> Vec<String> {
+fn places(root: &Path, hits: &[(PathBuf, Hit)]) -> Vec<String> {
     hits.iter()
-        .map(|hit| {
-            let path = hit.path.strip_prefix(root).unwrap_or(&hit.path);
+        .map(|(path, hit)| {
+            let path = path.strip_prefix(root).unwrap_or(path);
             format!(
                 "{}:{}",
                 path.display().to_string().replace('\\', "/"),
@@ -239,8 +239,8 @@ fn a_match_reaching_into_the_indentation_is_marked_for_what_is_drawn() {
     let hits = hits(&root, indented);
 
     assert!(hits.len() == 1);
-    assert!(hits[0].text == "needle;", "{:?}", hits[0].text);
-    assert!(hits[0].spans == vec![0..6], "{:?}", hits[0].spans);
+    assert!(hits[0].1.text == "needle;", "{:?}", hits[0].1.text);
+    assert!(hits[0].1.spans == vec![0..6], "{:?}", hits[0].1.spans);
 }
 
 /// The row's text is the line without its leading whitespace or its terminator, and the
@@ -253,7 +253,7 @@ fn the_spans_are_where_the_matches_are_in_the_text_drawn() {
     let hits = found(&root, "needle");
 
     assert!(hits.len() == 1);
-    let hit = &hits[0];
+    let hit = &hits[0].1;
     assert!(hit.text == "let needle = needle;", "{:?}", hit.text);
     assert!(hit.spans == vec![4..10, 13..19], "{:?}", hit.spans);
     assert!(hit
@@ -275,7 +275,7 @@ fn a_hit_knows_where_its_match_is_in_the_files_line() {
 
     assert!(hits.len() == 1);
     // Two spaces, `\u{e9}` (one unit), an emoji (two) and a space: the match starts at 6.
-    assert!(hits[0].columns == Some(6..12), "{:?}", hits[0].columns);
+    assert!(hits[0].1.columns == Some(6..12), "{:?}", hits[0].1.columns);
 }
 
 /// A line longer than the bound is cut on a character boundary, and a match past the cut
@@ -289,7 +289,7 @@ fn a_long_line_is_cut_on_a_character_boundary() {
     let hits = found(&root, "needle");
 
     assert!(hits.len() == 1);
-    let hit = &hits[0];
+    let hit = &hits[0].1;
     assert!(hit.text.chars().count() == MAX_LINE);
     assert!(hit.spans == vec![0..6], "{:?}", hit.spans);
 }
@@ -309,7 +309,7 @@ fn a_zero_width_match_is_a_hit_with_nothing_marked() {
     let hits = hits(&root, empty);
 
     assert!(hits.len() == 1);
-    assert!(hits[0].spans.is_empty());
+    assert!(hits[0].1.spans.is_empty());
 }
 
 /// The callback saying stop stops the walk where it stands, and nothing is emitted after
@@ -329,7 +329,7 @@ fn a_break_stops_the_walk_where_it_stands() {
     let mut finished = false;
     search(&query, &mut |event| {
         match event {
-            SearchEvent::Hit(_) => seen += 1,
+            SearchEvent::Hit(..) => seen += 1,
             SearchEvent::Finished => finished = true,
         }
         if seen == 2 {
@@ -355,60 +355,8 @@ fn the_search_stops_at_the_cap() {
     assert!(hits.len() == MAX_HITS);
 
     let mut held = SearchHits::default();
-    for hit in hits {
-        held.push(hit);
+    for (path, hit) in hits {
+        held.push(&path, hit);
     }
-    assert!(held.capped());
-}
-
-/// Hits are grouped under the file they are in, in the order they arrived, and a folded
-/// file draws its own row and none of theirs.
-#[test]
-fn hits_are_grouped_under_their_file_and_fold() {
-    let mut hits = SearchHits::default();
-    let hit = |path: &str, line: u32| Hit {
-        path: PathBuf::from(path),
-        line,
-        text: "needle".to_owned(),
-        spans: vec![0..6],
-        columns: Some(0..6),
-    };
-    hits.push(hit("a.rs", 1));
-    hits.push(hit("a.rs", 7));
-    hits.push(hit("b.rs", 2));
-
-    assert!(hits.counts() == (3, 2));
-    assert!(!hits.capped());
-
-    let rows = hits.rows();
-    assert!(rows.len() == 5);
-    assert!(
-        rows[0]
-            == SearchRow::File {
-                path: PathBuf::from("a.rs"),
-                name: "a.rs".to_owned(),
-                count: 2,
-                folded: false,
-            }
-    );
-    assert!(rows[1] == SearchRow::Match(hit("a.rs", 1)));
-
-    assert!(hits.toggle(Path::new("a.rs")));
-    let folded = hits.rows();
-    assert!(folded.len() == 3);
-    assert!(matches!(&folded[0], SearchRow::File { folded: true, .. }));
-    assert!(matches!(&folded[1], SearchRow::File { name, .. } if name == "b.rs"));
-
-    assert!(!hits.toggle(Path::new("nothing.rs")));
-}
-
-/// The rows are shared by an `Arc` and compared by it, so handing ten thousand of them to
-/// a scroll view is one comparison.
-#[test]
-fn rows_are_compared_by_pointer() {
-    let hits = SearchHits::default();
-    let rows = hits.rows();
-
-    assert!(rows == rows.clone());
-    assert!(rows != hits.rows());
+    assert!(capped(&held));
 }

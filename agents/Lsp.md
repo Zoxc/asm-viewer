@@ -551,7 +551,7 @@ asked for from the same place a definition is: the row's file and the pressed co
 right-click rather than the press. It comes back grouped and with each line's text, both
 done on the worker: the reply is `Reply::Referenced` where a definition's is `Reply::Defined`,
 since reading those lines is a file read and belongs on the thread that already blocks. The
-read handed to `References::of` is `source::read_text` and not a `read_to_string` of its
+read handed to `references::of` is `source::read_text` and not a `read_to_string` of its
 own: a path a server answers with is file input, and a second rule for what a source file
 is would be a directory or a fifo opened on this thread, and a line the pane draws that the
 panel leaves blank. It

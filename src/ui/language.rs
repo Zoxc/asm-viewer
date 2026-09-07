@@ -598,7 +598,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                         // (`source::read_text`) and not by one of this thread's own: a
                         // path a server answers with is file input, and two rules would
                         // be two ideas of which files this app can show.
-                        Reply::Referenced(references::References::of(&places, source::read_text))
+                        Reply::Referenced(references::of(&places, source::read_text))
                     }
                 });
                 Some(LspAnswer::Answered {

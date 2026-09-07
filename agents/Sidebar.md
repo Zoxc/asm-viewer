@@ -72,6 +72,8 @@ nothing in Lucide's 1640 icons names an object format.
 
 **A tree row is four columns and one of them is elastic.** The triangle and the format tag are fixed
 widths every row keeps whether or not it has one, so the tags and the names line up down the list.
+The triangle itself is `parts::chevron`, one glyph, one width and one colour for every list in the
+app that folds.
 An archive's member count is a column of its own, its digits and a `COUNT_GUTTER` beside them. The
 name is the row's single `flex` child, which torin only works out under `Content::Flex`. The order
 that follows is the whole of `Goals.md`'s "the count should survive a narrow sidebar": the fixed
@@ -218,28 +220,31 @@ to, and its hits -- files outside the new directory -- would land under the new 
 keeps its `next` across a `clear` for the same reason. The work is an argument to the hook for the reason the analysis worker's is: a
 walk that answers as fast as it is asked can say nothing about superseding.
 
-**The references panel is the Locations panel and its rows are the Search panel's**
-(`src/references.rs`,
-`ui::locations`). The rows are a flattened tree the way a search's hits are -- a file row and its
-references under it, folded by a press on the file, shared under one `Arc` so handing them to a scroll
-view is a pointer compare -- because it is the same drawing problem. They draw the same row too,
-down to the line's text with the name marked in it (`search::drawn` cuts a long line for both,
-`marked_spans` marks both): a list of line numbers says where a name is used and not how. The
-server says nothing about the text, so **the lines are read off the disk**, each file once, on the
-language worker with the ask -- a read blocks, and that is the thread that may block; a file that
-will not read leaves its references the number they already have. Grouped there rather than as it
-arrives, since the whole answer lands at once: files by path and references by line, so a reader
-find a file, where a search keeps the order its walk found them in and only ever grows at the
-end. The filter matches the file's
-path, applied where the rows are built rather than through `Filtered`'s memo -- that is for the
-thousands a line's symbols can be, and a name's references are tens.
+**The references panel is the Locations panel, and one model holds both answers**
+(`src/references.rs`, `src/grouped.rs`, `ui::locations`). A grouped list is items under the
+file each is in with a fold per file, flattened into rows shared under one `Arc` so handing
+them to a scroll view is a pointer compare -- because it is the same drawing problem. What
+differs is only how a list is built and what an item is: a search appends as it walks, and a
+server's answer, which lands whole, is grouped when it does -- files by path and references
+by line, so a reader can find a file, where a search keeps the order its walk found them in
+and only ever grows at the end. The lines are read off the disk there, since the server says
+nothing about the text: each file once, on the language worker with the ask -- a read blocks,
+and that is the thread that may block; a file that will not read leaves its references the
+number they already have. The panels draw one row too (`ui::place_row`), down to the line's
+text with the name marked in it (`search::drawn` cuts a long line for both, `marked_spans`
+marks both): a list of line numbers says where a name is used and not how. `Folding` is what
+is left of the difference -- which state a press on a file row writes its fold to, and
+whether a press on a place may refuse the path. The filter matches the file's path, applied
+where the rows are built rather than through `Filtered`'s memo -- that is for the thousands a
+line's symbols can be, and a name's references are tens.
 
-**A hit row is the Locations row's door itself** -- `open_source_place` (`agents/Panes.md`), so a
-hit opens the same way a reference does, down to the tab's assembly side being driven from the line
-it landed on. `shows_as_source` guards the press in front of that call, so a row cannot open a tab
-the pane would refuse: this path came off a walk of the directory, where the guard is the Files
-row's own, and the other doors into that arrival take a path a server or the debug info named, for
-which opening the file and letting the pane say what is wrong with it is the honest answer. It lands
+**A place row opens through `open_source_place`** (`agents/Panes.md`), the arrival every door
+into a place in a source file makes, so a hit opens exactly as a reference does, down to the tab's
+assembly side being driven from the line it landed on. A hit's press is guarded by
+`shows_as_source` in front of that call, so a row cannot open a tab the pane would refuse: that
+path came off a walk of the directory, where the guard is the Files row's own. A reference's is
+not, the other doors into that arrival taking a path a server or the debug info named, for which
+opening the file and letting the pane say what is wrong with it is the honest answer. It lands
 on the **match** and not just its line: a `Landing` carries the columns to select, and `line_pick`
 makes them the row's `CharSelection` where a door naming no columns leaves a caret at column 0. So
 Ctrl+C there copies the match, `copy_text` preferring characters to rows. The columns are the

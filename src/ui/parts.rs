@@ -184,6 +184,21 @@ pub(crate) fn tag_label(tag: &str) -> impl IntoElement {
         .max_lines(1)
 }
 
+/// The disclosure triangle of a row that folds, in the column every list of them keeps
+/// for one: open, shut, or -- for a row with nothing behind it to fold -- the empty
+/// column, so the names below it still line up.
+pub(crate) fn chevron(open: Option<bool>) -> impl IntoElement {
+    label()
+        .text(match open {
+            Some(true) => "\u{25be}",
+            Some(false) => "\u{25b8}",
+            None => "",
+        })
+        .width(Size::px(CHEVRON_WIDTH))
+        .color(palette().icon_fg)
+        .max_lines(1)
+}
+
 /// Whether the one line of text a row draws fitted the room it was given.
 ///
 /// **freya cannot be asked this of a `label`.** It reports the box a text was laid out in

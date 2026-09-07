@@ -42,10 +42,10 @@ impl Component for EntryRow {
         let pressed = path.clone();
 
         // A failed directory keeps its triangle: pressing it tries the read again.
-        let chevron = match fold {
-            None => "",
-            Some(Fold::Unfolded) => "\u{25be}",
-            Some(Fold::Folded | Fold::Failed) => "\u{25b8}",
+        let open = match fold {
+            None => None,
+            Some(Fold::Unfolded) => Some(true),
+            Some(Fold::Folded | Fold::Failed) => Some(false),
         };
         let glyph = match fold {
             None => ("file", lucide::file()),
@@ -115,13 +115,7 @@ impl Component for EntryRow {
                     ContextMenu::open_from_event(&e, menu);
                 })
                 .child(rect().width(Size::px(self.row.depth as f32 * TREE_INDENT)))
-                .child(
-                    label()
-                        .text(chevron)
-                        .width(Size::px(CHEVRON_WIDTH))
-                        .color(palette().address_fg)
-                        .max_lines(1),
-                )
+                .child(chevron(open))
                 .child(document_glyph(glyph))
                 .child(tree_name(self.row.name.clone(), failed)),
         )

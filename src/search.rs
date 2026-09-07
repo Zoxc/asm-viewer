@@ -14,6 +14,7 @@
 //! compile, so a toggle means one thing in both places.
 
 use crate::filter::{Filter, Matcher};
+use crate::grouped::{self, Grouped};
 use grep_matcher::Matcher as _;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
@@ -22,8 +23,6 @@ use std::{
     ops::{ControlFlow, Range},
     path::{Path, PathBuf},
 };
-
-use crate::shared::Shared;
 
 /// The most hits a search reports. A pattern like `.` matches every line of every file, so
 /// the walk stops here and the panel says that there are more.
@@ -51,10 +50,10 @@ impl SearchQuery {
     }
 }
 
-/// One matched line.
+/// One matched line. The file it is in is the group it is held under
+/// ([`crate::grouped`]) and not a field of its own.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Hit {
-    pub path: PathBuf,
     /// Numbered from one, as an editor numbers them.
     pub line: u32,
     /// The line as the row draws it: leading whitespace gone and cut to [`MAX_LINE`]
@@ -72,7 +71,8 @@ pub struct Hit {
 
 /// What a running search says.
 pub enum SearchEvent {
-    Hit(Hit),
+    /// One matched line, and the file it was found in.
+    Hit(PathBuf, Hit),
     /// The walk is over, whether it ended, was capped, or found nothing.
     Finished,
 }
@@ -169,8 +169,8 @@ impl Sink for Hits<'_> {
         let first = matched.line_number().unwrap_or(1);
         for (offset, line) in matched.lines().enumerate() {
             let number = first.saturating_add(offset as u64);
-            let hit = hit_from(self.path, self.matcher, line, number);
-            if (self.emit)(SearchEvent::Hit(hit)).is_break() {
+            let hit = hit_from(self.matcher, line, number);
+            if (self.emit)(SearchEvent::Hit(self.path.to_path_buf(), hit)).is_break() {
                 *self.stopped = true;
                 return Ok(false);
             }
@@ -192,7 +192,7 @@ impl Sink for Hits<'_> {
 /// found over the **whole** line, since a pattern's `^` and `\b` are answers about where in
 /// the line they are asked, and only after that is the line trimmed and cut and the spans
 /// moved with it.
-fn hit_from(path: &Path, matcher: &RegexMatcher, line: &[u8], number: u64) -> Hit {
+fn hit_from(matcher: &RegexMatcher, line: &[u8], number: u64) -> Hit {
     let text = String::from_utf8_lossy(trim_terminator(line));
 
     let mut spans: Vec<Range<usize>> = Vec::new();
@@ -214,7 +214,6 @@ fn hit_from(path: &Path, matcher: &RegexMatcher, line: &[u8], number: u64) -> Hi
     let (text, spans) = drawn(&text, spans);
 
     Hit {
-        path: path.to_path_buf(),
         line: u32::try_from(number).unwrap_or(u32::MAX),
         text,
         spans,
@@ -262,101 +261,20 @@ fn trim_terminator(line: &[u8]) -> &[u8] {
     line.strip_suffix(b"\r").unwrap_or(line)
 }
 
-/// Every hit a search has found, by the file each is in, and which files are folded away.
+/// Every hit a search has found, under the file each is in.
 ///
-/// Files are kept in the order they arrived, which is the order
-/// [`crate::walk`] walked them in,
-/// so the list only ever grows at its end and nothing a reader is looking at moves. The
-/// rows a `VirtualScrollView` asks for are [`SearchRows`], flattened here for the reason
-/// `files.rs` flattens its tree: the shape is in the data and never in the elements.
-#[derive(Clone, Default)]
-pub struct SearchHits {
-    files: Vec<Found>,
-    hits: usize,
-}
-
-/// One file and what was found in it.
-#[derive(Clone)]
-struct Found {
-    path: PathBuf,
-    name: String,
-    lines: Vec<Hit>,
-    folded: bool,
-}
-
-impl SearchHits {
-    /// Add a hit, under its file: the last file when it is the same one, and a new one
-    /// otherwise. A search reports a file's hits together, so this is a comparison against
-    /// the last and not a lookup.
-    pub fn push(&mut self, hit: Hit) {
-        self.hits += 1;
-        if let Some(last) = self.files.last_mut() {
-            if last.path == hit.path {
-                last.lines.push(hit);
-                return;
-            }
-        }
-        self.files.push(Found {
-            name: crate::walk::name_of(&hit.path),
-            path: hit.path.clone(),
-            lines: vec![hit],
-            folded: false,
-        });
-    }
-
-    /// Fold the file at `path`, or unfold it. Whether anything changed.
-    pub fn toggle(&mut self, path: &Path) -> bool {
-        let Some(file) = self.files.iter_mut().find(|file| file.path == path) else {
-            return false;
-        };
-        file.folded = !file.folded;
-        true
-    }
-
-    /// How many hits, and in how many files.
-    pub fn counts(&self) -> (usize, usize) {
-        (self.hits, self.files.len())
-    }
-
-    /// Whether the cap was reached, so the panel can say that there are more.
-    pub fn capped(&self) -> bool {
-        self.hits >= MAX_HITS
-    }
-
-    /// Everything found, flattened in the order it is drawn: a file and then its hits,
-    /// unless it is folded.
-    pub fn rows(&self) -> SearchRows {
-        let mut rows = Vec::new();
-        for file in &self.files {
-            rows.push(SearchRow::File {
-                path: file.path.clone(),
-                name: file.name.clone(),
-                count: file.lines.len(),
-                folded: file.folded,
-            });
-            if !file.folded {
-                rows.extend(file.lines.iter().cloned().map(SearchRow::Match));
-            }
-        }
-        rows.into()
-    }
-}
-
-/// One row of the flattened hits.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum SearchRow {
-    /// A file, and how many hits are under it.
-    File {
-        path: PathBuf,
-        name: String,
-        count: usize,
-        folded: bool,
-    },
-    Match(Hit),
-}
+/// Files are kept in the order they arrived, which is the order [`crate::walk`] walked
+/// them in, so the list only ever grows at its end and nothing a reader is looking at
+/// moves.
+pub type SearchHits = Grouped<Hit>;
 
 /// The rows the Search panel draws, in order.
-pub type SearchRows = Shared<SearchRow>;
+pub type SearchRows = grouped::Rows<Hit>;
+
+/// Whether the cap was reached, so the panel can say that there are more.
+pub fn capped(hits: &SearchHits) -> bool {
+    hits.count() >= MAX_HITS
+}
 
 #[cfg(test)]
 mod tests;
