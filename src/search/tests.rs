@@ -383,24 +383,21 @@ fn hits_are_grouped_under_their_file_and_fold() {
     let rows = hits.rows();
     assert!(rows.len() == 5);
     assert!(
-        rows.row(0)
-            == &SearchRow::File {
+        rows[0]
+            == SearchRow::File {
                 path: PathBuf::from("a.rs"),
                 name: "a.rs".to_owned(),
                 count: 2,
                 folded: false,
             }
     );
-    assert!(rows.row(1) == &SearchRow::Match(hit("a.rs", 1)));
+    assert!(rows[1] == SearchRow::Match(hit("a.rs", 1)));
 
     assert!(hits.toggle(Path::new("a.rs")));
     let folded = hits.rows();
     assert!(folded.len() == 3);
-    assert!(matches!(
-        folded.row(0),
-        SearchRow::File { folded: true, .. }
-    ));
-    assert!(matches!(folded.row(1), SearchRow::File { name, .. } if name == "b.rs"));
+    assert!(matches!(&folded[0], SearchRow::File { folded: true, .. }));
+    assert!(matches!(&folded[1], SearchRow::File { name, .. } if name == "b.rs"));
 
     assert!(!hits.toggle(Path::new("nothing.rs")));
 }

@@ -649,7 +649,10 @@ demangling is the only lever there is, and it defers work until the first click 
 **Identity throughout the UI is `Arc` pointer identity**, not names or indices: list keys are
 `Arc::as_ptr(..).addr()` and every prop `PartialEq` is hand-written in terms of `Arc::ptr_eq`. That
 matters twice: duplicate symbol names across objects stay distinct, and `#[derive(PartialEq)]` on an
-`Arc<T>` field would deep-compare on every parent render.
+`Arc<T>` field would deep-compare on every parent render. **A list of rows is a `Shared`**
+(`src/shared.rs`), the rule written once rather than once per list: an `Arc<[T]>` equal only to the
+same build, derefing to its slice, so a view reads the rows as a slice and passes them on as a
+pointer. The Files, Search, Locations and Objects lists and a file's links are all one.
 
 
 **The crash box is the desktop's own, and it has to be.** `crate::panics`'s hook runs on the

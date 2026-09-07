@@ -447,7 +447,7 @@ impl Component for ObjectsPanel {
                     Option<usize>,
                     State<HashSet<usize>>,
                 )| {
-                    match tree.row(row) {
+                    match &tree[row] {
                         TreeRow::File {
                             name,
                             path,

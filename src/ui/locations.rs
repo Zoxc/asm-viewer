@@ -713,7 +713,7 @@ impl Component for ReferencesRow {
         let plant = use_consume::<Plant>().0;
         let driven = use_consume::<Drives>().0;
 
-        let row = self.rows.row(self.index).clone();
+        let row = self.rows[self.index].clone();
         let pressed = row.clone();
         let tooltip = match &row {
             ReferenceRow::File { path, .. } => path.display().to_string(),

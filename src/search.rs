@@ -21,8 +21,9 @@ use std::{
     io,
     ops::{ControlFlow, Range},
     path::{Path, PathBuf},
-    sync::Arc,
 };
+
+use crate::shared::Shared;
 
 /// The most hits a search reports. A pattern like `.` matches every line of every file, so
 /// the walk stops here and the panel says that there are more.
@@ -337,7 +338,7 @@ impl SearchHits {
                 rows.extend(file.lines.iter().cloned().map(SearchRow::Match));
             }
         }
-        SearchRows(Arc::new(rows))
+        rows.into()
     }
 }
 
@@ -354,27 +355,8 @@ pub enum SearchRow {
     Match(Hit),
 }
 
-/// The rows the Search panel draws, in order. Built once per change and shared by an
-/// `Arc`, compared by that pointer, so handing them to a scroll view is one comparison and
-/// not a walk of ten thousand.
-#[derive(Clone)]
-pub struct SearchRows(Arc<Vec<SearchRow>>);
-
-impl PartialEq for SearchRows {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl SearchRows {
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn row(&self, index: usize) -> &SearchRow {
-        &self.0[index]
-    }
-}
+/// The rows the Search panel draws, in order.
+pub type SearchRows = Shared<SearchRow>;
 
 #[cfg(test)]
 mod tests;

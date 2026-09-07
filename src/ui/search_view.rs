@@ -420,7 +420,7 @@ impl Component for SearchPanel {
                             VirtualScrollView::new_with_data(
                                 (rows, searched),
                                 |index, (rows, searched): &(SearchRows, State<Searched>)| {
-                                    let row = rows.row(index);
+                                    let row = &rows[index];
                                     HitRow {
                                         row: row.clone(),
                                         searched: *searched,

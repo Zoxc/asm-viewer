@@ -11,8 +11,9 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    sync::Arc,
 };
+
+use crate::shared::Shared;
 
 /// Whether a press on `path` opens it as a source file: a regular file within the
 /// [`source::MAX_SIZE`](crate::source::MAX_SIZE) the source cache will read, asked of the
@@ -75,31 +76,8 @@ pub struct FileRow {
     pub fold: Option<Fold>,
 }
 
-/// The rows the Files view draws, in order. Built once per change and shared by an `Arc`,
-/// compared by that pointer.
-#[derive(Clone, Debug)]
-pub struct FileRows(Arc<Vec<FileRow>>);
-
-impl PartialEq for FileRows {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl FileRows {
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn row(&self, index: usize) -> &FileRow {
-        &self.0[index]
-    }
-
-    #[cfg(test)]
-    fn rows(&self) -> &[FileRow] {
-        &self.0
-    }
-}
+/// The rows the Files view draws, in order.
+pub type FileRows = Shared<FileRow>;
 
 /// A project directory and whatever of it has been read.
 #[derive(Clone, Debug)]
@@ -166,7 +144,7 @@ impl FileTree {
                 stack.extend(children.iter().rev().map(|child| (child, depth + 1)));
             }
         }
-        FileRows(Arc::new(rows))
+        rows.into()
     }
 }
 

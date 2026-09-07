@@ -24,9 +24,9 @@
 //! Telling the two apart would mean reading the row's text here, which is the pane's.
 
 use std::ops::Range;
-use std::sync::Arc;
 
 use crate::lsp;
+use crate::shared::Shared;
 
 /// Which question following a link asks the server.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -55,18 +55,7 @@ pub struct Link {
 
 /// Every name in one file the server had something to say about, in the order they are
 /// drawn: by line, and by column inside a line.
-///
-/// Shared under an `Arc` and compared by that pointer, so handing a file's links to a pane
-/// that draws a row at a time is a pointer compare and never a walk
-/// ([`crate::references::ReferenceRows`]'s rule).
-#[derive(Clone, Default)]
-pub struct Links(Arc<[Link]>);
-
-impl PartialEq for Links {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
+pub type Links = Shared<Link>;
 
 impl Links {
     /// The links among `tokens`, as `legend` spells them.
@@ -88,7 +77,7 @@ impl Links {
         links.sort_by(|one, other| {
             (one.line, one.columns.start).cmp(&(other.line, other.columns.start))
         });
-        Links(links.into())
+        links.into()
     }
 
     /// The columns of the names on `line` that can be followed, in the order they are
@@ -103,8 +92,8 @@ impl Links {
 
     /// Every name on `line`, 1-based, in the order they are drawn.
     pub fn on_line(&self, line: u32) -> &[Link] {
-        let from = self.0.partition_point(|link| link.line < line);
-        let rest = &self.0[from..];
+        let from = self.partition_point(|link| link.line < line);
+        let rest = &self[from..];
         let to = rest.partition_point(|link| link.line == line);
         &rest[..to]
     }
@@ -115,10 +104,6 @@ impl Links {
         self.on_line(line)
             .iter()
             .find(|link| link.columns.contains(&column))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 

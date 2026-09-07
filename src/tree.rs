@@ -18,6 +18,7 @@ use std::{
 use analysis::{BinaryFormat, Object};
 
 use crate::filter::Matcher;
+use crate::shared::Shared;
 
 /// Which load asked for a file. A counter and not a path, because the same path can be
 /// loading twice — a file closed and reopened mid-parse is two loads, and the first one's
@@ -138,16 +139,8 @@ pub enum TreeRow {
     Object { object: Arc<Object>, member: bool },
 }
 
-/// The rows the Objects list draws, in order. Built in a memo and shared by an `Arc`,
-/// compared by that pointer.
-#[derive(Clone)]
-pub struct ObjectTree(Arc<Vec<TreeRow>>);
-
-impl PartialEq for ObjectTree {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
+/// The rows the Objects list draws, in order.
+pub type ObjectTree = Shared<TreeRow>;
 
 impl ObjectTree {
     /// Group `objects` by the file they came from, drop what the filter does not match,
@@ -254,20 +247,7 @@ impl ObjectTree {
             });
         }
 
-        ObjectTree(Arc::new(rows))
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn row(&self, index: usize) -> &TreeRow {
-        &self.0[index]
-    }
-
-    #[cfg(test)]
-    fn rows(&self) -> &[TreeRow] {
-        &self.0
+        rows.into()
     }
 }
 

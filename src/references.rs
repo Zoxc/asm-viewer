@@ -20,11 +20,11 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::filter::Matcher;
 use crate::lsp;
 use crate::search;
+use crate::shared::Shared;
 
 /// One reference: the line it is on, 1-based as every line in the app is, the columns of
 /// the name on it, and that line as a row draws it.
@@ -148,7 +148,7 @@ impl References {
                 }));
             }
         }
-        ReferenceRows(Arc::new(rows))
+        rows.into()
     }
 }
 
@@ -166,27 +166,8 @@ pub enum ReferenceRow {
     Reference { path: PathBuf, reference: Reference },
 }
 
-/// The rows the panel draws, in order. Built once per change and shared by an `Arc`,
-/// compared by that pointer, so handing them to a scroll view is one comparison and not a
-/// walk ([`crate::search::SearchRows`]'s rule).
-#[derive(Clone, Default)]
-pub struct ReferenceRows(Arc<Vec<ReferenceRow>>);
-
-impl PartialEq for ReferenceRows {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl ReferenceRows {
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn row(&self, index: usize) -> &ReferenceRow {
-        &self.0[index]
-    }
-}
+/// The rows the panel draws, in order.
+pub type ReferenceRows = Shared<ReferenceRow>;
 
 /// One place as a row of it: its line, and that line's text where the file gave one, cut
 /// as a search hit's is with the name's own columns turned into spans over what is left.

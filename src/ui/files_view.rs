@@ -175,7 +175,7 @@ impl Component for FilesPanel {
                 VirtualScrollView::new_with_data(
                     (rows, tree),
                     |index, (rows, tree): &(FileRows, State<Option<FileTree>>)| {
-                        let row = rows.row(index);
+                        let row = &rows[index];
                         EntryRow {
                             row: row.clone(),
                             tree: *tree,

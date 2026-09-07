@@ -31,8 +31,7 @@ fn plain(pattern: &str) -> Filter {
 
 /// The rows as text, which is what every assertion below is about.
 fn described(tree: &ObjectTree) -> Vec<String> {
-    tree.rows()
-        .iter()
+    tree.iter()
         .map(|row| match row {
             TreeRow::File {
                 name,
@@ -206,7 +205,7 @@ fn a_file_being_read_is_a_row_before_it_has_an_object() {
         &[],
     );
     assert_eq!(described(&tree), ["file libfoo.rlib (0) Collapsed reading"]);
-    assert!(matches!(tree.row(0), TreeRow::File { group: None, .. }));
+    assert!(matches!(&tree[0], TreeRow::File { group: None, .. }));
 }
 
 /// While a file is being read, one object is not yet an answer: the row stays a file row so

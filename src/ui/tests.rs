@@ -3169,7 +3169,7 @@ fn reading(states: &ProjectStates) -> Vec<(String, usize, bool)> {
         &HashSet::new(),
     );
     (0..tree.len())
-        .filter_map(|row| match tree.row(row) {
+        .filter_map(|row| match &tree[row] {
             TreeRow::File {
                 name,
                 members,
@@ -7092,7 +7092,7 @@ fn an_answer_to_a_question_nobody_asked_is_not_taken() {
     assert!(linked.asking(1, file.clone()), "the question went out");
     assert!(linked.answer(1, file.clone(), a_link()), "and was answered");
     assert_eq!(
-        linked.links_in(&file).map(links::Links::is_empty),
+        linked.links_in(&file).map(|links| links.is_empty()),
         Some(false)
     );
 
@@ -7102,7 +7102,7 @@ fn an_answer_to_a_question_nobody_asked_is_not_taken() {
         "an answer arriving twice was taken twice"
     );
     assert_eq!(
-        linked.links_in(&file).map(links::Links::is_empty),
+        linked.links_in(&file).map(|links| links.is_empty()),
         Some(false),
         "an empty answer wrote over the names that came back"
     );

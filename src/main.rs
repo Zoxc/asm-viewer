@@ -24,6 +24,7 @@ mod scratchpad;
 mod search;
 mod section;
 mod settings;
+mod shared;
 mod shutdown;
 mod source;
 mod store;

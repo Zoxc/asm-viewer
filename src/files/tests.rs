@@ -24,8 +24,7 @@ fn touch(path: &Path) {
 /// The rows as text, which is what every assertion below is about: two spaces per level,
 /// a directory marked by its fold — `+` folded, `-` unfolded, `!` failed.
 fn described(rows: &FileRows) -> Vec<String> {
-    rows.rows()
-        .iter()
+    rows.iter()
         .map(|row| {
             let indent = "  ".repeat(row.depth);
             let fold = match row.fold {

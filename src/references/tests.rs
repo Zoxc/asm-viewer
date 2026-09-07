@@ -22,7 +22,7 @@ fn grouped(places: &[lsp::Place]) -> References {
 /// The text of the reference rows, in the order they are drawn.
 fn texts(rows: &ReferenceRows) -> Vec<String> {
     (0..rows.len())
-        .filter_map(|at| match rows.row(at) {
+        .filter_map(|at| match &rows[at] {
             ReferenceRow::Reference { reference, .. } => Some(reference.text.clone()),
             ReferenceRow::File { .. } => None,
         })
@@ -32,7 +32,7 @@ fn texts(rows: &ReferenceRows) -> Vec<String> {
 /// The paths of the file rows, in the order they are drawn.
 fn files(rows: &ReferenceRows) -> Vec<String> {
     (0..rows.len())
-        .filter_map(|at| match rows.row(at) {
+        .filter_map(|at| match &rows[at] {
             ReferenceRow::File { path, .. } => Some(path.display().to_string()),
             ReferenceRow::Reference { .. } => None,
         })
@@ -42,7 +42,7 @@ fn files(rows: &ReferenceRows) -> Vec<String> {
 /// The lines of the reference rows, in the order they are drawn.
 fn lines(rows: &ReferenceRows) -> Vec<u32> {
     (0..rows.len())
-        .filter_map(|at| match rows.row(at) {
+        .filter_map(|at| match &rows[at] {
             ReferenceRow::Reference { reference, .. } => Some(reference.line),
             ReferenceRow::File { .. } => None,
         })
@@ -63,7 +63,7 @@ fn the_answers_places_are_grouped_by_file_whatever_order_they_came_in() {
     assert_eq!(files(&rows), vec!["/p/src/a.rs", "/p/src/b.rs"]);
     assert_eq!(lines(&rows), vec![4, 2, 9]);
     assert_eq!(
-        rows.row(0),
+        &rows[0],
         &ReferenceRow::File {
             path: PathBuf::from("/p/src/a.rs"),
             name: "a.rs".to_owned(),
@@ -84,7 +84,7 @@ fn a_name_used_twice_on_one_line_is_two_rows_each_with_its_own_columns() {
     assert_eq!(references.count(), 2);
     assert_eq!(lines(&rows), vec![7, 7]);
     let columns: Vec<Range<u32>> = (0..rows.len())
-        .filter_map(|at| match rows.row(at) {
+        .filter_map(|at| match &rows[at] {
             ReferenceRow::Reference { reference, .. } => Some(reference.columns.clone()),
             ReferenceRow::File { .. } => None,
         })
@@ -101,7 +101,7 @@ fn folding_a_file_hides_its_references_and_leaves_its_count() {
     assert_eq!(files(&rows), vec!["/p/src/a.rs", "/p/src/b.rs"]);
     assert_eq!(lines(&rows), vec![9]);
     assert_eq!(
-        rows.row(0),
+        &rows[0],
         &ReferenceRow::File {
             path: PathBuf::from("/p/src/a.rs"),
             name: "a.rs".to_owned(),
@@ -139,7 +139,7 @@ fn a_reference_carries_its_line_marked_where_the_name_is() {
     });
 
     let rows = all(&references);
-    let ReferenceRow::Reference { reference, .. } = rows.row(1) else {
+    let ReferenceRow::Reference { reference, .. } = &rows[1] else {
         panic!("the second row is the use");
     };
     // The line as a row draws it: its indentation gone, and the name marked where it is
@@ -185,7 +185,7 @@ fn a_line_the_file_does_not_have_is_the_number_alone() {
     });
 
     let rows = all(&references);
-    let ReferenceRow::Reference { reference, .. } = rows.row(1) else {
+    let ReferenceRow::Reference { reference, .. } = &rows[1] else {
         panic!("the second row is the use");
     };
     assert_eq!(reference.line, 9);
@@ -203,7 +203,7 @@ fn a_name_after_a_wide_character_is_marked_where_it_is_in_the_bytes() {
     });
 
     let rows = all(&references);
-    let ReferenceRow::Reference { reference, .. } = rows.row(1) else {
+    let ReferenceRow::Reference { reference, .. } = &rows[1] else {
         panic!("the second row is the use");
     };
     assert_eq!(&reference.text[reference.spans[0].clone()], "helper");
@@ -218,7 +218,7 @@ fn a_line_of_zero_is_the_number_alone_and_not_a_panic() {
     });
 
     let rows = all(&references);
-    let ReferenceRow::Reference { reference, .. } = rows.row(1) else {
+    let ReferenceRow::Reference { reference, .. } = &rows[1] else {
         panic!("the second row is the use");
     };
     assert_eq!(reference.line, 0);
