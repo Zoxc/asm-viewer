@@ -276,9 +276,17 @@ bar through intermediate states: `Strip::close` takes the predicate, works the l
 `tabs::landing` before anything is removed, and leaves the tab on screen alone when it survives.
 
 A tab's header is `chip`, hover state and × included, wrapped in a `TabHeader` that owns the hover
-and is keyed by its tab. **The chip activates its own tab**, freya's docking having been what did
-that before -- it wraps a header in a `DropZone` around a `rect().on_press(set_active)` around a
-`DragZone` -- so the press handler calls `raise_tab` and then asks whether it was a **double press**
+and is keyed by its tab. **One `chip` draws every one of them**, the copy that follows the cursor
+while a tab is dragged included: what varies is a `Mark` -- a chip like any other, the tab on screen
+with whether the keyboard is inside it, or that copy -- so `dragged` wraps `chip` rather than
+spelling the frame a second time, as `dock.rs` draws a panel's from `panel_label`. Where a drop
+would land is not one of the marks but a flag beside it: that rule is on another edge and is worn
+with any of them, the tab on screen being the one a reader most often drags. What a tab is called,
+the glyph before it and what hovering it says are `tab_title`, `tab_icon` and `tab_tooltip`, which
+the tab list and the drag copy read too. **The chip activates its own tab**, freya's docking having
+been what did that before -- it wraps a header in a `DropZone` around a
+`rect().on_press(set_active)` around a `DragZone` -- so the press handler calls `raise_tab` and then
+asks whether it was a **double press**
 (`EventsCombos::pressed`, freya's own count of 500 ms and 5 px), which promotes the temporal tab.
 The × still has to `stop_propagation`, now so the press does not reach the chip under it and switch
 to the tab being closed -- and the same `TabClose` ends every row of the tab list, where the press it
@@ -327,9 +335,10 @@ during it.
 
 **The × is a control of its own**, `TabClose`, and a component rather than another line of `chip`
 for one reason: the hover has to be *its*, freya has no `.hover()` pseudo-state, and the `use_state`
-with `on_pointer_over`/`on_pointer_out` around it cannot run in a helper. That is why the × reaches
-`chip` as an element already built rather than as an `on_close` handler. Two things follow from its
-being a control. It is **a target you hit rather than one you aim at**: a `close_target()` square
+with `on_pointer_over`/`on_pointer_out` around it cannot run in a helper. `chip` builds one from the
+`Tab` it is handed -- all the identity a close needs -- rather than taking an `on_close` handler: a
+`Component` is `PartialEq` and a closure is not. Two things follow from its being a control. It is
+**a target you hit rather than one you aim at**: a `close_target()` square
 centred on the glyph, three pixels of air on every side, capped at the **tab** row so the close
 never decides how tall the bar is. Three and not the four it was drawn at first -- what the square
 has past it is the two pixels of margin the control carries and the chip's own two, so a fourth

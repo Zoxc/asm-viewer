@@ -8,8 +8,25 @@
 
 use super::*;
 
-/// One tab's chip: the icon naming its kind, what it is called, the × that closes it, a
-/// right-click menu, and the pane's own white when it is the one on screen.
+/// What a chip is: an ordinary one in the bar, the tab on screen, or the copy that follows
+/// the cursor while a tab is dragged. One value and not a column of flags, a chip being
+/// exactly one of the three, and only the tab on screen having a keyboard to be inside it.
+///
+/// Whether a drop would land here is none of them: that rule is on another edge and is
+/// worn with any of the three, the tab on screen being the one a reader most often drags.
+#[derive(Clone, Copy)]
+enum Mark {
+    /// A chip like any other in the bar.
+    Plain,
+    /// The tab on screen, with whether the keyboard is inside it.
+    Active { typing: bool },
+    /// The copy that follows the cursor: the ground a drop lands on, no rule, and nothing
+    /// that answers a pointer.
+    Dragging,
+}
+
+/// One tab's chip: the icon naming its kind, what it is called, the × that closes it, and
+/// the pane's own white when it is the one on screen.
 ///
 /// **The press activates the tab**, this being the app's own bar: there is no wrapper
 /// above it that does so, the way freya's docking has one. The × therefore has to stop
@@ -19,48 +36,47 @@ use super::*;
 /// is: the gutter marks' own purple while it is inside the tab, and a dim grey while it is
 /// anywhere else -- a sidebar list, a filter box. The mark is drawn on the chip that is
 /// showing and on no other, so the bar says which tab is being read and whether it is
-/// being typed into, without a second wash to tell from the first.
+/// being typed into, without a second wash to tell from the first. `landing` is the other
+/// rule, down the leading edge of the chip a dragged tab would land on.
 ///
 /// A temporal tab -- the preview a sidebar row opens in, which the next row reuses -- is
 /// told from one that stays by its name being **italic**, and by nothing else: it is the
 /// same tab in every other way, and the slant is the one cue that says "provisional"
 /// without taking room from the name.
 ///
-/// A stateless helper rather than a component, the hover state belonging to the caller, so
-/// no hook runs here -- which is exactly why the × arrives as an element already built: it
-/// carries a hover of its own and a hook has to run somewhere.
-#[allow(clippy::too_many_arguments)]
+/// A stateless helper rather than a component, so no hook runs here: the hover is the
+/// caller's `use_state`, handed over to be read and written, and [`dragged`] passes `None`
+/// for it, having nothing to hover. The × is a control of its own for the same reason and
+/// arrives as a [`Tab`], which is all the identity a close needs. The caller adds the
+/// press, the menu and the tooltip; the frame, the padding and the spacing are here, once,
+/// for the bar and the drag alike.
 fn chip(
     icon: Element,
-    text: String,
-    tooltip: String,
-    active: bool,
-    typing: bool,
+    text: &str,
+    mark: Mark,
     landing: bool,
     temporal: bool,
-    mut hovering: State<bool>,
-    close: Option<Element>,
-    mut on_press: impl FnMut(Event<PressEventData>) + 'static,
-    mut on_menu: impl FnMut(Event<PressEventData>) + 'static,
-) -> impl IntoElement {
+    hovering: Option<State<bool>>,
+    close: Option<Tab>,
+) -> Rect {
+    let hovered = hovering.is_some_and(|hovering| hovering());
     // The active chip takes the pane's own background, so it reads as the top edge of the
     // pane below it. The hover stays lighter than that, or it would be more prominent
     // than the active tab.
-    let background = if active {
-        palette().pane_bg
-    } else if hovering() {
-        palette().toggle_hover_bg
-    } else {
-        Color::TRANSPARENT
+    let background = match mark {
+        Mark::Active { .. } => palette().pane_bg,
+        Mark::Dragging => palette().selected_bg,
+        Mark::Plain if hovered => palette().toggle_hover_bg,
+        Mark::Plain => Color::TRANSPARENT,
     };
     // And a tab that is not the one on screen writes its name a step back, so the bar says
     // which tab is being read in the text as well as in the ground under it. A step and not
     // a fade: these are names the reader reads their way along.
-    let name = match active {
-        true => palette().text_fg,
-        false => faded(
+    let name = match mark {
+        Mark::Active { .. } | Mark::Dragging => palette().text_fg,
+        Mark::Plain => faded(
             palette().text_fg,
-            match hovering() {
+            match hovered {
                 true => palette().toggle_hover_bg,
                 false => palette().header_bg,
             },
@@ -69,7 +85,7 @@ fn chip(
 
     // Where a tab being dragged would land: the leading edge of the chip under the
     // pointer, in the same purple the tab on screen is marked with.
-    let mark = landing.then(|| {
+    let edge = landing.then(|| {
         Border::new()
             .fill(palette().compiled_fg)
             .width(BorderWidth {
@@ -82,55 +98,50 @@ fn chip(
 
     // Painted and not laid out, so the mark takes no room from the name: a border is drawn
     // inside the box it is on.
-    let marker = active.then(|| {
-        Border::new()
-            .fill(match typing {
-                true => palette().compiled_fg,
-                false => dimmed(palette().icon_fg, palette().pane_bg),
-            })
-            .width(BorderWidth {
-                top: TAB_MARKER,
-                right: 0.0,
-                bottom: 0.0,
-                left: 0.0,
-            })
-    });
+    let marker = match mark {
+        Mark::Active { typing } => Some(
+            Border::new()
+                .fill(match typing {
+                    true => palette().compiled_fg,
+                    false => dimmed(palette().icon_fg, palette().pane_bg),
+                })
+                .width(BorderWidth {
+                    top: TAB_MARKER,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                }),
+        ),
+        Mark::Plain | Mark::Dragging => None,
+    };
 
     // A chip is cut by the count and never by the room it has: `elide` is what shortened
     // it, and the bar scrolls rather than squeezing a chip (`metrics.rs`).
-    name_tooltip(
-        elided(&text),
-        &text,
-        tooltip,
-        rect()
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .height(Size::px(tab_row_height()))
-            // Air to the left of the icon and next to none to the right: what sits at that
-            // end is the ×, which is a target of its own and carries its own.
-            .padding(Gaps::new(0.0, 2.0, 0.0, 8.0))
-            .spacing(6.0)
-            .background(background)
-            .border(right_hairline())
-            .border(marker)
-            .border(mark)
-            .on_pointer_over(move |_| hovering.set_if_modified(true))
-            .on_pointer_out(move |_| hovering.set_if_modified(false))
-            // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
-            // without it panics. A right-click is not a press, so this leaves the tab it
-            // was opened on where it is rather than activating it first.
-            .on_secondary_down(move |e: Event<PressEventData>| on_menu(e))
-            .on_press(move |e: Event<PressEventData>| on_press(e))
-            .child(icon)
-            .child(
-                label()
-                    .text(elide(&text))
-                    .color(name)
-                    .max_lines(1)
-                    .maybe(temporal, |chip| chip.font_slant(FontSlant::Italic)),
-            )
-            .maybe_child(close),
-    )
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .height(Size::px(tab_row_height()))
+        // Air to the left of the icon and next to none to the right: what sits at that
+        // end is the ×, which is a target of its own and carries its own.
+        .padding(Gaps::new(0.0, 2.0, 0.0, 8.0))
+        .spacing(6.0)
+        .background(background)
+        .border(right_hairline())
+        .border(marker)
+        .border(edge)
+        .map(hovering, |chip, mut hovering| {
+            chip.on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+        })
+        .child(icon)
+        .child(
+            label()
+                .text(elide(text))
+                .color(name)
+                .max_lines(1)
+                .maybe(temporal, |chip| chip.font_slant(FontSlant::Italic)),
+        )
+        .maybe_child(close.map(|tab| TabClose { tab }.into_element()))
 }
 
 /// The × on a document's tab: **a target with padding around the glyph rather than a
@@ -345,6 +356,15 @@ fn tab_icon(tab: Tab, docs: &Docs) -> Element {
             Some(document) => entry_icon(document),
             None => rect().into_element(),
         },
+    }
+}
+
+/// What hovering that chip says: the whole of a name the chip had to cut, and the whole
+/// path of a file.
+fn tab_tooltip(tab: Tab, docs: &Docs) -> String {
+    match tab {
+        Tab::Page(page) => page.title().to_owned(),
+        Tab::Document(id) => docs.get(id).map(entry_tooltip).unwrap_or_default(),
     }
 }
 
@@ -707,58 +727,67 @@ impl Component for TabHeader {
         // Asked only of the chip that is showing, which is the only one that draws the
         // mark: asking is a subscription to the focus moving, and every chip taking one
         // would re-render the whole bar whenever it did.
-        let typing = self.active && keyboard_in_tab(keyboard);
+        let mark = match self.active {
+            true => Mark::Active {
+                typing: keyboard_in_tab(keyboard),
+            },
+            false => Mark::Plain,
+        };
 
-        let Tab::Document(id) = tab else {
-            let Tab::Page(page) = tab else {
-                return rect().into_element();
-            };
-            return chip(
+        // What the chip is called and whether it is the temporal one, out of one read: the
+        // chip follows the trail's current entry, so navigating in place renames it. A
+        // page's name is its own, and leaving the table unread keeps a page's chip out of
+        // every re-render a document causes.
+        let (icon, text, tooltip, temporal) = match tab {
+            Tab::Page(page) => (
                 page_icon(page),
                 page.title().to_owned(),
                 page.title().to_owned(),
-                self.active,
-                typing,
-                self.landing,
                 false,
-                hovering,
-                Some(TabClose { tab }.into_element()),
-                move |_| {
-                    raise_tab(open, tab);
-                    ask_for_keyboard(keyboard);
-                },
-                move |e: Event<PressEventData>| {
-                    let others = open.strip.peek().tabs().iter().any(|other| *other != tab);
-                    ContextMenu::open_from_event(&e, tab_menu(states, tab, others, None));
-                },
+            ),
+            Tab::Document(id) => {
+                let docs = open.docs.read();
+                (
+                    tab_icon(tab, &docs),
+                    tab_title(tab, &docs),
+                    tab_tooltip(tab, &docs),
+                    docs.temporal() == Some(id),
+                )
+            }
+        };
+
+        name_tooltip(
+            elided(&text),
+            &text,
+            tooltip,
+            chip(
+                icon,
+                &text,
+                mark,
+                self.landing,
+                temporal,
+                Some(hovering),
+                Some(tab),
             )
-            .into_element();
-        };
-
-        // What the tab shows and whether it is the temporal one, out of one read: the
-        // chip follows the trail's current entry, so navigating in place renames it.
-        // Not reachable -- a tab and its trail are closed together -- but a render is no
-        // place to panic.
-        let (document, temporal) = {
-            let docs = open.docs.read();
-            (docs.get(id).cloned(), docs.temporal() == Some(id))
-        };
-        let Some(document) = document else {
-            return rect().into_element();
-        };
-
-        let subject = document.clone();
-        chip(
-            entry_icon(&document),
-            entry_text(&document),
-            entry_tooltip(&document),
-            self.active,
-            typing,
-            self.landing,
-            temporal,
-            hovering,
-            Some(TabClose { tab }.into_element()),
-            move |e: Event<PressEventData>| {
+            // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
+            // without it panics. A right-click is not a press, so this leaves the tab it
+            // was opened on where it is rather than activating it first.
+            .on_secondary_down(move |e: Event<PressEventData>| {
+                // Read at the press rather than at the render: whether this tab has
+                // company is not something the chip draws, so subscribing to the strip
+                // for it would re-render every tab whenever any one of them opened. The
+                // only tab open still gets its menu, the bookmark item being about the
+                // tab itself; what it does without is the one row that would do nothing.
+                // The document the rows are about is peeked here for the same reason: the
+                // chip draws a name, not the entry behind it.
+                let others = open.strip.peek().tabs().iter().any(|other| *other != tab);
+                let subject = match tab {
+                    Tab::Document(id) => open.docs.peek().get(id).cloned(),
+                    Tab::Page(_) => None,
+                };
+                ContextMenu::open_from_event(&e, tab_menu(states, tab, others, subject));
+            })
+            .on_press(move |e: Event<PressEventData>| {
                 raise_tab(open, tab);
                 // The reader is going to read in it, so the keyboard goes there too: what
                 // it lands on is the pane the tab is driven from (`use_keyboard_asked`).
@@ -766,6 +795,9 @@ impl Component for TabHeader {
                 // A double press on a temporal tab's chip makes it a tab that stays.
                 // freya counts the presses (500 ms, 5 px), and nothing else on the chip
                 // asks it, so the count is this handler's own.
+                let Tab::Document(id) = tab else {
+                    return;
+                };
                 let PressEventData::Mouse(mouse) = e.data() else {
                     return;
                 };
@@ -778,21 +810,8 @@ impl Component for TabHeader {
                     let mut docs = open.docs;
                     docs.write().promote(id);
                 }
-            },
-            move |e: Event<PressEventData>| {
-                // Read at the press rather than at the render: whether this tab has
-                // company is not something the chip draws, so subscribing to the strip
-                // for it would re-render every tab whenever any one of them opened. The
-                // only tab open still gets its menu, the bookmark item being about the
-                // tab itself; what it does without is the one row that would do nothing.
-                let others = open.strip.peek().tabs().iter().any(|other| *other != tab);
-                ContextMenu::open_from_event(
-                    &e,
-                    tab_menu(states, tab, others, Some(subject.clone())),
-                );
-            },
+            }),
         )
-        .into_element()
     }
 
     fn render_key(&self) -> DiffKey {
@@ -1143,20 +1162,22 @@ fn drop_zone(
         .into_element()
 }
 
-/// The copy of a chip that follows the cursor while it is being dragged.
+/// The copy of a chip that follows the cursor while it is being dragged: the chip itself,
+/// on the ground a drop lands on, with nothing that answers a pointer. As `dock.rs` draws
+/// a panel's, so the padding and the spacing cannot drift from the bar's.
 fn dragged(tab: Tab, docs: &Docs) -> Element {
     rect()
         .interactive(false)
-        .height(Size::px(tab_row_height()))
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .padding(Gaps::new(0.0, 2.0, 0.0, 8.0))
-        .spacing(6.0)
-        .background(palette().selected_bg)
-        .border(right_hairline())
         .overflow(Overflow::Clip)
-        .child(tab_icon(tab, docs))
-        .child(label().text(elide(&tab_title(tab, docs))).max_lines(1))
+        .child(chip(
+            tab_icon(tab, docs),
+            &tab_title(tab, docs),
+            Mark::Dragging,
+            false,
+            false,
+            None,
+            None,
+        ))
         .into_element()
 }
 
