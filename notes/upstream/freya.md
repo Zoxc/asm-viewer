@@ -314,6 +314,20 @@ tree folds with -- on the live "Open recent" row and on the dim one that stands 
 It goes after the name and not at the row's end, which is a second thing the crate lacks:
 see **A child of a `MenuItem` cannot fill the row** above.
 
+**A scrollbar that takes its own room instead of lying over the content.** `ScrollBar` is
+`Position::new_absolute()` on layer 999, offset back 16 px into the very content it scrolls
+(`scrollbar.rs:103-109`, `:69-90`). torin leaves an absolute child out of both the flow and
+its parent's content size (`torin/src/measure.rs:913`), so the wrapper rect beside the
+content measures zero and the content stays `Size::fill()` of the whole width
+(`shared.rs:61-67`): nothing anywhere subtracts the bar's thickness. The last 16 px of every
+row is under it. It is invisible while idle and unmounts 800 ms after the last movement, so
+nothing looks wrong until the pointer nears that edge and an opaque bar appears over the
+text. `show_scrollbar` is the only prop and it is off-or-over, not gutter-or-over; the
+thickness is hard-coded (12 idle, 16 hovered) and the `size` field its theme defines is
+never read. What the app does instead: the tab bar turns its scrollbar off -- one row cannot
+spare 16 px of its height (`src/ui/strip.rs`) -- and every other pane lets the bar cover its
+trailing edge. A gutter of the app's own is a goal (`notes/Goals.md`).
+
 **Markdown code blocks that follow the app's own syntax colours.**
 `freya-markdown`'s `code-editor` feature draws a fenced block with the `CodeEditor`
 component, which is the highlighter this app already colours its source pane with -- but

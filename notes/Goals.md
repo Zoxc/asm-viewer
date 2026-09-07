@@ -110,6 +110,17 @@ leaves this list when it is. That is a move made on request, like everything els
   in a pane. Undecided: whether
   freya 0.4 reports the window regaining focus at all, and what the panel says about a file
   that has since been deleted.
+- [ ] Draw no caret in a pane the keyboard is not in. A code row draws the caret wherever the
+  run's lead is and asks nothing about focus (`src/ui/code_row.rs`), so a split tab shows one in
+  both panes at once, and a tab left for another goes on showing the caret it had. Only one pane
+  holds the keyboard, and a caret is the app saying where the next key lands, so every caret but
+  that one says the keyboard is somewhere it is not. What it needs is already there: each pane
+  registers its focusable box with `Keys` (`src/ui/focus.rs`), and the chip's top rule already
+  asks whether the keyboard is in the tab, so this is the pane asking that same question and the
+  row being told the answer. The decision is the selection, which is not the caret: a run has to
+  stay drawn while the keyboard is elsewhere, or a reader could not see what they had selected
+  before reaching for the other pane. So the caret goes and the highlight stays, and whether the
+  highlight dims instead is the second question.
 
 ## Navigation
 
@@ -245,6 +256,19 @@ leaves this list when it is. That is a move made on request, like everything els
   `VirtualScrollView` always pass `theme: None` with the override fields `pub(crate)`), so the only
   way is vendoring the whole scrollview module (~1350 lines) out of `freya-components` — too much to
   carry for a cosmetic change. Revisit if freya makes it themeable.
+- [ ] Keep the scrollbar off the content. freya draws it as an overlay: the bar is absolutely
+  positioned and offset back 16 px into the pane it scrolls, so it lies over the last 16 px of
+  every row rather than taking a column of its own (`notes/upstream/freya.md`). Idle it is
+  invisible and after 800 ms it is gone, so nothing looks wrong until the pointer nears that
+  edge and an opaque bar appears over the text. It costs most where the text reaches the edge:
+  a code row, whose instruction or source line runs the width of the listing, and a sidebar
+  name cut with an ellipsis, which is cut exactly where the bar sits. The crate offers no
+  inline mode and no way to set the thickness, so the gutter has to be the app's own -- which
+  makes 16 a number of ours, and the widest-row width every code row takes (`src/ui/width.rs`)
+  has to leave room for it. What needs deciding is whether the gutter is always there or only
+  while the content overflows: always is steady and spends the room on panes that never
+  scroll, and only-when-overflowing moves the text sideways the moment a file grows past the
+  pane.
 - [ ] Keep every expensive operation off the UI thread. A standing rule rather than a task that
   finishes, since each new one arrives with whatever feature needed it. freya's executor *is* the
   UI thread, so a `spawn` is not the answer: what is expensive goes onto a `std::thread` fed an
