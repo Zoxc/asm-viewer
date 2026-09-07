@@ -5479,14 +5479,18 @@ fn the_locations_panel_draws_a_row_per_symbol() {
     settle(&mut test);
     let finding = format!(
         "Finding locations for {}:{}\u{2026}",
-        file_name(&at.file),
+        source::name_of(Path::new(&*at.file)),
         at.line
     );
     assert!(labels(&test).contains(&finding), "{:?}", labels(&test));
 
     located.write().found = Some(Found::new(Query::line(at.clone()), Vec::new()));
     settle(&mut test);
-    let nothing = format!("No code compiled from {}:{}", file_name(&at.file), at.line);
+    let nothing = format!(
+        "No code compiled from {}:{}",
+        source::name_of(Path::new(&*at.file)),
+        at.line
+    );
     assert!(labels(&test).contains(&nothing), "{:?}", labels(&test));
 
     located.write().found = Some(Found::new(
@@ -5495,7 +5499,11 @@ fn the_locations_panel_draws_a_row_per_symbol() {
     ));
     settle(&mut test);
     let drawn = labels(&test);
-    let heading = format!("2 locations for {}:{}", file_name(&at.file), at.line);
+    let heading = format!(
+        "2 locations for {}:{}",
+        source::name_of(Path::new(&*at.file)),
+        at.line
+    );
     assert!(drawn.contains(&heading), "{drawn:?}");
     assert_eq!(
         drawn.iter().filter(|text| **text == "sum_to").count(),

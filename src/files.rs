@@ -14,6 +14,7 @@ use std::{
 };
 
 use crate::shared::Shared;
+use crate::source;
 
 /// Whether a press on `path` opens it as a source file: a regular file within the
 /// [`source::MAX_SIZE`](crate::source::MAX_SIZE) the source cache will read, asked of the
@@ -93,7 +94,7 @@ impl FileTree {
         let children = read_level(root).ok()?;
         Some(FileTree {
             root: Node {
-                name: file_name(root),
+                name: source::name_of(root),
                 path: root.to_path_buf(),
                 directory: true,
                 children: Children::Read(children),
@@ -189,15 +190,6 @@ fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
             .then_with(|| a.name.cmp(&b.name))
     });
     Ok(nodes)
-}
-
-/// What a path is called without its directory, falling back to the whole path when it has
-/// no file name at all — a root like `/`, which must not come out empty.
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
 }
 
 #[cfg(test)]

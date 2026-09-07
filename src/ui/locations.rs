@@ -468,7 +468,7 @@ pub(crate) fn locate_menu(
 /// A line as the panel names it: the file's own name and the line, the full path being
 /// the tooltip's.
 fn spell(at: &LinePos) -> String {
-    format!("{}:{}", file_name(&at.file), at.line)
+    format!("{}:{}", source::name_of(Path::new(&*at.file)), at.line)
 }
 
 /// The Locations view: what was asked about, over every symbol it answered with.

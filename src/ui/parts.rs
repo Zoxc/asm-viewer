@@ -306,15 +306,6 @@ pub(crate) fn elide(text: &str) -> String {
     }
 }
 
-/// What a source file is called in a list: the last component of its path, or the whole
-/// of it when there is nothing else to call it.
-pub(crate) fn file_name(file: &str) -> String {
-    Path::new(file)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| file.to_owned())
-}
-
 /// The heading over one section of the project view, with whatever the section's own
 /// action is on the right of it.
 pub(crate) fn section_heading(text: &str, action: Option<Element>) -> impl IntoElement {
@@ -454,7 +445,7 @@ pub(crate) fn diagnostic_block(diagnostic: &Diagnostic, place: Option<Element>) 
 pub(crate) fn diagnostic_place(span: &cargo::Span, whole: bool) -> String {
     let file = match whole {
         true => span.file.clone(),
-        false => file_name(&span.file),
+        false => source::name_of(Path::new(&span.file)),
     };
     format!("{file}:{}:{}", span.line, span.column)
 }

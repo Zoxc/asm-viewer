@@ -19,6 +19,7 @@ use analysis::{BinaryFormat, Object};
 
 use crate::filter::Matcher;
 use crate::shared::Shared;
+use crate::source;
 
 /// Which load asked for a file. A counter and not a path, because the same path can be
 /// loading twice — a file closed and reopened mid-parse is two loads, and the first one's
@@ -189,7 +190,7 @@ impl ObjectTree {
                 continue;
             }
 
-            let name = file_name(&first.path);
+            let name = source::name_of(&first.path);
             let whole = matcher.matches(&name);
             let members: Vec<&Arc<Object>> = group
                 .iter()
@@ -233,7 +234,7 @@ impl ObjectTree {
             if objects.iter().any(|object| object.path == path) {
                 continue;
             }
-            let name = file_name(path);
+            let name = source::name_of(path);
             if !matcher.matches(&name) {
                 continue;
             }
@@ -249,15 +250,6 @@ impl ObjectTree {
 
         rows.into()
     }
-}
-
-/// What a file is called without its directory, falling back to the whole path when it has
-/// no file name at all — a path ending in `..`, say, which must not come out empty.
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
 }
 
 /// The short tag a row wears to say what kind of file it is. Text and not an icon: nothing

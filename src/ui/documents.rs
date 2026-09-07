@@ -794,7 +794,7 @@ pub(crate) fn entry_name(entry: &Document) -> String {
             .as_ref()
             .unwrap_or(&symbol.data.name)
             .clone(),
-        Document::Source(file) => file_name(file),
+        Document::Source(file) => source::name_of(Path::new(&**file)),
     }
 }
 

@@ -47,7 +47,7 @@ impl<T> Grouped<T> {
         for (path, items) in files {
             grouped.count += items.len();
             grouped.files.push(InFile {
-                name: crate::walk::name_of(&path),
+                name: crate::source::name_of(&path),
                 path,
                 items,
                 folded: false,
@@ -68,7 +68,7 @@ impl<T> Grouped<T> {
             }
         }
         self.files.push(InFile {
-            name: crate::walk::name_of(path),
+            name: crate::source::name_of(path),
             path: path.to_path_buf(),
             items: vec![item],
             folded: false,

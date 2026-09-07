@@ -17,6 +17,8 @@
 use ignore::{Walk, WalkBuilder};
 use std::{cmp::Ordering, ops::ControlFlow, path::Path, path::PathBuf};
 
+use crate::source;
+
 /// The walker both readers of a project's directory use.
 ///
 /// The bounds are here rather than at either call site, since a file one reader skips and
@@ -144,19 +146,11 @@ fn order(a: &Path, b: &Path) -> Ordering {
             .map(|data| data.is_dir())
             .unwrap_or(false)
     };
-    let (a_name, b_name) = (name_of(a), name_of(b));
+    let (a_name, b_name) = (source::name_of(a), source::name_of(b));
     directory(a)
         .cmp(&directory(b))
         .then_with(|| a_name.to_lowercase().cmp(&b_name.to_lowercase()))
         .then_with(|| a_name.cmp(&b_name))
-}
-
-/// What a path is called without its directory, the whole path where it has no name.
-pub fn name_of(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
 }
 
 #[cfg(test)]

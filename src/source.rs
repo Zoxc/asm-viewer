@@ -253,6 +253,15 @@ pub fn compiled(path: &Path) -> bool {
     Language::of(path).is_some_and(Language::compiled)
 }
 
+/// What a path is called without its directory, and the whole path where it has no name --
+/// a root like `/`, which must not come out empty.
+pub fn name_of(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// One source file: where it came from, and what it says. Splitting it into lines is the
 /// UI's syntax highlighter's job, which works in whole files and hands its own line breaks
 /// back.

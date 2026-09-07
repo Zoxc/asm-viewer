@@ -406,7 +406,7 @@ impl Component for SourceRow {
                 // same arrival every other door into a source file makes, so the
                 // assembly side follows this line as it follows a clicked one.
                 let menu = menu.maybe_child(opens.clone().map(|file| {
-                    let (line, name) = (at.line, file_name(&file));
+                    let (line, name) = (at.line, source::name_of(Path::new(&*file)));
                     MenuButton::new()
                         .on_press(move |_| {
                             open_source_place(
@@ -1017,7 +1017,7 @@ fn source_bar(
                         .child(entry_icon(&Document::Source(file.clone())))
                         .child(
                             label()
-                                .text(file_name(&file))
+                                .text(source::name_of(Path::new(&*file)))
                                 .width(Size::fill())
                                 .max_lines(1)
                                 .text_overflow(TextOverflow::Ellipsis),
