@@ -262,7 +262,6 @@ impl Component for SourceRow {
                     columns: self
                         .links
                         .followed_on(self.index as u32 + 1)
-                        .iter()
                         .map(|columns| drawn_columns(&row_text, columns))
                         .collect(),
                     // Always a door: nothing here is a link until the server has said

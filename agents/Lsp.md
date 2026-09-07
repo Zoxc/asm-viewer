@@ -570,7 +570,9 @@ has a definition like anything else, so excluding it would kill every link into 
 marker of a built-in type is `builtinType`; and there is no `definition` modifier at all,
 rust-analyzer folding its own into the standard `declaration`. A name the rule keeps but
 cannot follow -- where one is defined -- is kept all the same, since the row's menu is
-offered there too.
+offered there too. That is why one token has **three** answers and not two (`classify`,
+which settles both questions in the one lookup): a name with nothing to follow is not the
+same as something that is no name at all.
 
 An item in a trait `impl` is the one name that asks a different question. Its *definition*
 is itself, so `textDocument/definition` on it goes nowhere the reader is not already; its

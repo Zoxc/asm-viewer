@@ -60,11 +60,17 @@ impl Links {
     pub fn of(legend: &lsp::Legend, tokens: &[lsp::Token]) -> Links {
         let mut links: Vec<Link> = tokens
             .iter()
-            .filter(|token| is_name(legend, token))
-            .map(|token| Link {
-                line: token.line,
-                columns: token.columns.clone(),
-                asks: asked_by(legend, token),
+            .filter_map(|token| {
+                let asks = match classify(legend, token) {
+                    Named::Not => return None,
+                    Named::Defined => None,
+                    Named::Asks(asks) => Some(asks),
+                };
+                Some(Link {
+                    line: token.line,
+                    columns: token.columns.clone(),
+                    asks,
+                })
             })
             .collect();
         links.sort_by(|one, other| {
@@ -75,12 +81,12 @@ impl Links {
 
     /// The columns of the names on `line` that can be followed, in the order they are
     /// drawn: what a row draws as links, once the pane has counted them in its own units.
-    pub fn followed_on(&self, line: u32) -> Vec<Range<u32>> {
+    /// Borrowed rather than collected: a row asks on every render.
+    pub fn followed_on(&self, line: u32) -> impl Iterator<Item = &Range<u32>> + '_ {
         self.on_line(line)
             .iter()
             .filter(|link| link.asks.is_some())
-            .map(|link| link.columns.clone())
-            .collect()
+            .map(|link| &link.columns)
     }
 
     /// Every name on `line`, 1-based, in the order they are drawn.
@@ -143,24 +149,34 @@ const NAMES: [&str; 27] = [
     "label",
 ];
 
-/// Whether `token` is a name the reader can ask the server about at all.
-fn is_name(legend: &lsp::Legend, token: &lsp::Token) -> bool {
-    legend.kind(token).is_some_and(|kind| NAMES.contains(&kind))
+/// What the server's vocabulary makes of one token. Three answers and not two: a name
+/// with nothing to follow is still a name the reader can ask about, and is not the same
+/// as something that is no name at all.
+#[derive(PartialEq, Eq, Debug)]
+enum Named {
+    /// Not a name: something lexical, or one of the three the server places nowhere.
+    Not,
+    /// A name where one is defined, so there is nothing to follow.
+    Defined,
+    /// A name, and what following it asks.
+    Asks(lsp::Followed),
 }
 
-/// What following the name at `token` asks, and `None` where there is nothing to follow.
-fn asked_by(legend: &lsp::Legend, token: &lsp::Token) -> Option<lsp::Followed> {
-    if !is_name(legend, token) {
-        return None;
+/// What `legend` says `token` is. Both questions are settled in the one lookup: whether
+/// it is a name at all, and what following it asks.
+fn classify(legend: &lsp::Legend, token: &lsp::Token) -> Named {
+    if !legend.kind(token).is_some_and(|kind| NAMES.contains(&kind)) {
+        return Named::Not;
     }
     if !legend.says(token, "declaration") {
-        return Some(lsp::Followed::Definition);
+        return Named::Asks(lsp::Followed::Definition);
     }
     // A definition, so there is nothing to follow -- unless it is an item in a trait
     // `impl`, where the trait declares what this one writes out.
-    legend
-        .says(token, "trait")
-        .then_some(lsp::Followed::Declaration)
+    match legend.says(token, "trait") {
+        true => Named::Asks(lsp::Followed::Declaration),
+        false => Named::Defined,
+    }
 }
 
 #[cfg(test)]
