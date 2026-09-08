@@ -295,9 +295,9 @@ pub(crate) enum What {
     /// when it was asked, in the crate's own order -- object by object and by address
     /// within one, which is a tie-break and not a ranking.
     ///
-    /// [`SymbolList`] and not a `Vec`, so handing it to the rows is a pointer compare
+    /// A [`Shared`] and not a `Vec`, so handing it to the rows is a pointer compare
     /// rather than a walk of thousands.
-    Symbols(SymbolList),
+    Symbols(Shared<Symbol>),
     /// The places one of the server's two list questions answered with, under the file
     /// each is in. Both are the same shape, and the panel draws one at a time, so which
     /// question it was is the `Query`'s to say and not this.
@@ -308,7 +308,7 @@ impl Found {
     pub(crate) fn new(of: Query, symbols: Vec<Symbol>) -> Found {
         Found {
             of,
-            what: What::Symbols(SymbolList(Arc::new(symbols))),
+            what: What::Symbols(symbols.into()),
         }
     }
 
@@ -330,15 +330,14 @@ impl Found {
             .map(|object| Arc::as_ptr(object).addr())
             .collect();
         let kept: Vec<Symbol> = symbols
-            .0
             .iter()
             .filter(|symbol| open.contains(&Arc::as_ptr(&symbol.object).addr()))
             .cloned()
             .collect();
-        if kept.len() == symbols.0.len() {
+        if kept.len() == symbols.len() {
             return false;
         }
-        self.what = What::Symbols(SymbolList(Arc::new(kept)));
+        self.what = What::Symbols(kept.into());
         true
     }
 }
@@ -542,8 +541,8 @@ impl Component for LocationsPanel {
                 Some(Found {
                     what: What::Symbols(symbols),
                     ..
-                }) => symbols.0.clone(),
-                _ => Arc::new(Vec::new()),
+                }) => symbols.clone(),
+                _ => Shared::default(),
             };
             Filtered::new(symbols, &filter.read().matcher(), |symbol| {
                 symbol.data.display()
@@ -654,7 +653,7 @@ impl Component for LocationsPanel {
                     what: What::Symbols(symbols),
                     ..
                 }),
-            ) if symbols.0.is_empty() => {
+            ) if symbols.is_empty() => {
                 placeholder(format!("No code compiled from {}", query.spell()))
             }
             (
@@ -665,7 +664,7 @@ impl Component for LocationsPanel {
                     ..
                 }),
             ) => {
-                let count = symbols.0.len();
+                let count = symbols.len();
                 let length = filtered.len();
                 // The rows the arrows step and Enter presses: a `Filtered` is the list
                 // behind an `Arc` and the indices the filter kept.
@@ -697,7 +696,7 @@ impl Component for LocationsPanel {
                             let index = filtered.index(row);
                             let symbol = &filtered.list()[index];
                             LocationRow {
-                                symbols: SymbolList(filtered.list().clone()),
+                                symbols: filtered.list().clone(),
                                 index,
                                 selected: selected.as_ref() == Some(symbol),
                                 at: row,
@@ -730,7 +729,7 @@ impl Component for LocationsPanel {
 /// apart.
 #[derive(Clone)]
 struct LocationRow {
-    symbols: SymbolList,
+    symbols: Shared<Symbol>,
     /// Which symbol this is, in the list the filter narrowed.
     index: usize,
     /// Whether this is the symbol the panes are drawing.
@@ -853,7 +852,7 @@ impl Component for LocationRow {
         let subject = located.subject.clone();
         let picking = use_picking(Panel::Locations);
         let row = self.at;
-        let symbol = self.symbols.0[self.index].clone();
+        let symbol = self.symbols[self.index].clone();
         let pick = Pick::Symbol(symbol.clone());
         let name = symbol.data.display().to_owned();
         let object = symbol.object.name.clone();

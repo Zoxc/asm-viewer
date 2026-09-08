@@ -402,18 +402,9 @@ pub(crate) fn use_arrangement() -> Arrangement {
     }
 }
 
-/// The flattened symbol list, shared through context so the Symbols tab does not have to
-/// rebuild it.
+/// Every object's text symbols flattened into one list, rebuilt only when the object list
+/// changes and shared through context so the Symbols tab does not have to rebuild it. A
+/// [`Shared`], so passing it around is a pointer and not a walk of a hundred thousand
+/// symbols.
 #[derive(Clone, Copy)]
-pub(crate) struct Symbols(pub(crate) Memo<SymbolList>);
-
-/// Every object's text symbols flattened into one list, rebuilt only when the object
-/// list changes. Compared by pointer so passing it around stays O(1).
-#[derive(Clone)]
-pub(crate) struct SymbolList(pub(crate) Arc<Vec<Symbol>>);
-
-impl PartialEq for SymbolList {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
+pub(crate) struct Symbols(pub(crate) Memo<Shared<Symbol>>);

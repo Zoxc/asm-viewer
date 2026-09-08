@@ -63,7 +63,7 @@ pub(crate) use crate::scratchpad::{
 };
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
-pub(crate) use crate::shared::same_arc;
+pub(crate) use crate::shared::{same_arc, Shared};
 pub(crate) use crate::shortcuts;
 pub(crate) use crate::source::{self, showable, SourceFile};
 pub(crate) use crate::store::{self, Store};
@@ -503,18 +503,17 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     use_provide_context(|| Rescued(State::create(store::moved())));
 
     let symbols = use_memo(move || {
-        SymbolList(Arc::new(
-            objects
-                .read()
-                .iter()
-                .flat_map(|object| {
-                    object.symbols_sorted.iter().cloned().map(|data| Symbol {
-                        object: object.clone(),
-                        data,
-                    })
+        objects
+            .read()
+            .iter()
+            .flat_map(|object| {
+                object.symbols_sorted.iter().cloned().map(|data| Symbol {
+                    object: object.clone(),
+                    data,
                 })
-                .collect::<Vec<_>>(),
-        ))
+            })
+            .collect::<Vec<Symbol>>()
+            .into()
     });
     use_provide_context(move || Symbols(symbols));
 

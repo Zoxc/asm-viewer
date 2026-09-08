@@ -753,9 +753,7 @@ fn a_window_with_no_project_is_one_screen() {
             // half of this test where a project arrives is a real mount and not a panic.
             let objects = states.objects;
             runner.provide_root_context(move || {
-                Symbols(Memo::create(move || {
-                    SymbolList(Arc::new(collect_symbols(&objects)))
-                }))
+                Symbols(Memo::create(move || collect_symbols(&objects).into()))
             });
             runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
             runner.provide_root_context(|| Locations(State::create(Located::default())));
@@ -4586,17 +4584,16 @@ fn a_lines_locations_come_back_from_every_open_object() {
     let names: Vec<&str> = found
         .symbols()
         .expect("symbols")
-        .0
         .iter()
         .map(|symbol| symbol.data.name.as_str())
         .collect();
     assert_eq!(names, ["sum_to", "sum_to"]);
     assert!(Arc::ptr_eq(
-        &found.symbols().expect("symbols").0[0].object,
+        &found.symbols().expect("symbols")[0].object,
         &wanted.object
     ));
     assert!(Arc::ptr_eq(
-        &found.symbols().expect("symbols").0[1].object,
+        &found.symbols().expect("symbols")[1].object,
         &twin
     ));
 
@@ -4620,7 +4617,6 @@ fn a_lines_locations_come_back_from_every_open_object() {
         .expect("answered")
         .symbols()
         .expect("symbols")
-        .0
         .is_empty());
 }
 
@@ -4745,7 +4741,6 @@ fn a_locate_being_worked_is_not_sent_again_by_a_write_beside_it() {
         .expect("answered")
         .symbols()
         .expect("symbols")
-        .0
         .is_empty());
 
     // The next question, held inside the worker.
@@ -4833,7 +4828,7 @@ fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
         .clone()
         .expect("the locate was answered");
     assert!(found.of.at == at);
-    assert!(!found.symbols().expect("symbols").0.is_empty());
+    assert!(!found.symbols().expect("symbols").is_empty());
     assert!(analysis.peek().pending.is_none());
 }
 
@@ -4871,7 +4866,6 @@ fn closing_a_binary_takes_its_locations_with_it() {
             .expect("answered")
             .symbols()
             .expect("symbols")
-            .0
             .len(),
         2
     );
@@ -4884,9 +4878,9 @@ fn closing_a_binary_takes_its_locations_with_it() {
     }
     let found = located.peek().found.clone().expect("the answer stands");
     assert!(found.of.at == at);
-    assert_eq!(found.symbols().expect("symbols").0.len(), 1);
+    assert_eq!(found.symbols().expect("symbols").len(), 1);
     assert!(Arc::ptr_eq(
-        &found.symbols().expect("symbols").0[0].object,
+        &found.symbols().expect("symbols")[0].object,
         &twin
     ));
 
@@ -4903,7 +4897,6 @@ fn closing_a_binary_takes_its_locations_with_it() {
             .expect("stands")
             .symbols()
             .expect("symbols")
-            .0
             .len(),
         1
     );
@@ -4920,7 +4913,6 @@ fn closing_a_binary_takes_its_locations_with_it() {
         .expect("stands")
         .symbols()
         .expect("symbols")
-        .0
         .is_empty());
 }
 
@@ -6094,7 +6086,6 @@ fn an_instance_query_answers_each_symbol_once() {
     let names: Vec<&str> = found
         .symbols()
         .expect("symbols")
-        .0
         .iter()
         .map(|symbol| symbol.data.name.as_str())
         .collect();
@@ -6111,8 +6102,8 @@ fn an_instance_query_answers_each_symbol_once() {
             .is_some_and(|found| found.of == query)
     });
     let found = located.peek().found.clone().expect("answered");
-    assert_eq!(found.symbols().expect("symbols").0.len(), 1);
-    assert_eq!(found.symbols().expect("symbols").0[0].data.name, "sum_to");
+    assert_eq!(found.symbols().expect("symbols").len(), 1);
+    assert_eq!(found.symbols().expect("symbols")[0].data.name, "sum_to");
 
     let query = Query::function(at.clone(), &function("comment", 1..=19));
     located.write().asked = Some(query.clone());
@@ -6130,7 +6121,6 @@ fn an_instance_query_answers_each_symbol_once() {
         .expect("answered")
         .symbols()
         .expect("symbols")
-        .0
         .is_empty());
 }
 
@@ -9070,7 +9060,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
     pump(&mut test, || located.peek().found.is_some());
     let found = located.peek().found.clone().expect("answered");
     assert!(found.of.at == at);
-    assert_eq!(found.symbols().expect("symbols").0.len(), 1);
+    assert_eq!(found.symbols().expect("symbols").len(), 1);
 
     // The same line again is asked again, out of whatever is open now.
     let mut objects = objects;
@@ -9087,7 +9077,6 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
             .expect("stands")
             .symbols()
             .expect("symbols")
-            .0
             .len(),
         1,
         "an answer re-asked itself when an object was opened"
@@ -9099,7 +9088,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
             .peek()
             .found
             .as_ref()
-            .is_some_and(|found| found.symbols().expect("symbols").0.len() == 2)
+            .is_some_and(|found| found.symbols().expect("symbols").len() == 2)
     });
 }
 
@@ -19003,18 +18992,17 @@ macro_rules! symbol_states {
             let objects = states.objects;
             $runner.provide_root_context(move || {
                 Symbols(Memo::create(move || {
-                    SymbolList(Arc::new(
-                        objects
-                            .read()
-                            .iter()
-                            .flat_map(|object| {
-                                object.symbols_sorted.iter().cloned().map(|data| Symbol {
-                                    object: object.clone(),
-                                    data,
-                                })
+                    objects
+                        .read()
+                        .iter()
+                        .flat_map(|object| {
+                            object.symbols_sorted.iter().cloned().map(|data| Symbol {
+                                object: object.clone(),
+                                data,
                             })
-                            .collect(),
-                    ))
+                        })
+                        .collect::<Vec<Symbol>>()
+                        .into()
                 }))
             });
             states

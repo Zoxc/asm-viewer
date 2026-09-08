@@ -152,7 +152,7 @@ enum Told {
 struct Answered {
     id: u64,
     query: String,
-    rows: Arc<Vec<Row>>,
+    rows: Shared<Row>,
     walking: bool,
 }
 
@@ -259,7 +259,11 @@ impl Held {
         Answered {
             id: self.id,
             query: self.query.clone(),
-            rows: Arc::new(hits.into_iter().map(|(_, row)| row).collect()),
+            rows: hits
+                .into_iter()
+                .map(|(_, row)| row)
+                .collect::<Vec<Row>>()
+                .into(),
             walking: self.walking,
         }
     }
@@ -440,7 +444,7 @@ pub(crate) fn asking(state: &Finder) -> Asking {
 /// for is the panel not saying *No files match* about a query nobody has answered yet.
 #[derive(Clone, Default)]
 pub(crate) struct Listed {
-    rows: Arc<Vec<Row>>,
+    rows: Shared<Row>,
     for_query: String,
 }
 
@@ -453,7 +457,7 @@ struct Row {
 
 impl PartialEq for Listed {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.rows, &other.rows) && self.for_query == other.for_query
+        self.rows == other.rows && self.for_query == other.for_query
     }
 }
 
@@ -515,7 +519,7 @@ fn recent(asking: &Asking, visits: &Visits) -> Listed {
         })
         .collect();
     Listed {
-        rows: Arc::new(rows),
+        rows: rows.into(),
         for_query: String::new(),
     }
 }

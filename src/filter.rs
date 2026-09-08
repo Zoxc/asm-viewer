@@ -9,11 +9,10 @@
 //! names that matched are, best first.
 
 use std::ops::Range;
-use std::sync::Arc;
 
 use regex::{Regex, RegexBuilder};
 
-use crate::shared::same_arc;
+use crate::shared::Shared;
 
 /// One list's filter: what was typed, and the three toggles that say how to read it.
 #[derive(Clone, Default, PartialEq)]
@@ -184,16 +183,16 @@ fn is_word(c: char) -> bool {
 /// Generic over the element, since more than one list is ranked this way and the only
 /// thing a filter asks of one is the name it is drawn under.
 ///
-/// Two are equal only where both halves are the same build, compared by the pointer as
-/// everything with an `Arc` behind it is: a fresh one is what tells a list to draw its
-/// rows again.
+/// Two are equal only where both halves are the same build, which is [`Shared`]'s rule:
+/// a fresh one is what tells a list to draw its rows again.
 pub struct Filtered<T> {
-    list: Arc<Vec<T>>,
-    matches: Option<Arc<Vec<usize>>>,
+    list: Shared<T>,
+    matches: Option<Shared<usize>>,
 }
 
-/// Written out rather than derived: derived, `Clone` would ask `T: Clone` and `PartialEq`
-/// would compare the elements, where the rule here is the pointer.
+/// Written out rather than derived: a derived `Clone` would ask `T: Clone` and a derived
+/// `PartialEq` `T: PartialEq`, and neither half needs either. A [`Shared`] is cloned and
+/// compared by its pointer whatever it holds.
 impl<T> Clone for Filtered<T> {
     fn clone(&self) -> Self {
         Filtered {
@@ -205,7 +204,7 @@ impl<T> Clone for Filtered<T> {
 
 impl<T> PartialEq for Filtered<T> {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.list, &other.list) && same_arc(&self.matches, &other.matches)
+        self.list == other.list && self.matches == other.matches
     }
 }
 
@@ -214,7 +213,7 @@ impl<T> Filtered<T> {
     /// shows, demangled where it has one -- and orders what is left by
     /// its [`Rank`], the list's own order breaking ties, so the sort is deterministic and
     /// `sort_unstable` is safe.
-    pub fn new(list: Arc<Vec<T>>, matcher: &Matcher, name: impl Fn(&T) -> &str) -> Self {
+    pub fn new(list: Shared<T>, matcher: &Matcher, name: impl Fn(&T) -> &str) -> Self {
         let matches = match matcher {
             Matcher::Everything => None,
             matcher => {
@@ -224,9 +223,13 @@ impl<T> Filtered<T> {
                     .filter_map(|(index, item)| Some((matcher.rank(name(item))?, index)))
                     .collect();
                 ranked.sort_unstable();
-                Some(Arc::new(
-                    ranked.into_iter().map(|(_, index)| index).collect(),
-                ))
+                Some(
+                    ranked
+                        .into_iter()
+                        .map(|(_, index)| index)
+                        .collect::<Vec<usize>>()
+                        .into(),
+                )
             }
         };
 
@@ -234,7 +237,7 @@ impl<T> Filtered<T> {
     }
 
     /// The whole list, filter or none: what a row is handed beside its index.
-    pub fn list(&self) -> &Arc<Vec<T>> {
+    pub fn list(&self) -> &Shared<T> {
         &self.list
     }
 

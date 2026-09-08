@@ -5,7 +5,7 @@ use super::*;
 impl Found {
     /// The symbols it answered with, and `None` where it was a question for the server.
     /// The tests' way of asking; the panel matches on `what` instead.
-    pub(crate) fn symbols(&self) -> Option<&SymbolList> {
+    pub(crate) fn symbols(&self) -> Option<&Shared<Symbol>> {
         match &self.what {
             What::Symbols(symbols) => Some(symbols),
             What::Places(_) => None,
@@ -77,11 +77,7 @@ fn a_binary_closed_while_the_worker_ran_is_not_put_back_by_its_answer() {
     // Answered over an object the reader has closed since.
     assert!(state.take(asked, symbols, &[]));
     let found = state.found.expect("an empty answer is an answer");
-    assert!(found
-        .symbols()
-        .expect("symbols were asked for")
-        .0
-        .is_empty());
+    assert!(found.symbols().expect("symbols were asked for").is_empty());
 }
 
 #[test]
@@ -100,5 +96,5 @@ fn a_close_drops_the_symbols_it_takes_with_it_and_a_load_writes_nothing() {
     );
     assert!(state.retain_open(&[]), "the closed file's symbols went");
     let found = state.found.expect("the question is still answered");
-    assert!(found.symbols().expect("symbols").0.is_empty());
+    assert!(found.symbols().expect("symbols").is_empty());
 }

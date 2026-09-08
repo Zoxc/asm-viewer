@@ -6,7 +6,7 @@ fn answered(id: u64, query: &str) -> Answered {
     Answered {
         id,
         query: query.to_owned(),
-        rows: Arc::new(Vec::new()),
+        rows: Shared::default(),
         walking: false,
     }
 }

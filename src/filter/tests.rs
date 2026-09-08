@@ -239,16 +239,15 @@ fn the_marks_are_every_occurrence_and_nothing_where_nothing_was_typed() {
 
 /// The list the two tests below filter: against `next` it holds a prefix, two word starts
 /// of different lengths, a substring, and a name that does not match at all.
-fn names() -> Arc<Vec<String>> {
-    Arc::new(
-        ["zz::next", "next_to", "std::next", "connext", "push"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-    )
+fn names() -> Shared<String> {
+    ["zz::next", "next_to", "std::next", "connext", "push"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<String>>()
+        .into()
 }
 
-fn filtered(list: Arc<Vec<String>>, filter: &Filter) -> Filtered<String> {
+fn filtered(list: Shared<String>, filter: &Filter) -> Filtered<String> {
     Filtered::new(list, &filter.matcher(), String::as_str)
 }
 

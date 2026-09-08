@@ -315,7 +315,7 @@ impl Component for ObjectRow {
 
 #[derive(Clone)]
 struct SymbolRow {
-    symbols: SymbolList,
+    symbols: Shared<Symbol>,
     /// Which symbol this is, in the list the filter narrowed.
     index: usize,
     selected: bool,
@@ -355,7 +355,7 @@ impl Component for SymbolRow {
         let objects = use_consume::<Objects>().0;
         let picking = use_picking(Panel::Symbols);
         let at = self.at;
-        let symbol = self.symbols.0[self.index].clone();
+        let symbol = self.symbols[self.index].clone();
         let pick = Pick::Symbol(symbol.clone());
         let text = symbol
             .data
@@ -700,7 +700,7 @@ impl Component for SymbolsPanel {
         // `viewer-sample`, and the `VirtualScrollView` has to be told its length before it
         // builds any row.
         let filtered = use_memo(move || {
-            let symbols = symbols.read().0.clone();
+            let symbols = symbols.read().clone();
             Filtered::new(symbols, &filter.read().matcher(), |symbol| {
                 symbol.data.display()
             })
@@ -753,7 +753,7 @@ impl Component for SymbolsPanel {
                     let index = filtered.index(row);
                     let symbol = &filtered.list()[index];
                     SymbolRow {
-                        symbols: SymbolList(filtered.list().clone()),
+                        symbols: filtered.list().clone(),
                         index,
                         selected: selected.as_ref() == Some(symbol),
                         at: row,
