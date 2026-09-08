@@ -120,10 +120,11 @@ deps effect runs a render late, so a Down pressed in the same pass as the typing
 reset arriving after it. Nothing here needs an effect at all once the row carries the query it
 belongs to. The row is **clamped where it is moved**, not only where it is drawn: counting on past
 the last row left it above the list, and the reader who held Down then spent an Up per overshoot
-before the highlight moved at all. The count that clamps it is the drawn list's: the key handler is
-handed the memo, so a press reads the list the panel is showing rather than working one out for
-itself. That row is also the finder's **pick**, in the sense every list in the app now has one
-(`agents/Sidebar.md`): an Alt+press moves the keyboard to the row under the pointer and opens
+before the highlight moved at all. The clamp is `Listed::clamp`, written once: the panel drawing a
+row, Enter opening one and an arrow moving one all have to land on the same row. What it clamps
+against is the drawn list -- the key handler is handed the list the memo holds, peeked, so a press
+reads what the panel is showing rather than working a list out for itself. That row is also the
+finder's **pick**, in the sense every list in the app now has one (`agents/Sidebar.md`): an Alt+press moves the keyboard to the row under the pointer and opens
 nothing, where a plain press opens the file and closes the panel. It is drawn in the selection while
 the box holds the keyboard, which it does from the moment the chord opens the finder, and in the
 grey a list not being typed in draws its pick with -- so the finder needs no rule of its own for

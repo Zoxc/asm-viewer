@@ -462,6 +462,17 @@ impl Listed {
         self.rows.len()
     }
 
+    /// Which row `at` is of this list: the last one when it is past the end, and the
+    /// first when the list is empty.
+    ///
+    /// The keyboard's row is the finder's own and the rows are the worker's, so a row
+    /// chosen against a longer list outlasts it. Written once, because the panel drawing
+    /// a row, Enter opening one and an arrow moving one all have to land on the same
+    /// one.
+    fn clamp(&self, at: usize) -> usize {
+        at.min(self.len().saturating_sub(1))
+    }
+
     /// Whether these rows are the answer to what the box says.
     pub(crate) fn answers(&self, typed: &str) -> bool {
         self.for_query.trim() == typed.trim()
@@ -570,11 +581,11 @@ impl Component for FinderOverlay {
             return rect().into_element();
         }
 
-        // The list as the panel is about to draw it. The memo itself goes to the key
-        // handler below, which wants the same list and not a ranking of its own.
+        // The list as the panel is about to draw it. The key handler below is handed
+        // this same list, so it moves and opens the rows the reader is looking at.
         let drawn = listed.read().clone();
         let rows = drawn.len();
-        let at = state.selected().min(rows.saturating_sub(1));
+        let at = drawn.clamp(state.selected());
 
         let body: Element = match (&state.root, rows) {
             (None, _) => note("No project directory. Set one in the Project view."),
@@ -664,7 +675,8 @@ impl Component for FinderOverlay {
                             // below move a list the box does not hold, and the box
                             // declines them so that they arrive here at all.
                             .on_global_key_down(move |e: Event<KeyboardEventData>| {
-                                finder_key(finder, states, keyboard, list, listed, &e.key);
+                                // Peeked and not read: a handler subscribes to nothing.
+                                finder_key(finder, states, keyboard, list, &listed.peek(), &e.key);
                             })
                             .child(FinderBox {
                                 finder,
@@ -692,28 +704,25 @@ fn note(text: &str) -> Element {
 /// The keys the finder answers: the list moved through, a file opened, and the overlay
 /// closed. Every read is bound before any write.
 ///
-/// The list is the memo's, not a ranking of its own: it is the one the panel drew, so
-/// Enter opens the row the reader is looking at, and neither arrow asks the query of
-/// every walked path again.
+/// The list is the one the panel drew, handed in rather than worked out again: Enter
+/// opens the row the reader is looking at, and neither arrow asks the query of every
+/// walked path afresh.
 fn finder_key(
     finder: State<Finder>,
     states: ProjectStates,
     keyboard: State<Keys>,
     list: ScrollController,
-    listed: Memo<Listed>,
+    listed: &Listed,
     key: &Key,
 ) {
-    let rows = listed.peek().len();
     match key {
         Key::Named(NamedKey::Escape) => close_finder(finder),
-        Key::Named(NamedKey::ArrowDown) => followed(list, moved(finder, rows, 1)),
-        Key::Named(NamedKey::ArrowUp) => followed(list, moved(finder, rows, -1)),
+        Key::Named(NamedKey::ArrowDown) => followed(list, moved(finder, listed, 1)),
+        Key::Named(NamedKey::ArrowUp) => followed(list, moved(finder, listed, -1)),
         Key::Named(NamedKey::Enter) => {
-            let opened = {
-                let at = finder.peek().selected().min(rows.saturating_sub(1));
-                listed.peek().path(at)
-            };
-            if let Some(path) = opened {
+            // Bound before the write below, so the read guard is gone by then.
+            let at = listed.clamp(finder.peek().selected());
+            if let Some(path) = listed.path(at) {
                 open_found(states, keyboard, &path);
                 close_finder(finder);
             }
@@ -722,29 +731,26 @@ fn finder_key(
     }
 }
 
-/// Move the keyboard `by` rows of `rows`, and remember what the box said when it was
+/// Move the keyboard `by` rows of `listed`, and remember what the box said when it was
 /// moved: the row is the list's as the query stands, and the list changes under it.
 ///
-/// Both ends stop at the list, which is why the count is wanted at all: unclamped, Down
-/// held past the last row counted on above it, and every Up after that was spent coming
-/// back before the highlight moved at all. The count is the drawn list's and not a
-/// ranking made here for it.
+/// Both ends stop at the list, which is why the list is handed in at all: unclamped,
+/// Down held past the last row counted on above it, and every Up after that was spent
+/// coming back before the highlight moved at all. The list is the drawn one and not a
+/// ranking made here.
 ///
 /// Hands back the row it moved to and how many there are, which is what the scroll
 /// follows.
-fn moved(mut finder: State<Finder>, rows: usize, by: isize) -> (usize, usize) {
+fn moved(mut finder: State<Finder>, listed: &Listed, by: isize) -> (usize, usize) {
     // Bound before the write, so the read guard is gone by then.
     let (at, typed) = {
         let state = finder.peek();
-        (
-            state.selected().min(rows.saturating_sub(1)),
-            state.typed.clone(),
-        )
+        (listed.clamp(state.selected()), state.typed.clone())
     };
     let mut state = finder.write();
-    state.at = at.saturating_add_signed(by).min(rows.saturating_sub(1));
+    state.at = listed.clamp(at.saturating_add_signed(by));
     state.at_for = typed;
-    (state.at, rows)
+    (state.at, listed.len())
 }
 
 /// Put the keyboard on `index` and leave the finder open: what an Alt+press on a row
