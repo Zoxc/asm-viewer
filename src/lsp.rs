@@ -628,7 +628,7 @@ impl<W: Write + Send + 'static> Talk<W> {
             "initialize",
             json!({
                 "processId": std::process::id(),
-                "clientInfo": { "name": "Assembly Viewer" },
+                "clientInfo": { "name": crate::APP_NAME },
                 "rootUri": root,
                 "workspaceFolders": [{ "uri": root, "name": name }],
                 "capabilities": {

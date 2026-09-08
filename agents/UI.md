@@ -447,9 +447,10 @@ all three. So each has a second spelling for a folder: the D-Bus interface has `
 against a live session bus -- the handler runs as `dolphin --new-window --select <path>` for the
 first and `--new-window <path>` for the second. `xdg-open`, the last word when no D-Bus call
 answers, picks nothing out and can only open a window, so it opens the window each call above ends
-at -- a file's folder, and a folder itself. **When nothing answers the reader gets a box saying so**, the kind a panic uses: they
-pressed something, and an item that does nothing at all leaves them wondering whether the app
-heard.
+at -- a file's folder, and a folder itself. **When nothing answers the reader gets a box saying so**, the app's own and not a second copy of
+one: `panics::message_box` is the level, the title and the text, and both callers show what it
+hands back. They pressed something, and an item that does nothing at all leaves them
+wondering whether the app heard.
 
 **The bar scrolls itself, without a `ScrollView`**, because documents are opened by the dozen and a
 row of chips needs no scrollbar, no keyboard scrolling and no drag-to-scroll to make up for what it
@@ -731,7 +732,8 @@ same build, derefing to its slice, so a view reads the rows as a slice and passe
 pointer. The Files, Search, Locations and Objects lists and a file's links are all one.
 
 
-**The crash box is the desktop's own, and it has to be.** `crate::panics`'s hook runs on the
+**The crash box is the desktop's own, and it has to be**, which is why the box lives in
+`crate::panics` and `crate::reveal` asks it for one. `crate::panics`'s hook runs on the
 panicking thread *before* the unwind, so when the UI thread is the one that died the app is inside
 its own render, inside winit's `run_app` callback, with no frame to draw a window of its own in.
 `rfd` works there because on every platform it hands the box to something that is not us: on Linux

@@ -41,6 +41,10 @@ mod walk;
 
 use freya::prelude::*;
 
+/// What the app is called, wherever it is spelled: the window's title, the title over a
+/// box the reader is shown, and the name the language server is told its client has.
+pub const APP_NAME: &str = "Assembly Viewer";
+
 fn main() {
     env_logger::init();
 
@@ -60,7 +64,7 @@ fn main() {
     launch(
         LaunchConfig::new().with_window(
             WindowConfig::new(move || ui::app(opening.clone()))
-                .with_title("Assembly Viewer")
+                .with_title(APP_NAME)
                 .with_size(1200., 800.)
                 // The only exit hook freya 0.4 offers, and it is a `Send` callback outside
                 // the component tree, so nothing here can read UI state. It covers the

@@ -6,6 +6,7 @@
 //! is a spawn and a wait, so it never happens on the UI thread: [`reveal`] starts a thread
 //! and returns.
 
+use crate::panics;
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -14,9 +15,9 @@ use std::{
 
 /// Show `path` in the desktop's file manager, on a thread of its own.
 ///
-/// Returns at once. When nothing answers the reader is told in a box, the same kind a
-/// panic uses: they pressed something, and an item that does nothing at all leaves them
-/// wondering whether the app heard.
+/// Returns at once. When nothing answers the reader is told in the app's box
+/// ([`panics::message_box`]), the one a panic puts up: they pressed something, and an
+/// item that does nothing at all leaves them wondering whether the app heard.
 pub fn reveal(path: PathBuf) {
     // Named, so that a panic on it says which thread died (`crate::panics`).
     let started = std::thread::Builder::new()
@@ -67,14 +68,15 @@ fn plan(path: &Path, folder: bool) -> Vec<Attempt> {
 
 /// Say that nothing answered.
 fn tell(path: &Path) {
-    rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Warning)
-        .set_title("Assembly Viewer")
-        .set_description(format!(
+    panics::message_box(
+        rfd::MessageLevel::Warning,
+        crate::APP_NAME,
+        format!(
             "No file manager answered.\n\n{} could not be shown.",
             path.display()
-        ))
-        .show();
+        ),
+    )
+    .show();
 }
 
 /// One program to run, with what its finishing means.

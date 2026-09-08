@@ -265,6 +265,25 @@ pub(crate) fn recorded(store: &Store) -> Vec<PathBuf> {
     files
 }
 
+/// The box the app tells the reader something in: the level, the title and the text, left
+/// unshown so the caller can add to it.
+///
+/// Here rather than in `crate::reveal`, the other caller, because the panic path is the
+/// one that decides what the box is: it has to be the desktop's own, a thread with no
+/// frame left to draw in having nothing else, and the caps on what goes in it follow from
+/// that. That box is also the one with buttons on it, which is why this stops short of
+/// showing.
+pub(crate) fn message_box(
+    level: rfd::MessageLevel,
+    title: impl Into<String>,
+    text: impl Into<String>,
+) -> rfd::MessageDialog {
+    rfd::MessageDialog::new()
+        .set_level(level)
+        .set_title(title)
+        .set_description(text)
+}
+
 /// Say what happened, in a box of the app's own: the same one whichever thread panicked,
 /// since a panic on the UI thread leaves no frame to draw a window of the app's in, and
 /// in a debug build as much as a release one.
@@ -305,12 +324,13 @@ fn tell(panic: &Panic, file: Option<&Path>) {
         None => rfd::MessageButtons::OkCustom(CLOSE.to_owned()),
     };
 
-    let answer = rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Error)
-        .set_title("Assembly Viewer has stopped")
-        .set_description(&said)
-        .set_buttons(buttons)
-        .show();
+    let answer = message_box(
+        rfd::MessageLevel::Error,
+        format!("{} has stopped", crate::APP_NAME),
+        said,
+    )
+    .set_buttons(buttons)
+    .show();
 
     if answer == rfd::MessageDialogResult::Custom(REVEAL.to_owned()) {
         if let Some(path) = file {
