@@ -146,7 +146,8 @@ impl Docs {
         }
     }
 
-    #[cfg(test)]
+    /// How many trails are held: one per open document tab. A tab and its trail are made
+    /// together and closed together, so this is the number of document tabs open.
     pub fn len(&self) -> usize {
         self.open.len()
     }

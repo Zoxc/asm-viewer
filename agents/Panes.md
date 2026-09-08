@@ -200,8 +200,8 @@ so an entry a closed tab left behind is four bytes of dead weight and can never 
 tab's; a reopened tab correctly comes up shut. It follows that the section stays open or shut along
 the whole of a tab's trail, a fact about the tab and not about any one place on it. It is not
 persisted: a view of a tab, like a filter. The pane takes its tab's id as a prop from
-`DocumentBody`; a headless harness mounting one with no tab behind it hands it a stray id
-(`DocId::stray`), under which nothing is ever kept.
+`DocumentBody`; a headless harness mounting one with no tab behind it hands it an unfiled id
+(`DocId::unfiled`), under which nothing is ever kept.
 
 **A click in a source-driven tab's own file is the only writer of `Driven` inside the panes.** A
 click in a companion file selects the line and nothing more, and a click in the *assembly* pane

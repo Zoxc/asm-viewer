@@ -4,10 +4,6 @@ use super::*;
 use crate::docs::Docs;
 use crate::project::Document;
 
-fn strings(items: &[&str]) -> Vec<String> {
-    items.iter().map(|item| (*item).to_string()).collect()
-}
-
 /// A strip of document tabs, ids taken in the order given so a test can name them, with
 /// the table they came out of for a test that opens one more.
 fn strip(count: u32) -> (Strip, Vec<Tab>, Docs) {
@@ -149,45 +145,45 @@ fn moving_a_tab_the_strip_does_not_hold_puts_nothing_there() {
 }
 
 /// `landing` is asked *before* anything is removed, so each of these passes the whole
-/// list and the predicate that is about to thin it.
-fn shut(items: &[&str], showing: &str, closing: &[&str]) -> Option<String> {
-    let open = strings(items);
-    let closing = strings(closing);
-    landing(&open, Some(&showing.to_string()), |open| {
-        closing.contains(open)
-    })
+/// list and the predicate that is about to thin it. The tabs are named by where they sit
+/// in `open`.
+fn shut(open: &[Tab], showing: usize, closing: &[usize]) -> Option<Tab> {
+    let closing: Vec<Tab> = closing.iter().map(|&nth| open[nth]).collect();
+    landing(open, Some(open[showing]), |tab| closing.contains(tab))
 }
 
 #[test]
 fn landing_moves_to_the_tab_on_its_right() {
-    assert_eq!(shut(&["a", "b", "c"], "b", &["b"]), Some("c".to_owned()));
+    let (_, tabs, _docs) = strip(3);
+    assert_eq!(shut(&tabs, 1, &[1]), Some(tabs[2]));
 }
 
 #[test]
 fn landing_on_the_last_tab_moves_to_the_one_on_its_left() {
-    assert_eq!(shut(&["a", "b", "c"], "c", &["c"]), Some("b".to_owned()));
+    let (_, tabs, _docs) = strip(3);
+    assert_eq!(shut(&tabs, 2, &[2]), Some(tabs[1]));
 }
 
 #[test]
 fn landing_with_nothing_left_is_nothing() {
-    assert_eq!(shut(&["a"], "a", &["a"]), None);
+    let (_, tabs, _docs) = strip(1);
+    assert_eq!(shut(&tabs, 0, &[0]), None);
 }
 
 /// The bulk case: the reader ends up where closing the one tab by hand would have
 /// put them, whether the tabs around it went with it or not.
 #[test]
 fn landing_after_several_is_the_first_survivor_after_the_shown_one() {
-    assert_eq!(
-        shut(&["a", "b", "c", "d"], "b", &["a", "b", "c"]),
-        Some("d".to_owned())
-    );
+    let (_, tabs, _docs) = strip(4);
+    assert_eq!(shut(&tabs, 1, &[0, 1, 2]), Some(tabs[3]));
 }
 
 /// A tab that survives is its own answer, which is what lets a caller ask without
 /// first working out whether what is on screen is going anywhere.
 #[test]
 fn a_surviving_shown_tab_is_its_own_landing() {
-    assert_eq!(shut(&["a", "b", "c"], "b", &["c"]), Some("b".to_owned()));
+    let (_, tabs, _docs) = strip(3);
+    assert_eq!(shut(&tabs, 1, &[2]), Some(tabs[1]));
 }
 
 /// Nothing on screen is a state the app is really in — an empty strip — and a close
@@ -195,14 +191,11 @@ fn a_surviving_shown_tab_is_its_own_landing() {
 /// survivor, exactly where a tab that is not open at all lands.
 #[test]
 fn landing_from_nothing_shown_is_the_last_survivor() {
-    let open = strings(&["a", "b", "c"]);
+    let (_, tabs, mut docs) = strip(3);
+    assert_eq!(landing(&tabs, None, |tab| *tab == tabs[1]), Some(tabs[2]));
+    let missing = Tab::Document(docs.open(Document::Source(Arc::from("z.rs"))));
     assert_eq!(
-        landing(&open, None, |open| open == "b"),
-        Some("c".to_owned())
-    );
-    let missing = "z".to_owned();
-    assert_eq!(
-        landing(&open, Some(&missing), |open| open == "b"),
-        Some("c".to_owned())
+        landing(&tabs, Some(missing), |tab| *tab == tabs[1]),
+        Some(tabs[2])
     );
 }

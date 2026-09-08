@@ -205,7 +205,7 @@ impl Strip {
         }
         let showing = self.active.is_some_and(|active| closing(&active));
         if showing {
-            self.active = landing(&self.tabs, self.active.as_ref(), &closing);
+            self.active = landing(&self.tabs, self.active, &closing);
         }
         self.tabs.retain(|tab| !closing(tab));
         closed
@@ -219,17 +219,13 @@ impl Strip {
 /// `open`, and a `showing` that is not closed is its own answer. `None` means only
 /// "nothing is left", never "nothing was closed": this cannot tell, having removed
 /// nothing.
-pub fn landing<T: Clone + PartialEq>(
-    open: &[T],
-    showing: Option<&T>,
-    closing: impl Fn(&T) -> bool,
-) -> Option<T> {
+pub fn landing(open: &[Tab], showing: Option<Tab>, closing: impl Fn(&Tab) -> bool) -> Option<Tab> {
     // Where the tab that moves into `showing`'s place will be once the closed ones
     // are gone: how many of the tabs before it survive. A tab that is not open at
     // all — or no tab at all — counts as being past the end, which lands on the last
     // survivor.
     let position = showing
-        .and_then(|showing| open.iter().position(|open| open == showing))
+        .and_then(|showing| open.iter().position(|open| *open == showing))
         .unwrap_or(open.len());
     let landing = open[..position]
         .iter()
@@ -240,7 +236,7 @@ pub fn landing<T: Clone + PartialEq>(
     surviving()
         .nth(landing)
         .or_else(|| surviving().last())
-        .cloned()
+        .copied()
 }
 
 #[cfg(test)]
