@@ -646,7 +646,7 @@ impl Component for SourceList {
                     chars,
                     // A source-driven tab's subject is the file its own document names;
                     // a companion's tab is a symbol's.
-                    drives: matches!(self.document, Document::Source(_)).then_some(self.tab),
+                    drives: (self.document.driven_from() == Pane::Source).then_some(self.tab),
                     links,
                     marking,
                 },

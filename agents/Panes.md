@@ -6,12 +6,14 @@ click from outside lands, the arrow gutter, and what a run copies.
 
 **The side a tab is driven from is the left-hand pane.** An assembly-driven tab reads
 assembly-then-source and a source-driven one source-then-assembly, so in both the leading pane is
-the one the reader came here to read and the trailing one is what it resolves to. Only
-`DocumentBody` knows this; neither pane is told which side it was put on, so the swap is the order
-of two panels and nothing else, and everything the two share is keyed by which pane it is rather
-than by where the pane sits. The split's one remembered width is the exception and is kept by place
-on purpose (`agents/UI.md`): the handle stays where the reader left it across a switch of kind
-rather than jumping across the window.
+the one the reader came here to read and the trailing one is what it resolves to. The side is a
+fact about the document, `Document::driven_from` (`src/document.rs`), so a new kind of document is
+classified in one place; `DocumentBody` is the only thing that orders the panes by it. Neither
+pane is told which side it was put on, so the swap is the order of two panels and nothing else, and
+everything the two share is keyed by which pane it is rather than by where the pane sits. The
+split's one remembered width is the exception and is kept by place on purpose (`agents/UI.md`): the
+handle stays where the reader left it across a switch of kind rather than jumping across the
+window.
 
 **Which panes a tab has is the reader's to say, and the file's until they do.** A source-driven tab on
 a file in no compiled language *opens* as the Source pane alone: a `Cargo.toml` or a `.json` is read,

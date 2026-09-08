@@ -1,6 +1,5 @@
-//! A place in a file, the two panes named as a pair, the landing a click from outside
-//! them makes, what each tab keeps of where it was left and of its runs, and the effects
-//! that spend a landing.
+//! A place in a file, the landing a click from outside the two panes makes, what each
+//! tab keeps of where it was left and of its runs, and the effects that spend a landing.
 //!
 //! What the two panes say to each other is in `marks.rs`: each pane's picked-out run is
 //! what the other pane lights the pair of, and owes a scroll to. Arriving somewhere is
@@ -18,13 +17,6 @@ use super::*;
 pub(crate) struct LinePos {
     pub(crate) file: Arc<str>,
     pub(crate) line: u32,
-}
-
-/// One of the two panes that show code.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Pane {
-    Assembly,
-    Source,
 }
 
 /// A place to pick out the moment `tab` becomes the active document: a line, an
@@ -969,7 +961,7 @@ pub(crate) fn use_keyboard_asked(mut keyboard: State<Keys>, open: Open, marked: 
         // the reader asked to see, and the one `DocumentBody` draws first.
         let leads = {
             let (strip, docs) = (open.strip.read(), open.docs.read());
-            active_document(&strip, &docs).map(|document| leading(&document))
+            active_document(&strip, &docs).map(|document| document.driven_from())
         };
         // **An ask is kept until there is somewhere to spend it.** A tab opened from a
         // list has nothing to focus in the pass that opened it: its assembly side draws a

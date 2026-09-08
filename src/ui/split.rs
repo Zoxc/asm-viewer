@@ -7,16 +7,6 @@
 
 use super::*;
 
-/// Which pane leads a tab of `document`: the side it is driven from, which is the
-/// left-hand half of the split and the one an ask for the keyboard is spent on
-/// (`ui/focus.rs`). A fact about the *document* and not about the panels it is drawn in.
-pub(crate) fn leading(document: &Document) -> Pane {
-    match document {
-        Document::Source(_) => Pane::Source,
-        Document::Assembly(_) | Document::Code(_) => Pane::Assembly,
-    }
-}
-
 /// Whether the pane a tab is not driven from is up: what the reader last said about this
 /// tab, and where they have said nothing, what its document opens with.
 ///
@@ -30,10 +20,7 @@ pub(crate) fn leading(document: &Document) -> Pane {
 pub(crate) fn following(tab: DocId, document: &Document, said: &HashMap<DocId, bool>) -> bool {
     match said.get(&tab) {
         Some(&said) => said,
-        None => match document {
-            Document::Source(file) => source::compiled(Path::new(&**file)),
-            Document::Assembly(_) | Document::Code(_) => true,
-        },
+        None => document.driven_from() != Pane::Source || source::compiled(document.file()),
     }
 }
 
@@ -85,9 +72,10 @@ impl Component for PaneToggle {
                 let Some(document) = docs.read().get(tab).cloned() else {
                     return rect().into_element();
                 };
-                let name = match &document {
-                    Document::Source(_) => "assembly",
-                    Document::Assembly(_) | Document::Code(_) => "source",
+                // The side that follows is the one the tab is *not* driven from.
+                let name = match document.driven_from() {
+                    Pane::Source => "assembly",
+                    Pane::Assembly => "source",
                 };
                 (name, following(tab, &document, &said.read()))
             }
@@ -222,23 +210,16 @@ impl Component for DocumentBody {
         // stay with the two places, the reader's side and the side that follows it, so
         // switching between the two kinds of tab leaves the handle where it was rather
         // than jumping it across the split.
-        let (leads, follows) = match leading(&document) {
-            Pane::Source => (
-                SourcePane {
-                    tab,
-                    document: document.clone(),
-                }
-                .into_element(),
-                AssemblyPane { tab, document }.into_element(),
-            ),
-            Pane::Assembly => (
-                AssemblyPane {
-                    tab,
-                    document: document.clone(),
-                }
-                .into_element(),
-                SourcePane { tab, document }.into_element(),
-            ),
+        let driven = document.driven_from();
+        let source = SourcePane {
+            tab,
+            document: document.clone(),
+        }
+        .into_element();
+        let assembly = AssemblyPane { tab, document }.into_element();
+        let (leads, follows) = match driven {
+            Pane::Source => (source, assembly),
+            Pane::Assembly => (assembly, source),
         };
 
         // The pane that follows, where this tab has one: put away by hand, or by the file

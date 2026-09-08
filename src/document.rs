@@ -5,6 +5,9 @@
 //! compare by `Arc` pointer identity, the app's rule everywhere; a source file compares
 //! as text, so the same file reached two ways is one tab.
 //!
+//! [`Pane`] is the two sides every tab has, and [`Document::driven_from`] which of them
+//! the reader came for.
+//!
 //! Where a document was *left* is [`Positions`](crate::positions::Positions); how one is
 //! written to a file is [`SavedDocument`](crate::project::SavedDocument).
 
@@ -47,6 +50,13 @@ impl PartialEq for Selection {
     }
 }
 
+/// One of the two panes that show code.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Pane {
+    Assembly,
+    Source,
+}
+
 /// One of the places the reader has open: a place in a binary, or a file.
 ///
 /// A tab holds one of these and has two sides — assembly and source — and the variant
@@ -82,6 +92,16 @@ impl Document {
             Document::Assembly(selection) => selection.file(),
             Document::Source(file) => Path::new(&**file),
             Document::Code(object) => &object.path,
+        }
+    }
+
+    /// The side this is driven from: the pane the reader came here to read, which the
+    /// other one follows. A file is read for itself and the assembly follows it; an
+    /// object and a symbol are read as code and the source follows.
+    pub fn driven_from(&self) -> Pane {
+        match self {
+            Document::Source(_) => Pane::Source,
+            Document::Assembly(_) | Document::Code(_) => Pane::Assembly,
         }
     }
 

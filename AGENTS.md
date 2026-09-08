@@ -192,7 +192,8 @@ command.
   a stretch is decoded, the symbol's own after, and an address for every one.
 - `src/document.rs` — what the reader has open: a place in a binary, or a source file; and
   `Selection`, the object or the symbol an assembly-driven one is about. What every tab,
-  trail, visit and bookmark is keyed by.
+  trail, visit and bookmark is keyed by. Also `Pane`, the two sides a tab has, and which of
+  them a document is driven from.
 - `src/docs.rs` — `Docs`, the table mapping a document tab's `DocId` to the trail behind it: every
   place the tab has shown with a cursor on the one it shows, and which tab is the temporal one.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.

@@ -1573,7 +1573,7 @@ impl Component for AssemblyPane {
                     named,
                     tab,
                     // This pane leads in every tab but a source-driven one.
-                    leading: !matches!(self.document, Document::Source(_)),
+                    leading: self.document.driven_from() == Pane::Assembly,
                 }
                 .into_element()
             }))
