@@ -79,14 +79,6 @@ impl Panic {
     /// [`Backtrace::force_capture`], so it does not depend on `RUST_BACKTRACE` being set
     /// in whatever environment the app was launched from.
     fn of(info: &PanicHookInfo<'_>) -> Panic {
-        let payload = info.payload();
-        let message = match payload.downcast_ref::<&str>() {
-            Some(message) => (*message).to_owned(),
-            None => payload
-                .downcast_ref::<String>()
-                .cloned()
-                .unwrap_or_else(|| "a panic carrying no message".to_owned()),
-        };
         Panic {
             thread: std::thread::current()
                 .name()
@@ -96,7 +88,11 @@ impl Panic {
                 Some(at) => format!("{}:{}:{}", at.file(), at.line(), at.column()),
                 None => "an unknown place".to_owned(),
             },
-            message,
+            // A payload is a `&str` or a `String`; anything else says nothing.
+            message: info
+                .payload_as_str()
+                .unwrap_or("a panic carrying no message")
+                .to_owned(),
             backtrace: Backtrace::force_capture().to_string(),
             at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
