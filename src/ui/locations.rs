@@ -313,6 +313,8 @@ impl Found {
     }
 
     /// The symbols it answered with, and `None` where it was a question for the server.
+    /// The tests' way of asking; the panel matches on `what` instead.
+    #[cfg(test)]
     pub(crate) fn symbols(&self) -> Option<&SymbolList> {
         match &self.what {
             What::Symbols(symbols) => Some(symbols),
@@ -321,6 +323,8 @@ impl Found {
     }
 
     /// The places it answered with, and `None` where it was a question about symbols.
+    /// The tests' way of asking, as `symbols` is.
+    #[cfg(test)]
     pub(crate) fn places(&self) -> Option<&references::References> {
         match &self.what {
             What::Places(places) => Some(places),
@@ -510,6 +514,28 @@ fn spell(at: &LinePos) -> String {
     format!("{}:{}", source::name_of(Path::new(&*at.file)), at.line)
 }
 
+/// The shell both of the panel's lists are drawn in: the question over the rows, with
+/// `count` of them in it.
+///
+/// The count is said over the list rather than in the tab's title: the rows are not the
+/// answer to anything until the question is in view with them.
+fn headed(query: &Query, count: usize, list: Element) -> Element {
+    rect()
+        .expanded()
+        .content(Content::Flex)
+        .child(extra_tooltip(
+            query.tooltip(),
+            section_heading(&query.heading(count), None),
+        ))
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .child(list),
+        )
+        .into()
+}
+
 /// The Locations view: what was asked about, over every symbol it answered with.
 ///
 /// `HistoryPanel`'s shape with `SymbolsPanel`'s list: a filter over a `VirtualScrollView`,
@@ -532,13 +558,13 @@ impl Component for LocationsPanel {
         let filter = use_state(Filter::default);
         let pane = use_list_pane(Panel::Locations);
         let filtered = use_memo(move || {
-            let symbols = located
-                .read()
-                .found
-                .as_ref()
-                .and_then(Found::symbols)
-                .cloned()
-                .unwrap_or_else(|| SymbolList(Arc::new(Vec::new())));
+            let symbols = match &located.read().found {
+                Some(Found {
+                    what: What::Symbols(symbols),
+                    ..
+                }) => symbols.clone(),
+                _ => SymbolList(Arc::new(Vec::new())),
+            };
             Filtered::new(symbols, &filter.read().matcher())
         });
         let filtered = filtered.read().clone();
@@ -546,12 +572,12 @@ impl Component for LocationsPanel {
         // filter is applied where the rows are built (`filter_bar.rs`) -- but through a
         // memo all the same, since the rows are compared by the pointer they are shared
         // under and a fresh one every render would redraw every row.
-        let used = use_memo(move || {
-            let state = located.read();
-            let found = state.found.as_ref().and_then(Found::places);
-            found
-                .map(|found| found.rows(&filter.read().matcher()))
-                .unwrap_or_default()
+        let used = use_memo(move || match &located.read().found {
+            Some(Found {
+                what: What::Places(places),
+                ..
+            }) => places.rows(&filter.read().matcher()),
+            _ => ReferenceRows::default(),
         });
         let used = used.read().clone();
         let selected = use_consume::<Analysis>()
@@ -576,20 +602,33 @@ impl Component for LocationsPanel {
 
         let mut keys = ListKeys::none();
         let body: Element = match (&state.asked, state.pending(), &state.found) {
-            (None, _, _) => placeholder("Nothing looked for yet"),
+            // Asked and not pending is found, by `pending`'s definition, so the second
+            // of these never comes up.
+            (None, _, _) | (Some(_), None, None) => placeholder("Nothing looked for yet"),
             (Some(_), Some(query), _) => placeholder(format!(
                 "Finding {} {}\u{2026}",
                 query.words().1,
                 query.spell()
             )),
-            (Some(query), None, Some(found))
-                if found.places().is_some_and(|found| found.count() == 0) =>
-            {
+            (
+                Some(query),
+                None,
+                Some(Found {
+                    what: What::Places(found),
+                    ..
+                }),
+            ) if found.count() == 0 => {
                 placeholder(format!("No {} {}", query.words().1, query.spell()))
             }
-            (Some(query), None, Some(found)) if found.places().is_some() => {
-                let heading =
-                    query.heading(found.places().map_or(0, references::References::count));
+            (
+                Some(query),
+                None,
+                Some(Found {
+                    what: What::Places(found),
+                    ..
+                }),
+            ) => {
+                let count = found.count();
                 let length = used.len();
                 // The rows the arrows step and Enter presses: a `ReferenceRows` is the
                 // rows behind an `Arc`, so this is a pointer each.
@@ -605,43 +644,46 @@ impl Component for LocationsPanel {
                         None => Pressed::Folded,
                     }),
                 };
-                rect()
-                    .expanded()
-                    .content(Content::Flex)
-                    .child(extra_tooltip(
-                        query.tooltip(),
-                        section_heading(&heading, None),
-                    ))
-                    .child(
-                        rect().width(Size::fill()).height(Size::flex(1.0)).child(
-                            VirtualScrollView::new_with_data(
-                                (used, located),
-                                |row, (used, located): &(ReferenceRows, State<Located>)| {
-                                    PlaceRow {
-                                        row: used[row].clone(),
-                                        folding: Folding::Places(*located),
-                                        at: row,
-                                        key: DiffKey::None,
-                                    }
-                                    .into()
-                                },
-                            )
-                            .length(length)
-                            .item_size(list_row_height())
-                            .scroll_controller(pane.controller),
-                        ),
+                headed(
+                    query,
+                    count,
+                    VirtualScrollView::new_with_data(
+                        (used, located),
+                        |row, (used, located): &(ReferenceRows, State<Located>)| {
+                            PlaceRow {
+                                row: used[row].clone(),
+                                folding: Folding::Places(*located),
+                                at: row,
+                                key: DiffKey::None,
+                            }
+                            .into()
+                        },
                     )
-                    .into()
+                    .length(length)
+                    .item_size(list_row_height())
+                    .scroll_controller(pane.controller)
+                    .into(),
+                )
             }
-            (Some(query), None, Some(found))
-                if found.symbols().is_some_and(|symbols| symbols.0.is_empty()) =>
-            {
+            (
+                Some(query),
+                None,
+                Some(Found {
+                    what: What::Symbols(symbols),
+                    ..
+                }),
+            ) if symbols.0.is_empty() => {
                 placeholder(format!("No code compiled from {}", query.spell()))
             }
-            (Some(query), None, Some(found)) => {
-                // Said over the list rather than in the tab's title: the rows are not
-                // the answer to anything until the question is in view with them.
-                let heading = query.heading(found.symbols().map_or(0, |symbols| symbols.0.len()));
+            (
+                Some(query),
+                None,
+                Some(Found {
+                    what: What::Symbols(symbols),
+                    ..
+                }),
+            ) => {
+                let count = symbols.0.len();
                 let length = filtered.len();
                 // The rows the arrows step and Enter presses: a `Filtered` is the list
                 // behind an `Arc` and the indices the filter kept.
@@ -661,51 +703,37 @@ impl Component for LocationsPanel {
                         None => Pressed::Folded,
                     }),
                 };
-                rect()
-                    .expanded()
-                    .content(Content::Flex)
-                    .child(extra_tooltip(
-                        query.tooltip(),
-                        section_heading(&heading, None),
-                    ))
-                    .child(
-                        rect().width(Size::fill()).height(Size::flex(1.0)).child(
-                            VirtualScrollView::new_with_data(
-                                (filtered, selected, marking),
-                                |row,
-                                 (filtered, selected, marking): &(
-                                    Filtered,
-                                    Option<Symbol>,
-                                    Marking,
-                                )| {
-                                    let index = filtered.index(row);
-                                    let symbol = &filtered.symbols.0[index];
-                                    LocationRow {
-                                        symbols: filtered.symbols.clone(),
-                                        index,
-                                        selected: selected.as_ref() == Some(symbol),
-                                        at: row,
-                                        marks: marking.marks(symbol.data.display()),
-                                        key: DiffKey::None,
-                                    }
-                                    // The symbol *and* its object: one file parsed
-                                    // twice is two rows naming one `SymbolData`.
-                                    .key((
-                                        Arc::as_ptr(&symbol.object).addr(),
-                                        Arc::as_ptr(&symbol.data).addr(),
-                                    ))
-                                    .into()
-                                },
-                            )
-                            .length(length)
-                            .item_size(list_row_height())
-                            .scroll_controller(pane.controller),
-                        ),
+                headed(
+                    query,
+                    count,
+                    VirtualScrollView::new_with_data(
+                        (filtered, selected, marking),
+                        |row, (filtered, selected, marking): &(Filtered, Option<Symbol>, Marking)| {
+                            let index = filtered.index(row);
+                            let symbol = &filtered.symbols.0[index];
+                            LocationRow {
+                                symbols: filtered.symbols.clone(),
+                                index,
+                                selected: selected.as_ref() == Some(symbol),
+                                at: row,
+                                marks: marking.marks(symbol.data.display()),
+                                key: DiffKey::None,
+                            }
+                            // The symbol *and* its object: one file parsed
+                            // twice is two rows naming one `SymbolData`.
+                            .key((
+                                Arc::as_ptr(&symbol.object).addr(),
+                                Arc::as_ptr(&symbol.data).addr(),
+                            ))
+                            .into()
+                        },
                     )
-                    .into()
+                    .length(length)
+                    .item_size(list_row_height())
+                    .scroll_controller(pane.controller)
+                    .into(),
+                )
             }
-            // Asked and not pending is found, by `pending`'s definition.
-            (Some(_), None, None) => placeholder("Nothing looked for yet"),
         };
 
         pane.filtered(filter, keys, body)
