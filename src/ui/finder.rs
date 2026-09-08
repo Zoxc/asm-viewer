@@ -603,13 +603,12 @@ impl Component for FinderOverlay {
                 .height(Size::px(rows.min(FINDER_ROWS) as f32 * list_row_height()))
                 .child(
                     VirtualScrollView::new_with_data_controlled(
-                        (drawn, at, finder),
-                        |index, (drawn, at, finder): &(Listed, usize, State<Finder>)| {
+                        (drawn, at),
+                        |index, (drawn, at): &(Listed, usize)| {
                             FoundRow {
                                 listed: drawn.clone(),
                                 index,
                                 on_row: index == *at,
-                                finder: *finder,
                                 key: DiffKey::None,
                             }
                             .key(&index)
@@ -840,20 +839,13 @@ impl Component for FinderBox {
 
 /// One file in the list: its name, the directories above it dimmed, and what the query
 /// matched marked in both.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct FoundRow {
     listed: Listed,
     index: usize,
     /// Whether the keyboard is on this row.
     on_row: bool,
-    finder: State<Finder>,
     key: DiffKey,
-}
-
-impl PartialEq for FoundRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.listed == other.listed && self.index == other.index && self.on_row == other.on_row
-    }
 }
 
 impl KeyExt for FoundRow {
@@ -866,9 +858,11 @@ impl Component for FoundRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
-        // Consumed in the render, because the handler that uses them runs no hook.
+        // Consumed in the render, because the handler that uses them runs no hook. The
+        // finder's state is the root's own, so the row reaches for it rather than being
+        // handed it as row data.
         let states = use_project_states();
-        let finder = self.finder;
+        let finder = use_consume::<Finding>().0;
 
         let alt = use_consume::<Alt>().0;
         let keyboard = use_consume::<Keyboard>().0;
