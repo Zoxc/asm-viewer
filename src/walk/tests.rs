@@ -27,13 +27,13 @@ fn write(path: &Path, text: &str) {
 
 /// Every file the walk reports under `root`, as the paths it draws them by.
 fn walked(root: &Path) -> Vec<String> {
-    files(root)
+    found_files(root)
         .into_iter()
         .map(|found| found.shown.into_string())
         .collect()
 }
 
-fn files(root: &Path) -> Vec<Found> {
+fn found_files(root: &Path) -> Vec<Found> {
     let mut found = Vec::new();
     let mut finished = false;
     walk_files(root, &mut |event| {
@@ -109,7 +109,7 @@ fn a_file_is_held_by_the_path_it_is_drawn_by() {
     write(&root.join("src/ui/files_view.rs"), "");
     write(&root.join("top.rs"), "");
 
-    let found = files(&root);
+    let found = found_files(&root);
     let deep = found
         .iter()
         .find(|file| file.name() == "files_view.rs")

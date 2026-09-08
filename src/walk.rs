@@ -4,26 +4,26 @@
 //! One place and not two. The Search panel reads the directory to grep it and the file
 //! finder reads it to list it, and they have to agree about what is in a project: a file
 //! the search finds a hit in but the finder will not offer, or the other way round, is a
-//! reader being told two things. So the walker is built here, once, and both take it from
-//! here.
+//! reader being told two things. So the walk is built here, once, down to which entries
+//! count as files, and both take it from here: [`files`] is all either reads.
 //!
 //! The walk is ripgrep's own ([`ignore`]), which is what skips what git is told to ignore
-//! without being told twice. Files leave here through a **callback** and not a channel,
-//! [`crate::search::search`]'s own shape and for its reason: whoever draws the result is
-//! who should decide what to do when they arrive faster than they can be drawn. The
-//! callback answering [`ControlFlow::Break`] is how a walk nobody is waiting for stops
+//! without being told twice. The finder's files leave here through a **callback** and not
+//! a channel, [`crate::search::search`]'s own shape and for its reason: whoever draws the
+//! result is who should decide what to do when they arrive faster than they can be drawn.
+//! The callback answering [`ControlFlow::Break`] is how a walk nobody is waiting for stops
 //! where it stands.
 
-use ignore::{Walk, WalkBuilder};
+use ignore::{DirEntry, Walk, WalkBuilder};
 use std::{cmp::Ordering, ops::ControlFlow, path::Path, path::PathBuf};
 
 use crate::source;
 
-/// The walker both readers of a project's directory use.
+/// The walker [`files`] filters.
 ///
 /// The bounds are here rather than at either call site, since a file one reader skips and
 /// the other does not is the disagreement this module exists to prevent.
-pub fn walker(root: &Path) -> Walk {
+fn walker(root: &Path) -> Walk {
     WalkBuilder::new(root)
         // `ignore`'s default is to read `.gitignore` only inside a git working tree, so
         // without this a project directory that is not one has its `target/` walked whole.
@@ -81,19 +81,27 @@ pub enum WalkEvent {
     Finished,
 }
 
-/// Walk `root` and report every file under it that the rules above allow.
+/// Every file under `root` that the rules above allow, in the order [`order`] settles.
 ///
 /// Directories are not reported and neither is anything that is not a plain file --
 /// a symlink included, whatever it points at: what this answers is which files a reader
 /// could open, and the tree they sit in is the Files view's question, not this one.
-pub fn walk_files(root: &Path, emit: &mut dyn FnMut(WalkEvent) -> ControlFlow<()>) {
-    for entry in walker(root).flatten() {
+///
+/// Both readers of a project's directory come through here, so what counts as a walked
+/// file is settled once. The finder wants each entry as a [`Found`] and the search wants
+/// its path to read; that is all they differ in.
+pub fn files(root: &Path) -> impl Iterator<Item = DirEntry> {
+    walker(root).flatten().filter(|entry| {
         // The entry's own kind, the walk following no symlink, so a symlink fails this
         // as it fails `source::showable`. An entry whose kind is unknown is one `ignore`
         // could not stat, and is skipped too.
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
-        }
+        entry.file_type().is_some_and(|kind| kind.is_file())
+    })
+}
+
+/// Walk `root` and report every file [`files`] finds under it, as the finder holds them.
+pub fn walk_files(root: &Path, emit: &mut dyn FnMut(WalkEvent) -> ControlFlow<()>) {
+    for entry in files(root) {
         let Some(found) = found_at(root, entry.path()) else {
             continue;
         };

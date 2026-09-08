@@ -96,36 +96,28 @@ pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlF
         .binary_detection(BinaryDetection::quit(0))
         .build();
 
-    let walk = crate::walk::walker(&query.root);
-
-    let mut sent = 0usize;
-    let mut stopped = false;
-    let mut capped = false;
-    for entry in walk.flatten() {
-        // A directory is not a hit, and neither is anything that is not a plain file. An
-        // entry whose kind is unknown is one `ignore` could not stat, so it is skipped.
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
-        }
+    let mut progress = Progress {
+        sent: 0,
+        ended: None,
+    };
+    for entry in crate::walk::files(&query.root) {
         let mut sink = Hits {
             path: entry.path(),
             matcher: &matcher,
             emit,
-            sent: &mut sent,
-            stopped: &mut stopped,
-            capped: &mut capped,
+            progress: &mut progress,
         };
         // A file that cannot be read is not an error the reader is asked about: it is one
         // of thousands being walked, and the panel is a list of what was found.
         let _ = searcher.search_path(&matcher, entry.path(), &mut sink);
-        if stopped || capped {
+        if progress.ended.is_some() {
             break;
         }
     }
 
     // A capped search is a search that ended, and the panel must stop saying that it is
     // running; a stopped one is a search nobody is listening to any more.
-    if !stopped {
+    if progress.ended != Some(Ended::Stopped) {
         let _ = emit(SearchEvent::Finished);
     }
 }
@@ -152,17 +144,32 @@ fn compile(filter: &Filter) -> Option<RegexMatcher> {
         .ok()
 }
 
+/// What ended a search short of the end of the walk.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Ended {
+    /// The callback said to stop. Nobody is listening, so nothing more is emitted --
+    /// `Finished` included.
+    Stopped,
+    /// [`MAX_HITS`] was reached. A search that ended, so `Finished` is emitted and the
+    /// panel stops saying that it is running.
+    Capped,
+}
+
+/// How far the whole search has got. Owned by [`search`] and lent to the sink each file
+/// is read into, so the two ways it can end are one value and cannot both hold.
+struct Progress {
+    /// How many hits have been emitted, against [`MAX_HITS`].
+    sent: usize,
+    /// What ended the walk, while it is still walking.
+    ended: Option<Ended>,
+}
+
 /// One file's matches on their way out: the sink `grep-searcher` reports to.
 struct Hits<'a> {
     path: &'a Path,
     matcher: &'a RegexMatcher,
     emit: &'a mut dyn FnMut(SearchEvent) -> ControlFlow<()>,
-    /// How many hits the whole search has emitted, against [`MAX_HITS`].
-    sent: &'a mut usize,
-    /// Whether the callback said to stop.
-    stopped: &'a mut bool,
-    /// Whether [`MAX_HITS`] was reached.
-    capped: &'a mut bool,
+    progress: &'a mut Progress,
 }
 
 impl Sink for Hits<'_> {
@@ -176,12 +183,12 @@ impl Sink for Hits<'_> {
             let number = first.saturating_add(offset as u64);
             let hit = hit_from(self.matcher, line, number);
             if (self.emit)(SearchEvent::Hit(self.path.to_path_buf(), hit)).is_break() {
-                *self.stopped = true;
+                self.progress.ended = Some(Ended::Stopped);
                 return Ok(false);
             }
-            *self.sent += 1;
-            if *self.sent >= MAX_HITS {
-                *self.capped = true;
+            self.progress.sent += 1;
+            if self.progress.sent >= MAX_HITS {
+                self.progress.ended = Some(Ended::Capped);
                 return Ok(false);
             }
         }

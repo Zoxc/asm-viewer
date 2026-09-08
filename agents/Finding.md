@@ -7,10 +7,10 @@ project's directory share.
 because a second reader of the same directory arrived: a file the Search panel finds a hit in but
 the finder will not offer, or the other way round, is the app telling a reader two things about
 one project. `require_git(false)`, the source pane's size bound, symlinks left unfollowed and the
-order a directory's entries come back in are settled once, and `search::search` and
-`walk::walk_files` both take them. `Found` — the path, the path written from the project's
-directory with `/` separators, and
-where the name starts in it — is built on the walking thread, because it is what every keystroke
+order a directory's entries come back in are settled once, and so is which entries count as
+files: `walk::files` is one iterator of them, which `search::search` reads and `walk::walk_files`
+builds the finder's rows from. `Found` — the path, the path written from the project's directory
+with `/` separators, and where the name starts in it — is built on the walking thread, because it is what every keystroke
 is matched against and taking a path apart per file per character is work the match should not
 be doing. It never leaves that side: the finder's worker holds the walk, and only the rows a
 query picked out cross to the UI.
