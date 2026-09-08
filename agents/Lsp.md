@@ -136,7 +136,9 @@ make a progress token. Dropping the conversation takes that input away and close
 is how a server is told there is nothing more coming and what lets the reader thread go.
 
 `Talk` is generic over its two streams, so the whole conversation is tested against a fake
-server over `std::io::pipe()` and only `start_in` needs a program. `write_message` and
+server over `std::io::pipe()` and only starting one needs a program. That is also why
+`Server` is not simply a `Talk<ChildStdin>`: what it adds is the process -- the handle that
+ends it, and the stderr where a program that would not run says why. `write_message` and
 `read_message` are the wire format on their own, tested over `Cursor`s.
 
 Things learned from rust-analyzer's own transport, each of which is a test:
@@ -424,6 +426,8 @@ The stop is also how a worker parked in a read is let go: the pipes close with t
 read ends instead of waiting on a server that will never answer. That is why the kill happens on the
 UI thread and the worker is only told afterwards -- and why the handle reaches the app at the spawn
 rather than at the handshake, the handshake being one of the reads a worker can be parked in.
+`lsp::start` is the spawn and the handshake in one call, and it takes a `spawned` callback for
+that reason alone: it hands the handle over between the two.
 
 A handshake that failed asks the process how it ended, waiting `ENDING` for it to finish doing so,
 and that is what tells a program that would not start from a server that stopped answering. A

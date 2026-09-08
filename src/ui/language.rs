@@ -571,18 +571,14 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 let told = move |note| {
                     let _ = notes.send_blocking((run, note));
                 };
+                // The handle is sent on before the handshake, which is what puts it where
+                // a stop can reach it; `lsp::start` says why.
                 let started =
-                    lsp::start_in(&program, &directory, told).and_then(|(mut server, handle)| {
-                        // Before the handshake, which a program that reads its input and
-                        // answers nothing never returns from. What ends that read is the
-                        // pipes closing, so the app has to be holding the handle by then
-                        // or a stop has nothing to press against.
+                    lsp::start(&program, &directory, settings.options(), told, |handle| {
                         let _ = spawned.send_blocking(LspAnswer::Spawned {
                             run,
                             handle: handle.clone(),
                         });
-                        server.initialize(&directory, settings.options())?;
-                        Ok((server, handle))
                     });
                 let server = match started {
                     Ok((server, handle)) => {

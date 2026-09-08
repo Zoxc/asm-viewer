@@ -1124,7 +1124,7 @@ fn a_server_that_stops_answering_ends_the_conversation() {
 
 #[test]
 fn a_server_that_is_not_installed_is_a_failure_and_not_a_panic() {
-    let failure = start_program_in("no-such-language-server", Path::new("."), |_| ())
+    let failure = start_in("no-such-language-server", Path::new("."), |_| ())
         .err()
         .expect("no server");
 
@@ -1259,7 +1259,7 @@ fn what_a_program_said_on_its_way_out_is_waited_for() {
     );
     let program = directory.join("server");
     let (mut server, handle) =
-        start_program_in(&program.to_string_lossy(), Path::new("."), |_| ()).expect("spawned");
+        start_in(&program.to_string_lossy(), Path::new("."), |_| ()).expect("spawned");
 
     let failure = server
         .initialize(Path::new("."), &wanted())
@@ -1275,12 +1275,10 @@ fn what_a_program_said_on_its_way_out_is_waited_for() {
 #[test]
 #[cfg(unix)]
 fn a_handshake_with_a_program_that_exits_at_once_says_it_would_not_start() {
-    let (mut server, handle) = start_program_in("true", Path::new("."), |_| ()).expect("spawned");
-    let failure = server
-        .initialize(Path::new("."), &wanted())
+    // The failure drops the server, which stops the process.
+    let failure = start("true", Path::new("."), &wanted(), |_| (), |_| ())
         .err()
         .expect("no server");
-    handle.stop();
 
     assert!(
         matches!(failure, Failure::NoServer(_)),

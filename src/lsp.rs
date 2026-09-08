@@ -24,7 +24,7 @@
 //! progress token.
 //!
 //! [`Talk`] is generic over the two streams, so the conversation is tested against a fake
-//! server over a pipe and the only part needing a real program is [`start_in`].
+//! server over a pipe and the only part needing a real program is [`start`].
 //!
 //! What a server is told about the project is the other half of the handshake. [`wanted`]
 //! is what this app asks of every server; a project's own `.vscode/settings.json` is read
@@ -315,6 +315,11 @@ pub struct Token {
 }
 
 /// A started server: the conversation, and the process it is with.
+///
+/// Not a [`Talk<ChildStdin>`](Talk) itself because the process is the other half of it: the
+/// handle that ends it, and the stderr where a program that would not run says why. `Talk`
+/// is generic over its two streams and knows nothing of a process, which is what lets the
+/// whole conversation be tested over a pipe with no program anywhere on the machine.
 pub struct Server {
     talk: Talk<ChildStdin>,
     /// What ends it, which is also what says whether it has ended by itself.
@@ -329,23 +334,33 @@ pub struct Server {
     stderr: Option<std::thread::JoinHandle<()>>,
 }
 
-/// Start rust-analyzer over `directory` and hand back the conversation and a handle that
-/// can end it.
+/// Start rust-analyzer over `directory`, shake hands with it, and hand back the
+/// conversation and a handle that can end it.
 ///
 /// The handle is registered by [`process::start`], so [`process::stop_all`] reaches a
 /// server whose [`Server`] has been lost -- the window's close hook can read no UI state
 /// and has only this.
-pub fn start_in(
+///
+/// `spawned` is called with that handle the moment the process exists, which is **before**
+/// the handshake: a program that reads its input and answers nothing never returns from
+/// one, and what ends that read is the pipes closing. So the caller has to be holding the
+/// handle by then or a stop has nothing to press against (`src/ui/language.rs`).
+pub fn start(
     program: &str,
     directory: &Path,
+    options: &Value,
     told: impl FnMut(Note) + Send + 'static,
+    spawned: impl FnOnce(&Handle),
 ) -> Result<(Server, Handle), Failure> {
-    start_program_in(program, directory, told)
+    let (mut server, handle) = start_in(program, directory, told)?;
+    spawned(&handle);
+    server.initialize(directory, options)?;
+    Ok((server, handle))
 }
 
-/// [`start_in`] under the name the tests use, which is what lets the failing half of it be
-/// tested without a language server anywhere on the machine.
-fn start_program_in(
+/// The spawn on its own, which is what lets the failing half of a start be tested without
+/// a language server anywhere on the machine.
+fn start_in(
     program: &str,
     directory: &Path,
     told: impl FnMut(Note) + Send + 'static,
@@ -429,12 +444,13 @@ fn all_said(reader: std::thread::JoinHandle<()>) {
 }
 
 impl Server {
-    /// The handshake. Until it returns, the server has been asked nothing else.
+    /// The handshake, which is [`start`]'s second half and nobody else's. Until it
+    /// returns, the server has been asked nothing else.
     ///
     /// A handshake against a program that has already ended is not a conversation that
     /// broke: it is a program that would not run, and saying so is the difference between
     /// "rust-analyzer stopped answering" and the line it wrote on its way out.
-    pub fn initialize(&mut self, directory: &Path, options: &Value) -> Result<(), Failure> {
+    fn initialize(&mut self, directory: &Path, options: &Value) -> Result<(), Failure> {
         self.talk.initialize(directory, options).map_err(|failure| {
             // In this order. The program's last words reach `said` on a thread of its
             // own, and both its pipes close at the same instant, so reading `said` first
@@ -1787,9 +1803,8 @@ pub fn read_message(from: &mut impl BufRead) -> Result<Value, Failure> {
 /// the reader's own spelling of their project, and on Windows a verbatim prefix
 /// (`\\?\C:\work`) that no `file:` URI can carry.
 ///
-/// The process needs none of this: [`start_program_in`] hands the same relative directory
-/// to `current_dir`, which the spawn resolves against the same working directory this
-/// does.
+/// The process needs none of this: [`start_in`] hands the same relative directory to
+/// `current_dir`, which the spawn resolves against the same working directory this does.
 fn rooted(directory: &Path) -> PathBuf {
     std::path::absolute(directory).unwrap_or_else(|_| directory.to_path_buf())
 }
