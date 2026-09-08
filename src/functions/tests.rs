@@ -400,6 +400,31 @@ fn b() {
 }
 ";
     assert_eq!(named(&rust::functions(text)), [("b", 2, 4)]);
+
+    // And only itself when the text ends inside its signature: the stack is finished
+    // from the top, so what was found inside it stays.
+    let text = "\
+fn a( fn b() {}
+fn c() {}
+";
+    assert_eq!(named(&rust::functions(text)), [("b", 1, 1), ("c", 2, 2)]);
+}
+
+/// Where the brackets do not balance, a body ends at the close that takes the scan back
+/// out of the depth its brace opened at, whichever bracket that is. Here a `fn` inside a
+/// macro's parentheses hides the brace that would have ended the body, and the `)` that
+/// finally drops it is what ends it instead.
+#[test]
+fn an_unbalanced_close_ends_an_open_body_where_it_stands() {
+    let text = "\
+fn a() {
+    m!( fn b
+}
+}
+)
+fn c() {}
+";
+    assert_eq!(named(&rust::functions(text)), [("a", 1, 5), ("c", 6, 6)]);
 }
 
 /// Nothing in the text can make the scanner index past it: every shape of unfinished

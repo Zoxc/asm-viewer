@@ -25,10 +25,7 @@ use super::Function;
 pub fn functions(text: &str) -> Vec<Function> {
     let mut found = Vec::new();
     let mut scanner = Scanner::new(text);
-    // Functions whose signature has been seen and whose body has not closed: the index
-    // into `found`, how many parentheses and brackets were open at the `fn` keyword, and
-    // the depth at which the body will close once it has begun.
-    let mut open: Vec<(usize, usize, Option<usize>)> = Vec::new();
+    let mut open: Vec<Open> = Vec::new();
 
     while let Some(token) = scanner.next() {
         match token {
@@ -43,108 +40,163 @@ pub fn functions(text: &str) -> Vec<Function> {
                     name,
                     lines: line..=line,
                 });
-                open.push((found.len() - 1, scanner.grouped, None));
+                open.push(Open {
+                    found: found.len() - 1,
+                    grouped_at: scanner.grouped,
+                    body_depth: None,
+                });
             }
-            Token::Open(bracket) => {
-                scanner.depth += 1;
-                // The first brace after a signature at the grouping depth the `fn` was
-                // seen at is the body's: the signature's own `{` never comes inside a
-                // `(`, `[` or `<` of its own, a `{ N }` in a const generic argument
-                // does, and the depth is relative because a whole item can sit inside a
-                // macro invocation's parentheses (`const_eval_select!( ... )`).
-                if bracket == b'{' {
-                    if let Some((_, at, body @ None)) = open.last_mut() {
-                        if scanner.grouped == *at {
-                            *body = Some(scanner.depth);
-                        }
-                    }
-                }
-                if bracket != b'{' {
-                    scanner.grouped += 1;
+            Token::Open(Bracket::Brace) => {
+                if let Some(last) = open.last_mut() {
+                    last.begins_body(&scanner);
                 }
             }
-            Token::Close(bracket) => {
-                if bracket != b'{' {
-                    scanner.grouped = scanner.grouped.saturating_sub(1);
+            // A `(` or a `[` opens grouping and nothing else, and the scanner has
+            // counted it.
+            Token::Open(Bracket::Paren | Bracket::Square) => {}
+            Token::Close => {
+                // The stranded go first, so none of them stands between a closing
+                // brace and the body it ends. From the top down, which is descending
+                // index order, so the entries under them stay valid.
+                while let Some(last) = open.pop_if(|last| last.stranded(&scanner)) {
+                    last.forget(&mut found);
                 }
-                // A signature whose grouping has closed under it never had a body and
-                // never will: `fn` inside a macro invocation's parentheses. Dropped
-                // here, so it does not hide the enclosing function's brace from the
-                // match below. From the top down, which is descending index order, so
-                // the indices still on the stack stay valid.
-                while let Some(&(index, at, None)) = open.last() {
-                    if scanner.grouped >= at {
-                        break;
-                    }
-                    open.pop();
-                    if index < found.len() {
-                        found.remove(index);
-                    }
+                if let Some(last) = open.pop_if(|last| last.ends_at(&scanner)) {
+                    last.ends_on(&mut found, scanner.line_of(scanner.position));
                 }
-                if let Some((index, _, Some(depth))) = open.last() {
-                    if *depth == scanner.depth {
-                        if let (Some(function), Some(line)) =
-                            (found.get_mut(*index), scanner.line_of(scanner.position))
-                        {
-                            function.lines = *function.lines.start()..=line;
-                        }
-                        open.pop();
-                    }
-                }
-                scanner.depth = scanner.depth.saturating_sub(1);
             }
-            // A signature that ends before its body began is a declaration -- a
-            // trait's, or an `extern` block's -- and has no lines of code. At the `fn`'s
-            // own grouping depth, since the `;` of `[u8; 4]` is a type's and not an end.
             Token::Semicolon => {
-                if let Some((index, at, None)) = open.last() {
-                    if scanner.grouped == *at {
-                        if *index + 1 == found.len() {
-                            found.pop();
-                        }
-                        open.pop();
+                // A declaration comes back off `found` where it is the last one there,
+                // so that whatever was found inside the signature keeps its place.
+                if let Some(last) = open.pop_if(|last| last.declared(&scanner)) {
+                    if last.found + 1 == found.len() {
+                        found.pop();
                     }
                 }
             }
         }
     }
 
-    // A body still open at the end of the text is unterminated; it reaches the last
-    // line there is -- the one the final byte is on, which a trailing newline is part of.
-    // A signature that never began one is no function and goes, but only it: taken from
-    // the back, so the entries under it keep their indices.
-    for (index, _, body) in open.into_iter().rev() {
-        if body.is_some() {
-            if let (Some(function), Some(line)) = (
-                found.get_mut(index),
-                scanner.line_of(text.len().saturating_sub(1)),
-            ) {
-                function.lines = *function.lines.start()..=line;
+    // What the text ended in the middle of, finished from the top down: an entry names
+    // a higher index in `found` than the ones under it, so a removal leaves theirs.
+    while let Some(last) = open.pop() {
+        match last.body_depth {
+            // A body still open at the end of the text is unterminated; it reaches the
+            // last line there is -- the one the final byte is on, which a trailing
+            // newline is part of.
+            Some(_) => {
+                let last_line = scanner.line_of(text.len().saturating_sub(1));
+                last.ends_on(&mut found, last_line);
             }
-        } else if index < found.len() {
-            found.remove(index);
+            // A signature that never began one is no function and goes, but only it.
+            None => last.forget(&mut found),
         }
     }
     found
 }
 
-/// The tokens the scan cares about; everything else is skipped over.
+/// A `fn` whose signature has been seen and whose body has not closed.
+struct Open {
+    /// Where in `found` the function it names sits.
+    found: usize,
+    /// How many `(`, `[` or `<` were open at the `fn` keyword.
+    grouped_at: usize,
+    /// How deep the body's own brace put the scan, once the body has begun.
+    body_depth: Option<usize>,
+}
+
+impl Open {
+    /// The first brace after a signature at the grouping depth the `fn` was seen at is
+    /// the body's: the signature's own `{` never comes inside a `(`, `[` or `<` of its
+    /// own, a `{ N }` in a const generic argument does, and the depth is relative
+    /// because a whole item can sit inside a macro invocation's parentheses
+    /// (`const_eval_select!( ... )`).
+    fn begins_body(&mut self, scanner: &Scanner) {
+        if self.body_depth.is_none() && scanner.grouped == self.grouped_at {
+            self.body_depth = Some(scanner.depth);
+        }
+    }
+
+    /// Whether the bracket just closed was the body's: the close left the scan one
+    /// bracket further out than the body's brace put it. A signature with no body yet
+    /// ends on nothing.
+    fn ends_at(&self, scanner: &Scanner) -> bool {
+        self.body_depth == scanner.depth.checked_add(1)
+    }
+
+    /// A signature whose grouping has closed under it never had a body and never will:
+    /// `fn` inside a macro invocation's parentheses.
+    fn stranded(&self, scanner: &Scanner) -> bool {
+        self.body_depth.is_none() && scanner.grouped < self.grouped_at
+    }
+
+    /// A signature that ends before its body began is a declaration -- a trait's, or an
+    /// `extern` block's -- and has no lines of code. At the `fn`'s own grouping depth,
+    /// since the `;` of `[u8; 4]` is a type's and not an end.
+    fn declared(&self, scanner: &Scanner) -> bool {
+        self.body_depth.is_none() && scanner.grouped == self.grouped_at
+    }
+
+    /// The function this names ends on `line`, where the text has one.
+    fn ends_on(self, found: &mut [Function], line: Option<u32>) {
+        if let (Some(function), Some(line)) = (found.get_mut(self.found), line) {
+            function.lines = *function.lines.start()..=line;
+        }
+    }
+
+    /// Take the function this names back out of `found`: it was no function.
+    fn forget(self, found: &mut Vec<Function>) {
+        if self.found < found.len() {
+            found.remove(self.found);
+        }
+    }
+}
+
+/// The tokens the scan cares about; everything else is skipped over. An open says which
+/// bracket it is, a body being written in a brace and not in the other two; a close says
+/// nothing, what it does to the counting being the scanner's own.
 enum Token {
     Fn,
-    Open(u8),
-    Close(u8),
+    Open(Bracket),
+    Close,
     Semicolon,
+}
+
+/// A bracket the scan counts: the two a type or an expression is grouped by, and the one
+/// a body is written in.
+#[derive(Clone, Copy)]
+enum Bracket {
+    Paren,
+    Square,
+    Brace,
+}
+
+impl Bracket {
+    /// Which bracket `byte` is, whichever end of one it is.
+    fn of(byte: u8) -> Bracket {
+        match byte {
+            b'(' | b')' => Bracket::Paren,
+            b'[' | b']' => Bracket::Square,
+            _ => Bracket::Brace,
+        }
+    }
+
+    /// Whether it is grouping: the `(` and `[` a `fn`'s own body brace is never
+    /// inside.
+    fn groups(self) -> bool {
+        matches!(self, Bracket::Paren | Bracket::Square)
+    }
 }
 
 struct Scanner<'a> {
     text: &'a [u8],
     /// The byte after the token last handed out.
     position: usize,
-    /// How many braces and brackets are open.
+    /// How many braces and brackets are open at the position: [`next`](Scanner::next)
+    /// counts each as it hands it out, so the bracket a `Close` just named has come off.
     depth: usize,
     /// How many `(`, `[` or `<` are open: the grouping a `fn`'s own body brace is never
-    /// inside. Angle brackets are counted by [`next`](Scanner::next) as it passes them,
-    /// the rest by the walk over the tokens it hands out.
+    /// inside. Counted by [`next`](Scanner::next) too, angle brackets as it passes them.
     grouped: usize,
     /// Where each line starts, for turning an offset into a 1-based line.
     lines: Vec<usize>,
@@ -192,12 +244,22 @@ impl<'a> Scanner<'a> {
                 b'r' | b'b' if self.raw_string_hashes().is_some() => self.skip_raw_string(),
                 b'\'' => self.skip_char_or_lifetime(),
                 b'(' | b'[' | b'{' => {
+                    let bracket = Bracket::of(byte);
                     self.position += 1;
-                    return Some(Token::Open(byte));
+                    self.depth += 1;
+                    if bracket.groups() {
+                        self.grouped += 1;
+                    }
+                    return Some(Token::Open(bracket));
                 }
                 b')' | b']' | b'}' => {
+                    let bracket = Bracket::of(byte);
                     self.position += 1;
-                    return Some(Token::Close(if byte == b'}' { b'{' } else { byte }));
+                    self.depth = self.depth.saturating_sub(1);
+                    if bracket.groups() {
+                        self.grouped = self.grouped.saturating_sub(1);
+                    }
+                    return Some(Token::Close);
                 }
                 b';' => {
                     self.position += 1;
