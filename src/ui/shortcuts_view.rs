@@ -150,31 +150,9 @@ impl Component for FilterBox {
                 .placeholder("Filter")
                 .compact()
                 .width(Size::fill())
-                // The app's own chords, declined before the edit so they reach the root
-                // rather than being typed in as an `f` or a `p`. Without this the page
-                // that names Ctrl+P is the one place it does not work (`FilterBar`
-                // declines the same three, for the same reason).
-                .on_pre_key_down(Callback::new(
-                    move |e: Event<KeyboardEventData>| {
-                        if is_find_chord(&e.key, e.modifiers)
-                            || is_search_chord(&e.key, e.modifiers)
-                            || is_finder_chord(&e.key, e.modifiers)
-                        {
-                            return false;
-                        }
-                        match &e.key {
-                            Key::Named(NamedKey::Enter)
-                            | Key::Named(NamedKey::Escape)
-                            | Key::Named(NamedKey::Shift) => true,
-                            Key::Named(NamedKey::Tab) => false,
-                            _ => {
-                                e.stop_propagation();
-                                e.prevent_default();
-                                true
-                            }
-                        }
-                    },
-                )),
+                // Declining the window's chords is one call (`chords.rs`): without it
+                // the page that names Ctrl+P would be the one place it does not work.
+                .on_pre_key_down(box_keys(Boxed::Input, &[], |_, _| {})),
             )
     }
 }

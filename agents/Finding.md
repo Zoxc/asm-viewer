@@ -160,6 +160,6 @@ refuse, and the same uncanonicalised spelling of the path.
 `on_global_key_down` — a second one would replace it and take the modifier tracking with it,
 silently. Every text box has to **decline** Ctrl+P in its `on_pre_key_down`: the `_` arm there
 calls `prevent_default`, which cancels the global key event beside it, so a box that does not
-decline the chord both types a `p` and stops the finder opening. The finder's own box declines
-Escape, the arrows and Enter for the same reason — they belong to the panel's handler, not to
-the box.
+decline the chord both types a `p` and stops the finder opening. The decline is one call,
+`box_keys` (`ui/chords.rs`). The finder's own box names Escape, the arrows and Enter in it too —
+they belong to the panel's handler, not to the box.

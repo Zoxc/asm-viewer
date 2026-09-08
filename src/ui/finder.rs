@@ -816,30 +816,17 @@ impl Component for FinderBox {
                 // width of a sidebar; there is room here for the text to sit in.
                 .width(Size::fill())
                 .a11y_id(a11y)
-                // Declined, not answered: the keys that move the list and the chord that
-                // opened the box belong to handlers beside this one, and the `_` arm
-                // below calls `prevent_default`, which cancels the global key event they
-                // arrive by. The rest is freya's default, which the hook replaces
-                // wholesale (`notes/upstream/freya.md`).
-                .on_pre_key_down(Callback::new(
-                    move |e: Event<KeyboardEventData>| {
-                        if is_finder_chord(&e.key, e.modifiers) {
-                            return false;
-                        }
-                        match &e.key {
-                            Key::Named(NamedKey::ArrowUp)
-                            | Key::Named(NamedKey::ArrowDown)
-                            | Key::Named(NamedKey::Enter)
-                            | Key::Named(NamedKey::Escape) => false,
-                            Key::Named(NamedKey::Shift) => true,
-                            Key::Named(NamedKey::Tab) => false,
-                            _ => {
-                                e.stop_propagation();
-                                e.prevent_default();
-                                true
-                            }
-                        }
-                    },
+                // The four keys the panel's own handler answers, declined here so they
+                // reach it (`chords.rs`).
+                .on_pre_key_down(box_keys(
+                    Boxed::Input,
+                    &[
+                        NamedKey::ArrowUp,
+                        NamedKey::ArrowDown,
+                        NamedKey::Enter,
+                        NamedKey::Escape,
+                    ],
+                    |_, _| {},
                 )),
             )
     }

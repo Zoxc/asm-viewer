@@ -21950,21 +21950,34 @@ fn the_temporal_tabs_name_is_italic_and_a_double_press_makes_it_stay() {
     assert_eq!(label_slant(&test, &name), None);
 }
 
-/// The chord is Ctrl+F alone -- `F` too, for Caps Lock -- and not Ctrl+Shift+F, which the
-/// source search will want, nor a bare `f`.
+/// Each chord is its own letter and its own Shift -- `F` too, for Caps Lock -- and none
+/// of them is a bare letter, an Alt or the chord next to it.
 #[test]
-fn the_find_chord_is_ctrl_f_and_nothing_wider() {
+fn every_chord_is_its_letter_and_nothing_wider() {
     let f = Key::Character("f".into());
     let upper = Key::Character("F".into());
-    assert!(is_find_chord(&f, Modifiers::CONTROL));
-    assert!(is_find_chord(&upper, Modifiers::CONTROL));
-    assert!(!is_find_chord(&f, Modifiers::CONTROL | Modifiers::SHIFT));
-    assert!(!is_find_chord(&f, Modifiers::CONTROL | Modifiers::ALT));
-    assert!(!is_find_chord(&f, Modifiers::default()));
-    assert!(!is_find_chord(
-        &Key::Character("g".into()),
-        Modifiers::CONTROL
-    ));
+    let p = Key::Character("p".into());
+    let g = Key::Character("g".into());
+    let shift = Modifiers::CONTROL | Modifiers::SHIFT;
+
+    assert!(Chord::Find.is(&f, Modifiers::CONTROL));
+    assert!(Chord::Find.is(&upper, Modifiers::CONTROL));
+    assert!(!Chord::Find.is(&f, shift));
+    assert!(!Chord::Find.is(&f, Modifiers::CONTROL | Modifiers::ALT));
+    assert!(!Chord::Find.is(&f, Modifiers::default()));
+    assert!(!Chord::Find.is(&g, Modifiers::CONTROL));
+
+    assert!(Chord::Search.is(&f, shift));
+    assert!(Chord::Search.is(&upper, shift));
+    assert!(!Chord::Search.is(&f, Modifiers::CONTROL));
+    assert!(!Chord::Search.is(&f, shift | Modifiers::ALT));
+    assert!(!Chord::Search.is(&f, Modifiers::SHIFT));
+
+    assert!(Chord::Finder.is(&p, Modifiers::CONTROL));
+    assert!(!Chord::Finder.is(&p, shift));
+    assert!(!Chord::Finder.is(&p, Modifiers::CONTROL | Modifiers::ALT));
+    assert!(!Chord::Finder.is(&p, Modifiers::default()));
+    assert!(!Chord::Finder.is(&f, Modifiers::CONTROL));
 }
 
 /// The Assembly pane with the find worker behind it, which is what a bar over it needs:
@@ -26661,11 +26674,11 @@ fn the_finder_chord_is_declined_by_a_filter_box() {
     assert!(labels(&test).iter().any(|label| label == "sum_to"));
 }
 
-/// The chord is not typed into the scratchpad's editor either. The editor inserts any
-/// character it has no chord of its own for, Ctrl held or not, so without the decline
-/// Ctrl+P puts a `p` in the source and never opens the finder.
+/// The window's chords are not typed into the scratchpad's editor either. The editor
+/// inserts any character it has no chord of its own for, Ctrl held or not, so without the
+/// decline Ctrl+P puts a `p` in the source and never opens the finder, and Ctrl+F an `f`.
 #[test]
-fn the_finder_chord_is_declined_by_the_scratchpad_editor() {
+fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
     let (mut test, _states, pad, text, _asking, _marked, _asks) =
         mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
@@ -26690,13 +26703,44 @@ fn the_finder_chord_is_declined_by_the_scratchpad_editor() {
     press_at(&mut test, editor);
     settle(&mut test);
     key_with(&mut test, Key::Character("p".into()), Modifiers::CONTROL);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    key_with(
+        &mut test,
+        Key::Character("f".into()),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+    );
     settle(&mut test);
 
     assert_eq!(
         shown_rope(text, pad),
         before,
-        "the chord was typed into the source"
+        "a chord was typed into the source"
     );
+}
+
+/// The finder's own box declines them too, Ctrl+P included: a box that kept a chord would
+/// type the letter into the query instead, and the chord would reach neither the root nor
+/// the panel's handler.
+#[test]
+fn the_windows_chords_are_declined_by_the_finder_box() {
+    let (mut test, states, finder, keys, _directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "kept.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+
+    key_with(&mut test, Key::Character("p".into()), Modifiers::CONTROL);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    key_with(
+        &mut test,
+        Key::Character("f".into()),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+    );
+    settle(&mut test);
+
+    assert_eq!(finder.peek().typed, "", "a chord was typed into the query");
 }
 
 /// The box is the panel's width, less the air around it, and inside the panel. Centring

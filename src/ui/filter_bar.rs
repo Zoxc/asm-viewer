@@ -98,34 +98,6 @@ impl Component for FilterToggle {
     }
 }
 
-/// The one chord that reaches a filter box: Ctrl+F -- Ctrl or Meta, and neither Shift
-/// nor Alt, so Ctrl+Shift+F stays free for the source search. `F` as well as `f`, which
-/// is what Caps Lock makes of it.
-pub(crate) fn is_find_chord(key: &Key, modifiers: Modifiers) -> bool {
-    modifiers.contains(Modifiers::ctrl_or_meta())
-        && !modifiers.intersects(Modifiers::SHIFT | Modifiers::ALT)
-        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case("f"))
-}
-
-/// The chord that reaches the Search panel: Ctrl+Shift+F, exactly the one
-/// [`is_find_chord`] leaves free. It is answered at the root and not here, since it works
-/// wherever the keyboard is; a box only has to decline it (`FilterBar`).
-pub(crate) fn is_search_chord(key: &Key, modifiers: Modifiers) -> bool {
-    modifiers.contains(Modifiers::ctrl_or_meta())
-        && modifiers.contains(Modifiers::SHIFT)
-        && !modifiers.contains(Modifiers::ALT)
-        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case("f"))
-}
-
-/// The chord that opens the file finder: Ctrl+P -- Ctrl or Meta, and neither Shift nor
-/// Alt. Answered at the root, wherever the keyboard is; a box only has to decline it, or
-/// it is typed in as a `p`.
-pub(crate) fn is_finder_chord(key: &Key, modifiers: Modifiers) -> bool {
-    modifiers.contains(Modifiers::ctrl_or_meta())
-        && !modifiers.intersects(Modifiers::SHIFT | Modifiers::ALT)
-        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case("p"))
-}
-
 /// The filter over one of the sidebar lists: a text box, and the three toggles that say
 /// how to read what is in it. The state it edits arrives as a prop, never as a context.
 #[derive(Clone, PartialEq)]
@@ -182,43 +154,14 @@ impl Component for FilterBar {
                         .compact()
                         .width(Size::flex(1.0))
                         .a11y_id(a11y)
-                        // An `Input` inserts a character it has no chord of its own for,
-                        // so Ctrl+F in the box would type an `f` into the pattern.
-                        // Declined here, before the edit. The rest is freya's default,
-                        // which the hook replaces wholesale (`notes/upstream/freya.md`).
-                        .on_pre_key_down(Callback::new(move |e: Event<KeyboardEventData>| {
-                            if is_find_chord(&e.key, e.modifiers) {
-                                return false;
-                            }
-                            // Declined rather than answered here: the chord is the root's,
-                            // and this arm is what keeps it reaching the root at all --
-                            // the `_` arm below calls `prevent_default`, which cancels the
-                            // global key event beside this one. The `Shift` arm above is
-                            // the same rule already answered once, for the modifier the
-                            // root tracks.
-                            if is_search_chord(&e.key, e.modifiers) {
-                                return false;
-                            }
-                            if is_finder_chord(&e.key, e.modifiers) {
-                                return false;
-                            }
-                            if let (Key::Named(NamedKey::Enter), Some(mut submits)) =
-                                (&e.key, submits)
+                        // The window's chords declined before the edit, and Enter
+                        // answered where the bar has something to submit (`chords.rs`).
+                        .on_pre_key_down(box_keys(Boxed::Input, &[], move |key, _| {
+                            if let (Key::Named(NamedKey::Enter), Some(mut submits)) = (key, submits)
                             {
                                 // Bound before the write, so the read guard is gone by it.
                                 let next = submits.peek().wrapping_add(1);
                                 submits.set(next);
-                            }
-                            match &e.key {
-                                Key::Named(NamedKey::Enter)
-                                | Key::Named(NamedKey::Escape)
-                                | Key::Named(NamedKey::Shift) => true,
-                                Key::Named(NamedKey::Tab) => false,
-                                _ => {
-                                    e.stop_propagation();
-                                    e.prevent_default();
-                                    true
-                                }
                             }
                         }))
                         .maybe(error.is_some(), |input| {
@@ -395,7 +338,7 @@ fn answer(
     box_id: AccessibilityId,
     e: &Event<KeyboardEventData>,
 ) {
-    if is_find_chord(&e.key, e.modifiers) {
+    if Chord::Find.is(&e.key, e.modifiers) {
         box_id.request_focus();
         return;
     }

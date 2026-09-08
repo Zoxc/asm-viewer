@@ -515,34 +515,19 @@ impl Component for FindBar {
                         .compact()
                         .width(Size::flex(1.0))
                         .a11y_id(box_id)
-                        .on_pre_key_down(Callback::new(move |e: Event<KeyboardEventData>| {
-                            // Declined, as a filter box declines them: the chords are the
-                            // root's and the panes' own, and the `_` arm below cancels the
-                            // global event beside this one.
-                            if is_search_chord(&e.key, e.modifiers)
-                                || is_finder_chord(&e.key, e.modifiers)
-                                || is_find_chord(&e.key, e.modifiers)
-                            {
-                                return false;
-                            }
-                            match &e.key {
+                        // Enter steps and Escape closes; the window's chords are
+                        // declined for the whole app in one place (`chords.rs`).
+                        .on_pre_key_down(box_keys(
+                            Boxed::Input,
+                            &[],
+                            move |key, modifiers: Modifiers| match key {
                                 Key::Named(NamedKey::Enter) => {
-                                    step(e.modifiers.contains(Modifiers::SHIFT));
-                                    true
+                                    step(modifiers.contains(Modifiers::SHIFT))
                                 }
-                                Key::Named(NamedKey::Escape) => {
-                                    close();
-                                    true
-                                }
-                                Key::Named(NamedKey::Shift) => true,
-                                Key::Named(NamedKey::Tab) => false,
-                                _ => {
-                                    e.stop_propagation();
-                                    e.prevent_default();
-                                    true
-                                }
-                            }
-                        }))
+                                Key::Named(NamedKey::Escape) => close(),
+                                _ => {}
+                            },
+                        ))
                         .maybe(error.is_some(), |input| {
                             input
                                 .color(palette().invalid_fg)
@@ -671,7 +656,7 @@ pub(crate) fn find_chord(
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     let finds = try_consume_context::<Looking>().map(|looking| looking.0);
     move |e: Event<KeyboardEventData>| {
-        let Some(finds) = finds.filter(|_| is_find_chord(&e.key, e.modifiers)) else {
+        let Some(finds) = finds.filter(|_| Chord::Find.is(&e.key, e.modifiers)) else {
             return keys(e);
         };
         let seed = seed_of(&marked.peek(), at.1, &text);

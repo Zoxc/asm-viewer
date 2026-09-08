@@ -82,6 +82,8 @@ mod bookmarks_view;
 pub(crate) use bookmarks_view::*;
 mod building;
 pub(crate) use building::*;
+mod chords;
+pub(crate) use chords::*;
 mod code_row;
 pub(crate) use code_row::*;
 mod debug_view;
@@ -328,10 +330,10 @@ pub(crate) fn root_key_down(
     modifiers: Modifiers,
 ) {
     keys.down(key, modifiers);
-    if is_search_chord(key, modifiers) {
+    if Chord::Search.is(key, modifiers) {
         reach_search(searched, dock);
     }
-    if is_finder_chord(key, modifiers) {
+    if Chord::Finder.is(key, modifiers) {
         let root = proj.peek().workspace();
         open_finder(finder, root);
     }

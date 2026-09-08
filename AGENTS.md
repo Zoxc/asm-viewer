@@ -245,6 +245,9 @@ command.
   ask a press on a chip makes for it to go there.
 - `src/ui/keys.rs` — whether Shift, Ctrl and Alt are held, kept by the root's global key
   handlers because a pointer event carries no modifiers.
+- `src/ui/chords.rs` — the chords the window answers wherever the keyboard is, and the one
+  hook every text box declines them with: freya's own default for each of its two boxes,
+  written once.
 - `src/ui/marks.rs` — the run picked out in each pane, the pair it lights on the other
   side, the scroll it owes, the keyboard's moves over it, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file read and parsed off the UI thread: the reader's worker

@@ -36,7 +36,7 @@ names, and not in the headless suite.
 **Ctrl+F puts the caret in the box over the list it is pressed in.** The binding is on the rows of
 `use_filter_pane` and not on the root, so it reaches the box of the list the reader is in and
 nothing else: the Objects box from the Objects list, and no box at all from a code pane, which
-keeps its own keys. `is_find_chord` is exact — Ctrl or Meta, and neither Shift nor Alt — which is
+keeps its own keys. `Chord::Find` is exact — Ctrl or Meta, and neither Shift nor Alt — which is
 what leaves Ctrl+Shift+F to the Search panel. The rows are
 focusable and a press on one focuses them, the code panes' own shape (`a11y_id`,
 `a11y_focusable`, `on_pointer_down`): without it no list could hold the keyboard and the chord
@@ -48,11 +48,11 @@ is emitted only for a focused node that listens for it** — an ancestor's handl
 bubbling afterwards, and a focused node with no handler of its own emits nothing to bubble
 (`notes/upstream/freya.md`). In the box the chord does nothing, the box being where it leads, but
 the bar still has to decline it: an `Input` inserts a character it has no chord of its own for, so
-Ctrl+F would type an `f` into the pattern. The `on_pre_key_down` returns `false` for the chord,
-before the edit, and otherwise repeats freya's default, which the hook replaces wholesale. The
-Project, Settings and scratchpad boxes are left as they are: they filter no list, and five copies
-of freya's default is not worth it. Two ids are minted in the pane, the rows' and the box's, the
-pane being what holds them both. The headless tests pin the whole door — the chord ignored with
+Ctrl+F would type an `f` into the pattern. The hook is `box_keys` (`ui/chords.rs`), which every box
+that must not eat a chord takes: it declines all three before the edit and is otherwise freya's own
+default, written out once because the hook replaces it wholesale. The Project and Settings boxes are
+still that default — they filter no list — and declining is one call if that changes. Two ids are
+minted in the pane, the rows' and the box's, the pane being what holds them both. The headless tests pin the whole door — the chord ignored with
 nothing focused, answered from a pressed row, and not typed into the box it reaches.
 
 **Pressing an object opens all of its code** as one listing (`Document::Code`, `agents/UI.md`). That
