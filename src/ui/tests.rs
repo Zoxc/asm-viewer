@@ -12184,6 +12184,41 @@ fn a_field_names_column_follows_the_interface_font() {
     set_fonts(fixed_fonts(9.0, 10.5));
 }
 
+/// **The settings page draws one labelled field, not two.** The theme row is a `field_row`
+/// and the font rows below it were a second copy of the same column, so a change to one of
+/// the two missed the other. They are one row now, which the runner can see: every name on
+/// the page sits in the same column, `field_label_width()` wide.
+#[test]
+fn the_settings_pages_names_all_sit_in_one_column() {
+    let (mut test, ()) = TestingRunner::new(
+        || page_body(Page::Settings),
+        (500., 700.).into(),
+        |runner| {
+            runner.provide_root_context(|| {
+                Prefs(State::create(EditedSettings::of(&Settings::default())))
+            });
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // The theme's, and the family and the size of each of the two fonts.
+    let names: Vec<(String, Area)> = labels_with_areas(&test)
+        .into_iter()
+        .filter(|(text, _)| ["Theme", "Family", "Size"].contains(&text.as_str()))
+        .collect();
+    assert_eq!(names.len(), 5, "the page's names: {names:?}");
+
+    let left = names[0].1.origin.x;
+    for (text, area) in &names {
+        assert_eq!(
+            (area.origin.x, area.width()),
+            (left, field_label_width()),
+            "{text:?} is not in the column the rest of the page lines up in"
+        );
+    }
+}
+
 /// **A disclosure triangle follows the interface font, column and all.** The mark was a
 /// character in that font and grew with it; as an icon it grows only because
 /// `chevron_size` is written against the row, and the column it sits in only because

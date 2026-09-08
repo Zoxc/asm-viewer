@@ -88,53 +88,44 @@ fn setting_row(
     value: impl IntoElement,
     clear: impl FnMut(Event<PressEventData>) + 'static,
 ) -> impl IntoElement {
-    rect()
-        .width(Size::fill())
-        .height(Size::px(list_row_height() + 8.0))
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .content(Content::Flex)
-        .spacing(8.0)
-        // Clipped inside its column, `field_row`'s reasoning: a `label` given a width
-        // paints past it, and the value beside this one is a box the reader types in.
-        .child(
-            rect()
-                .width(Size::px(field_label_width()))
-                .overflow(Overflow::Clip)
-                .child(
-                    label()
-                        .text(name.to_owned())
-                        .width(Size::fill())
-                        .color(match overridden {
-                            true => palette().text_fg,
-                            false => palette().address_fg,
-                        })
-                        .max_lines(1)
-                        .text_overflow(TextOverflow::Ellipsis),
-                ),
-        )
-        .child(value)
-        .child(
-            rect()
-                // Wide enough for the **Clear** button, so the value boxes above and
-                // below one another end at the same x whichever state each is in.
-                .width(Size::px(76.0))
-                .horizontal()
-                .main_align(Alignment::End)
-                .cross_align(Alignment::Center)
-                .child(match overridden {
-                    true => Button::new()
-                        .compact()
-                        .on_press(clear)
-                        .child("Clear")
-                        .into_element(),
-                    false => label()
-                        .text("inherited")
-                        .color(palette().address_fg)
-                        .max_lines(1)
-                        .into_element(),
-                }),
-        )
+    field_row_in(
+        name,
+        match overridden {
+            true => palette().text_fg,
+            false => palette().address_fg,
+        },
+        rect()
+            .width(Size::flex(1.0))
+            // Taller than a plain field row: what these rows hold is a box to type in or
+            // a stepper, either of which is taller than a line of text.
+            .height(Size::px(list_row_height() + 8.0))
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .content(Content::Flex)
+            .spacing(8.0)
+            .child(value)
+            .child(
+                rect()
+                    // Wide enough for the **Clear** button, so the value boxes above and
+                    // below one another end at the same x whichever state each is in.
+                    .width(Size::px(76.0))
+                    .horizontal()
+                    .main_align(Alignment::End)
+                    .cross_align(Alignment::Center)
+                    .child(match overridden {
+                        true => Button::new()
+                            .compact()
+                            .on_press(clear)
+                            .child("Clear")
+                            .into_element(),
+                        false => label()
+                            .text("inherited")
+                            .color(palette().address_fg)
+                            .max_lines(1)
+                            .into_element(),
+                    }),
+            ),
+    )
 }
 
 /// One of the two fonts, as three rows: the family, the size, and a line of the font

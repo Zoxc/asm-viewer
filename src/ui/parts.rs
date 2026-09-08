@@ -478,6 +478,12 @@ pub(crate) fn section_heading(text: &str, action: Option<Element>) -> impl IntoE
 /// ([`field_label_width`]) so that a reader who enlarges the interface font is not the one
 /// who finds this out.
 pub(crate) fn field_row(name: &str, value: impl IntoElement) -> impl IntoElement {
+    field_row_in(name, palette().address_fg, value)
+}
+
+/// The same row with the name's colour handed in: what a field whose name says something
+/// by its colour is built on, the settings page's being dim while the value is inherited.
+pub(crate) fn field_row_in(name: &str, colour: Color, value: impl IntoElement) -> impl IntoElement {
     rect()
         .width(Size::fill())
         .horizontal()
@@ -488,11 +494,7 @@ pub(crate) fn field_row(name: &str, value: impl IntoElement) -> impl IntoElement
             rect()
                 .width(Size::px(field_label_width()))
                 .overflow(Overflow::Clip)
-                .child(
-                    one_line(name.to_owned())
-                        .width(Size::fill())
-                        .color(palette().address_fg),
-                ),
+                .child(one_line(name.to_owned()).width(Size::fill()).color(colour)),
         )
         .child(value)
 }

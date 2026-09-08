@@ -242,3 +242,8 @@ inherited (`fonts::inherited`, so what is shown is by construction what would be
 platform's own family and the app's own size included). And the **Clear** button is there only when
 there is something to clear, which is also the only way back to unspecified: a family box can be
 emptied, a stepper cannot.
+
+The row itself is `parts::field_row_in` -- `field_row` with the name's colour handed in -- so the
+theme row above and the font rows below line up in one column and move together when it changes.
+All `setting_row` draws of its own is the cell on the right, 76px wide so the value boxes end at
+the same x whether the cell holds the button or the word "inherited".
