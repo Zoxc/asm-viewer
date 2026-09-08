@@ -471,7 +471,7 @@ impl Component for SourceList {
         let entry = (self.tab, place_at(&docs.read(), self.tab, &self.document));
         use_kept_position(
             use_places().src_at,
-            move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),
+            docs,
             {
                 let file = self.file.clone();
                 let document = self.document.clone();

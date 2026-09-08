@@ -601,10 +601,7 @@ impl Component for SectionList {
         use_kept_place(
             doors,
             places,
-            move |(tab, stop): &Entry| match place {
-                Placing::Tab(_) => docs.peek().contains(*tab, stop),
-                Placing::Pad => false,
-            },
+            docs,
             // The scroll this pane owes: to the source pane's run, the row of the first
             // instruction compiled from one of its lines, in whichever held stretch has
             // one. Left owed while none does -- the stretch may not be decoded yet, and
@@ -988,10 +985,14 @@ impl At {
 /// target ([`target_of`]), publish the rows, and then pay the reveal or scroll. Each
 /// stage is a function over the [`Step`] they share -- what one stage tells the next is a
 /// field of it -- and the rule a stage keeps is written on the stage.
+///
+/// `docs` says whether the place is still open, which is what a write down here is
+/// allowed for, and is asked of the state itself for the reason [`use_kept_position`]
+/// gives.
 fn use_kept_place(
     doors: Doors,
     places: Places,
-    is_open: impl Fn(&Entry) -> bool + 'static,
+    docs: State<Docs>,
     mut reveal: impl FnMut(&mut ScrollController, &Built) -> bool + 'static,
     reading: State<Reading>,
     mut rows: State<Option<Arc<Built>>>,
@@ -1040,6 +1041,10 @@ fn use_kept_place(
             };
             let planted = plant_caret(&mut step, &built, plant, marked);
             name_run(&built, marked);
+            // Whether the entry is still on an open tab's trail. The Scratchpad's listing
+            // is under `DocId::unfiled`, which no tab holds, so it is never open and the
+            // pad keeps no place.
+            let is_open = |(id, stop): &Entry| docs.peek().contains(*id, stop);
             keep_spots(&step, &built, planted, marked, marks_at, &is_open);
 
             let at = At::of(&step, &built, code_at, state.known, top, height);

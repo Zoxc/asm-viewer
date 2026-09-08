@@ -47,12 +47,13 @@ fn harness() -> impl IntoElement {
 /// The five states [`scrolling_harness`] is wired to, as context types of their own so that
 /// three `State<usize>`s cannot be confused for one another.
 #[derive(Clone, Copy)]
-struct KeptTab(State<String>);
+struct KeptTab(State<Entry>);
 #[derive(Clone, Copy)]
-struct KeptAt(State<Positions<String>>);
-/// The tabs that are open, which is what a position is only kept for.
+struct KeptAt(State<Positions<Entry>>);
+/// The tabs that are open and the trail behind each, which is what a position is only
+/// kept for.
 #[derive(Clone, Copy)]
-struct KeptOpen(State<Vec<String>>);
+struct KeptDocs(State<Docs>);
 #[derive(Clone, Copy)]
 struct KeptLength(State<usize>);
 /// The last row the pointer was over, which is how the test asks where the view actually
@@ -78,13 +79,26 @@ const VIEWPORT: f32 = 100.0;
 #[derive(Clone, Copy)]
 struct KeptViewport(State<f32>);
 
+/// The two tabs the scrolling harnesses key by: a [`Docs`] with two files open, and the
+/// entry naming each. A source stop needs no object, so the harnesses stay object-free.
+fn kept_tabs() -> (Docs, Entry, Entry) {
+    let mut docs = Docs::default();
+    let (first, second) = (
+        Stop::whole(Document::Source(Arc::from("a.rs"))),
+        Stop::whole(Document::Source(Arc::from("b.rs"))),
+    );
+    let a = (docs.open(first.clone()), first);
+    let b = (docs.open(second.clone()), second);
+    (docs, a, b)
+}
+
 /// A scroll view wired the way both **code** panes are: one `ScrollController` reused across
 /// every tab the pane shows, `use_kept_position` between them, and [`code_row_height`] on
 /// both halves of the view.
 fn scrolling_harness() -> impl IntoElement {
     let tab = use_consume::<KeptTab>().0;
     let at = use_consume::<KeptAt>().0;
-    let open = use_consume::<KeptOpen>().0;
+    let docs = use_consume::<KeptDocs>().0;
     let length = use_consume::<KeptLength>().0;
     let mut top = use_consume::<KeptTop>().0;
 
@@ -97,7 +111,7 @@ fn scrolling_harness() -> impl IntoElement {
     let viewport = use_state(|| VIEWPORT);
     use_kept_position(
         at,
-        move |tab: &String| open.peek().contains(tab),
+        docs,
         |_| false,
         // No landing machinery here, so no landing to take.
         |_: &Landing, _: &mut ScrollController| false,
@@ -154,21 +168,23 @@ fn list_scrolling_harness() -> impl IntoElement {
 /// asserted against which row a real `VirtualScrollView` put under the pointer.
 #[test]
 fn a_tab_comes_back_to_the_row_it_was_left_at() {
-    let (mut test, (tab, at, open, _length, top)) = TestingRunner::new(
+    let (mut test, (tab, at, docs, a, b, _length, top)) = TestingRunner::new(
         scrolling_harness,
         (100., 100.).into(),
         |runner| {
-            let tabs = vec!["a".to_owned(), "b".to_owned()];
+            let (docs, a, b) = kept_tabs();
             (
                 runner
-                    .provide_root_context(|| KeptTab(State::create("a".to_owned())))
+                    .provide_root_context(|| KeptTab(State::create(a.clone())))
                     .0,
                 runner
                     .provide_root_context(|| KeptAt(State::create(Positions::default())))
                     .0,
                 runner
-                    .provide_root_context(|| KeptOpen(State::create(tabs)))
+                    .provide_root_context(|| KeptDocs(State::create(docs)))
                     .0,
+                a,
+                b,
                 runner
                     .provide_root_context(|| KeptLength(State::create(100)))
                     .0,
@@ -201,30 +217,30 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
     assert!(left_at > 0, "the wheel moved nothing");
     // The scroll was written down as it happened, which is what survives the window merely
     // being closed.
-    assert_eq!(at.peek().at(&"a".to_owned()), Some(left_at));
+    assert_eq!(at.peek().at(&a), Some(left_at));
 
     // A tab this pane has never shown starts at the top, and pointedly not at the offset
     // the tab before it was at.
-    tab.set("b".to_owned());
+    tab.set(b.clone());
     test.sync_and_update();
     assert_eq!(top_row(&mut test), 0);
     // And the tab left behind is remembered, not overwritten by where the new one is.
-    assert_eq!(at.peek().at(&"a".to_owned()), Some(left_at));
+    assert_eq!(at.peek().at(&a), Some(left_at));
 
-    tab.set("a".to_owned());
+    tab.set(a.clone());
     test.sync_and_update();
     assert_eq!(top_row(&mut test), left_at);
 
     // And closing the tab on screen does not put it back: `close_tab` forgets the position
     // and then moves to a neighbour, so the run that follows is holding a tab that is gone.
-    let (mut open, mut at) = (open, at);
-    open.write().retain(|tab| tab != "a");
-    at.write().forgetting(|tab| tab != "a");
-    tab.set("b".to_owned());
+    let (mut docs, mut at) = (docs, at);
+    docs.write().close(a.0);
+    at.write().forgetting(|(tab, _): &Entry| *tab != a.0);
+    tab.set(b);
     for _ in 0..4 {
         test.sync_and_update();
     }
-    assert_eq!(at.peek().at(&"a".to_owned()), None);
+    assert_eq!(at.peek().at(&a), None);
 }
 
 /// [`scrolling_harness`] with the panes' reveal made through the kept position, as
@@ -233,7 +249,7 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
 fn revealing_harness() -> impl IntoElement {
     let tab = use_consume::<KeptTab>().0;
     let at = use_consume::<KeptAt>().0;
-    let open = use_consume::<KeptOpen>().0;
+    let docs = use_consume::<KeptDocs>().0;
     let length = use_consume::<KeptLength>().0;
     let mut top = use_consume::<KeptTop>().0;
     let marked = use_consume::<Marked>().0;
@@ -251,7 +267,7 @@ fn revealing_harness() -> impl IntoElement {
     let assumed = use_state(|| VIEWPORT);
     use_kept_position(
         at,
-        move |tab: &String| open.peek().contains(tab),
+        docs,
         move |controller: &mut ScrollController| {
             let row = match owed_reveal(marked, Pane::Assembly) {
                 None => return false,
@@ -313,11 +329,12 @@ fn a_reveal_owed_to_an_unmeasured_pane_is_kept_until_it_is_measured() {
         revealing_harness,
         (100., 100.).into(),
         |runner| {
+            let (docs, a, _) = kept_tabs();
             runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
-            runner.provide_root_context(|| KeptOpen(State::create(vec!["a".to_owned()])));
+            runner.provide_root_context(|| KeptDocs(State::create(docs)));
             runner.provide_root_context(|| KeptLength(State::create(100)));
             runner.provide_root_context(|| KeptListing(State::create(PAIRED_LISTING)));
-            runner.provide_root_context(|| KeptTab(State::create("a".to_owned())));
+            runner.provide_root_context(|| KeptTab(State::create(a)));
             (
                 runner.provide_root_context(|| KeptTop(State::create(0))).0,
                 runner
@@ -373,19 +390,18 @@ fn a_reveal_owed_to_an_unmeasured_pane_is_kept_until_it_is_measured() {
 /// putting the arriving tab at its top would undo the scroll the reveal made.
 #[test]
 fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
-    let (mut test, (tab, top, marked)) = TestingRunner::new(
+    let (mut test, (tab, b, top, marked)) = TestingRunner::new(
         revealing_harness,
         (100., 100.).into(),
         |runner| {
-            let tabs = vec!["a".to_owned(), "b".to_owned()];
+            let (docs, a, b) = kept_tabs();
             runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
-            runner.provide_root_context(|| KeptOpen(State::create(tabs)));
+            runner.provide_root_context(|| KeptDocs(State::create(docs)));
             runner.provide_root_context(|| KeptLength(State::create(100)));
             runner.provide_root_context(|| KeptListing(State::create(PAIRED_LISTING)));
             (
-                runner
-                    .provide_root_context(|| KeptTab(State::create("a".to_owned())))
-                    .0,
+                runner.provide_root_context(|| KeptTab(State::create(a))).0,
+                b,
                 runner.provide_root_context(|| KeptTop(State::create(0))).0,
                 runner
                     .provide_root_context(|| Marked(State::create(Marks::default())))
@@ -416,7 +432,7 @@ fn a_reveal_owed_when_the_tab_changes_wins_over_the_kept_position() {
         assembly: None,
         source: Some(picked_row(40, "b.rs", Owed::by(Pane::Assembly))),
     });
-    tab.set("b".to_owned());
+    tab.set(b);
     let landed = top_row(&mut test);
     assert!(
         (30..=40).contains(&landed),
@@ -437,10 +453,11 @@ fn a_listing_of_the_same_length_pays_the_reveal_it_arrives_to() {
         revealing_harness,
         (100., 100.).into(),
         |runner| {
+            let (docs, a, _) = kept_tabs();
             runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
-            runner.provide_root_context(|| KeptOpen(State::create(vec!["a".to_owned()])));
+            runner.provide_root_context(|| KeptDocs(State::create(docs)));
             runner.provide_root_context(|| KeptLength(State::create(100)));
-            runner.provide_root_context(|| KeptTab(State::create("a".to_owned())));
+            runner.provide_root_context(|| KeptTab(State::create(a)));
             (
                 runner.provide_root_context(|| KeptTop(State::create(0))).0,
                 runner
@@ -12196,10 +12213,10 @@ fn a_scroll_view_and_its_rows_agree_at_every_font_size() {
             scrolling_harness,
             (200., 200.).into(),
             |runner| {
-                let tabs = vec!["a".to_owned()];
-                runner.provide_root_context(|| KeptTab(State::create("a".to_owned())));
+                let (docs, a, _) = kept_tabs();
+                runner.provide_root_context(|| KeptTab(State::create(a)));
                 runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
-                runner.provide_root_context(|| KeptOpen(State::create(tabs)));
+                runner.provide_root_context(|| KeptDocs(State::create(docs)));
                 runner.provide_root_context(|| KeptLength(State::create(100)));
                 runner.provide_root_context(|| KeptTop(State::create(0))).0
             },

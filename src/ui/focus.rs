@@ -345,21 +345,27 @@ enum Move {
 /// row count -- two accessors, two monomorphisations of one generic -- leaves a reveal
 /// owed until the next click or wheel, when the point of leaving it owed is that the
 /// listing which can answer it finds it.
-pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
-    mut positions: State<Positions<T>>,
-    is_open: impl Fn(&T) -> bool + 'static,
+///
+/// `docs` says whether the entry a row is about to be written down for is still on an
+/// open tab's trail: the run after a close is still holding the tab, and writing its row
+/// down would put it straight back. **Asked of [`Docs`] itself, never of a [`Memo`] over
+/// it**, which can still be reporting a just-closed tab as open during exactly that run.
+/// The state and not a closure over it, so that rule is stated once.
+pub(crate) fn use_kept_position(
+    mut positions: State<Positions<Entry>>,
+    docs: State<Docs>,
     reveal: impl FnMut(&mut ScrollController) -> bool + 'static,
     coming: impl FnMut(&Landing, &mut ScrollController) -> bool + 'static,
     mut controller: ScrollController,
     viewport: State<f32>,
-    tab: &T,
+    tab: &Entry,
     length: usize,
     listing: u64,
     opening: Option<usize>,
 ) {
     // Which tab the controller is scrolled for. An `Rc<RefCell>` and not a `State`:
     // nothing renders from it, and a state would cost the pane a render per switch.
-    let held = use_hook(|| Rc::new(RefCell::new(None::<T>)));
+    let held = use_hook(|| Rc::new(RefCell::new(None::<Entry>)));
 
     // The reveal and the opening row as this render made them. The effect below is handed
     // fresh deps, but its callback is built once in a `use_hook`, so a value passed to it
@@ -398,7 +404,7 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
     // and would hold the first tab this pane ever showed.
     use_side_effect_with_deps(
         &(tab.clone(), length, listing),
-        move |(tab, length, _): &(T, usize, u64)| {
+        move |(tab, length, _): &(Entry, usize, u64)| {
             // Subscribes this effect to the pane's scroll, so it comes before any return.
             let (_, offset) = <(i32, i32)>::from(controller);
             let height = code_row_height();
@@ -466,11 +472,10 @@ pub(crate) fn use_kept_position<T: Clone + PartialEq + 'static>(
             };
 
             if let Some(owner) = owner {
-                // Only for a tab that is still open: the run after a close is still holding
-                // it, and writing its row down would put it straight back. **Asked of the
-                // states themselves, never of a `Memo` over them**, which can still be
-                // reporting a just-closed tab as open during exactly this run.
-                let still_open = is_open(&owner);
+                // Only for a place still on an open tab's trail, for the reason the doc
+                // comment gives.
+                let (id, stop) = &owner;
+                let still_open = docs.peek().contains(*id, stop);
                 // And only when it has moved: `State::write` notifies whether or not the
                 // value changes, and this runs on every scroll event.
                 let at = positions.peek().at(&owner);

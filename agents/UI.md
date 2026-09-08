@@ -653,8 +653,8 @@ left by a move that changes the place, and that arrival is what spends it.
 id, and `close_binary` forgets those of the entries it takes off the surviving trails too. Each ends
 in one `Places::forgetting`, which is why none of them can forget four of the five maps: that is not
 tidiness, since an `Assembly` entry holds the `Arc<Object>` it points into, and the hook is handed
-`Docs::contains` precisely so that the run *after* a close, still holding the place that has gone,
-cannot put it straight back. The driven lines go with them, which *is* tidiness: a
+`Docs` itself and asks it `contains` precisely so that the run *after* a close, still holding the
+place that has gone, cannot put it straight back. The driven lines go with them, which *is* tidiness: a
 `Source` key holds no object, so nothing is being held up. **Each place remembers what was selected
 in each of its panes** the same way: `Places::marks_at` is a map keyed by the same `Entry`, holding
 both panes' runs as they were left (the caret and the selection, no gesture, nothing owed) and, for

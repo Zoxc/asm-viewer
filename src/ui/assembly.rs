@@ -1200,7 +1200,7 @@ impl Component for InstructionList {
         );
         use_kept_position(
             use_places().asm_at,
-            move |(tab, stop): &Entry| docs.peek().contains(*tab, stop),
+            docs,
             {
                 let data = data.clone();
                 move |controller: &mut ScrollController| {
