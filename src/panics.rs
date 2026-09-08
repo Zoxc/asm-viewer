@@ -25,6 +25,10 @@
 //! stderr goes through `echo` rather than `eprintln!`, which panics when that write
 //! fails.
 //!
+//! [`handle`] is the rule all this comes to, and the seam the tests use: the storing, the
+//! telling and the shutting down are handed to it, so a test needs neither a disk nor a
+//! window.
+//!
 //! The hook is installed once the window is up (`crate::ui::app`) and not from `main`, so
 //! that it is the outer one: freya installs its own inside `launch`, in a release build
 //! only, which shows a "Fatal Error" box and exits (`notes/upstream/freya.md`). Ours takes
@@ -158,7 +162,11 @@ pub(crate) fn install(store: Option<Store>) {
             &panic,
             analysis::guard::guarded(),
             &STOPPING,
-            &mut |panic| store.as_ref().and_then(|store| write_in(store, panic)),
+            &mut |panic| {
+                store
+                    .as_ref()
+                    .and_then(|store| write_to(&FILE, store, panic))
+            },
             &mut tell,
             &mut shut_down,
         );
@@ -204,18 +212,15 @@ fn handle(
     stop();
 }
 
-/// Append `panic`'s record to this run's file, making it and the directory over it on the
-/// first panic, and answer where it went.
+/// Append `panic`'s record to the run's file `file` names, making it and the directory
+/// over it on the first panic, and answer where it went.
 ///
 /// Appended and not written atomically: the file grows a record at a time and a reader
 /// may be looking at it, where the app's other files are each replaced whole
 /// (`store::write_atomically`).
-fn write_in(store: &Store, panic: &Panic) -> Option<PathBuf> {
-    write_to(&FILE, store, panic)
-}
-
-/// The same against a given cell, so a test has a run of its own: [`FILE`] is one static
-/// and the tests share one process.
+///
+/// The cell is handed in rather than read from [`FILE`] so a test has a run of its own:
+/// that is one static and the tests share one process. The hook itself passes [`FILE`].
 fn write_to(file: &Mutex<Option<PathBuf>>, store: &Store, panic: &Panic) -> Option<PathBuf> {
     let mut held = file.lock().unwrap_or_else(|held| held.into_inner());
     let path = match held.clone() {
