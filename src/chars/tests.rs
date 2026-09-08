@@ -218,15 +218,15 @@ fn moved(selection: CharSelection, motion: Motion, extend: bool) -> CharSelectio
 /// row's start to the row above's end, from its end to the row below's start.
 #[test]
 fn left_and_right_step_by_character_and_cross_rows_at_their_ends() {
-    let line = listing(3);
-    assert_eq!(line.after(0), Some(1));
-    assert_eq!(line.after(1), Some(3), "the wide character is one step");
-    assert_eq!(line.after(2), Some(3), "from inside it, its end");
-    assert_eq!(line.after(4), None);
-    assert_eq!(line.before(4), Some(3));
-    assert_eq!(line.before(3), Some(1));
-    assert_eq!(line.before(2), Some(1), "from inside it, its start");
-    assert_eq!(line.before(0), None);
+    let wide = listing(3).atoms();
+    assert_eq!(after(&wide, 0), Some(1));
+    assert_eq!(after(&wide, 1), Some(3), "the wide character is one step");
+    assert_eq!(after(&wide, 2), Some(3), "from inside it, its end");
+    assert_eq!(after(&wide, 4), None);
+    assert_eq!(before(&wide, 4), Some(3));
+    assert_eq!(before(&wide, 3), Some(1));
+    assert_eq!(before(&wide, 2), Some(1), "from inside it, its start");
+    assert_eq!(before(&wide, 0), None);
 
     let at = |row, col| CharSelection::at(caret(row, col));
     assert_eq!(moved(at(0, 3), Motion::Right, false).lead(), caret(0, 4));
@@ -250,11 +250,11 @@ fn left_and_right_step_by_character_and_cross_rows_at_their_ends() {
 /// word of its own.
 #[test]
 fn a_step_by_word_takes_a_run_of_one_kind() {
-    let line = listing(0);
+    let row = listing(0).atoms();
     // "mov rax, [rbp-8]": rightward stops after mov, rax, ",", "[", rbp, "-", 8, "]".
     let mut stops = Vec::new();
     let mut col = 0;
-    while let Some(next) = line.word_after(col) {
+    while let Some(next) = word_after(&row, col) {
         stops.push(next);
         col = next;
     }
@@ -262,26 +262,27 @@ fn a_step_by_word_takes_a_run_of_one_kind() {
     // Leftward, the starts: the same words from the other side.
     let mut starts = Vec::new();
     let mut col = 16;
-    while let Some(next) = line.word_before(col) {
+    while let Some(next) = word_before(&row, col) {
         starts.push(next);
         col = next;
     }
     assert_eq!(starts, [15, 14, 13, 10, 9, 7, 4, 0]);
     // Trailing and leading whitespace goes to the row's end or start.
-    let padded = Line::text("  x  ");
-    assert_eq!(padded.word_after(3), Some(5));
-    assert_eq!(padded.word_before(2), Some(0));
-    assert_eq!(padded.word_after(5), None);
-    assert_eq!(padded.word_before(0), None);
+    let padded = Line::text("  x  ").atoms();
+    assert_eq!(word_after(&padded, 3), Some(5));
+    assert_eq!(word_before(&padded, 2), Some(0));
+    assert_eq!(word_after(&padded, 5), None);
+    assert_eq!(word_before(&padded, 0), None);
     // Underscores are word characters, and an inline element is one word.
-    let mut call = Line::default();
-    call.push_text("call my_fn_2 ");
-    call.push_inline("core::fmt::write");
-    call.push_text("+8");
-    assert_eq!(call.word_after(5), Some(12));
-    assert_eq!(call.word_after(12), Some(14), "the inline element");
-    assert_eq!(call.word_before(14), Some(13));
-    assert_eq!(call.word_after(14), Some(15));
+    let mut line = Line::default();
+    line.push_text("call my_fn_2 ");
+    line.push_inline("core::fmt::write");
+    line.push_text("+8");
+    let call = line.atoms();
+    assert_eq!(word_after(&call, 5), Some(12));
+    assert_eq!(word_after(&call, 12), Some(14), "the inline element");
+    assert_eq!(word_before(&call, 14), Some(13));
+    assert_eq!(word_after(&call, 14), Some(15));
 
     // Through the selection, and across rows at the ends as a character step does.
     let at = |row, col| CharSelection::at(caret(row, col));

@@ -152,10 +152,23 @@ impl CharSelection {
         let Some(last) = length.checked_sub(1) else {
             return self;
         };
-        let units = |row: usize| line(row).units();
         let row = self.lead.row.min(last);
-        let col = self.lead.col.min(units(row));
+        // The row the lead is on, read once and scanned once: every sideways step is a
+        // step over these characters.
+        let here_line = line(row);
+        let atoms = here_line.atoms();
+        let here_units = here_line.units();
+        let col = self.lead.col.min(here_units);
         let here = Caret { row, col };
+        // How many units a row is: this one from the text already in hand, any other
+        // read for it.
+        let units = |at: usize| {
+            if at == row {
+                here_units
+            } else {
+                line(at).units()
+            }
+        };
         let start_of = |row: usize| Caret { row, col: 0 };
         let end_of = |row: usize| Caret {
             row,
@@ -176,38 +189,36 @@ impl CharSelection {
         let page = page.max(1);
 
         let (lead, goal) = match motion {
-            Motion::Left => (
-                match (line(row).before(col), row.checked_sub(1)) {
-                    (Some(col), _) => Caret { row, col },
-                    (None, Some(above)) => end_of(above),
-                    (None, None) => here,
-                },
-                None,
-            ),
-            Motion::Right => (
-                match (line(row).after(col), row < last) {
-                    (Some(col), _) => Caret { row, col },
-                    (None, true) => start_of(row + 1),
-                    (None, false) => here,
-                },
-                None,
-            ),
-            Motion::WordLeft => (
-                match (line(row).word_before(col), row.checked_sub(1)) {
-                    (Some(col), _) => Caret { row, col },
-                    (None, Some(above)) => end_of(above),
-                    (None, None) => here,
-                },
-                None,
-            ),
-            Motion::WordRight => (
-                match (line(row).word_after(col), row < last) {
-                    (Some(col), _) => Caret { row, col },
-                    (None, true) => start_of(row + 1),
-                    (None, false) => here,
-                },
-                None,
-            ),
+            Motion::Left | Motion::WordLeft => {
+                let step = if motion == Motion::WordLeft {
+                    word_before
+                } else {
+                    before
+                };
+                (
+                    match (step(&atoms, col), row.checked_sub(1)) {
+                        (Some(col), _) => Caret { row, col },
+                        (None, Some(above)) => end_of(above),
+                        (None, None) => here,
+                    },
+                    None,
+                )
+            }
+            Motion::Right | Motion::WordRight => {
+                let step = if motion == Motion::WordRight {
+                    word_after
+                } else {
+                    after
+                };
+                (
+                    match (step(&atoms, col), row < last) {
+                        (Some(col), _) => Caret { row, col },
+                        (None, true) => start_of(row + 1),
+                        (None, false) => here,
+                    },
+                    None,
+                )
+            }
             Motion::Up => vertical(row.saturating_sub(1)),
             Motion::Down => vertical((row + 1).min(last)),
             Motion::PageUp => vertical(row.saturating_sub(page)),
@@ -495,12 +506,67 @@ impl Class {
     }
 }
 
-/// One character of a row as the steps see it: the columns it spans and its kind.
+/// One character of a row as the steps below see it: the columns it spans and its kind.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Atom {
     start: usize,
     end: usize,
     class: Class,
+}
+
+/// The column of the character before `col` -- the boundary a Left steps to -- and
+/// `None` at the row's start. A column inside a character is that character's start.
+fn before(atoms: &[Atom], col: usize) -> Option<usize> {
+    atoms
+        .iter()
+        .rev()
+        .find(|atom| atom.start < col)
+        .map(|atom| atom.start)
+}
+
+/// The column after the character at `col` -- the boundary a Right steps to -- and
+/// `None` at the row's end. A column inside a character is that character's end.
+fn after(atoms: &[Atom], col: usize) -> Option<usize> {
+    atoms
+        .iter()
+        .find(|atom| atom.end > col)
+        .map(|atom| atom.end)
+}
+
+/// The start of the word before `col`: back over any whitespace, then over the run of
+/// characters of one kind -- alphanumerics and underscores, or punctuation -- that ends
+/// there. `None` at the row's start.
+fn word_before(atoms: &[Atom], col: usize) -> Option<usize> {
+    let mut i = atoms.iter().rposition(|atom| atom.start < col)?;
+    while atoms[i].class == Class::Space {
+        let Some(before) = i.checked_sub(1) else {
+            return Some(0);
+        };
+        i = before;
+    }
+    let class = atoms[i].class;
+    while i > 0 && atoms[i - 1].class == class {
+        i -= 1;
+    }
+    Some(atoms[i].start)
+}
+
+/// The end of the word after `col`: over any whitespace, then over the run of characters
+/// of one kind that starts there. `None` at the row's end.
+fn word_after(atoms: &[Atom], col: usize) -> Option<usize> {
+    let mut i = atoms.iter().position(|atom| atom.end > col)?;
+    while atoms[i].class == Class::Space {
+        i += 1;
+        if i == atoms.len() {
+            // Trailing whitespace: the row's end, which is the last character's.
+            return atoms.last().map(|atom| atom.end);
+        }
+    }
+    let class = atoms[i].class;
+    while i + 1 < atoms.len() && atoms[i + 1].class == class {
+        i += 1;
+    }
+    Some(atoms[i].end)
 }
 
 /// A row's text as it is drawn, in pieces.
@@ -560,62 +626,6 @@ impl Line {
             }
         }
         atoms
-    }
-
-    /// The column of the character before `col` -- the boundary a Left steps to -- and
-    /// `None` at the row's start. A column inside a character is that character's start.
-    pub fn before(&self, col: usize) -> Option<usize> {
-        self.atoms()
-            .iter()
-            .rev()
-            .find(|atom| atom.start < col)
-            .map(|atom| atom.start)
-    }
-
-    /// The column after the character at `col` -- the boundary a Right steps to -- and
-    /// `None` at the row's end. A column inside a character is that character's end.
-    pub fn after(&self, col: usize) -> Option<usize> {
-        self.atoms()
-            .iter()
-            .find(|atom| atom.end > col)
-            .map(|atom| atom.end)
-    }
-
-    /// The start of the word before `col`: back over any whitespace, then over the run
-    /// of characters of one kind -- alphanumerics and underscores, or punctuation -- that
-    /// ends there. `None` at the row's start.
-    pub fn word_before(&self, col: usize) -> Option<usize> {
-        let atoms = self.atoms();
-        let mut i = atoms.iter().rposition(|atom| atom.start < col)?;
-        while atoms[i].class == Class::Space {
-            let Some(before) = i.checked_sub(1) else {
-                return Some(0);
-            };
-            i = before;
-        }
-        let class = atoms[i].class;
-        while i > 0 && atoms[i - 1].class == class {
-            i -= 1;
-        }
-        Some(atoms[i].start)
-    }
-
-    /// The end of the word after `col`: over any whitespace, then over the run of
-    /// characters of one kind that starts there. `None` at the row's end.
-    pub fn word_after(&self, col: usize) -> Option<usize> {
-        let atoms = self.atoms();
-        let mut i = atoms.iter().position(|atom| atom.end > col)?;
-        while atoms[i].class == Class::Space {
-            i += 1;
-            if i == atoms.len() {
-                return Some(self.units());
-            }
-        }
-        let class = atoms[i].class;
-        while i + 1 < atoms.len() && atoms[i + 1].class == class {
-            i += 1;
-        }
-        Some(atoms[i].end)
     }
 
     /// The text between two columns. A column inside a character that is two units wide
