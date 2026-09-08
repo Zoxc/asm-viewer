@@ -106,12 +106,9 @@ pub(crate) struct CodeAsk {
 
 impl PartialEq for CodeAsk {
     fn eq(&self, other: &Self) -> bool {
-        let same_code = match (&self.code, &other.code) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-        Arc::ptr_eq(&self.object, &other.object) && same_code && self.window == other.window
+        Arc::ptr_eq(&self.object, &other.object)
+            && same_arc(&self.code, &other.code)
+            && self.window == other.window
     }
 }
 
@@ -305,12 +302,7 @@ pub(crate) fn use_reading_of(
             None => beside.read().clone(),
             _ => None,
         };
-        let same = match (&reading.peek().object, &wanted) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-        if !same {
+        if !same_arc(&reading.peek().object, &wanted) {
             reading.set(Reading::of(wanted));
             window.set(None);
         }

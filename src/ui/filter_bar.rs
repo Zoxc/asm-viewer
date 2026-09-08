@@ -462,12 +462,7 @@ pub(crate) struct Filtered {
 
 impl PartialEq for Filtered {
     fn eq(&self, other: &Self) -> bool {
-        self.symbols == other.symbols
-            && match (&self.matches, &other.matches) {
-                (None, None) => true,
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                _ => false,
-            }
+        self.symbols == other.symbols && same_arc(&self.matches, &other.matches)
     }
 }
 

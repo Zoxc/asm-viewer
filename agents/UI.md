@@ -730,6 +730,8 @@ matters twice: duplicate symbol names across objects stay distinct, and `#[deriv
 (`src/shared.rs`), the rule written once rather than once per list: an `Arc<[T]>` equal only to the
 same build, derefing to its slice, so a view reads the rows as a slice and passes them on as a
 pointer. The Files, Search, Locations and Objects lists and a file's links are all one.
+An `Arc` a field may not have compares by `same_arc` beside it, so no `PartialEq` writes that
+truth table out again.
 
 
 **The crash box is the desktop's own, and it has to be**, which is why the box lives in

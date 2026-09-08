@@ -1,5 +1,5 @@
 //! A list built once and passed on by its pointer: what every list of rows the UI draws
-//! is. Framework-free.
+//! is, and the same identity for an `Arc` that may be absent. Framework-free.
 
 use std::{fmt, ops::Deref, sync::Arc};
 
@@ -50,6 +50,19 @@ impl<T> Deref for Shared<T> {
 impl<T: fmt::Debug> fmt::Debug for Shared<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
+    }
+}
+
+/// Whether two optional `Arc`s are the same one: both absent, or both the same build.
+///
+/// [`Shared`]'s rule where the `Arc` need not be there. A `PartialEq` over such a field
+/// writes this and not a `match` of its own, the `_ => false` arm being easy to mistype
+/// in a truth table that does not look symmetric on the page.
+pub(crate) fn same_arc<T>(a: &Option<Arc<T>>, b: &Option<Arc<T>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        _ => false,
     }
 }
 

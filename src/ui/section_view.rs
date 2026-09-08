@@ -95,12 +95,7 @@ struct SectionRows {
 
 impl PartialEq for SectionRows {
     fn eq(&self, other: &Self) -> bool {
-        let same_rows = match (&self.rows, &other.rows) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-        same_rows
+        same_arc(&self.rows, &other.rows)
             && Arc::ptr_eq(&self.object, &other.object)
             && self.pair == other.pair
             && self.touching == other.touching

@@ -229,16 +229,10 @@ pub(crate) fn answer(question: Question) -> Answer {
 }
 
 /// A listing, and the question it was worked out for.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct Shown {
     pub(crate) ask: Ask,
     pub(crate) studied: Studied,
-}
-
-impl PartialEq for Shown {
-    fn eq(&self, other: &Self) -> bool {
-        self.ask == other.ask && self.studied == other.studied
-    }
 }
 
 impl Shown {
@@ -278,7 +272,7 @@ impl Shown {
 }
 
 /// What the two panes are drawing, and what is being worked out for them.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct Analyzed {
     /// The listing the panes draw, and the question it answers. Replaced by the next
     /// listing and never by a blank, so its question can be older than `answered`.
@@ -293,15 +287,6 @@ pub(crate) struct Analyzed {
     pub(crate) pending: Option<Ask>,
     /// Whether `pending` has been outstanding for [`SLOW_ANALYSIS`].
     pub(crate) slow: bool,
-}
-
-impl PartialEq for Analyzed {
-    fn eq(&self, other: &Self) -> bool {
-        self.shown == other.shown
-            && self.answered == other.answered
-            && self.pending == other.pending
-            && self.slow == other.slow
-    }
 }
 
 /// What a pane draws, which is one decision and not two panes' worth of `if`s.
@@ -489,14 +474,8 @@ pub(crate) struct Studied {
 
 impl PartialEq for Studied {
     fn eq(&self, other: &Self) -> bool {
-        let same_assembly = match (&self.assembly, &other.assembly) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-
         self.symbol == other.symbol
-            && same_assembly
+            && same_arc(&self.assembly, &other.assembly)
             && Arc::ptr_eq(&self.lanes, &other.lanes)
             && self.lines == other.lines
     }
@@ -603,15 +582,9 @@ pub(crate) struct SymbolLines {
 
 impl PartialEq for SymbolLines {
     fn eq(&self, other: &Self) -> bool {
-        let same_info = match (&self.info, &other.info) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-
         // The file compares by its text, not by pointer, for the reason `LinePos` does:
         // two `LineInfo`s naming one file hold two `Arc<str>`s of it.
-        same_info && self.file == other.file && self.line == other.line
+        same_arc(&self.info, &other.info) && self.file == other.file && self.line == other.line
     }
 }
 
