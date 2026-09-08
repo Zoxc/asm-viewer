@@ -22,7 +22,7 @@
 //! draw at two addresses and the listing reads as one.
 
 use crate::lanes::Lanes;
-use analysis::{Assembly, CodeListing, Place};
+use analysis::{Assembly, CodeListing, Place, Stretch};
 use std::{ops::Range, sync::Arc};
 
 /// How many of a gap's bytes one row draws.
@@ -105,7 +105,6 @@ pub enum Kind {
 
 /// One stretch's share of the rows.
 struct StretchRows {
-    place: Place,
     /// The placed address the stretch starts at, and how many bytes it covers.
     start: u64,
     bytes: u64,
@@ -198,44 +197,95 @@ impl StretchRows {
     }
 }
 
-/// The stretch at flat index `flat` -- sections concatenated in placed order -- as the
-/// crate names it. What a window of stretches is asked for by, since one number is what a
-/// list of them wants.
-pub fn place_of(code: &CodeListing, flat: usize) -> Option<Place> {
-    let mut first = 0;
-    for (section, placed) in code.sections().iter().enumerate() {
-        let count = placed.listing.stretches().len();
-        if flat < first + count {
-            return Some(Place {
-                section,
-                stretch: flat - first,
-            });
+/// A listing's stretches numbered end to end: every section's, in placed order. One
+/// number is what a list of stretches wants, so a flat index is the currency between the
+/// view's window, the worker and [`Rows`], and this is the one place that maps it to the
+/// crate's [`Place`] and back. Both ways are questions about the listing's shape and
+/// nothing else.
+pub struct Flat {
+    code: Arc<CodeListing>,
+    /// `sections[s]` is the flat index of section `s`'s first stretch; one more entry
+    /// holds the stretch count.
+    sections: Vec<usize>,
+}
+
+impl Flat {
+    pub fn new(code: Arc<CodeListing>) -> Self {
+        let mut sections = Vec::with_capacity(code.sections().len() + 1);
+        let mut total = 0;
+        for placed in code.sections() {
+            sections.push(total);
+            total += placed.listing.stretches().len();
         }
-        first += count;
+        sections.push(total);
+        Self { code, sections }
     }
-    None
+
+    pub fn code(&self) -> &Arc<CodeListing> {
+        &self.code
+    }
+
+    /// How many stretches the listing has. Not a row count: [`Rows::len`] is that.
+    pub fn count(&self) -> usize {
+        *self.sections.last().unwrap_or(&0)
+    }
+
+    /// The stretch at flat index `flat`, as the crate names it.
+    pub fn place(&self, flat: usize) -> Option<Place> {
+        if flat >= self.count() {
+            return None;
+        }
+        // The last section starting at or before `flat`, which steps over a section with
+        // no stretches; `sections` has one entry past the sections.
+        let after = self.sections.partition_point(|&first| first <= flat);
+        let section = after.checked_sub(1)?;
+        Some(Place {
+            section,
+            stretch: flat - self.sections[section],
+        })
+    }
+
+    /// The stretch at flat index `flat`: where the crate names it, and the stretch
+    /// itself. One call, so nothing indexes the listing with a place it was handed a
+    /// line earlier.
+    pub fn stretch(&self, flat: usize) -> Option<(Place, &Stretch)> {
+        let place = self.place(flat)?;
+        let stretch = self
+            .code
+            .sections()
+            .get(place.section)?
+            .listing
+            .stretches()
+            .get(place.stretch)?;
+        Some((place, stretch))
+    }
+
+    /// The flat index of a place, if the listing has it.
+    pub fn index(&self, place: Place) -> Option<usize> {
+        let first = *self.sections.get(place.section)?;
+        let end = *self.sections.get(place.section + 1)?;
+        let flat = first.checked_add(place.stretch)?;
+        (flat < end).then_some(flat)
+    }
 }
 
 /// Every row of one object's code listing, worked out from the skeleton and whichever
 /// stretches have been decoded.
 pub struct Rows {
-    code: Arc<CodeListing>,
+    /// The listing, and its stretches numbered: what a row's `stretch` indexes.
+    flat: Flat,
     stretches: Vec<StretchRows>,
     /// `starts[i]` is the first row of stretch `i`; one more entry holds the total.
     starts: Vec<usize>,
-    /// `sections[s]` is the flat index of section `s`'s first stretch; one more entry
-    /// holds the stretch count.
-    sections: Vec<usize>,
 }
 
 impl Rows {
     /// The rows for `code`, with `decoded` answering for the stretches -- by flat index --
     /// that have been.
     pub fn new(code: Arc<CodeListing>, decoded: impl Fn(usize) -> Option<Body>) -> Self {
+        let flat_index = Flat::new(code);
         let mut stretches = Vec::new();
-        let mut sections = Vec::with_capacity(code.sections().len() + 1);
-        for (section, placed) in code.sections().iter().enumerate() {
-            sections.push(stretches.len());
+        for placed in flat_index.code().sections() {
             let bias = placed.bias();
             for (index, stretch) in placed.listing.stretches().iter().enumerate() {
                 let flat = stretches.len();
@@ -255,10 +305,6 @@ impl Rows {
                     None => BodyRows::Estimated(StretchRows::estimate(bytes, labels > 0)),
                 };
                 stretches.push(StretchRows {
-                    place: Place {
-                        section,
-                        stretch: index,
-                    },
                     start: placed.place(stretch.range.start),
                     bytes,
                     bias,
@@ -269,7 +315,6 @@ impl Rows {
                 });
             }
         }
-        sections.push(stretches.len());
 
         let mut starts = Vec::with_capacity(stretches.len() + 1);
         let mut total = 0;
@@ -280,22 +325,19 @@ impl Rows {
         starts.push(total);
 
         Self {
-            code,
+            flat: flat_index,
             stretches,
             starts,
-            sections,
         }
     }
 
     pub fn code(&self) -> &Arc<CodeListing> {
-        &self.code
+        self.flat.code()
     }
 
     /// The placed section stretch `flat` is in.
     pub fn placed_of(&self, flat: usize) -> Option<&analysis::Placed> {
-        self.code
-            .sections()
-            .get(self.stretches.get(flat)?.place.section)
+        self.code().sections().get(self.place(flat)?.section)
     }
 
     /// How many rows the listing has, estimates included.
@@ -305,15 +347,12 @@ impl Rows {
 
     /// The stretch at flat index `flat`, as the crate names it.
     pub fn place(&self, flat: usize) -> Option<Place> {
-        Some(self.stretches.get(flat)?.place)
+        self.flat.place(flat)
     }
 
-    /// The flat index of a place, if the listing has it.
-    pub fn flat(&self, place: Place) -> Option<usize> {
-        let first = *self.sections.get(place.section)?;
-        let end = *self.sections.get(place.section + 1)?;
-        let flat = first.checked_add(place.stretch)?;
-        (flat < end).then_some(flat)
+    /// The stretch at flat index `flat`.
+    pub fn stretch(&self, flat: usize) -> Option<&Stretch> {
+        Some(self.flat.stretch(flat)?.1)
     }
 
     /// The row a stretch's body starts at, after its header and labels: what its lanes'
@@ -419,7 +458,7 @@ impl Rows {
     /// an address keeps how many rows past this it was, so the top row being a stretch's
     /// first instruction comes back as that row and not as the label two rows up.
     pub fn row_for(&self, address: u64) -> Option<usize> {
-        let flat = self.flat(self.code.at(address)?)?;
+        let flat = self.flat.index(self.code().at(address)?)?;
         let stretch = &self.stretches[flat];
         let first = self.starts[flat];
         if address <= stretch.start {

@@ -63,6 +63,51 @@ fn kind_of(rows: &Rows, at: usize) -> Option<Kind> {
     Some(rows.row(at)?.kind)
 }
 
+/// The flat index is one mapping, both ways: the listing's stretches numbered end to
+/// end, section by section, each naming its place and coming back from it, and the
+/// stretch it hands over is the one the crate has there. A place past the end of its
+/// section is nothing, and not the next section's first stretch.
+#[test]
+fn a_flat_index_numbers_every_stretch_in_placed_order_and_nothing_else() {
+    for name in ["line_fixture.o", "line_fixture_split.o"] {
+        let object = fixture(name);
+        let code = Arc::new(CodeListing::new(&object));
+        assert!(!code.sections().is_empty(), "the fixture's layout moved");
+        let index = Flat::new(code.clone());
+
+        let mut flat = 0;
+        for (section, placed) in code.sections().iter().enumerate() {
+            for stretch in 0..placed.listing.stretches().len() {
+                let place = Place { section, stretch };
+                assert_eq!(index.place(flat), Some(place), "{name} at {flat}");
+                assert_eq!(index.index(place), Some(flat), "{name} at {flat}");
+                let (named, held) = index.stretch(flat).expect("the stretch exists");
+                assert_eq!(named, place);
+                assert!(std::ptr::eq(held, &placed.listing.stretches()[stretch]));
+                flat += 1;
+            }
+        }
+
+        assert_eq!(index.count(), flat, "{name}: every stretch is counted");
+        assert_eq!(index.place(flat), None, "{name}: no stretch past the end");
+        assert!(index.stretch(flat).is_none(), "{name}: none to hand over");
+        let past = Place {
+            section: code.sections().len(),
+            stretch: 0,
+        };
+        assert_eq!(index.index(past), None, "{name}: no section past the last");
+        let over = Place {
+            section: 0,
+            stretch: code.sections()[0].listing.stretches().len(),
+        };
+        assert_eq!(
+            index.index(over),
+            None,
+            "{name}: a section ends where it ends"
+        );
+    }
+}
+
 /// Before a byte is decoded, a stretch is its header where a section starts, a label per
 /// symbol, and as many empty rows as its bytes suggest -- and never none, so that every
 /// label has a row under it.

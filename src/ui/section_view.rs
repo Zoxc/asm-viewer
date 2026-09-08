@@ -239,15 +239,7 @@ pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
 
 /// The `index`th symbol at stretch `flat`'s address.
 fn label_of(rows: &Rows, flat: usize, index: usize) -> Option<Arc<SymbolData>> {
-    let placed = rows.placed_of(flat)?;
-    let place = rows.place(flat)?;
-    placed
-        .listing
-        .stretches()
-        .get(place.stretch)?
-        .symbols
-        .get(index)
-        .cloned()
+    rows.stretch(flat)?.symbols.get(index).cloned()
 }
 
 /// The bytes gap row `index` of stretch `flat` draws, and the placed address they start

@@ -190,14 +190,13 @@ pub(crate) fn answer(question: Question) -> Answer {
                 .code
                 .clone()
                 .unwrap_or_else(|| Arc::new(CodeListing::new(&ask.object)));
+            let index = section::Flat::new(code.clone());
             let decoded = ask
                 .window
                 .iter()
                 .take(CHUNK)
                 .filter_map(|&flat| {
-                    let place = section::place_of(&code, flat)?;
-                    let stretch =
-                        &code.sections()[place.section].listing.stretches()[place.stretch];
+                    let (place, stretch) = index.stretch(flat)?;
                     let decoded = code.decode(&ask.object, place)?;
                     // The symbol's listing exactly as its own tab would work it out --
                     // one decode, the crate's, with the lanes and the line info put

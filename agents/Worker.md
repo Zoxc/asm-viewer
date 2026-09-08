@@ -53,7 +53,11 @@ there is no receiver here whose dropping could stop it and the walk number does 
 
 **A third kind of question is a window of an object's code** (`src/ui/reading.rs`), for the section
 view. `Question::Code(CodeAsk)` carries an object, its skeleton once the view has one, and the
-stretches wanted by flat index, **nearest the reader first**. The skeleton (`CodeListing`, free to
+stretches wanted by flat index, **nearest the reader first**. A flat index numbers the sections'
+stretches end to end, and `section::Flat` is the one mapping between it and the crate's `Place`. It
+hands over the stretch along with the place, so nothing indexes the listing with a place it was
+given a line earlier; the worker builds one over the skeleton, and the rows the view draws are
+counted over another. The skeleton (`CodeListing`, free to
 build) is built on the worker with the first ask and answered with it. A stretch is decoded through
 the crate's own `CodeListing::decode` and then `Studied::with_assembly`, which does the rest of what
 `Studied::new` does over a listing already in hand; so the section view and the symbol's own tab

@@ -94,7 +94,7 @@ pub(crate) fn holding(
 /// One window of an object's code to decode.
 ///
 /// `window` is the stretches wanted, by flat index over every section
-/// (`section::place_of`), **nearest the reader first**: the worker takes the first
+/// (`section::Flat`), **nearest the reader first**: the worker takes the first
 /// [`CHUNK`] of them. `code` is the skeleton once the view has one and `None` on the first
 /// ask, when the worker builds it and answers with it.
 #[derive(Clone)]
