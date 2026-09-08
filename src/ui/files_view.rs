@@ -44,7 +44,7 @@ fn press_entry(
             Pressed::Folded
         }
         None => {
-            open_source_file(states, path, reach(ctrl));
+            open_source_file(states, path, Reach::outside(ctrl));
             Pressed::Opened
         }
     }

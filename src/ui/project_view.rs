@@ -298,7 +298,7 @@ fn source_place(
                             address: None,
                             columns: None,
                         },
-                        reach(ctrl),
+                        Reach::outside(ctrl),
                     );
                 }),
             }

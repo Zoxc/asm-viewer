@@ -251,7 +251,7 @@ impl Component for SourceRow {
                     is_link: Rc::new(|| true),
                     follow: Rc::new(move |columns: Range<usize>| {
                         let column = byte_column(&pressed, columns.start);
-                        follow_link(&server, &links, open, &at, column, reach_inside(ctrl));
+                        follow_link(&server, &links, open, &at, column, Reach::inside(ctrl));
                     }),
                 }
             }),
@@ -991,16 +991,10 @@ fn source_bar(
                         .width(Size::fill())
                         .height(Size::px(list_row_height()))
                         .spacing(6.0)
-                        // A click inside the tab: in place, or a tab of its own with Ctrl.
                         .maybe(opens, |bar| {
                             let document = Document::Source(file.clone());
                             bar.on_press(move |_| {
-                                let reach = if *ctrl.peek() {
-                                    Reach::NewTab
-                                } else {
-                                    Reach::InPlace
-                                };
-                                open_document(open, visits, document.clone(), reach);
+                                open_document(open, visits, document.clone(), Reach::inside(ctrl));
                             })
                         })
                         .child(entry_icon(&Document::Source(file.clone())))

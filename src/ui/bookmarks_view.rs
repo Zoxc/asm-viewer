@@ -79,7 +79,7 @@ impl Component for BookmarkRow {
                 let live = live.clone();
                 list_row(hovering, picking.drawn(&pick, false)).on_press(move |_| {
                     picking.press(pick.clone(), at, || {
-                        open_document(open, visits, live.clone(), reach(ctrl));
+                        open_document(open, visits, live.clone(), Reach::outside(ctrl));
                         Pressed::Opened
                     });
                 })
@@ -202,7 +202,7 @@ impl Component for BookmarksPanel {
                 open: Box::new(
                     move |at| match listed.get(at).and_then(|(_, live)| live.clone()) {
                         Some(live) => {
-                            open_document(open, visits, live, reach(ctrl));
+                            open_document(open, visits, live, Reach::outside(ctrl));
                             Pressed::Opened
                         }
                         None => Pressed::Folded,

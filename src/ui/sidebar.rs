@@ -274,7 +274,12 @@ impl Component for ObjectRow {
                 // Ctrl. With Alt it opens nothing and the row is only picked out.
                 .on_press(move |_| {
                     picking.press(pick.clone(), at, || {
-                        open_document(open, visits, Document::Code(object.clone()), reach(ctrl));
+                        open_document(
+                            open,
+                            visits,
+                            Document::Code(object.clone()),
+                            Reach::outside(ctrl),
+                        );
                         Pressed::Opened
                     });
                 })
@@ -370,7 +375,7 @@ impl Component for SymbolRow {
                             open,
                             visits,
                             Document::Assembly(Selection::Symbol(symbol.clone())),
-                            reach(ctrl),
+                            Reach::outside(ctrl),
                         );
                         Pressed::Opened
                     });
@@ -447,7 +452,7 @@ impl Component for HistoryRow {
             list_row(hovering, picking.drawn(&pick, self.current))
                 .on_press(move |_| {
                     picking.press(pick.clone(), at, || {
-                        open_document(open, visits, target.clone(), reach(ctrl));
+                        open_document(open, visits, target.clone(), Reach::outside(ctrl));
                         Pressed::Opened
                     });
                 })
@@ -587,7 +592,12 @@ impl Component for ObjectsPanel {
                     // Nothing under it to fold and nothing behind it to open.
                     TreeRow::Pending { .. } => Pressed::Folded,
                     TreeRow::Object { object, .. } => {
-                        open_document(open, visits, Document::Code(object.clone()), reach(ctrl));
+                        open_document(
+                            open,
+                            visits,
+                            Document::Code(object.clone()),
+                            Reach::outside(ctrl),
+                        );
                         Pressed::Opened
                     }
                 }
@@ -721,7 +731,7 @@ impl Component for SymbolsPanel {
                         open,
                         visits,
                         Document::Assembly(Selection::Symbol(symbol)),
-                        reach(ctrl),
+                        Reach::outside(ctrl),
                     );
                     Pressed::Opened
                 }
@@ -823,7 +833,7 @@ impl Component for HistoryPanel {
                 at: Box::new(move |at| stepped.get(at).cloned().map(Pick::Visit)),
                 open: Box::new(move |at| match listed.get(at) {
                     Some(entry) => {
-                        open_document(open, visits, entry.clone(), reach(ctrl));
+                        open_document(open, visits, entry.clone(), Reach::outside(ctrl));
                         Pressed::Opened
                     }
                     None => Pressed::Folded,

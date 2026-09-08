@@ -30,33 +30,35 @@ pub(crate) enum Reach {
     Preview,
 }
 
-/// How a click outside the panes opens its place: a preview in the temporal tab, or, with
-/// Ctrl held, a tab of its own that stays. Peeked, this being asked in a press handler.
-///
-/// Beside [`Reach`] and not with any one list, because it is the rule for every row that
-/// opens something -- the three sidebar lists, the Files view, the Bookmarks, the Search
-/// and Locations panels -- and none of them owns it.
-pub(crate) fn reach(ctrl: State<bool>) -> Reach {
-    if *ctrl.peek() {
-        Reach::NewTab
-    } else {
-        Reach::Preview
+impl Reach {
+    /// How a press on a link **inside** a pane opens what it names: in place, pushed onto
+    /// the tab's trail so the place left is one Back away, the way a browser follows a
+    /// link, or, with Ctrl held, in a tab of its own beside it.
+    ///
+    /// On the enum and not with any one pane, because it is the rule for every link in a
+    /// code row -- an operand naming a symbol, the bare address of a call, a name in the
+    /// source -- and none of them owns it. Peeked, this being asked in a press handler.
+    pub(crate) fn inside(ctrl: State<bool>) -> Reach {
+        if *ctrl.peek() {
+            Reach::NewTab
+        } else {
+            Reach::InPlace
+        }
     }
-}
 
-/// How a press on a link **inside** a pane opens what it names: in place, pushed onto the
-/// tab's trail so the place left is one Back away, the way a browser follows a link, or,
-/// with Ctrl held, in a tab of its own beside it.
-///
-/// Beside [`reach`] and for the same reason: it is the rule for every link in a code row
-/// -- an operand naming a symbol, the bare address of a call, a name in the source -- and
-/// none of them owns it. Between the two, Ctrl says one thing everywhere: a tab of its
-/// own. Peeked, this being asked in a press handler.
-pub(crate) fn reach_inside(ctrl: State<bool>) -> Reach {
-    if *ctrl.peek() {
-        Reach::NewTab
-    } else {
-        Reach::InPlace
+    /// How a click from outside the panes opens its place: a preview in the temporal tab,
+    /// or, with Ctrl held, a tab of its own that stays.
+    ///
+    /// Here for the same reason: it is the rule for every row that opens something -- the
+    /// three sidebar lists, the Files view, the Bookmarks, the Search and Locations panels
+    /// -- and none of them owns it. Between the two, Ctrl says one thing everywhere: a tab
+    /// of its own. Peeked, this being asked in a press handler.
+    pub(crate) fn outside(ctrl: State<bool>) -> Reach {
+        if *ctrl.peek() {
+            Reach::NewTab
+        } else {
+            Reach::Preview
+        }
     }
 }
 

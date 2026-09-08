@@ -41,7 +41,7 @@ pub(crate) struct Window(pub(crate) State<Option<CodeAsk>>);
 /// none.
 ///
 /// The Scratchpad's pane claims it while it is mounted and lets go on the way out, the way
-/// a pane registers its focusable box (`use_tab_keyboard`, `src/ui/focus.rs`). It is a
+/// a pane registers its focusable box (`use_tab_keyboard`, `src/ui/keyboard.rs`). It is a
 /// claim and not a question asked of the pads, because the pane drawing the listing is the
 /// only thing that knows there is one: a general mechanism asking would have to know about
 /// pages and pads, and would hold a skeleton for a pad's program while the reader sat on

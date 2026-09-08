@@ -1417,7 +1417,7 @@ fn target_of(
 ///
 /// `reach` is the press's to say: a menu item asks for a tab of its own, a bare address
 /// pressed in a symbol's listing for the code in place and, with Ctrl, for a tab of its
-/// own (`reach_inside`). Where the listing is that code already the reach never comes up:
+/// own (`Reach::inside`). Where the listing is that code already the reach never comes up:
 /// `land` finds the document on top and moves inside it.
 ///
 /// The place is written in the same handler as the open and before any render, so the

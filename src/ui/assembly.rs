@@ -537,7 +537,7 @@ impl Component for DoorLabel {
                                 object: object.clone(),
                                 data: target.clone(),
                             })),
-                            reach_inside(ctrl),
+                            Reach::inside(ctrl),
                         );
                     }
                     // The object's code at that address: moved to where this listing is
@@ -550,7 +550,7 @@ impl Component for DoorLabel {
                         object.clone(),
                         *address,
                         None,
-                        reach_inside(ctrl),
+                        Reach::inside(ctrl),
                     ),
                     // A label is the one door no `DoorLabel` carries: it is a run of its
                     // row's own text, and the row follows it (`section_view`).

@@ -148,11 +148,11 @@ list having changed. A **dead row is drawn, dimmed, and does nothing**: `tree_na
 loading-file-row idiom, with no press or hover handler at all, the way a history button with nowhere
 to go has none. Dropping it would be the history's rule, and a reader's own list must not shrink
 behind their back. And a live row's press is `open_document` like a Symbols row's, a `Preview` into
-the temporal tab and a `NewTab` with Ctrl (`reach`, the one rule every row outside the panes reads,
-in `ui/documents.rs` beside `Reach` and not with any one list), never `navigate`, since a bookmark
-is a place and not a position on a trail. The row draws
-`Bookmark::label` even when live, `short_name` of it for a symbol with the whole in the tooltip and
-under the filter, as a History row does, so a row does not change its spelling when its binary
+the temporal tab and a `NewTab` with Ctrl (`Reach::outside`, the one rule every row outside the
+panes reads, on the enum in `ui/documents.rs` and not with any one list), never `navigate`, since a
+bookmark is a place and not a position on a trail. The row draws `Bookmark::label` even when live,
+`short_name` of it for a symbol with the whole in the tooltip and under the filter, as a History row
+does, so a row does not change its spelling when its binary
 goes. That is the **stored name**, except for a symbol the app named rather than the file, which
 stores no name and spells itself from what was saved (`agents/Persistence.md`).
 Right-click offers **Remove bookmark**, by index rather than by place, because a dead row is exactly

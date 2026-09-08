@@ -239,6 +239,8 @@ command.
   it has asked the server, what came back, and why the asking waits until the server is
   ready; and which files the server has been told the reader has open, which is what makes
   it answer about them.
+- `src/ui/keyboard.rs` — the boxes inside the tab on screen the keyboard can be in, and the
+  ask a press on a chip makes for it to go there.
 - `src/ui/keys.rs` — whether Shift, Ctrl and Alt are held, kept by the root's global key
   handlers because a pointer event carries no modifiers.
 - `src/ui/marks.rs` — the run picked out in each pane, the pair it lights on the other

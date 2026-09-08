@@ -160,7 +160,7 @@ pub(crate) fn press_place<T: Place>(
                 path,
                 item.line(),
                 item.columns(),
-                reach(ctrl),
+                Reach::outside(ctrl),
             );
             Pressed::Opened
         }

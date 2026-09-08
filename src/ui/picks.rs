@@ -125,7 +125,7 @@ pub(crate) fn rows_box() -> Option<AccessibilityId> {
 }
 
 /// Whether the keyboard is in the list being drawn. Asking is what subscribes the row to
-/// the focus moving, `is_focused` reading the platform's own state (`ui/focus.rs`).
+/// the focus moving, `is_focused` reading the platform's own state (`ui/keyboard.rs`).
 pub(crate) fn keyboard_in_list() -> bool {
     rows_box().is_some_and(|rows| rows.is_focused())
 }

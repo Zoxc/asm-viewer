@@ -115,7 +115,7 @@ leaves this list when it is. That is a move made on request, like everything els
   both panes at once, and a tab left for another goes on showing the caret it had. Only one pane
   holds the keyboard, and a caret is the app saying where the next key lands, so every caret but
   that one says the keyboard is somewhere it is not. What it needs is already there: each pane
-  registers its focusable box with `Keys` (`src/ui/focus.rs`), and the chip's top rule already
+  registers its focusable box with `Keys` (`src/ui/keyboard.rs`), and the chip's top rule already
   asks whether the keyboard is in the tab, so this is the pane asking that same question and the
   row being told the answer. The decision is the selection, which is not the caret: a run has to
   stay drawn while the keyboard is elsewhere, or a reader could not see what they had selected

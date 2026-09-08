@@ -84,8 +84,8 @@ language server is running, and what would stop it -- `agents/Lsp.md`); `SplitRa
 **A context lives with the mechanism that owns it, and so does the bundle that groups it.**
 `src/ui/state.rs` holds only what belongs to no one mechanism -- the objects, the store, the
 project, the window -- and each of the others sits beside the code it is about: `Marked` in
-`marks.rs`, `Doors` in `focus.rs`, `Shift`/`Ctrl`/`Alt` in `keys.rs`, `Loading` in
-`loading.rs`, the `Pad*` family in `pad.rs`. The **value** a context holds goes the same way
+`marks.rs`, `Doors` in `focus.rs`, `Keyboard` in `keyboard.rs`, `Shift`/`Ctrl`/`Alt` in
+`keys.rs`, `Loading` in `loading.rs`, the `Pad*` family in `pad.rs`. The **value** a context holds goes the same way
 where one page is all that edits it: `Proj` and `Prefs` are provided at the root, but
 `OpenProject` sits in `project_view.rs` and `EditedSettings` in `settings_view.rs`, beside the
 pages that fill them.
@@ -240,9 +240,9 @@ header), pushed onto that tab's trail so the place left is one Back away. **`New
 screen, in a tab that stays (Ctrl+click on anything, a menu item). **`Preview`** is from outside the
 panes (a sidebar row), into the one temporal tab, pushed onto its trail so Back inside it walks the
 rows clicked, or into a new temporal tab where there is none. **Ctrl says one thing everywhere**: a
-tab of its own. Which two functions beside `Reach` write down, since neither belongs to any one
-list: `reach` is what a press *outside* the panes means (`Preview`, or `NewTab` with Ctrl), and
-`reach_inside` what a press on a link *inside* one means (`InPlace`, or `NewTab` with Ctrl).
+tab of its own. Which two functions on `Reach` write down, since neither belongs to any one list:
+`Reach::outside` is what a press *outside* the panes means (`Preview`, or `NewTab` with Ctrl), and
+`Reach::inside` what a press on a link *inside* one means (`InPlace`, or `NewTab` with Ctrl).
 
 Under every reach a tab already showing the place is **raised** instead, the one on screen
 preferred where two show it -- one branch above the match, since the raise is the same whichever

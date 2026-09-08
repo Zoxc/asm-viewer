@@ -793,7 +793,7 @@ fn press_location(
     let open = doors.open;
     let symbol_tab = Document::Assembly(Selection::Symbol(symbol.clone()));
     let Some(at) = at else {
-        open_document(open, doors.visits, symbol_tab, reach(ctrl));
+        open_document(open, doors.visits, symbol_tab, Reach::outside(ctrl));
         return Pressed::Opened;
     };
     // Chosen for the tab the question was asked from. The choice is that entry's, and the
@@ -829,7 +829,7 @@ fn press_location(
                     address: None,
                     columns: None,
                 },
-                reach(ctrl),
+                Reach::outside(ctrl),
             );
         }
     }
