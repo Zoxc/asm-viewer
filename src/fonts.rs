@@ -66,12 +66,39 @@ pub struct Fonts {
     pub mono: Font,
 }
 
-/// Which of the two fonts is being asked for. Every desktop names the same pair and
-/// names it differently, so the key belongs where the desktop is.
+/// Which of the two fonts is being asked for, and every per-font fact under it: what each
+/// desktop calls it, the platform's own family, the app's own size, and the reader's
+/// setting for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Which {
     Ui,
     Fixed,
+}
+
+impl Which {
+    /// The platform's own family for this font.
+    fn family(self) -> &'static str {
+        match self {
+            Which::Ui => DEFAULT_UI,
+            Which::Fixed => DEFAULT_MONO,
+        }
+    }
+
+    /// The app's own size for it, in points.
+    fn points(self) -> f32 {
+        match self {
+            Which::Ui => DEFAULT_UI_POINTS,
+            Which::Fixed => DEFAULT_MONO_POINTS,
+        }
+    }
+
+    /// The reader's own setting for it.
+    fn setting(self, settings: &Settings) -> &FontSetting {
+        match self {
+            Which::Ui => &settings.interface,
+            Which::Fixed => &settings.fixed,
+        }
+    }
 }
 
 /// A font as a desktop wrote it down. The size is optional because Gnome's spec allows
@@ -457,12 +484,7 @@ fn desktop_answer(which: Which) -> Option<&'static Spec> {
 /// One font, merged: the user's overrides in front of the desktop's answer, field by
 /// field, with the platform's own family behind both. Pure, and handed the desktop's
 /// answer rather than asking for it, so the merge is testable with no desktop at all.
-fn resolve_font(
-    setting: &FontSetting,
-    desktop: Option<&Spec>,
-    default: &'static str,
-    default_points: f32,
-) -> Font {
+fn resolve_font(setting: &FontSetting, desktop: Option<&Spec>, which: Which) -> Font {
     let family = setting
         .family()
         .map(str::to_owned)
@@ -474,16 +496,18 @@ fn resolve_font(
         families: family
             .map(Cow::Owned)
             .into_iter()
-            .chain([Cow::Borrowed(default)])
+            .chain([Cow::Borrowed(which.family())])
             .collect(),
         points: setting
             .size()
             .or_else(|| desktop.and_then(|desktop| desktop.points))
-            .unwrap_or(default_points),
+            .unwrap_or(which.points()),
     }
 }
 
-fn font(setting: &FontSetting, which: Which, default: &'static str, default_points: f32) -> Font {
+fn font(settings: &Settings, which: Which) -> Font {
+    let setting = which.setting(settings);
+
     // The desktop is asked only where it has something left to answer: a font whose
     // family *and* size the user has chosen has no unanswered half, so a fully configured
     // app spawns no process.
@@ -491,7 +515,7 @@ fn font(setting: &FontSetting, which: Which, default: &'static str, default_poin
         .then(|| desktop_answer(which))
         .flatten();
 
-    resolve_font(setting, desktop, default, default_points)
+    resolve_font(setting, desktop, which)
 }
 
 /// The two fonts with nothing asked of anyone: the platform's own families at the app's
@@ -503,8 +527,8 @@ pub fn defaults() -> Fonts {
     let setting = FontSetting::default();
 
     Fonts {
-        ui: resolve_font(&setting, None, DEFAULT_UI, DEFAULT_UI_POINTS),
-        mono: resolve_font(&setting, None, DEFAULT_MONO, DEFAULT_MONO_POINTS),
+        ui: resolve_font(&setting, None, Which::Ui),
+        mono: resolve_font(&setting, None, Which::Fixed),
     }
 }
 
@@ -512,18 +536,8 @@ pub fn defaults() -> Fonts {
 /// rather than reading them, so the settings page can resolve what it is editing.
 pub fn resolve(settings: &Settings) -> Fonts {
     Fonts {
-        ui: font(
-            &settings.interface,
-            Which::Ui,
-            DEFAULT_UI,
-            DEFAULT_UI_POINTS,
-        ),
-        mono: font(
-            &settings.fixed,
-            Which::Fixed,
-            DEFAULT_MONO,
-            DEFAULT_MONO_POINTS,
-        ),
+        ui: font(settings, Which::Ui),
+        mono: font(settings, Which::Fixed),
     }
 }
 

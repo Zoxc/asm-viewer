@@ -82,7 +82,7 @@ fn setting(family: Option<&str>, size: Option<f32>) -> FontSetting {
 
 /// One font resolved against the mono defaults, since that is what every case below is.
 fn resolved(setting: &FontSetting, desktop: Option<Spec>) -> Font {
-    resolve_font(setting, desktop.as_ref(), DEFAULT_MONO, DEFAULT_MONO_POINTS)
+    resolve_font(setting, desktop.as_ref(), Which::Fixed)
 }
 
 #[test]
