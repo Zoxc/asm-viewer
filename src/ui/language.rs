@@ -825,7 +825,7 @@ pub(crate) fn use_language_with(
                 // A file read for a project that has since been left says nothing about
                 // the one that is open now. The project and not the server is what this
                 // answer is about, which is why the run says nothing about it.
-                let open = workspace(&proj.peek());
+                let open = proj.peek().workspace();
                 if open.as_deref() != Some(directory.as_path()) {
                     return;
                 }
@@ -954,7 +954,7 @@ pub(crate) fn use_language_with(
     // counts. The two reads are bound first, since the stop below writes the state this
     // effect is about.
     let open = proj.read().clone();
-    let deps = (open.file.clone(), workspace(&open));
+    let deps = (open.file.clone(), open.workspace());
     // What the effect last saw, so that it can tell the two changes apart. A directory
     // typed into the box is the reader pointing *this* project somewhere else, and the
     // agreement was to the old place; a project arriving is another project's answer
@@ -996,7 +996,7 @@ pub(crate) fn use_language_with(
 pub(crate) fn start_server(language: State<Language>, proj: State<OpenProject>, jobs: &LspJobs) {
     let open = proj.peek().clone();
     // Nothing to run one over.
-    let Some(directory) = workspace(&open) else {
+    let Some(directory) = open.workspace() else {
         return;
     };
     let asking = Asking {
@@ -1186,7 +1186,7 @@ impl Component for ServerButton {
         // dropped here: the press below writes the very state this looked at.
         let held = language.read().clone();
         let open = proj.read().clone();
-        let directory = workspace(&open);
+        let directory = open.workspace();
 
         // With no directory there is nothing to run a server over.
         let live = directory.is_some();

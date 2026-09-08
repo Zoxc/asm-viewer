@@ -210,7 +210,7 @@ impl Component for SearchPanel {
                 .unwrap_or_default()
         });
         let submits = use_state(|| 0u64);
-        let directory = given(&proj.read().directory).map(str::to_owned);
+        let directory = proj.read().workspace();
 
         let rows = use_memo(move || searched.read().hits.rows(&Matcher::Everything));
         let rows = rows.read().clone();
@@ -224,7 +224,7 @@ impl Component for SearchPanel {
             if *count == 0 {
                 return;
             }
-            let directory = given(&proj.peek().directory).map(str::to_owned);
+            let directory = proj.peek().workspace();
             let Some(directory) = directory else {
                 return;
             };
@@ -232,7 +232,7 @@ impl Component for SearchPanel {
                 searched,
                 dock,
                 SearchQuery {
-                    root: PathBuf::from(directory),
+                    root: directory,
                     filter: filter.peek().clone(),
                 },
             );

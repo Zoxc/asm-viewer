@@ -506,7 +506,7 @@ pub(crate) fn ask_for_a_directory(states: ProjectStates) {
             return;
         };
         new_project(states);
-        proj.write().directory = handle.path().to_string_lossy().into_owned();
+        proj.write().workspace_text = handle.path().to_string_lossy().into_owned();
     });
 }
 

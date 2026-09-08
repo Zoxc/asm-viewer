@@ -328,7 +328,7 @@ pub(crate) fn root_key_down(
         reach_search(searched, dock);
     }
     if is_finder_chord(key, modifiers) {
-        let root = given(&proj.peek().directory).map(PathBuf::from);
+        let root = proj.peek().workspace();
         open_finder(finder, root);
     }
 }

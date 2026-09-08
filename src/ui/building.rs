@@ -346,7 +346,7 @@ fn finished(
     // What the panes have read of the workspace is from before the reader edited it and
     // pressed Build. Dropped whatever the build came to: a build that failed says the
     // files have changed just as one that did not.
-    let directory = workspace(&states.proj.peek());
+    let directory = states.proj.peek().workspace();
     if let Some(directory) = directory {
         forget_source_under(&directory);
         // And the language server is holding the text from before it, for every file of
@@ -391,11 +391,6 @@ pub(crate) fn start_build(
             what: BuildWhat::Build,
         });
     }
-}
-
-/// The project's directory as a path, or `None` when the reader has not named one.
-pub(crate) fn workspace(proj: &OpenProject) -> Option<PathBuf> {
-    given(&proj.directory).map(PathBuf::from)
 }
 
 #[cfg(test)]

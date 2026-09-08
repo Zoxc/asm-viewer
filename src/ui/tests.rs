@@ -19094,7 +19094,7 @@ fn files_over(line: u32) -> (TestingRunner, ProjectStates, Temporary) {
     let (mut test, states) =
         TestingRunner::new(files_harness, (300., 400.).into(), project_states!(), 1.);
     let mut proj = states.proj;
-    proj.write().directory = directory.to_string_lossy().into_owned();
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
     settle(&mut test);
     (test, states, directory)
 }
@@ -19255,7 +19255,7 @@ fn no_directory_draws_the_placeholder() {
     let directory = run_directory_under(line!(), "project");
     std::fs::write(directory.join("main.rs"), "fn main() {}\n").expect("writing the source");
     let mut proj = states.proj;
-    proj.write().directory = directory.to_string_lossy().into_owned();
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
     // Two settles: the write wakes the effect, the effect's write wakes the memo, and the
     // memo's write is what the rows are drawn from.
     settle(&mut test);
@@ -19263,7 +19263,7 @@ fn no_directory_draws_the_placeholder() {
     assert!(label_area(&test, "No project directory. Set one in the Project view.").is_none());
     assert!(label_area(&test, "main.rs").is_some());
 
-    proj.write().directory = String::from("   ");
+    proj.write().workspace_text = String::from("   ");
     settle(&mut test);
     settle(&mut test);
     assert!(label_area(&test, "main.rs").is_none());
@@ -22305,7 +22305,7 @@ fn search_and_modifiers(
         1.,
     );
     let mut proj = states.0.proj;
-    proj.write().directory = directory.to_string_lossy().into_owned();
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
     settle(&mut test);
     (
         test, states.0, directory, states.1, states.2, states.3, states.4,
@@ -22895,7 +22895,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
     let (mut test, states, _language, asking, asks) = mount_project!(answer);
 
     let mut proj = states.proj;
-    proj.write().directory = "/work/app".to_owned();
+    proj.write().workspace_text = "/work/app".to_owned();
     pump(&mut test, || states.build.peek().manifest.is_some());
     assert_eq!(asks.try_recv(), Ok(AskedToBuild::Read));
 
@@ -23060,7 +23060,7 @@ fn an_artifact_load_survives_the_view_being_left() {
         mount_project!(leaving_project_harness, answer);
 
     let mut proj = states.proj;
-    proj.write().directory = "/work/app".to_owned();
+    proj.write().workspace_text = "/work/app".to_owned();
     pump(&mut test, || states.build.peek().manifest.is_some());
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
@@ -23127,7 +23127,7 @@ fn a_finished_build_forgets_the_workspace_sources() {
         });
 
     let mut proj = states.proj;
-    proj.write().directory = directory.to_string_lossy().into_owned();
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
     test.sync_and_update();
 
     let drawn = || source_text(&path).expect("the file").0.rope.to_string();
@@ -23236,7 +23236,7 @@ fn a_directory_with_no_manifest_builds_nothing() {
         });
 
     let mut proj = states.proj;
-    proj.write().directory = "/work/not-a-workspace".to_owned();
+    proj.write().workspace_text = "/work/not-a-workspace".to_owned();
     pump(&mut test, || states.build.peek().manifest.is_none());
 
     let drawn = labels(&test);
@@ -23293,7 +23293,7 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
     let (mut test, states, _language, _asking, _asks) = mount_project!(answer);
 
     let mut proj = states.proj;
-    proj.write().directory = "/work/app".to_owned();
+    proj.write().workspace_text = "/work/app".to_owned();
     pump(&mut test, || states.build.peek().manifest.is_some());
 
     let drawn = labels(&test);
@@ -23415,7 +23415,7 @@ fn a_diagnostics_place_opens_the_file_it_names() {
         });
 
     let mut proj = states.proj;
-    proj.write().directory = directory.to_string_lossy().into_owned();
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
     // The section is drawn once the manifest has been read, which is a worker's answer away.
     pump(&mut test, || states.build.peek().manifest.is_some());
     let mut build = states.build;
@@ -23488,7 +23488,7 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
         });
 
     let mut proj = states.proj;
-    proj.write().directory = directory.to_string_lossy().into_owned();
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
     pump(&mut test, || states.build.peek().manifest.is_some());
 
     let mut build = states.build;
@@ -23745,7 +23745,7 @@ fn until_server(test: &mut TestingRunner, language: State<Language>, wanted: &Ls
 /// The prompt is its own tests' subject.
 fn with_a_directory(test: &mut TestingRunner, states: &ProjectStates, directory: &str) {
     let mut proj = states.proj;
-    proj.write().directory = directory.to_owned();
+    proj.write().workspace_text = directory.to_owned();
     settle(test);
     proj.write().trusted = true;
     settle(test);
@@ -24113,7 +24113,7 @@ fn the_project_view_says_how_the_language_server_went() {
     assert!(says(&test, "No directory"));
 
     let mut proj = states.proj;
-    proj.write().directory = "/p".to_owned();
+    proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
     assert!(says(&test, "Not running"), "{:?}", labels(&test));
 
@@ -24180,7 +24180,7 @@ fn the_project_view_lists_the_settings_the_project_gave_the_server() {
         });
 
     let mut proj = states.proj;
-    proj.write().directory = directory.to_string_lossy().into_owned();
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
     pump(&mut test, || !language.peek().overrides().is_empty());
 
     let drawn = labels(&test);
@@ -24217,7 +24217,7 @@ fn the_project_view_says_why_a_settings_file_could_not_be_used() {
         });
 
     let mut proj = states.proj;
-    proj.write().directory = directory.to_string_lossy().into_owned();
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
     pump(&mut test, || language.peek().unreadable().is_some());
 
     let drawn = labels(&test);
@@ -24274,7 +24274,7 @@ fn the_project_views_button_starts_and_stops_the_language_server() {
             refused: None,
         });
     let mut proj = states.proj;
-    proj.write().directory = "/p".to_owned();
+    proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
     proj.write().trusted = true;
     settle(&mut test);
@@ -24591,7 +24591,7 @@ fn a_press_over_a_directory_nobody_agreed_to_asks_before_it_starts() {
         _ => None,
     });
     let mut proj = states.proj;
-    proj.write().directory = "/p".to_owned();
+    proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
 
     press_at(&mut test, the_control());
@@ -24625,7 +24625,7 @@ fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
         }
     });
     let mut proj = states.proj;
-    proj.write().directory = "/p".to_owned();
+    proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
     press_at(&mut test, the_control());
     settle(&mut test);
@@ -24659,7 +24659,7 @@ fn declining_starts_nothing_and_is_not_remembered() {
         _ => None,
     });
     let mut proj = states.proj;
-    proj.write().directory = "/p".to_owned();
+    proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
     press_at(&mut test, the_control());
     settle(&mut test);
@@ -24702,7 +24702,7 @@ fn a_project_that_agreed_before_the_app_opened_is_not_asked_again() {
             }
         },
         OpenProject {
-            directory: "/p".to_owned(),
+            workspace_text: "/p".to_owned(),
             trusted: true,
             ..OpenProject::default()
         }
@@ -24749,7 +24749,7 @@ fn changing_the_directory_asks_about_the_new_one() {
     until_server(&mut test, language, &Lsp::Running);
 
     let mut proj = states.proj;
-    proj.write().directory = "/elsewhere".to_owned();
+    proj.write().workspace_text = "/elsewhere".to_owned();
     settle(&mut test);
 
     assert!(!proj.read().trusted, "the agreement outlived its directory");
@@ -24776,7 +24776,7 @@ fn the_project_view_shows_the_agreement_and_takes_it_back() {
             refused: None,
         });
     let mut proj = states.proj;
-    proj.write().directory = "/p".to_owned();
+    proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
 
     // Nobody has agreed to anything yet, and it says so rather than saying nothing.
@@ -24832,7 +24832,7 @@ fn switching_projects_keeps_the_answer_the_new_one_brought() {
     let mut proj = states.proj;
     let mut open = proj.peek().clone();
     open.file = Some(PathBuf::from("/elsewhere/other.avproj"));
-    open.directory = "/elsewhere".to_owned();
+    open.workspace_text = "/elsewhere".to_owned();
     open.trusted = true;
     proj.set(open);
     settle(&mut test);
@@ -24867,7 +24867,7 @@ fn the_project_views_button_asks_before_it_starts_too() {
             refused: None,
         });
     let mut proj = states.proj;
-    proj.write().directory = "/p".to_owned();
+    proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
 
     let start = centre_of(&test, "Start");
@@ -25980,7 +25980,7 @@ fn finder_over(
     let (states, finder, held, dock) = states;
     let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
     let mut proj = states.proj;
-    proj.write().directory = directory.to_string_lossy().into_owned();
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
     settle(&mut test);
     (test, states, finder, keys, directory, dock)
 }

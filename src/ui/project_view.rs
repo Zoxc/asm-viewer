@@ -310,7 +310,7 @@ impl Component for IdentitySection {
                 else {
                     return;
                 };
-                proj.write().directory = handle.path().to_string_lossy().into_owned();
+                proj.write().workspace_text = handle.path().to_string_lossy().into_owned();
             });
         };
 
@@ -331,7 +331,7 @@ impl Component for IdentitySection {
                     .child(
                         Input::new(
                             proj.into_writable()
-                                .map(|open| &open.directory, |open| &mut open.directory),
+                                .map(|open| &open.workspace_text, |open| &mut open.workspace_text),
                         )
                         .placeholder("None")
                         .compact()
@@ -412,7 +412,7 @@ impl Component for CargoSection {
         let doors = use_doors();
         let ctrl = use_consume::<Ctrl>().0;
         let open = proj.read().clone();
-        let directory = workspace(&open);
+        let directory = open.workspace();
         let profile = open.profile;
 
         // The manifest is read on mount and whenever the directory or the profile
@@ -612,7 +612,7 @@ impl Component for LanguageSection {
         let spoken = language.read().clone();
         let lsp = use_consume::<LspJobs>();
         let open = proj.read().clone();
-        let directory = workspace(&open);
+        let directory = open.workspace();
 
         rect()
             .width(Size::fill())

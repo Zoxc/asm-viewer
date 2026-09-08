@@ -169,20 +169,13 @@ impl Component for FilesPanel {
         let ctrl = use_consume::<Ctrl>().0;
         // Read, not peeked: a keystroke in the Project view's directory box is a change
         // of what this is a tree of, and costs one `read_dir` of a half-typed path.
-        let directory = given(&proj.read().directory).map(str::to_owned);
+        let directory = proj.read().workspace();
         let first = directory.clone();
         // Built at the first render rather than by the effect below, which runs a beat
         // later and would draw the "not a directory" placeholder for one frame.
-        let mut tree = use_state(move || {
-            first
-                .as_deref()
-                .and_then(|directory| FileTree::new(Path::new(directory)))
-        });
-        use_side_effect_with_deps(&directory, move |directory: &Option<String>| {
-            let next = directory
-                .as_deref()
-                .and_then(|directory| FileTree::new(Path::new(directory)));
-            tree.set(next);
+        let mut tree = use_state(move || first.as_deref().and_then(FileTree::new));
+        use_side_effect_with_deps(&directory, move |directory: &Option<PathBuf>| {
+            tree.set(directory.as_deref().and_then(FileTree::new));
         });
         // A memo, not a walk per row: the `VirtualScrollView` has to be told how many rows
         // there are before it builds any of them.
@@ -192,7 +185,9 @@ impl Component for FilesPanel {
         let mut keys = ListKeys::none();
         let body = match (directory, rows) {
             (None, _) => placeholder("No project directory. Set one in the Project view."),
-            (Some(directory), None) => placeholder(format!("Not a directory: {directory}")),
+            (Some(directory), None) => {
+                placeholder(format!("Not a directory: {}", directory.display()))
+            }
             (Some(_), Some(rows)) => {
                 let length = rows.len();
                 // The rows the arrows step and Enter presses: the tree as it is drawn,

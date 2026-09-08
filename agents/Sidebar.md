@@ -334,12 +334,13 @@ fresher description of that one than a row read off a file could be.
 `OpenProject` is the value `Proj` holds, and its two editable fields are `String`s where `Details`
 has `Option`s: they are what is in two text boxes, and a text box has no third state. An empty box
 *is* how a reader says "I have not said". `OpenProject::details` is the one place the two spellings
-meet, and it trims, so a box of spaces is a box of nothing rather than a project named `" "`. Each
-box writes straight into `Proj`, so a keystroke is a state change the save observer sees like any
-other and `record` writes `project.toml` at once. That is a few hundred atomically-written bytes per
-keystroke of something typed once a project. The binaries it lists come from `Objects` through
-`project::binaries`, which is what the saved list is *derived from*, so what the pane draws is what
-the next write will say.
+meet, and it trims, so a box of spaces is a box of nothing rather than a project named `" "`.
+`OpenProject::workspace` is the directory box as a path, which everything wanting the project's
+directory calls rather than trimming and converting again. Each box writes straight into `Proj`, so
+a keystroke is a state change the save observer sees like any other and `record` writes
+`project.toml` at once. That is a few hundred atomically-written bytes per keystroke of something
+typed once a project. The binaries it lists come from `Objects` through `project::binaries`, which
+is what the saved list is *derived from*, so what the pane draws is what the next write will say.
 
 **The pane is five sections and not one render.** The project's own fields, the binaries, the
 cargo build, the language server and the recent projects are each a component reading the contexts

@@ -312,13 +312,16 @@ pub(crate) struct Bookmarked(pub(crate) State<Bookmarks>);
 ///
 /// Two of its fields are `String`s where [`Details`] has `Option`s, because this is what is
 /// in two text boxes and a text box has no third state: an empty box *is* how a reader says
-/// "I have not said". [`OpenProject::details`] is the one place the two spellings meet.
+/// "I have not said". [`OpenProject::details`] is the one place the two spellings meet, and
+/// [`OpenProject::workspace`] is the directory box as the path everything else wants.
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct OpenProject {
     /// The file the project is kept in, which is its identity. `None` until a project
     /// exists on disk at all.
     pub(crate) file: Option<PathBuf>,
-    pub(crate) directory: String,
+    /// The directory the project is over, as the reader typed it: what is built, walked,
+    /// searched, and read with a language server. [`OpenProject::workspace`] is it as a path.
+    pub(crate) workspace_text: String,
     /// The language server to read this project with, empty for the usual one. A box like
     /// the one above: a project on a toolchain of its own is the only one that fills it.
     pub(crate) language_server: String,
@@ -340,7 +343,7 @@ impl OpenProject {
     pub(crate) fn opened(file: PathBuf, project: &Project, trusted: bool) -> OpenProject {
         OpenProject {
             file: Some(file),
-            directory: project
+            workspace_text: project
                 .directory
                 .as_ref()
                 .map(|directory| directory.to_string_lossy().into_owned())
@@ -350,6 +353,11 @@ impl OpenProject {
             trusted,
             profile: project.cargo.clone().unwrap_or_default().profile,
         }
+    }
+
+    /// The project's directory as a path, or `None` when the reader has not named one.
+    pub(crate) fn workspace(&self) -> Option<PathBuf> {
+        given(&self.workspace_text).map(PathBuf::from)
     }
 
     /// The program to read this project with: what the reader named, or the one the
@@ -378,7 +386,7 @@ impl OpenProject {
     /// it reaches the disk through [`Session::from_state`] instead.
     pub(crate) fn details(&self) -> Details {
         Details {
-            directory: given(&self.directory).map(PathBuf::from),
+            directory: self.workspace(),
             language_server: given(&self.language_server).map(str::to_owned),
             language_files: given(&self.language_files).map(str::to_owned),
             // Absent while it says nothing the defaults do not: a reader who has never
