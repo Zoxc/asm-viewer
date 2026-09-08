@@ -64,6 +64,22 @@ fn a_tab_shows_the_current_entry_of_its_trail() {
     assert!(docs.contains(id, &Stop::whole(file("b.rs"))));
 }
 
+/// A place goes on the trail of the tab it names, and nowhere at all when that tab has
+/// been closed -- a menu left open over a tab that went while it was open.
+#[test]
+fn a_place_goes_on_the_trail_of_the_tab_it_names() {
+    let mut docs = Docs::default();
+    let id = docs.open(file("a.rs"));
+    let other = docs.open(file("c.rs"));
+    assert!(docs.push(id, Stop::whole(file("b.rs"))));
+    assert!(docs.get(id) == Some(&file("b.rs")));
+    assert!(docs.get(other) == Some(&file("c.rs")));
+
+    docs.close(id);
+    assert!(!docs.push(id, Stop::whole(file("b.rs"))));
+    assert!(docs.trail(id).is_none());
+}
+
 /// Two tabs can show one place. Which one answers must not depend on the order a
 /// `HashMap` walks, so it is the lowest id.
 #[test]

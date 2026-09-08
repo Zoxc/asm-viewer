@@ -20994,6 +20994,78 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     assert!(states.visits.peek().entries() == walked);
 }
 
+/// A link followed with no document tab on screen has nothing to replace, so it lands the
+/// way Ctrl does: a tab already showing the place is raised and promoted where it was the
+/// temporal one, and a place no tab shows opens a tab of its own.
+#[test]
+fn a_link_followed_with_a_page_on_screen_lands_in_a_tab_of_its_own() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let documents: Vec<Document> = symbols
+        .iter()
+        .take(2)
+        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .collect();
+
+    let (mut test, states) =
+        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+
+    let preview = open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::Preview,
+    )
+    .expect("a document panel");
+    assert_eq!(states.open.docs.peek().temporal(), Some(preview));
+
+    // A page on screen: no tab for a link to be followed in.
+    let show_page = || {
+        let mut strip = states.open.strip;
+        strip.write().show(Tab::Page(Page::Settings));
+    };
+    show_page();
+    test.sync_and_update();
+    assert!(states.open.active_tab().is_none());
+
+    // The place a tab already shows: that tab, raised, and promoted as Ctrl would.
+    let landed = open_document(
+        states.open,
+        states.visits,
+        documents[0].clone(),
+        Reach::InPlace,
+    );
+    assert_eq!(landed, Some(preview), "a link opened a second tab");
+    assert_eq!(states.open.active_id(), Some(preview));
+    assert_eq!(
+        states.open.docs.peek().temporal(),
+        None,
+        "the raised tab was left temporal"
+    );
+    assert!(trail_of(&states, preview) == [documents[0].clone()]);
+
+    // A place no tab shows, with nothing to replace: a tab of its own.
+    show_page();
+    test.sync_and_update();
+    let opened = open_document(
+        states.open,
+        states.visits,
+        documents[1].clone(),
+        Reach::InPlace,
+    )
+    .expect("a document panel");
+    assert_ne!(
+        opened, preview,
+        "the link replaced a tab that was not on screen"
+    );
+    test.sync_and_update();
+    assert!(open_documents(states.open) == [documents[0].clone(), documents[1].clone()]);
+    assert!(trail_of(&states, opened) == [documents[1].clone()]);
+}
+
 /// A click from outside the panes opens its place in one temporal tab, which the next such
 /// click reuses by pushing onto its trail -- so Back inside it walks the rows clicked --
 /// and a tab already showing the place is raised instead, whichever tab that is. Walking

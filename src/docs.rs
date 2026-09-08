@@ -90,9 +90,19 @@ impl Docs {
         self.open.get(&id)
     }
 
-    /// The same trail, to move along or push onto.
+    /// The same trail, to move along. Putting a place on one is [`Docs::push`].
     pub fn trail_mut(&mut self, id: DocId) -> Option<&mut History> {
         self.open.get_mut(&id)
+    }
+
+    /// Put `stop` onto the trail of `id`. Whether it went: false for a closed tab, which
+    /// has no trail to go on.
+    pub fn push(&mut self, id: DocId, stop: Stop) -> bool {
+        let Some(trail) = self.open.get_mut(&id) else {
+            return false;
+        };
+        trail.push(stop);
+        true
     }
 
     /// The tab showing `document` now, or `None` when no tab does. The lowest id where

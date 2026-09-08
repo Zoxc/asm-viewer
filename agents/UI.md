@@ -245,8 +245,10 @@ list: `reach` is what a press *outside* the panes means (`Preview`, or `NewTab` 
 `reach_inside` what a press on a link *inside* one means (`InPlace`, or `NewTab` with Ctrl).
 
 Under every reach a tab already showing the place is **raised** instead, the one on screen
-preferred where two show it. `NewTab` promotes the temporal one, since what was asked for is a tab
-of this place that stays; `Preview` promotes nothing. Every opening is recorded in `Doors::visits`. **What
+preferred where two show it -- one branch above the match, since the raise is the same whichever
+reach asked for it. `NewTab` promotes the temporal one, since what was asked for is a tab of this
+place that stays; `Preview` promotes nothing; `InPlace` with no tab on screen has nothing to
+replace and is `NewTab`, promotion included. Every opening is recorded in `Doors::visits`. **What
 promotes** the temporal tab: `NewTab` on the place it shows, a link followed in place inside it (the
 reader is reading in it), or a double press on its header. `navigate` never does, walking a trail
 not being going somewhere new in it. `raise` is the move between places already open (the strip's

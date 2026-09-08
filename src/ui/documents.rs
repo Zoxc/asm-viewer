@@ -130,6 +130,22 @@ pub(crate) fn open_stop(
     };
     let temporal = docs.peek().temporal();
 
+    // A tab already showing the place is raised instead of anything opening, under every
+    // reach but the one that opens *in* the tab on screen, which has its own rules below.
+    // The tab has the document; what it may not have is the place. Raising promotes the
+    // temporal tab under the two reaches that ask for a tab that stays -- `NewTab`, and
+    // `InPlace` with no tab on screen, which is `NewTab` -- and never under a preview.
+    let in_place = reach == Reach::InPlace && active.is_some();
+    if let Some(id) = showing.filter(|_| !in_place) {
+        moved_to(open, id, &stop);
+        if reach != Reach::Preview && temporal == Some(id) {
+            docs.write().promote(id);
+        }
+        raise(open, id);
+        return Some(id);
+    }
+
+    // Nothing left to raise: what each reach opens, or the trail the place goes on.
     match reach {
         Reach::InPlace if active.is_some() => {
             let (id, current) = active?;
@@ -137,13 +153,7 @@ pub(crate) fn open_stop(
             // a different one. Otherwise nothing is pushed, and a write would wake every
             // header.
             let moved = match current != target {
-                true => {
-                    let mut docs = docs.write();
-                    if let Some(trail) = docs.trail_mut(id) {
-                        trail.push(stop);
-                    }
-                    true
-                }
+                true => docs.write().push(id, stop),
                 false => moved_to(open, id, &stop),
             };
             // A link followed inside the temporal tab is the reader reading in it,
@@ -154,48 +164,27 @@ pub(crate) fn open_stop(
             Some(id)
         }
         Reach::InPlace | Reach::NewTab => {
-            if let Some(id) = showing {
-                // The tab has the document; what it may not have is the place.
-                moved_to(open, id, &stop);
-                if temporal == Some(id) {
-                    docs.write().promote(id);
-                }
-                raise(open, id);
-                return Some(id);
-            }
             let id = docs.write().open(stop);
             strip.write().show(Tab::Document(id));
             Some(id)
         }
-        Reach::Preview => {
-            if let Some(id) = showing {
-                moved_to(open, id, &stop);
+        Reach::Preview => match temporal {
+            Some(id) => {
+                docs.write().push(id, stop);
                 raise(open, id);
-                return Some(id);
+                Some(id)
             }
-            match temporal {
-                Some(id) => {
-                    {
-                        let mut docs = docs.write();
-                        if let Some(trail) = docs.trail_mut(id) {
-                            trail.push(stop);
-                        }
-                    }
-                    raise(open, id);
-                    Some(id)
-                }
-                None => {
-                    let id = {
-                        let mut docs = docs.write();
-                        let id = docs.open(stop);
-                        docs.mark_temporal(id);
-                        id
-                    };
-                    strip.write().show(Tab::Document(id));
-                    Some(id)
-                }
+            None => {
+                let id = {
+                    let mut docs = docs.write();
+                    let id = docs.open(stop);
+                    docs.mark_temporal(id);
+                    id
+                };
+                strip.write().show(Tab::Document(id));
+                Some(id)
             }
-        }
+        },
     }
 }
 
@@ -491,12 +480,7 @@ fn moved_to(open: Open, id: DocId, stop: &Stop) -> bool {
         return false;
     }
     let mut docs = open.docs;
-    let mut docs = docs.write();
-    let Some(trail) = docs.trail_mut(id) else {
-        return false;
-    };
-    trail.push(stop.clone());
-    true
+    docs.write().push(id, stop.clone())
 }
 
 /// Raise the open tab `id` on `at`: what a Locations row does for the source-driven tab
