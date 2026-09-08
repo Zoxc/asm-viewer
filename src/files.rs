@@ -15,6 +15,7 @@ use std::{
 
 use crate::shared::Shared;
 use crate::source;
+use crate::walk;
 
 /// What is known of a directory's contents.
 #[derive(Clone, Debug)]
@@ -175,8 +176,8 @@ impl Node {
     }
 }
 
-/// One directory's entries: directories first, then files, each by name without regard to
-/// case and then with it, so `Makefile` and `main.rs` sit where a reader looks for them.
+/// One directory's entries: directories first, then files, each by [`walk::by_name`] --
+/// the walk's own ordering, under a different leading term.
 ///
 /// **A symlink is not an entry**, whatever it points at: the kind is the one the read
 /// hands back, and nothing here follows one. That is [`source::showable`]'s rule and the
@@ -206,8 +207,7 @@ fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
         b.kind
             .is_directory()
             .cmp(&a.kind.is_directory())
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| walk::by_name(&a.name, &b.name))
     });
     Ok(nodes)
 }

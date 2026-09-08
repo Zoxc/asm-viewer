@@ -59,6 +59,23 @@ fn a_directorys_files_come_before_the_directories_under_it() {
     assert_eq!(walked(&root), ["a.rs", "b.rs", "a/inner.rs"]);
 }
 
+/// Where the two spellings of "lowercase" part. A character is lowered on its own, so a
+/// capital sigma sorts under the medial σ wherever it stands, never under the word-final
+/// ς that lowering the whole name at once would give it.
+#[test]
+fn a_name_is_lowercased_a_character_at_a_time() {
+    let capital = "\u{39f}\u{394}\u{39f}\u{3a3}"; // ΟΔΟΣ
+    let medial = "\u{3bf}\u{3b4}\u{3bf}\u{3c3}"; // οδοσ
+    let word_final = "\u{3bf}\u{3b4}\u{3bf}\u{3c2}"; // οδος
+
+    let mut names = [capital, medial, word_final];
+    names.sort_by(|a, b| by_name(a, b));
+
+    assert_eq!(names, [word_final, capital, medial]);
+    // Lowering the whole name would tie the capital with the word-final spelling instead.
+    assert_eq!(capital.to_lowercase(), word_final);
+}
+
 /// The rule the module exists for: what the search skips, the finder skips.
 #[test]
 fn what_git_is_told_to_ignore_is_not_walked() {

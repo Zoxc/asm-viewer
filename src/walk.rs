@@ -147,10 +147,26 @@ fn found_at(root: &Path, path: &Path) -> Option<Found> {
     })
 }
 
-/// One directory's entries, files before the directories under them and each by name
-/// without regard to case and then with it. The order the reader sees a list grow in, so
-/// it is settled here rather than left to the walker: a hit in a directory's own files
-/// arrives before the walk descends, and the list only ever grows at its end.
+/// By name without regard to case, and then with it, so `Makefile` sits beside `main.rs`
+/// rather than in a list of its own. Both readings of a project's directory sort by it --
+/// the walk here and the Files view's tree (`crate::files`) -- differing only in what
+/// each puts first.
+///
+/// Nothing is allocated: the names are lowercased a character at a time as they are
+/// compared. A character is lowercased on its own, with no regard for what is around it,
+/// so a name ending in a Greek capital sigma sorts under σ where `str::to_lowercase`
+/// would give the word-final ς. This is a sort key and not what a row draws.
+pub fn by_name(a: &str, b: &str) -> Ordering {
+    a.chars()
+        .flat_map(char::to_lowercase)
+        .cmp(b.chars().flat_map(char::to_lowercase))
+        .then_with(|| a.cmp(b))
+}
+
+/// One directory's entries, files before the directories under them and each by
+/// [`by_name`]. The order the reader sees a list grow in, so it is settled here rather
+/// than left to the walker: a hit in a directory's own files arrives before the walk
+/// descends, and the list only ever grows at its end.
 ///
 /// The comparator is handed paths and not entries, so the kind costs a `symlink_metadata`
 /// per comparison. A path that cannot be stat'ed sorts as a file, which is where a walker
@@ -161,11 +177,9 @@ fn order(a: &Path, b: &Path) -> Ordering {
             .map(|data| data.is_dir())
             .unwrap_or(false)
     };
-    let (a_name, b_name) = (source::name_of(a), source::name_of(b));
     directory(a)
         .cmp(&directory(b))
-        .then_with(|| a_name.to_lowercase().cmp(&b_name.to_lowercase()))
-        .then_with(|| a_name.cmp(&b_name))
+        .then_with(|| by_name(&source::borrowed_name(a), &source::borrowed_name(b)))
 }
 
 #[cfg(test)]

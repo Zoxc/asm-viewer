@@ -13,6 +13,7 @@
 
 use analysis::{SourceDigests, SourceHash};
 use std::{
+    borrow::Cow,
     collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
@@ -256,10 +257,15 @@ pub fn compiled(path: &Path) -> bool {
 /// What a path is called without its directory, and the whole path where it has no name --
 /// a root like `/`, which must not come out empty.
 pub fn name_of(path: &Path) -> String {
+    borrowed_name(path).into_owned()
+}
+
+/// [`name_of`] without the copy: borrowed where the name is valid UTF-8. One rule and not
+/// two, for a caller that asks per comparison rather than per row (`walk::order`).
+pub fn borrowed_name(path: &Path) -> Cow<'_, str> {
     path.file_name()
         .unwrap_or(path.as_os_str())
         .to_string_lossy()
-        .into_owned()
 }
 
 /// One source file: where it came from, and what it says. Splitting it into lines is the
