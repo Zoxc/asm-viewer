@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use analysis::{Architecture, BinaryFormat, Object, ObjectData};
 
 use super::*;
-use crate::project::Selection;
+use crate::document::Selection;
 
 /// A distinct stop: two calls with the same `name` still produce different `Arc`s, and so
 /// entries that do not compare equal.

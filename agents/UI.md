@@ -176,7 +176,7 @@ branch inside it is a branch nothing can ask about. Settings and the Scratchpad 
 with no project -- they are nobody's project's -- out of `NoProjectPage` and **not** the strip:
 the strip's tabs are written into the session, and there is no session to put a tab in.
 
-**One strip, three kinds of tab.** A `Document` (`project.rs`) is **a place in a binary or a file**.
+**One strip, three kinds of tab.** A `Document` (`document.rs`) is **a place in a binary or a file**.
 `Document::Assembly(Selection)` is an object or a function. `Document::Source(Arc<str>)` is a file
 as a string and not a `PathBuf`: the spelling the debug info said, or the project directory joined
 with a Files row's entries, which is deliberately the same spelling and is never canonicalised

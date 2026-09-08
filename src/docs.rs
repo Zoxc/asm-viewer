@@ -1,6 +1,6 @@
 //! The documents that are open, and the handle each one is known by.
 //!
-//! A tab holds a [`DocId`] rather than a [`crate::project::Document`] because a tab is
+//! A tab holds a [`DocId`] rather than a [`crate::document::Document`] because a tab is
 //! `Copy` -- a list's key, a menu row's capture -- and a `Document` is not. This is a side
 //! table, not the list of open documents: the order is the strip's own
 //! ([`crate::tabs::Strip`]). An entry exists here exactly while a tab holds its id.
@@ -13,8 +13,8 @@
 
 use std::collections::HashMap;
 
+use crate::document::Document;
 use crate::history::{History, Stop};
-use crate::project::Document;
 
 /// The handle a tab holds in place of the document it shows. A newtype so it cannot be
 /// confused with the panel ids the sidebar's dock numbers from zero.

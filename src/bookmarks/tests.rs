@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, Symbol, SymbolData};
 
 use super::*;
-use crate::project::Selection;
+use crate::document::Selection;
 
 /// A bare `Object` with the given text symbols, sorted by name as the parser leaves them.
 fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {

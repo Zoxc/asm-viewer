@@ -189,26 +189,6 @@ fn objects() -> Vec<Arc<Object>> {
     ]
 }
 
-/// A member is not a file, so both members of `/tmp/lib.a` answer for it and a symbol
-/// answers for the file its object came out of.
-#[test]
-fn everything_in_a_file_says_so() {
-    let objects = objects();
-    let lib = Path::new("/tmp/lib.a");
-    let other = Path::new("/tmp/some.dll");
-
-    let member = Selection::Object(objects[1].clone());
-    assert!(member.in_file(lib));
-    assert!(!member.in_file(other));
-
-    let symbol = Selection::Symbol(Symbol {
-        object: objects[0].clone(),
-        data: objects[0].symbols_sorted[0].clone(),
-    });
-    assert!(symbol.in_file(lib));
-    assert!(!symbol.in_file(other));
-}
-
 #[test]
 fn saves_and_resolves_a_symbol() {
     let objects = objects();
@@ -2594,17 +2574,6 @@ fn a_code_document_is_saved_by_its_object_and_found_again() {
     let text = toml::to_string(&tab).expect("serialises");
     let back: SavedTab = toml::from_str(&text).expect("parses back");
     assert_eq!(back, tab);
-}
-
-/// An object's code points into the file its object came out of, so it closes with it and
-/// with nothing else.
-#[test]
-fn a_code_document_closes_with_its_file() {
-    let objects = objects();
-    let code = Document::Code(objects[1].clone());
-    assert!(code.in_file(Path::new("/tmp/lib.a")));
-    assert!(!code.in_file(Path::new("/tmp/some.dll")));
-    assert!(code.symbol().is_none(), "no symbol to ask the worker about");
 }
 
 /// The two ways an object is shown are one saved document telling them apart, so a

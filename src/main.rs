@@ -3,6 +3,7 @@ mod cargo;
 mod chars;
 mod compiled;
 mod docs;
+mod document;
 mod files;
 mod filter;
 mod find;

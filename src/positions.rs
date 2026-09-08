@@ -17,7 +17,7 @@ use crate::docs::Entry;
 /// was last read. A tab that was never scrolled has no entry here and reads as the top.
 ///
 /// A `Vec` of pairs and not a `HashMap`, because the key is whatever the tab list holds:
-/// a [`crate::project::Document`] is compared by `Arc` pointer identity where it is a
+/// a [`crate::document::Document`] is compared by `Arc` pointer identity where it is a
 /// place in a binary and hashes by nothing at all.
 ///
 /// The value is a row for the two panes, an **address** for the listing of an object's
@@ -58,7 +58,7 @@ impl<T: Clone + PartialEq, V: Clone + PartialEq> Positions<T, V> {
     /// Forget every position `keep` answers false for: a closing tab's, or a closing
     /// binary's.
     ///
-    /// Not an optimisation: a [`crate::project::Document`] that is a place in a binary
+    /// Not an optimisation: a [`crate::document::Document`] that is a place in a binary
     /// holds the `Arc<Object>` it points into, so a position kept for a closed tab would
     /// hold that binary's bytes for as long as the app ran.
     pub fn forgetting(&mut self, keep: impl Fn(&T) -> bool) {
@@ -141,7 +141,7 @@ impl Driven {
     /// Forget every line and choice `keep` answers false for: what a closing tab does with
     /// its own entries and a closing binary with the entries it takes off the surviving
     /// tabs' trails. For the line, consistency and not [`Positions::forgetting`]'s reason
-    /// -- a [`crate::project::Document::Source`] key holds no `Arc<Object>`; for the
+    /// -- a [`crate::document::Document::Source`] key holds no `Arc<Object>`; for the
     /// choice, that reason.
     pub fn forgetting(&mut self, keep: impl Fn(&Entry) -> bool) {
         self.from.forgetting(&keep);

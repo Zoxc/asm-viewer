@@ -10,7 +10,8 @@ use std::{borrow::Cow, sync::Arc};
 use analysis::Object;
 use serde::{Deserialize, Serialize};
 
-use crate::project::{Document, SavedDocument};
+use crate::document::Document;
+use crate::project::SavedDocument;
 
 /// One bookmark: where it points and what to call it.
 ///

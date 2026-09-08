@@ -187,6 +187,9 @@ command.
   offsets a column is everywhere else, and where a compiler's line and column put a cursor.
 - `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
   a stretch is decoded, the symbol's own after, and an address for every one.
+- `src/document.rs` — what the reader has open: a place in a binary, or a source file; and
+  `Selection`, the object or the symbol an assembly-driven one is about. What every tab,
+  trail, visit and bookmark is keyed by.
 - `src/docs.rs` — `Docs`, the table mapping a document tab's `DocId` to the trail behind it: every
   place the tab has shown with a cursor on the one it shows, and which tab is the temporal one.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.

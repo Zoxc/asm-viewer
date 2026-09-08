@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::docs::Docs;
-use crate::project::Document;
+use crate::document::Document;
 
 /// A strip of document tabs, ids taken in the order given so a test can name them, with
 /// the table they came out of for a test that opens one more.

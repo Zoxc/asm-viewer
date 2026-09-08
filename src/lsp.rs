@@ -1850,7 +1850,7 @@ fn path_of(uri: &str) -> Option<PathBuf> {
 ///
 /// `/C:/x/y.rs` is how a Windows path comes back: both the leading slash and the
 /// separators are the URI's, where the app spells that file `C:\x\y.rs`. A
-/// [`Document::Source`](crate::project::Document) is compared as text and never
+/// [`Document::Source`](crate::document::Document) is compared as text and never
 /// canonicalised, so the two spellings are two tabs of one file.
 ///
 /// The drive letter is what says a path is Windows', not a `cfg`, so the rule is the same

@@ -6,8 +6,8 @@ use analysis::{Architecture, BinaryFormat, Object, ObjectData, SymbolData};
 
 use super::*;
 use crate::docs::Docs;
+use crate::document::Document;
 use crate::history::Stop;
-use crate::project::Document;
 
 fn positions(at: &[(&str, usize)]) -> Positions<String> {
     let mut positions = Positions::default();

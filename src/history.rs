@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use analysis::Object;
 
+use crate::document::Document;
 use crate::order::Order;
-use crate::project::Document;
 
 /// The most entries a trail ever holds; the oldest are dropped past it. Per tab, so it is
 /// modest: every entry is saved with the session, rows and all.

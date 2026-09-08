@@ -8,8 +8,8 @@
 //! trail's do, so entries made before a re-parse never compare equal to ones made after
 //! it. Persisted as [`crate::project::SavedHistory`].
 
+use crate::document::Document;
 use crate::order::Order;
-use crate::project::Document;
 
 /// The most places ever recorded; the oldest are dropped past it.
 pub const MAX_VISITS: usize = 200;

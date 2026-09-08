@@ -38,6 +38,7 @@ pub(crate) use crate::cargo::{self, Diagnostic, Level, Profile};
 pub(crate) use crate::chars::{self, beyond, Bounds, Caret, CharSelection, Line, Motion};
 pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs, Entry};
+pub(crate) use crate::document::{Document, Selection};
 pub(crate) use crate::files::{FileRow, FileRows, FileTree, Fold};
 pub(crate) use crate::filter::{Filter, Matcher, Rank};
 pub(crate) use crate::fonts::{self, Font, Fonts};
@@ -51,8 +52,8 @@ pub(crate) use crate::pixels::Grid;
 pub(crate) use crate::positions::{Driven, Positions, Spot};
 pub(crate) use crate::process::{self, Ended, OutputLine, RunEvent, RunOutput, Stream};
 pub(crate) use crate::project::{
-    self, Cargo, Details, Document, OnScreen, Project, Recent, RestoredEntry, RestoredTab,
-    SavedDock, SavedDocument, SavedShown, SavedUi, SavingTab, Selection, Session,
+    self, Cargo, Details, OnScreen, Project, Recent, RestoredEntry, RestoredTab, SavedDock,
+    SavedDocument, SavedShown, SavedUi, SavingTab, Session,
 };
 pub(crate) use crate::references::{self, ReferenceRows};
 pub(crate) use crate::reveal;

@@ -43,7 +43,7 @@ fn walker(root: &Path) -> Walk {
 /// One walked file, as the finder needs it.
 ///
 /// The path is the entry's own, never canonicalised, so a file reached here and a file
-/// reached through the Files view are one document ([`crate::project::Document`]).
+/// reached through the Files view are one document ([`crate::document::Document`]).
 /// `shown` and `name_at` are worked out here, on the walking thread: they are what every
 /// keystroke is matched against, and a match that had to take a path apart first would do
 /// it once per file per character typed.
