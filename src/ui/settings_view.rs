@@ -7,6 +7,62 @@
 
 use super::*;
 
+/// The user's settings as the settings page has them. [`OpenProject`]'s shape, and for its
+/// reason: a family is a `String` here and an `Option<String>` in `Settings`, and
+/// [`EditedSettings::settings`] is the one place the two spellings meet. A size is edited
+/// by a stepper rather than a text box, so it needs no such treatment.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct EditedSettings {
+    pub(crate) theme: ThemeChoice,
+    pub(crate) interface: EditedFont,
+    pub(crate) fixed: EditedFont,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct EditedFont {
+    pub(crate) family: String,
+    /// In points, like the file and like [`Font::points`], so the number on screen, the
+    /// number the desktop answered and the number written down are one number.
+    pub(crate) size: Option<f32>,
+}
+
+impl EditedSettings {
+    /// The settings as they were read off disk.
+    pub(crate) fn of(settings: &Settings) -> EditedSettings {
+        EditedSettings {
+            theme: settings.theme,
+            interface: EditedFont::of(&settings.interface),
+            fixed: EditedFont::of(&settings.fixed),
+        }
+    }
+
+    /// What of this reaches `settings.toml` -- and, through [`fonts::resolve`], what is on
+    /// screen.
+    pub(crate) fn settings(&self) -> Settings {
+        Settings {
+            theme: self.theme,
+            interface: self.interface.setting(),
+            fixed: self.fixed.setting(),
+        }
+    }
+}
+
+impl EditedFont {
+    pub(crate) fn of(setting: &FontSetting) -> EditedFont {
+        EditedFont {
+            family: setting.family().unwrap_or_default().to_owned(),
+            size: setting.size(),
+        }
+    }
+
+    pub(crate) fn setting(&self) -> FontSetting {
+        FontSetting {
+            family: given(&self.family).map(str::to_owned),
+            size: self.size,
+        }
+    }
+}
+
 /// How far one press of the size stepper moves a font. Half a point is the granularity
 /// the desktops themselves store.
 const SIZE_STEP: f32 = 0.5;

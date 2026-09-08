@@ -3,6 +3,97 @@
 
 use super::*;
 
+/// The project the app is in, as the project view holds it.
+///
+/// Two of its fields are `String`s where [`Details`] has `Option`s, because this is what is
+/// in two text boxes and a text box has no third state: an empty box *is* how a reader says
+/// "I have not said". [`OpenProject::details`] is the one place the two spellings meet, and
+/// [`OpenProject::workspace`] is the directory box as the path everything else wants.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct OpenProject {
+    /// The file the project is kept in, which is its identity. `None` until a project
+    /// exists on disk at all.
+    pub(crate) file: Option<PathBuf>,
+    /// The directory the project is over, as the reader typed it: what is built, walked,
+    /// searched, and read with a language server. [`OpenProject::workspace`] is it as a path.
+    pub(crate) workspace_text: String,
+    /// The language server to read this project with, empty for the usual one. A box like
+    /// the one above: a project on a toolchain of its own is the only one that fills it.
+    pub(crate) language_server: String,
+    /// Which of the project's files that server is for, as extensions with anything
+    /// between them: `c h cpp`. Empty for the program's own answer, which is what nearly
+    /// every project leaves it at.
+    pub(crate) language_files: String,
+    /// Whether the reader has agreed to a language server being run over the directory
+    /// above. A plain value like the profile below: the prompt has no third answer, and
+    /// a project that was never asked is one that has not agreed.
+    pub(crate) trusted: bool,
+    /// What to build the directory with. A plain value and not an `Option`, since the two
+    /// buttons that set it have no third state either; the file is what leaves it out.
+    pub(crate) profile: Profile,
+}
+
+impl OpenProject {
+    /// The project as it was found on disk.
+    pub(crate) fn opened(file: PathBuf, project: &Project, trusted: bool) -> OpenProject {
+        OpenProject {
+            file: Some(file),
+            workspace_text: project
+                .directory
+                .as_ref()
+                .map(|directory| directory.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            language_server: project.language_server.clone().unwrap_or_default(),
+            language_files: project.language_files.clone().unwrap_or_default(),
+            trusted,
+            profile: project.cargo.clone().unwrap_or_default().profile,
+        }
+    }
+
+    /// The project's directory as a path, or `None` when the reader has not named one.
+    pub(crate) fn workspace(&self) -> Option<PathBuf> {
+        given(&self.workspace_text).map(PathBuf::from)
+    }
+
+    /// The program to read this project with: what the reader named, or the one the
+    /// language this app is written for is read with (`source::Language::server`).
+    pub(crate) fn server(&self) -> String {
+        given(&self.language_server)
+            .or_else(|| source::Language::Rust.server())
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// The extensions the reader named for that server, as they wrote them and in that
+    /// order, with the dots off. Anything is a separator: what is wanted is the
+    /// extensions, and `c, h` and `c h` and `.c .h` are all somebody saying the same
+    /// thing.
+    pub(crate) fn server_files(&self) -> Vec<String> {
+        self.language_files
+            .split(|letter: char| !letter.is_alphanumeric() && letter != '+' && letter != '#')
+            .filter(|extension| !extension.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// What of this reaches the project file. Trimmed, so a box holding nothing but spaces
+    /// is a box holding nothing. `trusted` is not here: the agreement is the session's, so
+    /// it reaches the disk through [`Session::from_state`] instead.
+    pub(crate) fn details(&self) -> Details {
+        Details {
+            directory: self.workspace(),
+            language_server: given(&self.language_server).map(str::to_owned),
+            language_files: given(&self.language_files).map(str::to_owned),
+            // Absent while it says nothing the defaults do not: a reader who has never
+            // touched the profile leaves no `[cargo]` behind, and choosing the default
+            // back takes the section out again.
+            cargo: (self.profile != Profile::default()).then(|| Cargo {
+                profile: self.profile,
+            }),
+        }
+    }
+}
+
 /// One binary the project holds, by the path it was opened from, with how many objects
 /// came out of it.
 ///

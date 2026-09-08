@@ -296,19 +296,21 @@ command.
   tab, and the body under it all.
 - `src/ui/project_view.rs` — which project is open: the project's own fields, its binaries,
   the cargo build, the language server and the other projects, five sections each redrawn on
-  its own.
+  its own; and `OpenProject`, the project as the view's boxes hold it.
 - `src/ui/session.rs` — the session as the UI keeps it in step with `project.rs`: what is
   saved when, what a restore fills in, and what a switch empties; and `settings.toml` wired
   to the appearance and the fonts. Every hook `app()` calls that draws nothing.
 - `src/ui/no_project.rs` — the window with no project open: what is drawn under the top bar
   either way, and the screen that offers the ways into one.
-- `src/ui/settings_view.rs` — the settings page: the theme choice and the two font overrides.
+- `src/ui/settings_view.rs` — the settings page: the theme choice and the two font
+  overrides, and `EditedSettings`, the settings as the page holds them.
 - `src/ui/shortcuts_view.rs` — the Shortcuts page: the gestures under the place each applies,
   and the box that filters them.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
 - `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes,
-  `verdict_line` among them: the one line a `Verdict` is drawn as, wherever one is.
+  `verdict_line` among them: the one line a `Verdict` is drawn as, wherever one is. Also
+  `given`: what a text box says, or nothing.
 - `src/ui/picks.rs` — the row each list has picked out: what a pick is, the one per panel,
   the Alt that picks without opening, and which of two colours a picked row wears.
 - `src/ui/place_row.rs` — the row the Search and Locations panels both draw: a file, or one

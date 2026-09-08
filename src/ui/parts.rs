@@ -441,6 +441,12 @@ pub(crate) fn elide(text: &str) -> String {
     }
 }
 
+/// What a text box says, or `None` when it says nothing.
+pub(crate) fn given(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty()).then_some(text)
+}
+
 /// The heading over one section of the project view, with whatever the section's own
 /// action is on the right of it.
 pub(crate) fn section_heading(text: &str, action: Option<Element>) -> impl IntoElement {

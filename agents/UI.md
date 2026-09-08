@@ -87,7 +87,10 @@ language server is running, and what would stop it -- `agents/Lsp.md`); `SplitRa
 `src/ui/state.rs` holds only what belongs to no one mechanism -- the objects, the store, the
 project, the window -- and each of the others sits beside the code it is about: `Marked` in
 `marks.rs`, `Doors` in `focus.rs`, `Shift`/`Ctrl`/`Alt` in `keys.rs`, `Loading` in
-`loading.rs`, the `Pad*` family in `pad.rs`.
+`loading.rs`, the `Pad*` family in `pad.rs`. The **value** a context holds goes the same way
+where one page is all that edits it: `Proj` and `Prefs` are provided at the root, but
+`OpenProject` sits in `project_view.rs` and `EditedSettings` in `settings_view.rs`, beside the
+pages that fill them.
 
 **A group the code passes around is a context of its own**, so a state added to it is a field
 and not a parameter threaded through every function of the group. Beside `Open` there are four,
