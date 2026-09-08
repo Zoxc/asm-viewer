@@ -928,20 +928,6 @@ fn opening_row(line: Option<u32>) -> Option<usize> {
 /// its line numbers are the compiler's and not necessarily this file's.
 pub(crate) const STALE_SOURCE: &str = "This file differs from the one the binary was built from";
 
-/// One row over the source rows saying [`STALE_SOURCE`], drawn only when it is so. In the
-/// header's own colours: a notice about the file, in the place the file is named.
-fn stale_banner() -> Element {
-    rect()
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .width(Size::fill())
-        .height(Size::px(list_row_height()))
-        .padding(Gaps::new_symmetric(0.0, 8.0))
-        .background(palette().header_bg)
-        .child(label().text(STALE_SOURCE).color(palette().text_fg))
-        .into()
-}
-
 /// The bar over the Source pane, naming the file the pane is showing and carrying the
 /// control that puts the pane beside it away.
 ///
@@ -1125,7 +1111,7 @@ impl Component for SourcePane {
             .content(Content::Flex)
             .background(palette().pane_bg)
             .child(source_bar(&side, self.tab, open, visits, ctrl, sweeping))
-            .maybe_child(stale.then(stale_banner))
+            .maybe_child(stale.then(|| stale_banner(STALE_SOURCE)))
             .child(
                 rect()
                     .width(Size::fill())

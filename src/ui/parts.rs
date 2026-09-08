@@ -109,6 +109,23 @@ pub(crate) fn blank_pane(background: Color) -> Element {
     rect().expanded().background(background).into()
 }
 
+/// One row over a code listing saying what the reader is looking at is out of date, in
+/// the header's own colours: a notice about the listing, drawn where the listing is
+/// named. The Source pane draws [`STALE_SOURCE`] over a file whose bytes are not the ones
+/// the binary was built from; the Scratchpad draws [`STALE_PROGRAM`] over a program the
+/// reader has edited since it was built.
+pub(crate) fn stale_banner(text: &'static str) -> Element {
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .width(Size::fill())
+        .height(Size::px(list_row_height()))
+        .padding(Gaps::new_symmetric(0.0, 8.0))
+        .background(palette().header_bg)
+        .child(label().text(text).color(palette().text_fg))
+        .into()
+}
+
 pub(crate) fn info_line(text: String) -> impl IntoElement {
     rect().padding(5.0).child(label().text(text))
 }

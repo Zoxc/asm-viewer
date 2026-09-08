@@ -692,20 +692,6 @@ impl Component for PadRow {
     }
 }
 
-/// One row over the listing saying [`STALE_PROGRAM`], drawn only when it is so, in the
-/// header's own colours -- the Source pane's stale banner exactly.
-fn stale_program() -> Element {
-    rect()
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .width(Size::fill())
-        .height(Size::px(list_row_height()))
-        .padding(Gaps::new_symmetric(0.0, 8.0))
-        .background(palette().header_bg)
-        .child(label().text(STALE_PROGRAM).color(palette().text_fg))
-        .into()
-}
-
 /// What the pane says over the listing once the reader has typed since the build. The
 /// Source pane's checksum row in a second place, and exact where that one is a guess: the
 /// app wrote the source this program was built from and kept it.
@@ -843,7 +829,7 @@ impl Component for PadAssembly {
             .background(palette().asm_pane_bg)
             // Over the listing and not inside it: a notice about the whole program, where
             // the bar naming what a document's pane is drawing would be.
-            .maybe_child(self.stale.then(stale_program))
+            .maybe_child(self.stale.then(|| stale_banner(STALE_PROGRAM)))
             .child(
                 rect()
                     .width(Size::fill())
