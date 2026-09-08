@@ -124,6 +124,9 @@ impl Strip {
     /// Put `tab` at `position`, or at the end when that is past it, and show it: what a
     /// restore does, stating the saved order outright rather than reproducing it a tab at
     /// a time. A tab already open only comes to the front.
+    ///
+    /// The one place an opened tab is made the tab on screen: [`Strip::show`] is this
+    /// with the position a new tab goes in at.
     pub fn insert(&mut self, tab: Tab, position: usize) {
         if !self.contains(tab) {
             self.tabs.insert(position.min(self.tabs.len()), tab);
@@ -135,29 +138,35 @@ impl Strip {
     /// way a browser opens a link, so a place opened out of a function sits next to the
     /// function.
     pub fn show(&mut self, tab: Tab) {
-        if !self.contains(tab) {
-            let after = self
-                .active
-                .and_then(|active| self.tabs.iter().position(|open| *open == active));
-            match after {
-                Some(index) => self.tabs.insert(index + 1, tab),
-                None => self.tabs.push(tab),
-            }
-        }
-        self.active = Some(tab);
+        self.insert(tab, self.after_active());
     }
 
-    /// Make an open tab the one on screen, answering whether it was open at all. Nothing
-    /// is written for a tab that is already showing: a write notifies whether or not it
-    /// changed anything, and re-raising the tab on top must wake nothing.
-    pub fn raise(&mut self, tab: Tab) -> bool {
-        if !self.contains(tab) {
-            return false;
-        }
-        if self.active != Some(tab) {
+    /// Where a tab opened beside the tab on screen goes: just after it, or the end of the
+    /// bar when nothing is on screen.
+    fn after_active(&self) -> usize {
+        self.active
+            .and_then(|active| self.tabs.iter().position(|open| *open == active))
+            .map_or(self.tabs.len(), |index| index + 1)
+    }
+
+    /// Whether raising `tab` would change what is on screen: it is open, and it is not
+    /// the tab already showing.
+    ///
+    /// The question a caller asks before it writes, a `State::write` notifying whether
+    /// or not the value changed (`raise_tab`, `src/ui/documents.rs`).
+    pub fn would_raise(&self, tab: Tab) -> bool {
+        self.contains(tab) && self.active != Some(tab)
+    }
+
+    /// Make an open tab the one on screen. A tab that is not open is not shown: the tab
+    /// on screen is one of the open ones.
+    ///
+    /// This writes for the tab already showing too. Waking nothing for that one is
+    /// [`Strip::would_raise`], asked before the write by the caller holding the state.
+    pub fn raise(&mut self, tab: Tab) {
+        if self.contains(tab) {
             self.active = Some(tab);
         }
-        true
     }
 
     /// Move `tab` so that it sits where the tab now at `position` does, which is what a

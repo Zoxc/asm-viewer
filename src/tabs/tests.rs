@@ -72,7 +72,20 @@ fn showing_an_open_tab_only_raises_it() {
     strip.show(tabs[0]);
     assert_eq!(strip.tabs(), tabs);
     assert_eq!(strip.active(), Some(tabs[0]));
-    assert!(!strip.raise(Tab::Page(Page::Settings)), "a tab not open");
+}
+
+/// `would_raise` is what `raise_tab` asks before it writes (`src/ui/documents.rs`), and
+/// it says no twice over: for a tab that is not open, and for the one already on screen.
+/// A tab that is not open is not shown either.
+#[test]
+fn raising_says_when_it_would_change_what_is_on_screen() {
+    let (mut strip, tabs, _docs) = strip(3);
+    let page = Tab::Page(Page::Settings);
+    strip.raise(tabs[0]);
+    assert!(!strip.would_raise(tabs[0]), "already on screen");
+    assert!(!strip.would_raise(page), "not open");
+    assert!(strip.would_raise(tabs[1]));
+    strip.raise(page);
     assert_eq!(strip.active(), Some(tabs[0]));
 }
 

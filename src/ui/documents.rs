@@ -210,14 +210,12 @@ pub(crate) fn raise(open: Open, id: DocId) {
 /// own menu does with the row that was picked.
 ///
 /// Asked before it is written: `State::write` notifies whether or not the value changes,
-/// so re-raising the tab already on screen must not reach for it.
+/// so re-raising the tab already on screen must not reach for it. The question itself is
+/// [`Strip::would_raise`], the strip's own.
 pub(crate) fn raise_tab(open: Open, tab: Tab) {
     let mut strip = open.strip;
-    let settled = {
-        let strip = strip.peek();
-        !strip.contains(tab) || strip.active() == Some(tab)
-    };
-    if !settled {
+    let raising = strip.peek().would_raise(tab);
+    if raising {
         strip.write().raise(tab);
     }
 }
