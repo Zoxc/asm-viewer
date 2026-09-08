@@ -158,9 +158,9 @@ impl Component for WindowBody {
         // bar is written by every tab opened, moved or closed, and this has to re-render
         // for one of those only when it takes the last tab away or brings the first back.
         let any_tabs = use_memo(move || !strip.read().tabs().is_empty());
-        // Registered here rather than beside the container, so that the drag is followed
-        // for exactly as long as there is a sidebar to drag.
-        use_sidebar_width(splits, width);
+        // Above the early return, as a hook has to be: the width is followed here rather
+        // than beside the container, which is only built when a project is open.
+        use_dragged_size(splits, width);
 
         if !opened() {
             // Settings and the Scratchpad are nobody's project's, so they open with none --
@@ -175,11 +175,8 @@ impl Component for WindowBody {
 
         // The sidebar beside the one proportional panel, which therefore takes whatever is
         // left. Docking cannot express a literal width, which is why this split is a
-        // `ResizableContainer` and not another `DockingArea`.
-        //
-        // `peek` and not `read`, as the document's own split does: `initial_size` is
-        // consulted once in the panel's `use_hook`, so a read here would subscribe to
-        // nothing and loop with the effect that follows the drag (`use_sidebar_width`).
+        // `ResizableContainer` and not another `DockingArea`. The width is read back with
+        // a `peek` for the reason `use_dragged_size` gives.
         ResizableContainer::new()
             .direction(Direction::Horizontal)
             .controller(splits)
@@ -322,20 +319,6 @@ impl Component for DeleteProjectPopup {
                     )
             })
     }
-}
-
-/// Follow the sidebar's handle: what the reader drags it to becomes [`SidebarWidth`].
-///
-/// `splits.read()` is what subscribes this to the drag, and `set_if_modified` keeps the
-/// panel's own registration at mount from waking anything. The document's split has the
-/// same pair for the same reasons (`src/ui/split.rs`).
-fn use_sidebar_width(splits: State<ResizableContext>, mut width: State<f32>) {
-    use_side_effect(move || {
-        let live = splits.read().panels.first().map(|panel| panel.size);
-        if let Some(live) = live {
-            width.set_if_modified(live);
-        }
-    });
 }
 
 /// The screen: the ways into a project, and the projects there have been.

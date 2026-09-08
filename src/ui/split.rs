@@ -24,6 +24,30 @@ pub(crate) fn following(tab: DocId, document: &Document, said: &HashMap<DocId, b
     }
 }
 
+/// Follow a split's handle: what the reader drags it to becomes the number the app holds,
+/// which is what carries the size across the container's own unmount.
+///
+/// Reading the context is what subscribes the caller to the drag, and `set_if_modified`
+/// keeps the panels' registration at mount from waking anything.
+///
+/// That number is fed back in as a panel's `initial_size`, and **that read is a `peek` and
+/// never a `read`**: `initial_size` is consulted once, in the panel's own `use_hook` at
+/// mount, so subscribing to it would be a subscription to nothing -- and a loop with this
+/// effect. The clamp around the `peek` stays with the caller; each split has its own floor
+/// and ceiling.
+///
+/// A hook, so every caller calls it while rendering and calls it unconditionally, above
+/// whatever early return it has: the document's split here, the Scratchpad's
+/// (`src/ui/pad_view.rs`) and the sidebar's (`src/ui/no_project.rs`).
+pub(crate) fn use_dragged_size(splits: State<ResizableContext>, mut size: State<f32>) {
+    use_side_effect(move || {
+        let live = splits.read().panels.first().map(|panel| panel.size);
+        if let Some(live) = live {
+            size.set_if_modified(live);
+        }
+    });
+}
+
 /// What a [`PaneToggle`] is the toggle of: a document's following pane, or the
 /// Scratchpad's listing.
 ///
@@ -165,23 +189,13 @@ pub(crate) struct DocumentBody {
 impl Component for DocumentBody {
     fn render(&self) -> impl IntoElement {
         let docs = use_open().docs;
-        let mut ratio = use_consume::<SplitRatio>().0;
+        let ratio = use_consume::<SplitRatio>().0;
         let splits = use_consume::<Splits>().0;
         let said = use_consume::<Follows>().0;
 
-        // Where the reader last left the handle, written back as they drag it. Reading the
-        // context is what subscribes this to the drag; `set_if_modified` keeps the mount's
-        // own registration from waking anything.
-        use_side_effect(move || {
-            let live = splits.read().panels.first().map(|panel| panel.size);
-            if let Some(live) = live {
-                ratio.set_if_modified(live);
-            }
-        });
-
-        // `peek` and not `read`: `initial_size` is consulted once, in the panel's own
-        // `use_hook` at mount, so subscribing here would be a subscription to nothing --
-        // and a loop with the effect above.
+        // Where the reader last left the handle, written back as they drag it, and read
+        // back with a `peek` for the reason `use_dragged_size` gives.
+        use_dragged_size(splits, ratio);
         let wide = ratio.peek().clamp(1.0, 99.0);
 
         // Not reachable -- the tab and the table entry are closed together -- but a render

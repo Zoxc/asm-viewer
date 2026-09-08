@@ -1188,20 +1188,12 @@ impl Component for ScratchpadTab {
 
         let editing = text.read().holds(&shown).then(|| shown.clone());
 
-        let mut ratio = use_consume::<PadSplit>().0;
+        let ratio = use_consume::<PadSplit>().0;
         let splits = use_consume::<PadSplits>().0;
         let following = *use_consume::<PadFollows>().0.read();
-        // Where the reader left the handle, written back as they drag it, exactly as a
-        // document's split does it (`DocumentBody`).
-        use_side_effect(move || {
-            let live = splits.read().panels.first().map(|panel| panel.size);
-            if let Some(live) = live {
-                ratio.set_if_modified(live);
-            }
-        });
-        // `peek` and not `read`: `initial_size` is consulted once, in the panel's own
-        // `use_hook` at mount, so subscribing here would be a subscription to nothing --
-        // and a loop with the effect above.
+        // Where the reader left the handle, written back as they drag it, and read back
+        // with a `peek` for the reason `use_dragged_size` gives.
+        use_dragged_size(splits, ratio);
         let leading = ratio.peek().clamp(1.0, 99.0);
 
         let output = ran.map(|(verdict, lines)| {

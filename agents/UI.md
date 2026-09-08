@@ -574,7 +574,11 @@ That unmounting is why the split ratio is held at the root (`SplitRatio`, with `
 `ResizableContext` it is read back out of). A `ResizablePanel` registers at its `initial_size` in a
 `use_hook` and *removes* its entry in a `use_drop`, so even a shared context comes back holding the
 initial sizes under new panel ids. What survives is a number the app keeps, fed in as `initial_size`
-and written back out while the split is on screen. It is one number for the app and not one per
+and written back out while the split is on screen. The writing back is `use_dragged_size`
+(`src/ui/split.rs`), one hook for all three splits -- the document's, the Scratchpad's and the
+sidebar's -- which also carries the reason the number is fed back in with a `peek` and never a
+`read`: `initial_size` is consulted once, in the panel's own `use_hook`, so a `read` there would
+subscribe to nothing and loop with the effect. It is one number for the app and not one per
 document: per-document would be a third `Positions`-shaped map to forget in `close_tab`, for a
 number nobody asked to differ per document. That number is **the leading panel's width and not the
 assembly pane's**, the one thing here deliberately kept by place rather than by pane. Both readings
