@@ -5,11 +5,15 @@
 //! three toggles *are* three regex constructs — so they compose instead of being four
 //! hand-written search loops. It is also the faster answer over 151k demangled names. The
 //! same regex ranks: where its first match starts in a name is the [`Rank`] a list under a
-//! filter orders its rows by.
+//! filter orders its rows by. [`Filtered`] is that ordering: a list, and where in it the
+//! names that matched are, best first.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use regex::{Regex, RegexBuilder};
+
+use crate::shared::same_arc;
 
 /// One list's filter: what was typed, and the three toggles that say how to read it.
 #[derive(Clone, Default, PartialEq)]
@@ -170,6 +174,87 @@ fn tier_at(text: &str, start: usize, empty: bool) -> Tier {
 /// A word character as regex's `\b` counts them.
 fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+/// What a filter leaves of a list: the list itself, and where in it the names that
+/// matched are, best match first. Indices rather than a second `Vec<T>` (115k entries in
+/// the app's own symbol list), and `None` for no filter at all, which costs no pass, no
+/// sort and no allocation, and keeps the list in its own order.
+///
+/// Generic over the element, since more than one list is ranked this way and the only
+/// thing a filter asks of one is the name it is drawn under.
+///
+/// Two are equal only where both halves are the same build, compared by the pointer as
+/// everything with an `Arc` behind it is: a fresh one is what tells a list to draw its
+/// rows again.
+pub struct Filtered<T> {
+    list: Arc<Vec<T>>,
+    matches: Option<Arc<Vec<usize>>>,
+}
+
+/// Written out rather than derived: derived, `Clone` would ask `T: Clone` and `PartialEq`
+/// would compare the elements, where the rule here is the pointer.
+impl<T> Clone for Filtered<T> {
+    fn clone(&self) -> Self {
+        Filtered {
+            list: self.list.clone(),
+            matches: self.matches.clone(),
+        }
+    }
+}
+
+impl<T> PartialEq for Filtered<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.list, &other.list) && same_arc(&self.matches, &other.matches)
+    }
+}
+
+impl<T> Filtered<T> {
+    /// Filters on the name `name` gives each element -- for a symbol the one the row
+    /// shows, demangled where it has one -- and orders what is left by
+    /// its [`Rank`], the list's own order breaking ties, so the sort is deterministic and
+    /// `sort_unstable` is safe.
+    pub fn new(list: Arc<Vec<T>>, matcher: &Matcher, name: impl Fn(&T) -> &str) -> Self {
+        let matches = match matcher {
+            Matcher::Everything => None,
+            matcher => {
+                let mut ranked: Vec<(Rank, usize)> = list
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, item)| Some((matcher.rank(name(item))?, index)))
+                    .collect();
+                ranked.sort_unstable();
+                Some(Arc::new(
+                    ranked.into_iter().map(|(_, index)| index).collect(),
+                ))
+            }
+        };
+
+        Filtered { list, matches }
+    }
+
+    /// The whole list, filter or none: what a row is handed beside its index.
+    pub fn list(&self) -> &Arc<Vec<T>> {
+        &self.list
+    }
+
+    /// How many rows there are, which is what the `VirtualScrollView` is given.
+    pub fn len(&self) -> usize {
+        self.matches
+            .as_ref()
+            .map_or(self.list.len(), |matches| matches.len())
+    }
+
+    /// Which element the row at `row` is.
+    pub fn index(&self, row: usize) -> usize {
+        self.matches.as_ref().map_or(row, |matches| matches[row])
+    }
+
+    /// The element the row at `row` draws, `None` past the end -- which is where a
+    /// keyboard step off the last row asks.
+    pub fn at(&self, row: usize) -> Option<&T> {
+        (row < self.len()).then(|| &self.list[self.index(row)])
+    }
 }
 
 /// The one line of a `regex` error worth putting in a filter bar: its `Display` is a

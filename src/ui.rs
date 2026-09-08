@@ -40,7 +40,7 @@ pub(crate) use crate::compiled;
 pub(crate) use crate::docs::{DocId, Docs, Entry};
 pub(crate) use crate::document::{Document, Pane, Selection};
 pub(crate) use crate::files::{FileRow, FileRows, FileTree, Fold};
-pub(crate) use crate::filter::{Filter, Matcher, Rank};
+pub(crate) use crate::filter::{Filter, Filtered, Matcher};
 pub(crate) use crate::fonts::{self, Font, Fonts};
 pub(crate) use crate::functions::{self, Function};
 pub(crate) use crate::history::{History, Place, Stop};

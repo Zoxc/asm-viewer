@@ -1,9 +1,9 @@
-//! The bar over a sidebar list, and what a filter leaves of the symbols under it.
+//! The bar over a sidebar list, its three toggles, and the pane the list is drawn in.
 //!
 //! One component with three uses, whose `Filter` is a `use_state` in the tab that owns the
 //! list rather than a root context: a filter is a view of a list, never part of the
-//! session. Only the symbol list earns a memo; Objects and History filter where their rows
-//! are built.
+//! session. What a filter leaves of a list is `filter::Filtered`; only the symbol lists
+//! earn a memo over it, Objects and History filtering where their rows are built.
 
 use super::*;
 
@@ -447,61 +447,5 @@ impl Marking {
     /// compiled matcher answers both (`src/find.rs`).
     pub(crate) fn hits(&self, line: &Line) -> Vec<Range<usize>> {
         crate::find::hits_in(line, &self.0)
-    }
-}
-
-/// What a filter leaves of the symbol list: the list itself, and where in it the names
-/// that matched are, best match first. Indices rather than a second `Vec<Symbol>` (115k
-/// entries on `viewer-sample`), and `None` for no filter at all, which costs no pass, no
-/// sort and no allocation, and keeps the list in its own order.
-#[derive(Clone)]
-pub(crate) struct Filtered {
-    pub(crate) symbols: SymbolList,
-    matches: Option<Arc<Vec<usize>>>,
-}
-
-impl PartialEq for Filtered {
-    fn eq(&self, other: &Self) -> bool {
-        self.symbols == other.symbols && same_arc(&self.matches, &other.matches)
-    }
-}
-
-impl Filtered {
-    /// Filters on the name the row actually shows -- the demangled one where there is one
-    /// -- and orders what is left by its [`Rank`], the list's own order breaking ties, so
-    /// the sort is deterministic and `sort_unstable` is safe.
-    pub(crate) fn new(symbols: SymbolList, matcher: &Matcher) -> Self {
-        let matches = match matcher {
-            Matcher::Everything => None,
-            matcher => {
-                let mut ranked: Vec<(Rank, usize)> = symbols
-                    .0
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, symbol)| {
-                        let rank = matcher.rank(symbol.data.display())?;
-                        Some((rank, index))
-                    })
-                    .collect();
-                ranked.sort_unstable();
-                Some(Arc::new(
-                    ranked.into_iter().map(|(_, index)| index).collect(),
-                ))
-            }
-        };
-
-        Filtered { symbols, matches }
-    }
-
-    /// How many rows there are, which is what the `VirtualScrollView` is given.
-    pub(crate) fn len(&self) -> usize {
-        self.matches
-            .as_ref()
-            .map_or(self.symbols.0.len(), |matches| matches.len())
-    }
-
-    /// Which symbol the row at `row` is.
-    pub(crate) fn index(&self, row: usize) -> usize {
-        self.matches.as_ref().map_or(row, |matches| matches[row])
     }
 }

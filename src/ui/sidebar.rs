@@ -699,8 +699,12 @@ impl Component for SymbolsPanel {
         // The one list where the filtering has to be a memo: 115k names on
         // `viewer-sample`, and the `VirtualScrollView` has to be told its length before it
         // builds any row.
-        let filtered =
-            use_memo(move || Filtered::new(symbols.read().clone(), &filter.read().matcher()));
+        let filtered = use_memo(move || {
+            let symbols = symbols.read().0.clone();
+            Filtered::new(symbols, &filter.read().matcher(), |symbol| {
+                symbol.data.display()
+            })
+        });
         let filtered = filtered.read().clone();
         let selected = match &*use_consume::<Active>().0.read() {
             Some((
@@ -718,9 +722,7 @@ impl Component for SymbolsPanel {
         // Cheap to hand to both closures: a `Filtered` is the list behind an `Arc` and
         // the indices the filter kept.
         let rows = Rc::new(filtered.clone());
-        let symbol_at = move |rows: &Filtered, at: usize| {
-            (at < rows.len()).then(|| rows.symbols.0[rows.index(at)].clone())
-        };
+        let symbol_at = move |rows: &Filtered<Symbol>, at: usize| rows.at(at).cloned();
         let stepped = rows.clone();
         let keys = ListKeys {
             length,
@@ -744,14 +746,14 @@ impl Component for SymbolsPanel {
             keys,
             VirtualScrollView::new_with_data(
                 (filtered, selected, marking),
-                |row, (filtered, selected, marking): &(Filtered, Option<Symbol>, Marking)| {
+                |row, (filtered, selected, marking): &(Filtered<Symbol>, Option<Symbol>, Marking)| {
                     // The row's place in the filtered list is not the symbol's place in the
                     // list it was filtered out of, and everything below is about the
                     // symbol.
                     let index = filtered.index(row);
-                    let symbol = &filtered.symbols.0[index];
+                    let symbol = &filtered.list()[index];
                     SymbolRow {
-                        symbols: filtered.symbols.clone(),
+                        symbols: SymbolList(filtered.list().clone()),
                         index,
                         selected: selected.as_ref() == Some(symbol),
                         at: row,

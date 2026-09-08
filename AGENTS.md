@@ -158,7 +158,8 @@ command.
 - `src/shared.rs` — a list built once and passed on by its pointer, equal only to the same
   build: what every list of rows the UI draws is; and the same identity for an `Arc` a
   field may not have.
-- `src/filter.rs` — what a filter bar is asking for and the matcher it compiles to.
+- `src/filter.rs` — what a filter bar is asking for, the matcher it compiles to, and what
+  it leaves of a list: the ranked index every filtered list is drawn from.
 - `src/fuzzy.rs` — characters in order: what the file finder's box asks of a path, where it
   hit, and how well.
 - `src/walk.rs` — the project's directory walked: the rules both readers of it share, and
@@ -260,7 +261,7 @@ command.
   and the one worker that finds them.
 - `src/ui/section_view.rs` — the section view: an object's code as one listing, its rows, the
   place it keeps as an address, and the window it asks for.
-- `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the Symbols list's memo.
+- `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the pane its list is drawn in.
 - `src/ui/language.rs` — whether a language server is running, what the project's own
   settings said, the worker that talks to it, and the control in the top bar that starts and
   stops it.

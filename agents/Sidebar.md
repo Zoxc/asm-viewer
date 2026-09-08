@@ -28,8 +28,10 @@ one the pattern says most of, and the list's own order breaks the last tie, so t
 and `sort_unstable` is safe. Ranking is `Regex::find` in place of `is_match`, one pass and not two,
 and costs almost nothing: over the app's own 154k names `find` takes 10–18 ms against `is_match`'s
 11–14 ms, since a name that does not match is scanned whole either way. Nothing typed is still
-`None`: no pass, no sort, the list in its own order. The Locations panel builds the same memo and
-so ranks the same way, which is wanted, since one line can answer with thousands of instantiations.
+`None`: no pass, no sort, the list in its own order. `Filtered` sits in `filter.rs` beside the rank
+it orders by, generic over the element and asking only for the name each is drawn under, so the
+Symbols and Locations panels rank alike by calling it. It is tested there, over a list of plain
+names, and not in the headless suite.
 
 **Ctrl+F puts the caret in the box over the list it is pressed in.** The binding is on the rows of
 `use_filter_pane` and not on the root, so it reaches the box of the list the reader is in and

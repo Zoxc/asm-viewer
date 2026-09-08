@@ -519,7 +519,7 @@ fn headed(query: &Query, count: usize, list: Element) -> Element {
 /// The Locations view: what was asked about, over every symbol it answered with.
 ///
 /// `HistoryPanel`'s shape with `SymbolsPanel`'s list: a filter over a `VirtualScrollView`,
-/// through the same `Filtered` memo, because one line answers with thousands. What the
+/// ranked by the same [`Filtered`], because one line answers with thousands. What the
 /// pane says is decided in one `match` off [`Located`]'s two fields, so "nothing asked",
 /// "being looked for", "found nothing" and the rows cannot disagree about which they are.
 ///
@@ -542,10 +542,12 @@ impl Component for LocationsPanel {
                 Some(Found {
                     what: What::Symbols(symbols),
                     ..
-                }) => symbols.clone(),
-                _ => SymbolList(Arc::new(Vec::new())),
+                }) => symbols.0.clone(),
+                _ => Arc::new(Vec::new()),
             };
-            Filtered::new(symbols, &filter.read().matcher())
+            Filtered::new(symbols, &filter.read().matcher(), |symbol| {
+                symbol.data.display()
+            })
         });
         let filtered = filtered.read().clone();
         // A references answer is tens of rows where a line's symbols are thousands, so the
@@ -668,9 +670,7 @@ impl Component for LocationsPanel {
                 // The rows the arrows step and Enter presses: a `Filtered` is the list
                 // behind an `Arc` and the indices the filter kept.
                 let rows = Rc::new(filtered.clone());
-                let symbol_at = move |rows: &Filtered, at: usize| {
-                    (at < rows.len()).then(|| rows.symbols.0[rows.index(at)].clone())
-                };
+                let symbol_at = move |rows: &Filtered<Symbol>, at: usize| rows.at(at).cloned();
                 let stepped = rows.clone();
                 let (at_asked, subject) = (asked_at.clone(), subject.clone());
                 keys = ListKeys {
@@ -688,11 +688,16 @@ impl Component for LocationsPanel {
                     count,
                     VirtualScrollView::new_with_data(
                         (filtered, selected, marking),
-                        |row, (filtered, selected, marking): &(Filtered, Option<Symbol>, Marking)| {
+                        |row,
+                         (filtered, selected, marking): &(
+                            Filtered<Symbol>,
+                            Option<Symbol>,
+                            Marking,
+                        )| {
                             let index = filtered.index(row);
-                            let symbol = &filtered.symbols.0[index];
+                            let symbol = &filtered.list()[index];
                             LocationRow {
-                                symbols: filtered.symbols.clone(),
+                                symbols: SymbolList(filtered.list().clone()),
                                 index,
                                 selected: selected.as_ref() == Some(symbol),
                                 at: row,

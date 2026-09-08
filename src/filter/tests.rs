@@ -236,3 +236,64 @@ fn the_marks_are_every_occurrence_and_nothing_where_nothing_was_typed() {
     };
     assert_eq!(marks(&empty, "axxb"), [1..3]);
 }
+
+/// The list the two tests below filter: against `next` it holds a prefix, two word starts
+/// of different lengths, a substring, and a name that does not match at all.
+fn names() -> Arc<Vec<String>> {
+    Arc::new(
+        ["zz::next", "next_to", "std::next", "connext", "push"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+fn filtered(list: Arc<Vec<String>>, filter: &Filter) -> Filtered<String> {
+    Filtered::new(list, &filter.matcher(), String::as_str)
+}
+
+/// Nothing typed leaves the list in its own order, and does it by keeping no indices at
+/// all: no pass, no sort and no allocation, which is what a list under an empty box has to
+/// cost.
+#[test]
+fn an_unfiltered_list_keeps_its_own_order_and_no_indices() {
+    let list = filtered(names(), &Filter::default());
+
+    assert!(list.matches.is_none());
+    assert_eq!(list.len(), 5);
+    assert!((0..5).all(|row| list.index(row) == row));
+    assert_eq!(list.at(0).map(String::as_str), Some("zz::next"));
+    assert_eq!(list.at(5), None);
+}
+
+/// Under a filter the rows come back by how well they matched -- a prefix, then a word
+/// start, then a substring -- with the shorter name first among equals, and what did not
+/// match at all is gone.
+#[test]
+fn a_filtered_list_puts_the_best_match_first() {
+    let list = filtered(names(), &plain("next"));
+
+    let rows: Vec<usize> = (0..list.len()).map(|row| list.index(row)).collect();
+    assert_eq!(rows, [1, 0, 2, 3]);
+    assert_eq!(list.at(0).map(String::as_str), Some("next_to"));
+    assert_eq!(list.at(4), None);
+}
+
+/// Two [`Filtered`]s are the same one only where both halves are the same build: the list
+/// compared by its pointer, and the indices kept from it by theirs. What the panels' props
+/// rest on, a fresh build being what tells a scroll view to draw its rows again.
+#[test]
+fn a_filtered_list_is_equal_only_to_the_same_build() {
+    let list = names();
+    let one = filtered(list.clone(), &plain("next"));
+
+    assert!(one == one.clone());
+    assert!(one != filtered(list.clone(), &plain("next")));
+    assert!(one != filtered(names(), &plain("next")));
+
+    let all = filtered(list.clone(), &Filter::default());
+    assert!(all == all.clone());
+    // Both unfiltered, so both hold no indices: the list alone decides.
+    assert!(all == filtered(list, &Filter::default()));
+    assert!(all != filtered(names(), &Filter::default()));
+}
