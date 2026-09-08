@@ -83,15 +83,6 @@ impl Store {
         Some(Store { base })
     }
 
-    /// A store at a given directory: what a test points at one of its own, in place of
-    /// the twin every operation under here used to have for exactly that.
-    #[cfg(test)]
-    pub fn at(base: impl AsRef<Path>) -> Store {
-        Store {
-            base: base.as_ref().to_path_buf(),
-        }
-    }
-
     /// The directory itself, for the two questions that are about a path's shape rather
     /// than about a file.
     pub fn base(&self) -> &Path {

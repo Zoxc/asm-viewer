@@ -312,26 +312,6 @@ impl Found {
         }
     }
 
-    /// The symbols it answered with, and `None` where it was a question for the server.
-    /// The tests' way of asking; the panel matches on `what` instead.
-    #[cfg(test)]
-    pub(crate) fn symbols(&self) -> Option<&SymbolList> {
-        match &self.what {
-            What::Symbols(symbols) => Some(symbols),
-            What::Places(_) => None,
-        }
-    }
-
-    /// The places it answered with, and `None` where it was a question about symbols.
-    /// The tests' way of asking, as `symbols` is.
-    #[cfg(test)]
-    pub(crate) fn places(&self) -> Option<&references::References> {
-        match &self.what {
-            What::Places(places) => Some(places),
-            What::Symbols(_) => None,
-        }
-    }
-
     /// Drop every symbol whose object is no longer among `open`, answering whether any
     /// went -- so the caller writes only then.
     ///

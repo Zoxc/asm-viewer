@@ -296,16 +296,6 @@ impl Handle {
             }
         }
     }
-
-    /// A handle with no process behind it, for the tests: everything a handle is asked
-    /// about a program it has stopped is bookkeeping, and only the killing needs one.
-    #[cfg(test)]
-    pub fn to_nothing() -> Handle {
-        Handle(Arc::new(Process {
-            child: Mutex::new(None),
-            over: AtomicBool::new(false),
-        }))
-    }
 }
 
 /// What a started program is talked to and read through, for whoever asked for them.

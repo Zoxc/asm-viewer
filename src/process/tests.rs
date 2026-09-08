@@ -2,6 +2,17 @@ use std::io::Cursor;
 
 use super::*;
 
+impl Handle {
+    /// A handle with no process behind it, for the tests: everything a handle is asked
+    /// about a program it has stopped is bookkeeping, and only the killing needs one.
+    pub fn to_nothing() -> Handle {
+        Handle(Arc::new(Process {
+            child: Mutex::new(None),
+            over: AtomicBool::new(false),
+        }))
+    }
+}
+
 /// The line cap: a program writing megabytes with no newline in it must still be
 /// *delivered*, in pieces, rather than kept in one growing string nobody ever sees.
 #[test]

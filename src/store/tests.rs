@@ -3,6 +3,16 @@ use serde::Deserialize;
 use super::*;
 use crate::temporary::Temporary;
 
+impl Store {
+    /// A store at a given directory: what a test points at one of its own, in place of
+    /// the twin every operation under here used to have for exactly that.
+    pub fn at(base: impl AsRef<Path>) -> Store {
+        Store {
+            base: base.as_ref().to_path_buf(),
+        }
+    }
+}
+
 /// A directory of this test's own under the system temporary directory, named after the
 /// line that asked for it, standing in for the one everything is stored in. Gone when the
 /// test ends.

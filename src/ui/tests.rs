@@ -13,6 +13,19 @@ use crate::temporary::Temporary;
 use crate::walk::WalkEvent;
 use freya_testing::{TestingNode, TestingRunner};
 
+/// Every open tab's document, in the reader's tab order. Pages are skipped: they are tabs
+/// in the same bar but they are not documents. The app itself asks for the ids
+/// (`open_ids`), a tab being a trail and not what it shows.
+///
+/// `peek`, so asking subscribes nothing.
+fn open_documents(open: Open) -> Vec<Document> {
+    let (strip, docs) = (open.strip.peek(), open.docs.peek());
+    strip
+        .documents()
+        .filter_map(|id| docs.get(id).cloned())
+        .collect()
+}
+
 /// Three rows wired exactly the way the two panes are: the press that starts a run, the
 /// `pointer_move` that sweeps it, and the release watched globally at the root, because the
 /// button very often comes up somewhere the run does not reach.
@@ -1293,7 +1306,7 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     src_at.write().remember(source_entry.clone(), 7);
     test.sync_and_update();
 
-    assert_eq!(states.open.documents().len(), 3);
+    assert_eq!(open_documents(states.open).len(), 3);
     // Three visits, the source file included: the history records documents.
     assert_eq!(states.visits.peek().entries().len(), 3);
 
@@ -1304,7 +1317,10 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
         states.objects.peek().is_empty(),
         "an object was left behind"
     );
-    assert!(states.open.documents().is_empty(), "a tab was left behind");
+    assert!(
+        open_documents(states.open).is_empty(),
+        "a tab was left behind"
+    );
     assert!(
         states.visits.peek().entries().is_empty(),
         "a history entry was left behind"
@@ -1658,7 +1674,7 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
     // Settled and not synced once: the pair reads `Active`, a memo, which is a beat
     // behind the states it is over.
     settle(&mut test);
-    assert_eq!(states.open.documents().len(), 1);
+    assert_eq!(open_documents(states.open).len(), 1);
     assert_eq!(cursor_of(&states), Some(0));
 
     let side = toggle_size();
@@ -1817,7 +1833,7 @@ fn the_tab_list_closes_a_tab_from_its_own_row() {
     settle(&mut test);
 
     assert!(
-        states.open.documents() == documents[1..],
+        open_documents(states.open) == documents[1..],
         "the × in the list closed the wrong tab, or none"
     );
 }
@@ -2261,7 +2277,7 @@ fn a_tab_is_dragged_along_the_bar_to_move_it() {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     }
     settle(&mut test);
-    assert!(states.open.documents() == documents);
+    assert!(open_documents(states.open) == documents);
 
     let marked = |test: &TestingRunner| -> usize {
         test.find_many(|_node, element| {
@@ -2297,7 +2313,7 @@ fn a_tab_is_dragged_along_the_bar_to_move_it() {
     }
     settle(&mut test);
     assert!(
-        states.open.documents()
+        open_documents(states.open)
             == [
                 documents[2].clone(),
                 documents[0].clone(),
@@ -3191,7 +3207,7 @@ fn the_panel_and_the_table_hold_the_same_documents() {
     objects.write().push(object);
 
     let agree = |states: &ProjectStates| {
-        let open = states.open.documents();
+        let open = open_documents(states.open);
         assert_eq!(
             open.len(),
             states.open.docs.peek().len(),
@@ -3319,7 +3335,7 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
     close_others(states.open, states.places, Tab::Document(keep));
     test.sync_and_update();
 
-    assert!(states.open.documents() == documents[1..2]);
+    assert!(open_documents(states.open) == documents[1..2]);
     assert!(
         states.open.active() == Some(documents[1].clone()),
         "the tab on screen closed without landing on the one that was kept"
@@ -3382,12 +3398,12 @@ fn switching_to_an_open_tab_is_not_a_visit() {
     go(&first);
     test.sync_and_update();
     assert!(states.visits.peek().entries() == [first.clone(), second]);
-    assert_eq!(states.open.documents().len(), 2);
+    assert_eq!(open_documents(states.open).len(), 2);
 
     // And closing the tab lands on the neighbour without recording it.
     close_document(&states, &first);
     test.sync_and_update();
-    assert_eq!(states.open.documents().len(), 1);
+    assert_eq!(open_documents(states.open).len(), 1);
     assert_eq!(
         states.visits.peek().entries().len(),
         2,
@@ -3417,13 +3433,13 @@ fn closing_a_binary_keeps_the_source_tabs() {
     went(source.clone());
     went(function.clone());
     test.sync_and_update();
-    assert_eq!(states.open.documents().len(), 2);
+    assert_eq!(open_documents(states.open).len(), 2);
 
     close_binary(states, &path);
     test.sync_and_update();
 
     assert!(
-        states.open.documents() == [source.clone()],
+        open_documents(states.open) == [source.clone()],
         "the file tab went with the binary"
     );
     assert!(
@@ -5975,7 +5991,7 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
         "the press left the tab"
     );
     assert_eq!(
-        states.open.documents().len(),
+        open_documents(states.open).len(),
         1,
         "a tab was opened for the symbol"
     );
@@ -7643,7 +7659,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
     });
 
     assert!(
-        states.open.documents() == vec![Document::Source(dotted)],
+        open_documents(states.open) == vec![Document::Source(dotted)],
         "the answer's spelling opened a file the reader already had open"
     );
     assert_eq!(
@@ -7721,7 +7737,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
     });
 
     assert!(
-        states.open.documents() == vec![Document::Source(stepped)],
+        open_documents(states.open) == vec![Document::Source(stepped)],
         "the answer's spelling opened a file the reader already had open"
     );
     assert_eq!(
@@ -20901,7 +20917,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
 
     // Newest first, so the trail and the record read back the way they were walked.
     let walked: Vec<Document> = documents.iter().rev().cloned().collect();
-    assert!(states.open.documents() == [documents[2].clone()]);
+    assert!(open_documents(states.open) == [documents[2].clone()]);
     assert!(trail_of(&states, id) == walked);
     assert_eq!(cursor_of(&states), Some(0));
     assert!(states.visits.peek().entries() == walked);
@@ -20988,7 +21004,7 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
         Reach::Preview,
     );
     assert_eq!(again, Some(preview), "a second row opened a second tab");
-    assert_eq!(states.open.documents().len(), 2);
+    assert_eq!(open_documents(states.open).len(), 2);
     assert!(trail_of(&states, preview) == [documents[2].clone(), documents[1].clone()]);
 
     // A place a tab already shows: that tab, the temporal one left as it is.
@@ -21071,7 +21087,7 @@ fn a_new_tab_opens_beside_the_one_on_screen() {
     );
     test.sync_and_update();
     assert!(
-        states.open.documents()
+        open_documents(states.open)
             == [
                 documents[0].clone(),
                 documents[2].clone(),
@@ -21091,7 +21107,7 @@ fn a_new_tab_opens_beside_the_one_on_screen() {
     open_document(states.open, states.visits, source.clone(), Reach::Preview);
     test.sync_and_update();
     assert!(
-        states.open.documents()
+        open_documents(states.open)
             == [
                 documents[0].clone(),
                 documents[2].clone(),
@@ -21146,7 +21162,7 @@ fn a_temporal_tab_is_promoted_by_ctrl_and_by_a_link_followed_in_it_and_not_by_ba
     );
     assert_eq!(kept, Some(first));
     assert_eq!(states.open.docs.peek().temporal(), None);
-    assert_eq!(states.open.documents().len(), 1);
+    assert_eq!(open_documents(states.open).len(), 1);
 
     let second = open_document(
         states.open,
@@ -21170,7 +21186,7 @@ fn a_temporal_tab_is_promoted_by_ctrl_and_by_a_link_followed_in_it_and_not_by_ba
     );
     assert!(third.is_some_and(|third| third != first && third != second));
     test.sync_and_update();
-    assert_eq!(states.open.documents().len(), 3);
+    assert_eq!(open_documents(states.open).len(), 3);
 }
 
 /// Closing a binary closes the tabs showing a place in it and thins the trails of the
@@ -21203,12 +21219,12 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
         .write()
         .remember((survivor, Stop::whole(source.clone())), 3);
     test.sync_and_update();
-    assert_eq!(states.open.documents().len(), 2);
+    assert_eq!(open_documents(states.open).len(), 2);
 
     close_binary(states, &path);
     test.sync_and_update();
 
-    assert!(states.open.documents() == [source.clone()]);
+    assert!(open_documents(states.open) == [source.clone()]);
     assert!(states.open.active() == Some(source.clone()));
     assert!(trail_of(&states, survivor) == [source.clone()]);
     assert_eq!(
@@ -21552,7 +21568,7 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
 
     close_binary(states, &path);
     test.sync_and_update();
-    assert!(states.open.documents() == [source.clone()]);
+    assert!(open_documents(states.open) == [source.clone()]);
     assert!(
         states
             .places
@@ -23448,7 +23464,7 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     let plain = centre_of(&test, "lib.rs:9:4");
     press_at(&mut test, plain);
     assert!(
-        states.open.documents().is_empty(),
+        open_documents(states.open).is_empty(),
         "a place with nowhere to go opened a tab"
     );
 
@@ -23458,7 +23474,7 @@ fn a_diagnostics_place_opens_the_file_it_names() {
 
     let file = Arc::<str>::from(&*directory.join("src/main.rs").to_string_lossy());
     assert!(
-        states.open.documents() == [Document::Source(file)],
+        open_documents(states.open) == [Document::Source(file)],
         "the place did not open the file it names"
     );
 }

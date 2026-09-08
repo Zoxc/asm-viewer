@@ -124,13 +124,6 @@ impl Language {
             }
     }
 
-    /// Whether the app is holding what would end a server, which is a process that
-    /// exists. For the tests: nothing drawn asks it.
-    #[cfg(test)]
-    pub(crate) fn holding(&self) -> bool {
-        self.server.is_some()
-    }
-
     /// Whether something is going on: starting one, or a server reading the project.
     /// What the control draws a turning loader for instead of its own icon.
     pub(crate) fn busy(&self) -> bool {

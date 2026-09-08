@@ -73,18 +73,6 @@ pub(crate) struct Open {
     pub(crate) docs: State<Docs>,
 }
 
-/// Every open tab's document, in the order the reader's tabs are in. Pages are skipped:
-/// they are tabs in the same bar but they are not documents. What the tests ask of the
-/// strip; the app itself asks for the ids ([`open_ids`]), a tab being a trail and not
-/// what it shows.
-#[cfg(test)]
-pub(crate) fn open_documents(strip: &Strip, docs: &Docs) -> Vec<Document> {
-    strip
-        .documents()
-        .filter_map(|id| docs.get(id).cloned())
-        .collect()
-}
-
 /// Every open document tab's id, in the order the reader's tabs are in.
 pub(crate) fn open_ids(strip: &Strip) -> Vec<DocId> {
     strip.documents().collect()
@@ -125,13 +113,6 @@ impl Open {
     /// The active tab's id as of now, a document or not.
     pub(crate) fn active_id(&self) -> Option<DocId> {
         self.active_tab().map(|(id, _)| id)
-    }
-
-    /// Every open tab's document as of now, in tab order. `peek`, for the same reason.
-    #[cfg(test)]
-    pub(crate) fn documents(&self) -> Vec<Document> {
-        let (strip, docs) = (self.strip.peek(), self.docs.peek());
-        open_documents(&strip, &docs)
     }
 
     /// Every open document tab's id as of now, in tab order.

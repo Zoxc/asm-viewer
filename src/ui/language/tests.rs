@@ -3,6 +3,14 @@
 
 use super::*;
 
+impl Language {
+    /// Whether the app is holding what would end a server, which is a process that
+    /// exists. For the tests: nothing drawn asks it.
+    pub(crate) fn holding(&self) -> bool {
+        self.server.is_some()
+    }
+}
+
 fn asking() -> Asking {
     Asking {
         directory: PathBuf::from("/project"),

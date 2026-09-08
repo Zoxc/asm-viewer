@@ -4,6 +4,23 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use super::*;
 use crate::temporary::Temporary;
 
+impl Legend {
+    /// A legend as a test spells one, the real ones coming off a handshake.
+    pub fn of(types: &[&str], modifiers: &[&str]) -> Legend {
+        let owned = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect();
+        Legend {
+            types: owned(types),
+            modifiers: owned(modifiers),
+        }
+    }
+}
+
+/// Read the files a conversion needs with `read` rather than off the disk: what a test
+/// hands over instead of writing one.
+fn reading<W>(talk: &mut Talk<W>, read: fn(&Path) -> Option<String>) {
+    talk.read = read;
+}
+
 /// A place in the file every question here is about, in the app's units: the line
 /// 1-based, as a [`Lookup`]'s is, and the column a byte offset into it.
 fn at(line: u32, column: u32) -> Lookup {
@@ -526,7 +543,7 @@ fn asked_over_wide_line(
             }));
         },
         move |talk| {
-            talk.reading(read);
+            reading(talk, read);
             talk.initialize(Path::new("/p"), &wanted())
                 .expect("a handshake");
             talk.places(Question::Followed(Followed::Definition), &at(1, 8))

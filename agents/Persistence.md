@@ -80,9 +80,9 @@ module looks the place up for itself, and a path given to the store is relative 
 absolute, which is what lets a project file the reader gave a place go through the same writer as
 the app's own. `Saves` keeps the one it was pointed at when the project was opened, so the
 periodic flush and the close hook -- neither of them in the component tree -- have one without
-being handed one. `Store::at` is the other constructor and is the tests': a store under a
-directory of a test's own, which is what the `x()`/`x_in(base)` twin of every stored operation
-used to be for.
+being handed one. `Store::at` is the other constructor and is the tests', declared with them in
+`store/tests.rs`: a store under a directory of a test's own, which is what the `x()`/`x_in(base)`
+twin of every stored operation used to be for.
 
 Each file under it is written atomically via `.tmp` + rename (`Store::write`, over the one
 `write_atomically`; the free function is there because `cargo.rs` edits a manifest that is not the

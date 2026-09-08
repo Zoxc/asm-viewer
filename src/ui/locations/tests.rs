@@ -2,6 +2,26 @@
 
 use super::*;
 
+impl Found {
+    /// The symbols it answered with, and `None` where it was a question for the server.
+    /// The tests' way of asking; the panel matches on `what` instead.
+    pub(crate) fn symbols(&self) -> Option<&SymbolList> {
+        match &self.what {
+            What::Symbols(symbols) => Some(symbols),
+            What::Places(_) => None,
+        }
+    }
+
+    /// The places it answered with, and `None` where it was a question about symbols.
+    /// The tests' way of asking, as `symbols` is.
+    pub(crate) fn places(&self) -> Option<&references::References> {
+        match &self.what {
+            What::Places(places) => Some(places),
+            What::Symbols(_) => None,
+        }
+    }
+}
+
 fn fixture() -> Arc<Object> {
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");

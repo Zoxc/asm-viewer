@@ -295,16 +295,6 @@ impl Legend {
     pub fn is_empty(&self) -> bool {
         self.types.is_empty()
     }
-
-    /// A legend as a test spells one, the real ones coming off a handshake.
-    #[cfg(test)]
-    pub fn of(types: &[&str], modifiers: &[&str]) -> Legend {
-        let owned = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect();
-        Legend {
-            types: owned(types),
-            modifiers: owned(modifiers),
-        }
-    }
 }
 
 /// One name the server classified, as [`Legend`] spells out: where it is, and the type
@@ -594,13 +584,6 @@ impl<W: Write + Send + 'static> Talk<W> {
             encoding: Encoding::Utf16,
             read: crate::source::read_text,
         }
-    }
-
-    /// Read the files a conversion needs with `read` rather than off the disk: what a
-    /// test hands over instead of writing one.
-    #[cfg(test)]
-    pub fn reading(&mut self, read: fn(&Path) -> Option<String>) {
-        self.read = read;
     }
 
     /// The handshake: `initialize`, then the `initialized` notification, which the
