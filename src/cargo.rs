@@ -24,6 +24,10 @@ use crate::{
     verdict::{counted, Verdict},
 };
 
+/// What cargo calls a package's manifest, spelled once: this module reads them, and a
+/// scratchpad writes the one its generated package is (`src/scratchpad.rs`).
+pub const MANIFEST: &str = "Cargo.toml";
+
 /// Which of cargo's two built-in profiles to build.
 ///
 /// `Debug` is cargo's `dev`: the profile is named `dev` in a manifest and puts its output
@@ -422,8 +426,6 @@ pub fn add_debug_lines(directory: &Path, profile: Profile) -> Result<(), String>
 
     write_atomically(&path, document.to_string().as_bytes()).map_err(|error| error.to_string())
 }
-
-const MANIFEST: &str = "Cargo.toml";
 
 /// The manifest at `path` as a value, or `None` when there is none or it does not parse.
 /// Neither is an error here: what cargo makes of its own file is cargo's answer, said when

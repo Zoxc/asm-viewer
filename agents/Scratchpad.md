@@ -13,10 +13,13 @@ Each scratchpad is one directory under `scratchpads/`, under the same base `proj
 since every field of the model is already a field of the package. So `load_from` is the exact
 inverse of `write_to` rather than a second format that could disagree with what cargo is handed.
 Both files go down through the same `.tmp` + rename, which the source earns: `src/main.rs` is the
-reader's document. The manifest carries an empty `[workspace]`, so a scratchpad is its own workspace
-root wherever the state directory turns out to be. A scratchpad belongs to the **app** and not to a
-project: it lives here beside `projects/` rather than inside one, `Pad` is not one of the states a
-project switch closes, and a pad open in one project is the same pad in the next.
+reader's document. Each name is spelled once -- `cargo::MANIFEST` for the manifest, and
+`scratchpad::SOURCE_FILE` for the source, which is also what says whether a diagnostic's span is
+the pad's own and which language the editor colours. The manifest carries an empty `[workspace]`,
+so a scratchpad is its own workspace root wherever the state directory turns out to be. A
+scratchpad belongs to the **app** and not to a project: it lives here beside `projects/` rather
+than inside one, `Pad` is not one of the states a project switch closes, and a pad open in one
+project is the same pad in the next.
 
 **A pad is filed under an id, and the id is never shown.** `PadId` is what the directory, the order
 and the app's own table are keyed by; `Scratchpad::name` is what the reader calls it. The two are

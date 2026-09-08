@@ -502,13 +502,6 @@ fn a_program_that_is_not_there_says_so() {
     assert!(matches!(failure, Failure::NoProgram(_)), "{failure:?}");
 }
 
-/// The pad's source file is the two names its package is written from, so the rule and the
-/// package cannot drift apart.
-#[test]
-fn the_source_file_is_the_two_names_it_is_made_of() {
-    assert_eq!(SOURCE_FILE, format!("{SOURCE_DIR}/{SOURCE_NAME}"));
-}
-
 /// A diagnostic names the pad's own file relatively, and on Windows with the other
 /// separator. Nothing above it and nothing beside it is that file.
 #[test]

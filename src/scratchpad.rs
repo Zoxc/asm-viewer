@@ -27,13 +27,9 @@ use crate::process::{self, RunEvent, Stream};
 use crate::store::{write_atomically, Store, MAX_ORDER, RECENTS_FILE};
 use crate::verdict::Verdict;
 
-const MANIFEST_NAME: &str = "Cargo.toml";
-const SOURCE_DIR: &str = "src";
-const SOURCE_NAME: &str = "main.rs";
-
-/// The file a scratchpad's source is, as cargo and rustc spell it: the two names above, in
-/// the order the package puts them. What a diagnostic's span says, and what the end of a
-/// program's own name for it is.
+/// The one file a scratchpad's source is, as cargo and rustc spell it: relative to the
+/// directory cargo ran in. What the package is written from, what a diagnostic's span
+/// says, and what the end of a program's own name for it is.
 pub const SOURCE_FILE: &str = "src/main.rs";
 
 /// Whether the file a **diagnostic** names is the pad's own source.
@@ -592,12 +588,12 @@ impl Scratchpad {
     /// The manifest goes first, so a directory that exists at all is a package.
     pub fn write_to(&self, directory: &Path) -> Result<(), Failure> {
         let manifest = self.manifest()?;
-        let source = directory.join(SOURCE_DIR);
+        let source = directory.join(SOURCE_FILE);
 
         let write = || -> io::Result<()> {
-            fs::create_dir_all(&source)?;
-            write_atomically(&directory.join(MANIFEST_NAME), manifest.as_bytes())?;
-            write_atomically(&source.join(SOURCE_NAME), self.source.as_bytes())
+            fs::create_dir_all(source.parent().unwrap_or(directory))?;
+            write_atomically(&directory.join(cargo::MANIFEST), manifest.as_bytes())?;
+            write_atomically(&source, self.source.as_bytes())
         };
         write().map_err(|error| Failure::Write(error.to_string()))
     }
@@ -610,9 +606,9 @@ impl Scratchpad {
     /// manifest with no name in its metadata reads back as a pad nobody has named, which is
     /// what one written by hand is.
     pub fn load_from(directory: &Path) -> Option<Scratchpad> {
-        let manifest = fs::read_to_string(directory.join(MANIFEST_NAME)).ok()?;
+        let manifest = fs::read_to_string(directory.join(cargo::MANIFEST)).ok()?;
         let manifest: Manifest = toml::from_str(&manifest).ok()?;
-        let source = fs::read_to_string(directory.join(SOURCE_DIR).join(SOURCE_NAME)).ok()?;
+        let source = fs::read_to_string(directory.join(SOURCE_FILE)).ok()?;
 
         let mut scratchpad = Scratchpad::of(manifest.package.name);
         scratchpad.name = manifest.package.metadata.scratchpad.name;
@@ -688,7 +684,7 @@ fn pad_in(store: &Store, id: &PadId) -> PathBuf {
 /// Whether `directory` holds either half of a package. What tells "nothing there" from
 /// "something there this module cannot read"; see [`Scratchpad::opened_in`].
 fn holds_package(directory: &Path) -> bool {
-    directory.join(MANIFEST_NAME).exists() || directory.join(SOURCE_DIR).join(SOURCE_NAME).exists()
+    directory.join(cargo::MANIFEST).exists() || directory.join(SOURCE_FILE).exists()
 }
 
 /// The order file sits **beside the pads** rather than at the top of the store, so it is
