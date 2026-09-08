@@ -637,10 +637,10 @@ impl Component for DeletePopup {
 /// One row of the pad list: a scratchpad that can be switched to, drawn by the name the
 /// reader gave it — never by the id it is filed under.
 ///
-/// The whole row is the press target, as a recent project's is; the shown pad wears the
-/// selection, `text_select_bg`, and the one under the pointer `row_hover_bg`, which is
-/// what every list in the sidebar already does. The name is a prop and the id is a prop, so a rename in the
-/// box beside it redraws the row and nothing else has to be told.
+/// The whole row is the press target, as a recent project's is, and the frame is
+/// [`list_row`]: the shown pad is [`Chosen::Live`], so it wears the same selection a
+/// picked-out row wears anywhere else. The name is a prop and the id is a prop, so a
+/// rename in the box beside it redraws the row and nothing else has to be told.
 #[derive(Clone, PartialEq)]
 struct PadRow {
     id: PadId,
@@ -657,16 +657,15 @@ impl KeyExt for PadRow {
 
 impl Component for PadRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let fitted = use_fitted();
         let pad = use_consume::<Pad>().0;
         let jobs = use_consume::<PadJobs>();
         let (id, deleting) = (self.id.clone(), self.id.clone());
 
-        let background = match (self.shown, hovering()) {
-            (true, _) => palette().text_select_bg,
-            (false, true) => palette().row_hover_bg,
-            (false, false) => Color::TRANSPARENT,
+        let chosen = match self.shown {
+            true => Chosen::Live,
+            false => Chosen::No,
         };
 
         let unnamed = self.name.trim().is_empty();
@@ -675,16 +674,7 @@ impl Component for PadRow {
         cut_tooltip(
             fitted.cut(),
             label.clone(),
-            rect()
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .padding(Gaps::new_symmetric(0.0, 6.0))
-                .content(Content::Flex)
-                .background(background)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            list_row(hovering, chosen)
                 .on_press(move |_| show_pad(pad, &jobs, id.clone()))
                 // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
                 // without it panics.

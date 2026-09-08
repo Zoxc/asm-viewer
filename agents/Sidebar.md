@@ -483,13 +483,16 @@ closing the file clears one. So does the **folder dialog** behind "Choose...": t
 portal it is not modal to the window, the app keeps taking input while it is up, and a reader who
 raised another tab meanwhile got the directory they had before and nothing to say why.
 
-**Every list row is one frame.** `list_row` (`src/ui/parts.rs`) is the chrome the ten sidebar-style
-rows open with: the height the scroll view over them uses as its `item_size`, the padding and the
-spacing their columns are laid on, and the three-way background -- picked out, under the pointer, or
-nothing. A row appends its own press, its menu and its children, and keeps its own hover state,
-since a hook may not run in a plain function and there is no `.hover()` pseudo-state to read
-instead. The ten copies had drifted into two paddings, two spacings and two hover colours, and
-folding them together settled each. The two washes looked like one per pane ground -- one over
+**Every list row is one frame.** `list_row` (`src/ui/parts.rs`) is the chrome the thirteen
+sidebar-style rows open with: the height the scroll view over them uses as its `item_size`, the
+padding and the spacing their columns are laid on, and the three-way background -- picked out, under
+the pointer, or nothing. A row appends its own press, its menu and its children, and keeps its own
+hover state, since a hook may not run in a plain function and there is no `.hover()` pseudo-state to
+read instead. The copies had drifted into two paddings, two spacings and two hover colours, and
+folding them together settled each. Three more joined later, from outside the sidebar: the pad
+list's row, the build-artefact row and the recent-project row. Each had a padding and a spacing of
+its own, and all three took the shared ones, so a row in the Scratchpad or the Project view sits on
+the same grid as one in the Objects tree. The two washes looked like one per pane ground -- one over
 `pane_bg`, another over the cream four of the panels sat on -- but the Locations panel drew its
 reference rows in one and its location rows in the other on the same ground, which is what makes it
 drift and not a rule. So one wash lights a row wherever it is drawn. The grounds went next: **every

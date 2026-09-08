@@ -190,7 +190,7 @@ impl KeyExt for ArtifactRow {
 
 impl Component for ArtifactRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let fitted = use_fitted();
         let states = use_project_states();
         let path = self.artifact.path.clone();
@@ -203,19 +203,7 @@ impl Component for ArtifactRow {
             fitted.cut(),
             text.clone(),
             CursorArea::new().child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::px(list_row_height()))
-                    .horizontal()
-                    .cross_align(Alignment::Center)
-                    .spacing(8.0)
-                    .content(Content::Flex)
-                    .background(match hovering() {
-                        true => palette().row_hover_bg,
-                        false => Color::TRANSPARENT,
-                    })
-                    .on_pointer_over(move |_| hovering.set_if_modified(true))
-                    .on_pointer_out(move |_| hovering.set_if_modified(false))
+                list_row(hovering, Chosen::No)
                     .on_press(move |_| {
                         // The same question a Files row's menu turns on: a path the app
                         // holds already is not opened a second time.
@@ -325,7 +313,7 @@ impl KeyExt for RecentRow {
 
 impl Component for RecentRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let states = use_project_states();
         let rescued = use_consume::<Rescued>().0;
         let unopened = use_consume::<Unopened>().0;
@@ -345,20 +333,7 @@ impl Component for RecentRow {
 
         extra_tooltip(
             recent.path.to_string_lossy().into_owned(),
-            rect()
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .padding(Gaps::new_symmetric(0.0, 4.0))
-                .spacing(8.0)
-                .content(Content::Flex)
-                .background(match hovering() {
-                    true => palette().row_hover_bg,
-                    false => Color::TRANSPARENT,
-                })
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            list_row(hovering, Chosen::No)
                 .on_press(move |_| switch_project(states, rescued, unopened, path.clone()))
                 .child(one_line(text).width(Size::flex(1.0)))
                 .child(label().text(about).color(palette().address_fg).max_lines(1)),
