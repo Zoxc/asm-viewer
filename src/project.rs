@@ -120,18 +120,6 @@ pub struct Details {
     pub cargo: Option<Cargo>,
 }
 
-impl Details {
-    /// The half of a project that is what the user said.
-    fn of(project: &Project) -> Details {
-        Details {
-            directory: project.directory.clone(),
-            language_server: project.language_server.clone(),
-            language_files: project.language_files.clone(),
-            cargo: project.cargo.clone(),
-        }
-    }
-}
-
 /// What the reader chose about building, in `project.toml`'s `[cargo]`.
 ///
 /// A table of its own, so it is **absent** until the reader has chosen something and has
@@ -203,6 +191,16 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl Project {
+    /// The half of this that is what the user said.
+    fn details(&self) -> Details {
+        Details {
+            directory: self.directory.clone(),
+            language_server: self.language_server.clone(),
+            language_files: self.language_files.clone(),
+            cargo: self.cargo.clone(),
+        }
+    }
+
     /// Turn every path in this project the way `spelling` says, against the directory the
     /// project file is in.
     ///
@@ -1372,31 +1370,26 @@ struct Saves {
     /// or created. Otherwise claimed on the first write that has anything to say, so a run
     /// where nothing was ever opened leaves no file behind.
     open: Option<PathBuf>,
-    /// Which project that file holds. Kept here rather than asked of the file, because it
-    /// is stamped onto both halves of every write and the two must agree: a session
-    /// carrying another id is one the next load throws away.
-    id: Option<ProjectId>,
-    /// The name and directory as last written: the baseline a rename is measured against.
+    /// `project.toml` as last written: the baseline every change is measured against, and
+    /// where a write that is not about the binaries takes them from.
     ///
-    /// Seeded by [`Saves::opened`] where the two below are pointedly empty, because every
-    /// baseline is the state the app boots into and only this one is restored
-    /// synchronously.
-    given: Details,
-    /// The bookmarks as last written: the other baseline seeded by [`Saves::opened`], since
-    /// they too are restored synchronously, out of the file and not out of a parse.
-    bookmarks: Vec<Bookmark>,
+    /// Its id says which project the file holds. It is stamped onto both halves of every
+    /// write, since a session carrying another id is one the next load throws away.
+    ///
+    /// Seeded whole by [`Saves::opened`], where the two below are pointedly empty,
+    /// because every baseline is the state the app boots into and only this one is
+    /// restored synchronously.
+    written: Project,
     /// The binaries the app was last seen holding, out of a moment when nothing was
     /// loading. Empty to start with, deliberately not the ones loaded at startup: they
     /// arrive asynchronously, so a baseline holding them would read the still-empty boot
     /// state as a change and write an empty project over a good one.
-    binaries: Vec<PathBuf>,
-    /// What `project.toml` currently *says* the binaries are.
     ///
-    /// The same list as `binaries` in every state but one: while a load is in flight, the
-    /// app holds what has landed so far while the file names the whole list. A write that
-    /// is not about the binaries writes this back rather than the app's own list, so a
-    /// rename in that window cannot forget them.
-    listed: Vec<PathBuf>,
+    /// The same list as `written.binaries` in every state but one: while a load is in
+    /// flight, the app holds what has landed so far while the file names the whole list.
+    /// A write that is not about the binaries writes the file's list back rather than
+    /// this one, so a rename in that window cannot forget them.
+    binaries: Vec<PathBuf>,
     /// The session as last written, empty for `binaries`' reason.
     session: Session,
     /// A newer session that has not been written yet. Only ever a *session*: a change to
@@ -1410,23 +1403,20 @@ impl Saves {
         self.pending.as_ref().unwrap_or(&self.session)
     }
 
-    /// Note that `id` is the project the app is now in, and set every baseline to the
+    /// Note that `project` is the file the app is now in, and set every baseline to the
     /// state the app will be in the instant afterwards. The two empty baselines are
     /// *assigned* rather than assumed because a project switched away from leaves its own
     /// binaries and pending session behind.
     fn opened(&mut self, store: &Store, path: PathBuf, project: &Project, trusted: bool) {
         self.store = Some(store.clone());
         self.open = Some(path);
-        self.id = project.id;
-        self.given = Details::of(project);
-        self.bookmarks = project.bookmarks.clone();
+        self.written = project.clone();
         self.binaries = Vec::new();
-        self.listed = project.binaries.clone();
         // The id and the agreement, and nothing else. Both are restored *synchronously*
         // -- the one from the file being opened, the other into `Proj` beside it -- so a
         // baseline without them would read the state the app boots into as a change.
         self.session = Session {
-            id: project.id,
+            id: self.written.id,
             trusted,
             ..Session::default()
         };
@@ -1469,12 +1459,12 @@ impl Saves {
         // policy and not to the UI, and stamping before the comparison is what keeps the
         // baseline and what arrives comparable.
         let session = Session {
-            id: self.id,
+            id: self.written.id,
             ..session
         };
         let binaries_changed = !loading && self.binaries != binaries;
-        let details_changed = self.given != details;
-        let bookmarks_changed = self.bookmarks != bookmarks;
+        let details_changed = self.written.details() != details;
+        let bookmarks_changed = self.written.bookmarks != bookmarks;
 
         if !binaries_changed && !details_changed && !bookmarks_changed {
             if *self.latest() != session {
@@ -1483,18 +1473,17 @@ impl Saves {
             return None;
         }
 
-        // A write that is not about the binaries keeps the ones already in the file; see
-        // [`Saves::listed`].
-        let listed = match binaries_changed {
-            true => binaries,
-            false => self.listed.clone(),
-        };
         let project = Project {
-            id: self.id,
+            id: self.written.id,
             directory: details.directory,
             language_server: details.language_server,
             language_files: details.language_files,
-            binaries: listed,
+            // A write that is not about the binaries keeps the ones already in the file;
+            // see [`Saves::binaries`].
+            binaries: match binaries_changed {
+                true => binaries,
+                false => self.written.binaries.clone(),
+            },
             cargo: details.cargo,
             bookmarks,
         };
@@ -1523,14 +1512,11 @@ impl Saves {
         self.pending.clone()
     }
 
-    /// Note that `project` reached `project.toml`. The details, the bookmarks and the
-    /// binaries the file lists are what it says they are. The app's own list moves only
-    /// when the change was to the binaries: any other write put back the list the file
-    /// already held.
+    /// Note that `project` reached `project.toml`: it is now what the file holds. The
+    /// app's own list of binaries moves only when the change was to the binaries; any
+    /// other write put back the list the file already held.
     fn wrote_project(&mut self, project: &Project, binaries_changed: bool) {
-        self.given = Details::of(project);
-        self.bookmarks = project.bookmarks.clone();
-        self.listed = project.binaries.clone();
+        self.written = project.clone();
         if binaries_changed {
             self.binaries = project.binaries.clone();
         }
@@ -1548,7 +1534,7 @@ impl Saves {
     /// a moment ago, and the files just written say the same.
     fn moved_to(&mut self, path: PathBuf, id: Option<ProjectId>) {
         self.open = Some(path);
-        self.id = id;
+        self.written.id = id;
         self.session.id = id;
         if let Some(pending) = &mut self.pending {
             pending.id = id;
@@ -1855,7 +1841,7 @@ pub fn record(
     // The id is only minted when the file is claimed, so a project that was not open when
     // the record was decided has one now and both halves take it.
     let project = Project {
-        id: saves.id,
+        id: saves.written.id,
         ..recorded.project
     };
 
@@ -1864,7 +1850,7 @@ pub fn record(
     }
     if let Some(session) = recorded.session {
         let session = Session {
-            id: saves.id,
+            id: saves.written.id,
             ..session
         };
         match write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {
@@ -1886,7 +1872,7 @@ pub fn flush() {
         return;
     };
     let session = Session {
-        id: saves.id,
+        id: saves.written.id,
         ..session
     };
     if write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {

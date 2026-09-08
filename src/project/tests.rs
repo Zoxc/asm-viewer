@@ -1360,8 +1360,8 @@ fn recorded(
     binaries: Vec<PathBuf>,
     session: Session,
 ) -> Option<(Project, Option<Session>)> {
-    let unchanged = saves.given.clone();
-    let bookmarks = saves.bookmarks.clone();
+    let unchanged = saves.written.details();
+    let bookmarks = saves.written.bookmarks.clone();
     let decided = saves.record(unchanged, binaries, false, bookmarks, session);
     landed(saves, decided)
 }
@@ -1381,8 +1381,8 @@ fn mid_load(
     binaries: &[&str],
     session: Session,
 ) -> Option<(Project, Option<Session>)> {
-    let unchanged = saves.given.clone();
-    let bookmarks = saves.bookmarks.clone();
+    let unchanged = saves.written.details();
+    let bookmarks = saves.written.bookmarks.clone();
     let decided = saves.record(unchanged, paths(binaries), true, bookmarks, session);
     landed(saves, decided)
 }
@@ -1623,7 +1623,7 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
     // still being read.
     let named = Details {
         directory: Some(PathBuf::from("/src/kernel")),
-        ..saves.given.clone()
+        ..saves.written.details()
     };
     let decided = saves.record(
         named,
@@ -1761,7 +1761,7 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
     // Once the parse lands the write *is* about the binaries, which is the one kind that
     // may replace the list.
     let decided = saves.record(
-        saves.given.clone(),
+        saves.written.details(),
         paths(&["/tmp/vmlinux"]),
         false,
         Vec::new(),
@@ -1785,7 +1785,7 @@ fn a_write_that_failed_is_recorded_again() {
     // A binaries change, written at once -- and neither file reaches the disk, so
     // nothing is noted as written and the session is owed.
     let decided = saves.record(
-        saves.given.clone(),
+        saves.written.details(),
         paths(&["/tmp/lib.a"]),
         false,
         Vec::new(),
@@ -3041,7 +3041,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
 
     // Seeded: the same bookmarks are no change, while the parse has yet to land.
     let unchanged = saves.record(
-        saves.given.clone(),
+        saves.written.details(),
         Vec::new(),
         false,
         reopened.bookmarks.clone(),
@@ -3055,7 +3055,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         document: saved_symbol("a.o", "target", 6),
     });
     let decided = saves.record(
-        saves.given.clone(),
+        saves.written.details(),
         Vec::new(),
         false,
         added.clone(),
@@ -3071,7 +3071,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
 
     // Removing them all is a change too, written as an absent key.
     let decided = saves.record(
-        saves.given.clone(),
+        saves.written.details(),
         Vec::new(),
         false,
         Vec::new(),

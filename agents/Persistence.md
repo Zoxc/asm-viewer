@@ -199,11 +199,11 @@ seconds. The session takes the project file's whole name and not its stem, so th
 and one ignore rule reaches both -- which is the point of the naming, a project file being something
 a reader may check in.
 
-**The id is stamped by the policy and not by the caller.** `Saves::id` is which project the open
-file holds; `Saves::record` puts it on the session before comparing it against the baseline, so the
-stamp cannot read as a change, and `record` puts it on both halves again after `writing_into`, since
-a project that was not open when the record was decided has only just been given an id. Nothing in
-the UI knows the id, which is why nothing in the UI can get it wrong.
+**The id is stamped by the policy and not by the caller.** The id of `Saves::written` is which
+project the open file holds; `Saves::record` puts it on the session before comparing it against the
+baseline, so the stamp cannot read as a change, and `record` puts it on both halves again after
+`writing_into`, since a project that was not open when the record was decided has only just been
+given an id. Nothing in the UI knows the id, which is why nothing in the UI can get it wrong.
 
 **Building puts a `[cargo]` section in each file, and which file each half goes in is that same
 line.** The profile is what the reader chose, so it is the project file's and is written the moment
@@ -372,25 +372,27 @@ for the next `flush`. Advancing first meant that a disk full for one tick left t
 file held a session that never reached it: nothing marked the session pending again, so the close
 hook's flush found nothing to do and the reader kept the one from before, for one warning in a log a
 windowed app never shows. Which baselines a project-file write moves is the
-`binaries_changed` beside it -- the details and the bookmarks always, the binaries only when the
-change was to them, since any other write puts back the list the file already held.
+`binaries_changed` beside it -- `Saves::written` becomes the project just written whatever
+happened, and the app's own list of binaries moves only when the change was to them, since any
+other write puts back the list the file already held.
 
-**Every baseline is the state the app boots into**, which is why two of them start empty and two do
-not. The binaries and the session are restored *asynchronously*: the app boots holding nothing and
-fills in when the parse lands. So seeding them from the loaded project would make the first
-comparison see the still-empty boot state as a change and write an empty project over a good one.
-`Saves::given` and `Saves::bookmarks` *are* seeded by `reopen`, because the directory and
-the bookmarks are restored *synchronously*, into `Proj` and `Bookmarked`, before a single effect has
-run. An effect's first run is a later pass than the render whose `use_hook` set them
-(`agents/Headless.md`), so registering the save observer before the restore is not what keeps them
-apart and does not have to be. Until the project view held them (`Proj`), `Saves` **carried** the
-details across the calls instead of comparing them against a baseline; a change to one now arrives
-through `record` like everything else and that special case is gone. `Saves::listed` is the one
-piece of bookkeeping that grew out of it: it is what the project file currently *says* the binaries
-are, and a
-write that is not about the binaries writes that back rather than the app's own list. Otherwise a
-change during the startup parse, or after a restore that opened none of them, would forget a file
-through a change that had nothing to do with it.
+**Every baseline is the state the app boots into**, which is why the binaries and the session start
+empty and `Saves::written` does not. The binaries and the session are restored *asynchronously*:
+the app boots holding nothing and fills in when the parse lands. So seeding them from the loaded
+project would make the first comparison see the still-empty boot state as a change and write an
+empty project over a good one. `Saves::written` -- `project.toml` as the file holds it, which is
+one baseline for the directory, the server, the profile and the bookmarks together -- *is* seeded
+whole by `reopen`, because the directory and the bookmarks are restored *synchronously*, into
+`Proj` and `Bookmarked`, before a single effect has run. An effect's first run is a later pass than
+the render whose `use_hook` set them (`agents/Headless.md`), so registering the save observer
+before the restore is not what keeps them apart and does not have to be. Until the project view
+held them (`Proj`), `Saves` **carried** the details across the calls instead of comparing them
+against a baseline; a change to one now arrives through `record` like everything else and that
+special case is gone. The binaries in `Saves::written` are the one part of it nothing is compared
+against: they are what the project file currently *says*, and a write that is not about the
+binaries writes them back rather than the app's own list. Otherwise a change during the startup
+parse, or after a restore that opened none of them, would forget a file through a change that had
+nothing to do with it.
 
 **A list still being read is not the app's list**, which is the `loading` flag. The objects arrive
 one at a time, so while a load is in flight `record` neither compares the binaries nor writes them:
