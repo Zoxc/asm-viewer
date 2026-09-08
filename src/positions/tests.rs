@@ -58,6 +58,7 @@ fn forgetting_a_tab_leaves_the_others() {
     positions.forgetting(|tab| tab != "a");
     assert_eq!(positions.at(&"a".to_owned()), None);
     assert_eq!(positions.at(&"b".to_owned()), Some(2));
+    assert_eq!(positions.keys().cloned().collect::<Vec<_>>(), ["b"]);
     // And forgetting one that was never there is not an error.
     positions.forgetting(|tab| tab != "c");
     assert_eq!(positions.at(&"b".to_owned()), Some(2));

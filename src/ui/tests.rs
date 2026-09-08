@@ -1969,7 +1969,8 @@ fn the_bar_forgets_the_place_of_a_chip_whose_tab_has_closed() {
         (240., 100.).into(),
         |runner: &mut _| {
             let states = project_states!(runner);
-            let measured = runner.provide_root_context(|| Measured(State::create(Vec::new())));
+            let measured =
+                runner.provide_root_context(|| Measured(State::create(Chips::default())));
             (states, measured)
         },
         1.,
@@ -1982,7 +1983,7 @@ fn the_bar_forgets_the_place_of_a_chip_whose_tab_has_closed() {
     }
     settle(&mut test);
 
-    let held = || -> Vec<Tab> { measured.0.peek().iter().map(|(tab, ..)| *tab).collect() };
+    let held = || -> Vec<Tab> { measured.0.peek().keys().copied().collect() };
     let open = || -> Vec<Tab> { states.open.ids().into_iter().map(Tab::Document).collect() };
     let same = |held: &[Tab], open: &[Tab]| {
         held.len() == open.len() && held.iter().all(|tab| open.contains(tab))
@@ -2037,7 +2038,7 @@ fn bar_rules() -> (TestingRunner, Bar) {
             runner
                 .provide_root_context(|| {
                     Rules(Bar {
-                        places: State::create(Vec::new()),
+                        places: State::create(Chips::default()),
                         viewport: State::create(None),
                         content: State::create(0.0),
                         offset: State::create(0.0),
@@ -2108,7 +2109,11 @@ fn a_chip_that_moved_along_the_row_is_a_new_shape_and_one_carried_by_a_scroll_is
     bar.content_sized(500.0);
 
     bar.chip_sized(tab, 0.0, 100.0);
-    assert_eq!(*bar.places.peek(), [(tab, 0.0, 100.0)], "the chip's place");
+    assert_eq!(
+        bar.places.peek().at(&tab),
+        Some((0.0, 100.0)),
+        "the chip's place"
+    );
 
     bar.scroll_by(-40.0);
     // The count put back, so that what the measurements below wake is their own.
@@ -2119,8 +2124,8 @@ fn a_chip_that_moved_along_the_row_is_a_new_shape_and_one_carried_by_a_scroll_is
     // row.
     bar.chip_sized(tab, -40.0, 60.0);
     assert_eq!(
-        *bar.places.peek(),
-        [(tab, 0.0, 100.0)],
+        bar.places.peek().at(&tab),
+        Some((0.0, 100.0)),
         "the scroll moved the chip along the row"
     );
     assert_eq!(
@@ -2132,8 +2137,8 @@ fn a_chip_that_moved_along_the_row_is_a_new_shape_and_one_carried_by_a_scroll_is
     // The same chip, wider by 20.
     bar.chip_sized(tab, -40.0, 80.0);
     assert_eq!(
-        *bar.places.peek(),
-        [(tab, 0.0, 120.0)],
+        bar.places.peek().at(&tab),
+        Some((0.0, 120.0)),
         "the chip's new width was not kept"
     );
     assert_eq!(
@@ -2146,8 +2151,8 @@ fn a_chip_that_moved_along_the_row_is_a_new_shape_and_one_carried_by_a_scroll_is
     shape.set(0);
     bar.chip_sized(tab, 20.0, 140.0);
     assert_eq!(
-        *bar.places.peek(),
-        [(tab, 60.0, 180.0)],
+        bar.places.peek().at(&tab),
+        Some((60.0, 180.0)),
         "the chip's new place was not kept"
     );
     assert_eq!(

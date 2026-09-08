@@ -10,7 +10,8 @@ use analysis::Symbol;
 
 use crate::docs::Entry;
 
-/// Where each tab was left: the row that was at the top of its pane.
+/// Where each tab was left: the row that was at the top of its pane, and, more widely,
+/// whatever else is held per tab.
 ///
 /// **A row and not a pixel offset**, so it survives a row height that follows the fonts,
 /// a listing that has grown or shrunk under a rebuilt binary, and a file edited since it
@@ -23,10 +24,10 @@ use crate::docs::Entry;
 /// The value is a row for the two panes, an **address** for the listing of an object's
 /// whole code, whose rows are counted afresh as it is decoded and where a row means
 /// nothing for long, the **runs** each pane had picked out at the place -- which are not
-/// `Copy`, so a value need only be `Clone` -- and, in [`Driven`], the line a tab is
-/// driven from and the symbol it follows. The map is the same map in all of them, and
-/// only [`row`](Positions::row), the clamp against a listing's length, is a rows-only
-/// answer.
+/// `Copy`, so a value need only be `Clone` -- the two **sides** of a chip along the tab
+/// strip, and, in [`Driven`], the line a tab is driven from and the symbol it follows.
+/// The map is the same map in all of them, and only [`row`](Positions::row), the clamp
+/// against a listing's length, is a rows-only answer.
 pub struct Positions<T, V = usize> {
     at: Vec<(T, V)>,
 }
@@ -53,6 +54,13 @@ impl<T: Clone + PartialEq, V: Clone + PartialEq> Positions<T, V> {
             Some((_, was)) => *was = at,
             None => self.at.push((tab, at)),
         }
+    }
+
+    /// Every tab a position is held for, in the order they were first remembered: what a
+    /// caller reads to tell whether a [`forgetting`](Positions::forgetting) would drop
+    /// anything, so that it can skip a write.
+    pub fn keys(&self) -> impl Iterator<Item = &T> {
+        self.at.iter().map(|(open, _)| open)
     }
 
     /// Forget every position `keep` answers false for: a closing tab's, or a closing

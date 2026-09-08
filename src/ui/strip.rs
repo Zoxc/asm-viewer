@@ -874,9 +874,9 @@ impl Component for TabBar {
         // costs the reveal nothing: the tab on screen is one of these.
         use_side_effect_with_deps(&tabs, move |tabs: &Vec<Tab>| {
             let mut places = bar.places;
-            let closed = places.peek().iter().any(|(tab, ..)| !tabs.contains(tab));
+            let closed = places.peek().keys().any(|tab| !tabs.contains(tab));
             if closed {
-                places.write().retain(|(tab, ..)| tabs.contains(tab));
+                places.write().forgetting(|tab| tabs.contains(tab));
             }
         });
 
@@ -974,7 +974,7 @@ impl Component for TabBar {
 
 /// Every measurement the bar keeps, made in one place: the hook [`TabBar`] opens with.
 fn use_bar() -> Bar {
-    let places = use_state(Vec::<(Tab, f32, f32)>::new);
+    let places = use_state(Chips::default);
     // The test that asks what the bar still holds a place for hands it the list to keep
     // them in, there being no reading a component's own state from outside.
     #[cfg(test)]
@@ -993,10 +993,14 @@ fn use_bar() -> Bar {
     }
 }
 
+/// Where every chip is: its two sides along the row, one entry per open tab. The map the
+/// panes keep their places in, keyed by a tab rather than by a place on one.
+pub(super) type Chips = Positions<Tab, (f32, f32)>;
+
 /// The list a test hands the bar to measure its chips into, so that it can read them.
 #[cfg(test)]
 #[derive(Clone, Copy)]
-pub(crate) struct Measured(pub(crate) State<Vec<(Tab, f32, f32)>>);
+pub(crate) struct Measured(pub(crate) State<Chips>);
 
 /// What the bar has been measured as, how far along it is, and every rule over the two:
 /// passed about as one thing because nothing that scrolls can do without all of it.
@@ -1005,7 +1009,7 @@ pub(super) struct Bar {
     /// Every chip's two sides, along the row: where each was laid out, less the offset,
     /// so that scrolling the strip moves none of them. Only the open tabs: nothing
     /// measures a chip that has gone, so its entry is dropped when its tab closes.
-    pub(super) places: State<Vec<(Tab, f32, f32)>>,
+    pub(super) places: State<Chips>,
     /// The two sides of the strip: what a chip has to be inside to be in view.
     pub(super) viewport: State<Option<(f32, f32)>>,
     /// How wide the chips are altogether.
@@ -1032,22 +1036,14 @@ impl Bar {
     pub(super) fn chip_sized(self, tab: Tab, min_x: f32, max_x: f32) {
         let slid = *self.offset.peek();
         let at = (min_x - slid, max_x - slid);
-        let held = self
-            .places
-            .peek()
-            .iter()
-            .find(|(open, ..)| *open == tab)
-            .map(|(_, min, max)| (*min, *max));
+        let held = self.places.peek().at(&tab);
         let shifted =
             held.is_none_or(|(min, max)| (min - at.0).abs() >= 1.0 || (max - at.1).abs() >= 1.0);
         if !shifted {
             return;
         }
         let mut places = self.places;
-        let mut open = places.write();
-        open.retain(|(open, ..)| *open != tab);
-        open.push((tab, at.0, at.1));
-        drop(open);
+        places.write().remember(tab, at);
         self.reshaped();
     }
 
@@ -1140,13 +1136,7 @@ fn use_reveal(strip: State<Strip>, bar: Bar) {
             let Some(active) = *active else {
                 return;
             };
-            let Some((_, min, max)) = bar
-                .places
-                .peek()
-                .iter()
-                .find(|(tab, ..)| *tab == active)
-                .copied()
-            else {
+            let Some((min, max)) = bar.places.peek().at(&active) else {
                 return;
             };
             let Some((left, right)) = *bar.viewport.peek() else {
