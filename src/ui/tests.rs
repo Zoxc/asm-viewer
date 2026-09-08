@@ -7310,8 +7310,9 @@ fn the_name_under_the_pointer_is_asked_about_link_or_not() {
         .collect();
     assert_eq!(
         asked.last().map(|at| (at.line, at.column)),
-        // `fn main() {` is the first row, and the protocol counts its lines from zero.
-        Some((0, 3)),
+        // `fn main() {` is the file's first line, counted from one as every line in
+        // the app is.
+        Some((1, 3)),
         "the server was not asked about the name under the pointer"
     );
 }
@@ -7468,9 +7469,10 @@ fn a_right_click_on_a_link_offers_the_names_references() {
     // Where `helper` begins on `    let n = helper(1);`.
     assert_eq!(*column, 12);
 
-    // And the server was asked, at the same place, in the units the protocol takes.
+    // And the server was asked about the same place, in the app's own units: the line
+    // counts from one, and the wire's counting is `src/lsp.rs`'s alone.
     let (asked_of, _) = next_ask(&mut test, &asks).expect("the server was asked");
-    assert_eq!((asked_of.line, asked_of.column), (1, 12));
+    assert_eq!((asked_of.line, asked_of.column), (2, 12));
 }
 
 /// A name where one is **defined** is not a link, and the server saying so is the whole
@@ -8425,7 +8427,7 @@ fn an_item_in_a_trait_impl_asks_the_server_for_its_declaration() {
     settle(&mut test);
 
     let (asked, want) = next_ask(&mut test, &asks).expect("the press asked the server");
-    assert_eq!((asked.line, asked.column), (1, 12));
+    assert_eq!((asked.line, asked.column), (2, 12));
     assert_eq!(
         want,
         lsp::Question::Followed(lsp::Followed::Declaration),
@@ -8477,12 +8479,12 @@ fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
     assert_eq!(*column, 12);
 
     let (asked_of, _) = next_ask(&mut test, &asks).expect("the server was asked");
-    assert_eq!((asked_of.line, asked_of.column), (1, 12));
+    assert_eq!((asked_of.line, asked_of.column), (2, 12));
 }
 
 /// The menu's "Go to definition" asks about the name it was opened over, and asks about
-/// the same place a click on the link asks about. One `Lookup::at` counts the line down
-/// for the protocol, so the two cannot land a line apart.
+/// the same place a click on the link asks about. One `Lookup::at` builds both, so the
+/// two cannot land a line apart.
 #[test]
 fn the_menus_definition_asks_where_a_click_on_the_link_does() {
     let (file, _directory) = calling_file("asksdef");
@@ -8504,9 +8506,9 @@ fn the_menus_definition_asks_where_a_click_on_the_link_does() {
     press_at(&mut test, entry);
 
     let (asked, want) = next_ask(&mut test, &asks).expect("the press asked the server");
-    // `helper` begins the twelfth byte into the file's second line, which the protocol
-    // counts as line one.
-    assert_eq!((asked.line, asked.column), (1, 12));
+    // `helper` begins the twelfth byte into the file's second line, counted from one as
+    // every line in the app is.
+    assert_eq!((asked.line, asked.column), (2, 12));
     assert_eq!(want, lsp::Question::Followed(lsp::Followed::Definition));
 }
 
@@ -8662,9 +8664,9 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
         asked,
         Lookup {
             file: PathBuf::from(&*file),
-            // `let n = helper(1);` is the file's second row, and `helper` its twelfth
-            // column: both counted from zero, which is the protocol's own counting.
-            line: 1,
+            // `let n = helper(1);` is the file's second line, and `helper` begins at its
+            // twelfth byte: the line counted from one, as every line in the app is.
+            line: 2,
             column: 12,
         }
     );

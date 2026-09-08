@@ -129,7 +129,7 @@ impl Follow {
         let nowhere = |arrival: &&Arrival| {
             asked.want == lsp::Followed::Declaration
                 && arrival.place.file == asked.at.file
-                && arrival.place.line == asked.at.line.saturating_add(1)
+                && arrival.place.line == asked.at.line
         };
         self.arrived = places
             .first()

@@ -373,27 +373,18 @@ impl Language {
 /// is. The program's own name is in the tooltip and in the Project view.
 const SERVER_NAME: &str = "LSP";
 
-/// A place in a source file, as the language server is asked about one: the line counts
-/// from zero, as the protocol counts, and the column is a byte offset into that line, as
-/// every column outside the drawing is (`src/lsp.rs`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Lookup {
-    pub(crate) file: PathBuf,
-    pub(crate) line: u32,
-    pub(crate) column: u32,
-}
-
 impl Lookup {
     /// The place `column` of row `at` is, as the server is asked about one.
     ///
-    /// **The one place a line is counted down for the protocol.** Every line in the app
-    /// is 1-based and the protocol's is not, and two spellings of that rule drift a line
-    /// apart. `column` is already a byte offset into the row, which is what a column is
-    /// everywhere but the drawing (`src/lsp.rs`).
+    /// **The one way the app builds a question about a place**: a `LinePos` is the UI's
+    /// own, which is why this sits here and the type it makes sits with the rest of the
+    /// protocol. Both units go through untouched -- the line is 1-based on either side
+    /// (`lsp::Lookup`), and `column` is already a byte offset into the row, which is what
+    /// a column is everywhere but the drawing.
     pub(crate) fn at(at: &LinePos, column: u32) -> Lookup {
         Lookup {
             file: PathBuf::from(&*at.file),
-            line: at.line.saturating_sub(1),
+            line: at.line,
             column,
         }
     }
@@ -603,9 +594,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 Some(LspAnswer::Started { run, server })
             }
             LspJob::Ask { run, id, at, want } => {
-                let places = asked(&mut talking, |talk| {
-                    talk.places(want, &at.file, at.line, at.column)
-                })?;
+                let places = asked(&mut talking, |talk| talk.places(want, &at))?;
                 Some(LspAnswer::Answered {
                     run,
                     id,
@@ -623,9 +612,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 Some(LspAnswer::Linked { run, file, links })
             }
             LspJob::Hover { run, id, at } => {
-                let said = asked(&mut talking, |talk| {
-                    talk.hover(&at.file, at.line, at.column)
-                })?;
+                let said = asked(&mut talking, |talk| talk.hover(&at))?;
                 Some(LspAnswer::Hovered { run, id, said })
             }
             LspJob::Opened {

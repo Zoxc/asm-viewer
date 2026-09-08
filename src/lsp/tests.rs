@@ -4,6 +4,16 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use super::*;
 use crate::temporary::Temporary;
 
+/// A place in the file every question here is about, in the app's units: the line
+/// 1-based, as a [`Lookup`]'s is, and the column a byte offset into it.
+fn at(line: u32, column: u32) -> Lookup {
+    Lookup {
+        file: PathBuf::from("/p/src/main.rs"),
+        line,
+        column,
+    }
+}
+
 /// A message as it goes on the wire, for the tests that assert about bytes.
 fn framed(body: &str) -> Vec<u8> {
     format!("Content-Length: {}\r\n\r\n{body}", body.len()).into_bytes()
@@ -519,13 +529,8 @@ fn asked_over_wide_line(
             talk.reading(read);
             talk.initialize(Path::new("/p"), &wanted())
                 .expect("a handshake");
-            talk.places(
-                Question::Followed(Followed::Definition),
-                Path::new("/p/src/main.rs"),
-                0,
-                8,
-            )
-            .expect("an answer")
+            talk.places(Question::Followed(Followed::Definition), &at(1, 8))
+                .expect("an answer")
         },
     );
     let asked = said
@@ -573,13 +578,8 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
             }));
         },
         |talk| {
-            talk.places(
-                Question::Followed(Followed::Definition),
-                Path::new("/p/src/main.rs"),
-                41,
-                17,
-            )
-            .expect("an answer")
+            talk.places(Question::Followed(Followed::Definition), &at(42, 17))
+                .expect("an answer")
         },
     );
 
@@ -588,6 +588,8 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
         said[0]["params"]["textDocument"]["uri"],
         json!("file:///p/src/main.rs")
     );
+    // Both ways of the one unit: line 42 was asked about and 41 went out, and the line 3
+    // the answer named comes back as 4.
     assert_eq!(
         said[0]["params"]["position"],
         json!({ "line": 41, "character": 17 })
@@ -612,10 +614,7 @@ fn hover_of(result: Value) -> Option<Hovered> {
                 "result": result.clone(),
             }));
         },
-        |talk| {
-            talk.hover(Path::new("/p/src/main.rs"), 10, 14)
-                .expect("an answer")
-        },
+        |talk| talk.hover(&at(11, 14)).expect("an answer"),
     );
     found
 }
@@ -634,10 +633,7 @@ fn a_hover_is_asked_where_the_pointer_rested_and_answered_with_the_name_it_is_ab
                 },
             }));
         },
-        |talk| {
-            talk.hover(Path::new("/p/src/main.rs"), 10, 14)
-                .expect("an answer")
-        },
+        |talk| talk.hover(&at(11, 14)).expect("an answer"),
     );
 
     assert_eq!(said[0]["method"], json!("textDocument/hover"));
@@ -724,7 +720,7 @@ fn a_server_still_reading_the_project_says_nothing_about_a_name_and_does_not_fai
         },
         |talk| {
             assert_eq!(
-                talk.hover(Path::new("/p/src/main.rs"), 0, 0),
+                talk.hover(&at(1, 0)),
                 Ok(None),
                 "a refusal is no answer, and not a failure to report"
             );
@@ -917,13 +913,8 @@ fn implementations_are_asked_for_where_the_reader_pointed() {
             }));
         },
         |talk| {
-            talk.places(
-                Question::Listed(Listed::Implementations),
-                Path::new("/p/src/main.rs"),
-                4,
-                11,
-            )
-            .expect("an answer")
+            talk.places(Question::Listed(Listed::Implementations), &at(5, 11))
+                .expect("an answer")
         },
     );
 
@@ -955,13 +946,8 @@ fn references_are_asked_for_where_the_reader_pointed_and_leave_the_definition_ou
             }));
         },
         |talk| {
-            talk.places(
-                Question::Listed(Listed::References),
-                Path::new("/p/src/main.rs"),
-                41,
-                17,
-            )
-            .expect("an answer")
+            talk.places(Question::Listed(Listed::References), &at(42, 17))
+                .expect("an answer")
         },
     );
 
@@ -1005,12 +991,7 @@ fn what_arrives_before_the_answer_is_dealt_with_and_the_answer_is_still_the_answ
         },
         |talk| {
             let places = talk
-                .places(
-                    Question::Followed(Followed::Definition),
-                    Path::new("/p/src/main.rs"),
-                    0,
-                    0,
-                )
+                .places(Question::Followed(Followed::Definition), &at(1, 0))
                 .expect("an answer");
             assert_eq!(places, Vec::new());
         },
@@ -1045,13 +1026,8 @@ fn what_the_server_says_unasked_is_whether_it_is_working() {
             fake.say(json!({ "jsonrpc": "2.0", "id": message["id"].clone(), "result": null }));
         },
         |talk| {
-            talk.places(
-                Question::Followed(Followed::Definition),
-                Path::new("/p/src/main.rs"),
-                0,
-                0,
-            )
-            .expect("an answer");
+            talk.places(Question::Followed(Followed::Definition), &at(1, 0))
+                .expect("an answer");
         },
     );
 
@@ -1078,13 +1054,8 @@ fn a_server_that_says_it_has_settled_is_heard_saying_so() {
             fake.say(json!({ "jsonrpc": "2.0", "id": message["id"].clone(), "result": null }));
         },
         |talk| {
-            talk.places(
-                Question::Followed(Followed::Definition),
-                Path::new("/p/src/main.rs"),
-                0,
-                0,
-            )
-            .expect("an answer");
+            talk.places(Question::Followed(Followed::Definition), &at(1, 0))
+                .expect("an answer");
         },
     );
 
@@ -1107,12 +1078,7 @@ fn a_server_that_is_still_reading_the_project_is_no_answer_and_not_a_failure() {
         },
         |talk| {
             let places = talk
-                .places(
-                    Question::Followed(Followed::Definition),
-                    Path::new("/p/src/main.rs"),
-                    0,
-                    0,
-                )
+                .places(Question::Followed(Followed::Definition), &at(1, 0))
                 .expect("no failure");
             assert_eq!(places, Vec::new());
         },
@@ -1131,12 +1097,7 @@ fn any_other_error_is_the_failure_the_server_named() {
         },
         |talk| {
             assert_eq!(
-                talk.places(
-                    Question::Followed(Followed::Definition),
-                    Path::new("/p/src/main.rs"),
-                    0,
-                    0
-                ),
+                talk.places(Question::Followed(Followed::Definition), &at(1, 0)),
                 Err(Failure::Refused {
                     code: -32603,
                     said: "it panicked".to_owned(),
@@ -1154,12 +1115,7 @@ fn a_server_that_stops_answering_ends_the_conversation() {
     drop(fake);
 
     assert!(matches!(
-        talk.places(
-            Question::Followed(Followed::Definition),
-            Path::new("/p/src/main.rs"),
-            0,
-            0
-        ),
+        talk.places(Question::Followed(Followed::Definition), &at(1, 0)),
         Err(Failure::Broken(_))
     ));
 }

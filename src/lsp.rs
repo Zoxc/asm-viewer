@@ -157,6 +157,22 @@ pub struct Place {
     pub columns: Range<u32>,
 }
 
+/// A place a question is about: a file, a line in it, and a column on that line.
+///
+/// The units are a [`Place`]'s, which are the app's own: the line counts from **one**,
+/// and the column is a byte offset into that line whichever way the server counts one
+/// ([`Encoding`]). The line goes out the protocol's way where the question is sent
+/// ([`asked_at`]) and nowhere else.
+///
+/// Built by `Lookup::at` (`src/ui/language.rs`), which is where the app's own `LinePos`
+/// is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Lookup {
+    pub file: PathBuf,
+    pub line: u32,
+    pub column: u32,
+}
+
 /// Which of the four questions about a place is being asked.
 ///
 /// One type from the link the reader presses to the method that goes out, so nothing is
@@ -206,8 +222,8 @@ impl Question {
     /// What is sent with it: the place, and for references the one thing that is not
     /// asked for -- where the name is **defined**. A reader looking at the name has that
     /// under the pointer already, and following the link is the door to it.
-    fn params(self, file: &Path, line: u32, column: u32) -> Value {
-        let mut params = asked_at(file, line, column);
+    fn params(self, at: &Lookup, column: u32) -> Value {
+        let mut params = asked_at(at, column);
         if matches!(self, Question::Listed(Listed::References)) {
             params["context"] = json!({ "includeDeclaration": false });
         }
@@ -436,18 +452,9 @@ impl Server {
         })
     }
 
-    /// Put `question` about what is at `line` and `column` of `file`.
-    ///
-    /// `line` counts from zero, as the protocol does, and `column` is a byte offset into
-    /// that line, as every column in the app is ([`Place`]).
-    pub fn places(
-        &mut self,
-        question: Question,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Place>, Failure> {
-        self.talk.places(question, file, line, column)
+    /// Put `question` about what is at `at`, in the app's own units ([`Lookup`]).
+    pub fn places(&mut self, question: Question, at: &Lookup) -> Result<Vec<Place>, Failure> {
+        self.talk.places(question, at)
     }
 
     /// Every name in `file`, as the server classifies them.
@@ -460,14 +467,9 @@ impl Server {
         self.talk.legend()
     }
 
-    /// What the name at `line` and `column` of `file` is, in the same units.
-    pub fn hover(
-        &mut self,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Option<Hovered>, Failure> {
-        self.talk.hover(file, line, column)
+    /// What the name at `at` is, in the same units.
+    pub fn hover(&mut self, at: &Lookup) -> Result<Option<Hovered>, Failure> {
+        self.talk.hover(at)
     }
 
     /// Tell it the app is showing `file`, and that it is not any more.
@@ -660,21 +662,14 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// up. A file the app never opened -- one outside the project, or of a language this
     /// server is not for -- answers whatever the server can work out on its own, which
     /// is often nothing, and nothing is what a question with no answer gets anyway.
-    pub fn places(
-        &mut self,
-        question: Question,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Vec<Place>, Failure> {
+    pub fn places(&mut self, question: Question, at: &Lookup) -> Result<Vec<Place>, Failure> {
         let mut lines = self.lines();
-        let params = question.params(file, line, lines.out(file, line, column));
+        let params = question.params(at, lines.out(&at.file, at.line, at.column));
         let mut found = self
             .asked(question.method(), params)
             .map(|value| places(&value))?;
         for place in &mut found {
-            let at = place.line.saturating_sub(1);
-            place.columns = lines.back(&place.file, at, place.columns.clone());
+            place.columns = lines.back(&place.file, place.line, place.columns.clone());
         }
         Ok(found)
     }
@@ -687,20 +682,14 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// **A refusal is an empty answer**, as it is for a place and not as it is for the
     /// names in a file: the pointer resting on the name again is what asks anew, and it
     /// costs nothing to wait for that.
-    pub fn hover(
-        &mut self,
-        file: &Path,
-        line: u32,
-        column: u32,
-    ) -> Result<Option<Hovered>, Failure> {
+    pub fn hover(&mut self, at: &Lookup) -> Result<Option<Hovered>, Failure> {
         let mut lines = self.lines();
-        let column = lines.out(file, line, column);
+        let column = lines.out(&at.file, at.line, at.column);
         let mut said = self
-            .asked("textDocument/hover", asked_at(file, line, column))
-            .map(|value| hovered(&value, line, column))?;
+            .asked("textDocument/hover", asked_at(at, column))
+            .map(|value| hovered(&value, at.line, column))?;
         if let Some(said) = said.as_mut() {
-            let at = said.line.saturating_sub(1);
-            said.columns = lines.back(file, at, said.columns.clone());
+            said.columns = lines.back(&at.file, said.line, said.columns.clone());
         }
         Ok(said)
     }
@@ -894,19 +883,20 @@ struct Lines {
 }
 
 impl Lines {
-    /// The text of `line` -- counted from zero, as the protocol counts -- of `file`, and
-    /// nothing where there is no converting to do, the file would not read, or it is too
-    /// short for the line.
+    /// The text of `line` -- 1-based, as every line here but the wire's own is -- of
+    /// `file`, and nothing where there is no converting to do, the file would not read,
+    /// or it is too short for the line.
     fn at(&mut self, file: &Path, line: u32) -> Option<&str> {
         if self.encoding == Encoding::Utf8 {
             return None;
         }
+        let row = (line as usize).checked_sub(1)?;
         let read = self.read;
         let text = self
             .files
             .entry(file.to_path_buf())
             .or_insert_with(|| read(file));
-        text.as_deref()?.lines().nth(line as usize)
+        text.as_deref()?.lines().nth(row)
     }
 
     /// A byte column as the server counts one: what goes out with a question.
@@ -1517,11 +1507,16 @@ fn reply(id: Value, answer: Result<Value, Value>) -> Value {
     }
 }
 
-/// The position a question is about, as every question about one sends it.
-fn asked_at(file: &Path, line: u32, column: u32) -> Value {
+/// The position a question is about, as every question about one sends it. `column` is
+/// the server's own already ([`Lines::out`]); the line is counted down here.
+///
+/// **The one place a line goes out the wire's way**, and the mirror of [`spanned`]
+/// counting an answer's line up: the app counts a line from one ([`Place`]) and the
+/// protocol from zero, so both halves of that sit in the one file that speaks it.
+fn asked_at(at: &Lookup, column: u32) -> Value {
     json!({
-        "textDocument": { "uri": uri_of(file) },
-        "position": { "line": line, "character": column },
+        "textDocument": { "uri": uri_of(&at.file) },
+        "position": { "line": at.line.saturating_sub(1), "character": column },
     })
 }
 
@@ -1650,7 +1645,7 @@ fn spanned(range: &Value) -> Option<(u32, Range<u32>)> {
 }
 
 /// What one hover answer says, and nothing for one that says nothing. `line` and `column`
-/// are the question's, in the units it was asked in.
+/// are the question's, in the units it was asked in: the line 1-based, as an answer's is.
 ///
 /// The columns are the answer's own where it named a range, and the question's otherwise:
 /// a server need not say what it answered about, and what the box is drawn against has to
@@ -1666,7 +1661,7 @@ fn hovered(answer: &Value, line: u32, column: u32) -> Option<Hovered> {
     let (line, columns) = answer
         .get("range")
         .and_then(spanned)
-        .unwrap_or((line.saturating_add(1), column..column));
+        .unwrap_or((line, column..column));
     Some(Hovered {
         text: text.to_owned(),
         line,

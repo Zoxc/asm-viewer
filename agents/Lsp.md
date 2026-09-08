@@ -221,11 +221,12 @@ Things learned from rust-analyzer's own transport, each of which is a test:
 
 ## How a column is counted
 
-Lines go out as the protocol takes them, counted from zero, and a `Place` comes back with
-a **1-based** line, the unit line information is in everywhere else in the app. On the way
-out that conversion is written once, in `Lookup::at`: every question about a name -- a
-followed link, and the three a row's menu offers -- is built there, so no two of them can
-land a line apart. On the way in it happens as the answer is decoded, in `src/lsp.rs`.
+A line is **1-based** everywhere in this app, the unit line information is in: the
+`Lookup` a question goes out as and the `Place` an answer comes back as both. The protocol
+counts from zero, so that conversion is in one place and happens once, and both halves of
+it are in `src/lsp.rs` -- `asked_at` counts a question's line down as it goes on the wire,
+and an answer's is counted up as it is read. Nothing outside that file holds a line the
+wire's way.
 
 The column is asked about. The protocol's own unit is a UTF-16 code unit, which is what
 skia counts a drawn row in and so what `src/chars.rs` counts in -- but it is not what
