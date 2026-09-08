@@ -124,11 +124,12 @@ before the highlight moved at all. The clamp is `Listed::clamp`, written once: t
 row, Enter opening one and an arrow moving one all have to land on the same row. What it clamps
 against is the drawn list -- the key handler is handed the list the memo holds, peeked, so a press
 reads what the panel is showing rather than working a list out for itself. That row is also the
-finder's **pick**, in the sense every list in the app now has one (`agents/Sidebar.md`): an Alt+press moves the keyboard to the row under the pointer and opens
-nothing, where a plain press opens the file and closes the panel. It is drawn in the selection while
-the box holds the keyboard, which it does from the moment the chord opens the finder, and in the
-grey a list not being typed in draws its pick with -- so the finder needs no rule of its own for
-either, only the box handed down as `RowsBox`.
+finder's **pick**, in the sense every list in the app now has one (`agents/Sidebar.md`): an
+Alt+press moves the keyboard to the row under the pointer and opens nothing, where a plain press
+opens the file and closes the panel. It is drawn in the selection while the box holds the keyboard,
+which it does from the moment the chord opens the finder, and in the grey a list not being typed in
+draws its pick with -- so the finder needs no rule of its own for either, only the box handed down
+as `RowsBox`.
 
 **The list follows that row.** The panel is `FINDER_ROWS` tall and the arrows walk past it, so the
 list is given a `ScrollController` and each move ends in `reveal_caret` -- the code panes' own
