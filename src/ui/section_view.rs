@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::positions::Spot;
-use crate::section::{Row, Rows, GAP_BYTES_PER_ROW};
+use crate::section::{Kind, Row, Rows, GAP_BYTES_PER_ROW};
 
 /// How many screens above and below the viewport are decoded ahead, so that a page up or
 /// down lands on rows already there and empty rows are seen only by a reader outrunning
@@ -162,9 +162,10 @@ struct TextOf {
 /// The rows alone answer this: an instruction is the one row that is read out of the
 /// reading.
 fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
-    match rows.row(row)? {
-        Row::Header { section } => {
-            let placed = rows.code().sections().get(section)?;
+    let Row { stretch, kind } = rows.row(row)?;
+    match kind {
+        Kind::Header => {
+            let placed = rows.placed_of(stretch)?;
             Some(TextOf {
                 address: Some(placed.range().start),
                 mark: None,
@@ -174,7 +175,7 @@ fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
                 opens: None,
             })
         }
-        Row::Label { stretch, index } => {
+        Kind::Label(index) => {
             let symbol = label_of(rows, stretch, index)?;
             Some(TextOf {
                 address: Some(rows.address_of(row).unwrap_or(0)),
@@ -185,7 +186,7 @@ fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
                 opens: Some(symbol),
             })
         }
-        Row::Gap { stretch, index } => {
+        Kind::Gap(index) => {
             let (address, bytes) = gap_bytes(rows, stretch, index)?;
             let (mark, values) = dump_line(&bytes);
             Some(TextOf {
@@ -197,11 +198,11 @@ fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
                 opens: None,
             })
         }
-        Row::Instruction { .. }
-        | Row::Rule { .. }
-        | Row::Space { .. }
-        | Row::Empty { .. }
-        | Row::Separator { .. } => None,
+        Kind::Instruction(_)
+        | Kind::Rule
+        | Kind::Space { .. }
+        | Kind::Empty(_)
+        | Kind::Separator { .. } => None,
     }
 }
 
@@ -219,7 +220,10 @@ pub(crate) fn row_line(rows: &Rows, reading: &Reading, row: usize) -> String {
 /// [`row_line`] without the address column.
 pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
     match rows.row(row) {
-        Some(Row::Instruction { stretch, index }) => reading
+        Some(Row {
+            stretch,
+            kind: Kind::Instruction(index),
+        }) => reading
             .held
             .get(&stretch)
             .and_then(|s| s.code.as_ref())
@@ -722,17 +726,22 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             .find(|(flat, _)| *flat == stretch)
             .map_or(&[][..], |(_, edges)| edges.as_slice())
     };
-    match rows.row(i) {
+    let Some(Row { stretch, kind }) = rows.row(i) else {
+        return rect().height(Size::px(code_row_height())).into_element();
+    };
+    match kind {
         // The three rows that are text and nothing else, drawn from the one answer they
         // are copied from ([`text_of`]); a row whose section or bytes could not be read
         // draws the blank it copies as.
-        Some(row @ (Row::Header { .. } | Row::Label { .. } | Row::Gap { .. })) => {
+        Kind::Header | Kind::Label(_) | Kind::Gap(_) => {
             let Some(text) = text_of(rows, i) else {
                 return rect().height(Size::px(code_row_height())).into_element();
             };
-            let key = match row {
-                Row::Header { section } => RowKey::Header(section),
-                Row::Label { index, .. } => RowKey::Label(rows.address_of(i).unwrap_or(0), index),
+            let key = match kind {
+                Kind::Header => {
+                    RowKey::Header(rows.place(stretch).map_or(0, |place| place.section))
+                }
+                Kind::Label(index) => RowKey::Label(rows.address_of(i).unwrap_or(0), index),
                 // By the row's own address and never the bytes': a row whose bytes could
                 // not be found would otherwise share a key with every other such row.
                 _ => RowKey::Gap(rows.address_of(i).or(text.address).unwrap_or(0)),
@@ -758,7 +767,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
         // The rule over a stretch, and the two blanks: drawn as an empty row is, washed
         // and swept across. Told apart by their kind, the three of one stretch standing
         // for the one address.
-        Some(Row::Rule { stretch }) => EmptyRow {
+        Kind::Rule => EmptyRow {
             row: i,
             wash,
             rule: true,
@@ -766,7 +775,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
         }
         .key(RowKey::Rule(rows.start_of(stretch).unwrap_or(0)))
         .into_element(),
-        Some(Row::Space { stretch, under }) => EmptyRow {
+        Kind::Space { under } => EmptyRow {
             row: i,
             wash,
             rule: false,
@@ -774,7 +783,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
         }
         .key(RowKey::Space(rows.start_of(stretch).unwrap_or(0), under))
         .into_element(),
-        Some(Row::Empty { stretch, index }) => EmptyRow {
+        Kind::Empty(index) => EmptyRow {
             row: i,
             wash,
             rule: false,
@@ -782,7 +791,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
         }
         .key(RowKey::Empty(rows.start_of(stretch).unwrap_or(0), index))
         .into_element(),
-        Some(Row::Instruction { stretch, index }) => {
+        Kind::Instruction(index) => {
             let Some(asm) = data.asm_data(stretch) else {
                 return rect().height(Size::px(code_row_height())).into_element();
             };
@@ -792,9 +801,9 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             // The rows either side, where they are instructions of this same stretch:
             // a label, a header or a separator is nobody's pair.
             let paired_at = |row: usize| match rows.row(row) {
-                Some(Row::Instruction {
+                Some(Row {
                     stretch: other,
-                    index,
+                    kind: Kind::Instruction(index),
                 }) if other == stretch => asm.paired(index, data.pair.as_ref()),
                 _ => false,
             };
@@ -815,7 +824,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             .key(RowKey::Insn(address))
             .into_element()
         }
-        Some(Row::Separator { stretch, below }) => {
+        Kind::Separator { below } => {
             let Some(asm) = data.asm_data(stretch) else {
                 return rect().height(Size::px(code_row_height())).into_element();
             };
@@ -837,7 +846,6 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             .key(RowKey::Sep(address))
             .into_element()
         }
-        None => rect().height(Size::px(code_row_height())).into_element(),
     }
 }
 
@@ -1392,7 +1400,10 @@ fn row_compiled_from(rows: &Rows, reading: &Reading, pair: &Picked) -> Option<us
 /// and any row of a stretch still guessed, none of which is anybody's line yet.
 fn file_at(built: &Built, row: usize) -> Option<Arc<str>> {
     match built.row(row) {
-        Some(Row::Instruction { stretch, index }) => built
+        Some(Row {
+            stretch,
+            kind: Kind::Instruction(index),
+        }) => built
             .reading
             .held
             .get(&stretch)

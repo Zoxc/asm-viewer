@@ -15795,7 +15795,12 @@ fn pressing_an_object_row_opens_its_code() {
     assert_eq!(entry_text(&document), "line_fixture.o");
 }
 
-use crate::section::{Row, Rows};
+use crate::section::{Kind, Row, Rows};
+
+/// What row `at` of a listing draws, whichever stretch it is in.
+fn kind_at(rows: &Rows, at: usize) -> Option<Kind> {
+    Some(rows.row(at)?.kind)
+}
 
 /// Nothing at all: for a test that drives the states and mounts no pane.
 fn bare_harness() -> impl IntoElement {
@@ -15938,7 +15943,7 @@ fn a_code_tab_draws_its_labels_and_empty_rows_before_a_byte_is_decoded() {
     // estimate says, which is far more than its four rows of text.
     assert!(rows.len() > 4);
     let label_rows: Vec<usize> = (0..rows.len())
-        .filter(|&row| matches!(rows.row(row), Some(Row::Label { .. })))
+        .filter(|&row| matches!(kind_at(&rows, row), Some(Kind::Label(_))))
         .collect();
     let top = label_area(&test, "section .text").expect("the header is drawn");
     let bottom = label_area(&test, "sum_to:").expect("sum_to is labelled");
@@ -15973,7 +15978,8 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
     // Scroll so that `sum_to`'s label is the row at the top.
     let label = (0..rows.len())
         .find(|&row| {
-            rows.address_of(row) == Some(0x30) && matches!(rows.row(row), Some(Row::Label { .. }))
+            rows.address_of(row) == Some(0x30)
+                && matches!(kind_at(&rows, row), Some(Kind::Label(_)))
         })
         .expect("sum_to has a label row");
     test.scroll(
@@ -17613,7 +17619,7 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     // keeps above the target, and the target's own row is one the guess puts the address
     // in, which is nobody's address.
     let guess = guessed.row_for(target).expect("the target has a row");
-    assert!(matches!(guessed.row(guess), Some(Row::Empty { .. })));
+    assert!(matches!(kind_at(&guessed, guess), Some(Kind::Empty(_))));
     assert!(
         !labels(&test).iter().any(|text| text == "f:"),
         "the view did not move: {:?}",
@@ -17704,7 +17710,7 @@ fn a_gap_row_is_marked_as_data() {
     ));
     let rows = rows_of(&reading);
     let gap_row = (0..rows.len())
-        .find(|&row| matches!(rows.row(row), Some(Row::Gap { .. })))
+        .find(|&row| matches!(kind_at(&rows, row), Some(Kind::Gap(_))))
         .expect("the stretch has a gap row");
     // Sixteen bytes divide into quadwords, little-endian; a row of them is `dq`.
     let copied = row_line(&rows, &reading, gap_row);
@@ -17784,7 +17790,15 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
 
     let rows = rows_of(&reading);
     let gaps: Vec<usize> = (0..rows.len())
-        .filter(|&row| matches!(rows.row(row), Some(Row::Gap { stretch: 0, .. })))
+        .filter(|&row| {
+            matches!(
+                rows.row(row),
+                Some(Row {
+                    stretch: 0,
+                    kind: Kind::Gap(_)
+                })
+            )
+        })
         .collect();
     assert!(!gaps.is_empty(), "the stretch draws none of its bytes");
     for &row in &gaps {
@@ -18097,8 +18111,8 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         .body_row_for(address)
         .expect("the address has a row");
     let row = exact.body_row_for(address).expect("the address has a row");
-    assert!(matches!(guessed.row(guess), Some(Row::Empty { .. })));
-    assert!(matches!(exact.row(row), Some(Row::Instruction { index: at, .. }) if at == index));
+    assert!(matches!(kind_at(&guessed, guess), Some(Kind::Empty(_))));
+    assert!(matches!(kind_at(&exact, row), Some(Kind::Instruction(at)) if at == index));
 
     let (mut test, (states, doors, held)) = TestingRunner::new(
         doors_harness,
@@ -26307,7 +26321,7 @@ fn each_kind_of_row_of_an_objects_code_copies_the_same_text_both_ways() {
     ));
     let gap_rows = rows_of(&gapped);
     let gap = (0..gap_rows.len())
-        .find(|&row| matches!(gap_rows.row(row), Some(Row::Gap { .. })))
+        .find(|&row| matches!(kind_at(&gap_rows, row), Some(Kind::Gap(_))))
         .expect("the stretch has a gap row");
     let swept = code_line(&gap_rows, &gapped, gap).to_string();
     // The data directive, the values, then the bytes as characters between bars.

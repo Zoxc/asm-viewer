@@ -71,28 +71,36 @@ fn gap_rows(gap: &Range<u64>) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-/// One row of the listing, as what it draws.
+/// One row of the listing: the stretch it belongs to, and what it draws.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Row {
-    /// Where a placed section starts: its name.
-    Header { section: usize },
+pub struct Row {
+    /// The stretch the row is in, by flat index.
+    pub stretch: usize,
+    pub kind: Kind,
+}
+
+/// What a row draws.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// Where the stretch's section starts: its name.
+    Header,
     /// The rule over a stretch: what a reader tells one function from the next by, drawn
     /// as the rule between two basic blocks is.
-    Rule { stretch: usize },
+    Rule,
     /// A blank row: the one under the rule, and -- `under` -- the one between a section
     /// header and the first label beneath it. The rule is not drawn against the name it
     /// separates, and a header is not drawn against its first label.
-    Space { stretch: usize, under: bool },
+    Space { under: bool },
     /// The `index`th symbol at the stretch's address.
-    Label { stretch: usize, index: usize },
+    Label(usize),
     /// One of the rows a stretch nobody has decoded is guessed to take.
-    Empty { stretch: usize, index: usize },
+    Empty(usize),
     /// The `index`th instruction of the stretch's symbol.
-    Instruction { stretch: usize, index: usize },
+    Instruction(usize),
     /// The block separator above the instruction `below`.
-    Separator { stretch: usize, below: usize },
+    Separator { below: usize },
     /// The `index`th row of sixteen bytes of the stretch's gap.
-    Gap { stretch: usize, index: usize },
+    Gap(usize),
 }
 
 /// One stretch's share of the rows.
@@ -123,14 +131,53 @@ impl StretchRows {
         }
     }
 
-    /// The rows above the body: the rule over the stretch and its blank, a section's
-    /// header and the blank under it, and one row per label.
+    /// The rows above the body, in the order they are drawn: the rule over the stretch
+    /// and its blank, a section's header and the blank under it, and one row per label.
+    /// The one place they are laid out, so counting them and drawing them cannot
+    /// disagree.
+    fn heading(&self) -> impl Iterator<Item = Kind> + '_ {
+        let space = self
+            .space
+            .then_some([Kind::Rule, Kind::Space { under: false }]);
+        let header = self
+            .header
+            .then_some([Kind::Header, Kind::Space { under: true }]);
+        space
+            .into_iter()
+            .flatten()
+            .chain(header.into_iter().flatten())
+            .chain((0..self.labels).map(Kind::Label))
+    }
+
+    /// How many rows stand above the body: four at most, plus one per label.
     fn above(&self) -> usize {
-        2 * usize::from(self.space) + 2 * usize::from(self.header) + self.labels
+        self.heading().count()
     }
 
     fn rows(&self) -> usize {
         self.above() + self.body_rows()
+    }
+
+    /// What row `local` of the body draws, counted from the body's first row. [`None`]
+    /// for a separator with no instruction under it: [`Lanes`] lays out none, and no row
+    /// is better than one labelled with the wrong instruction.
+    fn body_kind(&self, local: usize) -> Option<Kind> {
+        Some(match &self.body {
+            BodyRows::Estimated(_) => Kind::Empty(local),
+            BodyRows::Decoded(body) => {
+                let listing = body.listing_rows();
+                if local < listing {
+                    match body.lanes.instruction_at(local) {
+                        Some(index) => Kind::Instruction(index),
+                        None => Kind::Separator {
+                            below: body.lanes.instruction_at(local + 1)?,
+                        },
+                    }
+                } else {
+                    Kind::Gap(local - listing)
+                }
+            }
+        })
     }
 
     /// How many rows to guess for a body nobody has decoded: never none, so every label
@@ -310,68 +357,15 @@ impl Rows {
     pub fn row(&self, row: usize) -> Option<Row> {
         let flat = self.stretch_of(row)?;
         let stretch = &self.stretches[flat];
-        let mut local = row - self.starts[flat];
-        if stretch.space {
-            if local == 0 {
-                return Some(Row::Rule { stretch: flat });
-            }
-            local -= 1;
-            if local == 0 {
-                return Some(Row::Space {
-                    stretch: flat,
-                    under: false,
-                });
-            }
-            local -= 1;
-        }
-        if stretch.header {
-            if local == 0 {
-                return Some(Row::Header {
-                    section: stretch.place.section,
-                });
-            }
-            local -= 1;
-            if local == 0 {
-                return Some(Row::Space {
-                    stretch: flat,
-                    under: true,
-                });
-            }
-            local -= 1;
-        }
-        if local < stretch.labels {
-            return Some(Row::Label {
-                stretch: flat,
-                index: local,
-            });
-        }
-        local -= stretch.labels;
-        match &stretch.body {
-            BodyRows::Estimated(_) => Some(Row::Empty {
-                stretch: flat,
-                index: local,
-            }),
-            BodyRows::Decoded(body) => {
-                let listing = body.listing_rows();
-                if local < listing {
-                    Some(match body.lanes.instruction_at(local) {
-                        Some(index) => Row::Instruction {
-                            stretch: flat,
-                            index,
-                        },
-                        None => Row::Separator {
-                            stretch: flat,
-                            below: body.lanes.instruction_at(local + 1).unwrap_or(0),
-                        },
-                    })
-                } else {
-                    Some(Row::Gap {
-                        stretch: flat,
-                        index: local - listing,
-                    })
-                }
-            }
-        }
+        let local = row - self.starts[flat];
+        let kind = match stretch.heading().nth(local) {
+            Some(kind) => kind,
+            None => stretch.body_kind(local - stretch.above())?,
+        };
+        Some(Row {
+            stretch: flat,
+            kind,
+        })
     }
 
     /// The placed address row `row` stands for: what names it once the rows around it
@@ -380,12 +374,15 @@ impl Rows {
     /// its share of the stretch's bytes, an instruction its own, a separator the
     /// instruction below it, and a gap row its first byte.
     pub fn address_of(&self, row: usize) -> Option<u64> {
-        let flat = self.stretch_of(row)?;
+        let Row {
+            stretch: flat,
+            kind,
+        } = self.row(row)?;
         let stretch = &self.stretches[flat];
-        Some(match self.row(row)? {
-            Row::Header { section } => self.code.sections().get(section)?.range().start,
-            Row::Rule { .. } | Row::Space { .. } | Row::Label { .. } => stretch.start,
-            Row::Empty { index, .. } => {
+        Some(match kind {
+            Kind::Header => self.placed_of(flat)?.range().start,
+            Kind::Rule | Kind::Space { .. } | Kind::Label(_) => stretch.start,
+            Kind::Empty(index) => {
                 let BodyRows::Estimated(rows) = &stretch.body else {
                     return None;
                 };
@@ -396,7 +393,7 @@ impl Rows {
                     .div_ceil(*rows as u64);
                 stretch.start.saturating_add(share)
             }
-            Row::Instruction { index, .. } | Row::Separator { below: index, .. } => {
+            Kind::Instruction(index) | Kind::Separator { below: index } => {
                 let assembly = self.body(flat)?.assembly.as_ref()?;
                 assembly
                     .instructions
@@ -404,7 +401,7 @@ impl Rows {
                     .address
                     .wrapping_add(stretch.bias)
             }
-            Row::Gap { index, .. } => {
+            Kind::Gap(index) => {
                 let gap = self.body(flat)?.gap.as_ref()?;
                 gap.start
                     .wrapping_add(stretch.bias)

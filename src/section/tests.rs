@@ -53,6 +53,16 @@ fn kinds(rows: &Rows) -> Vec<Row> {
     (0..rows.len()).map(|i| rows.row(i).unwrap()).collect()
 }
 
+/// What `rows.row` answers for a row of stretch `stretch`.
+fn row(stretch: usize, kind: Kind) -> Option<Row> {
+    Some(Row { stretch, kind })
+}
+
+/// What row `at` draws, whichever stretch it is in.
+fn kind_of(rows: &Rows, at: usize) -> Option<Kind> {
+    Some(rows.row(at)?.kind)
+}
+
 /// Before a byte is decoded, a stretch is its header where a section starts, a label per
 /// symbol, and as many empty rows as its bytes suggest -- and never none, so that every
 /// label has a row under it.
@@ -76,41 +86,17 @@ fn a_stretch_nobody_decoded_is_a_run_of_empty_rows_sized_by_its_bytes() {
         // listing's first has, then the header, the blank under it and the label.
         let mut at = first.start;
         if flat > 0 {
-            assert_eq!(rows.row(at), Some(Row::Rule { stretch: flat }));
-            assert_eq!(
-                rows.row(at + 1),
-                Some(Row::Space {
-                    stretch: flat,
-                    under: false
-                })
-            );
+            assert_eq!(rows.row(at), row(flat, Kind::Rule));
+            assert_eq!(rows.row(at + 1), row(flat, Kind::Space { under: false }));
             at += 2;
         }
-        assert_eq!(rows.row(at), Some(Row::Header { section: flat }));
-        assert_eq!(
-            rows.row(at + 1),
-            Some(Row::Space {
-                stretch: flat,
-                under: true
-            })
-        );
-        assert_eq!(
-            rows.row(at + 2),
-            Some(Row::Label {
-                stretch: flat,
-                index: 0
-            })
-        );
+        assert_eq!(rows.row(at), row(flat, Kind::Header));
+        assert_eq!(rows.row(at + 1), row(flat, Kind::Space { under: true }));
+        assert_eq!(rows.row(at + 2), row(flat, Kind::Label(0)));
         let above = at + 3 - first.start;
         assert_eq!(rows.body_start(flat), Some(first.start + above));
         for k in 0..estimate {
-            assert_eq!(
-                rows.row(first.start + above + k),
-                Some(Row::Empty {
-                    stretch: flat,
-                    index: k
-                })
-            );
+            assert_eq!(rows.row(first.start + above + k), row(flat, Kind::Empty(k)));
         }
         expected += above + estimate;
         assert_eq!(first.end, expected);
@@ -135,40 +121,60 @@ fn a_rule_and_a_blank_stand_over_every_stretch_and_a_blank_under_every_header() 
         let over = 2 * usize::from(flat > 0);
         if flat == 0 {
             assert!(
-                !matches!(kinds[first], Row::Rule { .. } | Row::Space { .. }),
+                !matches!(kinds[first].kind, Kind::Rule | Kind::Space { .. }),
                 "the listing opens on a rule"
             );
         } else {
-            assert_eq!(kinds[first], Row::Rule { stretch: flat });
-            assert_eq!(
-                kinds[first + 1],
-                Row::Space {
-                    stretch: flat,
-                    under: false
-                }
-            );
+            assert_eq!(kinds[first].kind, Kind::Rule);
+            assert_eq!(kinds[first + 1].kind, Kind::Space { under: false });
         }
-        if matches!(kinds[first + over], Row::Header { .. }) {
-            assert_eq!(
-                kinds[first + over + 1],
-                Row::Space {
-                    stretch: flat,
-                    under: true
-                }
-            );
+        if matches!(kinds[first + over].kind, Kind::Header) {
+            assert_eq!(kinds[first + over + 1].kind, Kind::Space { under: true });
         }
     }
 
     // Which is the whole of the point: nothing but a blank, or another name at the same
     // address, is ever drawn against the row above a label -- the rule included.
-    for (row, kind) in kinds.iter().enumerate().skip(1) {
-        if matches!(kind, Row::Label { .. }) {
+    for (row, drawn) in kinds.iter().enumerate().skip(1) {
+        if matches!(drawn.kind, Kind::Label(_)) {
             assert!(
-                matches!(kinds[row - 1], Row::Space { .. } | Row::Label { .. }),
+                matches!(kinds[row - 1].kind, Kind::Space { .. } | Kind::Label(_)),
                 "row {row}'s label sits on {:?}",
                 kinds[row - 1]
             );
         }
+    }
+}
+
+/// The rows above a stretch's body are laid out once: every row from the stretch's
+/// first to its `body_start` draws one of them, and the body starts on the row after.
+/// What counts those rows and what draws them are the one list.
+#[test]
+fn the_rows_above_a_body_are_counted_as_they_are_drawn() {
+    let object = fixture("line_fixture.o");
+    let code = Arc::new(CodeListing::new(&object));
+    let rows = nothing_decoded(code);
+    assert!(rows.stretches.len() > 2, "the fixture's layout moved");
+
+    for flat in 0..rows.stretches.len() {
+        let range = rows_of(&rows, flat);
+        let body = rows.body_start(flat).expect("the stretch has a body");
+        assert!(range.contains(&body), "stretch {flat}'s body is outside it");
+        for at in range.start..body {
+            assert!(
+                matches!(
+                    kind_of(&rows, at),
+                    Some(Kind::Rule | Kind::Space { .. } | Kind::Header | Kind::Label(_))
+                ),
+                "row {at} stands above the body and draws {:?}",
+                kind_of(&rows, at)
+            );
+        }
+        assert_eq!(
+            kind_of(&rows, body),
+            Some(Kind::Empty(0)),
+            "stretch {flat}'s body opens on its first row"
+        );
     }
 }
 
@@ -187,27 +193,13 @@ fn an_address_finds_the_row_that_draws_it_and_the_row_names_it_back() {
                 .address_of(row)
                 .unwrap_or_else(|| panic!("{name}: row {row} has an address"));
             let found = rows.row_for(address);
-            let kind = rows.row(row).unwrap();
-            let stretch = match kind {
-                Row::Header { section } => rows
-                    .flat(Place {
-                        section,
-                        stretch: 0,
-                    })
-                    .unwrap(),
-                Row::Rule { stretch }
-                | Row::Space { stretch, .. }
-                | Row::Label { stretch, .. }
-                | Row::Empty { stretch, .. }
-                | Row::Instruction { stretch, .. }
-                | Row::Separator { stretch, .. }
-                | Row::Gap { stretch, .. } => stretch,
-            };
+            let drawn = rows.row(row).unwrap();
+            let stretch = drawn.stretch;
             let expected = if rows.start_of(stretch) == Some(address) {
                 // The header, the labels and the first instruction all sit at the
                 // stretch's start, which finds the stretch's first row.
                 rows_of(&rows, stretch).start
-            } else if matches!(kind, Row::Separator { .. }) {
+            } else if matches!(drawn.kind, Kind::Separator { .. }) {
                 // A separator shares its address with the instruction below it, which is
                 // the row an address finds.
                 row + 1
@@ -217,7 +209,7 @@ fn an_address_finds_the_row_that_draws_it_and_the_row_names_it_back() {
             assert_eq!(
                 found,
                 Some(expected),
-                "{name}: row {row} ({kind:?}) at {address:#x}"
+                "{name}: row {row} ({drawn:?}) at {address:#x}"
             );
         }
     }
@@ -299,13 +291,7 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
     let second = &assembly.instructions[1];
     assert!(second.bytes.len() > 1, "a one-byte instruction");
     assert_eq!(with_gap.row_for(second.address + bias + 1), Some(body + 1));
-    assert_eq!(
-        with_gap.row(body + 2),
-        Some(Row::Gap {
-            stretch: 0,
-            index: 0
-        })
-    );
+    assert_eq!(with_gap.row(body + 2), row(0, Kind::Gap(0)));
     assert_eq!(with_gap.row_for(cut_at + bias + 3), Some(body + 2));
 }
 
@@ -337,7 +323,10 @@ fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
             );
             assert!(matches!(
                 rows.row(body),
-                Some(Row::Instruction { index: 0, .. } | Row::Empty { index: 0, .. })
+                Some(Row {
+                    kind: Kind::Instruction(0) | Kind::Empty(0),
+                    ..
+                })
             ));
             for address in start + 1..end {
                 assert_eq!(
@@ -397,38 +386,25 @@ fn decoding_a_stretch_settles_its_rows_and_moves_none_above_it() {
     assert_eq!(after.len() as isize, before.len() as isize + shift);
 
     // And the decoded rows are the symbol's own, in the symbol's own order.
-    let kinds: Vec<Row> = kinds(&after)[settled.start..settled.end].to_vec();
-    assert_eq!(kinds[0], Row::Rule { stretch: 1 });
+    let kinds: Vec<Kind> = kinds(&after)[settled.start..settled.end]
+        .iter()
+        .map(|drawn| {
+            assert_eq!(drawn.stretch, 1);
+            drawn.kind
+        })
+        .collect();
     assert_eq!(
-        kinds[1],
-        Row::Space {
-            stretch: 1,
-            under: false
-        }
+        kinds[..6],
+        [
+            Kind::Rule,
+            Kind::Space { under: false },
+            Kind::Header,
+            Kind::Space { under: true },
+            Kind::Label(0),
+            Kind::Instruction(0),
+        ]
     );
-    assert_eq!(kinds[2], Row::Header { section: 1 });
-    assert_eq!(
-        kinds[3],
-        Row::Space {
-            stretch: 1,
-            under: true
-        }
-    );
-    assert_eq!(
-        kinds[4],
-        Row::Label {
-            stretch: 1,
-            index: 0
-        }
-    );
-    assert_eq!(
-        kinds[5],
-        Row::Instruction {
-            stretch: 1,
-            index: 0
-        }
-    );
-    assert!(kinds.iter().all(|kind| !matches!(kind, Row::Empty { .. })));
+    assert!(kinds.iter().all(|kind| !matches!(kind, Kind::Empty(_))));
 }
 
 /// The addresses the listing draws are the layout's, so three functions that are all at
@@ -444,20 +420,14 @@ fn a_relocatable_objects_sections_draw_at_their_placed_addresses() {
     let rows = Rows::new(code.clone(), |flat| bodies.get(&flat).cloned());
 
     let labels: Vec<u64> = (0..rows.len())
-        .filter(|&row| matches!(rows.row(row), Some(Row::Label { .. })))
+        .filter(|&row| matches!(kind_of(&rows, row), Some(Kind::Label(_))))
         .map(|row| rows.address_of(row).unwrap())
         .collect();
     assert_eq!(labels, [0x10, 0x30, 0x50]);
 
     for flat in 0..3 {
         let body = rows.body_start(flat).unwrap();
-        assert_eq!(
-            rows.row(body),
-            Some(Row::Instruction {
-                stretch: flat,
-                index: 0
-            })
-        );
+        assert_eq!(rows.row(body), row(flat, Kind::Instruction(0)));
         assert_eq!(
             rows.address_of(body),
             rows.start_of(flat),
@@ -474,13 +444,13 @@ fn a_relocatable_objects_sections_draw_at_their_placed_addresses() {
     let code = Arc::new(CodeListing::new(&flat));
     let rows = nothing_decoded(code);
     let labels: Vec<u64> = (0..rows.len())
-        .filter(|&row| matches!(rows.row(row), Some(Row::Label { .. })))
+        .filter(|&row| matches!(kind_of(&rows, row), Some(Kind::Label(_))))
         .map(|row| rows.address_of(row).unwrap())
         .collect();
     assert_eq!(labels, [0, 0x14, 0x30]);
     assert_eq!(
         (0..rows.len())
-            .filter(|&row| matches!(rows.row(row), Some(Row::Header { .. })))
+            .filter(|&row| matches!(kind_of(&rows, row), Some(Kind::Header)))
             .count(),
         1
     );
@@ -522,21 +492,19 @@ fn a_separator_row_belongs_to_the_instruction_below_it() {
     let rows = Rows::new(code, |flat| (flat == 2).then(|| body.clone()));
 
     let separators: Vec<usize> = (0..rows.len())
-        .filter(|&row| matches!(rows.row(row), Some(Row::Separator { .. })))
+        .filter(|&row| matches!(kind_of(&rows, row), Some(Kind::Separator { .. })))
         .collect();
     assert!(!separators.is_empty(), "sum_to has a block boundary");
-    for row in separators {
-        let Some(Row::Separator { below, stretch }) = rows.row(row) else {
+    for at in separators {
+        let Some(Row {
+            stretch,
+            kind: Kind::Separator { below },
+        }) = rows.row(at)
+        else {
             unreachable!()
         };
-        assert_eq!(
-            rows.row(row + 1),
-            Some(Row::Instruction {
-                stretch,
-                index: below
-            })
-        );
-        assert_eq!(rows.address_of(row), rows.address_of(row + 1));
+        assert_eq!(rows.row(at + 1), row(stretch, Kind::Instruction(below)));
+        assert_eq!(rows.address_of(at), rows.address_of(at + 1));
     }
 }
 
@@ -573,7 +541,7 @@ fn a_stretch_that_decoded_to_no_instructions_draws_its_bytes() {
     for byte in 0..bytes {
         let index = (byte / GAP_BYTES_PER_ROW) as usize;
         let address = start + byte;
-        assert_eq!(rows.row(body + index), Some(Row::Gap { stretch: 1, index }));
+        assert_eq!(rows.row(body + index), row(1, Kind::Gap(index)));
         assert_eq!(
             rows.body_row_for(address),
             Some(body + index),
