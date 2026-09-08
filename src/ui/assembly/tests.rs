@@ -195,3 +195,81 @@ fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
         }
     });
 }
+
+/// **Every link a row can have is one inline piece, the fourth included.** [`split`] says
+/// which of the four it lifted out and what that one says, so a line is head, link, tail
+/// whichever it was: a relocation's name in the operand it applies to, a branch this
+/// listing has the row for, a bare target, and -- the case with no span of its own -- a
+/// name the formatter offered no operand for, appended behind one space. That last one is
+/// the whole of what `asm_line` puts after the address, so the two are held together here
+/// as well.
+#[test]
+fn every_kind_of_link_is_one_inline_piece() {
+    let target = Arc::new(SymbolData {
+        name: "_ZN3add3addE".to_owned(),
+        demangled: Some("add".to_owned()),
+        address: 0x100,
+        section: None,
+        size: 0,
+    });
+    let assembly = listing(target);
+    let kinds = (0..assembly.instructions.len())
+        .map(|index| {
+            split(&assembly.instructions[index], linked(&assembly, index))
+                .1
+                .map(|link| link.kind)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            None,
+            Some(Link::Relocation),
+            Some(Link::Appended),
+            Some(Link::Branch),
+            Some(Link::Target),
+            Some(Link::Relocation),
+        ]
+    );
+
+    let lines = (0..assembly.instructions.len())
+        .map(|index| instruction_line(&assembly, index))
+        .collect::<Vec<_>>();
+    let inlines = |line: &Line| {
+        line.pieces
+            .iter()
+            .filter_map(|piece| match piece {
+                crate::chars::Piece::Inline(name) => Some(name.clone()),
+                crate::chars::Piece::Text(_) => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // The padding after the last span is not text, and a row with no link has no piece
+    // the text engine counts as one unit.
+    assert_eq!(lines[0].to_string(), "mov     rax, rbx");
+    assert!(inlines(&lines[0]).is_empty());
+
+    assert_eq!(lines[1].to_string(), "call    add");
+    assert_eq!(inlines(&lines[1]), ["add"]);
+    // Appended: every span, then the space, then the name -- one unit, as the others are.
+    assert_eq!(lines[2].to_string(), "nop    add");
+    assert_eq!(inlines(&lines[2]), ["add"]);
+    assert_eq!(lines[2].units(), "nop    ".len() + 1);
+    assert_eq!(lines[3].to_string(), "jmp     0x0");
+    assert_eq!(inlines(&lines[3]), ["0x0"]);
+    assert_eq!(lines[4].to_string(), "call    0x2000");
+    assert_eq!(inlines(&lines[4]), ["0x2000"]);
+    // The name inside a memory operand: the tail is drawn after it.
+    assert_eq!(lines[5].to_string(), "mov     rax, [add]");
+    assert_eq!(inlines(&lines[5]), ["add"]);
+
+    for (index, line) in lines.iter().enumerate() {
+        let instruction = &assembly.instructions[index];
+        assert_eq!(
+            asm_line(instruction, 0),
+            format!("{:016X} {line}", instruction.address),
+            "instruction {index}"
+        );
+    }
+}

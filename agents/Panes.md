@@ -937,14 +937,18 @@ keeps its hover, its cursor and its press, and to the text engine it is one unit
 `Caret` is a row and a column in **UTF-16 units**, the unit skia answers a pointer in and takes a
 highlight in, and a `Line` is the row's text in pieces so a column into what is drawn is a column
 into what is copied: `instruction_line`, `source_line` and `code_line` are built from the same
-splits the rows draw from, and `asm_line` is the address plus `instruction_line`. The one place the
-two halves can drift apart is an instruction row's padding to the operand column. Skia trims
-trailing whitespace when it measures a paragraph, which would butt a relocation target's name up
-against the mnemonic, so `instruction_text` (`src/ui/assembly.rs`) draws that padding in
-**non-breaking spaces** — one unit each, as a plain space is, and one more for the space `asm_line`
-puts before a name it had to append. The two halves are built side by side there for that reason,
-and the module's own tests hold every column of the drawn text to the same column of the copy, over
-an instruction of each kind a row draws differently. freya supplies
+splits the rows draw from, and `asm_line` is the address plus `instruction_line` -- the call itself,
+not a third way of building the same string. The one place the two halves can drift apart is an
+instruction row's padding to the operand column. Skia trims trailing whitespace when it measures a
+paragraph, which would butt a relocation target's name up against the mnemonic, so
+`instruction_text` (`src/ui/assembly.rs`) draws that padding in **non-breaking spaces** — one unit
+each, as a plain space is, and one more for the space `asm_line` puts before a name it had to
+append. That appended name is a link like any other and not a `None` each side has to spot for
+itself: `split` hands back what the link says beside which of the four kinds it is (`Lifted`), and
+the name the formatter offered no operand for is the fourth, `Link::Appended`, after every span and
+with an empty tail. The two halves are built side by side there for that reason, and the module's
+own tests hold every column of the drawn text to the same column of the copy, over an instruction of
+each kind a row draws differently. freya supplies
 exactly the two primitives a paragraph has anyway: the hit-test behind its `ParagraphHolder`
 (`caret_col`, `word_at`, in `ui/code_row.rs`; `None` before layout where freya's own code would unwrap)
 and the highlight paint (`highlights`, `text_select_bg`, `CursorMode::Expanded` so it fills the
