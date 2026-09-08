@@ -349,6 +349,12 @@ reads `a` and writes `b`:
 | yes | renders; `b` unchanged | effect runs; `b == 9` |
 | no | effect runs; `b == 9` | — |
 
+**An effect that writes what it reads never yields.** The loop is `run(); notified().await`, and a
+write of its own leaves that wait already resolved, so the task is polled for ever inside one
+`sync_and_update` and the test hangs rather than fails -- which is what an effect writing the
+state it reads to subscribe has to compare under `peek` to avoid (`save_if_changed`,
+`agents/Scratchpad.md`).
+
 **One pass per hop, plus one for every hop whose write also dirties a scope.** A chain of *n* hops
 therefore settles somewhere between *n* and *2n* passes, and which it is depends on what the
 components happen to read, which is not knowable at the call site. That is the entire reason this

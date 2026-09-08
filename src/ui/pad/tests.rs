@@ -64,6 +64,43 @@ fn a_pad_that_is_open_is_read_once_and_never_again() {
     );
 }
 
+/// **Nothing is owed to the disk before the disk has been read.** What is on screen is
+/// compared against the baseline the worker's answer seeds, and a pad with no baseline has
+/// nothing to be compared against: the app boots holding the default scratchpad, and
+/// writing that over a pad someone was keeping is the loss the rule exists to prevent.
+#[test]
+fn nothing_is_owed_to_the_disk_before_it_has_been_read() {
+    let mut pads = Pads::default();
+    pads.show(id("pad-a"));
+    pads.state_mut().scratchpad.source = "the default the app booted with".to_owned();
+
+    assert!(
+        !pads.state().opened(),
+        "a pad the worker has not answered for"
+    );
+    assert!(
+        pads.unsaved_change(&id("pad-a")).is_none(),
+        "a pad with no baseline was written over"
+    );
+
+    // The answer, which is both what opens the pad and what seeds its baseline.
+    let read = Scratchpad::new("pad-a").expect("a valid id");
+    assert!(pads.opened(&read, None));
+    assert!(pads.state().opened());
+    assert!(
+        pads.unsaved_change(&id("pad-a")).is_none(),
+        "the disk already holds what is on screen"
+    );
+
+    pads.state_mut().scratchpad.source = "typed since".to_owned();
+    let owed = pads.unsaved_change(&id("pad-a")).expect("the edit");
+    assert_eq!(owed.source, "typed since");
+    assert!(
+        pads.unsaved_change(&id("pad-a")).is_none(),
+        "the baseline did not move to what was sent, so the edit is owed twice"
+    );
+}
+
 #[test]
 fn a_build_answered_for_a_pad_that_asked_for_none_is_not_taken() {
     let mut pads = Pads::default();

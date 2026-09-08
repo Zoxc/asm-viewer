@@ -261,16 +261,17 @@ is where it would be, and there is not. `confirming` sits beside `refused` at th
 reason that one does, and a delete that fails is what `refused` then says -- which is why it holds
 the whole sentence now rather than a `Failure` the panel puts a word in front of.
 
-**Letting go comes first and the disk second.** `request_delete_pad` takes the pad out of the table,
-out of the order and out of the buffers, drops its save baseline, and only then queues
-`PadJob::Delete`. That order is what makes an answer about a deleted pad harmless: the worker is one
-ordered thread, so a build in flight finishes against a directory that is still there, and what it
-answers arrives for a pad nothing holds and is dropped -- which is how a build the reader deleted
-their way out of does not go on to open its artifact. A queued save of that pad is superseded by the
-delete, having nothing left to write to. The pad's program is stopped, the directory it was started
-in being about to go; a run still forking is stopped where it lands, its handle arriving for no pad
-in the table. **There is always a pad to show**: the next in the order takes over, and when the last
-one goes the table comes back to the pad a first run holds, opened like any other so that nothing is
+**Letting go comes first and the disk second.** `request_delete_pad` takes the pad out of the
+table -- its save baseline with it, the baseline being a field of the state the table holds -- out
+of the order and out of the buffers, and only then queues `PadJob::Delete`. That order is what
+makes an answer about a deleted pad harmless: the worker is one ordered thread, so a build in
+flight finishes against a directory that is still there, and what it answers arrives for a pad
+nothing holds and is dropped -- which is how a build the reader deleted their way out of does not
+go on to open its artifact. A queued save of that pad is superseded by the delete, having nothing
+left to write to. The pad's program is stopped, the directory it was started in being about to go;
+a run still forking is stopped where it lands, its handle arriving for no pad in the table.
+**There is always a pad to show**: the next in the order takes over, and when the last one goes
+the table comes back to the pad a first run holds, opened like any other so that nothing is
 written until something is typed into it. That `Open` is queued *behind* the delete, or it would
 read the directory the delete is about to remove.
 
@@ -363,28 +364,39 @@ what makes the reader's own switch draw the right text.
 jobs are one ordered queue, so a save queued ahead of the arriving pad's read lands ahead of it. A
 save left to the effect would not: the mirror into the model and the write out of it are two
 effects, the second woken by the first, so a click landing between them would leave the last
-keystroke unwritten. `save_if_changed` is the one comparison behind both callers, the effect for the
-pad being typed into and `show_pad` for the pad being left, and the baseline it compares against
-travels in `PadJobs`, since a switch has to reach it from outside the hook that owns the loop. A pad
-already read is shown from what is held and is never read a second time. **That is the answer's rule
-as well as the question's** (`Pads::opened`): a pad shown, left and shown again before its first
-answer arrives is asked for twice, `show_pad` going by `opened` and the answer being what sets it,
-so an answer for a pad that is already open is dropped -- and the buffer and the baseline are made
-only where it says it took one. Taking it would put back what the disk held before the read --
-older than anything typed since -- and make that the baseline, leaving the disk ahead of the screen
-with no save owing until the next keystroke wrote the older text back over it.
+keystroke unwritten. `Pads::unsaved_change` is the one comparison behind both callers, the effect
+for the pad being typed into and `show_pad` for the pad being left. A pad already read is shown
+from what is held and is never read a second time. **That is the answer's rule as well as the
+question's** (`Pads::opened`): a pad shown, left and shown again before its first answer arrives
+is asked for twice, `show_pad` going by `PadState::opened` and the answer being what seeds the
+baseline behind it, so an answer for a pad that is already open is dropped -- and the buffer is
+made only where it says it took one. Taking it would put back what the disk held before the read
+-- older than anything typed since -- and make that the baseline, leaving the disk ahead of the
+screen with no save owing until the next keystroke wrote the older text back over it.
+
+**The baseline is a field of the pad, and the comparison is asked under `peek`.** `PadState::disk`
+is what the worker last read or was last handed, and `PadState::opened` is that field being there:
+one fact in one place, where a `bool` beside a map held elsewhere was an invariant nothing
+checked. The cost is that the save effect now writes the state it reads to subscribe, so
+`save_if_changed` asks `PadState::unsaved` under `peek` first and takes a guard only where there
+is something to send. A write notifies whether or not it changed anything, and an effect is a loop
+that runs and then waits to be notified, so the effect's own write makes that wait return at once
+and the task never yields. A guard taken whatever the answer said costs not a render but the
+window: every test that mounts the scratchpad hangs rather than fails, which is why there is no
+headless test of this and a unit test of `Pads::unsaved_change` instead.
 
 **Nothing is written until the disk has been read.** `PadState::opened` is `Saves::written`'s rule
-in a second place, and now per pad: the app boots holding `Scratchpad::default` and the reader's own
-source arrives a thread later, so a save in between would put the default over a scratchpad someone
-was keeping. The baseline is then seeded *by that answer*, so a run in which nothing is typed writes
-nothing and a scratchpad nobody opened leaves no directory behind. Startup is one question above
-that, `PadJob::List`, asked on mount, whose answer says which pad to open: the front of the order,
-or, when there is no order at all, the pad the app booted holding, opened like any other so that
-`opened_in` seeds its baseline without writing anything. `Scratchpad::write` refuses outright rather
-than generating a manifest that differs from the rows, so a bad row stops the source being written
-too, which the pane says over the rows, each of which says its own half. Every bad row is marked,
-not the first: `Scratchpad::problems` answers with `(RowId, Problem)` for all of them, and
+in a second place, and now per pad: the app boots holding `Scratchpad::default` and the reader's
+own source arrives a thread later, so a save in between would put the default over a scratchpad
+someone was keeping. There is nothing to compare against until that answer seeds the baseline,
+which is the whole of what an absent one means, so a run in which nothing is typed writes nothing
+and a scratchpad nobody opened leaves no directory behind. Startup is one question above that,
+`PadJob::List`, asked on mount, whose answer says which pad to open: the front of the order, or,
+when there is no order at all, the pad the app booted holding, opened like any other so that
+`opened_in` seeds its baseline without writing anything. `Scratchpad::write` refuses outright
+rather than generating a manifest that differs from the rows, so a bad row stops the source being
+written too, which the pane says over the rows, each of which says its own half. Every bad row is
+marked, not the first: `Scratchpad::problems` answers with `(RowId, Problem)` for all of them, and
 `Problem::half` says which of the row's two boxes to redden, because `Repeated` is a *name*
 collision and nothing in its wording says so.
 

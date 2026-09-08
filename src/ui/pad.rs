@@ -106,16 +106,6 @@ impl PadBuffers {
 pub(crate) struct PadJobs {
     jobs: Requests<PadJob>,
     events: async_channel::Sender<(PadId, u64, RunEvent)>,
-    /// What the worker was last handed for each pad, and so what that pad's disk copy
-    /// says. It travels with the way to ask because a flush is "send a save unless the
-    /// worker already has this one", and a switch has to flush the pad it is leaving from
-    /// outside the hook that owns the loop.
-    ///
-    /// An entry appears only when that pad's own answer lands, never at mount: the app
-    /// boots holding [`Scratchpad::default`], and a baseline seeded from that would make
-    /// the reader's own scratchpad look like a change to be written back over it. An
-    /// `Rc<RefCell>` rather than a `State`, since nothing renders from it.
-    sent: Rc<RefCell<HashMap<PadId, Scratchpad>>>,
 }
 
 /// Every pad the app is holding, and which of them the pane draws.
@@ -197,7 +187,7 @@ impl Pads {
             .pads
             .entry(listed.id.clone())
             .or_insert_with(|| PadState::of(Scratchpad::of(listed.id.clone())));
-        if !state.opened {
+        if !state.opened() {
             state.scratchpad.name = listed.name.clone();
         }
     }
@@ -260,30 +250,34 @@ impl Pads {
         self.refused = failure.map(|failure| format!("Not deleted: {failure}"));
     }
 
-    /// The pad the worker read, and the program its last build made. Whether it was taken,
-    /// so the caller makes the buffer and seeds the baseline only then.
+    /// The pad the worker read, and the program its last build made. This is what seeds
+    /// the pad's baseline; it answers whether it took the read, so the caller makes the
+    /// buffer only then.
     ///
     /// **A pad that is open is read once and never again.** A pad shown, left and shown
     /// again before its first answer arrived was asked for twice, `show_pad` going by
-    /// `opened` and `opened` being what this sets. The second answer is the disk as it was
-    /// read *before* any save of what has been typed since, so taking it would put the
-    /// older text back on screen and make it the baseline -- leaving the disk ahead of the
-    /// screen with no save owing, until the next keystroke wrote the older text over it.
+    /// [`PadState::opened`] and the baseline behind it being what this seeds. The second
+    /// answer is the disk as it was read *before* any save of what has been typed since,
+    /// so taking it would put the older text back on screen and make it the baseline --
+    /// leaving the disk ahead of the screen with no save owing, until the next keystroke
+    /// wrote the older text over it.
     fn opened(&mut self, scratchpad: &Scratchpad, program: Option<Program>) -> bool {
-        let already = self.get(scratchpad.id()).is_some_and(|state| state.opened);
+        let already = self.get(scratchpad.id()).is_some_and(PadState::opened);
         if already {
             return false;
         }
         if let Some(state) = self.get_mut(scratchpad.id()) {
             state.scratchpad = scratchpad.clone();
-            state.opened = true;
+            // The baseline, seeded by the answer and nowhere else: what the disk holds is
+            // what the worker just read off it.
+            state.disk = Some(scratchpad.clone());
             state.program = program;
         }
         true
     }
 
-    /// A pad that could not be read, and why. `opened` stays false, so nothing here is
-    /// ever written back: the reason is all the app does with it.
+    /// A pad that could not be read, and why. It is left with no baseline, so nothing
+    /// here is ever written back: the reason is all the app does with it.
     fn unopened(&mut self, name: &PadId, failure: Failure) {
         if let Some(state) = self.get_mut(name) {
             state.unsaved = Some(failure);
@@ -295,6 +289,25 @@ impl Pads {
         if let Some(state) = self.get_mut(name) {
             state.unsaved = failure;
         }
+    }
+
+    /// What `name` owes the disk, with its baseline moved to it, or `None` where the disk
+    /// already has what is on screen.
+    ///
+    /// The one comparison, with two callers: the save effect, for the pad being typed
+    /// into, and a switch, for the pad being left. The baseline moves to what is handed
+    /// back, so a reader who changes a row and changes it back writes again. Nothing is
+    /// owed by a pad whose disk copy has not been read yet ([`PadState::opened`]).
+    ///
+    /// **Ask [`PadState::unsaved`] first, under `peek`.** This takes `&mut Pads` and the
+    /// save effect reads `Pads` to subscribe, so a guard taken for a keystroke that
+    /// changed nothing -- a bare cursor move -- would wake that effect with its own write
+    /// and never let go of the thread. See [`save_if_changed`].
+    fn unsaved_change(&mut self, name: &PadId) -> Option<Scratchpad> {
+        let state = self.get_mut(name)?;
+        let scratchpad = state.unsaved()?.clone();
+        state.disk = Some(scratchpad.clone());
+        Some(scratchpad)
     }
 
     /// The build the worker ran and the program it made, read. Answers with the pad's
@@ -357,9 +370,10 @@ impl Pads {
         }
     }
 
-    /// Let go of a deleted pad: out of the table, out of the order, and off the screen if
-    /// it was the one being drawn. Answers with the pad to read, when what takes its place
-    /// has never been shown.
+    /// Let go of a deleted pad: out of the table -- its save baseline with it, so an id
+    /// handed out again is read before it is written, exactly as a pad the app has never
+    /// seen is -- out of the order, and off the screen if it was the one being drawn.
+    /// Answers with the pad to read, when what takes its place has never been shown.
     ///
     /// **There is always a pad to show**, which is what keeps [`Pads::state`] free of an
     /// `Option`. The next one in the order takes over; when the last pad goes, the table
@@ -379,7 +393,7 @@ impl Pads {
             None => Scratchpad::default().id().clone(),
         };
         self.show(next);
-        (!self.state().opened).then(|| self.state().scratchpad.clone())
+        (!self.state().opened()).then(|| self.state().scratchpad.clone())
     }
 }
 
@@ -439,11 +453,12 @@ pub(crate) struct Program {
 #[derive(Clone, Default)]
 pub(crate) struct PadState {
     pub(crate) scratchpad: Scratchpad,
-    /// Whether the worker has yet said what is on disk. **Nothing is saved until this is
-    /// true**: the app boots holding [`Scratchpad::default`] and the reader's own source
-    /// arrives a thread later, so a save before then writes the default over a kept
-    /// scratchpad.
-    pub(crate) opened: bool,
+    /// What the worker last read off the disk or was last handed for this pad, and so
+    /// what its package says. `None` until that pad's own answer lands, which is what
+    /// [`PadState::opened`] asks: the app boots holding [`Scratchpad::default`] and the
+    /// reader's own source arrives a thread later, so a baseline seeded before then
+    /// would make their scratchpad look like a change to write the default back over.
+    disk: Option<Scratchpad>,
     /// Whether a build is running, which is the whole of "two builds cannot be started at
     /// once": a second job queued behind the first would build bytes the reader has since
     /// changed.
@@ -495,6 +510,21 @@ impl PadState {
             scratchpad,
             ..PadState::default()
         }
+    }
+
+    /// Whether the worker has yet said what is on disk. **Nothing is saved until this is
+    /// true**, which is the whole of what an absent baseline means: nothing to compare
+    /// against, so nothing to write.
+    pub(crate) fn opened(&self) -> bool {
+        self.disk.is_some()
+    }
+
+    /// What is on screen, where the disk has been read and has fallen behind it; `None`
+    /// for a pad the disk already has and for one never read. Asked under `peek` before
+    /// [`Pads::unsaved_change`] takes a guard.
+    fn unsaved(&self) -> Option<&Scratchpad> {
+        let disk = self.disk.as_ref()?;
+        (disk != &self.scratchpad).then_some(&self.scratchpad)
     }
 
     /// What the compiler said about the last build.
@@ -804,9 +834,6 @@ pub(crate) fn use_scratchpad_with(
     store: State<Option<Store>>,
     work: impl Fn(PadJob) -> PadAnswer + Send + 'static,
 ) -> PadJobs {
-    // The baseline the saves are compared against. See [`PadJobs::sent`].
-    let sent = use_hook(|| Rc::new(RefCell::new(HashMap::<PadId, Scratchpad>::new())));
-
     // What a running program is saying, on a channel of the app's own and taken by a task
     // of its own: a program that never ends would otherwise share a loop with every save.
     // Bounded, which is the app's half of the backpressure -- a full channel blocks the
@@ -862,7 +889,6 @@ pub(crate) fn use_scratchpad_with(
     // supersede; the answers task asks for more work of its own -- a listing names the
     // pad to open, and a pad just made is opened at once -- which is what the taker's
     // second argument is.
-    let answering = sent.clone();
     let requests = use_worker(
         "the scratchpad worker",
         // A job the supersede rule may not step over -- a save of another pad -- is
@@ -895,8 +921,9 @@ pub(crate) fn use_scratchpad_with(
                 program,
             } => {
                 // Whether the answer is wanted at all is the state's to say
-                // ([`Pads::opened`]); the buffer and the baseline are made only where it
-                // was taken, so a second answer for a pad already open changes neither.
+                // ([`Pads::opened`]), which is also what seeds the baseline; the buffer is
+                // made only where it was taken, so a second answer for a pad already open
+                // changes neither.
                 let taken = pad.write().opened(&scratchpad, program);
                 if !taken {
                     return;
@@ -915,11 +942,6 @@ pub(crate) fn use_scratchpad_with(
                 // `CodeEditorData::new` never runs the highlighter.
                 editor.parse();
                 text.write().put(scratchpad.id().clone(), editor);
-
-                // The baseline, seeded by the answer rather than at mount.
-                answering
-                    .borrow_mut()
-                    .insert(scratchpad.id().clone(), scratchpad);
             }
             PadAnswer::Unopened { pad: name, failure } => {
                 pad.write().unopened(&name, failure);
@@ -956,7 +978,6 @@ pub(crate) fn use_scratchpad_with(
     let jobs = use_provide_context(move || PadJobs {
         jobs: requests,
         events: emitted,
-        sent,
     });
 
     // What pads there are, asked for once: `use_hook` runs on mount and never again. The
@@ -1011,28 +1032,27 @@ pub(crate) fn use_scratchpad_with(
     jobs
 }
 
-/// Write `name`'s package out if what is on screen is not what the worker was last handed.
+/// Write `name`'s package out if what is on screen has moved on from its baseline
+/// ([`Pads::unsaved_change`]).
 ///
-/// The one comparison, with two callers: the effect above, for the pad being typed into,
-/// and a switch, for the pad being left. The baseline moves to what was last **sent**, so a
-/// reader who changes a row and changes it back writes again. Nothing is written for a pad
-/// whose disk copy has not been read yet -- [`PadState::opened`], per pad.
-fn save_if_changed(pad: State<Pads>, name: &PadId, jobs: &PadJobs) {
-    let pads = pad.peek();
-    let Some(state) = pads.get(name) else {
+/// **Asked under `peek` and answered under a guard only where there is something to
+/// send.** The effect above reads `Pads` to subscribe to every keystroke and this writes
+/// it. An effect is a loop that runs and then waits to be notified, so a write of its own
+/// makes that wait return at once and the task never yields: a guard taken whatever the
+/// answer said would not cost a render but lock the window up.
+fn save_if_changed(mut pad: State<Pads>, name: &PadId, jobs: &PadJobs) {
+    let owes = pad
+        .peek()
+        .get(name)
+        .is_some_and(|state| state.unsaved().is_some());
+    if !owes {
+        return;
+    }
+
+    let Some(scratchpad) = pad.write().unsaved_change(name) else {
         return;
     };
-    if !state.opened {
-        return;
-    }
-    let scratchpad = state.scratchpad.clone();
-    drop(pads);
-
-    let mut sent = jobs.sent.borrow_mut();
-    if sent.get(name) != Some(&scratchpad) {
-        sent.insert(name.clone(), scratchpad.clone());
-        jobs.jobs.send(PadJob::Save(scratchpad));
-    }
+    jobs.jobs.send(PadJob::Save(scratchpad));
 }
 
 /// Draw `name` from now on.
@@ -1051,7 +1071,7 @@ pub(crate) fn show_pad(mut pad: State<Pads>, jobs: &PadJobs, name: PadId) {
 
     let mut pads = pad.write();
     pads.show(name.clone());
-    let opened = pads.state().opened;
+    let opened = pads.state().opened();
     let arriving = pads.state().scratchpad.clone();
     drop(pads);
 
@@ -1127,9 +1147,6 @@ pub(crate) fn request_delete_pad(
     drop(pads);
 
     text.write().forget(&name);
-    // The baseline goes with the pad, so an id handed out again is read before it is
-    // written, exactly as a pad the app has never seen is.
-    jobs.sent.borrow_mut().remove(&name);
 
     jobs.jobs.send(PadJob::Delete(name));
     // Behind the delete, so a pad that has to be read is read after the directory has gone
@@ -1188,7 +1205,7 @@ pub(crate) fn superseded(
 /// loss leaving such a pad unopened is there to prevent, one deliberate press away.
 pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
     let state = pad.peek().state().clone();
-    if state.building || !state.opened {
+    if state.building || !state.opened() {
         return;
     }
 

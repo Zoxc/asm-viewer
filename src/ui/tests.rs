@@ -12758,7 +12758,7 @@ fn the_front_of_the_order_is_the_pad_that_opens() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     assert_eq!(pad.peek().shown().as_str(), "second");
     assert_eq!(shown_rope(text, pad), "// second\n");
@@ -12810,7 +12810,7 @@ fn a_listing_longer_than_the_order_file_is_drawn_whole() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     assert_eq!(
         pad.peek().order.entries().len(),
@@ -12852,7 +12852,7 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     assert_eq!(asks.try_recv(), Ok(Asked::List));
     assert_eq!(asks.try_recv(), Ok(Asked::Open("one".to_owned())));
 
@@ -12867,7 +12867,7 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
     pad.write().state_mut().scratchpad.source = "// edited\n".to_owned();
     show_pad(pad, &jobs, two.clone());
     pump(&mut test, || {
-        pad.peek().shown() == &two && pad.peek().state().opened
+        pad.peek().shown() == &two && pad.peek().state().opened()
     });
 
     // The order the worker was handed them, which is the order it did them in.
@@ -12949,7 +12949,7 @@ fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
     // The first read lands and the reader types into what it put on screen.
     letting.send_blocking(()).expect("the worker is waiting");
     pump(&mut test, || {
-        pad.peek().get(&one).is_some_and(|state| state.opened)
+        pad.peek().get(&one).is_some_and(|state| state.opened())
     });
     assert_eq!(
         shown_rope(text, pad),
@@ -12964,7 +12964,7 @@ fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
     // The other pad's read, and then the second read of this one.
     letting.send_blocking(()).expect("the worker is waiting");
     pump(&mut test, || {
-        pad.peek().get(&two).is_some_and(|state| state.opened)
+        pad.peek().get(&two).is_some_and(|state| state.opened())
     });
     letting.send_blocking(()).expect("the worker is waiting");
     pump(&mut test, || pad.peek().state().unsaved.is_some());
@@ -13016,7 +13016,7 @@ fn the_panel_draws_names_and_never_ids() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     let drawn = labels(&test);
     assert!(
@@ -13064,7 +13064,7 @@ fn a_new_pad_is_written_and_shown_at_once() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     assert_eq!(pad.peek().shown().as_str(), "pad");
     while asks.try_recv().is_ok() {}
 
@@ -13072,7 +13072,7 @@ fn a_new_pad_is_written_and_shown_at_once() {
     request_new_pad(&jobs);
     pump(&mut test, || pad.peek().shown().as_str() == "pad-1");
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     assert_eq!(asks.try_recv(), Ok(Asked::New));
     // Read straight back: the worker wrote the package on the way, and reading it is what
@@ -13115,7 +13115,7 @@ fn a_refusal_is_kept_and_the_next_one_replaces_it() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_new_pad(&jobs);
@@ -13158,7 +13158,7 @@ fn renaming_a_pad_is_a_save_and_moves_nothing() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     while asks.try_recv().is_ok() {}
 
     // What the box does, which is all a rename is now.
@@ -13208,7 +13208,7 @@ fn a_delete_is_asked_for_before_anything_goes() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     while asks.try_recv().is_ok() {}
 
     // The row of the pad that is *not* on screen, since any row can be asked about.
@@ -13271,7 +13271,7 @@ fn confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     let (one, two) = (pad_id("one"), pad_id("two"));
     assert!(text.peek().holds(&one), "the shown pad has a buffer");
     while asks.try_recv().is_ok() {}
@@ -13349,7 +13349,7 @@ fn coming_back_to_a_pad_already_read_draws_its_own_buffer() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     let (one, two) = (pad_id("one"), pad_id("two"));
     assert!(drawn_source(&test).contains("// pad one"));
 
@@ -13397,7 +13397,7 @@ fn deleting_a_pad_that_is_not_shown_leaves_the_editor_standing() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     let (one, two) = (pad_id("one"), pad_id("two"));
 
     let row = centre_of(&test, "<two>");
@@ -13530,7 +13530,7 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     assert_eq!(pad.peek().state().scratchpad, saved);
     // The editor is holding it too, which is the half a reader can see.
@@ -13571,7 +13571,7 @@ fn a_pad_that_will_not_load_is_left_unopened_and_never_written() {
     pump(&mut test, || pad.peek().state().unsaved.is_some());
 
     let shown = pad.peek().shown().clone();
-    assert!(!pad.peek().state().opened);
+    assert!(!pad.peek().state().opened());
     // No buffer, so the editor is never mounted and there is nothing to type into.
     assert!(!text.peek().holds(&shown));
     assert_eq!(pad.peek().state().unsaved, Some(Failure::Unreadable));
@@ -13608,7 +13608,7 @@ fn a_pad_that_will_not_load_is_not_built_over_either() {
         });
 
     pump(&mut test, || pad.peek().state().unsaved.is_some());
-    assert!(!pad.peek().state().opened);
+    assert!(!pad.peek().state().opened());
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
@@ -13649,7 +13649,7 @@ fn an_edit_is_written_and_a_bad_row_says_which_row() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     assert_eq!(asks.try_recv(), Ok(Asked::List));
     assert_eq!(
         asks.try_recv(),
@@ -13724,7 +13724,7 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     assert_eq!(asks.try_recv(), Ok(Asked::List));
     assert_eq!(
         asks.try_recv(),
@@ -13796,7 +13796,7 @@ fn the_scratchpad_says_there_is_nothing_built_yet() {
             _ => unreachable!("this test only lists, opens and saves"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     assert!(
         labels(&test).contains(&"Nothing built yet".to_owned()),
         "the pane said nothing about having nothing to show: {:?}",
@@ -13829,7 +13829,7 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
             _ => unreachable!("this test only lists, opens, saves and builds"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
     pump(&mut test, || pad.peek().state().program.is_some());
@@ -13882,7 +13882,7 @@ fn the_scratchpads_listing_can_be_put_away() {
             _ => unreachable!("this test only lists, opens and saves"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     assert!(
         labels(&test).contains(&"Nothing built yet".to_owned()),
         "the listing's side was not up to begin with"
@@ -13960,7 +13960,7 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
             _ => unreachable!("this test only lists, opens, saves and builds"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
     pump(&mut test, || pad.peek().state().program.is_some());
@@ -14081,7 +14081,7 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
             _ => unreachable!("this test only lists, opens, saves and builds"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
     pump(&mut test, || pad.peek().state().program.is_some());
@@ -14247,7 +14247,7 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     let one = pad.peek().shown().clone();
     while asks.try_recv().is_ok() {}
 
@@ -14267,7 +14267,7 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
     // The pad behind it, read after the delete and so after the build: waiting for it here
     // is waiting for the build's answer to have been dealt with.
     pump(&mut test, || {
-        pad.peek().shown().as_str() == "two" && pad.peek().state().opened
+        pad.peek().shown().as_str() == "two" && pad.peek().state().opened()
     });
     settle(&mut test);
 
@@ -14311,7 +14311,7 @@ fn a_finished_pad_build_forgets_the_pad_package() {
             _ => unreachable!("this test only opens and builds"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     let store = states
         .store
         .peek()
@@ -14366,7 +14366,7 @@ macro_rules! mount_rows {
                 PadJob::Build(_) => unreachable!("this test never builds"),
                 PadJob::Run { .. } => unreachable!("this test never runs"),
             });
-        pump(&mut test, || pad.peek().state().opened);
+        pump(&mut test, || pad.peek().state().opened());
 
         let mut pad = pad;
         let ids: Vec<RowId> = {
@@ -14483,7 +14483,7 @@ fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     // Line 3, column 5 of `DEFAULT_SOURCE` is the `x` of `x * 3 + 1`.
     let mut pad = pad;
@@ -14568,7 +14568,7 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     let mut pad = pad;
     pad.write().state_mut().built = Some(pad_built(
@@ -14645,7 +14645,7 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     let mut pad = pad;
     pad.write().state_mut().built = Some(pad_built(
@@ -14772,7 +14772,7 @@ fn a_run_that_cannot_start_says_why() {
             PadJob::Build(_) => unreachable!("this test never builds"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     already_built(pad, fixture_artifact());
     test.sync_and_update();
 
@@ -14848,7 +14848,7 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
             }
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     already_built(pad, fixture_artifact());
     test.sync_and_update();
 
@@ -15061,7 +15061,7 @@ fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
 
     // Two errors of the same shape: one that fits and one that cannot. The rendered block
     // of the second is the `-->` line a span carries, which is the line the goal is about.
@@ -26696,7 +26696,7 @@ fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
 
-    pump(&mut test, || pad.peek().state().opened);
+    pump(&mut test, || pad.peek().state().opened());
     let before = shown_rope(text, pad);
 
     let editor = centre_of(&test, "fn");

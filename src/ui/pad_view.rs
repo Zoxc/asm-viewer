@@ -955,7 +955,7 @@ impl Component for PadHeader {
             let pads = pad.read();
             let state = pads.state();
             (
-                state.opened,
+                state.opened(),
                 state.building,
                 state.is_running(),
                 state.executable().is_some(),
