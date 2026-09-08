@@ -357,28 +357,21 @@ impl Component for SymbolRow {
         let at = self.at;
         let symbol = self.symbols[self.index].clone();
         let pick = Pick::Symbol(symbol.clone());
-        let text = symbol
-            .data
-            .demangled
-            .as_ref()
-            .unwrap_or(&symbol.data.name)
-            .clone();
-        let document = Document::Assembly(Selection::Symbol(symbol.clone()));
+        let text = symbol.data.display().to_owned();
+        let document = Document::Assembly(Selection::Symbol(symbol));
 
         cut_tooltip(
             fitted.cut(),
             text.clone(),
             list_row(hovering, picking.drawn(&pick, self.selected))
-                .on_press(move |_| {
-                    picking.press(pick.clone(), at, || {
-                        open_document(
-                            open,
-                            visits,
-                            Document::Assembly(Selection::Symbol(symbol.clone())),
-                            Reach::outside(ctrl),
-                        );
-                        Pressed::Opened
-                    });
+                .on_press({
+                    let document = document.clone();
+                    move |_| {
+                        picking.press(pick.clone(), at, || {
+                            open_document(open, visits, document.clone(), Reach::outside(ctrl));
+                            Pressed::Opened
+                        });
+                    }
                 })
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(

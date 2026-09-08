@@ -44,12 +44,7 @@ pub(crate) fn entry_name(entry: &Document) -> String {
         Document::Assembly(Selection::Object(object)) | Document::Code(object) => {
             object.name.clone()
         }
-        Document::Assembly(Selection::Symbol(symbol)) => symbol
-            .data
-            .demangled
-            .as_ref()
-            .unwrap_or(&symbol.data.name)
-            .clone(),
+        Document::Assembly(Selection::Symbol(symbol)) => symbol.data.display().to_owned(),
         Document::Source(file) => source::name_of(Path::new(&**file)),
     }
 }
