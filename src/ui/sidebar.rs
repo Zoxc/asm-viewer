@@ -794,9 +794,8 @@ impl Component for HistoryPanel {
         // where the rows are built rather than through a memo.
         let matcher = filter.read().matcher();
 
-        // `visited` is asked of the whole record rather than of the rows, because an
-        // empty list means two different things -- nowhere has been visited yet, or
-        // nothing visited matches -- and the two are worth different words.
+        // `visited` is asked of the whole record and not of the rows: no rows means
+        // either of the two things `short_list` has a word for.
         let (rows, listed, visited): (Vec<Element>, Vec<Document>, bool) = {
             let visits = visits.read();
             let visited = !visits.entries().is_empty();
@@ -843,18 +842,10 @@ impl Component for HistoryPanel {
             }
         };
 
-        // A plain `ScrollView` rather than a `VirtualScrollView`: a handful of one-label
-        // rows, built straight from the state instead of routed through `new_with_data`.
         pane.filtered(
             filter,
             keys,
-            match (visited, rows.is_empty()) {
-                (false, _) => placeholder("Nothing visited yet"),
-                (true, true) => placeholder("No matches"),
-                (true, false) => ScrollView::new_controlled(pane.controller)
-                    .child(rect().width(Size::fill()).children(rows).into_element())
-                    .into_element(),
-            },
+            short_list(pane.controller, rows, visited, "Nothing visited yet"),
         )
     }
 }

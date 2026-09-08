@@ -229,6 +229,29 @@ pub(crate) fn use_list_pane(panel: Panel) -> ListPane {
     }
 }
 
+/// A handful of rows under a filter, or the reason there are none: `empty` when the list
+/// has nothing in it at all, "No matches" when the filter left nothing of it. Which of
+/// the two it is has to be asked of the whole list: the rows are only what the filter
+/// left of it.
+///
+/// A plain `ScrollView` and not a `VirtualScrollView`: the lists drawn this way are a few
+/// one-label rows, built straight from the state rather than routed through
+/// `new_with_data`.
+pub(crate) fn short_list(
+    controller: ScrollController,
+    rows: Vec<Element>,
+    any: bool,
+    empty: &str,
+) -> Element {
+    match (any, rows.is_empty()) {
+        (false, _) => placeholder(empty),
+        (true, true) => placeholder("No matches"),
+        (true, false) => ScrollView::new_controlled(controller)
+            .child(rect().width(Size::fill()).children(rows).into_element())
+            .into_element(),
+    }
+}
+
 impl ListPane {
     /// A list under its own filter bar. The bar takes its height off the top of the pane
     /// rather than out of the list, so a `VirtualScrollView` inside still starts at a row

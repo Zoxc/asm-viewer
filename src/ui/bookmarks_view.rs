@@ -206,13 +206,7 @@ impl Component for BookmarksPanel {
         pane.filtered(
             filter,
             keys,
-            match (any, rows.is_empty()) {
-                (false, _) => placeholder("No bookmarks"),
-                (true, true) => placeholder("No matches"),
-                (true, false) => ScrollView::new_controlled(pane.controller)
-                    .child(rect().width(Size::fill()).children(rows).into_element())
-                    .into_element(),
-            },
+            short_list(pane.controller, rows, any, "No bookmarks"),
         )
     }
 }

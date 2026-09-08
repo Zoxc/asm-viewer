@@ -17,7 +17,11 @@ matching everything hides a half-typed `(`. The toggles call `prevent_default` o
 holding indices, and `None` for the unfiltered case so it costs what it did before there was a
 filter); Objects, History and Bookmarks filter where their rows are built. A History row draws the
 shortened name (`entry_text`) and is filtered on the whole one (`entry_name`), so a generic argument
-the row has no room for can still be searched for.
+the row has no room for can still be searched for. The two short lists, History and Bookmarks, draw
+what the filter left through one `short_list` (`src/ui/filter_bar.rs`): a plain `ScrollView` of the
+rows, or the word for why there are none. An empty list means two things -- nothing has been added
+to it, or the filter left nothing of it -- and they are worth different words, so which of the two
+it is has to be asked of the whole list rather than of the rows.
 
 **A filtered list is ranked, an unfiltered one is not.** `Filtered` orders its indices by
 `filter::Rank`, which sits beside the matcher because it is the same regex asked a second question:
