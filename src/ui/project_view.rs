@@ -185,12 +185,14 @@ fn source_place(
     diagnostic: &Diagnostic,
 ) -> Option<Element> {
     let span = diagnostic.span.as_ref()?;
-    let file = directory.map(|directory| directory.join(&span.file));
-    let own = file.as_deref().is_some_and(|file| build.shows(file));
-    let text = diagnostic_place(span, own);
+    let target = directory.and_then(|directory| {
+        let file = directory.join(&span.file);
+        build.shows(&file).then_some(file)
+    });
+    let text = diagnostic_place(span, target.is_some());
 
-    Some(match (own, file) {
-        (true, Some(file)) => {
+    Some(match target {
+        Some(file) => {
             let file: Arc<str> = Arc::from(&*file.to_string_lossy());
             let line = span.line as u32;
             PlaceTarget {
@@ -214,7 +216,7 @@ fn source_place(
             }
             .into_element()
         }
-        _ => label()
+        None => label()
             .text(text)
             .color(palette().address_fg)
             .max_lines(1)
