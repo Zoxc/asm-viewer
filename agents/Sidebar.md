@@ -427,19 +427,23 @@ it, beside the manifest cargo is run over: the offer edits a file outside the pr
 the reader was not told about is the one thing it must not be.
 
 **A project switch is a close and a restore, through the same functions.** `switch_project` is
-`project::switch` (flush, re-point, remember), then `clear_project`, then `restore_project`.
+`project::switch` (flush, re-point, remember), then `clear_project`, then `enter_project`.
 `clear_project` is a `close_binary` per path and then a `close_tab` for whatever is left, never a
 write to the list, so a project is left in a state the reader could have reached by hand. Its one
 extra line is `Loads::clear`, which cannot go through the per-path walk: a file that has been asked
 for and has produced nothing yet is not in the objects list for that walk to reach, and its objects
-would otherwise arrive into the project that comes next. `restore_project` is the body the startup
-restore was, extracted so the two cannot drift. The source-driven tabs go in that second walk, where
+would otherwise arrive into the project that comes next. `enter_project` is the body the startup
+restore was, extracted so the ways in cannot drift: it sets which project is open and its bookmarks
+-- synchronously, before the save observer can see them -- and then calls `restore_project`. The
+source-driven tabs go in that second walk, where
 a closing *binary* deliberately leaves them standing: a file tab outlives the binary that led the
 reader to it because the text stands on its own, but it does not outlive the project whose session
 recorded that it was open. The ordering is what makes it safe: `project::switch` empties the
 baselines *before* the app is emptied, and freya wakes an effect by a notify rather than at the
 write, so the save observer runs once after the whole handler and sees a settled state that matches
-the baseline exactly. `new_project` is the same thing with nothing to restore.
+the baseline exactly. `new_project` goes the same way, with a default project and an empty session:
+there is nothing saved to put back, so the restore does nothing, and the way in is still the one way
+in.
 
 **What the Project view starts, it starts with `spawn_forever`.** A task belongs to the scope that
 spawned it, and this view is drawn only while its tab is the one on screen, so a `spawn` here is

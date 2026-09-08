@@ -185,21 +185,29 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<Path
             }
         };
 
-        // Synchronously, and before anything else here: `project::reopen` has just
-        // seeded the save policy's baselines from this same project, and the two have to
-        // agree by the time the first effect runs or the save observer would see the
-        // name, or the bookmarks, as a change and write them straight back out.
-        let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
-        proj.set(OpenProject::opened(file, &project, session.trusted));
-        bookmarks.set(Bookmarks::from_entries(project.bookmarks.clone()));
-
-        restore_project(states, project, session);
+        enter_project(states, file, project, session);
     });
 }
 
-/// Put a project's binaries, tabs, active document and visits on screen. Shared by the
-/// two things that do a restore -- the app starting and a switch -- so the second cannot
-/// drift from the first. Every step degrades silently.
+/// Put a project on screen: which project is open, its bookmarks, and everything
+/// [`restore_project`] restores. The one way in, so the three ways a project is entered
+/// -- the app starting, a switch, and a new project -- cannot drift apart.
+///
+/// Both writes are **synchronous, and before anything else**: the save policy's baselines
+/// have just been seeded from this same project, and the two have to agree by the time the
+/// first effect runs or the save observer would see the name, or the bookmarks, as a
+/// change and write them straight back out.
+fn enter_project(states: ProjectStates, file: PathBuf, project: Project, session: Session) {
+    let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
+    proj.set(OpenProject::opened(file, &project, session.trusted));
+    bookmarks.set(Bookmarks::from_entries(project.bookmarks.clone()));
+
+    restore_project(states, project, session);
+}
+
+/// Put a project's binaries, tabs, active document and visits on screen. Every way into a
+/// project comes here through [`enter_project`], so none can drift from another. Every
+/// step degrades silently, and a project with nothing saved restores nothing.
 ///
 /// The **pages go back first and synchronously**: one resolves against no object, so a
 /// session whose only tab was Settings has nothing to wait for, and a project with no
@@ -458,10 +466,7 @@ pub(crate) fn switch_project(
     }
 
     clear_project(states);
-    let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
-    proj.set(OpenProject::opened(path, &project, session.trusted));
-    bookmarks.set(Bookmarks::from_entries(project.bookmarks.clone()));
-    restore_project(states, project, session);
+    enter_project(states, path, project, session);
 }
 
 /// Ask for a project file and open it in place of the one on screen.
@@ -617,7 +622,7 @@ pub(crate) fn new_project(states: ProjectStates) {
     };
 
     clear_project(states);
-    let (mut proj, mut bookmarks) = (states.proj, states.bookmarks);
-    proj.set(OpenProject::opened(path, &Project::default(), false));
-    bookmarks.set(Bookmarks::default());
+    // The same way in as the other two. A default project and an empty session have
+    // nothing to put back, so the restore does nothing.
+    enter_project(states, path, Project::default(), Session::default());
 }
