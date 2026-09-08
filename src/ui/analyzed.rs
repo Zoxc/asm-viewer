@@ -274,11 +274,6 @@ impl PartialEq for Shown {
 }
 
 impl Shown {
-    /// Whether this listing is an answer to `ask` as well as to the one it was worked out
-    /// for. It is what keeps "the answer for the first A of an A -> B -> A is a good
-    /// answer for the third" true across the two kinds: a source line that resolved to a
-    /// symbol has already answered a later ask for that symbol outright, and
-    /// re-disassembling it would be most of a second for nothing.
     /// Whether the object this listing points into is still open.
     ///
     /// **The one thing in the analysis that can outlive the document that named it.** A
@@ -301,6 +296,11 @@ impl Shown {
         }
     }
 
+    /// Whether this listing is an answer to `ask` as well as to the one it was worked out
+    /// for. It is what keeps "the answer for the first A of an A -> B -> A is a good
+    /// answer for the third" true across the two kinds: a source line that resolved to a
+    /// symbol has already answered a later ask for that symbol outright, and
+    /// re-disassembling it would be most of a second for nothing.
     fn answers(&self, ask: &Ask) -> bool {
         match ask {
             Ask::Symbol(symbol) => self.studied.symbol == *symbol,

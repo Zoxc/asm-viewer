@@ -10,9 +10,6 @@
 
 use super::*;
 
-/// One opened file that contributed several objects -- an archive -- and the row its
-/// members fold under. It has no `Object` behind it, so it selects nothing: pressing it
-/// folds it open or shut.
 /// Fold the file row's group away, or open it: what pressing an archive row does, and
 /// what Enter on one does. A row the filter is holding open (`Forced`) is left alone,
 /// since folding it would hide the rows the filter put on screen.
@@ -31,6 +28,9 @@ fn fold_archive(
     Pressed::Folded
 }
 
+/// One opened file that contributed several objects -- an archive -- and the row its
+/// members fold under. It has no `Object` behind it, so it selects nothing: pressing it
+/// folds it open or shut.
 #[derive(Clone)]
 struct ArchiveRow {
     name: String,

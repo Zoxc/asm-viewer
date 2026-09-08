@@ -55,13 +55,13 @@ pub(crate) struct Palette {
     /// A filter toggle that is on, and one the pointer is over: two shades of the header's
     /// own grey.
     pub(crate) toggle_on_bg: Color,
+    pub(crate) toggle_hover_bg: Color,
     /// Behind the language server's control while a server is running: the one place in
     /// the app with a colour of its own, so that a process the reader started is visible
     /// at a glance and tells itself apart from a toggle that happens to be on. **Barely a
     /// colour**: enough purple to be told from the grey of a hover wash, and no more, since
     /// it sits in a bar the reader looks past all day.
     pub(crate) server_bg: Color,
-    pub(crate) toggle_hover_bg: Color,
     /// The wash under the × on a tab while the pointer is on the × *itself* rather
     /// than merely on the tab. Translucent, because it sits on either of two grounds --
     /// the active tab's `pane_bg` and a hovered tab's `toggle_hover_bg` -- and has to say
@@ -182,8 +182,8 @@ impl Palette {
         panel_shadow: Color::from_argb(70, 0, 0, 0),
         icon_fg: Color::from_rgb(90, 90, 90),
         toggle_on_bg: Color::from_rgb(196, 196, 196),
-        server_bg: Color::from_rgb(233, 229, 243),
         toggle_hover_bg: Color::from_rgb(225, 225, 225),
+        server_bg: Color::from_rgb(233, 229, 243),
         close_hover_bg: Color::from_argb(70, 90, 90, 96),
         link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
         branch_fg: Color::from_rgb(176, 188, 202),
@@ -232,8 +232,8 @@ impl Palette {
         panel_shadow: Color::from_argb(140, 0, 0, 0),
         icon_fg: Color::from_rgb(160, 160, 160),
         toggle_on_bg: Color::from_rgb(88, 88, 92),
-        server_bg: Color::from_rgb(64, 60, 76),
         toggle_hover_bg: Color::from_rgb(60, 60, 64),
+        server_bg: Color::from_rgb(64, 60, 76),
         // Translucent, and stated the same way as the three above: what it comes out as
         // over a tab, which here means lifting the surface rather than darkening it.
         close_hover_bg: Color::from_argb(75, 200, 200, 210),
@@ -463,13 +463,6 @@ const IDLE_ALPHA: u8 = 150;
 /// that are already carried over between them.
 const DISABLED_ALPHA: u8 = 100;
 
-/// A control that is drawn but cannot be used: the colour it has when it is live, faded
-/// into the surface it sits on.
-///
-/// Derived rather than a `Palette` field of its own. A disabled drawing follows whatever
-/// colour the control uses when it works, in both themes, with no second value per theme
-/// to keep in step with the first -- and `blend` is already the rule for "this colour over
-/// that ground", so the dimmed state is that rule applied to a foreground.
 /// `color` a step back into `surface`: what a tab that is not the one on screen writes its
 /// name in. Derived, as [`dimmed`] is, so it follows the text colour of both palettes with
 /// no second value to keep in step.
@@ -480,6 +473,13 @@ pub(crate) fn faded(color: Color, surface: Color) -> Color {
     )
 }
 
+/// A control that is drawn but cannot be used: the colour it has when it is live, faded
+/// into the surface it sits on.
+///
+/// Derived rather than a `Palette` field of its own. A disabled drawing follows whatever
+/// colour the control uses when it works, in both themes, with no second value per theme
+/// to keep in step with the first -- and `blend` is already the rule for "this colour over
+/// that ground", so the dimmed state is that rule applied to a foreground.
 pub(crate) fn dimmed(color: Color, surface: Color) -> Color {
     blend(
         Color::from_argb(DISABLED_ALPHA, color.r(), color.g(), color.b()),

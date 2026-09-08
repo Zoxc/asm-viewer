@@ -11586,9 +11586,6 @@ fn contrast(a: Color, b: Color) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-/// Every foreground is legible on the surface it is actually drawn on, in both palettes.
-/// The floor is 3.0 and not WCAG AA's 4.5: two of the light palette's own colours sit
-/// between 3 and 3.5, both of which are *meant* to recede.
 /// A tab that is not the one on screen writes its name a step back, and a step is all it
 /// is: still comfortably legible on the bar -- these are names read at a glance, not a
 /// control the reader is being told not to press -- and quieter than the name of the tab
@@ -11609,6 +11606,9 @@ fn a_tab_off_screen_is_quieter_and_still_legible() {
     }
 }
 
+/// Every foreground is legible on the surface it is actually drawn on, in both palettes.
+/// The floor is 3.0 and not WCAG AA's 4.5: two of the light palette's own colours sit
+/// between 3 and 3.5, both of which are *meant* to recede.
 #[test]
 fn every_foreground_is_legible_on_its_own_surface() {
     for (theme, palette) in [("light", &Palette::LIGHT), ("dark", &Palette::DARK)] {
@@ -15653,7 +15653,6 @@ fn marked_lines(test: &TestingRunner) -> Vec<u32> {
     lines
 }
 
-/// Every label on screen with the area it was laid out in.
 /// The assembly gutter marks the instructions the debug info places on a source line and
 /// leaves the rest bare, so a reader can tell code a line produced from a stretch placed
 /// nowhere without hovering each row.
@@ -15733,6 +15732,7 @@ fn marked_addresses(test: &TestingRunner) -> Vec<(u64, bool)> {
         .collect()
 }
 
+/// Every label on screen with the area it was laid out in.
 fn labels_with_areas(test: &TestingRunner) -> Vec<(String, Area)> {
     use freya::elements::{label::LabelElement, paragraph::ParagraphElement};
     use std::any::Any;
