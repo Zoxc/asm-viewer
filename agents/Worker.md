@@ -266,3 +266,15 @@ resize costs nothing where the old shape re-decoded in `render`. A second, keyed
 unbounded pile of `Assembly`s for listings the reader has left, to save a few milliseconds on a
 symbol they have already been shown. `Reading::held` is not that cache: it is the section view's one
 answer, a listing read in windows rather than whole, bounded by `KEEP` and dropped with the tab.
+
+**A find over a code pane is a worker of its own, and the sixth of this shape.** The reason is the
+source reader's: a pattern supersedes on every keystroke, and a question queued behind the seconds of
+DWARF a click costs would land long after the reader had typed past it. Its drain keeps the newest
+question **per pane**, not the newest outright, so the two panes of a tab do not drop each other's,
+and its answer is judged by comparison as every other is -- the listing it is about, by pointer, and
+the pattern it was asked with. The listing travels with the job (`Searchable`), a worker thread being
+able to read no UI state; both arms of it are `Send` already, and the two functions that build a
+row's line from them ask for no colour, `palette()` being thread-local. A pane asks by *claiming*
+what it draws (`use_searching`, the shape `use_code_beside` has) and the effect beside the worker
+reads that and sends: a view cannot reach the request channel. An empty pattern is not asked at all
+-- nothing typed marks nothing, so there is nothing to search for.

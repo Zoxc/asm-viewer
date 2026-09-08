@@ -21,7 +21,7 @@ pub(crate) struct LinePos {
 }
 
 /// One of the two panes that show code.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Pane {
     Assembly,
     Source,
@@ -931,6 +931,17 @@ pub(crate) fn use_tab_keyboard(pane: Option<Pane>, a11y: AccessibilityId) {
     use_drop(move || {
         keyboard.write().boxes.retain(|(_, open)| *open != a11y);
     });
+}
+
+/// The focusable box `pane` registered, where it has one mounted: what puts the keyboard
+/// back in the code after a find bar over it is closed.
+pub(crate) fn pane_box(keyboard: State<Keys>, pane: Pane) -> Option<AccessibilityId> {
+    keyboard
+        .peek()
+        .boxes
+        .iter()
+        .find(|(of, _)| *of == Some(pane))
+        .map(|(_, a11y)| *a11y)
 }
 
 /// Whether the keyboard is inside the tab on screen. Asking is what subscribes the caller

@@ -154,6 +154,16 @@ pub(crate) struct Palette {
     /// plain one. It is the paragraph's own highlight, freya giving a span no background
     /// (`ui/parts.rs`), so a row marks its matches in the one unit skia indexes text by.
     pub(crate) match_bg: Color,
+    /// The same for what a find bar matched in a code pane, and a **purple** where that
+    /// one is green: green already means "the same place as the run on the other side"
+    /// in these two panes (`pair_bg`, which is that green at another alpha), so a match
+    /// washed in it would read as a row the other pane had lit. The purple is the
+    /// gutter dot's family (`compiled_fg`), at the wash alpha its green counterpart uses.
+    ///
+    /// A rect the row draws and not the paragraph's highlight, unlike `match_bg`: a code
+    /// row's selection is drawn that way already, and the two have to compose -- the
+    /// match a step is on wears this and the selection over it.
+    pub(crate) find_bg: Color,
 }
 
 impl Palette {
@@ -199,6 +209,7 @@ impl Palette {
 
         invalid_fg: Color::from_rgb(176, 0, 32),
         match_bg: Color::from_argb(64, 120, 160, 110),
+        find_bg: Color::from_argb(64, 150, 118, 190),
     };
 
     /// The same palette at dark-mode lightness: every value is the one in `LIGHT` turned
@@ -250,6 +261,7 @@ impl Palette {
 
         invalid_fg: Color::from_rgb(240, 110, 120),
         match_bg: Color::from_argb(80, 120, 160, 110),
+        find_bg: Color::from_argb(80, 150, 118, 190),
     };
 
     /// This palette in the shape `freya-code-editor`'s highlighter wants, so the source

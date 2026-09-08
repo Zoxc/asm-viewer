@@ -9,14 +9,14 @@ use super::*;
 
 /// One of the three toggles beside a filter's text box.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Toggle {
+pub(crate) enum Toggle {
     Case,
     Word,
     Regex,
 }
 
 impl Toggle {
-    const ALL: [Toggle; 3] = [Toggle::Case, Toggle::Word, Toggle::Regex];
+    pub(crate) const ALL: [Toggle; 3] = [Toggle::Case, Toggle::Word, Toggle::Regex];
 
     /// What the button is drawn as: text rather than an icon, since `\b` and `.*` *are*
     /// the regex the toggle turns on. The words are in the tooltip.
@@ -36,7 +36,7 @@ impl Toggle {
         }
     }
 
-    fn is_on(self, filter: &Filter) -> bool {
+    pub(crate) fn is_on(self, filter: &Filter) -> bool {
         match self {
             Toggle::Case => filter.case_sensitive,
             Toggle::Word => filter.whole_word,
@@ -56,10 +56,10 @@ impl Toggle {
 /// One toggle button. Whether it is on is a prop rather than something read here, so that
 /// typing a character re-renders the bar and none of the toggles.
 #[derive(Clone, PartialEq)]
-struct FilterToggle {
-    filter: State<Filter>,
-    toggle: Toggle,
-    on: bool,
+pub(crate) struct FilterToggle {
+    pub(crate) filter: State<Filter>,
+    pub(crate) toggle: Toggle,
+    pub(crate) on: bool,
 }
 
 impl Component for FilterToggle {
@@ -440,6 +440,13 @@ impl Marking {
     /// Where the filter matched in `text`, for the row to mark.
     pub(crate) fn marks(&self, text: &str) -> Vec<Range<usize>> {
         self.0.marks(text)
+    }
+
+    /// The columns it matched in a line of code, for a code row to wash. The same
+    /// question as [`marks`](Self::marks) asked of a line rather than a name, so the one
+    /// compiled matcher answers both (`src/find.rs`).
+    pub(crate) fn hits(&self, line: &Line) -> Vec<Range<usize>> {
+        crate::find::hits_in(line, &self.0)
     }
 }
 

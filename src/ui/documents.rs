@@ -244,7 +244,7 @@ pub(crate) fn close_tab(open: Open, places: Places, id: DocId) {
         return;
     }
     docs.write().close(id);
-    places.forgetting(|(tab, _): &Entry| *tab != id);
+    places.forgetting(|(tab, _): &Entry| *tab != id, |tab| *tab != id);
 }
 
 /// Close the page `page`, which is a tab leaving the bar and nothing else: what it was
@@ -297,7 +297,10 @@ pub(crate) fn close_others(open: Open, places: Places, keep: Tab) {
         }
     }
 
-    places.forgetting(|(tab, _): &Entry| !closing.contains(tab));
+    places.forgetting(
+        |(tab, _): &Entry| !closing.contains(tab),
+        |tab| !closing.contains(tab),
+    );
 }
 
 /// Let go of the binary at `path`: drop every [`Object`] it contributed and answer for
@@ -361,7 +364,10 @@ pub(crate) fn close_binary(states: ProjectStates, path: &Path) {
 
     // Nothing kept by an entry can outlive the entry: not the closed tabs', and not the
     // ones a surviving trail just lost, which hold the file's bytes just the same.
-    places.forgetting(|(tab, stop): &Entry| !closing.contains(tab) && !stop.document.in_file(path));
+    places.forgetting(
+        |(tab, stop): &Entry| !closing.contains(tab) && !stop.document.in_file(path),
+        |tab| !closing.contains(tab),
+    );
     // A source-driven tab stands, but a symbol it chose out of this file is let go: the
     // line beside the choice is what survives a close, and the next ask answers out of
     // what is left. The one thing here that is not a forget.

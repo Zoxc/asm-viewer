@@ -168,6 +168,9 @@ pub(crate) struct Text<L> {
     pub(crate) tail: Vec<Span<'static>>,
     /// What this row draws of the character selection.
     pub(crate) chars: RowChars,
+    /// The columns of every match the pane's find bar has on this row, washed under the
+    /// text. Empty where no bar is open, and where nothing is typed in one.
+    pub(crate) finds: Vec<Range<usize>>,
     /// The columns of **every** name the server placed on this row, links and the places
     /// where one is defined alike: what the pointer is answered about. A superset of
     /// `links`, and not fed to [`cut_at`] -- hovering a name changes no span's style, so
@@ -295,6 +298,7 @@ impl<L: RowLinks> Text<L> {
             head: self.head,
             tail: self.tail,
             chars: self.chars,
+            finds: self.finds,
             names: self.names,
             on_hover: self.on_hover,
             links: self.links.drawn(),
@@ -701,9 +705,11 @@ fn row(
         let units = text.line.units();
         let (selected, caret) = marks(&cells, &listing, grid, text.chars, units);
         let wash = lit_box(&cells, grid, columns.as_ref(), units);
+        let matched = found(&cells, grid, &text.finds, units);
         let inline = inline.map(|element| link_box(&cells, &links, element));
         (
             wash,
+            matched,
             selected,
             text_paragraph(&cells, text, &links, columns.as_ref(), inline),
             caret,
@@ -753,15 +759,20 @@ fn row(
         })
         .children(before);
 
-    // The lit link's box and the selection before the paragraph in the tree, so both are
-    // painted under the text -- and **always there**, as is the caret's slot: freya
-    // matches siblings by position, so a rect appearing before the paragraph on the press
-    // would move the paragraph along one and remount it, link and all, between the down
-    // and the up, and the press meant for the link would never fire.
+    // The lit link's box, the find bar's matches and the selection before the paragraph
+    // in the tree, so all three are painted under the text -- and **always there**, as is
+    // the caret's slot: freya matches siblings by position, so a rect appearing before the
+    // paragraph on the press would move the paragraph along one and remount it, link and
+    // all, between the down and the up, and the press meant for the link would never fire.
     match drawn {
-        Some((wash, selected, paragraph, caret)) => {
-            el.child(wash).child(selected).child(paragraph).child(caret)
-        }
+        Some((wash, matched, selected, paragraph, caret)) => el
+            .child(wash)
+            // Under the selection: the match the pane is on wears both, and the one it
+            // is on has to read as the selected one.
+            .child(matched)
+            .child(selected)
+            .child(paragraph)
+            .child(caret),
         None => el,
     }
 }
@@ -933,6 +944,37 @@ fn lit_box(cells: &RowCells, grid: Grid, columns: Option<&Range<usize>>, units: 
             .height(Size::px(code_row_height() - 2.0 * LINK_BOX_INSET)),
         Some(palette().name_hover_fg),
     )
+}
+
+/// What the find bar matched on this row, washed under the text: one rect per match, in
+/// [`find_bg`](Palette::find_bg), placed exactly as the selection is.
+///
+/// **One slot holding however many**, rather than a rect each among the row's own
+/// children: freya matches siblings by position, and a count that changes with what is
+/// typed would move the paragraph along and remount it (see the children at the foot of
+/// [`row`]). The slot itself is always there, empty when nothing matched.
+fn found(cells: &RowCells, grid: Grid, finds: &[Range<usize>], units: usize) -> Rect {
+    let washes: Vec<Element> = finds
+        .iter()
+        .filter_map(|columns| {
+            let (from, to) = (columns.start.min(units), columns.end.min(units));
+            let (left, right) = (cells.column_x(from, units)?, cells.column_x(to, units)?);
+            if right <= left {
+                return None;
+            }
+            let span = grid.span(left, right);
+            Some(
+                rect()
+                    .interactive(false)
+                    .position(Position::new_absolute().left(span.near).top(0.0))
+                    .width(Size::px(span.thick))
+                    .height(Size::px(code_row_height()))
+                    .background(palette().find_bg)
+                    .into_element(),
+            )
+        })
+        .collect();
+    nothing().children(washes)
 }
 
 /// The link inside the text, in a box that says when the pointer is over it: the hand is

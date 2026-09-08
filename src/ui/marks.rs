@@ -368,6 +368,39 @@ pub(crate) fn line_pick(
     }
 }
 
+/// Pick out a run of one row's characters in `pane`: what a find lands on, and the only
+/// thing it changes about the pane.
+///
+/// **No scroll owed to the other side.** A step through matches is a move within this
+/// pane, as a caret key is ([`move_caret`]): the pane beside it stays where the reader
+/// left it rather than being yanked along to each match in turn. The file is the run's
+/// own where the pane has one -- a source listing's -- and the row's own otherwise.
+pub(crate) fn mark_columns(
+    marked: State<Marks>,
+    pane: Pane,
+    file: Option<Arc<str>>,
+    row: usize,
+    columns: Range<usize>,
+) {
+    let picked = Picked {
+        chars: CharSelection::between(
+            Caret {
+                row,
+                col: columns.start,
+            },
+            Caret {
+                row,
+                col: columns.end,
+            },
+        ),
+        dragging: false,
+        by_rows: false,
+        file,
+        owed: Owed::NEITHER,
+    };
+    update(marked, |marks| *marks.of_mut(pane) = Some(picked.clone()));
+}
+
 /// Sweep `pane`'s run out to `row`, which does nothing unless a run is already started.
 /// `col` is the column under the pointer where the row has text, and the characters
 /// follow it; a row with no text, or a gutter, is column 0. A run started in the gutter

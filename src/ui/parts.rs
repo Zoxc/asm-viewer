@@ -70,6 +70,17 @@ pub(crate) fn link_chrome(rect: Rect, underline: Option<Color>) -> Rect {
 /// of around the row, and the rule under it about where an underline would be.
 pub(crate) const LINK_BOX_INSET: f32 = 4.0;
 
+/// The rule over a bar drawn under what it belongs to, as [`bottom_hairline`] is the rule
+/// under one drawn over it.
+pub(crate) fn top_hairline() -> Border {
+    Border::new().fill(palette().hairline).width(BorderWidth {
+        top: 0.5,
+        right: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+    })
+}
+
 pub(crate) fn right_hairline() -> Border {
     Border::new().fill(palette().hairline).width(BorderWidth {
         top: 0.0,

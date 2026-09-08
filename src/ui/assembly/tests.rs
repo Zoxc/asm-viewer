@@ -173,7 +173,7 @@ fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
 
     in_runtime(|| {
         for index in 0..data.assembly.instructions.len() {
-            let text = instruction_text(&data, index, RowChars::default(), None, None);
+            let text = instruction_text(&data, index, RowChars::default(), None, None, None);
             let (drawn, copied) = (drawn(&text), &text.line);
 
             for col in 0..copied.units() {

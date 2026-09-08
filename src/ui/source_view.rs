@@ -43,6 +43,9 @@ struct SourceData {
     /// changes with every word it says about its progress, and every mounted row would be
     /// drawn again for it.
     links: links::Links,
+    /// What the find bar is looking for, compiled once for the list; `None` where no bar
+    /// is open (`find_bar.rs`).
+    marking: Option<Marking>,
 }
 
 impl PartialEq for SourceData {
@@ -56,6 +59,7 @@ impl PartialEq for SourceData {
             && self.chars == other.chars
             && self.drives == other.drives
             && self.links == other.links
+            && self.marking == other.marking
     }
 }
 
@@ -82,6 +86,8 @@ struct SourceRow {
     drives: Option<DocId>,
     /// Which of the file's names the server placed. See [`SourceData::links`].
     links: links::Links,
+    /// What the find bar is looking for. See [`SourceData::marking`].
+    marking: Option<Marking>,
     key: DiffKey,
 }
 
@@ -96,6 +102,7 @@ impl PartialEq for SourceRow {
             && self.chars == other.chars
             && self.drives == other.drives
             && self.links == other.links
+            && self.marking == other.marking
     }
 }
 
@@ -205,14 +212,20 @@ impl Component for SourceRow {
             .map(|(_, text)| text.as_str())
             .collect::<String>()
             .into();
+        let line = {
+            let mut line = Line::default();
+            for (_, text) in &pieces {
+                line.push_text(text.clone());
+            }
+            line
+        };
         let text = Text {
-            line: {
-                let mut line = Line::default();
-                for (_, text) in &pieces {
-                    line.push_text(text.clone());
-                }
-                line
-            },
+            finds: self
+                .marking
+                .as_ref()
+                .map(|marking| marking.hits(&line))
+                .unwrap_or_default(),
+            line,
             head: pieces
                 .into_iter()
                 .map(|(color, text)| Span::new(text).color(color).assembly_font())
@@ -449,6 +462,11 @@ impl Component for SourceList {
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Source, listing);
+        // What the find bar over this pane is looking for, for every row to wash, and
+        // what it searches, claimed for as long as these rows are drawn.
+        let at = (Placing::Tab(self.tab), Pane::Source);
+        let marking = use_marking(at);
+        use_searching(at, Searchable::Source(self.source.clone()));
         let (controller, viewport) = (list.controller, list.viewport);
 
         // Which of this file's names are links, which is the server's to say and not the
@@ -547,44 +565,68 @@ impl Component for SourceList {
             self.opening,
         );
 
+        // The step the bar asked for, made here: the hits are rows, and only the list
+        // knows how far to scroll to reach one.
+        {
+            let mut controller = controller;
+            use_find_steps(at, marked, Some(self.file.clone()), move |row| {
+                reveal_caret(
+                    &mut controller,
+                    *viewport.peek(),
+                    code_row_height(),
+                    length,
+                    row,
+                )
+            });
+        }
+
         let on_key_down = {
             let source = self.source.clone();
             let drawn = self.source.clone();
+            let seeded = self.source.clone();
             let mut controller = controller;
-            on_listing_key(
+            find_chord(
+                at,
                 marked,
-                Pane::Source,
-                // Every run of this pane is a run of the file it is showing.
-                Some(self.file.clone()),
-                length,
-                viewport,
-                move |index| {
-                    // The file's own text and not the row's spans: what is pasted is the
-                    // line as it is on disk, tabs and all. The newline is the join's
-                    // business.
-                    source
-                        .0
-                        .rope
-                        .get_line(index)
-                        .map(|line| {
-                            let line = line.to_string();
-                            line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
-                        })
-                        .unwrap_or_default()
-                },
-                // The characters are columns of the line as drawn, so that is what they
-                // copy: an indentation as the spaces the row draws it as.
-                move |index| source_line(&drawn, index),
-                // The caret's row, brought on screen after a key has moved it.
-                move |index| {
-                    reveal_caret(
-                        &mut controller,
-                        *viewport.peek(),
-                        code_row_height(),
-                        length,
-                        index,
-                    )
-                },
+                Searchable::Source(self.source.clone()),
+                // What Ctrl+F seeds the box with is what a copy would take: the columns
+                // are columns of the line as drawn.
+                move |index| source_line(&seeded, index),
+                on_listing_key(
+                    marked,
+                    Pane::Source,
+                    // Every run of this pane is a run of the file it is showing.
+                    Some(self.file.clone()),
+                    length,
+                    viewport,
+                    move |index| {
+                        // The file's own text and not the row's spans: what is pasted is the
+                        // line as it is on disk, tabs and all. The newline is the join's
+                        // business.
+                        source
+                            .0
+                            .rope
+                            .get_line(index)
+                            .map(|line| {
+                                let line = line.to_string();
+                                line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
+                            })
+                            .unwrap_or_default()
+                    },
+                    // The characters are columns of the line as drawn, so that is what they
+                    // copy: an indentation as the spaces the row draws it as.
+                    move |index| source_line(&drawn, index),
+                    // The caret's row, brought on screen after a key has moved it.
+                    move |index| {
+                        reveal_caret(
+                            &mut controller,
+                            *viewport.peek(),
+                            code_row_height(),
+                            length,
+                            index,
+                        )
+                    },
+                ),
             )
         };
 
@@ -606,6 +648,7 @@ impl Component for SourceList {
                     // a companion's tab is a symbol's.
                     drives: matches!(self.document, Document::Source(_)).then_some(self.tab),
                     links,
+                    marking,
                 },
                 |i, data: &SourceData| {
                     let paired_at = |row: usize| data.pairs.contains(&(row as u32 + 1));
@@ -619,6 +662,7 @@ impl Component for SourceList {
                         chars: RowChars::of(data.chars, i),
                         drives: data.drives,
                         links: data.links.clone(),
+                        marking: data.marking.clone(),
                         key: DiffKey::None,
                     }
                     .key(i)
@@ -1093,6 +1137,9 @@ impl Component for SourcePane {
                         Drawing::Waiting => rect().expanded().into(),
                     }),
             )
+            // Last, so the rows above are given what is left: the code makes room for the
+            // bar rather than being covered by it.
+            .maybe_child(find_bar_over((Placing::Tab(self.tab), Pane::Source)))
             .into()
     }
 }

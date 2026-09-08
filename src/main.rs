@@ -5,6 +5,7 @@ mod compiled;
 mod docs;
 mod files;
 mod filter;
+mod find;
 mod fonts;
 mod functions;
 mod fuzzy;

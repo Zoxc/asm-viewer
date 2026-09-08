@@ -491,22 +491,19 @@ leaves this list when it is. That is a move made on request, like everything els
   was opened, and what leaves it in a list is a row that only folds and a press with Alt
   held, which opens nothing. Every panel answers, the Files tree having grown the focusable
   box the other six get from their filter pane.
-- [ ] Ctrl+F in a tab: find in what the pane is showing. The chord means "the filter box over
-  this list" in the sidebar and nothing at all in a code pane, which is where a reader coming
-  from any editor will press it first -- and the app's answer to "find this text" is
-  Ctrl+Shift+F, which searches the project's files on a worker and says nothing about the
-  listing on screen. What is wanted is the editor's: a small bar in the tab, the pane's own
-  rows searched as they are drawn, every match washed the way a filter's is (`match_bg`), and
-  Enter and Shift+Enter stepping between them with the listing scrolling to each. The pieces
-  are there -- `Matcher` compiles the box, `marked_units` puts a wash on a row's paragraph,
-  and `reveal_caret` scrolls a listing to a row. What has to be decided is what a pane's text
-  *is* for this: an assembly listing is rows of spans a worker decoded and a source file is a
-  rope the highlighter parsed, so either each pane answers "which of my rows hold this" in its
-  own terms or both are asked through one seam; whether the search runs over the whole listing
-  or only what has been decoded, an object's code being decoded a window at a time; whether a
-  match is a selection the caret sits in, which would make Ctrl+C after it copy the match, or
-  only a wash; and where the bar goes, the pane's bar being full and the split putting two
-  panes side by side.
+- [x] Ctrl+F in a tab: find in what the pane is showing. A bar along the bottom of the code
+  pane the keyboard is in, which the code makes room for rather than being covered by; the
+  filter bars' three toggles, so a toggle means one thing in all four boxes; every match
+  washed in `match_bg`, and Enter and Shift+Enter stepping between them with the listing
+  scrolling to each and picking the match out, so Ctrl+C copies it. The four questions it
+  left are answered in `notes/specs/Split View.md` and `agents/Panes.md`. **One seam**: every
+  listing already answers "the text of row N" as a `Line`, which is what a copy is taken
+  through, so nothing learned a second shape. **Whole listing, off the UI thread**: a file
+  and a symbol are searched whole by a worker of their own, since a pattern supersedes on
+  every keystroke; an object's code is read a piece at a time and so is *walked* for the next
+  match instead, decoding and discarding stretch by stretch, with how far it has got where a
+  count would be. **A match is a selection**, not only a wash. **The bar goes under the
+  pane**, the two panes' bars being full already.
 - [ ] Reach the panels from the keyboard: getting *to* one. The rows answer the arrows and
   Enter once the keyboard is in them, but the only ways in are a press on a row and Ctrl+F,
   which goes from a list to the box over it and never back. What is left is a chord that

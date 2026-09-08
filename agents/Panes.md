@@ -1062,3 +1062,97 @@ bounds; freya reports a row's own `visible_area` unclipped) says where the pane 
 scrolls the list by the difference, from a task and not the render since a scroll is a write. A
 listing with no run does nothing with the key. A page is `viewport / code_row_height()`, floored,
 and the motion makes one of none. Nothing edits: no Backspace, no typing.
+
+## Find in a pane
+
+**Ctrl+F over a code pane is the pane's own, and the bar it opens is the pane's own too**
+(`src/ui/find_bar.rs`). The chord already meant "the filter box over this list" in the sidebar and
+was answered there on the *rows* node rather than at the root, deliberately leaving it free inside a
+code pane (`filter_bar.rs`); this takes it up. `find_chord` wraps `on_listing_key` rather than being
+folded into it, so a listing's keys stay the whole of what `marks.rs` says they are, and the wrap is
+where each list already builds its handler. **The seed is the run picked out within one line**, taken
+through the same `Fn(usize) -> Line` a copy is taken through: a run of rows is a page of disassembly
+and not a search term, so a run crossing rows leaves the box as it was.
+
+**The bar is the last child of the pane's own flex column.** Both panes were already
+`Content::Flex` with a fixed-height bar and one `height(Size::flex(1.0))` body, so a third child
+takes its own height and the listing is given what is left -- which is also what keeps a page of
+rows, every reveal and every sweep measured in the height the reader can see, `ListBox`'s
+`on_sized` reporting the shorter viewport without being told. Nothing in `split.rs` changed. The
+alternative, a bar floating over the rows, was what the reader asked against: it would hide the code
+it is a bar about, and the headless test for it fails the moment a row is laid out inside the bar's
+band.
+
+**Nothing is searched on the UI thread**, which is what a worker of its own is for
+(`agents/Worker.md`). A listing is a file or a function -- a regex pass long enough to be felt at the
+keystroke that starts it -- and the pane holds the answer rather than working one out. What makes it
+movable at all is that the three functions that build a row's line are already pure and already
+`Send`: `source_line` reads a rope and a highlight tree the source reader built on a thread, and
+`instruction_line` reads an `Arc<Assembly>` the analysis worker answered with. Neither asks
+`palette()`, which is thread-local and would not survive the crossing.
+
+**What a row *wears* is not that answer.** A drawn row asks the compiled matcher where it hits
+(`Marking::hits`, over `find::hits_in`), as every marked row in the app does. That is drawing and not
+searching: there is no pass over the listing in it, one `Rc<Matcher>` is shared by every row of a
+render through a memo so the rows are not rebuilt for a render that changed no pattern, and it is the
+only thing an object's code could answer at all, a line there having text only once it has been read.
+The count and the steps come from the worker's answer; the two cannot disagree, being the same
+matcher over the same line.
+
+**A hit is columns, and a match is drawn as rects and never as split spans.** `find::hits_in` matches
+each run of adjacent `Piece::Text` whole -- an assembly line is pushed one span at a time, so
+`mov rax` crosses three of them -- and treats a `Piece::Inline` as one unit, which is what it is to
+the text engine: either the pattern is somewhere in the symbol name it draws, and the one column the
+element occupies is the hit, or it is not. The wash is one more always-present sibling in
+`code_row::row`, a single rect holding one child per match, under the selection; freya matches
+siblings by position, so the varying count sits inside a slot that never varies. It is **purple**
+and not the `match_bg` a filter's hits wear (`find_bg`): green already means "the same place as the
+run on the other side" in these two panes, and the pair's wash is that same green at another alpha,
+so a match washed in it would read as a row the other pane had lit. The palette test asks which
+channel each of the two leads on rather than how far it moves the pane, a fainter green being a
+green still. Rects and not span
+splits, because a split that came and went with the pattern would grow `Widest` for good and the pane
+would never scroll back (`src/ui/width.rs`).
+
+**A step is a move within the pane**, exactly as a caret key is: it picks the hit out
+(`mark_columns`), reveals it with `reveal_caret`, and owes the other pane no scroll -- stepping
+through matches would otherwise yank the pane beside it to each one in turn. Which hit a step goes to
+is `find::step`: the index the bar is on wins, and the caret is what a *first* step reads, so a find
+starts from where the reader is looking rather than from the top.
+
+**An object's code is walked, not passed over.** It is read a piece at a time, so there is no
+listing to search whole and nothing to count: a step asks for the *next* match from where the pane
+is, and the whole of the answer is one address (`hunt`, `use_code_hunt`). The walk is the one-shot
+`stream` shape the Search panel has -- the receiver dropping is what calls it off -- and it decodes
+each stretch exactly as the view's own window ask does and **throws it away again**: what comes back
+is an address, so walking a whole object leaves the app's memory where it found it and the landing
+pays for the one stretch it lands in through the ordinary window ask. It wraps once, starting and
+ending in the stretch the reader's address is in, so a match behind them is still found and none is
+found twice. What it says as it goes is how far it has got, every `SAID_EVERY` stretches rather than
+every one: a word per function on a binary with 115k of them is a write per function to a state the
+bar reads. The bar draws that where a count would be, and "No matches" when a walk comes back round
+with nothing.
+
+**The walk reads the text the pane draws, through the pane's own builders.** `stretch_lines` asks
+`section_view`'s `header_text`, `label_text`, `gap_row_bytes`, `dump_line` and `text_line`, and
+`instruction_line` as everything else does; a search that built its own strings would find what the
+reader cannot see, or miss what they can. Those five were reachable only through a `&Rows` before,
+which is why `gap_row_bytes` now takes the section and the gap themselves: `Rows::new` walks every
+stretch of the whole skeleton, so a `Rows` per stretch would make the walk quadratic in a binary with
+115k of them.
+
+**The match is landed by the pane and not through a `Planting`.** A planting is spent by
+`use_kept_place`, whose effect wakes on the document changing or the reading's generation moving --
+which is exactly what a door does and exactly what a find does not: the tab is already on top and
+nothing else about it has changed, so a planting written there would sit unspent. The walk's answer
+is landed where there are rows to land it in, the row worked out from the address at that moment
+(`body_row_for`), and the closure says whether it landed, so a walk that answers before the pane has
+rows is landed by the wake the rows bring. A run carried across a recount is `Kept::spots`'s
+business, as it is for every other run here.
+
+**A bar is keyed by the tab and not by a place on its trail.** The five maps in `Places` are keyed by
+an `Entry` because they are facts about a place; what was typed in a find bar is a fact about the
+tab, so a step Back leaves it alone. It joins `Places::forgetting` all the same -- a bar holds the
+file or the symbol it is about -- which is why that function takes two predicates now, the same
+question asked of a place and of a tab. The key is a `Placing`, which already spells "this tab, or
+the scratchpad's listing", so the pad's own pane can have a bar without a `DocId` to file it under.

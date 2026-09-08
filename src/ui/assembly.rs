@@ -262,6 +262,9 @@ struct AsmRows {
     /// The run picked out here -- the caret, the characters, and so the rows -- for each
     /// row to draw its part of, or `None` when there is none.
     chars: Option<CharSelection>,
+    /// What the find bar is looking for, compiled once for the list: every row wears the
+    /// same one, and a new one is what makes them all draw again.
+    marking: Option<Marking>,
 }
 
 /// What one row draws in the gutter: its own lanes, and how much of it belongs to a branch
@@ -824,6 +827,9 @@ pub(crate) struct InstructionRow {
     /// The columns of this row inside the pane's character selection, worked out by the
     /// list for the reason `selected` is (`RowChars`).
     pub(crate) chars: RowChars,
+    /// What the find bar is looking for, compiled once per render of the list and shared
+    /// by every row of it; `None` where no bar is open (`find_bar.rs`).
+    pub(crate) marking: Option<Marking>,
     pub(crate) key: DiffKey,
 }
 
@@ -836,6 +842,7 @@ impl PartialEq for InstructionRow {
             && self.wash == other.wash
             && self.chars == other.chars
             && self.arrows == other.arrows
+            && self.marking == other.marking
     }
 }
 
@@ -865,6 +872,7 @@ fn instruction_text(
     data: &AsmData,
     index: usize,
     chars: RowChars,
+    marking: Option<&Marking>,
     ctrl: Option<State<bool>>,
     alt: Option<State<bool>>,
 ) -> Text<Option<InlineLink>> {
@@ -962,8 +970,12 @@ fn instruction_text(
         );
     }
 
+    let line = instruction_line(&data.assembly, index);
     Text {
-        line: instruction_line(&data.assembly, index),
+        finds: marking
+            .map(|marking| marking.hits(&line))
+            .unwrap_or_default(),
+        line,
         head,
         tail: spans(tail, false),
         chars,
@@ -1107,7 +1119,12 @@ impl Component for InstructionRow {
             },
             before,
             Some(instruction_text(
-                &self.data, self.index, self.chars, ctrl, alt,
+                &self.data,
+                self.index,
+                self.chars,
+                self.marking.as_ref(),
+                ctrl,
+                alt,
             )),
             Some(instruction_menu(
                 doors, places, located, dock, bookmarked, objects, &self.data, self.index, at,
@@ -1166,6 +1183,17 @@ impl Component for InstructionList {
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
+        // What the find bar over this pane is looking for, for every row to wash, and
+        // what it searches, claimed for as long as these rows are drawn.
+        let at = (Placing::Tab(self.tab), Pane::Assembly);
+        let marking = use_marking(at);
+        use_searching(
+            at,
+            Searchable::Symbol {
+                assembly: self.assembly.clone(),
+                lanes: self.studied.lanes.clone(),
+            },
+        );
         let (controller, viewport) = (list.controller, list.viewport);
 
         let data = AsmData::of(
@@ -1285,45 +1313,76 @@ impl Component for InstructionList {
             .map(|indices| data.lanes().touching_any(indices))
             .unwrap_or_default();
 
+        // The step the bar asked for, made here: the hits are rows, and only the list
+        // knows how far to scroll to reach one.
+        {
+            let mut controller = controller;
+            use_find_steps(at, marked, None, move |row| {
+                reveal_caret(
+                    &mut controller,
+                    *viewport.peek(),
+                    code_row_height(),
+                    length,
+                    row,
+                )
+            });
+        }
+
         let on_key_down = {
             let assembly = self.assembly.clone();
             let lanes = self.studied.lanes.clone();
             let (text_assembly, text_lanes) = (assembly.clone(), lanes.clone());
+            let (seed_assembly, seed_lanes) = (assembly.clone(), lanes.clone());
             // A separator copies as the blank line it is drawn as, so a run lifted out of
             // the listing keeps the blocks apart on the way to the clipboard.
             let mut controller = controller;
-            on_listing_key(
+            find_chord(
+                at,
                 marked,
-                Pane::Assembly,
-                // An assembly run's file is the row's own, so a run of the whole
-                // listing is a run of no one file.
-                None,
-                length,
-                viewport,
+                Searchable::Symbol {
+                    assembly: self.assembly.clone(),
+                    lanes: self.studied.lanes.clone(),
+                },
                 move |row| {
-                    lanes
+                    seed_lanes
                         .instruction_at(row)
-                        .and_then(|index| assembly.instructions.get(index))
-                        .map(|instruction| asm_line(instruction, 0))
+                        .filter(|&index| index < seed_assembly.instructions.len())
+                        .map(|index| instruction_line(&seed_assembly, index))
                         .unwrap_or_default()
                 },
-                move |row| {
-                    text_lanes
-                        .instruction_at(row)
-                        .filter(|&index| index < text_assembly.instructions.len())
-                        .map(|index| instruction_line(&text_assembly, index))
-                        .unwrap_or_default()
-                },
-                // The caret's row, brought on screen after a key has moved it.
-                move |row| {
-                    reveal_caret(
-                        &mut controller,
-                        *viewport.peek(),
-                        code_row_height(),
-                        length,
-                        row,
-                    )
-                },
+                on_listing_key(
+                    marked,
+                    Pane::Assembly,
+                    // An assembly run's file is the row's own, so a run of the whole
+                    // listing is a run of no one file.
+                    None,
+                    length,
+                    viewport,
+                    move |row| {
+                        lanes
+                            .instruction_at(row)
+                            .and_then(|index| assembly.instructions.get(index))
+                            .map(|instruction| asm_line(instruction, 0))
+                            .unwrap_or_default()
+                    },
+                    move |row| {
+                        text_lanes
+                            .instruction_at(row)
+                            .filter(|&index| index < text_assembly.instructions.len())
+                            .map(|index| instruction_line(&text_assembly, index))
+                            .unwrap_or_default()
+                    },
+                    // The caret's row, brought on screen after a key has moved it.
+                    move |row| {
+                        reveal_caret(
+                            &mut controller,
+                            *viewport.peek(),
+                            code_row_height(),
+                            length,
+                            row,
+                        )
+                    },
+                ),
             )
         };
 
@@ -1336,6 +1395,7 @@ impl Component for InstructionList {
                 pair,
                 touching,
                 chars,
+                marking,
             },
             move |i, rows: &AsmRows| {
                 let wash = wash_of(rows.chars, i);
@@ -1379,6 +1439,7 @@ impl Component for InstructionList {
                     row: i,
                     wash,
                     chars: RowChars::of(rows.chars, i),
+                    marking: rows.marking.clone(),
                     arrows: RowArrows {
                         lanes: rows.data.lanes().row(index),
                         lit: lanes::lit(&rows.touching, index),
@@ -1488,6 +1549,7 @@ impl Component for AssemblyPane {
     fn render(&self) -> impl IntoElement {
         let analysis = use_consume::<Analysis>().0.read().clone();
         let tab = self.tab;
+        let bar = find_bar_over((Placing::Tab(tab), Pane::Assembly));
 
         rect()
             .expanded()
@@ -1510,6 +1572,9 @@ impl Component for AssemblyPane {
                     .height(Size::flex(1.0))
                     .child(self.body(&analysis)),
             )
+            // Last, so the listing above is given what is left: the code makes room for
+            // the bar rather than being covered by it.
+            .maybe_child(bar)
     }
 }
 

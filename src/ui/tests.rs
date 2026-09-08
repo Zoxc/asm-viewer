@@ -674,6 +674,9 @@ macro_rules! project_wiring {
         // Everything kept per place, the runs, and what a door is given, in `app()`'s own
         // order: the doors carry the same runs `Marked` hands the panes.
         let places = $runner.provide_root_context(Places::create);
+        // Likewise: every code pane asks whether a find bar is open over it, and the
+        // panes that draw a listing claim it as what a find would search.
+        $runner.provide_root_context(move || Looking(places.finds));
         let marked = $runner
             .provide_root_context(|| Marked(State::create(Marks::default())))
             .0;
@@ -11812,6 +11815,19 @@ fn every_wash_reads_against_the_pane_under_it() {
                 palette.match_bg,
                 blend(palette.text_select_bg, palette.pane_bg),
             ),
+            // And what a find bar matched in a code pane, over the pane, over a row the
+            // other pane has lit, and under the selection the match a step is on wears.
+            ("find_bg", palette.find_bg, palette.asm_pane_bg),
+            (
+                "find_bg over a paired row",
+                palette.find_bg,
+                blend(palette.pair_bg, palette.asm_pane_bg),
+            ),
+            (
+                "text_select_bg over a match",
+                palette.text_select_bg,
+                blend(palette.find_bg, palette.asm_pane_bg),
+            ),
             ("drop_preview_bg", palette.drop_preview_bg, palette.pane_bg),
             // Under the file finder's panel, falling on whatever the window was showing:
             // a pane and, where the finder is wider than one, the chrome around it.
@@ -11840,6 +11856,25 @@ fn every_wash_reads_against_the_pane_under_it() {
             let step = step(wash, ground);
             assert!(step >= 10, "{theme} {name}: {step} levels");
         }
+
+        // **A match must not read as a row the other pane has lit.** Green means "the
+        // same place as the run over there" in these two panes, so the find's wash is a
+        // purple. Which channel each wash leads on and not how far it moves the pane:
+        // the same green at another alpha is a fainter green and still a green, which is
+        // all `step` above would have asked of it.
+        let leads = |wash: Color| {
+            let (r, g, b) = (wash.r(), wash.g(), wash.b());
+            match (r >= g && r >= b, g >= b) {
+                (true, _) => "red",
+                (false, true) => "green",
+                (false, false) => "blue",
+            }
+        };
+        assert_ne!(
+            leads(palette.find_bg),
+            leads(palette.pair_bg),
+            "{theme}: a match is washed in the colour a paired row is"
+        );
 
         // A row that is both picked out and the pair has to be told from one that is only
         // the pair: the same green, moved further.
@@ -20275,6 +20310,7 @@ impl Component for LentRow {
                 head: vec![Span::new(LENT_TEXT).assembly_font()],
                 tail: Vec::new(),
                 chars: RowChars::default(),
+                finds: Vec::new(),
                 names: Vec::new(),
                 on_hover: None,
                 links: NoLinks,
@@ -21757,6 +21793,362 @@ fn the_find_chord_is_ctrl_f_and_nothing_wider() {
         &Key::Character("g".into()),
         Modifiers::CONTROL
     ));
+}
+
+/// The Assembly pane with the find worker behind it, which is what a bar over it needs:
+/// the pane holds the worker's answer and works out none of it here.
+fn find_harness() -> impl IntoElement {
+    use_find(use_consume::<Looking>().0);
+    listing_harness()
+}
+
+/// Which bar a listing harness's pane draws, the one document it ever shows being the tab
+/// its listing belongs to.
+fn find_at(states: &ProjectStates, document: &Document) -> Where {
+    let tab = states
+        .open
+        .docs
+        .peek()
+        .showing(document)
+        .unwrap_or(DocId::unfiled());
+    (Placing::Tab(tab), Pane::Assembly)
+}
+
+/// Put the keyboard in the pane, the way a reader does, and open the bar over it.
+fn open_find_bar(test: &mut TestingRunner) {
+    let first = paragraphs(test)[0].0;
+    let at = left_of(&first);
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    settle(test);
+    key_with(test, Key::Character("f".into()), Modifiers::CONTROL);
+}
+
+/// Wait for the find worker to answer the pattern the box now holds. The pattern and not
+/// merely an answer: the box is written a character at a time, and an answer about what it
+/// held two keystrokes ago is one the pane has already moved on from.
+fn find_answered(test: &mut TestingRunner, finds: State<Finds>, at: Where, pattern: &str) {
+    pump(test, || {
+        let bar = finds.peek().get(&at).clone();
+        bar.filter.pattern == pattern && bar.hits().is_some()
+    });
+}
+
+/// **Ctrl+F in a code pane opens the bar over that pane**, which is the chord's one
+/// meaning there: the sidebar's lists answer it on their rows and a code pane on its own
+/// box, so the bar a reader opens is the one they were reading. Fails on a binding at the
+/// root, and on a pane that answers the chord without the keyboard being in it.
+#[test]
+fn ctrl_f_opens_the_find_bar_over_the_pane_the_keyboard_is_in() {
+    let shown = shown_sum_to();
+    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+        find_harness,
+        (600., 400.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    // Nothing focused: the chord reaches no pane, a key event being emitted for the node
+    // that has the keyboard.
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    assert!(
+        !labels(&test).iter().any(|label| label == "Aa"),
+        "the chord opened a bar with the keyboard nowhere"
+    );
+
+    open_find_bar(&mut test);
+    let drawn = labels(&test);
+    for glyph in ["Aa", "\\b", ".*"] {
+        assert!(
+            drawn.iter().any(|label| label == glyph),
+            "the bar is missing the {glyph} toggle: {drawn:?}"
+        );
+    }
+    assert!(
+        drawn.iter().any(|label| label == "\u{2039}"),
+        "the bar is missing its step buttons: {drawn:?}"
+    );
+}
+
+/// **The bar takes its room from the code and does not cover it.** It is the last child of
+/// the pane's own flex column, so the listing above is given what is left -- which is also
+/// what keeps a page of rows and every reveal measured in the height the reader can see.
+///
+/// The pane is shorter than the listing, so the rows fill it: a bar drawn *over* them
+/// would then have one laid out underneath it, which is what this fails on.
+#[test]
+fn the_find_bar_takes_its_room_from_the_code() {
+    let shown = shown_sum_to();
+    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+        find_harness,
+        (600., 240.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let before = paragraphs(&test);
+    let lowest = before
+        .iter()
+        .map(|(area, _, _)| area.max_y())
+        .fold(f32::MIN, f32::max);
+
+    open_find_bar(&mut test);
+    // The lowest bar drawn is this one: the pane's own header is the other, and it is at
+    // the top.
+    let bar = rects_with(&test, palette().header_bg)
+        .into_iter()
+        .max_by(|a, b| a.origin.y.total_cmp(&b.origin.y))
+        .expect("the bar is drawn");
+    assert!(
+        bar.origin.y < lowest,
+        "the bar is below where the rows reached, so it took no room: {bar:?}"
+    );
+
+    // No row *begins* inside the bar's band. The last one may reach into it and be
+    // clipped, as the last row of any list this size is; a bar drawn over a listing that
+    // still had the whole pane would have a row laid out below its top edge, with nothing
+    // clipping it.
+    let after = paragraphs(&test);
+    assert!(!after.is_empty(), "no rows are drawn at all");
+    let under: Vec<&(Area, String, Option<Area>)> = after
+        .iter()
+        .filter(|(area, _, _)| area.origin.y >= bar.origin.y)
+        .collect();
+    assert!(
+        under.is_empty(),
+        "the bar was drawn over the code: {under:?} start past {}",
+        bar.origin.y
+    );
+}
+
+/// A step goes to a match, picks it out so Ctrl+C copies it, and every match on a drawn
+/// row wears the search wash. A second step goes to another one.
+///
+/// The pattern is taken off the listing rather than written here, so the test says what a
+/// find does and not what this fixture disassembles to.
+#[test]
+fn a_step_picks_out_the_match_and_the_rows_wear_the_wash() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+        find_harness,
+        (600., 600.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    // A word this listing draws on more than one row, so that stepping has somewhere to
+    // go: taken off the rows rather than written here, since what is asserted is what a
+    // find does and not what this fixture disassembles to.
+    let mut counted: HashMap<String, usize> = HashMap::new();
+    for (_, text, _) in paragraphs(&test) {
+        for word in text.split_whitespace().collect::<HashSet<_>>() {
+            *counted.entry(word.to_owned()).or_default() += 1;
+        }
+    }
+    let mut repeated: Vec<String> = counted
+        .into_iter()
+        .filter(|(_, rows)| *rows > 1)
+        .map(|(word, _)| word)
+        .collect();
+    repeated.sort();
+    let mnemonic = repeated
+        .first()
+        .expect("the listing draws one word on two rows")
+        .clone();
+
+    open_find_bar(&mut test);
+    test.write_text(&mnemonic);
+    let at = find_at(&states, &document);
+    let finds = states.places.finds;
+    find_answered(&mut test, finds, at, &mnemonic);
+
+    let hits = finds.peek().get(&at).hits().cloned().expect("an answer");
+    assert!(hits.len() > 1, "the term matched one row: {hits:?}");
+    assert!(
+        !rects_with(&test, palette().find_bg).is_empty(),
+        "no drawn row wears the wash"
+    );
+    // Nothing is stepped to until the reader asks: the count alone until then.
+    assert!(finds.peek().get(&at).at.is_none());
+
+    test.press_key(Key::Named(NamedKey::Enter));
+    settle(&mut test);
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the step picked the match out");
+    let (from, to) = picked.chars.ends();
+    assert_eq!(from.row, to.row, "the run crossed rows");
+    assert_eq!(
+        to.col - from.col,
+        crate::chars::units(&mnemonic),
+        "the run is not the match"
+    );
+    assert!(
+        picked.owed == Owed::NEITHER,
+        "a step owed the other pane a scroll"
+    );
+    let first = finds.peek().get(&at).at.expect("the bar is on a match");
+    assert!(labels(&test).iter().any(|label| label.contains(" of ")));
+
+    // And on again, to another one.
+    test.press_key(Key::Named(NamedKey::Enter));
+    settle(&mut test);
+    let second = finds.peek().get(&at).at.expect("the bar is on a match");
+    assert_ne!(second, first, "the second step went nowhere");
+}
+
+/// **Selected text within one line becomes the search term**, and a selection crossing
+/// lines does not: a run of rows is a page of disassembly and not something to look for.
+#[test]
+fn a_run_inside_one_line_seeds_the_box_and_one_across_lines_does_not() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+        find_harness,
+        (600., 600.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let at = find_at(&states, &document);
+    let finds = states.places.finds;
+
+    // A run inside the first row, made the way a sweep makes one.
+    let first = paragraphs(&test)[0].0;
+    let (from, to) = (left_of(&first), right_of(&first));
+    test.move_cursor(from);
+    test.press_cursor(from);
+    test.move_cursor(to);
+    test.release_cursor(to);
+    mark_release(marked);
+    settle(&mut test);
+    assert!(!marked.peek().assembly.clone().unwrap().chars.is_empty());
+
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    let seeded = finds.peek().get(&at).filter.pattern.clone();
+    assert!(!seeded.is_empty(), "the run did not reach the box");
+
+    // A run across rows leaves it as it was.
+    let second = paragraphs(&test)[1].0;
+    let down = right_of(&second);
+    test.move_cursor(from);
+    test.press_cursor(from);
+    test.move_cursor(down);
+    test.release_cursor(down);
+    mark_release(marked);
+    settle(&mut test);
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(picked.chars.rows(), 0..=1, "the sweep stayed on one row");
+
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    assert_eq!(
+        finds.peek().get(&at).filter.pattern,
+        seeded,
+        "a run across rows was taken for a search term"
+    );
+}
+
+/// An object's code with the find worker and the walk behind it.
+fn code_find_harness() -> impl IntoElement {
+    use_find(use_consume::<Looking>().0);
+    code_harness()
+}
+
+/// **A step through an object's code walks on until it finds a match**, and lands on it
+/// with what it matched picked out. There is no count and no list of hits: the code is
+/// read a piece at a time, so the answer is one address.
+///
+/// Nothing is decoded to begin with, which is the case the walk exists for: the match is
+/// in a stretch the pane has never read, and a search over what is drawn would find
+/// nothing at all.
+#[test]
+fn a_step_through_an_objects_code_walks_on_until_it_finds_a_match() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, (states, marked, _reading, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_find_harness,
+            (600., 400.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    settle(&mut test);
+    let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let finds = states.places.finds;
+
+    open_find_bar(&mut test);
+    test.write_text("sum_to");
+    test.press_key(Key::Named(NamedKey::Enter));
+    pump(&mut test, || {
+        finds
+            .peek()
+            .get(&at)
+            .hunt
+            .as_ref()
+            .is_some_and(|hunt| !hunt.walking)
+    });
+
+    let hunt = finds.peek().get(&at).hunt.clone().expect("a walk");
+    let (_, columns) = hunt.found.clone().expect("the walk found sum_to");
+    assert_eq!(columns.len(), "sum_to".len(), "the run is not the match");
+    // The label the walk found is drawn at that address, which is what the pane lands on.
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the match was picked out");
+    let (from, to) = picked.chars.ends();
+    assert_eq!(from.row, to.row);
+    assert_eq!(to.col - from.col, columns.len());
+    assert!(
+        picked.owed == Owed::NEITHER,
+        "a step owed the other pane a scroll"
+    );
+}
+
+/// A walk that goes all the way round without finding anything says so, and stops: the
+/// bar has no count to fall back on over an object's code.
+#[test]
+fn a_walk_that_finds_nothing_says_so_and_stops() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, (states, _marked, _reading, _window, _landing, _ctrl, _doors)) =
+        TestingRunner::new(
+            code_find_harness,
+            (600., 400.).into(),
+            |runner| code_states!(runner, reading),
+            1.,
+        );
+    settle(&mut test);
+    let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let finds = states.places.finds;
+
+    open_find_bar(&mut test);
+    test.write_text("nothing_is_called_this");
+    test.press_key(Key::Named(NamedKey::Enter));
+    pump(&mut test, || {
+        finds
+            .peek()
+            .get(&at)
+            .hunt
+            .as_ref()
+            .is_some_and(|hunt| !hunt.walking)
+    });
+
+    let hunt = finds.peek().get(&at).hunt.clone().expect("a walk");
+    assert!(hunt.found.is_none(), "it found something: {:?}", hunt.found);
+    assert_eq!(hunt.through, 1.0, "it stopped short of the whole listing");
+    assert!(
+        labels(&test).iter().any(|label| label == "No matches"),
+        "the bar did not say the walk found nothing: {:?}",
+        labels(&test)
+    );
 }
 
 /// Ctrl+F reaches a filter box only from the list it filters: with nothing focused the

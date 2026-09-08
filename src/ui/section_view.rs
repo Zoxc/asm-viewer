@@ -88,6 +88,9 @@ struct SectionRows {
     /// The run picked out here -- the caret, the characters, and so the rows -- for each
     /// row to draw its part of, or `None` when there is none.
     chars: Option<CharSelection>,
+    /// What the find bar is looking for, compiled once for the list; `None` where no bar
+    /// is open (`find_bar.rs`).
+    marking: Option<Marking>,
 }
 
 impl PartialEq for SectionRows {
@@ -106,6 +109,7 @@ impl PartialEq for SectionRows {
             // without the caret drew it where it had been -- which read, in the unified
             // view alone, as Left, Right, Home and End doing nothing.
             && self.chars == other.chars
+            && self.marking == other.marking
     }
 }
 
@@ -169,7 +173,7 @@ fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
             Some(TextOf {
                 address: Some(placed.range().start),
                 mark: None,
-                text: format!("section {}", placed.listing.section().name),
+                text: header_text(placed),
                 color: palette().text_fg,
                 bold: true,
                 opens: None,
@@ -180,7 +184,7 @@ fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
             Some(TextOf {
                 address: Some(rows.address_of(row).unwrap_or(0)),
                 mark: None,
-                text: format!("{}:", symbol.display()),
+                text: label_text(&symbol),
                 color: palette().name_fg,
                 bold: true,
                 opens: Some(symbol),
@@ -242,12 +246,33 @@ fn label_of(rows: &Rows, flat: usize, index: usize) -> Option<Arc<SymbolData>> {
     rows.stretch(flat)?.symbols.get(index).cloned()
 }
 
+/// The text a section's header row draws.
+pub(crate) fn header_text(placed: &analysis::Placed) -> String {
+    format!("section {}", placed.listing.section().name)
+}
+
+/// The text a symbol's label row draws.
+pub(crate) fn label_text(symbol: &SymbolData) -> String {
+    format!("{}:", symbol.display())
+}
+
 /// The bytes gap row `index` of stretch `flat` draws, and the placed address they start
 /// at.
 fn gap_bytes(rows: &Rows, flat: usize, index: usize) -> Option<(u64, Vec<u8>)> {
     // The rows' own gap and not the reading's: they are counted from it, and it is the
     // whole stretch where nothing was decoded.
     let gap = rows.body(flat)?.gap.as_ref()?;
+    gap_row_bytes(rows.placed_of(flat)?, gap, index)
+}
+
+/// The same asked of the section and the gap themselves, for a reader with no [`Rows`] to
+/// ask: the search that walks an object's code a stretch at a time (`find_bar.rs`), which
+/// must draw the same text this does or find what the pane does not show.
+pub(crate) fn gap_row_bytes(
+    placed: &analysis::Placed,
+    gap: &Range<u64>,
+    index: usize,
+) -> Option<(u64, Vec<u8>)> {
     let start = gap
         .start
         .checked_add((index as u64).checked_mul(GAP_BYTES_PER_ROW)?)?;
@@ -256,7 +281,6 @@ fn gap_bytes(rows: &Rows, flat: usize, index: usize) -> Option<(u64, Vec<u8>)> {
     }
     let end = start.saturating_add(GAP_BYTES_PER_ROW).min(gap.end);
     // The section the stretch is in holds the bytes; `gap` is in its own addresses.
-    let placed = rows.placed_of(flat)?;
     let section = placed.listing.section();
     let offset = start.checked_sub(section.address)?;
     let offset: usize = offset.try_into().ok()?;
@@ -290,6 +314,8 @@ struct TextRow {
     mark: Option<&'static str>,
     /// The columns of this row inside the pane's character selection (`RowChars`).
     chars: RowChars,
+    /// What the find bar is looking for. See [`SectionRows::marking`].
+    marking: Option<Marking>,
     key: DiffKey,
 }
 
@@ -297,7 +323,7 @@ struct TextRow {
 /// `dq` for quadwords down to `db` for bytes -- and the row's text: the values in that
 /// unit, little-endian as x86 reads them, padded to the width a row of bytes would take,
 /// then the same bytes as characters between bars, a dot for anything unprintable.
-fn dump_line(bytes: &[u8]) -> (&'static str, String) {
+pub(crate) fn dump_line(bytes: &[u8]) -> (&'static str, String) {
     let (mark, unit) = [("dq", 8), ("dd", 4), ("dw", 2), ("db", 1)]
         .into_iter()
         .find(|&(_, unit)| !bytes.is_empty() && bytes.len() % unit == 0)
@@ -387,6 +413,11 @@ impl Component for TextRow {
             }
         });
         let text = Text {
+            finds: self
+                .marking
+                .as_ref()
+                .map(|marking| marking.hits(&line))
+                .unwrap_or_default(),
             line,
             head,
             tail: Vec::new(),
@@ -431,7 +462,7 @@ impl Component for TextRow {
 
 /// The text a [`TextRow`] draws after its address, as the clipboard sees it: the data
 /// directive and a space where the row has one, then the text.
-fn text_line(mark: Option<&str>, text: &str) -> Line {
+pub(crate) fn text_line(mark: Option<&str>, text: &str) -> Line {
     match mark {
         Some(mark) => Line::text(format!("{mark} {text}")),
         None => Line::text(text),
@@ -506,7 +537,7 @@ enum RowKey {
 /// with nothing that would ever forget it -- so it names an entry nothing is ever written
 /// under, and what keeps the reader's place across a recount is the place derived from the
 /// offset, which is the hook's own and not the map's.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Placing {
     Tab(DocId),
     /// The Scratchpad's listing of the program its pad built.
@@ -549,6 +580,12 @@ impl Component for SectionList {
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
         let (controller, viewport) = (list.controller, list.viewport);
+        // What the find bar over this pane is looking for, for every row to wash, and
+        // what it searches, claimed for as long as these rows are drawn: an object's code
+        // is walked rather than passed over, so the bar has no count over it.
+        let at = (self.place, Pane::Assembly);
+        let marking = use_marking(at);
+        use_searching(at, Searchable::Code(self.object.clone()));
         // The rows, produced by the place-keeping effect and rendered from here, so that
         // new rows and the offset that keeps the reader's place under them land together.
         let rows = use_consume::<CodeRows>().0;
@@ -648,39 +685,100 @@ impl Component for SectionList {
             _ => Vec::new(),
         };
 
-        let on_key_down = {
-            let rows = built.clone();
-            let drawn = built.clone();
+        // The walk a step over this listing asks for, and where the match it finds lands:
+        // an object's code is read a piece at a time, so a step reads on rather than
+        // stepping through an answer the pane holds (`find_bar.rs`).
+        {
+            let (caret, held) = (marked, rows);
             let mut controller = controller;
-            on_listing_key(
-                marked,
-                Pane::Assembly,
-                // An assembly run's file is the row's own, so a run of the whole
-                // listing is a run of no one file.
-                None,
-                length,
-                viewport,
-                move |row| {
-                    rows.as_ref()
-                        .map(|built| row_line(built, &built.reading, row))
-                        .unwrap_or_default()
-                },
-                move |row| {
-                    drawn
+            use_code_hunt(
+                at,
+                self.object.clone(),
+                reading.code.clone(),
+                move || {
+                    // Where the pane is, as an address; the top of the code where there
+                    // is no run in it yet.
+                    let row = caret
+                        .peek()
+                        .assembly
                         .as_ref()
-                        .map(|built| code_line(built, &built.reading, row))
-                        .unwrap_or_default()
+                        .map(|picked| picked.chars.lead().row);
+                    let built = held.peek().clone();
+                    match (row, built) {
+                        (Some(row), Some(built)) => built.address_of(row).unwrap_or(0),
+                        _ => 0,
+                    }
                 },
-                // The caret's row, brought on screen after a key has moved it.
-                move |row| {
+                move |address, columns| {
+                    // The row the address is in **now**: the rows are counted afresh as
+                    // stretches decode, so the walk answers an address and the row is
+                    // worked out here, where there are rows to work it out against. A
+                    // walk that answers before there are is landed by the wake the rows
+                    // bring, which is why this says whether it landed.
+                    let Some(built) = held.peek().clone() else {
+                        return false;
+                    };
+                    let Some(row) = built.body_row_for(address) else {
+                        return false;
+                    };
+                    mark_columns(caret, Pane::Assembly, file_at(&built, row), row, columns);
                     reveal_caret(
                         &mut controller,
                         *viewport.peek(),
                         code_row_height(),
-                        length,
+                        built.len(),
                         row,
-                    )
+                    );
+                    true
                 },
+            );
+        }
+
+        let on_key_down = {
+            let rows = built.clone();
+            let drawn = built.clone();
+            let seeded = built.clone();
+            let mut controller = controller;
+            find_chord(
+                at,
+                marked,
+                Searchable::Code(self.object.clone()),
+                move |row| {
+                    seeded
+                        .as_ref()
+                        .map(|built| code_line(built, &built.reading, row))
+                        .unwrap_or_default()
+                },
+                on_listing_key(
+                    marked,
+                    Pane::Assembly,
+                    // An assembly run's file is the row's own, so a run of the whole
+                    // listing is a run of no one file.
+                    None,
+                    length,
+                    viewport,
+                    move |row| {
+                        rows.as_ref()
+                            .map(|built| row_line(built, &built.reading, row))
+                            .unwrap_or_default()
+                    },
+                    move |row| {
+                        drawn
+                            .as_ref()
+                            .map(|built| code_line(built, &built.reading, row))
+                            .unwrap_or_default()
+                    },
+                    // The caret's row, brought on screen after a key has moved it.
+                    move |row| {
+                        reveal_caret(
+                            &mut controller,
+                            *viewport.peek(),
+                            code_row_height(),
+                            length,
+                            row,
+                        )
+                    },
+                ),
             )
         };
 
@@ -694,6 +792,7 @@ impl Component for SectionList {
                 pair,
                 touching,
                 chars,
+                marking,
             },
             build_row,
         )
@@ -748,6 +847,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                 }),
                 mark: text.mark,
                 chars,
+                marking: data.marking.clone(),
                 key: DiffKey::None,
             }
             .key(key)
@@ -808,6 +908,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                 paired,
                 wash,
                 chars,
+                marking: data.marking.clone(),
                 key: DiffKey::None,
             }
             .key(RowKey::Insn(address))

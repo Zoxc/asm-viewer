@@ -96,6 +96,8 @@ mod files_view;
 pub(crate) use files_view::*;
 mod filter_bar;
 pub(crate) use filter_bar::*;
+mod find_bar;
+pub(crate) use find_bar::*;
 mod finder;
 pub(crate) use finder::*;
 mod focus;
@@ -544,6 +546,12 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // of DWARF into (`agents/Worker.md`).
     let sourced = use_provide_context(|| Sourcing(State::create(Sourced::default()))).0;
     use_source_reading(sourced);
+
+    // Every code pane's find bar, and the worker that answers one. Its own worker for the
+    // reason the source reader has one: a pattern supersedes on every keystroke and must
+    // not queue behind the seconds of DWARF a click costs (`agents/Worker.md`).
+    let finds = use_provide_context(|| Looking(places.finds)).0;
+    use_find(finds);
 
     // The search's own worker, beside the analysis one and for its reasons: the walk reads
     // every file under the project directory, which is not the UI thread's to do.

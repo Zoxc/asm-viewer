@@ -83,6 +83,32 @@ source as the file's own text.
 A drag past any edge of the pane scrolls it towards the pointer while the button is held,
 extending the selection to what comes into view.
 
+## Find in the pane
+
+Ctrl+F opens a find bar along the bottom of the code pane the keyboard is in. It does not
+overlay code. Each pane has its own. Selected text within one line becomes the search term; a
+selection crossing lines leaves the box as it was.
+
+The bar is a box, the filter bars' three toggles, a count like `3 of 128`, and a button each
+way. A pattern that does not compile shows its error under the box, and one that matches
+nothing says so.
+
+Every match is marked. Enter goes to the next and Shift+Enter to the one before, wrapping at
+the ends; the buttons do the same. Each scrolls the pane to the match and selects it, so Ctrl+C
+copies it.
+
+Escape closes the bar and puts the focus back in the pane. What was typed lasts as long as the
+tab is open.
+
+### What is searched
+
+What the pane draws, which is what copying from it copies. The source pane searches the file it
+is showing, an assembly pane the symbol it is drawing.
+
+An object's code is read a piece at a time, so it has no count. A step searches from where the
+pane is until it finds a match, and wraps once before saying there is nothing to find. The bar
+says how far it has got, and the app stays responsive. A new pattern gives up the search.
+
 ## Highlighting
 
 Assembly is coloured by span kind; source by its language's grammar, in the assembly's

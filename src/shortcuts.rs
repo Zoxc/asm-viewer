@@ -106,6 +106,11 @@ pub static SECTIONS: &[Section] = &[
             gesture("Click a branch arrow", "Go to the row it points at."),
             gesture("Right-click", "The row's menu."),
             gesture("Rest on a name", "Ask the language server what it is."),
+            gesture(
+                "Ctrl+F",
+                "Open the find bar over this pane. Text selected within one line becomes \
+                 what it looks for.",
+            ),
         ],
     },
     Section {
@@ -155,8 +160,13 @@ pub static SECTIONS: &[Section] = &[
     Section {
         place: "A text box",
         gestures: &[
-            gesture("Enter", "In the Search panel, run the search."),
-            gesture("Escape", "Leave the box."),
+            gesture(
+                "Enter",
+                "In the Search panel, run the search; in a find bar, go to the next \
+                 match.",
+            ),
+            gesture("Shift+Enter", "In a find bar, go to the match before."),
+            gesture("Escape", "Leave the box, closing a find bar."),
             gesture("Tab", "Nothing. It does not move the keyboard on."),
         ],
     },

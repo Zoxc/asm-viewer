@@ -170,6 +170,11 @@ pub(crate) struct Places {
     /// symbols that line compiles into it follows. The same kind of thing as the four
     /// above: a fact about a place, made by a click in it and forgotten with it.
     pub(crate) driven: State<Driven>,
+    /// The find bar over each code pane, if any. Keyed by the **tab** where the five
+    /// above are keyed by a place on its trail, so a step Back leaves a bar as the reader
+    /// left it -- but forgotten by the same closers, a bar holding the file or the symbol
+    /// it is about.
+    pub(crate) finds: State<Finds>,
 }
 
 impl Places {
@@ -181,19 +186,31 @@ impl Places {
             code_at: State::create(Positions::default()),
             marks_at: State::create(Positions::default()),
             driven: State::create(Driven::default()),
+            finds: State::create(Finds::default()),
         }
     }
 
-    /// Let go of every entry `keep` answers false for, in all five maps and under one
-    /// write each. What every closer ends with, and the whole of what it owes.
-    pub(crate) fn forgetting(self, keep: impl Fn(&Entry) -> bool) {
+    /// Let go of every entry `keep` answers false for, and every find bar over a tab
+    /// `keeps` answers false for, in all six maps and under one write each. What every
+    /// closer ends with, and the whole of what it owes.
+    ///
+    /// Two predicates because the bars are keyed by the tab alone: a closer knows which
+    /// tabs are going, and the two questions are that one asked of a place and of a tab.
+    pub(crate) fn forgetting(self, keep: impl Fn(&Entry) -> bool, keeps: impl Fn(&DocId) -> bool) {
         let Places {
             mut asm_at,
             mut src_at,
             mut code_at,
             mut marks_at,
             mut driven,
+            mut finds,
         } = self;
+        // The scratchpad's listing is no tab and closes with the app, so it is kept
+        // whatever a closer says about the tabs.
+        finds.write().forgetting(|placing| match placing {
+            Placing::Tab(tab) => keeps(tab),
+            Placing::Pad => true,
+        });
         asm_at.write().forgetting(&keep);
         src_at.write().forgetting(&keep);
         code_at.write().forgetting(&keep);
