@@ -821,11 +821,15 @@ fn the_handshake_keeps_what_the_server_will_spell_its_tokens_with() {
         kind: 1,
         modifiers: 0b10,
     };
-    assert_eq!(legend.kind(&method), Some("method"));
-    assert!(legend.says(&method, "trait"));
-    assert!(!legend.says(&method, "declaration"));
-    // A type it never declared, which a server of another version may still send.
-    assert_eq!(legend.kind(&Token { kind: 9, ..method }), None);
+    // Index 1 is the type it called `method`, and the second modifier is `trait`.
+    assert_eq!(legend.kinds_named(&["method"]), vec![false, true, false]);
+    assert_eq!(method.modifiers & legend.bit("trait"), 0b10);
+    assert_eq!(method.modifiers & legend.bit("declaration"), 0);
+    // A type it never declared, which a server of another version may still send: the
+    // table stops where the legend does.
+    assert_eq!(legend.kinds_named(&["method"]).get(9), None);
+    // A modifier it never declared is `0`, a bit no answer can have set.
+    assert_eq!(legend.bit("async"), 0);
 }
 
 /// A server that offers no semantic tokens leaves an empty legend, and is never asked.

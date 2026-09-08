@@ -48,6 +48,31 @@ fn token(kind: &str, modifiers: &[&str]) -> lsp::Token {
     }
 }
 
+/// What the rule makes of one token. Three answers and not two: a name with nothing to
+/// follow is still a name the reader can ask about, and is not the same as something that
+/// is no name at all. `Links::of` says the two apart as a link with nothing to follow
+/// against no link at all, which is what this reads back.
+#[derive(PartialEq, Eq, Debug)]
+enum Named {
+    /// Not a name: something lexical, or one of the three the server places nowhere.
+    Not,
+    /// A name where one is defined, so there is nothing to follow.
+    Defined,
+    /// A name, and what following it asks.
+    Asks(lsp::Followed),
+}
+
+/// What `legend` makes of `token`, asked through the whole rule rather than a piece of it.
+fn classify(legend: &lsp::Legend, token: &lsp::Token) -> Named {
+    match Links::of(legend, std::slice::from_ref(token)).first() {
+        None => Named::Not,
+        Some(link) => match link.asks {
+            Some(asks) => Named::Asks(asks),
+            None => Named::Defined,
+        },
+    }
+}
+
 fn says(kind: &str, modifiers: &[&str]) -> Named {
     classify(&legend(), &token(kind, modifiers))
 }
@@ -151,7 +176,7 @@ fn a_modifier_the_legend_does_not_have_is_never_said() {
         kind: 0,
         modifiers: u32::MAX,
     };
-    assert!(!legend.says(&every_bit, "declaration"));
+    assert_eq!(legend.bit("declaration"), 0);
     // So a name whose declaration cannot be spoken of is taken as a use, which is the
     // link the reader can follow rather than the one they cannot.
     assert_eq!(

@@ -264,20 +264,30 @@ pub struct Legend {
 }
 
 impl Legend {
-    /// What the server calls `token`'s type, and `None` for an index it never declared.
-    pub fn kind<'a>(&'a self, token: &Token) -> Option<&'a str> {
-        self.types.get(token.kind as usize).map(String::as_str)
+    /// Which bit of a token's modifiers `modifier` is, and `0` for one the server never
+    /// declared -- a bit nothing can have set, as a modifier it cannot have said.
+    ///
+    /// The mask rather than the index, so what asks about a whole file takes it once and
+    /// tests every token with an `&` (`links::Links::of`). The bitset is 32 bits wide on
+    /// the wire, so a modifier past the 32nd is `0` as well: no answer can carry it.
+    pub fn bit(&self, modifier: &str) -> u32 {
+        match self.modifiers.iter().position(|name| name == modifier) {
+            Some(at) if at < 32 => 1 << at,
+            _ => 0,
+        }
     }
 
-    /// Whether the server said `modifier` of `token`. A modifier it never declared is one
-    /// it cannot have said.
-    pub fn says(&self, token: &Token, modifier: &str) -> bool {
-        let Some(at) = self.modifiers.iter().position(|name| name == modifier) else {
-            return false;
-        };
-        // The bitset is 32 bits wide on the wire, so a legend longer than that has
-        // modifiers no answer can carry.
-        u32::try_from(at).is_ok_and(|at| at < 32 && token.modifiers & (1 << at) != 0)
+    /// One flag per type index: whether the type at that index is one of `names`.
+    ///
+    /// The table a file's tokens are classified against. The legend is fixed for the
+    /// life of the conversation and a file is thousands of tokens, so the names are
+    /// matched here once instead of per token, and an index the server never declared
+    /// falls past the end of the table.
+    pub fn kinds_named(&self, names: &[&str]) -> Vec<bool> {
+        self.types
+            .iter()
+            .map(|kind| names.contains(&kind.as_str()))
+            .collect()
     }
 
     /// Whether the server declared any of this at all: an empty legend is a server that

@@ -589,9 +589,17 @@ has a definition like anything else, so excluding it would kill every link into 
 marker of a built-in type is `builtinType`; and there is no `definition` modifier at all,
 rust-analyzer folding its own into the standard `declaration`. A name the rule keeps but
 cannot follow -- where one is defined -- is kept all the same, since the row's menu is
-offered there too. That is why one token has **three** answers and not two (`classify`,
-which settles both questions in the one lookup): a name with nothing to follow is not the
-same as something that is no name at all.
+offered there too. That is why one token has **three** answers and not two: no name at
+all, a name with nothing to follow, or a name and the question following it asks.
+`Links::of` spells the first as a token it drops and the other two as a link whose `asks`
+is `None` or a question.
+
+**What the legend says is asked of it once per file, not per token.** Which of its type
+indices are names is a table (`Legend::kinds_named`) and each of the two modifiers is a
+bit (`Legend::bit`), both taken at the top of `Links::of`, so a token costs an index and
+two `&`s. The legend is fixed for the life of the conversation and a file is thousands of
+tokens; asking by name per token was a scan of the type list and of the modifier list
+apiece, on the worker, every time a file was shown.
 
 An item in a trait `impl` is the one name that asks a different question. Its *definition*
 is itself, so `textDocument/definition` on it goes nowhere the reader is not already; its

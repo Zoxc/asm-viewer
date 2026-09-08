@@ -58,19 +58,19 @@ impl Links {
     /// server that answered out of order would otherwise lose rows rather than draw them
     /// wrongly.
     pub fn of(legend: &lsp::Legend, tokens: &[lsp::Token]) -> Links {
+        // What the legend says is worked out once and not per token: which of its types
+        // are names, and which bits the two modifiers are. A file is thousands of tokens
+        // and the legend is fixed for the life of the conversation.
+        let named = legend.kinds_named(&NAMES);
+        let declaration = legend.bit("declaration");
+        let trait_ = legend.bit("trait");
         let mut links: Vec<Link> = tokens
             .iter()
-            .filter_map(|token| {
-                let asks = match classify(legend, token) {
-                    Named::Not => return None,
-                    Named::Defined => None,
-                    Named::Asks(asks) => Some(asks),
-                };
-                Some(Link {
-                    line: token.line,
-                    columns: token.columns.clone(),
-                    asks,
-                })
+            .filter(|token| named.get(token.kind as usize) == Some(&true))
+            .map(|token| Link {
+                line: token.line,
+                columns: token.columns.clone(),
+                asks: asked_by(token, declaration, trait_),
             })
             .collect();
         links.sort_by(|one, other| {
@@ -149,33 +149,23 @@ const NAMES: [&str; 27] = [
     "label",
 ];
 
-/// What the server's vocabulary makes of one token. Three answers and not two: a name
-/// with nothing to follow is still a name the reader can ask about, and is not the same
-/// as something that is no name at all.
-#[derive(PartialEq, Eq, Debug)]
-enum Named {
-    /// Not a name: something lexical, or one of the three the server places nowhere.
-    Not,
-    /// A name where one is defined, so there is nothing to follow.
-    Defined,
-    /// A name, and what following it asks.
-    Asks(lsp::Followed),
-}
-
-/// What `legend` says `token` is. Both questions are settled in the one lookup: whether
-/// it is a name at all, and what following it asks.
-fn classify(legend: &lsp::Legend, token: &lsp::Token) -> Named {
-    if !legend.kind(token).is_some_and(|kind| NAMES.contains(&kind)) {
-        return Named::Not;
-    }
-    if !legend.says(token, "declaration") {
-        return Named::Asks(lsp::Followed::Definition);
+/// What following `token` asks, and `None` where there is nothing to follow. Asked only
+/// of a name: whether a token is one is its type's to say, and settled before this
+/// ([`Links::of`]).
+///
+/// `declaration` and `trait_` are those two modifiers' bits, taken off the legend once
+/// (`lsp::Legend::bit`). A modifier the server never declared is `0`, which no token has
+/// set, so a name whose declaration cannot be spoken of is taken as a use -- the link the
+/// reader can follow rather than the one they cannot.
+fn asked_by(token: &lsp::Token, declaration: u32, trait_: u32) -> Option<lsp::Followed> {
+    if token.modifiers & declaration == 0 {
+        return Some(lsp::Followed::Definition);
     }
     // A definition, so there is nothing to follow -- unless it is an item in a trait
     // `impl`, where the trait declares what this one writes out.
-    match legend.says(token, "trait") {
-        true => Named::Asks(lsp::Followed::Declaration),
-        false => Named::Defined,
+    match token.modifiers & trait_ != 0 {
+        true => Some(lsp::Followed::Declaration),
+        false => None,
     }
 }
 
