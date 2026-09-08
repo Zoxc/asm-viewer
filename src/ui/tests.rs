@@ -518,34 +518,29 @@ fn a_listing_of_the_same_length_pays_the_reveal_it_arrives_to() {
     assert!(owed_reveal(marked, Pane::Assembly).is_none());
 }
 
-fn groups(area: &DockArea) -> Vec<PanelId> {
-    fn walk(node: &DockNode<Panel, PanelId>, into: &mut Vec<PanelId>) {
-        match node {
-            DockNode::Panel(group) => into.push(group.panel_id),
-            DockNode::Split { children, .. } => children.iter().for_each(|child| walk(child, into)),
-        }
-    }
-    let mut found = Vec::new();
-    walk(&area.tree, &mut found);
-    found
-}
-
 /// A group the reader has dragged everything out of folds away, which is what keeps the
 /// sidebar from filling up with the ghosts of groups.
 #[test]
 fn an_emptied_group_folds_away() {
-    let mut dock = DockArea::column(vec![vec![Panel::Objects], vec![]]);
-    dock.tidy();
-    assert_eq!(groups(&dock), [0]);
+    let mut dock = DockArea::column(vec![vec![Panel::Objects], vec![Panel::Files]]);
+    assert!(dock.on_drop(Panel::Files, DropTarget::Center(0)));
+    assert_eq!(dock.groups(), [vec![Panel::Objects, Panel::Files]]);
 }
 
-/// The last group standing is kept even when it is empty, so the sidebar stays on screen
-/// as somewhere to drop a panel back into.
+/// The same where the drop splits a group rather than joining one: the panel dragged into
+/// a split of its own group empties that group, and the split closes up around it instead
+/// of leaving it there beside the new one.
 #[test]
-fn the_last_group_is_kept_when_it_empties() {
-    let mut dock = DockArea::column(vec![vec![], vec![]]);
-    dock.tidy();
-    assert_eq!(groups(&dock).len(), 1);
+fn a_split_closes_up_around_the_group_it_emptied() {
+    let mut dock = DockArea::column(vec![vec![Panel::Objects], vec![Panel::Files]]);
+    assert!(dock.on_drop(
+        Panel::Files,
+        DropTarget::Split {
+            panel_id: 0,
+            side: Side::Top,
+        }
+    ));
+    assert_eq!(dock.groups(), [vec![Panel::Files], vec![Panel::Objects]]);
 }
 
 /// Nothing on screen: what a project switch does is to the states. A runner all the same,
@@ -9066,15 +9061,11 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
 
-    let on_top = |dock: State<DockArea>| {
-        let dock = dock.peek();
-        let (group, _) = dock.tree.find_tab(&Panel::Locations)?;
-        dock.tree.panel(&group)?.active_tab_id
-    };
-    assert!(on_top(sidebar) == Some(Panel::History));
+    let on_top = |dock: State<DockArea>, panel: Panel| dock.peek().is_active(panel);
+    assert!(on_top(sidebar, Panel::History));
 
     find_locations(located, sidebar, Query::line(at.clone()), None);
-    assert!(on_top(sidebar) == Some(Panel::Locations));
+    assert!(on_top(sidebar, Panel::Locations));
     assert!(located.peek().pending() == Some(&Query::line(at.clone())));
     pump(&mut test, || located.peek().found.is_some());
     let found = located.peek().found.clone().expect("answered");

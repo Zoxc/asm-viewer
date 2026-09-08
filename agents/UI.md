@@ -304,7 +304,9 @@ top.
 leave a tree with no panel at all where this keeps one: an area that loses its last panel keeps an
 empty group, so the sidebar stays on screen as somewhere to drop a panel back into. Two behaviours
 of freya's are kept: a split left with one child collapses into it, and a lone panel at the root is
-never removed.
+never removed. `on_drop` is the only caller, so `tidy` is private and so is the tree behind it: a
+test rearranges the area the way a reader does, by dropping, and asks the model what came of it
+(`is_active`, `groups`, `saved`).
 
 **The content area is the app's own**, `ContentArea` over `Strip` (`src/ui/strip.rs`): a bar of
 chips over the tab on screen, and nothing that can be folded, split or dragged out of. What the dock

@@ -107,7 +107,7 @@ pub(crate) type PanelId = u32;
 /// may be dragged into another group or split off into a group of its own, and it never
 /// leaves the sidebar.
 pub(crate) struct DockArea {
-    pub(crate) tree: DockNode<Panel, PanelId>,
+    tree: DockNode<Panel, PanelId>,
     next_panel_id: PanelId,
 }
 
@@ -258,8 +258,29 @@ impl DockArea {
         self.set_active(panel_id, panel)
     }
 
-    /// Whether `panel` is the one on top in whichever group holds it.
-    fn is_active(&self, panel: Panel) -> bool {
+    /// Each group's panels, in the order the groups are laid out: what
+    /// [`DockArea::column`] is given, out of an area a reader has since rearranged.
+    ///
+    /// Test-only: nothing the app draws wants the groups as a list, and this is how a
+    /// test asks about the shape without reaching into the tree.
+    #[cfg(test)]
+    pub(crate) fn groups(&self) -> Vec<Vec<Panel>> {
+        fn walk(node: &DockNode<Panel, PanelId>, into: &mut Vec<Vec<Panel>>) {
+            match node {
+                DockNode::Panel(group) => into.push(group.tabs.clone()),
+                DockNode::Split { children, .. } => {
+                    children.iter().for_each(|child| walk(child, into))
+                }
+            }
+        }
+        let mut groups = Vec::new();
+        walk(&self.tree, &mut groups);
+        groups
+    }
+
+    /// Whether `panel` is the one on top in whichever group holds it: what a tab header
+    /// draws itself by, and what a test asks rather than walking the tree.
+    pub(crate) fn is_active(&self, panel: Panel) -> bool {
         let Some((panel_id, _)) = self.tree.find_tab(&panel) else {
             return false;
         };
@@ -291,7 +312,7 @@ impl DockArea {
     /// sweep leaves a tree with no panel at all where this leaves one. freya's two
     /// behaviours that are kept: a split left with one child collapses into it, and a lone
     /// panel at the root is never removed.
-    pub(crate) fn tidy(&mut self) {
+    fn tidy(&mut self) {
         Self::prune(&mut self.tree);
         if self.tree.is_empty() && !matches!(self.tree, DockNode::Panel(_)) {
             self.tree = DockNode::Panel(DockPanel::new(self.next_panel_id, Vec::new()));
