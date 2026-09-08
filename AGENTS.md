@@ -194,7 +194,8 @@ command.
 - `src/document.rs` — what the reader has open: a place in a binary, or a source file; and
   `Selection`, the object or the symbol an assembly-driven one is about. What every tab,
   trail, visit and bookmark is keyed by. Also `Pane`, the two sides a tab has, and which of
-  them a document is driven from.
+  them a document is driven from; and `Kind`, the three kinds of place a document and a
+  `SavedDocument` both answer for, which is all a glyph needs of either.
 - `src/docs.rs` — `Docs`, the table mapping a document tab's `DocId` to the trail behind it: every
   place the tab has shown with a cursor on the one it shows, and which tab is the temporal one.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.
@@ -314,7 +315,8 @@ command.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
 - `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes,
   `verdict_line` among them: the one line a `Verdict` is drawn as, wherever one is. Also
-  `given`: what a text box says, or nothing.
+  `glyph`, the one small icon every bar, header and row draws, and `given`: what a text
+  box says, or nothing.
 - `src/ui/picks.rs` — the row each list has picked out: what a pick is, the one per panel,
   the Alt that picks without opening, and which of two colours a picked row wears.
 - `src/ui/place_row.rs` — the row the Search and Locations panels both draw: a file, or one

@@ -269,6 +269,34 @@ pub(crate) fn disclosure(open: Option<bool>) -> Element {
         .into_element()
 }
 
+/// **The one small glyph, in one place.** A Lucide icon at [`icon_size`] in the palette's
+/// `icon_fg`: a tab bar's button, a page's icon, a panel's header, a document's row, a
+/// file in the tree.
+///
+/// The colour is **given rather than inherited**: `SvgViewer` rasterizes only once it
+/// knows one, and with none set it waits for an `on_styled` -- a frame late, and a frame
+/// of nothing in a 26px bar. `show_loader(false)` is for that same frame: a spinner in a
+/// box this size says nothing.
+///
+/// `icon` is written `("name", lucide::name())` everywhere, the name beside the bytes,
+/// because `ImageSource` keys the raster cache on a hash of whatever it is given and
+/// hashing a short name beats hashing an SVG.
+pub(crate) fn glyph(icon: impl Into<ImageSource>) -> Element {
+    glyph_in(icon, palette().icon_fg)
+}
+
+/// The same glyph in a colour of the caller's own: the language server's button, which
+/// says by the icon's colour which of its states it is in.
+pub(crate) fn glyph_in(icon: impl Into<ImageSource>, colour: Color) -> Element {
+    let side = icon_size();
+    SvgViewer::new(icon)
+        .width(Size::px(side))
+        .height(Size::px(side))
+        .color(colour)
+        .show_loader(false)
+        .into_element()
+}
+
 /// The short tag saying what kind of file a row is, in the column every row of the objects
 /// tree keeps for it.
 pub(crate) fn tag_label(tag: &str) -> impl IntoElement {

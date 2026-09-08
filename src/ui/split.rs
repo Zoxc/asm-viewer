@@ -93,7 +93,7 @@ impl Component for PaneToggle {
                 format!("Show the {name} pane"),
             ),
         };
-        let (side, glyph) = (toggle_size(), icon_size());
+        let side = toggle_size();
         let of = self.of;
 
         // A box of the bar's own row height around the square, so the control sits beside
@@ -122,15 +122,7 @@ impl Component for PaneToggle {
                             }
                             Toggling::Pad => pad_said.set(!up),
                         })
-                        .child(
-                            SvgViewer::new(icon)
-                                .width(Size::px(glyph))
-                                .height(Size::px(glyph))
-                                // Given rather than inherited, as the tab bar's icons are:
-                                // `SvgViewer` rasterizes only once it knows a colour.
-                                .color(palette().icon_fg)
-                                .show_loader(false),
-                        ),
+                        .child(glyph(icon)),
                 ),
             ))
             .into_element()

@@ -46,7 +46,6 @@ impl Component for ChipButton {
         };
 
         let side = toggle_size();
-        let glyph = icon_size();
         extra_tooltip(
             tooltip.to_owned(),
             rect()
@@ -68,13 +67,7 @@ impl Component for ChipButton {
                         deleting.set(name);
                     }
                 })
-                .child(
-                    SvgViewer::new(icon)
-                        .width(Size::px(glyph))
-                        .height(Size::px(glyph))
-                        .color(palette().icon_fg)
-                        .show_loader(false),
-                ),
+                .child(glyph(icon)),
         )
     }
 }

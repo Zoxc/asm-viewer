@@ -36,7 +36,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::bookmarks::Bookmark;
 use crate::cargo::Profile;
 use crate::docs::{DocId, Entry};
-use crate::document::{Document, Selection};
+use crate::document::{Document, Kind, Selection};
 use crate::history::{History, Stop};
 use crate::order::Order;
 use crate::positions::{Driven, Positions, Spot};
@@ -921,6 +921,19 @@ impl SavedDocument {
             Document::Source(file) => SavedDocument::Source {
                 path: file.to_string(),
             },
+        }
+    }
+
+    /// Which of the three kinds of place this is: the same answer [`Document::kind`]
+    /// gives for the live one, so a bookmark wears the glyph its tab would.
+    pub fn kind(&self) -> Kind {
+        match self {
+            SavedDocument::Object {
+                shown: SavedShown::Code,
+                ..
+            } => Kind::Code,
+            SavedDocument::Object { .. } | SavedDocument::Symbol { .. } => Kind::Binary,
+            SavedDocument::Source { .. } => Kind::Source,
         }
     }
 

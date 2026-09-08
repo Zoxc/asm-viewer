@@ -67,25 +67,18 @@ pub(crate) fn entry_tooltip(entry: &Document) -> String {
 
 /// Which kind of tab this is, as the one glyph that tells the three apart.
 pub(crate) fn entry_icon(entry: &Document) -> Element {
-    let (name, svg) = match entry {
-        Document::Assembly(_) => ("binary", lucide::binary()),
-        Document::Source(_) => ("file-code", lucide::file_code()),
-        Document::Code(_) => ("scroll-text", lucide::scroll_text()),
-    };
-
-    document_glyph((name, svg))
+    kind_icon(entry.kind())
 }
 
-/// One of the three glyphs above, at the interface font's own size and in the palette's
-/// `icon_fg`; what [`entry_icon`] and a bookmark row's icon are both made of.
-pub(crate) fn document_glyph(source: impl Into<ImageSource>) -> Element {
-    let side = icon_size();
-    SvgViewer::new(source)
-        .width(Size::px(side))
-        .height(Size::px(side))
-        .color(palette().icon_fg)
-        .show_loader(false)
-        .into_element()
+/// **The one table of the three glyphs.** A place is drawn the same open or saved, so
+/// [`entry_icon`] and a bookmark row both come here, and a fourth [`Kind`] cannot reach
+/// one of them and miss the other.
+pub(crate) fn kind_icon(kind: Kind) -> Element {
+    glyph(match kind {
+        Kind::Binary => ("binary", lucide::binary()),
+        Kind::Source => ("file-code", lucide::file_code()),
+        Kind::Code => ("scroll-text", lucide::scroll_text()),
+    })
 }
 
 /// The identity of what a document points at, for keying the row or tab that names it.

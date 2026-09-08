@@ -67,20 +67,16 @@ impl Panel {
         }
     }
 
-    /// The Lucide glyph drawn before the title, at the interface font's own size and in
-    /// the palette's `icon_fg`.
-    ///
-    /// The name is passed beside the bytes because `ImageSource` keys the raster cache on
-    /// a hash of whatever it is given, and hashing a short name beats hashing an SVG.
+    /// The Lucide glyph drawn before the title ([`glyph`]).
     fn icon(self) -> Element {
         match self {
-            Panel::Objects => bar_icon(("package", lucide::package())),
-            Panel::Files => bar_icon(("folder-tree", lucide::folder_tree())),
-            Panel::Search => bar_icon(("search", lucide::search())),
-            Panel::Symbols => bar_icon(("square-function", lucide::square_function())),
-            Panel::History => bar_icon(("history", lucide::history())),
-            Panel::Bookmarks => bar_icon(("bookmark", lucide::bookmark())),
-            Panel::Locations => bar_icon(("map-pin", lucide::map_pin())),
+            Panel::Objects => glyph(("package", lucide::package())),
+            Panel::Files => glyph(("folder-tree", lucide::folder_tree())),
+            Panel::Search => glyph(("search", lucide::search())),
+            Panel::Symbols => glyph(("square-function", lucide::square_function())),
+            Panel::History => glyph(("history", lucide::history())),
+            Panel::Bookmarks => glyph(("bookmark", lucide::bookmark())),
+            Panel::Locations => glyph(("map-pin", lucide::map_pin())),
         }
     }
 
@@ -95,21 +91,6 @@ impl Panel {
             Panel::Locations => LocationsPanel.into_element(),
         }
     }
-}
-
-/// A tab bar's glyph, drawn at [`icon_size`] in the palette's `icon_fg`.
-///
-/// The colour is **given rather than inherited**: `SvgViewer` rasterizes only once it
-/// knows one, and with none set it waits for an `on_styled` -- a frame late, and a frame
-/// of nothing in a 26px bar.
-pub(crate) fn bar_icon(icon: impl Into<ImageSource>) -> Element {
-    let side = icon_size();
-    SvgViewer::new(icon)
-        .width(Size::px(side))
-        .height(Size::px(side))
-        .color(palette().icon_fg)
-        .show_loader(false)
-        .into_element()
 }
 
 /// Bring `panel` to the front of whichever group holds it: what a panel that answers a

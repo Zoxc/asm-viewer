@@ -106,15 +106,7 @@ impl Component for BookmarkRow {
 
 /// Which kind of place a saved document is, as the glyph its live tab would wear.
 fn saved_icon(saved: &SavedDocument) -> Element {
-    let (name, svg) = match saved {
-        SavedDocument::Object {
-            shown: SavedShown::Code,
-            ..
-        } => ("scroll-text", lucide::scroll_text()),
-        SavedDocument::Object { .. } | SavedDocument::Symbol { .. } => ("binary", lucide::binary()),
-        SavedDocument::Source { .. } => ("file-code", lucide::file_code()),
-    };
-    document_glyph((name, svg))
+    kind_icon(saved.kind())
 }
 
 /// The menu a bookmark row opens on a right-click: one item, removing that row. By index

@@ -57,6 +57,21 @@ pub enum Pane {
     Source,
 }
 
+/// Which of the three kinds of place a document is, with nothing of what it points at.
+///
+/// It is what [`Document`] and [`SavedDocument`](crate::project::SavedDocument) agree
+/// about: a saved place is drawn with the glyph its live tab wears, so the two answer one
+/// question and neither can grow a kind the other forgets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// A place in a binary: an object's symbols, or one symbol's code.
+    Binary,
+    /// A source file.
+    Source,
+    /// The whole of an object's code, as one listing.
+    Code,
+}
+
 /// One of the places the reader has open: a place in a binary, or a file.
 ///
 /// A tab holds one of these and has two sides — assembly and source — and the variant
@@ -92,6 +107,16 @@ impl Document {
             Document::Assembly(selection) => selection.file(),
             Document::Source(file) => Path::new(&**file),
             Document::Code(object) => &object.path,
+        }
+    }
+
+    /// Which of the three kinds of place this is: what a list draws it with, and all a
+    /// glyph needs of it.
+    pub fn kind(&self) -> Kind {
+        match self {
+            Document::Assembly(_) => Kind::Binary,
+            Document::Source(_) => Kind::Source,
+            Document::Code(_) => Kind::Code,
         }
     }
 

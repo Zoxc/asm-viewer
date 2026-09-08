@@ -258,7 +258,7 @@ impl Component for TabListButton {
                     let was = showing();
                     showing.set(!was);
                 })
-                .child(bar_icon(("chevron-down", lucide::chevron_down()))),
+                .child(glyph(("chevron-down", lucide::chevron_down()))),
         );
 
         rect()
@@ -365,11 +365,11 @@ fn tab_tooltip(tab: Tab, docs: &Docs) -> String {
 /// The glyph a page's tab is drawn with.
 fn page_icon(page: Page) -> Element {
     match page {
-        Page::Project => bar_icon(("folder-open", lucide::folder_open())),
-        Page::Settings => bar_icon(("settings", lucide::settings())),
-        Page::Shortcuts => bar_icon(("keyboard", lucide::keyboard())),
-        Page::Scratchpad => bar_icon(("notebook-pen", lucide::notebook_pen())),
-        Page::Debug => bar_icon(("bug", lucide::bug())),
+        Page::Project => glyph(("folder-open", lucide::folder_open())),
+        Page::Settings => glyph(("settings", lucide::settings())),
+        Page::Shortcuts => glyph(("keyboard", lucide::keyboard())),
+        Page::Scratchpad => glyph(("notebook-pen", lucide::notebook_pen())),
+        Page::Debug => glyph(("bug", lucide::bug())),
     }
 }
 
@@ -464,7 +464,7 @@ impl Component for PagesButton {
                     asked.set(!was && held);
                     showing.set(!was);
                 })
-                .child(bar_icon(("menu", lucide::menu()))),
+                .child(glyph(("menu", lucide::menu()))),
         );
 
         rect()

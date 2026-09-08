@@ -80,7 +80,7 @@ impl Component for EntryRow {
             Some(Fold::Unfolded) => Some(true),
             Some(Fold::Folded | Fold::Failed) => Some(false),
         };
-        let glyph = match fold {
+        let icon = match fold {
             None => ("file", lucide::file()),
             Some(Fold::Unfolded) => ("folder-open", lucide::folder_open()),
             Some(Fold::Folded | Fold::Failed) => ("folder", lucide::folder()),
@@ -141,7 +141,7 @@ impl Component for EntryRow {
                 })
                 .child(rect().width(Size::px(self.row.depth as f32 * TREE_INDENT)))
                 .child(disclosure(open))
-                .child(document_glyph(glyph))
+                .child(glyph(icon))
                 .child(tree_name(self.row.name.clone(), failed, &[])),
         )
     }

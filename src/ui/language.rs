@@ -1185,7 +1185,7 @@ impl Component for ServerButton {
             false => "The project has no directory".to_owned(),
         };
 
-        let (side, glyph) = (toggle_size(), icon_size());
+        let (side, square) = (toggle_size(), icon_size());
         // Dim only where a press would do nothing. Off is a control the reader is meant
         // to find, not one that is unavailable, so it is written as plainly as the two
         // buttons beside it; what says it is off is the lack of a border and a colour.
@@ -1245,16 +1245,12 @@ impl Component for ServerButton {
                 // The same square either way, so nothing beside it moves.
                 .child(
                     rect()
-                        .width(Size::px(glyph))
-                        .height(Size::px(glyph))
+                        .width(Size::px(square))
+                        .height(Size::px(square))
                         .center()
                         .child(match held.busy() {
-                            true => CircularLoader::new().size(glyph).into_element(),
-                            false => SvgViewer::new(lucide::link())
-                                .width(Size::px(glyph))
-                                .height(Size::px(glyph))
-                                .color(colour)
-                                .into_element(),
+                            true => CircularLoader::new().size(square).into_element(),
+                            false => glyph_in(("link", lucide::link()), colour),
                         }),
                 )
                 .child(label().text(SERVER_NAME.to_owned()).color(colour)),
