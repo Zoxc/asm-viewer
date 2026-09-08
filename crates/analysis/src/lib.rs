@@ -5,7 +5,7 @@ use object::{
 use std::{
     collections::{HashMap, HashSet},
     fmt, fs,
-    hash::Hasher as _,
+    hash::{Hash, Hasher},
     ops::{ControlFlow, Range},
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
@@ -556,6 +556,17 @@ pub struct Symbol {
 impl PartialEq for Symbol {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.object, &other.object) && Arc::ptr_eq(&self.data, &other.data)
+    }
+}
+
+impl Eq for Symbol {}
+
+/// The two pointers the equality above compares, so a map keyed by a symbol takes that
+/// identity from here rather than spelling it out again.
+impl Hash for Symbol {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.object).hash(state);
+        Arc::as_ptr(&self.data).hash(state);
     }
 }
 

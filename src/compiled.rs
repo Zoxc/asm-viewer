@@ -53,21 +53,20 @@ pub fn compiled_from(
 /// which differs line by line.
 ///
 /// And that order is arbitrary: the first candidate is the lowest-addressed symbol of the
-/// first object that answered. It is a tie-break and not a judgement; Step 5's picker is
-/// where a reader says which instance they meant.
+/// first object that answered. It is a tie-break and not a judgement; the Locations panel
+/// is where a reader says which instance they meant.
 pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
     // Indexed rather than scanned: one line can answer with thousands of symbols and the
-    // record of visits holds two hundred, so the nested walk is a million pointer compares. The
-    // key is `Symbol`'s own equality written out -- both `Arc`s, not just the data's.
-    let where_at: HashMap<(usize, usize), usize> = candidates
+    // record of visits holds two hundred, so the nested walk is a million pointer compares.
+    let where_at: HashMap<&Symbol, usize> = candidates
         .iter()
         .enumerate()
-        .map(|(index, symbol)| (identity(symbol), index))
+        .map(|(index, symbol)| (symbol, index))
         .collect();
 
     recent
         .iter()
-        .find_map(|symbol| where_at.get(&identity(symbol)))
+        .find_map(|symbol| where_at.get(symbol))
         .and_then(|index| candidates.get(*index))
         .or_else(|| candidates.first())
         .cloned()
@@ -88,14 +87,6 @@ pub fn lowest_placed(symbols: &[Arc<SymbolData>]) -> Option<u64> {
         .filter(|data| data.section.is_some())
         .map(|data| data.placed(data.address))
         .min()
-}
-
-/// A symbol as a hashable key: the pair of `Arc` addresses its `PartialEq` compares.
-fn identity(symbol: &Symbol) -> (usize, usize) {
-    (
-        Arc::as_ptr(&symbol.object).addr(),
-        Arc::as_ptr(&symbol.data).addr(),
-    )
 }
 
 #[cfg(test)]
