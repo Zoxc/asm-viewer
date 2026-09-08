@@ -54,6 +54,15 @@ the component keeps the closures it was first given. A mapping that can change i
 component holding it is unmounted when it does, which is what the scratchpad's editor and its
 dependency rows arrange (`agents/Scratchpad.md`), and never by handing it a new one.
 
+**Reading a `State` subscribes the whole scope, so splitting a pane into components cuts no
+render.** The child reads the same state the parent did and is woken with it, so the work moves
+without shrinking. Measured when a pane was cut up for exactly that reason, and every piece went
+on redrawing together. What would cut it is a `use_memo` between the state and the component, so
+the component subscribes to the part it draws rather than to the state it came out of. There is
+no such memo anywhere in the app, and no pane has yet been slow enough to want one -- so a split
+done for a render count is a split that buys nothing, and the reason to make one is that the
+pieces read better.
+
 **`prevent_default` cancels the events an event derives; `stop_propagation` stops it bubbling.** One
 platform event becomes a queue of tree events, and a handler calling `prevent_default` makes the
 executor drop from the rest of that queue everything the emitted event names as cancellable
