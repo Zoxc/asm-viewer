@@ -29,10 +29,13 @@ untouched and comes back as the reader left it when a tab that has two is next u
 a view of a tab, like the symbol bar's section.
 
 **The Source pane draws the active tab's source side**, and `source_side` is the one place either
-pane decides which file that is, so the pane and the effect that drops its selected rows cannot
-disagree about which listing is up. A **subject** is a source-driven tab's own file. A **companion**
-is the file the drawn symbol was compiled from, which comes out of `SymbolLines` inside `Studied`
-and not out of `Active`, because the analysis arrives from a worker thread and anything reading the
+pane decides what that is, so the pane and the effect that drops its selected rows cannot disagree
+about which listing is up. It answers the whole question -- which file, which place the rows are
+kept under, and which line the tab opens at -- so the pane spends the answer rather than working
+the kind out a second time; `use_clear_marks`, which wants the file alone, takes `file()` and hands
+in no rows. A **subject** is a source-driven tab's own file. A **companion** is the file the drawn
+symbol was compiled from, which comes out of `SymbolLines` inside `Studied` and not out of
+`Active`, because the analysis arrives from a worker thread and anything reading the
 two separately sees them disagree for as long as the work takes. Only the symbol's *own* file is
 drawn, never the rest of `LineInfo::files`, since a Rust function inlines dozens, with one
 exception: when the source pane's selected run is in another file the listing's line info names, the
@@ -60,7 +63,8 @@ see: a function a hundred lines into its file was otherwise read from the top of
 long as it took to scroll. `SymbolLines` carries the **line** the symbol opens at beside the file it
 opens in, both taken from **one** line-info row (the row the first instruction was compiled from,
 else the first row naming a file at all), so the line can never be a line of some other file; both
-are worked out on the worker, beside the info they come from. `opening_row` turns that into the row
+are worked out on the worker, beside the info they come from. `source_side` names that line, or
+the pressed instruction's for an object's code, and `opening_row` turns it into the row
 `use_kept_position` opens a tab it has never shown at, backed off by the `CONTEXT_ROWS` a reveal
 keeps above the row it scrolls to. A row remembered for the tab wins over it, so this is the *first*
 open and not every one. Everything with nothing to say falls back to the top of the file as it

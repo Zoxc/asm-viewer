@@ -5837,7 +5837,7 @@ fn a_run_in_a_file_the_listing_names_is_the_companion() {
         source: file.map(|file| picked_row(0, file, Owed::BOTH)),
     };
     let file_of = |file: Option<&str>| {
-        source_side(Some(&document), &analysis, &marks(file))
+        source_side(Some(&document), &analysis, &marks(file), None)
             .expect("a companion")
             .file()
             .clone()
@@ -5852,7 +5852,7 @@ fn a_run_in_a_file_the_listing_names_is_the_companion() {
     // And a source-driven tab's subject is its own file whatever is picked out.
     let subject = Document::Source("subject.rs".into());
     assert!(
-        source_side(Some(&subject), &analysis, &marks(Some(&elsewhere)))
+        source_side(Some(&subject), &analysis, &marks(Some(&elsewhere)), None)
             .expect("a subject")
             .file()
             .as_ref()
@@ -16294,6 +16294,89 @@ fn a_run_in_the_section_view_opens_its_file_beside_it() {
             .iter()
             .any(|text| text.contains("/fixture/line_fixture.c")),
         "the run's file is not what the pane went to: {drawn:?}"
+    );
+}
+
+/// **And that pane opens on the line the pressed row was compiled from**, as an
+/// assembly-driven tab's source side opens on the symbol's own line: the unified view
+/// draws no symbol, so the row picked out in it is the only thing saying where in the
+/// file to start.
+///
+/// The run names a file this test seeded, the path the fixture's DWARF holds being a
+/// build machine's that nothing can read; the line is the fixture's, read off the decoded
+/// rows the view leaves in `CodeRows`, which is where the pane reads it from too. Neither
+/// pane is owed a scroll, so the opening row is the only thing that can move this one.
+///
+/// Headless because the answer is a scroll offset a `VirtualScrollView` turns into rows,
+/// asked of the pane the way the reader asks it -- by which line numbers are drawn.
+#[test]
+fn the_pane_beside_an_objects_code_opens_on_the_pressed_rows_line() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    // The rows the pressed row's line is read out of, as the section view leaves them.
+    let held = reading_of(&object, &[0, 1, 2]);
+    let rows = Rows::new(
+        held.code.clone().expect("the reading has a skeleton"),
+        |flat| held.body(flat),
+    );
+    let built = Arc::new(Built {
+        rows,
+        reading: held,
+    });
+    // An instruction row the debug info places far enough down its file that the top of
+    // the file is not where the pane would be anyway.
+    let (row, line) = (0..built.rows.len())
+        .find_map(|row| {
+            let at = code_places(Some(&built), row..=row).into_iter().next()?;
+            (at.line > CONTEXT_ROWS as u32 + 1).then_some((row, at.line))
+        })
+        .expect("the fixture places an instruction below the top of its file");
+
+    // A file of this test's own, long enough that the line is nowhere near the top.
+    let directory = Seeded::directory("pressed");
+    let text: String = (1..=200)
+        .map(|n| format!("int line_{n}(void);\n"))
+        .collect();
+    let file = directory.named("pressed.c", &text);
+
+    let reading = reading_of(&object, &[]);
+    let (mut test, (states, marked, code_rows)) = TestingRunner::new(
+        code_source_harness,
+        (600., 300.).into(),
+        |runner| {
+            let (states, marked, ..) = code_states!(runner, reading);
+            let code_rows = runner
+                .provide_root_context(|| CodeRows(State::create(None)))
+                .0;
+            (states, marked, code_rows)
+        },
+        1.,
+    );
+    let (mut marked, mut code_rows) = (marked, code_rows);
+    let document = Document::Code(object.clone());
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    code_rows.set(Some(built));
+    marked.set(Marks {
+        assembly: Some(picked_row(row, &file, Owed::NEITHER)),
+        source: None,
+    });
+    // Long enough for the whole chain: the pane asks the reader for the file, the reader
+    // answers, the list is mounted over what it filed, and only then is there a row to
+    // reveal.
+    for _ in 0..20 {
+        test.sync_and_update();
+    }
+
+    let drawn = gutter_lines(&test);
+    assert!(
+        drawn.contains(&line),
+        "the pane does not show line {line}, which the pressed row was compiled from: {drawn:?}"
+    );
+    // With the margin a reveal keeps above the row it scrolls to, and no more.
+    let top = *drawn.first().expect("the gutter drew no line numbers");
+    assert!(
+        (line.saturating_sub(CONTEXT_ROWS as u32)..=line).contains(&top),
+        "the pane opened at line {top}, not on the pressed row's line {line}"
     );
 }
 

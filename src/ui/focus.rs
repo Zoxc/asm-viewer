@@ -585,8 +585,10 @@ pub(crate) fn use_clear_marks(
         // subscribes this to writes -- a request, the slow flag -- that change no listing.
         let active = active.read().clone();
         let document = active.as_ref().map(|(_, stop)| &stop.document);
-        let file =
-            source_side(document, &analysis.read(), &marked.read()).map(|side| side.file().clone());
+        // No code rows: only the file is wanted, and it is the line of a code tab's
+        // companion, not its file, that is read out of them.
+        let file = source_side(document, &analysis.read(), &marked.read(), None)
+            .map(|side| side.file().clone());
         // Cloned out of the borrow before the `borrow_mut`.
         let (was_entry, was) = showing.borrow().clone();
         let switched = was_entry != active;

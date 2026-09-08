@@ -673,49 +673,79 @@ impl Component for SourceList {
 }
 
 /// Which file the Source pane is drawing, and whose side of the tab it is: a **subject** is
-/// a source-driven tab's own file, a **companion** the file the drawn symbol was compiled
-/// from.
+/// a source-driven tab's own file, a **companion** the file the drawn symbol, or the
+/// pressed instruction, was compiled from.
 ///
 /// The companion comes out of the *analysis* and not out of `Active`, because the two
 /// disagree for as long as the worker takes and it is the analysis that says which symbol
-/// is actually drawn.
+/// is actually drawn. A subject opens at the top of its file and is keyed under the file
+/// itself, so it says the file and no more.
 pub(crate) enum SourceSide {
     Subject(Arc<str>),
-    Companion(Arc<str>),
+    Companion {
+        file: Arc<str>,
+        /// The place the rows are kept under: the drawn symbol's tab, or the object's
+        /// code. **Not the file**: two functions compiled from one file are two places,
+        /// and keying by the file would have them share a viewing position.
+        document: Document,
+        /// The line the pane opens at the first time it shows this tab, which is the
+        /// symbol's own line or the pressed instruction's.
+        ///
+        /// [`None`] where there is nothing better to say than the top of the file: an
+        /// object with no line info, a prologue DWARF places on no line, an instruction
+        /// row that is still a guess, and a companion that is not the symbol's own file
+        /// -- the last being a landing's doing, which comes with a reveal of its own and
+        /// would otherwise be sent to a line of the wrong file.
+        line: Option<u32>,
+    },
 }
 
 impl SourceSide {
     pub(crate) fn file(&self) -> &Arc<str> {
         match self {
-            SourceSide::Subject(file) | SourceSide::Companion(file) => file,
+            SourceSide::Subject(file) | SourceSide::Companion { file, .. } => file,
         }
     }
 }
 
-/// Which file the Source pane draws for `active`: a source-driven tab's own file, or the
-/// drawn symbol's companion. The companion is the symbol's own file -- the one its first
-/// instruction was compiled from -- except when the source pane's picked-out run is in
-/// another file the listing's line info knows: a row in the Locations panel opens a
-/// symbol on a line of the file the line is in, and a symbol whose prologue was inlined
-/// from elsewhere would otherwise open on that elsewhere, with the line the reader asked
-/// for in a file that is not up. A run picked out inside the pane is in the file already
-/// shown, so a click there changes no file, and a click on an inlined instruction never
-/// picks anything out on this side at all.
+/// The whole of what the Source pane draws for `active`: which file, which place its rows
+/// are kept under, and which line it opens at.
+///
+/// The companion is the symbol's own file -- the one its first instruction was compiled
+/// from -- except when the source pane's picked-out run is in another file the listing's
+/// line info knows: a row in the Locations panel opens a symbol on a line of the file the
+/// line is in, and a symbol whose prologue was inlined from elsewhere would otherwise open
+/// on that elsewhere, with the line the reader asked for in a file that is not up. A run
+/// picked out inside the pane is in the file already shown, so a click there changes no
+/// file, and a click on an inlined instruction never picks anything out on this side at
+/// all.
+///
+/// `code_rows` are an object's code as the section view has counted it. Only a code tab's
+/// line is read out of them, so a caller wanting the file alone passes [`None`].
 pub(crate) fn source_side(
     active: Option<&Document>,
     analysis: &Analyzed,
     marks: &Marks,
+    code_rows: Option<&Built>,
 ) -> Option<SourceSide> {
     match active? {
         Document::Source(file) => Some(SourceSide::Subject(file.clone())),
         // An object's code draws no symbol of its own, so its companion is the file of
         // whatever the reader picked out in it -- an instruction row's run is a run of
-        // the file the pressed row was compiled from -- and nothing until they have.
-        Document::Code(_) => marks
-            .assembly
-            .as_ref()
-            .and_then(|picked| picked.file.clone())
-            .map(SourceSide::Companion),
+        // the file the pressed row was compiled from -- and nothing until they have. The
+        // tab opens on that row's line, read off the same run.
+        document @ Document::Code(_) => {
+            let picked = marks.assembly.as_ref()?;
+            let anchor = picked.chars.anchor().row;
+            Some(SourceSide::Companion {
+                file: picked.file.clone()?,
+                document: document.clone(),
+                line: code_places(code_rows, anchor..=anchor)
+                    .into_iter()
+                    .next()
+                    .map(|at| at.line),
+            })
+        }
         Document::Assembly(_) => {
             let shown = analysis.shown.as_ref()?;
             let lines = &shown.studied.lines;
@@ -729,10 +759,17 @@ pub(crate) fn source_side(
                         .as_ref()
                         .is_some_and(|info| info.files().iter().any(|named| named == *file))
                 });
-            picked
-                .cloned()
-                .or_else(|| lines.file.clone())
-                .map(SourceSide::Companion)
+            let file = picked.cloned().or_else(|| lines.file.clone())?;
+            // The symbol's line only where the file it is a line of is the one drawn.
+            let line = lines.line.filter(|_| lines.file.as_ref() == Some(&file));
+            Some(SourceSide::Companion {
+                file,
+                // The *drawn* symbol's tab and not the active one: a row written down
+                // against the tab that is arriving would be a row of the listing that is
+                // leaving.
+                document: asked_of(&shown.ask),
+                line,
+            })
         }
     }
 }
@@ -875,18 +912,15 @@ impl Coded {
     }
 }
 
-/// The row the Source pane opens a tab it has never shown at: the line the symbol itself
-/// opens at, backed off by the margin [`reveal_row`] keeps above the row it scrolls to, so
-/// a function's signature is not flush against the top of the pane.
+/// The row the Source pane opens a tab it has never shown at: the line
+/// [`SourceSide::Companion`] named, as a row, which is what selecting a symbol or pressing
+/// an instruction asked to see. The row itself, the margin [`reveal_row`] keeps above the
+/// row it scrolls to being the reveal's to add.
 ///
-/// **The top of the file where there is nothing better to say**, which is what selecting a
-/// symbol used to do in every case: an object with no line info, a symbol whose opening row
-/// DWARF places on no line, and a companion that is not the symbol's own file -- the last
-/// being a landing's doing, which comes with a reveal of its own and would otherwise be
-/// sent to a line of the wrong file.
-fn opening_row(lines: &SymbolLines, file: &Arc<str>) -> Option<usize> {
-    let line = lines.line.filter(|_| lines.file.as_ref() == Some(file))?;
-    (line as usize).checked_sub(1)
+/// **The top of the file where the side named no line**, which is what selecting a symbol
+/// used to do in every case.
+fn opening_row(line: Option<u32>) -> Option<usize> {
+    (line? as usize).checked_sub(1)
 }
 
 /// What the Source pane says over a file whose bytes are not the ones the debug info's
@@ -928,7 +962,7 @@ fn source_bar(
     sweeping: bool,
 ) -> Element {
     let file = side.file().clone();
-    let opens = matches!(side, SourceSide::Companion(_));
+    let opens = matches!(side, SourceSide::Companion { .. });
 
     rect()
         .width(Size::fill())
@@ -1017,7 +1051,13 @@ impl Component for SourcePane {
         // pane is only ever mounted for the tab it belongs to.
         let marks = use_consume::<Marked>().0.read().clone();
         let code_rows = use_consume::<CodeRows>().0;
-        let side = source_side(Some(&self.document), &analysis, &marks);
+        // Peeked and not read: the line a code tab opens at is read out of the rows, and
+        // a window of them decoding must not draw the pane again. In a scope of its own,
+        // so the guard is let go before anything below writes.
+        let side = {
+            let built = code_rows.peek();
+            source_side(Some(&self.document), &analysis, &marks, built.as_deref())
+        };
 
         // **The three questions about the file this pane is showing, asked together.**
         // Its text, the lines of it anything open has code from, and which of its names
@@ -1056,37 +1096,11 @@ impl Component for SourcePane {
         let file = side.file().clone();
         // The tab, and the row it opens at the first time it is shown. A source-driven
         // tab is a *file* the reader opened, so it opens where a file does, at the top;
-        // an assembly tab is a symbol, and the symbol's own lines are what asking for it
-        // asked to see.
+        // a companion opens on the line [`source_side`] named, which is the symbol's own
+        // or the pressed instruction's.
         let (document, opening) = match &side {
             SourceSide::Subject(file) => (Document::Source(file.clone()), None),
-            // In an object's code the companion is the file of the row the reader
-            // pressed, and the tab opens on that row's line.
-            SourceSide::Companion(_) if matches!(self.document, Document::Code(_)) => {
-                let line = marks
-                    .assembly
-                    .as_ref()
-                    .and_then(|picked| {
-                        let anchor = picked.chars.anchor().row;
-                        code_places(code_rows.peek().as_deref(), anchor..=anchor)
-                            .into_iter()
-                            .next()
-                    })
-                    .map(|at| at.line as usize);
-                (
-                    self.document.clone(),
-                    line.and_then(|line| line.checked_sub(1)),
-                )
-            }
-            // The *drawn* symbol's tab and not the active one: a row written down against
-            // the tab that is arriving would be a row of the listing that is leaving.
-            SourceSide::Companion(_) => match analysis.shown.as_ref() {
-                Some(shown) => (
-                    asked_of(&shown.ask),
-                    opening_row(&shown.studied.lines, &file),
-                ),
-                None => return blank_pane(palette().pane_bg),
-            },
+            SourceSide::Companion { document, line, .. } => (document.clone(), opening_row(*line)),
         };
 
         // The file itself, out of what the reader has answered -- and nothing until it
