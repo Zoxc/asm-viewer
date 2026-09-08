@@ -101,15 +101,16 @@ still being read. The state is on the **file**, not on an object, because an obj
 been parsed does not exist: the unit part-way through is the one the reader opened, the one
 `close_binary` closes, and the one that already has a row. `Loads` (in `tree.rs`, the state behind
 the `Loading` context) is the files being read, one entry per (load, path). The tree draws a
-`TreeRow::File` for each that has produced nothing yet and marks the ones that have `loading`. Three
-rules come with it. A file still being read is **always** a file row even at one object, since "one
-object is its own row" needs to know the one is all there will be, and a row that promoted itself to
-a parent as the second member landed would move the list under a reader already reading it. A row
-with nothing behind it has **no group** (`group: Option<usize>`, the group being the first object's
-pointer), which is exactly the row that can never be folded, so it draws no triangle. And it shows
-`…` rather than a format tag, since a file's format is not known until it has been parsed; the name
-beside it is dimmed to `address_fg`. Those are two static cues rather than a spinner, because a
-sidebar row is one of hundreds and none of the others move.
+`TreeRow::Pending` for each that has produced nothing yet and marks the ones that have `loading`.
+Three rules come with it. A file still being read is **always** a file row even at one object, since
+"one object is its own row" needs to know the one is all there will be, and a row that promoted
+itself to a parent as the second member landed would move the list under a reader already reading
+it. A row with nothing behind it is **a variant of its own**, not a `File` with its group, its count
+and its expansion set to sentinels: it has no members, so there is nothing to fold and it draws no
+triangle, and the path is the whole of its identity, which is what keys it. And it shows `…` rather
+than a format tag, since a file's format is not known until it has been parsed; the name beside it
+is dimmed to `address_fg`. Those are two static cues rather than a spinner, because a sidebar row is
+one of hundreds and none of the others move.
 
 **A project file's row offers one thing more**: "Open as project", appended in the same
 handler as the reveal so the Objects rows -- which share `close_menu` -- keep the one item

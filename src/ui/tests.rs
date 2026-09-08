@@ -3443,7 +3443,7 @@ struct Feed(Arc<Mutex<Vec<(async_channel::Receiver<Progress>, Vec<PathBuf>)>>>);
 
 /// The real `take_load` over the real Objects tree, one per load, with the workers
 /// replaced by [`Feed`]. The tree is mounted so these tests also build the rows for a file
-/// being read -- including the row with no group behind it, which no other test reaches.
+/// being read -- including the pending row, which no other test reaches.
 fn load_harness() -> impl IntoElement {
     let objects = use_consume::<Objects>().0;
     let loading = use_consume::<Loading>().0;
@@ -3547,6 +3547,7 @@ fn reading(states: &ProjectStates) -> Vec<(String, usize, bool)> {
                 loading,
                 ..
             } => Some((name.clone(), *members, *loading)),
+            TreeRow::Pending { name, .. } => Some((name.clone(), 0, true)),
             TreeRow::Object { .. } => None,
         })
         .collect()

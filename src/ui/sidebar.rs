@@ -14,17 +14,13 @@ use super::*;
 /// members fold under. It has no `Object` behind it, so it selects nothing: pressing it
 /// folds it open or shut.
 /// Fold the file row's group away, or open it: what pressing an archive row does, and
-/// what Enter on one does. A file that has contributed no object yet has no group and so
-/// nothing to fold, and one the filter is holding open (`Forced`) would hide the rows the
-/// filter put on screen.
+/// what Enter on one does. A row the filter is holding open (`Forced`) is left alone,
+/// since folding it would hide the rows the filter put on screen.
 fn fold_archive(
     mut expanded: State<HashSet<usize>>,
-    group: Option<usize>,
+    group: usize,
     expansion: Expansion,
 ) -> Pressed {
-    let Some(group) = group else {
-        return Pressed::Folded;
-    };
     if expansion == Expansion::Forced {
         return Pressed::Folded;
     }
@@ -46,8 +42,7 @@ struct ArchiveRow {
     /// and none of the others move.
     loading: bool,
     /// The group this row is, in the tab's set of the groups the reader has opened.
-    /// [`None`] for a file that has contributed nothing yet, there being nothing to fold.
-    group: Option<usize>,
+    group: usize,
     expanded: State<HashSet<usize>>,
     /// Where this row is in the list as it is drawn, which is what the arrows step and
     /// what a press writes down with the pick (`ui/picks.rs`).
@@ -92,9 +87,8 @@ impl Component for ArchiveRow {
 
         // `Forced` draws no triangle, only the space one would have taken: the filter is
         // holding the file open and folding it would hide the rows the filter put on
-        // screen. A row with no group has nothing behind it to fold.
+        // screen.
         let open = match expansion {
-            _ if self.group.is_none() => None,
             Expansion::Collapsed => Some(false),
             Expansion::Expanded => Some(true),
             Expansion::Forced => None,
@@ -148,6 +142,67 @@ impl Component for ArchiveRow {
                                 .max_lines(1),
                         ),
                 ),
+        )
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+}
+
+/// A file that has been asked for and has produced nothing yet. It is a row so that the
+/// reader can see the file was opened and close it again, and there is nothing under it to
+/// fold: no triangle, no count, and `\u{2026}` where the format tag goes, since what a file
+/// is is not known until it has been parsed.
+#[derive(Clone, PartialEq)]
+struct PendingRow {
+    name: String,
+    path: PathBuf,
+    /// Where this row is in the list as it is drawn, which is what the arrows step and
+    /// what a press writes down with the pick (`ui/picks.rs`).
+    at: usize,
+    /// Where the filter matched in the name, for the row to mark.
+    marks: Vec<Range<usize>>,
+    key: DiffKey,
+}
+
+impl KeyExt for PendingRow {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for PendingRow {
+    fn render(&self) -> impl IntoElement {
+        let hovering = use_state(|| false);
+        let at = self.at;
+        // Consumed here, in the render, because the handler that uses them may not run a
+        // hook.
+        let states = use_project_states();
+        let picking = use_picking(Panel::Objects);
+        let path = self.path.clone();
+        let pick = Pick::Path(self.path.clone());
+
+        extra_tooltip(
+            self.path.display().to_string(),
+            // Nothing behind the row to open, so a press only picks it out.
+            list_row(hovering, picking.drawn(&pick, false))
+                .on_press(move |_| {
+                    picking.press(pick.clone(), at, || Pressed::Folded);
+                })
+                // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
+                // without it panics.
+                .on_secondary_down(move |e: Event<PressEventData>| {
+                    ContextMenu::open_from_event(&e, close_menu(states, path.clone()));
+                })
+                .child(disclosure(None))
+                .child(tag_label("\u{2026}"))
+                // Dimmed, and the tag beside it, rather than a spinner: a sidebar row is one
+                // of hundreds and none of the others move.
+                .child(tree_name(self.name.clone(), true, &self.marks))
+                // The count column every tree row keeps, empty: a file that has produced
+                // nothing shows no count rather than a zero.
+                .child(rect().padding(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))),
         )
     }
 
@@ -514,7 +569,9 @@ impl Component for ObjectsPanel {
                 let rows = rows.clone();
                 Box::new(move |at| {
                     (at < rows.len()).then(|| match &rows[at] {
-                        TreeRow::File { path, .. } => Pick::Path(path.clone()),
+                        TreeRow::File { path, .. } | TreeRow::Pending { path, .. } => {
+                            Pick::Path(path.clone())
+                        }
                         TreeRow::Object { object, .. } => Pick::Object(object.clone()),
                     })
                 })
@@ -527,6 +584,8 @@ impl Component for ObjectsPanel {
                     TreeRow::File {
                         group, expansion, ..
                     } => fold_archive(expanded, *group, *expansion),
+                    // Nothing under it to fold and nothing behind it to open.
+                    TreeRow::Pending { .. } => Pressed::Folded,
                     TreeRow::Object { object, .. } => {
                         open_document(open, visits, Document::Code(object.clone()), reach(ctrl));
                         Pressed::Opened
@@ -569,9 +628,18 @@ impl Component for ObjectsPanel {
                             marks: marking.marks(name),
                             key: DiffKey::None,
                         }
-                        // The path as well as the group, since a file with nothing behind
-                        // it yet has no group and the path is the only identity it has.
-                        .key((*group, path))
+                        .key(*group)
+                        .into(),
+                        // Keyed by the path, the only identity a file with nothing behind
+                        // it yet has.
+                        TreeRow::Pending { name, path } => PendingRow {
+                            name: name.clone(),
+                            path: path.clone(),
+                            at: row,
+                            marks: marking.marks(name),
+                            key: DiffKey::None,
+                        }
+                        .key(path)
                         .into(),
                         TreeRow::Object { object, member } => ObjectRow {
                             object: object.clone(),

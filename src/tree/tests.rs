@@ -43,6 +43,7 @@ fn described(tree: &ObjectTree) -> Vec<String> {
                 let reading = if *loading { " reading" } else { "" };
                 format!("file {name} ({members}) {expansion:?}{reading}")
             }
+            TreeRow::Pending { name, .. } => format!("pending {name}"),
             TreeRow::Object { object, member } => {
                 let indent = if *member { "  " } else { "" };
                 format!("{indent}object {}", object.name)
@@ -195,7 +196,7 @@ fn an_invalid_pattern_empties_the_tree() {
 }
 
 /// A file that has been asked for and has produced nothing yet is still on screen, saying
-/// so — and has no group, so nothing can fold it.
+/// so — as a row of its own, with no members and nothing to fold.
 #[test]
 fn a_file_being_read_is_a_row_before_it_has_an_object() {
     let tree = loading_tree(
@@ -204,8 +205,8 @@ fn a_file_being_read_is_a_row_before_it_has_an_object() {
         &Filter::default(),
         &[],
     );
-    assert_eq!(described(&tree), ["file libfoo.rlib (0) Collapsed reading"]);
-    assert!(matches!(&tree[0], TreeRow::File { group: None, .. }));
+    assert_eq!(described(&tree), ["pending libfoo.rlib"]);
+    assert!(matches!(&tree[0], TreeRow::Pending { .. }));
 }
 
 /// While a file is being read, one object is not yet an answer: the row stays a file row so
@@ -241,7 +242,7 @@ fn a_file_being_read_is_filtered_on_its_name() {
     let loads = reading(&["/tmp/libfoo.rlib"]);
     assert_eq!(
         described(&loading_tree(&[], &loads, &plain("foo"), &[])),
-        ["file libfoo.rlib (0) Collapsed reading"]
+        ["pending libfoo.rlib"]
     );
     assert!(described(&loading_tree(&[], &loads, &plain("bar"), &[])).is_empty());
 }
@@ -254,10 +255,7 @@ fn every_file_being_read_gets_a_row_of_its_own() {
     let loads = reading(&["/tmp/hello", "/tmp/libfoo.rlib"]);
     assert_eq!(
         described(&loading_tree(&objects, &loads, &Filter::default(), &[])),
-        [
-            "file hello (1) Collapsed reading",
-            "file libfoo.rlib (0) Collapsed reading",
-        ]
+        ["file hello (1) Collapsed reading", "pending libfoo.rlib",]
     );
 }
 

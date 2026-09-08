@@ -125,15 +125,22 @@ pub enum TreeRow {
         /// The whole path, which is what the row's tooltip says.
         path: PathBuf,
         /// The group's identity and the key the expansion set holds: the pointer of the
-        /// first object the file contributed. [`None`] for a file that has contributed
-        /// nothing yet, which is exactly the row that can never be folded.
-        group: Option<usize>,
+        /// first object the file contributed.
+        group: usize,
         /// How many objects are under this row *now*, which under a filter is how many
         /// of them matched.
         members: usize,
         expansion: Expansion,
         /// Whether more objects may still arrive out of this file.
         loading: bool,
+    },
+    /// A file being read that has contributed nothing yet: a row so the reader can see it
+    /// was opened, with nothing under it to fold and no format until it has been parsed.
+    Pending {
+        /// The file's name, without its directory.
+        name: String,
+        /// The whole path, which is what the row's tooltip says.
+        path: PathBuf,
     },
     /// One object: an archive member indented under its file, or a file that contributed
     /// exactly one object and so is a row of its own.
@@ -158,10 +165,11 @@ impl ObjectTree {
     ///
     /// Matching is on the name each row shows, so the directory is not read.
     ///
-    /// **A file still being read is always a file row**, whatever it has contributed so
-    /// far: "one object is its own row" needs to know the one is all there will be, and a
-    /// row that promoted itself to a parent as the second member landed would move the
-    /// list under a reader already reading it.
+    /// **A file still being read is always a file row**, even at one object: "one object
+    /// is its own row" needs to know the one is all there will be, and a row that promoted
+    /// itself to a parent as the second member landed would move the list under a reader
+    /// already reading it. One that has contributed nothing yet is a
+    /// [`TreeRow::Pending`].
     pub fn new(
         objects: &[Arc<Object>],
         loads: &Loads,
@@ -212,7 +220,7 @@ impl ObjectTree {
             rows.push(TreeRow::File {
                 name,
                 path: first.path.clone(),
-                group: Some(group),
+                group,
                 members: members.len(),
                 expansion,
                 loading,
@@ -238,13 +246,9 @@ impl ObjectTree {
             if !matcher.matches(&name) {
                 continue;
             }
-            rows.push(TreeRow::File {
+            rows.push(TreeRow::Pending {
                 name,
                 path: path.to_path_buf(),
-                group: None,
-                members: 0,
-                expansion: Expansion::Collapsed,
-                loading: true,
             });
         }
 
