@@ -28,10 +28,10 @@ fn split() -> (Arc<Object>, Arc<CodeListing>) {
 fn decode(object: &Object, code: &CodeListing, rows: &Rows, flat: usize) -> Body {
     let place = rows.place(flat).expect("the stretch exists");
     let decoded = code.decode(object, place).expect("the stretch decodes");
-    let lanes = Arc::new(match &decoded.code {
-        Some(assembly) => Lanes::new(&assembly.edges, assembly.instructions.len()),
-        None => Lanes::new(&[], 0),
-    });
+    let lanes = match &decoded.code {
+        Some(assembly) => Arc::new(Lanes::new(&assembly.edges, assembly.instructions.len())),
+        None => Lanes::none(),
+    };
     Body {
         assembly: decoded.code,
         lanes,
@@ -571,7 +571,7 @@ fn a_stretch_that_decoded_to_no_instructions_draws_its_bytes() {
             edges: Vec::new(),
             undecodable: Some("aarch64"),
         })),
-        lanes: Arc::new(Lanes::new(&[], 0)),
+        lanes: Lanes::none(),
         gap: None,
     };
     let rows = Rows::new(code.clone(), |flat| {

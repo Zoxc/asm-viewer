@@ -186,39 +186,7 @@ pub(crate) enum Answer {
 pub(crate) fn answer(question: Question) -> Answer {
     match question {
         Question::Code(ask) => {
-            let code = ask
-                .code
-                .clone()
-                .unwrap_or_else(|| Arc::new(CodeListing::new(&ask.object)));
-            let index = section::Flat::new(code.clone());
-            let decoded = ask
-                .window
-                .iter()
-                .take(CHUNK)
-                .filter_map(|&flat| {
-                    let (place, stretch) = index.stretch(flat)?;
-                    let decoded = code.decode(&ask.object, place)?;
-                    // The symbol's listing exactly as its own tab would work it out --
-                    // one decode, the crate's, with the lanes and the line info put
-                    // beside it as `Studied::new` puts them.
-                    let studied = stretch.symbol().map(|data| {
-                        Studied::with_assembly(
-                            Symbol {
-                                object: ask.object.clone(),
-                                data: data.clone(),
-                            },
-                            decoded.code,
-                        )
-                    });
-                    Some((
-                        flat,
-                        Stretched {
-                            code: studied,
-                            gap: decoded.gap,
-                        },
-                    ))
-                })
-                .collect();
+            let (code, decoded) = ask.decode();
             Answer::Code { ask, code, decoded }
         }
         Question::Study(symbol) => Answer::Listing {
@@ -545,10 +513,10 @@ impl Studied {
     /// decodes a stretch through the crate's listing, which is the same decode, and must
     /// not pay for it twice.
     pub(crate) fn with_assembly(symbol: Symbol, assembly: Option<Arc<Assembly>>) -> Studied {
-        let lanes = Arc::new(match &assembly {
-            Some(assembly) => Lanes::new(&assembly.edges, assembly.instructions.len()),
-            None => Lanes::new(&[], 0),
-        });
+        let lanes = match &assembly {
+            Some(assembly) => Arc::new(Lanes::new(&assembly.edges, assembly.instructions.len())),
+            None => Lanes::none(),
+        };
         let lines = SymbolLines::new(&symbol);
 
         Studied {

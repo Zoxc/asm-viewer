@@ -58,11 +58,13 @@ stretches end to end, and `section::Flat` is the one mapping between it and the 
 hands over the stretch along with the place, so nothing indexes the listing with a place it was
 given a line earlier; the worker builds one over the skeleton, and the rows the view draws are
 counted over another. The skeleton (`CodeListing`, free to
-build) is built on the worker with the first ask and answered with it. A stretch is decoded through
-the crate's own `CodeListing::decode` and then `Studied::with_assembly`, which does the rest of what
-`Studied::new` does over a listing already in hand; so the section view and the symbol's own tab
-decode a function once and identically. The worker decodes **at most `CHUNK` (8) of the ask** and
-then answers, because the queue is drained to its newest question only *between* jobs. A window
+build) is built on the worker with the first ask and answered with it. The decode is
+`CodeAsk::decode`, in `reading.rs` beside the rest of the mechanism rather than in `answer`, which
+calls it and names the answer. A stretch goes through the crate's own `CodeListing::decode` and then
+`Studied::with_assembly`, which does the rest of what `Studied::new` does over a listing already in
+hand; so the section view and the symbol's own tab decode a function once and identically. The
+worker decodes **at most `CHUNK` (8) of the ask** and then answers, because the queue is drained to
+its newest question only *between* jobs. A window
 decoded whole would hold a symbol click behind every function on a screen and three screens of
 buffer; a chunk holds it behind a few, and the view asks for the rest once the chunk has landed. The
 answers land in `Reading` (`Sections` at the root) and never in `Analyzed`, which is one symbol's

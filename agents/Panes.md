@@ -683,9 +683,10 @@ symbol, with the layout in `src/lanes.rs`
 because a `VirtualScrollView` builds row *n* knowing nothing but *n*: a row has to be *told* which
 lines pass through it. `Lanes::new` is called on the worker, inside `Studied::new` and beside the
 disassembly it is derived from, so a lane layout can never arrive a beat after the rows it is drawn
-over. Lanes are assigned **greedily, shortest span first**, which makes nesting a consequence rather
-than a rule. Two branches sharing only a row still take two lanes, or a top half and a bottom half
-in one lane would read as a line passing through. The gutter is capped at `MAX_LANES` (5) with the
+over. A listing with no rows takes `Lanes::none()`, one shared empty gutter rather than one built
+per call. Lanes are assigned **greedily, shortest span first**, which makes nesting a consequence
+rather than a rule. Two branches sharing only a row still take two lanes, or a top half and a
+bottom half in one lane would read as a line passing through. The gutter is capped at `MAX_LANES` (5) with the
 outermost lane **shared** past that, since the corner and the arrowhead survive sharing and only the
 joining line goes ambiguous. It is drawn with **rects**, not `canvas()`, whose `RenderCallback` has
 a `PartialEq` returning `true` unconditionally, exactly wrong for a row a scroll view recycles.

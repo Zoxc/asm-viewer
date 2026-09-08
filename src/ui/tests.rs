@@ -17849,7 +17849,7 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
         edges: Vec::new(),
         undecodable: Some("aarch64"),
     }));
-    studied.lanes = Arc::new(Lanes::new(&[], 0));
+    studied.lanes = Lanes::none();
     reading.held.insert(
         0,
         Arc::new(Stretched {

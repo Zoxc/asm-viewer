@@ -13,6 +13,7 @@
 
 use analysis::BranchEdge;
 use std::ops::RangeInclusive;
+use std::sync::{Arc, LazyLock};
 
 /// How many lanes the gutter is ever drawn with.
 pub(crate) const MAX_LANES: usize = 5;
@@ -84,6 +85,13 @@ impl Lanes {
             width,
             separators,
         }
+    }
+
+    /// The layout of a listing with no rows: every stretch with no code wants the same
+    /// empty gutter, so they all share one.
+    pub fn none() -> Arc<Lanes> {
+        static NONE: LazyLock<Arc<Lanes>> = LazyLock::new(|| Arc::new(Lanes::new(&[], 0)));
+        NONE.clone()
     }
 
     /// What the row at `index` draws. Total, so a row past the end is nothing rather than

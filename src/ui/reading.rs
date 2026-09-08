@@ -115,6 +115,50 @@ impl PartialEq for CodeAsk {
     }
 }
 
+impl CodeAsk {
+    /// The whole answer to this ask: the skeleton -- its own, or built for it -- and the
+    /// first [`CHUNK`] stretches it named that the listing has, by flat index.
+    ///
+    /// A pure function of the object and the stretches, touching no UI state, which is
+    /// what lets the worker run it on a plain thread.
+    pub(crate) fn decode(&self) -> (Arc<CodeListing>, Vec<(usize, Stretched)>) {
+        let code = self
+            .code
+            .clone()
+            .unwrap_or_else(|| Arc::new(CodeListing::new(&self.object)));
+        let index = section::Flat::new(code.clone());
+        let decoded = self
+            .window
+            .iter()
+            .take(CHUNK)
+            .filter_map(|&flat| {
+                let (place, stretch) = index.stretch(flat)?;
+                let decoded = code.decode(&self.object, place)?;
+                // The symbol's listing exactly as its own tab would work it out -- one
+                // decode, the crate's, with the lanes and the line info put beside it as
+                // `Studied::new` puts them.
+                let studied = stretch.symbol().map(|data| {
+                    Studied::with_assembly(
+                        Symbol {
+                            object: self.object.clone(),
+                            data: data.clone(),
+                        },
+                        decoded.code,
+                    )
+                });
+                Some((
+                    flat,
+                    Stretched {
+                        code: studied,
+                        gap: decoded.gap,
+                    },
+                ))
+            })
+            .collect();
+        (code, decoded)
+    }
+}
+
 /// One stretch, decoded: the symbol's listing worked out exactly as its own tab's is,
 /// and the bytes between its extent and the next label.
 #[derive(Clone)]
@@ -133,7 +177,7 @@ impl Stretched {
                 .code
                 .as_ref()
                 .map(|code| code.lanes.clone())
-                .unwrap_or_else(|| Arc::new(Lanes::new(&[], 0))),
+                .unwrap_or_else(Lanes::none),
             gap: self.gap.as_ref().map(|gap| gap.range.clone()),
         }
     }
