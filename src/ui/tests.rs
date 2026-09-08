@@ -13678,10 +13678,7 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
             },
             PadJob::Build(scratchpad) => PadAnswer::Built {
                 pad: scratchpad.id().clone(),
-                build: Build::Built {
-                    executable: built.clone(),
-                    diagnostics: Vec::new(),
-                },
+                build: pad_built(built.clone(), Vec::new()),
                 // What the worker does with a real build's artifact, over the committed
                 // fixture: a real parse of real DWARF, with no compiler in sight.
                 program: read_program(&built, scratchpad.compiled().digest()),
@@ -13705,7 +13702,10 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
     pump(&mut test, || !pad.peek().state().building);
     assert!(matches!(
         pad.peek().state().built,
-        Some(Build::Built { .. })
+        Some(Build::Ran {
+            executable: Some(_),
+            ..
+        })
     ));
 
     assert_eq!(
@@ -13785,10 +13785,7 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
             },
             PadJob::Build(scratchpad) => PadAnswer::Built {
                 pad: scratchpad.id().clone(),
-                build: Build::Built {
-                    executable: built.clone(),
-                    diagnostics: Vec::new(),
-                },
+                build: pad_built(built.clone(), Vec::new()),
                 program: read_program(&built, scratchpad.compiled().digest()),
             },
             _ => unreachable!("this test only lists, opens, saves and builds"),
@@ -13919,10 +13916,7 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
             },
             PadJob::Build(scratchpad) => PadAnswer::Built {
                 pad: scratchpad.id().clone(),
-                build: Build::Built {
-                    executable: built.clone(),
-                    diagnostics: Vec::new(),
-                },
+                build: pad_built(built.clone(), Vec::new()),
                 program: read_program(&built, scratchpad.compiled().digest()),
             },
             _ => unreachable!("this test only lists, opens, saves and builds"),
@@ -14036,18 +14030,12 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
                     // A build that made nothing: the program before it stays.
                     true => PadAnswer::Built {
                         pad,
-                        build: Build::Rejected {
-                            diagnostics: Vec::new(),
-                            message: "refused".to_owned(),
-                        },
+                        build: pad_rejected(Vec::new(), "refused".to_owned()),
                         program: None,
                     },
                     false => PadAnswer::Built {
                         pad,
-                        build: Build::Built {
-                            executable: built.clone(),
-                            diagnostics: Vec::new(),
-                        },
+                        build: pad_built(built.clone(), Vec::new()),
                         program: read_program(&built, scratchpad.compiled().digest()),
                     },
                 }
@@ -14088,7 +14076,13 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
         .map(|program| program.object.clone());
     request_build(pad, &jobs);
     pump(&mut test, || {
-        matches!(pad.peek().state().built, Some(Build::Rejected { .. }))
+        matches!(
+            pad.peek().state().built,
+            Some(Build::Ran {
+                executable: None,
+                ..
+            })
+        )
     });
     let after = pad
         .peek()
@@ -14208,10 +14202,7 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
                 let _ = waiting.recv_blocking();
                 PadAnswer::Built {
                     pad: scratchpad.id().clone(),
-                    build: Build::Built {
-                        executable: fixture_artifact(),
-                        diagnostics: Vec::new(),
-                    },
+                    build: pad_built(fixture_artifact(), Vec::new()),
                     program: read_program(&fixture_artifact(), scratchpad.compiled().digest()),
                 }
             }
@@ -14275,10 +14266,7 @@ fn a_finished_pad_build_forgets_the_pad_package() {
             // on its way just as one that succeeded did.
             PadJob::Build(scratchpad) => PadAnswer::Built {
                 pad: scratchpad.id().clone(),
-                build: Build::Rejected {
-                    diagnostics: Vec::new(),
-                    message: "refused".to_owned(),
-                },
+                build: pad_rejected(Vec::new(), "refused".to_owned()),
                 // A build that made nothing leaves the program before it.
                 program: None,
             },
@@ -14461,9 +14449,9 @@ fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
 
     // Line 3, column 5 of `DEFAULT_SOURCE` is the `x` of `x * 3 + 1`.
     let mut pad = pad;
-    pad.write().state_mut().built = Some(Build::Built {
-        executable: fixture_artifact(),
-        diagnostics: vec![Diagnostic {
+    pad.write().state_mut().built = Some(pad_built(
+        fixture_artifact(),
+        vec![Diagnostic {
             level: Level::Warning,
             message: "unused variable: `x`".to_owned(),
             rendered: "warning: unused variable: `x`\n".to_owned(),
@@ -14475,7 +14463,7 @@ fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
                 column: 5,
             }),
         }],
-    });
+    ));
     for _ in 0..4 {
         test.sync_and_update();
     }
@@ -14545,9 +14533,9 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
     pump(&mut test, || pad.peek().state().opened);
 
     let mut pad = pad;
-    pad.write().state_mut().built = Some(Build::Built {
-        executable: fixture_artifact(),
-        diagnostics: vec![Diagnostic {
+    pad.write().state_mut().built = Some(pad_built(
+        fixture_artifact(),
+        vec![Diagnostic {
             level: Level::Warning,
             message: "unused import".to_owned(),
             rendered: "warning: unused import\n".to_owned(),
@@ -14558,7 +14546,7 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
                 column: 5,
             }),
         }],
-    });
+    ));
     for _ in 0..4 {
         test.sync_and_update();
     }
@@ -14622,9 +14610,9 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
     pump(&mut test, || pad.peek().state().opened);
 
     let mut pad = pad;
-    pad.write().state_mut().built = Some(Build::Built {
-        executable: fixture_artifact(),
-        diagnostics: vec![Diagnostic {
+    pad.write().state_mut().built = Some(pad_built(
+        fixture_artifact(),
+        vec![Diagnostic {
             level: Level::Warning,
             message: "unused variable: `x`".to_owned(),
             rendered: "warning: unused variable: `x`\n".to_owned(),
@@ -14634,7 +14622,7 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
                 column: 5,
             }),
         }],
-    });
+    ));
     settle(&mut test);
 
     // Drawn as cargo spelt it, and whole: cutting it to the file's own name is what a path
@@ -14686,10 +14674,34 @@ fn run_path(line: u32) -> PathBuf {
 /// state rather than answered through `PadJob::Build`, so a test about running one does
 /// not have to drive a build to get there.
 fn already_built(mut pad: State<Pads>, executable: PathBuf) {
-    pad.write().state_mut().built = Some(Build::Built {
-        executable,
-        diagnostics: Vec::new(),
-    });
+    pad.write().state_mut().built = Some(pad_built(executable, Vec::new()));
+}
+
+/// A build cargo ran and made `executable` from, as [`Scratchpad::build_in`] answers one:
+/// the artifact it named, and that same path as the pad's one binary.
+fn pad_built(executable: PathBuf, diagnostics: Vec<Diagnostic>) -> Build {
+    Build::Ran {
+        run: cargo::Run::Built {
+            artifacts: vec![cargo::Artifact {
+                path: executable.clone(),
+                target: "pad".to_owned(),
+                kind: "bin".to_owned(),
+            }],
+            diagnostics,
+        },
+        executable: Some(executable),
+    }
+}
+
+/// A build cargo refused, which made nothing.
+fn pad_rejected(diagnostics: Vec<Diagnostic>, message: String) -> Build {
+    Build::Ran {
+        run: cargo::Run::Rejected {
+            diagnostics,
+            message,
+        },
+        executable: None,
+    }
 }
 
 /// A program that will not start is a sentence, not a pane that sits on "Starting..."
@@ -14730,9 +14742,13 @@ fn a_run_that_cannot_start_says_why() {
     request_run(pad, &jobs);
     pump(&mut test, || !pad.peek().state().is_running());
 
-    let (text, bad) = pad.peek().state().run_status().expect("a status");
-    assert!(text.contains("No such file or directory"), "{text}");
-    assert!(bad);
+    let verdict = pad.peek().state().run_verdict().expect("a verdict");
+    assert!(
+        verdict.text.contains("No such file or directory"),
+        "{}",
+        verdict.text
+    );
+    assert!(verdict.bad);
 }
 
 /// Every line of a pad's own output, oldest first.
@@ -14845,9 +14861,9 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
         matches!(pad.peek().state().run_state, RunState::Over(_))
     });
     assert_eq!(output_lines(pad), ["after"]);
-    let (status, bad) = pad.peek().state().run_status().expect("a status");
-    assert_eq!(status, "Exited");
-    assert!(!bad);
+    let verdict = pad.peek().state().run_verdict().expect("a verdict");
+    assert_eq!(verdict.text, "Exited");
+    assert!(!verdict.bad);
 }
 
 /// The lines a run has written, for [`output_harness`] to draw and a test to push into.
@@ -14863,8 +14879,7 @@ fn output_harness() -> impl IntoElement {
     rect().expanded().content(Content::Flex).child(OutputPane {
         pad: pad_id("pad"),
         lines: lines.read().clone(),
-        status: "Running".to_owned(),
-        bad: false,
+        verdict: Verdict::plain("Running"),
         key: DiffKey::None,
     })
 }
@@ -15023,16 +15038,16 @@ fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
         }),
     };
     let mut pad = pad;
-    pad.write().state_mut().built = Some(Build::Rejected {
-        diagnostics: vec![
+    pad.write().state_mut().built = Some(pad_rejected(
+        vec![
             diagnostic("short: nope", "  --> short"),
             diagnostic(
                 &format!("long: {}", "mismatched ".repeat(40)),
                 &format!("  --> long {}", "y".repeat(300)),
             ),
         ],
-        message: String::new(),
-    });
+        String::new(),
+    ));
     for _ in 0..6 {
         test.sync_and_update();
     }
@@ -23340,7 +23355,7 @@ fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
     let (mut test, states, _language, _asking, _asks) = mount_project!(answer);
 
     let mut proj = states.proj;
-    proj.write().directory = "/work/app".to_owned();
+    proj.write().workspace_text = "/work/app".to_owned();
     pump(&mut test, || states.build.peek().manifest.is_some());
 
     let button = centre_of(&test, "Turn on");
@@ -24335,7 +24350,7 @@ fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
         "{}",
         held.words()
     );
-    assert_eq!(held.status(true).0, "Reading the project...");
+    assert_eq!(held.verdict(true).text, "Reading the project...");
 
     // And it is still running: working is what it is doing, not a state of its own.
     assert!(control_is_lit(&test), "a working server is not lit");

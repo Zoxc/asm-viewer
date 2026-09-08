@@ -125,9 +125,11 @@ command.
 - `crates/analysis/src/guard.rs` — the calls whose panics are caught on purpose, and the flag
   that lets a panic hook tell one of those from a panic that has broken the app.
 - `src/cargo.rs` — running cargo and reading what it said: the artifacts it names, the
-  diagnostics it reports, and the profile's debug information in the manifest being built.
-  Plain data about someone else's file: what a diagnostic's place means to a cursor is
-  `src/chars.rs`.
+  diagnostics it reports, the one line a pane says about a build, and the profile's debug
+  information in the manifest being built. Plain data about someone else's file: what a
+  diagnostic's place means to a cursor is `src/chars.rs`.
+- `src/verdict.rs` — one line saying how something went and whether that is bad news: what
+  every build, run and server reports itself as, and the count with the word for it.
 - `src/project.rs` — projects: their identity, the two files each is stored in, the save policy,
   and which language server each is read with.
 - `src/store.rs` — everything the app stores: the directory it goes in and the variable that
@@ -304,7 +306,8 @@ command.
   and the box that filters them.
 - `src/ui/pad.rs` — the scratchpads the app holds, which is shown, and their one worker thread.
 - `src/ui/pad_view.rs` — the scratchpad's pane: pad list, editor, crates, diagnostics, output.
-- `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes.
+- `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes,
+  `verdict_line` among them: the one line a `Verdict` is drawn as, wherever one is.
 - `src/ui/picks.rs` — the row each list has picked out: what a pick is, the one per panel,
   the Alt that picks without opening, and which of two colours a picked row wears.
 - `src/ui/place_row.rs` — the row the Search and Locations panels both draw: a file, or one

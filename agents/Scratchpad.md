@@ -107,10 +107,16 @@ one binary a generated package has. The artifact path is what cargo *named*, nev
 above the directory or an executable suffix each make silently wrong. Turning that stream into an
 answer is a pure function of cargo's stdout, stderr and exit status, which is what lets a failed
 build be a test over a canned stream. Three answers, not two: the compiler said no (with cargo's own
-stderr kept, since `no matching package named ... found` is said there and nowhere else), or nothing
-was compiled at all. `Build` is still the pad's own type, since two of its answers -- a bad
-dependency row and a package that would not write -- are about a generated package and mean nothing
-to a workspace.
+stderr kept, since `no matching package named ... found` is said there and nowhere else), or cargo
+never ran.
+
+**`Build` holds what cargo said rather than copying it.** `Build::Ran` is a `cargo::Run` and the one
+binary a generated package has; the arm of its own is for the builds that never happened -- a bad
+dependency row, a package that would not write, a cargo that would not start -- which is about a
+generated package and means nothing to a workspace. What a pane says about a build is
+`cargo::Run::verdict`, so the pad and the Project view cannot report the same build differently;
+`PadState` and `Builds` each add only "Building..." and pass the rest on. It was two copies of the
+summary, down to the wording, and the two had already drifted over a cargo that would not start.
 
 **Running is the artifact and not `cargo run`.** `run_in` spawns the executable `build_in` already
 asked cargo to name, in the scratchpad's own directory with a null stdin. Re-entering cargo would

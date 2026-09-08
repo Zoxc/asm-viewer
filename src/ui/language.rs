@@ -137,23 +137,20 @@ impl Language {
         matches!(self.state, Lsp::Starting) || self.working
     }
 
-    /// What the Project view says about it: the line, and whether it is bad news.
+    /// What the Project view says about it.
     ///
     /// `directory` is whether the project has one to run a server over, which is the
     /// state's own answer to nothing and the reason there is no server all the same.
-    pub(crate) fn status(&self, directory: bool) -> (String, bool) {
+    pub(crate) fn verdict(&self, directory: bool) -> Verdict {
         if !directory {
-            return ("No directory".to_owned(), false);
+            return Verdict::plain("No directory");
         }
         match &self.state {
-            Lsp::Off => (
-                "Not running. The control in the top bar starts it.".to_owned(),
-                false,
-            ),
-            Lsp::Starting => ("Starting...".to_owned(), false),
-            Lsp::Running if self.working => ("Reading the project...".to_owned(), false),
-            Lsp::Running => ("Running".to_owned(), false),
-            Lsp::Failed(why) => (why.clone(), true),
+            Lsp::Off => Verdict::plain("Not running. The control in the top bar starts it."),
+            Lsp::Starting => Verdict::plain("Starting..."),
+            Lsp::Running if self.working => Verdict::plain("Reading the project..."),
+            Lsp::Running => Verdict::plain("Running"),
+            Lsp::Failed(why) => Verdict::bad_news(why.clone()),
         }
     }
 

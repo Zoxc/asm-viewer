@@ -40,10 +40,7 @@ impl Component for BinaryRow {
                 .child(tree_name_fitted(fitted, text, false, &[]))
                 .child(
                     label()
-                        .text(match self.objects {
-                            1 => "1 object".to_owned(),
-                            many => format!("{many} objects"),
-                        })
+                        .text(counted(self.objects, "object", "objects"))
                         .color(palette().address_fg)
                         .max_lines(1),
                 ),
@@ -255,8 +252,7 @@ impl Component for RecentRow {
             Some(directory) => directory.to_string_lossy().into_owned(),
             None => match recent.binaries {
                 0 => "empty".to_owned(),
-                1 => "1 binary".to_owned(),
-                many => format!("{many} binaries"),
+                many => counted(many, "binary", "binaries"),
             },
         };
 
@@ -468,7 +464,7 @@ impl Component for CargoSection {
                         .enabled(held.manifest.is_some() && !held.building)
                         .on_press(move |_| start_build(build, &jobs, directory.clone(), profile))
                         .child(match held.building {
-                            true => "Building...",
+                            true => cargo::BUILDING,
                             false => "Build",
                         })
                         .into_element()
@@ -569,20 +565,14 @@ impl Component for CargoSection {
                             // whether the write worked or not, so without this the reader
                             // is refused in silence.
                             .maybe_child(held.edit_refused.as_ref().map(|why| {
-                                info_line_in(why.clone(), palette().invalid_fg).into_element()
+                                verdict_line(Verdict::bad_news(why.clone())).into_element()
                             }))
                             .into_element()
                     }))
-                    .maybe_child(held.status().map(|(text, bad)| {
-                        info_line_in(
-                            text,
-                            match bad {
-                                true => palette().invalid_fg,
-                                false => palette().address_fg,
-                            },
-                        )
-                        .into_element()
-                    }))
+                    .maybe_child(
+                        held.verdict()
+                            .map(|verdict| verdict_line(verdict).into_element()),
+                    )
                     .children(artifacts)
                     // cargo's own words, for what it says nowhere else.
                     .maybe_child(
@@ -707,17 +697,7 @@ impl Component for LanguageSection {
                 )
                 .into_element()
             }))
-            .child({
-                let (text, bad) = spoken.status(directory.is_some());
-                info_line_in(
-                    text,
-                    match bad {
-                        true => palette().invalid_fg,
-                        false => palette().address_fg,
-                    },
-                )
-                .into_element()
-            })
+            .child(verdict_line(spoken.verdict(directory.is_some())).into_element())
             // What the project's own settings file gave the server, so a reader can see
             // what theirs is being told; and why it could not be used, in the colour the
             // failure above is in, since that file is the one thing that stops a start
@@ -726,10 +706,10 @@ impl Component for LanguageSection {
             .maybe_child(
                 spoken
                     .unreadable()
-                    .map(|why| info_line_in(why, palette().invalid_fg).into_element()),
+                    .map(|why| verdict_line(Verdict::bad_news(why)).into_element()),
             )
             .maybe_child((!spoken.overrides().is_empty()).then(|| {
-                info_line_in(format!("From {}", lsp::SETTINGS), palette().address_fg).into_element()
+                verdict_line(Verdict::plain(format!("From {}", lsp::SETTINGS))).into_element()
             }))
             .children(
                 spoken

@@ -25,6 +25,7 @@ use crate::cargo::{self, Diagnostic};
 use crate::order::Order;
 use crate::process::{self, RunEvent, Stream};
 use crate::store::{write_atomically, Store, MAX_ORDER, RECENTS_FILE};
+use crate::verdict::Verdict;
 
 const MANIFEST_NAME: &str = "Cargo.toml";
 const SOURCE_DIR: &str = "src";
@@ -352,23 +353,60 @@ pub enum Failure {
 }
 
 /// What a build came back with.
+///
+/// What cargo said is [`cargo::Run`] and is not copied here: the pad and the project's own
+/// workspace say the same words about the same build. [`Build::Unavailable`] is why there
+/// was no build to say anything about — a bad dependency row, a package that would not
+/// write, a cargo that would not start, one that built nothing to open — which is the
+/// pad's own list and means nothing to a workspace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Build {
-    /// `diagnostics` is whatever cargo said on the way — warnings and notes.
-    Built {
-        executable: PathBuf,
-        diagnostics: Vec<Diagnostic>,
-    },
-    /// cargo ran and refused. `message` is cargo's own stderr, which is the only place
-    /// some failures are said at all: `no matching package named ... found` for a
-    /// dependency row that does not resolve, and a manifest error, both arrive with no
-    /// compiler diagnostics behind them.
-    Rejected {
-        diagnostics: Vec<Diagnostic>,
-        message: String,
+    /// cargo ran. `executable` is the one binary the generated package has, when the
+    /// build made it.
+    Ran {
+        run: cargo::Run,
+        executable: Option<PathBuf>,
     },
     /// Nothing was compiled.
     Unavailable(Failure),
+}
+
+impl Build {
+    /// What the compiler said. Warnings on a build that succeeded and errors on one that
+    /// did not are the same list to a reader.
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        match self {
+            Build::Ran { run, .. } => run.diagnostics(),
+            Build::Unavailable(_) => &[],
+        }
+    }
+
+    /// cargo's own words, when they are about the dependency rows: a rejected build with
+    /// no compiler diagnostics at all is cargo refusing before it compiled anything, and
+    /// `[dependencies]` is the only part of the generated package this can get wrong.
+    pub fn refusal(&self) -> Option<&str> {
+        match self {
+            Build::Ran { run, .. } => run.refusal(),
+            Build::Unavailable(_) => None,
+        }
+    }
+
+    /// What the build made, and so what there is to run: the path cargo *named*, carried
+    /// through from the build rather than derived.
+    pub fn executable(&self) -> Option<&Path> {
+        match self {
+            Build::Ran { executable, .. } => executable.as_deref(),
+            Build::Unavailable(_) => None,
+        }
+    }
+
+    /// The one line a pane says about it.
+    pub fn verdict(&self) -> Verdict {
+        match self {
+            Build::Ran { run, .. } => run.verdict(),
+            Build::Unavailable(failure) => Verdict::bad_news(failure.to_string()),
+        }
+    }
 }
 
 impl Problem {
@@ -622,32 +660,24 @@ impl Scratchpad {
 
         // Always `dev`: a scratchpad is compiled to be read and run, not to be measured,
         // and the wait is the reader's.
-        match cargo::run(directory, cargo::Profile::Debug) {
-            cargo::Run::Built {
-                artifacts,
-                diagnostics,
-            } => match artifacts
-                .into_iter()
-                .find(|artifact| artifact.kind == "bin")
-            {
-                // The generated package has exactly one binary, so the one executable
-                // cargo named for it is this pad's.
-                Some(artifact) => Build::Built {
-                    executable: artifact.path,
-                    diagnostics,
-                },
-                // cargo succeeded and named nothing: a third answer, not an `unwrap`.
-                None => Build::Unavailable(Failure::NoArtifact),
-            },
-            cargo::Run::Rejected {
-                diagnostics,
-                message,
-            } => Build::Rejected {
-                diagnostics,
-                message,
-            },
-            cargo::Run::NoCargo(error) => Build::Unavailable(Failure::NoCargo(error)),
-        }
+        let run = cargo::run(directory, cargo::Profile::Debug);
+        let executable = match &run {
+            cargo::Run::Built { artifacts, .. } => {
+                match artifacts.iter().find(|artifact| artifact.kind == "bin") {
+                    // The generated package has exactly one binary, so the one executable
+                    // cargo named for it is this pad's.
+                    Some(artifact) => Some(artifact.path.clone()),
+                    // cargo succeeded and named nothing: an answer of its own, not an
+                    // `unwrap`.
+                    None => return Build::Unavailable(Failure::NoArtifact),
+                }
+            }
+            cargo::Run::NoCargo(error) => {
+                return Build::Unavailable(Failure::NoCargo(error.clone()))
+            }
+            cargo::Run::Rejected { .. } => None,
+        };
+        Build::Ran { run, executable }
     }
 }
 
@@ -1100,7 +1130,7 @@ impl fmt::Display for Failure {
             Failure::NoDirectory => write!(formatter, "nowhere to keep a scratchpad"),
             Failure::Write(error) => write!(formatter, "could not write the package: {error}"),
             Failure::Delete(error) => write!(formatter, "could not delete the package: {error}"),
-            Failure::NoCargo(error) => write!(formatter, "could not run cargo: {error}"),
+            Failure::NoCargo(error) => write!(formatter, "{}", cargo::no_cargo(error)),
             Failure::NoArtifact => write!(formatter, "cargo built nothing to open"),
             Failure::NoProgram(error) => write!(formatter, "could not start it: {error}"),
             Failure::Unreadable => write!(formatter, "the package could not be read"),

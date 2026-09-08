@@ -58,8 +58,7 @@ impl Builds {
         }
     }
 
-    /// What the compiler said about the last build. Warnings on a build that succeeded
-    /// and errors on one that did not are the same list to a reader.
+    /// What the compiler said about the last build.
     pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
         self.built
             .as_ref()
@@ -73,19 +72,9 @@ impl Builds {
         self.sources.contains(file)
     }
 
-    /// cargo's own words, for the failures said there and nowhere else: a manifest error
-    /// and a dependency that does not resolve both arrive with no compiler diagnostic
-    /// behind them. Once the compiler has spoken, that same stderr says nothing the list
-    /// below does not.
+    /// cargo's own words, for the failures said there and nowhere else.
     pub(crate) fn refusal(&self) -> Option<&str> {
-        match &self.built {
-            Some(cargo::Run::Rejected {
-                diagnostics,
-                message,
-            }) if diagnostics.is_empty() && !message.is_empty() => Some(message),
-            Some(cargo::Run::NoCargo(message)) => Some(message),
-            _ => None,
-        }
+        self.built.as_ref().and_then(cargo::Run::refusal)
     }
 
     /// What the manifest says, as the worker read it. Whether anything changed, so the
@@ -155,36 +144,12 @@ impl Builds {
             .collect()
     }
 
-    /// The one line under the button saying where the last build got to, and whether that
-    /// line is bad news.
-    pub(crate) fn status(&self) -> Option<(String, bool)> {
-        if self.building {
-            return Some(("Building...".to_owned(), false));
-        }
-
-        let count = |level: Level, one: &str, many: &str| {
-            let count = self
-                .diagnostics()
-                .iter()
-                .filter(|diagnostic| diagnostic.level == level)
-                .count();
-            match count {
-                0 => String::new(),
-                1 => format!(": 1 {one}"),
-                count => format!(": {count} {many}"),
-            }
-        };
-
-        match self.built.as_ref()? {
-            cargo::Run::Built { .. } => Some((
-                format!("Built{}", count(Level::Warning, "warning", "warnings")),
-                false,
-            )),
-            cargo::Run::Rejected { .. } => Some((
-                format!("Not built{}", count(Level::Error, "error", "errors")),
-                true,
-            )),
-            cargo::Run::NoCargo(_) => Some(("cargo could not be started".to_owned(), true)),
+    /// The one line under the button saying where the last build got to. The scratchpad's
+    /// is the same line ([`PadState::verdict`]).
+    pub(crate) fn verdict(&self) -> Option<Verdict> {
+        match self.building {
+            true => Some(Verdict::plain(cargo::BUILDING)),
+            false => self.built.as_ref().map(cargo::Run::verdict),
         }
     }
 }

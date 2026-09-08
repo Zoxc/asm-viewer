@@ -38,6 +38,7 @@ mod tabs;
 mod temporary;
 mod tree;
 mod ui;
+mod verdict;
 mod visits;
 mod walk;
 

@@ -410,9 +410,8 @@ fn use_follow_tail(mut controller: ScrollController, viewport: f32, output: usiz
 pub(crate) struct OutputPane {
     pub(crate) pad: PadId,
     pub(crate) lines: Arc<RunOutput>,
-    /// Where the run got to, and whether that is bad -- [`PadState::run_status`]'s answer.
-    pub(crate) status: String,
-    pub(crate) bad: bool,
+    /// Where the run got to -- [`PadState::run_verdict`]'s answer.
+    pub(crate) verdict: Verdict,
     pub(crate) key: DiffKey,
 }
 
@@ -420,8 +419,7 @@ impl PartialEq for OutputPane {
     fn eq(&self, other: &Self) -> bool {
         self.pad == other.pad
             && Arc::ptr_eq(&self.lines, &other.lines)
-            && self.status == other.status
-            && self.bad == other.bad
+            && self.verdict == other.verdict
     }
 }
 
@@ -435,7 +433,7 @@ impl Component for OutputPane {
     fn render(&self) -> impl IntoElement {
         let lines = self.lines.clone();
         let length = lines.len();
-        let bad = self.bad;
+        let verdict = self.verdict.clone();
 
         let controller = use_scroll_controller(ScrollConfig::default);
         // How tall the list is, which the follow needs to know where the bottom of it is.
@@ -463,12 +461,9 @@ impl Component for OutputPane {
                     .child(label().text("Output").font_weight(FontWeight::BOLD))
                     .child(
                         label()
-                            .text(self.status.clone())
+                            .text(verdict.text)
                             .width(Size::flex(1.0))
-                            .color(match bad {
-                                true => palette().invalid_fg,
-                                false => palette().address_fg,
-                            })
+                            .color(verdict_fg(verdict.bad))
                             .max_lines(1),
                     ),
             )
@@ -952,18 +947,7 @@ impl Component for PadList {
             // What the panel can be told no about: a New, and a delete. Under the list
             // rather than over it, so a list that fills the panel is not pushed down by a
             // line that is there once in a blue moon.
-            .maybe_child(refused.map(|refused| {
-                rect()
-                    .width(Size::fill())
-                    .padding(Gaps::new_symmetric(2.0, 6.0))
-                    .overflow(Overflow::Clip)
-                    .child(
-                        label()
-                            .text(refused)
-                            .color(palette().invalid_fg)
-                            .max_lines(1),
-                    )
-            }))
+            .maybe_child(refused.map(|refused| verdict_line(Verdict::bad_news(refused))))
     }
 }
 
@@ -1007,7 +991,7 @@ impl Component for PadHeader {
                             .enabled(opened && !building)
                             .on_press(move |_| request_build(pad, &jobs))
                             .child(match building {
-                                true => "Building...",
+                                true => cargo::BUILDING,
                                 false => "Build",
                             }),
                     )
@@ -1045,13 +1029,13 @@ impl Component for PadDetails {
         let pad = use_consume::<Pad>().0;
         let store = use_consume::<Storage>().0;
 
-        let (shown, package, status) = {
+        let (shown, package, verdict) = {
             let pads = pad.read();
             let state = pads.state();
             (
                 pads.shown().clone(),
                 package_path(&store.peek(), Some(&state.scratchpad)),
-                state.status(),
+                state.verdict(),
             )
         };
 
@@ -1087,20 +1071,7 @@ impl Component for PadDetails {
                         .color(palette().address_fg),
                 ),
             ))
-            .maybe_child(status.map(|(text, bad)| {
-                rect()
-                    .padding(Gaps::new(2.0, 0.0, 2.0, 0.0))
-                    .overflow(Overflow::Clip)
-                    .child(
-                        label()
-                            .text(text)
-                            .color(match bad {
-                                true => palette().invalid_fg,
-                                false => palette().address_fg,
-                            })
-                            .max_lines(1),
-                    )
-            }))
+            .maybe_child(verdict.map(verdict_line))
     }
 }
 
@@ -1165,17 +1136,11 @@ impl Component for DependencyList {
                 true => info_line("No crates asked for".to_owned()).into_element(),
                 false => rect().width(Size::fill()).children(rows).into_element(),
             })
-            .maybe_child(unsaved.map(|failure| {
-                rect()
-                    .padding(Gaps::new(2.0, 0.0, 2.0, 0.0))
-                    .overflow(Overflow::Clip)
-                    .child(
-                        label()
-                            .text(format!("Not saved: {failure}"))
-                            .color(palette().invalid_fg)
-                            .max_lines(1),
-                    )
-            }))
+            .maybe_child(
+                unsaved.map(|failure| {
+                    verdict_line(Verdict::bad_news(format!("Not saved: {failure}")))
+                }),
+            )
             .maybe_child(refusal)
     }
 }
@@ -1254,8 +1219,8 @@ impl Component for ScratchpadTab {
                 state.building,
                 state.out_of_date(),
                 state
-                    .run_status()
-                    .map(|(status, bad)| (status, bad, state.output.clone())),
+                    .run_verdict()
+                    .map(|verdict| (verdict, state.output.clone())),
             )
         };
 
@@ -1277,12 +1242,11 @@ impl Component for ScratchpadTab {
         // and a loop with the effect above.
         let leading = ratio.peek().clamp(1.0, 99.0);
 
-        let output = ran.map(|(status, bad, lines)| {
+        let output = ran.map(|(verdict, lines)| {
             OutputPane {
                 pad: shown.clone(),
                 lines,
-                status,
-                bad,
+                verdict,
                 key: DiffKey::None,
             }
             .key(shown.as_str().to_owned())

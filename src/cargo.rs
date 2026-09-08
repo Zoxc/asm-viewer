@@ -19,7 +19,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::write_atomically;
+use crate::{
+    store::write_atomically,
+    verdict::{counted, Verdict},
+};
 
 /// Which of cargo's two built-in profiles to build.
 ///
@@ -93,7 +96,58 @@ impl Run {
             Run::NoCargo(_) => &[],
         }
     }
+
+    /// cargo's own words, for the failures said there and nowhere else: a manifest error
+    /// and a dependency that does not resolve both arrive with no compiler diagnostic
+    /// behind them. Once the compiler has spoken, that same stderr says nothing the
+    /// diagnostics do not.
+    pub fn refusal(&self) -> Option<&str> {
+        match self {
+            Run::Rejected {
+                diagnostics,
+                message,
+            } if diagnostics.is_empty() && !message.is_empty() => Some(message),
+            Run::NoCargo(error) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// The one line a pane says about this build. Here and not in either view, both
+    /// saying the same thing about the same three answers.
+    pub fn verdict(&self) -> Verdict {
+        let count = |level: Level, one: &str, many: &str| match self
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.level == level)
+            .count()
+        {
+            0 => String::new(),
+            count => format!(": {}", counted(count, one, many)),
+        };
+
+        match self {
+            Run::Built { .. } => Verdict::plain(format!(
+                "Built{}",
+                count(Level::Warning, "warning", "warnings")
+            )),
+            Run::Rejected { .. } => Verdict::bad_news(format!(
+                "Not built{}",
+                count(Level::Error, "error", "errors")
+            )),
+            Run::NoCargo(error) => Verdict::bad_news(no_cargo(error)),
+        }
+    }
 }
+
+/// What a cargo that would not start is said as, wherever it is said: here for a
+/// workspace, and through `Failure::NoCargo` for a scratchpad.
+pub fn no_cargo(error: &str) -> String {
+    format!("could not run cargo: {error}")
+}
+
+/// What every pane says while a build is going. A build is one at a time, so this is a
+/// state and not a step of one.
+pub const BUILDING: &str = "Building...";
 
 /// One thing the compiler said, flattened out of cargo's JSON.
 #[derive(Clone, Debug, PartialEq, Eq)]

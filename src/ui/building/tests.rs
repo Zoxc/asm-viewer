@@ -129,3 +129,61 @@ fn only_the_diagnostic_files_under_the_directory_that_read_are_named() {
         "the set is the files this pane may open, and nothing else"
     );
 }
+
+/// The two panes that draw a build say the same words about the same one. Both ask
+/// `cargo::Run` (`agents/Scratchpad.md`), which is the whole of why: a summary written
+/// twice drifts, and these two are meant to be read as the same line in two places.
+#[test]
+fn both_build_panes_say_the_same_line_about_the_same_build() {
+    /// The pad holding one build, `PadState`'s own fields not all being this module's.
+    fn pad_holding(build: Build) -> PadState {
+        let mut pad = PadState::default();
+        pad.built = Some(build);
+        pad
+    }
+
+    for run in [
+        built(&["target/debug/viewer"]),
+        cargo::Run::Rejected {
+            diagnostics: Vec::new(),
+            message: "no matching package".to_owned(),
+        },
+    ] {
+        let project = Builds {
+            built: Some(run.clone()),
+            ..Builds::default()
+        };
+        let pad = pad_holding(Build::Ran {
+            run,
+            executable: None,
+        });
+        assert_eq!(project.verdict(), pad.verdict());
+        assert_eq!(project.refusal(), pad.refusal());
+    }
+
+    // A cargo that would not start, which the pad holds as a failure of its own and the
+    // project as cargo's answer: one sentence all the same, and it names what stopped it.
+    let project = Builds {
+        built: Some(cargo::Run::NoCargo("not found".to_owned())),
+        ..Builds::default()
+    };
+    let pad = pad_holding(Build::Unavailable(Failure::NoCargo("not found".to_owned())));
+    assert_eq!(project.verdict(), pad.verdict());
+    assert_eq!(
+        project.verdict().expect("a verdict").text,
+        "could not run cargo: not found"
+    );
+
+    // And while one is going, which is neither's build to describe.
+    let mut pad = PadState::default();
+    pad.building = true;
+    let project = Builds {
+        building: true,
+        ..Builds::default()
+    };
+    assert_eq!(project.verdict(), pad.verdict());
+    assert_eq!(project.verdict(), Some(Verdict::plain("Building...")));
+    // Nothing built and nothing going is no line at all.
+    assert_eq!(Builds::default().verdict(), PadState::default().verdict());
+    assert_eq!(Builds::default().verdict(), None);
+}

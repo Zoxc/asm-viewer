@@ -85,6 +85,13 @@ history buttons are the only caller so far. Its test is a floor rather than a va
 branch gutter's is: `dimmed` must land strictly quieter than the live colour and no closer to the
 surface than 1.5, in both palettes.
 
+**"Bad news" is one rule, not a colour written at every site.** A line saying how a build, a run or
+a language server went carries a bool and nothing else (`Verdict`, `src/verdict.rs`); `verdict_fg`
+turns it into the red of everything invalid or the receding grey, and `verdict_line` draws the whole
+line. It was the same `match` at four sites across the two build panes, with the red written out
+again at the lines beside them, so a second severity -- a warning colour of its own, say -- meant
+finding all of them.
+
 **A theme switch repaints by being asked for a colour.** `palette()` reads a thread-local
 `State<Appearance>` and hands back a `&'static` to one of the two `const`s, so `State::read`
 subscribes whichever scope is rendering: *asking for a colour is what subscribes a component to the

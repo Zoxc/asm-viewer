@@ -317,9 +317,9 @@ impl Pads {
         // its program rather than on nothing. Only a build that produced one replaces it,
         // which is what leaves a failed build showing the program before it -- and what
         // keeps the package naming an artifact that is still there.
-        if let (Build::Built { executable, .. }, Some(program)) = (&build, &program) {
+        if let (Some(executable), Some(program)) = (build.executable(), &program) {
             state.scratchpad.built = Some(crate::scratchpad::Built {
-                path: executable.clone(),
+                path: executable.to_path_buf(),
                 digest: program.built_from.clone(),
             });
         }
@@ -497,70 +497,31 @@ impl PadState {
         }
     }
 
-    /// What the compiler said about the last build. Warnings on a build that succeeded
-    /// and errors on one that did not are the same list to a reader.
+    /// What the compiler said about the last build.
     pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
-        match &self.built {
-            Some(Build::Built { diagnostics, .. }) => diagnostics,
-            Some(Build::Rejected { diagnostics, .. }) => diagnostics,
-            Some(Build::Unavailable(_)) | None => &[],
-        }
+        self.built
+            .as_ref()
+            .map(Build::diagnostics)
+            .unwrap_or_default()
     }
 
-    /// cargo's own words, when they are about the dependency rows: a rejected build with
-    /// no compiler diagnostics at all is cargo refusing before it compiled anything, and
-    /// `[dependencies]` is the only part of the generated package this pane can get wrong.
-    /// Once the compiler has spoken the same stderr says nothing the list below does not.
+    /// cargo's own words, when they are about the dependency rows.
     pub(crate) fn refusal(&self) -> Option<&str> {
-        match &self.built {
-            Some(Build::Rejected {
-                diagnostics,
-                message,
-            }) if diagnostics.is_empty() && !message.is_empty() => Some(message),
-            _ => None,
+        self.built.as_ref().and_then(Build::refusal)
+    }
+
+    /// The one line over the pane saying where the last build got to. The Project view's
+    /// is the same line ([`Builds::verdict`]).
+    pub(crate) fn verdict(&self) -> Option<Verdict> {
+        match self.building {
+            true => Some(Verdict::plain(cargo::BUILDING)),
+            false => self.built.as_ref().map(Build::verdict),
         }
     }
 
-    /// The one line over the pane saying where the last build got to, and whether that
-    /// line is bad news.
-    pub(crate) fn status(&self) -> Option<(String, bool)> {
-        if self.building {
-            return Some(("Building...".to_owned(), false));
-        }
-
-        let count = |level: Level, one: &str, many: &str| {
-            let count = self
-                .diagnostics()
-                .iter()
-                .filter(|diagnostic| diagnostic.level == level)
-                .count();
-            match count {
-                0 => String::new(),
-                1 => format!(": 1 {one}"),
-                count => format!(": {count} {many}"),
-            }
-        };
-
-        match self.built.as_ref()? {
-            Build::Built { .. } => Some((
-                format!("Built{}", count(Level::Warning, "warning", "warnings")),
-                false,
-            )),
-            Build::Rejected { .. } => Some((
-                format!("Not built{}", count(Level::Error, "error", "errors")),
-                true,
-            )),
-            Build::Unavailable(failure) => Some((failure.to_string(), true)),
-        }
-    }
-
-    /// What the last build made, and so what there is to run: the path cargo *named*,
-    /// carried through from the build rather than derived here.
+    /// What the last build made, and so what there is to run.
     pub(crate) fn executable(&self) -> Option<&Path> {
-        match &self.built {
-            Some(Build::Built { executable, .. }) => Some(executable),
-            _ => None,
-        }
+        self.built.as_ref().and_then(Build::executable)
     }
 
     /// Whether what is on screen has moved on from the program that is: an edit since the
@@ -580,9 +541,9 @@ impl PadState {
         matches!(self.run_state, RunState::Starting | RunState::Going(_))
     }
 
-    /// The line over the output, saying where the run got to, and whether that is bad
-    /// news. `None` before anything has been run, which is what leaves the pane out.
-    pub(crate) fn run_status(&self) -> Option<(String, bool)> {
+    /// The line over the output, saying where the run got to. `None` before anything has
+    /// been run, which is what leaves the pane out.
+    pub(crate) fn run_verdict(&self) -> Option<Verdict> {
         let dropped = match self.output.dropped() {
             0 => String::new(),
             1 => " (1 earlier line dropped)".to_owned(),
@@ -601,7 +562,10 @@ impl PadState {
             RunState::Over(Ended::Failed(error)) => (format!("Could not run it: {error}"), true),
         };
 
-        Some((format!("{text}{dropped}"), bad))
+        Some(Verdict {
+            text: format!("{text}{dropped}"),
+            bad,
+        })
     }
 }
 
@@ -802,12 +766,9 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
             // an executable it has not read. It is milliseconds against a build's seconds,
             // behind the same flag, so it delays nothing the build was not delaying
             // already.
-            let program = match &build {
-                Build::Built { executable, .. } => {
-                    read_program(executable, scratchpad.compiled().digest())
-                }
-                _ => None,
-            };
+            let program = build
+                .executable()
+                .and_then(|executable| read_program(executable, scratchpad.compiled().digest()));
             PadAnswer::Built {
                 pad: scratchpad.id().clone(),
                 build,

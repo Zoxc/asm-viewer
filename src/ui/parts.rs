@@ -105,9 +105,34 @@ pub(crate) fn info_line(text: String) -> impl IntoElement {
     rect().padding(5.0).child(label().text(text))
 }
 
-/// The same in a colour of its own, for a line that is saying how something went.
-pub(crate) fn info_line_in(text: String, color: Color) -> impl IntoElement {
-    rect().padding(5.0).child(label().text(text).color(color))
+/// The colour a line saying how something went is drawn in: the red every invalid thing
+/// wears when it is bad news, and the receding grey when it is not. For a line laid out by
+/// the pane around it; one on its own is [`verdict_line`].
+pub(crate) fn verdict_fg(bad: bool) -> Color {
+    match bad {
+        true => palette().invalid_fg,
+        false => palette().address_fg,
+    }
+}
+
+/// One line saying how something went, in that colour: what the build panes, the language
+/// server's section and the scratchpad all say their verdicts with, so a pane cannot
+/// diverge from another in padding, in clipping or in what the colour means.
+///
+/// Clipped to one line. What is said here is a sentence, and a build that could not start
+/// carries an error of any length behind it; a pane whose height jumps by four lines when
+/// cargo is missing is worse than a line the reader has to widen the pane to read.
+pub(crate) fn verdict_line(verdict: Verdict) -> impl IntoElement {
+    rect()
+        .width(Size::fill())
+        .padding(Gaps::new_symmetric(2.0, 6.0))
+        .overflow(Overflow::Clip)
+        .child(
+            label()
+                .text(verdict.text)
+                .color(verdict_fg(verdict.bad))
+                .max_lines(1),
+        )
 }
 
 /// The frame every sidebar-style row is drawn in: the height a list's rows are, the

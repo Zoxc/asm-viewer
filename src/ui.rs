@@ -70,6 +70,7 @@ pub(crate) use crate::tabs::{Page, Strip, Tab};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };
+pub(crate) use crate::verdict::{counted, Verdict};
 pub(crate) use crate::visits::Visits;
 
 mod analyzed;

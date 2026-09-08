@@ -454,3 +454,91 @@ fn a_directory_with_no_manifest_is_not_a_workspace() {
     assert!(!debug_lines(&directory, Profile::Release));
     assert!(add_debug_lines(&directory, Profile::Release).is_err());
 }
+
+/// One thing the compiler said, at the level a test is about.
+fn said(level: Level) -> Diagnostic {
+    Diagnostic {
+        level,
+        message: "something".to_owned(),
+        rendered: String::new(),
+        span: None,
+    }
+}
+
+/// The line a pane says about a build, counting the level that answer is about: the
+/// warnings of one that succeeded and the errors of one that did not. Here rather than in
+/// a view, so the scratchpad and the project's own build cannot say a build went
+/// differently.
+#[test]
+fn a_verdict_counts_the_level_its_own_answer_is_about() {
+    let built = |diagnostics| Run::Built {
+        artifacts: Vec::new(),
+        diagnostics,
+    };
+    assert_eq!(built(Vec::new()).verdict(), Verdict::plain("Built"));
+    assert_eq!(
+        built(vec![said(Level::Warning)]).verdict(),
+        Verdict::plain("Built: 1 warning")
+    );
+    // The notes a warning brings with it are not warnings.
+    assert_eq!(
+        built(vec![
+            said(Level::Warning),
+            said(Level::Warning),
+            said(Level::Note)
+        ])
+        .verdict(),
+        Verdict::plain("Built: 2 warnings")
+    );
+
+    let rejected = |diagnostics| Run::Rejected {
+        diagnostics,
+        message: String::new(),
+    };
+    assert_eq!(
+        rejected(vec![said(Level::Error), said(Level::Warning)]).verdict(),
+        Verdict::bad_news("Not built: 1 error")
+    );
+    assert_eq!(
+        rejected(Vec::new()).verdict(),
+        Verdict::bad_news("Not built")
+    );
+
+    // The one answer that is not about the compiler at all carries what stopped it.
+    let verdict = Run::NoCargo("not found".to_owned()).verdict();
+    assert!(verdict.bad);
+    assert!(verdict.text.contains("not found"), "{}", verdict.text);
+}
+
+/// cargo's own stderr is worth drawing only where the compiler said nothing: a manifest
+/// error and a dependency that does not resolve are said there and nowhere else, and once
+/// there are diagnostics that same text says nothing they do not.
+#[test]
+fn a_refusal_is_cargos_own_words_only_where_the_compiler_said_none() {
+    let rejected = |diagnostics, message: &str| Run::Rejected {
+        diagnostics,
+        message: message.to_owned(),
+    };
+
+    assert_eq!(
+        rejected(Vec::new(), "no matching package").refusal(),
+        Some("no matching package")
+    );
+    assert_eq!(
+        rejected(vec![said(Level::Error)], "could not compile").refusal(),
+        None
+    );
+    assert_eq!(rejected(Vec::new(), "").refusal(), None);
+    assert_eq!(
+        Run::NoCargo("not found".to_owned()).refusal(),
+        Some("not found")
+    );
+    assert_eq!(
+        Run::Built {
+            artifacts: Vec::new(),
+            diagnostics: vec![said(Level::Warning)],
+        }
+        .refusal(),
+        None
+    );
+}
