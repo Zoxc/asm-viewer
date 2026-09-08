@@ -101,6 +101,14 @@ pub(crate) fn placeholder(text: impl Into<String>) -> Element {
         .into()
 }
 
+/// [`placeholder`]'s box with no message in it: a pane with nothing to show and nothing
+/// to say about it -- `Showing::Nothing`, or a prop naming a tab the table no longer
+/// holds. The colour is the caller's, the panes having two: `pane_bg` on the source side,
+/// `asm_pane_bg` on the assembly side and in the split around them.
+pub(crate) fn blank_pane(background: Color) -> Element {
+    rect().expanded().background(background).into()
+}
+
 pub(crate) fn info_line(text: String) -> impl IntoElement {
     rect().padding(5.0).child(label().text(text))
 }

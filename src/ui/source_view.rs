@@ -1045,7 +1045,7 @@ impl Component for SourcePane {
             // of its own: a symbol can be analysed and still name no file.
             return match analysis.showing(&self.document) {
                 Showing::Message(text) => placeholder(text),
-                Showing::Nothing => rect().expanded().background(palette().pane_bg).into(),
+                Showing::Nothing => blank_pane(palette().pane_bg),
                 Showing::Listing(shown) if shown.studied.lines.info.is_some() => {
                     placeholder("No source file for this symbol")
                 }
@@ -1085,7 +1085,7 @@ impl Component for SourcePane {
                     asked_of(&shown.ask),
                     opening_row(&shown.studied.lines, &file),
                 ),
-                None => return rect().expanded().background(palette().pane_bg).into(),
+                None => return blank_pane(palette().pane_bg),
             },
         };
 

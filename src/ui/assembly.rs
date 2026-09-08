@@ -1524,7 +1524,7 @@ impl AssemblyPane {
         let shown = match analysis.showing(&self.document) {
             Showing::Listing(shown) => shown,
             Showing::Message(text) => return placeholder(text),
-            Showing::Nothing => return rect().expanded().background(palette().asm_pane_bg).into(),
+            Showing::Nothing => return blank_pane(palette().asm_pane_bg),
         };
         let studied = &shown.studied;
         let Some(assembly) = studied.assembly.clone() else {

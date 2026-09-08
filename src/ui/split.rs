@@ -195,10 +195,7 @@ impl Component for DocumentBody {
         // Not reachable -- the tab and the table entry are closed together -- but a render
         // is no place to panic.
         let Some(document) = docs.read().get(self.id).cloned() else {
-            return rect()
-                .expanded()
-                .background(palette().asm_pane_bg)
-                .into_element();
+            return blank_pane(palette().asm_pane_bg);
         };
 
         let tab = self.id;

@@ -796,11 +796,28 @@ impl Component for SectionList {
 
 /// Row `i` of the listing, as what it draws.
 fn build_row(i: usize, data: &SectionRows) -> Element {
+    // A row with nothing to draw, at the height every row of the listing is: what a row
+    // the rows cannot answer for comes to -- past the end, in a stretch nobody has
+    // decoded, or with a section or bytes that could not be read.
+    let blank = || rect().height(Size::px(code_row_height())).into_element();
     let Some(rows) = data.rows.as_ref() else {
-        return rect().height(Size::px(code_row_height())).into_element();
+        return blank();
     };
     let wash = wash_of(data.chars, i);
     let chars = RowChars::of(data.chars, i);
+    // The rule over a stretch and the two blanks: drawn as an empty row is, washed and
+    // swept across, and differing in the rule alone. The key is what tells them apart,
+    // the three of one stretch standing for the one address.
+    let empty = |rule: bool, key: RowKey| {
+        EmptyRow {
+            row: i,
+            wash,
+            rule,
+            key: DiffKey::None,
+        }
+        .key(key)
+        .into_element()
+    };
     // The edges lit in `stretch`, which is the stretch's own entry and nothing when it
     // has none.
     let touching = |stretch: usize| -> &[PlacedEdge] {
@@ -810,7 +827,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             .map_or(&[][..], |(_, edges)| edges.as_slice())
     };
     let Some(Row { stretch, kind }) = rows.row(i) else {
-        return rect().height(Size::px(code_row_height())).into_element();
+        return blank();
     };
     match kind {
         // The three rows that are text and nothing else, drawn from the one answer they
@@ -818,7 +835,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
         // draws the blank it copies as.
         Kind::Header | Kind::Label(_) | Kind::Gap(_) => {
             let Some(text) = text_of(rows, i) else {
-                return rect().height(Size::px(code_row_height())).into_element();
+                return blank();
             };
             let key = match kind {
                 Kind::Header => {
@@ -848,36 +865,18 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             .key(key)
             .into_element()
         }
-        // The rule over a stretch, and the two blanks: drawn as an empty row is, washed
-        // and swept across. Told apart by their kind, the three of one stretch standing
-        // for the one address.
-        Kind::Rule => EmptyRow {
-            row: i,
-            wash,
-            rule: true,
-            key: DiffKey::None,
-        }
-        .key(RowKey::Rule(rows.start_of(stretch).unwrap_or(0)))
-        .into_element(),
-        Kind::Space { under } => EmptyRow {
-            row: i,
-            wash,
-            rule: false,
-            key: DiffKey::None,
-        }
-        .key(RowKey::Space(rows.start_of(stretch).unwrap_or(0), under))
-        .into_element(),
-        Kind::Empty(index) => EmptyRow {
-            row: i,
-            wash,
-            rule: false,
-            key: DiffKey::None,
-        }
-        .key(RowKey::Empty(rows.start_of(stretch).unwrap_or(0), index))
-        .into_element(),
+        Kind::Rule => empty(true, RowKey::Rule(rows.start_of(stretch).unwrap_or(0))),
+        Kind::Space { under } => empty(
+            false,
+            RowKey::Space(rows.start_of(stretch).unwrap_or(0), under),
+        ),
+        Kind::Empty(index) => empty(
+            false,
+            RowKey::Empty(rows.start_of(stretch).unwrap_or(0), index),
+        ),
         Kind::Instruction(index) => {
             let Some(asm) = data.asm_data(stretch) else {
-                return rect().height(Size::px(code_row_height())).into_element();
+                return blank();
             };
             let address = asm.assembly.instructions[index]
                 .address
@@ -911,7 +910,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
         }
         Kind::Separator { below } => {
             let Some(asm) = data.asm_data(stretch) else {
-                return rect().height(Size::px(code_row_height())).into_element();
+                return blank();
             };
             let address = asm.assembly.instructions[below]
                 .address
