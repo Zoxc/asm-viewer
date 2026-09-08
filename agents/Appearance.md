@@ -113,7 +113,7 @@ is both what has the source reader read the file again and what lets the pane go
 entry it has meanwhile (`agents/Panes.md`); a clear here would blank every source pane for as long
 as the reading took. `colours(appearance)` is the palette handed the theme rather than asking for
 it, which is how a parse made on a thread resolves its spans at all. The appearance is resolved by
-`use_theme` (`src/ui/session.rs`) at the root of `app()` from two inputs, through the pure
+`apply_theme` (`src/ui/palette.rs`) at the root of `app()` from two inputs, through the pure
 `resolve_appearance`: the stored choice (`settings.rs`, read once: it is a file) and
 `Platform::preferred_theme`, which freya keeps from winit's `Window::theme()` and re-sets on the
 OS's `ThemeChanged` event. Only `Theme::Desktop` is a question at all. **Not a `use_hook`**: the

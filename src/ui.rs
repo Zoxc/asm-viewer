@@ -366,17 +366,15 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         }
     });
     // freya's own components read their colours from its `Theme` rather than from the
-    // palette, and the tooltip's font size can only be set there -- so a font change has
-    // to be carried in rather than picked up by a re-render, hence the size in the deps.
-    // Two calls and not one: `use_init_theme` builds its value in a `use_hook`, so it
-    // answers for the first render only and the effect carries every later switch.
-    let mut interface = use_init_theme(|| interface_theme(appearance()));
-    use_side_effect_with_deps(
-        &(appearance(), fonts().ui.size()),
-        move |(appearance, _): &(Appearance, f32)| {
-            interface.set(interface_theme(*appearance));
-        },
-    );
+    // palette, and the tooltip's font size can only be set there, so a font change has to
+    // be carried in rather than picked up by a re-render. Two calls and not one:
+    // `use_init_theme` builds its value in a `use_hook`, so it answers for the first
+    // render only and the effect carries every later switch.
+    let deps = (appearance(), fonts().ui.size());
+    let mut interface = use_init_theme(|| interface_theme(deps.0, deps.1));
+    use_side_effect_with_deps(&deps, move |(appearance, size): &(Appearance, f32)| {
+        interface.set(interface_theme(*appearance, *size));
+    });
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let loading = use_provide_context(|| Loading(State::create(Loads::default()))).0;

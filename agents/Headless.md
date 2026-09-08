@@ -375,11 +375,11 @@ a defect in the app as much as a hazard for a test, and was both here. And `para
 paragraphs: a separator row draws none, so its length is not the listing's row count.
 
 Two corollaries worth knowing. A component that dirties itself every pass would **starve every task
-in the app**: the app's `use_theme` writes during its render body and is safe only because the write
-is idempotent, and a test that hangs is what says it stopped being. And
+in the app**: the app's `apply_theme` writes during its render body and is safe only because the
+write is idempotent, and a test that hangs is what says it stopped being. And
 `a_desktop_that_changes_its_mind_repaints_the_window`'s "two passes, and the second is not padding"
-is this rule: the platform state wakes the scope holding `use_theme`, and the write that scope makes
-wakes everything that drew a colour, one pass later.
+is this rule: the platform state wakes the scope holding `apply_theme`, and the write that scope
+makes wakes everything that drew a colour, one pass later.
 
 ## Writing one here
 

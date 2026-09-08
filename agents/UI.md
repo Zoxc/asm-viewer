@@ -16,10 +16,8 @@ and no more, so the annotations *are* the list of what crosses a boundary.
 Seven of the names are not the obvious one, and each avoids shadowing a crate module the prelude has
 already brought in: `ui::source_view` (not `source`), `ui::project_view` (not `project`),
 `ui::filter_bar` (not `filter`), `ui::bookmarks_view` (not `bookmarks`), `ui::files_view` (not
-`files`), `ui::pad` (not `scratchpad`) and `ui::analyzed` (not
-`analysis`, which is the crate `ui/tests.rs` calls into). One name genuinely collides: `freya::prelude` exports a `use_theme` of
-its own, so `ui/tests.rs` names ours explicitly. An explicit import wins over a glob, and that line
-is the disambiguation rather than a duplicate.
+`files`), `ui::pad` (not `scratchpad`) and `ui::analyzed` (not `analysis`, which is the crate
+`ui/tests.rs` calls into).
 
 ## Framework and state
 

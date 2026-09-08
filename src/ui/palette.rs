@@ -378,10 +378,26 @@ pub(crate) fn resolve_appearance(choice: ThemeChoice, preferred: PreferredTheme)
     }
 }
 
+/// Resolve the appearance from the stored choice and the platform's own, and write it
+/// through [`set_appearance`] -- the one function that may change it.
+///
+/// **Not a `use_hook`**: reading `Platform::preferred_theme` subscribes this scope, so a
+/// desktop that goes dark while the app is running repaints. It resolves in the render
+/// body rather than in an effect, an effect being a frame late and a frame late on a dark
+/// desktop a white flash; the write is idempotent, so that costs nothing.
+pub(crate) fn apply_theme(choice: ThemeChoice) {
+    let preferred = *Platform::get().preferred_theme.read();
+
+    set_appearance(resolve_appearance(choice, preferred));
+}
+
 /// The sheet freya's own components -- the filter boxes, the scrollbars, the resizable
 /// handle, the tooltips, the context menu -- read their colours from. The one override is
 /// the tooltip's font size, which freya's theme hardcodes and no element can set.
-pub(crate) fn interface_theme(appearance: Appearance) -> Theme {
+///
+/// `ui_size` is an argument and not a read of `fonts()`. What rebuilds the sheet on a font
+/// change then lists the same two values as its deps.
+pub(crate) fn interface_theme(appearance: Appearance, ui_size: f32) -> Theme {
     let mut theme = match appearance {
         Appearance::Light => light_theme(),
         Appearance::Dark => dark_theme(),
@@ -404,15 +420,15 @@ pub(crate) fn interface_theme(appearance: Appearance) -> Theme {
             background_divider: Preference::Specific(palette().hairline),
             // A hover's headings are a doc comment's, inside a box a few lines tall: the
             // steps are small, and the smallest is the prose it sits over.
-            heading_h1: Preference::Specific(fonts().ui.size() + 5.0),
-            heading_h2: Preference::Specific(fonts().ui.size() + 4.0),
-            heading_h3: Preference::Specific(fonts().ui.size() + 3.0),
-            heading_h4: Preference::Specific(fonts().ui.size() + 2.0),
-            heading_h5: Preference::Specific(fonts().ui.size() + 1.0),
-            heading_h6: Preference::Specific(fonts().ui.size()),
-            paragraph_size: Preference::Specific(fonts().ui.size()),
+            heading_h1: Preference::Specific(ui_size + 5.0),
+            heading_h2: Preference::Specific(ui_size + 4.0),
+            heading_h3: Preference::Specific(ui_size + 3.0),
+            heading_h4: Preference::Specific(ui_size + 2.0),
+            heading_h5: Preference::Specific(ui_size + 1.0),
+            heading_h6: Preference::Specific(ui_size),
+            paragraph_size: Preference::Specific(ui_size),
             code_font_size: Preference::Specific(fonts().mono.size()),
-            table_font_size: Preference::Specific(fonts().ui.size()),
+            table_font_size: Preference::Specific(ui_size),
         },
     );
 
@@ -420,7 +436,7 @@ pub(crate) fn interface_theme(appearance: Appearance) -> Theme {
         theme.set(
             "tooltip",
             TooltipThemePreference {
-                font_size: Preference::Specific(fonts().ui.size()),
+                font_size: Preference::Specific(ui_size),
                 ..tooltip
             },
         );

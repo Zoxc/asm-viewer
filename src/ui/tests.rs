@@ -7,10 +7,6 @@
 //! they assert the properties a second set of values can silently break rather than the
 //! values themselves.
 use super::*;
-// Named again: `use super::*` offers two `use_theme`s -- ours and freya's own out of the
-// prelude -- and two globs offering one name is an ambiguity rather than a shadowing. An
-// explicit import wins over a glob, so this is what the name means here: ours.
-use super::session::use_theme;
 use crate::search::{Hit, SearchEvent, SearchQuery};
 use crate::source::Seeded;
 use crate::temporary::Temporary;
@@ -11397,10 +11393,10 @@ fn theme_harness() -> impl IntoElement {
 
 /// The same row under the wiring that resolves the theme, with the choice handed in so the
 /// machine's own settings file has no vote. The root reads the appearance as well, as
-/// `app()` does, so the write `use_theme` makes during the render body wakes the very
+/// `app()` does, so the write `apply_theme` makes during the render body wakes the very
 /// scope that made it -- which settles only because that write is idempotent.
 fn desktop_theme_harness() -> impl IntoElement {
-    use_theme(ThemeChoice::Desktop);
+    apply_theme(ThemeChoice::Desktop);
     let _ = appearance();
 
     rect().expanded().child(ThemedRow)
@@ -11547,7 +11543,7 @@ fn a_desktop_that_changes_its_mind_repaints_the_window() {
     assert_eq!(painted(&test), Fill::Color(Palette::LIGHT.pane_bg));
 
     // **Two passes, and the second is not padding.** The change reaches the window in two
-    // hops -- the platform state wakes the scope holding `use_theme`, and the write that
+    // hops -- the platform state wakes the scope holding `apply_theme`, and the write that
     // scope makes wakes everything that drew a colour -- and a pass renders the dirty
     // scopes it *began* with.
     let mut preferred = platform.preferred_theme;

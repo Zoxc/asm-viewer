@@ -5,20 +5,6 @@
 
 use super::*;
 
-/// Resolve the appearance from the stored choice and the platform's own, and write it
-/// through [`set_appearance`] -- the one function that may change it, and so the one that
-/// empties `HIGHLIGHTED`.
-///
-/// **Not a `use_hook`**: reading `Platform::preferred_theme` subscribes this scope, so a
-/// desktop that goes dark while the app is running repaints. It resolves in the render
-/// body rather than in an effect, an effect being a frame late and a frame late on a dark
-/// desktop a white flash; the write is idempotent, so that costs nothing.
-pub(crate) fn use_theme(choice: ThemeChoice) {
-    let preferred = *Platform::get().preferred_theme.read();
-
-    set_appearance(resolve_appearance(choice, preferred));
-}
-
 /// The whole of the wiring between the settings and what they are settings of: the
 /// appearance, the fonts, and `settings.toml`. The write is handed in because
 /// [`Settings::save`] writes the machine's real settings file, so a test that mounted
@@ -33,7 +19,7 @@ pub(crate) fn use_settings_with(
     let written = use_hook(|| Rc::new(RefCell::new(prefs.peek().settings())));
     let settings = prefs.read().settings();
 
-    use_theme(settings.theme);
+    apply_theme(settings.theme);
 
     use_side_effect_with_deps(&settings, move |settings: &Settings| {
         set_fonts(fonts::resolve(settings));
