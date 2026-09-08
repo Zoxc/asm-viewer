@@ -378,13 +378,15 @@ two was meant is not this app's to pick.
 
 The file is read as **JSONC**, as VS Code reads it and as the files in the wild are
 written: the tree this is all for opens with nine lines of `//`. `serde_json` takes neither
-comments nor a trailing comma, so `as_json` blanks the first and drops the second before it
-sees the text. Comments become spaces, and a newline in a block comment is kept, so what
+comments nor a trailing comma, so `as_json` blanks both in one pass before it sees the
+text. Comments become spaces, and a newline in a block comment is kept, so what
 `serde_json` says about the line and column of a real mistake is about the file the reader
-wrote. Nothing inside a string is touched, and that is the whole difficulty: a `//` is half
-of every URL, and a string can end in an escaped quote or hold a backslash before its
-closing one, so both passes track the string and the escape. Getting it wrong cuts a path
-short without a word, which is the failure this feature exists to prevent.
+wrote. A blanked comment is whitespace, which is what the comma rule skips over anyway, so
+the two jobs need no order between them. Nothing inside a string is touched, and that is
+the whole difficulty: a `//` is half of every URL, and a string can end in an escaped quote
+or hold a backslash before its closing one, so the pass tracks the string and the escape.
+Getting it wrong cuts a path short without a word, which is the failure this feature exists
+to prevent -- and in one pass it blanks a comma inside a string as well.
 
 Two bounds, both because the input is a file (`AGENTS.md`): the tree is built iteratively so
 a name of ten thousand dots cannot overflow the stack, and `DEEPEST` refuses a name of more

@@ -1264,21 +1264,21 @@ pub fn settings_from(text: &str, directory: &Path) -> Result<Settings, Unreadabl
 ///
 /// Comments become spaces rather than nothing, and a newline inside a block comment is
 /// kept, so what `serde_json` says about the line and column of a real mistake is about
-/// the file the reader wrote.
+/// the file the reader wrote. The comma before a `}` or a `]` becomes a space the same
+/// way; a blanked comment is whitespace, so one standing between the two changes nothing.
+///
+/// **Nothing inside a string is touched**, and that is the whole difficulty: a `//` is
+/// half of every URL, and a string can end in an escaped quote (`"a \" // b"`) or hold a
+/// backslash before its closing one (`"c:\\"`), so this tracks whether it is inside a
+/// string and whether the last character was an escape. Getting that wrong cuts a path
+/// short without a word, which is the failure this whole feature is against.
 fn as_json(text: &str) -> String {
-    without_trailing_commas(&without_comments(text))
-}
-
-/// Comments blanked. **Nothing inside a string is touched**: a `//` is half of every URL,
-/// and a string can end in an escaped quote (`"a \" // b"`) or hold a backslash before its
-/// closing one (`"c:\\"`), so this tracks whether it is inside a string and whether the
-/// last character was an escape. Getting that wrong cuts a path short without a word, which
-/// is the failure this whole feature is against.
-fn without_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     let mut string = false;
     let mut escaped = false;
+    // Where the last comma was written, while nothing but whitespace has followed it.
+    let mut comma: Option<usize> = None;
     while let Some(character) = chars.next() {
         if string {
             out.push(character);
@@ -1293,6 +1293,7 @@ fn without_comments(text: &str) -> String {
         match (character, chars.peek()) {
             ('"', _) => {
                 string = true;
+                comma = None;
                 out.push('"');
             }
             // To the end of the line, which is left where it is.
@@ -1320,47 +1321,22 @@ fn without_comments(text: &str) -> String {
                     star = character == '*';
                 }
             }
-            _ => out.push(character),
-        }
-    }
-    out
-}
-
-/// The comma before a `}` or a `]` taken out, which VS Code's own parser allows and
-/// `serde_json` does not. Over text the pass above has already blanked the comments in, so
-/// what is between the comma and the bracket is whitespace or nothing.
-fn without_trailing_commas(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut string = false;
-    let mut escaped = false;
-    // Where the last comma was written, while nothing but whitespace has followed it.
-    let mut comma: Option<usize> = None;
-    for character in text.chars() {
-        if string {
-            out.push(character);
-            match character {
-                _ if escaped => escaped = false,
-                '\\' => escaped = true,
-                '"' => string = false,
-                _ => {}
+            (',', _) => {
+                comma = Some(out.len());
+                out.push(',');
             }
-            continue;
-        }
-        match character {
-            '"' => {
-                string = true;
-                comma = None;
-            }
-            ',' => comma = Some(out.len()),
-            '}' | ']' => {
+            ('}' | ']', _) => {
                 if let Some(at) = comma.take() {
                     out.replace_range(at..at + 1, " ");
                 }
+                out.push(character);
             }
-            character if character.is_whitespace() => {}
-            _ => comma = None,
+            _ if character.is_whitespace() => out.push(character),
+            _ => {
+                comma = None;
+                out.push(character);
+            }
         }
-        out.push(character);
     }
     out
 }

@@ -1454,6 +1454,28 @@ fn nothing_inside_a_string_is_taken_for_a_comment() {
     assert_eq!(settings.options()["d"], json!("/* not a comment */"));
 }
 
+/// A comma inside a string is not the comma the trailing-comma rule takes out. One pass
+/// does both jobs, so the string tracking holds the comma rule up as well: a string whose
+/// closing quote was missed leaves the text under it outside every string, and a comma
+/// there before a bracket is blanked, taking a real value with it.
+#[test]
+fn a_comma_inside_a_string_is_not_a_trailing_comma() {
+    let settings = read(
+        r#"{
+            "rust-analyzer.a": "a \" b,",
+            "rust-analyzer.b": "c:\\",
+            "rust-analyzer.c": "// x,",
+            "rust-analyzer.linkedProjects": ["a", "b"],
+        }"#,
+    )
+    .expect("a file whose strings hold commas");
+
+    assert_eq!(settings.options()["a"], json!("a \" b,"));
+    assert_eq!(settings.options()["b"], json!("c:\\"));
+    assert_eq!(settings.options()["c"], json!("// x,"));
+    assert_eq!(settings.options()["linkedProjects"], json!(["a", "b"]));
+}
+
 /// The shape of the file the user's own tree keeps: a block of `//` lines and then the
 /// object, with the editor's own keys in it beside the server's.
 #[test]
