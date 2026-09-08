@@ -31,6 +31,10 @@ pub(crate) struct Builds {
     /// Whether the chosen profile carries the line information the source side is drawn
     /// from, as that manifest has it now.
     pub(crate) debug_lines: bool,
+    /// Why the last "Turn on" did not take, in the words of whatever refused it. The row
+    /// offering it is unchanged either way, so this is the only sign the press did
+    /// anything. Cleared by the next read of the manifest.
+    pub(crate) edit_refused: Option<String>,
     /// What the build before this one produced. **The set a build replaces**, which is why
     /// it is saved with the session: a binary the reader opened some other way is left
     /// alone, and the build before may have been in another run of the app.
@@ -86,15 +90,24 @@ impl Builds {
 
     /// What the manifest says, as the worker read it. Whether anything changed, so the
     /// hook writes only then ([`write_if`]).
-    fn read(&mut self, manifest: Option<PathBuf>, profiles: Option<PathBuf>, lines: bool) -> bool {
-        let same =
-            self.manifest == manifest && self.profiles == profiles && self.debug_lines == lines;
+    fn read(
+        &mut self,
+        manifest: Option<PathBuf>,
+        profiles: Option<PathBuf>,
+        lines: bool,
+        refused: Option<String>,
+    ) -> bool {
+        let same = self.manifest == manifest
+            && self.profiles == profiles
+            && self.debug_lines == lines
+            && self.edit_refused == refused;
         if same {
             return false;
         }
         self.manifest = manifest;
         self.profiles = profiles;
         self.debug_lines = lines;
+        self.edit_refused = refused;
         true
     }
 
@@ -180,24 +193,23 @@ impl Builds {
 #[derive(Clone, Copy)]
 pub(crate) struct Building(pub(crate) State<Builds>);
 
-/// One thing to do in the project's directory. Each carries what it needs, so nothing can
+/// One thing to do in the project's directory. It carries what it needs, so nothing can
 /// change under the worker between the ask and the answer.
-pub(crate) enum BuildJob {
+pub(crate) struct BuildJob {
+    pub(crate) directory: PathBuf,
+    pub(crate) profile: Profile,
+    pub(crate) what: BuildWhat,
+}
+
+/// Which of the three to do. The directory and the profile are the same question for each,
+/// so they are the job's and only the verb is here.
+pub(crate) enum BuildWhat {
     /// What the manifest says: whether there is one, and what it says about debug
     /// information for this profile.
-    Read {
-        directory: PathBuf,
-        profile: Profile,
-    },
-    Build {
-        directory: PathBuf,
-        profile: Profile,
-    },
+    Read,
+    Build,
     /// Ask the profile for line tables, in the reader's own manifest.
-    AddDebugLines {
-        directory: PathBuf,
-        profile: Profile,
-    },
+    AddDebugLines,
 }
 
 /// What the worker answers with.
@@ -206,6 +218,9 @@ pub(crate) enum BuildAnswer {
         manifest: Option<PathBuf>,
         profiles: Option<PathBuf>,
         debug_lines: bool,
+        /// Why the edit that asked for this read was refused, when one did. `None` for a
+        /// plain read, which is what clears the last refusal.
+        refused: Option<String>,
     },
     /// A finished build, with the diagnostic files the view may offer as targets already
     /// picked out ([`openable`]): the run alone would leave that to the rows.
@@ -218,25 +233,27 @@ pub(crate) enum BuildAnswer {
 /// The blocking half. Handed in rather than called directly, so a test can drive the whole
 /// mechanism with no cargo on the machine.
 pub(crate) fn build_work(job: BuildJob) -> BuildAnswer {
-    match job {
-        BuildJob::Read { directory, profile } => read(&directory, profile),
-        BuildJob::Build { directory, profile } => {
+    let BuildJob {
+        directory,
+        profile,
+        what,
+    } = job;
+    match what {
+        BuildWhat::Read => read(&directory, profile, None),
+        BuildWhat::Build => {
             let run = cargo::run(&directory, profile);
             BuildAnswer::Done {
                 sources: openable(&directory, run.diagnostics()),
                 run,
             }
         }
-        BuildJob::AddDebugLines { directory, profile } => {
+        BuildWhat::AddDebugLines => {
             // The answer is the file read back, whether or not the write worked: a write
-            // that failed must not leave the view saying the lines are there.
-            if let Err(error) = cargo::add_debug_lines(&directory, profile) {
-                log::warn!(
-                    "could not add debug lines to {}: {error}",
-                    directory.display()
-                );
-            }
-            read(&directory, profile)
+            // that failed must not leave the view saying the lines are there. What
+            // refused it goes back with the read, since the row it leaves standing says
+            // nothing about the press.
+            let refused = cargo::add_debug_lines(&directory, profile).err();
+            read(&directory, profile, refused)
         }
     }
 }
@@ -261,7 +278,7 @@ fn openable(directory: &Path, diagnostics: &[Diagnostic]) -> HashSet<PathBuf> {
     named
 }
 
-fn read(directory: &Path, profile: Profile) -> BuildAnswer {
+fn read(directory: &Path, profile: Profile, refused: Option<String>) -> BuildAnswer {
     let manifest = cargo::manifest(directory);
     // Named only when it is not the file cargo is run over: a member's profiles are the
     // workspace root's, and the reader is being offered an edit to that file and not to
@@ -271,6 +288,7 @@ fn read(directory: &Path, profile: Profile) -> BuildAnswer {
         debug_lines: cargo::debug_lines(directory, profile),
         profiles: (manifest.as_ref() != Some(&profiles)).then_some(profiles),
         manifest,
+        refused,
     }
 }
 
@@ -295,8 +313,11 @@ pub(crate) fn use_building_with(
                 manifest,
                 profiles,
                 debug_lines,
+                refused,
             } => {
-                write_if(build, |next| next.read(manifest, profiles, debug_lines));
+                write_if(build, |next| {
+                    next.read(manifest, profiles, debug_lines, refused)
+                });
             }
             BuildAnswer::Done { run, sources } => finished(build, states, opened, run, sources),
         },
@@ -364,7 +385,11 @@ pub(crate) fn start_build(
     // The button's own `enabled` says this too. Both, because a second build queued behind
     // the first would compile bytes that have since changed.
     if write_if(build, |next| next.start()) {
-        jobs.send(BuildJob::Build { directory, profile });
+        jobs.send(BuildJob {
+            directory,
+            profile,
+            what: BuildWhat::Build,
+        });
     }
 }
 

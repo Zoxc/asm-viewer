@@ -423,9 +423,10 @@ impl Component for CargoSection {
                 let Some(directory) = directory.clone() else {
                     return;
                 };
-                jobs.send(BuildJob::Read {
+                jobs.send(BuildJob {
                     directory,
                     profile: *profile,
+                    what: BuildWhat::Read,
                 });
             }
         });
@@ -530,7 +531,7 @@ impl Component for CargoSection {
                     .maybe_child((!held.debug_lines).then(|| {
                         let jobs = jobs.clone();
                         let directory = directory.clone();
-                        field_row(
+                        let row = field_row(
                             "Debug lines",
                             rect()
                                 .width(Size::flex(1.0))
@@ -550,15 +551,25 @@ impl Component for CargoSection {
                                             let Some(directory) = directory.clone() else {
                                                 return;
                                             };
-                                            jobs.send(BuildJob::AddDebugLines {
+                                            jobs.send(BuildJob {
                                                 directory,
                                                 profile,
+                                                what: BuildWhat::AddDebugLines,
                                             });
                                         })
                                         .child("Turn on"),
                                 ),
-                        )
-                        .into_element()
+                        );
+                        rect()
+                            .width(Size::fill())
+                            .child(row)
+                            // Why the last press did nothing. The row above is unchanged
+                            // whether the write worked or not, so without this the reader
+                            // is refused in silence.
+                            .maybe_child(held.edit_refused.as_ref().map(|why| {
+                                info_line_in(why.clone(), palette().invalid_fg).into_element()
+                            }))
+                            .into_element()
                     }))
                     .maybe_child(held.status().map(|(text, bad)| {
                         info_line_in(

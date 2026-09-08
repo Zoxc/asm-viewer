@@ -363,8 +363,10 @@ replace binaries opened over here.
 than several so the project's directory has a single writer -- the debug-lines edit cannot land
 inside the build that is reading the same manifest. Nothing supersedes: a build is asked for by a
 press and takes seconds, and the two manifest jobs are cheap. Two builds cannot start at once, on
-the button's `enabled` and in `start_build` both. The work function is handed in, so a headless test
-drives the whole mechanism with no cargo on the machine.
+the button's `enabled` and in `start_build` both. A job is a directory, a profile and which of the
+three to do with them (`BuildWhat`): all three ask over the same pair, so the pair is the job and
+only the verb varies. The work function is handed in, so a headless test drives the whole mechanism
+with no cargo on the machine.
 
 **Artifacts are what cargo named, and the workspace's own are found by `manifest_path`.** cargo
 reports a `compiler-artifact` for every crate in the graph -- 449 of them for this app's own
@@ -425,6 +427,13 @@ directory is not checked: cargo refuses to build a package its ancestor workspac
 there is no build there to ask about. When that file is not the project's own, the view **names**
 it, beside the manifest cargo is run over: the offer edits a file outside the project, and a write
 the reader was not told about is the one thing it must not be.
+
+**A write that fails says so under the offer.** The edit answers with the manifest read back, so a
+refusal -- a read-only file, a `[profile]` that is not a table -- leaves the row saying exactly what
+it said before the press, and without the words that refused it the button does nothing for no
+reason. They travel back with that read (`BuildAnswer::Read`'s `refused`), are held beside what it
+said (`Builds::edit_refused`), and the next read clears them, being by then about a file as it no
+longer is. Drawn in the invalid colour, as cargo's own refusal of a build already is.
 
 **A project switch is a close and a restore, through the same functions.** `switch_project` is
 `project::switch` (flush, re-point, remember), then `clear_project`, then `enter_project`.

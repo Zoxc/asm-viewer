@@ -22817,10 +22817,10 @@ macro_rules! mount_project {
         let (asked, asks) = async_channel::unbounded::<AskedToBuild>();
         let answer = $answer;
         let work = move |job: BuildJob| {
-            let recorded = match &job {
-                BuildJob::Read { .. } => AskedToBuild::Read,
-                BuildJob::Build { .. } => AskedToBuild::Build,
-                BuildJob::AddDebugLines { .. } => AskedToBuild::AddDebugLines,
+            let recorded = match &job.what {
+                BuildWhat::Read => AskedToBuild::Read,
+                BuildWhat::Build => AskedToBuild::Build,
+                BuildWhat::AddDebugLines => AskedToBuild::AddDebugLines,
             };
             let _ = asked.send_blocking(recorded);
             answer(job)
@@ -22882,12 +22882,13 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
     let artifact = fixture_artifact();
     let answer = {
         let artifact = artifact.clone();
-        move |job: BuildJob| match job {
-            BuildJob::Build { .. } => done(built(&[artifact.clone()])),
+        move |job: BuildJob| match job.what {
+            BuildWhat::Build => done(built(&[artifact.clone()])),
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
                 debug_lines: true,
+                refused: None,
             },
         }
     };
@@ -22967,6 +22968,7 @@ fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
             manifest: None,
             profiles: None,
             debug_lines: true,
+            refused: None,
         }
     });
 
@@ -23044,12 +23046,13 @@ fn an_artifact_load_survives_the_view_being_left() {
     let artifact = fixture_artifact();
     let answer = {
         let artifact = artifact.clone();
-        move |job: BuildJob| match job {
-            BuildJob::Build { .. } => done(built(&[artifact.clone()])),
+        move |job: BuildJob| match job.what {
+            BuildWhat::Build => done(built(&[artifact.clone()])),
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
                 debug_lines: true,
+                refused: None,
             },
         }
     };
@@ -23112,14 +23115,16 @@ fn a_finished_build_forgets_the_workspace_sources() {
     std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
 
     // Nothing is opened: what a build produced is another rule, tested above.
-    let (mut test, states, _language, asking, _asks) = mount_project!(|job: BuildJob| match job {
-        BuildJob::Build { .. } => done(built(&[])),
-        _ => BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: true,
-        },
-    });
+    let (mut test, states, _language, asking, _asks) =
+        mount_project!(|job: BuildJob| match job.what {
+            BuildWhat::Build => done(built(&[])),
+            _ => BuildAnswer::Read {
+                manifest: None,
+                profiles: None,
+                debug_lines: true,
+                refused: None,
+            },
+        });
 
     let mut proj = states.proj;
     proj.write().directory = directory.to_string_lossy().into_owned();
@@ -23157,12 +23162,13 @@ fn a_build_replaces_what_the_build_before_it_produced() {
         .join("crates/analysis/tests/fixtures/line_fixture_hidden.so");
     let answer = {
         let artifact = artifact.clone();
-        move |job: BuildJob| match job {
-            BuildJob::Build { .. } => done(built(&[artifact.clone()])),
+        move |job: BuildJob| match job.what {
+            BuildWhat::Build => done(built(&[artifact.clone()])),
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
                 debug_lines: true,
+                refused: None,
             },
         }
     };
@@ -23226,6 +23232,7 @@ fn a_directory_with_no_manifest_builds_nothing() {
             manifest: None,
             profiles: None,
             debug_lines: false,
+            refused: None,
         });
 
     let mut proj = states.proj;
@@ -23265,19 +23272,21 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
     let profiles = || Some(PathBuf::from("/work/Cargo.toml"));
     let answer = {
         let added = added.clone();
-        move |job: BuildJob| match job {
-            BuildJob::AddDebugLines { .. } => {
+        move |job: BuildJob| match job.what {
+            BuildWhat::AddDebugLines => {
                 added.store(true, std::sync::atomic::Ordering::SeqCst);
                 BuildAnswer::Read {
                     manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
                     profiles: profiles(),
                     debug_lines: true,
+                    refused: None,
                 }
             }
             _ => BuildAnswer::Read {
                 manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: profiles(),
                 debug_lines: added.load(std::sync::atomic::Ordering::SeqCst),
+                refused: None,
             },
         }
     };
@@ -23309,6 +23318,60 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
         !drawn
             .iter()
             .any(|text| text == "Off, so there is no source side"),
+        "{drawn:?}"
+    );
+}
+
+/// **A write that failed is said in the view.** The offer answers with the manifest read
+/// back, so a refused edit leaves the row saying exactly what it said before the press:
+/// without the words that refused it, "Turn on" does nothing and gives no reason.
+///
+/// And the next read of the manifest clears them, since by then they are about a file as
+/// it no longer is.
+#[test]
+fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
+    let answer = |job: BuildJob| BuildAnswer::Read {
+        manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+        profiles: None,
+        debug_lines: false,
+        refused: matches!(job.what, BuildWhat::AddDebugLines)
+            .then(|| "Permission denied (os error 13)".to_owned()),
+    };
+    let (mut test, states, _language, _asking, _asks) = mount_project!(answer);
+
+    let mut proj = states.proj;
+    proj.write().directory = "/work/app".to_owned();
+    pump(&mut test, || states.build.peek().manifest.is_some());
+
+    let button = centre_of(&test, "Turn on");
+    press_at(&mut test, button);
+    pump(&mut test, || states.build.peek().edit_refused.is_some());
+
+    let drawn = labels(&test);
+    assert!(
+        drawn
+            .iter()
+            .any(|text| text == "Permission denied (os error 13)"),
+        "the press was refused in silence: {drawn:?}"
+    );
+    assert!(
+        drawn
+            .iter()
+            .any(|text| text == "Off, so there is no source side"),
+        "the lines are still off, so the offer stands: {drawn:?}"
+    );
+
+    // The profile is the other thing the manifest is read over, so choosing the other
+    // one asks again.
+    let debug = centre_of(&test, "Debug");
+    press_at(&mut test, debug);
+    pump(&mut test, || states.build.peek().edit_refused.is_none());
+
+    let drawn = labels(&test);
+    assert!(
+        !drawn
+            .iter()
+            .any(|text| text == "Permission denied (os error 13)"),
         "{drawn:?}"
     );
 }
@@ -23348,6 +23411,7 @@ fn a_diagnostics_place_opens_the_file_it_names() {
             manifest: Some(manifest.clone()),
             profiles: None,
             debug_lines: true,
+            refused: None,
         });
 
     let mut proj = states.proj;
@@ -23420,6 +23484,7 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
             manifest: Some(manifest.clone()),
             profiles: None,
             debug_lines: true,
+            refused: None,
         });
 
     let mut proj = states.proj;
@@ -24037,6 +24102,7 @@ fn the_project_view_says_how_the_language_server_went() {
             manifest: None,
             profiles: None,
             debug_lines: false,
+            refused: None,
         });
 
     let says = |test: &TestingRunner, wanted: &str| {
@@ -24110,6 +24176,7 @@ fn the_project_view_lists_the_settings_the_project_gave_the_server() {
             manifest: None,
             profiles: None,
             debug_lines: false,
+            refused: None,
         });
 
     let mut proj = states.proj;
@@ -24146,6 +24213,7 @@ fn the_project_view_says_why_a_settings_file_could_not_be_used() {
             manifest: None,
             profiles: None,
             debug_lines: false,
+            refused: None,
         });
 
     let mut proj = states.proj;
@@ -24173,6 +24241,7 @@ fn the_project_names_the_language_server_it_is_read_with() {
             manifest: None,
             profiles: None,
             debug_lines: false,
+            refused: None,
         });
     let mut proj = states.proj;
 
@@ -24202,6 +24271,7 @@ fn the_project_views_button_starts_and_stops_the_language_server() {
             manifest: None,
             profiles: None,
             debug_lines: false,
+            refused: None,
         });
     let mut proj = states.proj;
     proj.write().directory = "/p".to_owned();
@@ -24703,6 +24773,7 @@ fn the_project_view_shows_the_agreement_and_takes_it_back() {
             manifest: None,
             profiles: None,
             debug_lines: false,
+            refused: None,
         });
     let mut proj = states.proj;
     proj.write().directory = "/p".to_owned();
@@ -24793,6 +24864,7 @@ fn the_project_views_button_asks_before_it_starts_too() {
             manifest: None,
             profiles: None,
             debug_lines: false,
+            refused: None,
         });
     let mut proj = states.proj;
     proj.write().directory = "/p".to_owned();

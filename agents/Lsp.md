@@ -399,9 +399,9 @@ changed, so the transition says it by answering with no settings to start under 
 than by a flag beside them. It is reported as `Lsp::Failed`, which is where a
 failure to start is already said.
 
-The read is the LSP worker's (`LspJob::ReadSettings`, `BuildJob::Read`'s shape): reading a
-file blocks and nothing is read on the UI thread, and what it answers is what a start has
-to carry. It happens in the effect that follows the project, at the **root**, and not in
+The read is the LSP worker's (`LspJob::ReadSettings`, the shape of the build worker's own
+read): reading a file blocks and nothing is read on the UI thread, and what it answers is
+what a start has to carry. It happens in the effect that follows the project, at the **root**, and not in
 the Project tab: that tab is unmounted while it is not the one on screen, where the
 control in the top bar is pressed from wherever the reader is. One read answers both, and
 it happens whether or not a server is ever started, since the view lists what it found
