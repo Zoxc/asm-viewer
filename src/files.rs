@@ -185,6 +185,8 @@ impl Node {
 /// dead. An entry whose kind cannot be read is dropped too: nothing is known of what its
 /// row would open.
 fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
+    #[cfg(test)]
+    READS.with(|reads| reads.set(reads.get() + 1));
     let mut nodes: Vec<Node> = fs::read_dir(directory)?
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
@@ -210,6 +212,22 @@ fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
             .then_with(|| walk::by_name(&a.name, &b.name))
     });
     Ok(nodes)
+}
+
+/// Test-only: how many directories this thread has read into a tree.
+///
+/// Every level a tree holds comes from [`read_level`], so counting there counts them all.
+/// A thread-local because `freya-testing` runs the whole app on the test's own thread,
+/// which is what lets a headless test settle how often the view read the root. Nothing
+/// resets it -- a test takes the count before and after what it is about.
+#[cfg(test)]
+pub fn reads() -> usize {
+    READS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

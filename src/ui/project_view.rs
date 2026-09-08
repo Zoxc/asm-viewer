@@ -217,13 +217,9 @@ impl Component for ArtifactRow {
                     .on_pointer_over(move |_| hovering.set_if_modified(true))
                     .on_pointer_out(move |_| hovering.set_if_modified(false))
                     .on_press(move |_| {
-                        let open = states
-                            .objects
-                            .peek()
-                            .iter()
-                            .any(|object| object.path == path)
-                            || states.loading.peek().is_loading(&path);
-                        if open {
+                        // The same question a Files row's menu turns on: a path the app
+                        // holds already is not opened a second time.
+                        if states.holds_path(&path) {
                             return;
                         }
 

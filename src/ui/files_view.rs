@@ -98,30 +98,19 @@ impl Component for EntryRow {
                         press_entry(states, tree, ctrl, fold, &pressed)
                     });
                 })
-                // Every row's menu. A file's opens with the binary item: opening a
-                // binary is a deliberate act, so it is not the press, and whether the
-                // file *is* one is the parser's question, asked when the reader chooses
-                // to open it. That item is Close when the path is already loaded or
-                // loading, since opening a path twice puts a second copy of each of its
-                // objects in the list. A directory has no such item, having no object in
-                // it to open. Under whatever there is, for either kind of row, sits the
-                // item that shows the path in the desktop's file manager. Needs the
-                // `ContextMenuViewer` mounted at the root; opening one without it panics.
+                // Every row's menu. A file's opens with the binary item, which is
+                // `file_menu`'s choice between Open and Close: opening a binary is a
+                // deliberate act, so it is not the press, and whether the file *is* one is
+                // the parser's question, asked when the reader chooses to open it. A
+                // directory has no such item, having no object in it to open. Under
+                // whatever there is, for either kind of row, sits the item that shows the
+                // path in the desktop's file manager. Needs the `ContextMenuViewer`
+                // mounted at the root; opening one without it panics.
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     let menu = match fold {
                         Some(_) => Menu::new(),
-                        None => {
-                            let loaded = states.objects.peek().iter().any(|o| o.path == path)
-                                || states.loading.peek().is_loading(&path);
-                            if loaded {
-                                close_menu(states, path.clone())
-                            } else {
-                                open_menu(states.objects, states.loading, path.clone())
-                            }
-                        }
+                        None => file_menu(states, path.clone()),
                     };
-                    // Appended rather than built into either, so that the Objects rows,
-                    // which share `close_menu`, keep the one item they had.
                     // Appended after the match, beside the reveal, so the Objects rows -- which
                     // share `close_menu` -- keep the one item they had. A project file is the one
                     // kind of file this view knows something more about than "it is a file".
@@ -171,10 +160,20 @@ impl Component for FilesPanel {
         // of what this is a tree of, and costs one `read_dir` of a half-typed path.
         let directory = proj.read().workspace();
         let first = directory.clone();
-        // Built at the first render rather than by the effect below, which runs a beat
-        // later and would draw the "not a directory" placeholder for one frame.
+        let started = directory.clone();
+        // Built here at the first render rather than by the effect below, which runs a
+        // beat later and would draw the "not a directory" placeholder for one frame.
         let mut tree = use_state(move || first.as_deref().and_then(FileTree::new));
+        // Which directory the tree above is over. The effect runs on the mount as well as
+        // on a change, and without something to compare against it would read the root a
+        // second time and hand the memo a tree equal to the one it already has.
+        let mut over = use_state(move || started);
         use_side_effect_with_deps(&directory, move |directory: &Option<PathBuf>| {
+            let changed = *over.peek() != *directory;
+            if !changed {
+                return;
+            }
+            over.set(directory.clone());
             tree.set(directory.as_deref().and_then(FileTree::new));
         });
         // A memo, not a walk per row: the `VirtualScrollView` has to be told how many rows

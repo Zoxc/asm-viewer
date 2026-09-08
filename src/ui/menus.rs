@@ -87,6 +87,20 @@ pub(crate) fn close_menu(states: ProjectStates, path: PathBuf) -> Menu {
     )
 }
 
+/// The menu a Files row over a file opens on a right-click: **Close file** when the app
+/// holds the path already ([`ProjectStates::holds_path`]), and **Open file** when it does
+/// not. Never both, since opening a path twice puts a second copy of each of its objects
+/// in the list.
+///
+/// Whatever the row adds -- the file manager's item, and a project file's own -- goes on
+/// after this, so the Objects rows that share `close_menu` keep the one item they had.
+pub(crate) fn file_menu(states: ProjectStates, path: PathBuf) -> Menu {
+    match states.holds_path(&path) {
+        true => close_menu(states, path),
+        false => open_menu(states.objects, states.loading, path),
+    }
+}
+
 /// The one menu item every bookmark gesture is: adding a bookmark of `document`, or
 /// removing the one that points at it, whichever is true at the press. Which it is comes
 /// from `Bookmarks::matching` -- by resolution, so a symbol that moved under a rebuild still

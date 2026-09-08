@@ -179,20 +179,25 @@ reads the root's own entries, and `toggle` reads one directory's when it is unfo
 them when it is folded. So a refold is a re-read, which is the whole refresh story and why there is
 no file-watcher dependency. **The tree is the fold state**: a directory is unfolded exactly when its
 children have been read, so there is no expansion set beside it to keep in step. The tree is a
-`use_state` in the tab, a view of a list and never part of the session, rebuilt by an effect
-whenever `Proj`'s directory string changes; a keystroke in the Project view's box costs one
-`read_dir` of a half-typed path, which fails cheaply. The root is a row like any other, named after
-the directory's last component, so refolding it is how the top level is refreshed. A root that
-cannot be read is a placeholder's job to say, as is a project with no directory at all, which points
-at the Project view and never puts the working directory in its place. The read is on the UI thread,
-one `read_dir` of one level per fold, the `pads_in` precedent: nothing is *analysed*, and a listing
-is what a file dialog does; a worker is the upgrade if a network mount ever makes a fold slow. Rows
-are directories first and then files, each sorted by `walk::by_name`, the comparator the walk sorts
-by too, and hidden entries are shown; `.git` and `target` fold away with one click. **A symlink is
-not a row**, whatever it points at: the kind is the one `read_dir` hands back and is never followed,
-which is what the walk does and what `source::showable` answers (`agents/Finding.md`), so a row here
-is a row a press opens. There is no filter bar: a filter over a lazily read tree can only see what
-is unfolded, and the search stories are the Symbols filter and `notes/Goals.md`'s source search.
+`use_state` in the tab, a view of a list and never part of the session, built by the state's own
+initialiser -- so the first frame is the tree and not the "not a directory" placeholder -- and
+rebuilt by an effect when `Proj`'s directory string changes. **The effect keeps the directory it
+built over**, because `use_side_effect_with_deps` runs on the mount as well as on a change: without
+something to compare against it would read the root a second time at the first render and hand the
+rows memo a tree equal to the one already there. A keystroke in the Project view's box is a change,
+and costs one `read_dir` of a half-typed path, which fails cheaply. The root is a row like any
+other, named after the directory's last component, so refolding it is how the top level is
+refreshed. A root that cannot be read is a placeholder's job to say, as is a project with no
+directory at all, which points at the Project view and never puts the working directory in its
+place. The read is on the UI thread, one `read_dir` of one level per fold, the `pads_in` precedent:
+nothing is *analysed*, and a listing is what a file dialog does; a worker is the upgrade if a
+network mount ever makes a fold slow. Rows are directories first and then files, each sorted by
+`walk::by_name`, the comparator the walk sorts by too, and hidden entries are shown; `.git` and
+`target` fold away with one click. **A symlink is not a row**, whatever it points at: the kind is
+the one `read_dir` hands back and is never followed, which is what the walk does and what
+`source::showable` answers (`agents/Finding.md`), so a row here is a row a press opens. There is no
+filter bar: a filter over a lazily read tree can only see what is unfolded, and the search stories
+are the Symbols filter and `notes/Goals.md`'s source search.
 
 **The Search panel is the Files panel's other half** (`src/ui/search_view.rs` over
 `src/search.rs`): the Files view answers *what is here*, this one answers *where is that*. A panel
@@ -327,7 +332,11 @@ Under whichever of the two is drawn sits **Show in file manager**, the same `rev
 document's tab carries (`agents/UI.md`), on the row's own path: appended to the menu here rather
 than built into either of them, so that the Objects rows, which share `close_menu`, keep the one
 item they had. **A directory's menu is that item alone**: a folder is as showable as a file, and
-there is no object inside one to open.
+there is no object inside one to open. **The choice between Open and Close is `file_menu`**
+(`src/ui/menus.rs`) and not the row's handler, over `tree::holds`: the objects read from a path and
+the loads still running are one question, a file being in the app from the moment it is asked for
+rather than from the moment its first object lands. The Project view's artefact rows ask it too,
+through the same `ProjectStates::holds_path`, before they start a load.
 
 **The Project view** (`Tab::Project`) is what a project's `name` and `directory` are finally set
 from. It is **one view and not two**, where `notes/Goals.md` asks for a project view and a

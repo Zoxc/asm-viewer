@@ -19406,6 +19406,39 @@ fn no_directory_draws_the_placeholder() {
     assert!(label_area(&test, "No project directory. Set one in the Project view.").is_some());
 }
 
+/// The tree is built once at the first render. The state's initialiser builds it so that
+/// the first frame is the tree and not the placeholder, and the effect beside it, which
+/// runs on the mount as well as on a change, has to leave that one alone: a second build
+/// is another `read_dir` of the root and a rebuilt rows memo for a tree equal to the one
+/// already there.
+///
+/// The directory is set before the mount, in the wiring, so that the first render is over
+/// a real one -- setting it afterwards is a change, and a change is the one time the
+/// effect *should* build.
+#[test]
+fn the_root_is_read_once_at_the_first_render() {
+    let directory = run_directory_under(line!(), "project");
+    std::fs::write(directory.join("main.rs"), "fn main() {}\n").expect("writing the source");
+    let over = directory.to_string_lossy().into_owned();
+
+    let before = crate::files::reads();
+    let (mut test, _states) = TestingRunner::new(
+        files_harness,
+        (300., 400.).into(),
+        move |runner: &mut _| {
+            let states = project_states!(runner);
+            let mut proj = states.proj;
+            proj.write().workspace_text = over;
+            states
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    assert!(label_area(&test, "main.rs").is_some(), "the tree is drawn");
+    assert_eq!(crate::files::reads() - before, 1, "the root was read twice");
+}
+
 /// The two configuration grammars colour what they parse: a TOML key is a property and a
 /// JSON key is a special string, each the palette's own colour rather than the text's.
 #[test]

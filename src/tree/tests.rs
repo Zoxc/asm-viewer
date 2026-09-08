@@ -329,3 +329,24 @@ fn clearing_abandons_every_load() {
     assert!(!loads.active(id));
     assert!(loads.paths().is_empty());
 }
+
+/// A path is in the app from the moment it is asked for and not from the moment its first
+/// object lands, so the question spans both halves: the objects, and the loads still
+/// running. What a Files row's menu turns on.
+#[test]
+fn a_path_is_held_while_it_loads_and_after_it_has_landed() {
+    let a = Path::new("/tmp/a");
+    let objects = vec![object("/tmp/a", "one")];
+    let mut loads = Loads::default();
+
+    assert!(!holds(&[], &loads, a));
+    // Being read is enough: the row is there before the first object is.
+    let id = loads.begin(&[a.to_path_buf()]);
+    assert!(holds(&[], &loads, a));
+    // And an object of it is enough once nothing is reading it.
+    loads.finished(id, a);
+    assert!(!holds(&[], &loads, a));
+    assert!(holds(&objects, &loads, a));
+    // Another file is another question.
+    assert!(!holds(&objects, &loads, Path::new("/tmp/b")));
+}

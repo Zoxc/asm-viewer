@@ -101,6 +101,22 @@ impl Loads {
     }
 }
 
+/// Whether the app holds `path` already: an object read from it is in the list, or a load
+/// of it is still on its way. The two halves are one question -- a file is in the app from
+/// the moment it is asked for, not from the moment its first object lands -- and opening a
+/// path a second time would put a second copy of each of its objects in the list.
+///
+/// What a Files row's menu turns on (Close file or Open file) and what an artefact row's
+/// press asks before it starts a load.
+pub fn holds(objects: &[Arc<Object>], loads: &Loads, path: &Path) -> bool {
+    objects_have(objects, path) || loads.is_loading(path)
+}
+
+/// Whether any object in the list came out of `path`.
+fn objects_have(objects: &[Arc<Object>], path: &Path) -> bool {
+    objects.iter().any(|object| object.path == path)
+}
+
 /// Whether a file row's members are on screen, and whether the reader decided that.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Expansion {
@@ -239,7 +255,7 @@ impl ObjectTree {
         // them next to, and a file's row moves into the walk above once its first one
         // lands. Only the file's own name is matched, there being no members yet.
         for path in loads.paths() {
-            if objects.iter().any(|object| object.path == path) {
+            if objects_have(objects, path) {
                 continue;
             }
             let name = source::name_of(path);
