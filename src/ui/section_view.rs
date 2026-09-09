@@ -523,6 +523,35 @@ enum RowKey {
     Gap(u64),
 }
 
+impl RowKey {
+    /// The key row `row` draws under, `at` being what [`Rows::row`] said it is. **The one
+    /// place a [`Kind`] becomes a key**, and a total match: a ninth kind is a key space of
+    /// its own or a compile error, never a row that quietly keys as another kind's.
+    ///
+    /// `stated` is the address the caller has already worked out for the row -- a text
+    /// row's own ([`text_of`]), an instruction's placed one -- so that neither is worked
+    /// out twice and an instruction is keyed by the address the row is drawn at. [`None`]
+    /// where the caller has none.
+    fn of(rows: &Rows, row: usize, at: Row, stated: Option<u64>) -> Self {
+        // The stretch's start, which the rule over it, the blank under it and its guessed
+        // rows all stand for, and the row's own address.
+        let start = || rows.start_of(at.stretch).unwrap_or(0);
+        let address = || rows.address_of(row);
+        match at.kind {
+            Kind::Header => Self::Header(rows.place(at.stretch).map_or(0, |place| place.section)),
+            Kind::Rule => Self::Rule(start()),
+            Kind::Space { under } => Self::Space(start(), under),
+            Kind::Label(index) => Self::Label(address().unwrap_or(0), index),
+            Kind::Empty(index) => Self::Empty(start(), index),
+            Kind::Instruction(_) => Self::Insn(stated.or_else(address).unwrap_or(0)),
+            Kind::Separator { .. } => Self::Sep(stated.or_else(address).unwrap_or(0)),
+            // By the row's own address and never the bytes': a row whose bytes could not
+            // be found would otherwise share a key with every other such row.
+            Kind::Gap(_) => Self::Gap(address().or(stated).unwrap_or(0)),
+        }
+    }
+}
+
 /// The listing of one object's code.
 #[derive(Clone)]
 pub(crate) struct SectionList {
@@ -812,7 +841,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             .find(|(flat, _)| *flat == stretch)
             .map_or(&[][..], |(_, edges)| edges.as_slice())
     };
-    let Some(Row { stretch, kind }) = rows.row(i) else {
+    let Some(at @ Row { stretch, kind }) = rows.row(i) else {
         return blank();
     };
     match kind {
@@ -823,15 +852,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             let Some(text) = text_of(rows, i) else {
                 return blank();
             };
-            let key = match kind {
-                Kind::Header => {
-                    RowKey::Header(rows.place(stretch).map_or(0, |place| place.section))
-                }
-                Kind::Label(index) => RowKey::Label(rows.address_of(i).unwrap_or(0), index),
-                // By the row's own address and never the bytes': a row whose bytes could
-                // not be found would otherwise share a key with every other such row.
-                _ => RowKey::Gap(rows.address_of(i).or(text.address).unwrap_or(0)),
-            };
+            let key = RowKey::of(rows, i, at, text.address);
             TextRow {
                 row: i,
                 address: text.address,
@@ -851,15 +872,9 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             .key(key)
             .into_element()
         }
-        Kind::Rule => empty(true, RowKey::Rule(rows.start_of(stretch).unwrap_or(0))),
-        Kind::Space { under } => empty(
-            false,
-            RowKey::Space(rows.start_of(stretch).unwrap_or(0), under),
-        ),
-        Kind::Empty(index) => empty(
-            false,
-            RowKey::Empty(rows.start_of(stretch).unwrap_or(0), index),
-        ),
+        Kind::Rule => empty(true, RowKey::of(rows, i, at, None)),
+        Kind::Space { .. } => empty(false, RowKey::of(rows, i, at, None)),
+        Kind::Empty(_) => empty(false, RowKey::of(rows, i, at, None)),
         Kind::Instruction(index) => {
             let Some(asm) = data.asm_data(stretch) else {
                 return blank();
@@ -891,7 +906,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                 marking: data.marking.clone(),
                 key: DiffKey::None,
             }
-            .key(RowKey::Insn(address))
+            .key(RowKey::of(rows, i, at, Some(address)))
             .into_element()
         }
         Kind::Separator { below } => {
@@ -913,7 +928,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                 },
                 key: DiffKey::None,
             }
-            .key(RowKey::Sep(address))
+            .key(RowKey::of(rows, i, at, Some(address)))
             .into_element()
         }
     }

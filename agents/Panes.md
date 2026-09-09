@@ -845,7 +845,11 @@ the listing, which is the `base` an `InstructionRow` is handed.
 rows are `InstructionRow` told its `base`, `bias` and a gutter `MAX_LANES` wide, the separators
 `SeparatorRow`, and the header, label, empty and gap rows four small rows of the view's own. All of
 them are keyed in a key space per kind over the placed address they stand for, the separators'
-lesson in six places. Two effects do the rest. `use_kept_place` keeps the reader's place
+lesson applied to every row. `RowKey::of` is the one place a `Kind` becomes a key and its match is
+total, so a ninth kind is a key space of its own or a compile error. Spelled out at the eight sites
+that draw the rows instead, the gap rows were keyed by a catch-all: a new kind would have keyed as
+a gap, and nothing would have said so. Two effects do the rest. `use_kept_place` keeps the reader's
+place
 (`agents/UI.md`, `Places::code_at`), plants a door's caret once there are rows to plant it in (the planting
 paragraph above), and rebuilds the rows whenever the reading's generation changes, in the one run
 that also moves the controller to where the place now is. **Which place, and whether it is kept at
