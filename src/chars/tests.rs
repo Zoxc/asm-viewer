@@ -577,8 +577,16 @@ fn a_run_the_line_is_too_short_for_stops_at_its_end() {
     assert_eq!(bytes_of(WIDE, 90..99), 14..14);
     assert_eq!(columns_of("", 0..4), 0..0);
     assert_eq!(bytes_of("", 0..4), 0..0);
-    // Ends the wrong way round come back as an empty run and not as a range that panics
-    // where it is used.
-    assert_eq!(columns_of(WIDE, 14..8), 12..12);
-    assert_eq!(bytes_of(WIDE, 12..6), 14..14);
+    // Ends the wrong way round come back empty at the start: not reversed, which panics
+    // where the range is used, and not empty at the smaller end. Both ends are inside the
+    // line, so this is the reversal and not the clamp above.
+    assert_eq!(columns_of(WIDE, backwards(8, 3)), 6..6);
+    assert_eq!(bytes_of(WIDE, backwards(6, 3)), 8..8);
+}
+
+/// A range whose ends are the wrong way round. One only ever comes from a stale answer,
+/// so it is built from its ends rather than written `8..3`, which reads as a typo and is
+/// an error to clippy.
+fn backwards(start: usize, end: usize) -> Range<usize> {
+    start..end
 }

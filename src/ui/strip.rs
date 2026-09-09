@@ -831,8 +831,6 @@ const PAST_LAST_TAB: f32 = 24.0;
 /// last chip is the one that appends. A drop anywhere else changes nothing: `DragZone`
 /// clears the payload on the release wherever it lands, and nothing but these zones acts on
 /// one.
-/// The bar over the tab on screen: the chips, what a drag along them does, and the
-/// scrolling that keeps the tab being read reachable.
 ///
 /// **The strip scrolls itself, without a `ScrollView`.** It is one row, and what it needs is
 /// an offset: the wheel over it moves that offset sideways, opening a tab or going to one

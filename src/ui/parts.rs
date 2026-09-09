@@ -163,7 +163,8 @@ pub(crate) fn verdict_line(verdict: Verdict) -> impl IntoElement {
 /// The frame every sidebar-style row is drawn in: the height a list's rows are, the
 /// padding and the spacing their columns are laid on, and the three-way background --
 /// picked out, under the pointer, or nothing. The caller appends its own press, its menu
-/// and its children, and hands the result to [`row_tooltip`].
+/// and its children, and hands the result to one of the tooltips -- [`cut_tooltip`],
+/// [`extra_tooltip`] or [`name_tooltip`].
 ///
 /// A row that is picked out wears the selection, `text_select_bg`, which is what a sweep
 /// paints under the characters it took in a code pane: being picked out says the same

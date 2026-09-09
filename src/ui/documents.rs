@@ -70,10 +70,11 @@ impl Reach {
 /// row -- where there is no line to land on. Two rules live here and are written nowhere
 /// else. **A file the source pane would refuse opens nothing at all**
 /// (`source::showable`, the reader's own first step: a regular file within the bound the
-/// source cache reads), so a press cannot make a tab that only says why it is empty. And
-/// the document is named by `path`'s own spelling, **never canonicalised**, since a
-/// [`Document::Source`] and a [`LinePos`] are compared as text: reduced here, a line the
-/// debug info names would be picked out in nothing (`src/project.rs`).
+/// source cache reads, and not a symlink to one), so a press cannot make a tab that only
+/// says why it is empty. And the document is named by `path`'s own spelling, **never
+/// canonicalised**, since a [`Document::Source`] and a [`LinePos`] are compared as text:
+/// reduced here, a line the debug info names would be picked out in nothing
+/// (`src/project.rs`).
 ///
 /// A path that names a *place* -- a hit, a reference, a definition -- goes through
 /// [`open_source_place`] instead, which lands on the line and drives the assembly side
