@@ -308,6 +308,22 @@ which draws nothing for as long as the read takes and then the file from its top
 moves it, both of them passes the door into a file already in hand does not have (`notes/Goals.md`,
 under Navigation).
 
+**A line is cut once and kept beside the parse.** What a row draws is that line's spans pulled out
+of the rope, and they used to be pulled out in the row's `render`: a rope slice and a `String` per
+span, sixty rows a pane, paid again for every scroll, every modifier and every keystroke in the find
+bar. `Highlighted::text` cuts a line once and holds it -- the row's text as one string, and each
+span's colour with the bytes of it that span covers -- so a row already drawn is a lookup and a
+pointer copy. Nothing analysed is memoized by it: the parse is the reader thread's and this only
+cuts its answer into rows, which is what `AGENTS.md` lets a render keep. It is keyed by the line and
+lives on the `Highlighted` the line belongs to, so no file's cuts are dropped for another's and a
+file pays only for the lines someone has looked at. Two short locks a line, never one a span, and
+neither held over the cutting: a miss drops the lock, cuts, and takes it again to file what it made.
+A pass over the whole file does *not* keep what it cuts (`cut_line`, `find_bar::look`), or a find in
+a long file would hold a second copy of it for the life of the process. Measured over a 1350-line
+Rust file, 60 rows in a debug build: 13.5 allocations a row and 0.77 ms a render before, 6.5 and
+0.10 ms after. What is left is freya's floor -- a `Span` holds a `Cow<'static, str>`, so no span can
+borrow the cut it came from.
+
 **A parse holds the theme's colours**, `SyntaxBlocks` keeping a `Color` per span rather than a name
 for one, so an entry parsed in the other appearance is not stale but wrong. Each says which
 appearance it was made in and `set_appearance` empties nothing: the pane goes on drawing the entry

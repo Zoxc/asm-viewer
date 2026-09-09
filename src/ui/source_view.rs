@@ -112,35 +112,6 @@ impl KeyExt for SourceRow {
     }
 }
 
-/// The pieces row `index` of `source` draws, each in its colour: the spans a parse
-/// resolved, with leading indentation as spaces. What the row draws and what a character
-/// selection copies, so a column into one is a column into the other.
-///
-/// In range because the list's length is the file's own `lines`, which is at most
-/// `blocks.len()` -- and `SyntaxBlocks::get_line` unwraps rather than answering `None`,
-/// so being in range is checked here.
-fn source_pieces(source: &SourceText, index: usize) -> Vec<(Color, String)> {
-    let source = &source.0;
-    if index >= source.lines {
-        return Vec::new();
-    }
-    source
-        .blocks
-        .get_line(index)
-        .iter()
-        .map(|(color, node)| {
-            let text = match node {
-                TextNode::Range(range) => source.rope.slice(range.clone()).to_string(),
-                // Leading indentation, handed over as a length so an editor can draw it
-                // as dots. Plain spaces here, this pane showing a file and not editing
-                // one.
-                TextNode::LineOfChars { len, .. } => " ".repeat(*len),
-            };
-            (*color, text)
-        })
-        .collect()
-}
-
 /// The text of `columns` on row `index`, or `None` where they name nothing of it.
 ///
 /// The columns are the byte offsets a language server counts in (`src/links.rs`), counted
@@ -148,9 +119,9 @@ fn source_pieces(source: &SourceText, index: usize) -> Vec<(Color, String)> {
 /// what a menu built from a press calls the name, so what the reader right-clicked is
 /// what the menu says.
 pub(crate) fn name_at(source: &SourceText, index: usize, columns: &Range<u32>) -> Option<String> {
-    let line = source_line(source, index);
-    let drawn = drawn_columns(&line.to_string(), columns);
-    let name = line.slice(drawn.start, drawn.end);
+    let cut = source.0.text(index);
+    let drawn = drawn_columns(&cut.whole, columns);
+    let name = Line::text(&*cut.whole).slice(drawn.start, drawn.end);
     (!name.is_empty()).then_some(name)
 }
 
@@ -165,12 +136,12 @@ fn byte_column(text: &str, column: usize) -> u32 {
 }
 
 /// The text row `index` draws, as the clipboard sees a character selection of it.
+///
+/// One piece and not one per span. A row's spans are all text and adjacent text is one
+/// run to every reader of a `Line` -- what it copies, how wide it is, where a find hits
+/// (`src/find.rs`) -- so cutting it up again here would say the same thing at a cost.
 pub(crate) fn source_line(source: &SourceText, index: usize) -> Line {
-    let mut line = Line::default();
-    for (_, text) in source_pieces(source, index) {
-        line.push_text(text);
-    }
-    line
+    Line::text(&*source.0.text(index).whole)
 }
 
 /// What a press, a right-click or the pointer on one of a row's names is answered from:
@@ -190,7 +161,7 @@ struct Named {
     /// UTF-16 units the text engine answers in. The drawn text and not the rope's, and
     /// the two agree wherever a column can land: what the row draws differently is the
     /// indentation, one space per character of it.
-    text: Rc<str>,
+    text: Arc<str>,
     /// Which of the file's names the server placed. See [`SourceData::links`].
     links: links::Links,
     /// Whom a press on a link or a name asks, and [`None`] where there is nobody: a pane
@@ -300,8 +271,8 @@ fn name_at_column(
     place: Caret,
 ) -> Option<NameAt> {
     let line = u32::try_from(place.row).ok()?.checked_add(1)?;
-    let text = source_line(source, place.row).to_string();
-    let link = links.at(line, byte_column(&text, place.col))?;
+    let cut = source.0.text(place.row);
+    let link = links.at(line, byte_column(&cut.whole, place.col))?;
     Some(NameAt {
         at: LinePos {
             file: file.clone(),
@@ -492,24 +463,17 @@ impl Component for SourceRow {
         let dock = use_consume::<SidebarDock>().0;
         let index = self.index;
 
-        let pieces = source_pieces(&self.source, index);
-        let line = {
-            let mut line = Line::default();
-            for (_, text) in &pieces {
-                line.push_text(text.clone());
-            }
-            line
-        };
+        // The line as it is drawn, taken from the file's own cut rather than made again:
+        // a row is drawn afresh for a scroll, a modifier and every keystroke in the find
+        // bar, and the cut is the same every time ([`Highlighted::text`]).
+        let cut = self.source.0.text(index);
+        let line = Line::text(&*cut.whole);
         let named = Named {
             at: LinePos {
                 file: self.file.clone(),
                 line: index as u32 + 1,
             },
-            text: pieces
-                .iter()
-                .map(|(_, text)| text.as_str())
-                .collect::<String>()
-                .into(),
+            text: cut.whole.clone(),
             links: self.links.clone(),
             server,
         };
@@ -524,9 +488,16 @@ impl Component for SourceRow {
                 .map(|marking| marking.hits(&line))
                 .unwrap_or_default(),
             line,
-            head: pieces
-                .into_iter()
-                .map(|(color, text)| Span::new(text).color(color).assembly_font())
+            // The one allocation a drawn row still owes: freya's `Span` holds a
+            // `Cow<'static, str>`, so a span cannot borrow the cut it was taken from.
+            head: cut
+                .spans
+                .iter()
+                .map(|(color, range)| {
+                    Span::new(cut.whole[range.clone()].to_string())
+                        .color(*color)
+                        .assembly_font()
+                })
                 .collect(),
             tail: Vec::new(),
             chars: self.chars,

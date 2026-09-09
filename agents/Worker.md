@@ -261,7 +261,7 @@ the Source pane's companion file comes out of `Analysis` rather than out of `Act
 name a file the previous symbol was compiled from; that is what `Studied` carrying its `Symbol` and
 `SymbolLines` carrying its file are for.
 
-**Nothing is cached in the UI, deliberately.** `SymbolData::assembly` does not memoize: it decodes
+**No analysis is cached in the UI, deliberately.** `SymbolData::assembly` does not memoize: it decodes
 afresh and hands back a new `Arc<Assembly>`. `Object::line_info` caches the DWARF context and the
 subprogram extents but re-walks the covering units' line programs per call. The `Analysis` state
 gives the one thing a re-render needed: the answer is *held*, so a selection, a theme change or a
@@ -269,6 +269,9 @@ resize costs nothing where the old shape re-decoded in `render`. A second, keyed
 unbounded pile of `Assembly`s for listings the reader has left, to save a few milliseconds on a
 symbol they have already been shown. `Reading::held` is not that cache: it is the section view's one
 answer, a listing read in windows rather than whole, bounded by `KEEP` and dropped with the tab.
+What *is* kept is the cheap shape a drawn row wants of an answer already in hand -- one line of a
+parse cut into pieces (`Highlighted::text`, `agents/Panes.md`) -- which is derived and not
+computed, and keyed by the line so a tab switch throws none of it away.
 
 **A find over a code pane is a worker of its own, and the sixth of this shape.** The reason is the
 source reader's: a pattern supersedes on every keystroke, and a question queued behind the seconds of

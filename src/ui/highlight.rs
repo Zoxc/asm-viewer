@@ -19,6 +19,12 @@
 //! count of the answers, since nothing re-renders for a write to a `static`. That is what
 //! keeps a file the reader has already seen instant: the pane finds it in the cache as it
 //! renders, with no question asked and no frame lost.
+//!
+//! **A line is cut once and kept beside the parse** ([`Highlighted::text`]). Cutting one up
+//! for the row that draws it is a rope slice and a `String` per span, and a row is drawn
+//! afresh for a scroll, a modifier and every keystroke in the find bar. Nothing here is
+//! analysis -- the parse is the worker's and this only cuts its answer into rows -- so it
+//! is kept where it is drawn, keyed by the line (`AGENTS.md`).
 
 use super::*;
 
@@ -30,6 +36,19 @@ impl PartialEq for SourceText {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
+}
+
+/// One line of the file as a row draws it: the text, and where in it each of the parse's
+/// coloured spans falls.
+///
+/// The spans are ranges into `whole` and not strings of their own, so a line held here is
+/// one copy of its text however many colours it is drawn in.
+pub(crate) struct LineText {
+    /// The row's text as it is drawn: the spans in order, with the leading indentation as
+    /// spaces. What the row's columns are counted through and what a copy takes.
+    pub(crate) whole: Arc<str>,
+    /// Each span's colour and the bytes of `whole` it covers, in order.
+    pub(crate) spans: Vec<(Color, Range<usize>)>,
 }
 
 /// A source file ready to be drawn: its text as a rope, the coloured spans tree-sitter
@@ -57,6 +76,9 @@ pub(crate) struct Highlighted {
     /// Every function in the file, outer before inner, for a row to say which one it is
     /// a line of. Empty for a file no grammar parses.
     pub(crate) functions: Vec<Function>,
+    /// The cut of every line drawn so far. See [`Highlighted::text`]. A `Mutex` so that
+    /// this stays `Sync` while a row fills it, not because two threads want one line.
+    cuts: Mutex<HashMap<usize, Arc<LineText>>>,
 }
 
 impl Highlighted {
@@ -94,7 +116,71 @@ impl Highlighted {
             blocks,
             lines,
             functions,
+            cuts: Mutex::default(),
         }
+    }
+
+    /// What row `index` draws, cut once and then kept.
+    ///
+    /// **The cut used to be the row's own, made afresh on every render**: a rope slice
+    /// and a `String` per span, sixty rows a pane, paid over again for every scroll,
+    /// every modifier and every keystroke in the find bar. None of it is analysis -- the
+    /// parse is the worker's and this only cuts its answer into rows -- so it is kept
+    /// where it is drawn, keyed by the line so no file's cuts are dropped for another's.
+    ///
+    /// **The lock is never held over the cutting**, and it is taken once a line and never
+    /// once a span: a miss drops it, cuts, and takes it again to file what it made. Two
+    /// threads that cut one line at the same moment cut the same text, and the first
+    /// filed is the one both get.
+    pub(crate) fn text(&self, index: usize) -> Arc<LineText> {
+        if let Some(text) = self.cuts().get(&index) {
+            return text.clone();
+        }
+        let text = Arc::new(self.cut_line(index));
+        self.cuts().entry(index).or_insert(text).clone()
+    }
+
+    /// The same cut, and not kept: what a pass over the whole file uses, where keeping
+    /// every line would hold a second copy of a file nobody is reading
+    /// (`find_bar::look`).
+    ///
+    /// In range because the list's length is the file's own `lines`, which is at most
+    /// `blocks.len()` -- and `SyntaxBlocks::get_line` unwraps rather than answering
+    /// `None`, so being in range is checked here.
+    pub(crate) fn cut_line(&self, index: usize) -> LineText {
+        let mut whole = String::new();
+        let mut spans = Vec::new();
+        if index < self.lines {
+            for (color, node) in self.blocks.get_line(index) {
+                let start = whole.len();
+                match node {
+                    // Pushed chunk by chunk rather than through a `String` of its own:
+                    // the row's text is one allocation whatever it is cut into.
+                    TextNode::Range(range) => {
+                        for chunk in self.rope.slice(range.clone()).chunks() {
+                            whole.push_str(chunk);
+                        }
+                    }
+                    // Leading indentation, handed over as a length so an editor can draw
+                    // it as dots. Plain spaces here, this pane showing a file and not
+                    // editing one.
+                    TextNode::LineOfChars { len, .. } => {
+                        for _ in 0..*len {
+                            whole.push(' ');
+                        }
+                    }
+                }
+                spans.push((*color, start..whole.len()));
+            }
+        }
+        LineText {
+            whole: whole.into(),
+            spans,
+        }
+    }
+
+    fn cuts(&self) -> MutexGuard<'_, HashMap<usize, Arc<LineText>>> {
+        self.cuts.lock().unwrap_or_else(|error| error.into_inner())
     }
 }
 

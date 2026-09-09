@@ -11880,6 +11880,31 @@ fn a_theme_switch_has_the_file_read_again() {
     forget_source_under(&directory);
 }
 
+/// **A line is cut once and then kept.** A row is drawn afresh for a scroll, a modifier
+/// and every keystroke in the find bar, and cutting the parse up for it each time was a
+/// rope slice and a `String` per span on every one. The cut is held per line, so a file
+/// pays only for the lines the reader has looked at and no file's lines are dropped for
+/// another's.
+#[test]
+fn a_source_line_is_cut_once_and_kept() {
+    let seeded = Seeded::directory("cut-once");
+    let path = seeded.file("main.rs", "fn one() -> u32 {\n    1\n}\n");
+    let source = source_text(&path).expect("the file");
+
+    let cut = source.0.text(1);
+    assert_eq!(&*cut.whole, "    1");
+    assert!(
+        Arc::ptr_eq(&cut, &source.0.text(1)),
+        "the same line was cut twice"
+    );
+    assert!(
+        !Arc::ptr_eq(&cut, &source.0.text(2)),
+        "two lines came back as one cut"
+    );
+
+    forget_source_under(path.parent().expect("the seeded directory"));
+}
+
 /// Neither cache is checked against the disk, so a file rewritten under the app's nose is
 /// drawn as it was first read until something forgets it. Both maps go together: the
 /// parsed copy holds the text it was parsed from in a `Rope` of its own.
