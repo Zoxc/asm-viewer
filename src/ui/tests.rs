@@ -22471,6 +22471,44 @@ fn the_chord_is_not_typed_into_the_box_it_reaches() {
     assert!(labels(&test).iter().any(|label| label == "sum_to"));
 }
 
+/// The Symbols list says "No matches" where its filter left nothing of it, as the short
+/// lists do, and says nothing where there are no symbols at all: an empty list means
+/// either. Fails on a list that draws a zero-length scroll view for both.
+#[test]
+fn the_symbols_list_says_when_its_filter_left_nothing() {
+    let symbols = fixture_symbols();
+    let (mut test, states) =
+        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let mut objects = states.objects;
+    settle(&mut test);
+
+    // Nothing loaded: the list nothing has been added to has no matching to report.
+    let shown = labels(&test);
+    assert!(
+        !shown.iter().any(|label| label == "No matches"),
+        "an empty list was called a filter that matched nothing: {shown:?}"
+    );
+
+    objects.set(vec![symbols[0].object.clone()]);
+    settle(&mut test);
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("nothing_is_called_this");
+    settle(&mut test);
+
+    let shown = labels(&test);
+    assert!(
+        !shown.iter().any(|label| label == "sum_to"),
+        "the filter left a row: {shown:?}"
+    );
+    assert!(
+        shown.iter().any(|label| label == "No matches"),
+        "the list said nothing about the filter matching nothing: {shown:?}"
+    );
+}
+
 /// The Search panel over a work function the test hands in, so that a search can be held
 /// still: a real walk answers faster than the runner settles, and superseding is a race
 /// by construction.

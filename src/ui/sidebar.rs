@@ -736,6 +736,13 @@ impl Component for SymbolsPanel {
             }),
         };
 
+        // An empty list means the same two things here as in `short_list`, and the whole
+        // list says which: no symbols at all draws the empty view, a filter that left
+        // nothing of them says so.
+        if length == 0 && !filtered.list().is_empty() {
+            return pane.filtered(filter, keys, placeholder("No matches"));
+        }
+
         pane.filtered(
             filter,
             keys,

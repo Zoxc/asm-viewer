@@ -21,7 +21,11 @@ the row has no room for can still be searched for. The two short lists, History 
 what the filter left through one `short_list` (`src/ui/filter_bar.rs`): a plain `ScrollView` of the
 rows, or the word for why there are none. An empty list means two things -- nothing has been added
 to it, or the filter left nothing of it -- and they are worth different words, so which of the two
-it is has to be asked of the whole list rather than of the rows.
+it is has to be asked of the whole list rather than of the rows. The Symbols list is too long for
+`short_list` and draws its rows through a `VirtualScrollView`, but it answers the same question the
+same way: a `Filtered` holds the whole list beside the indices the filter kept, so no rows out of
+some symbols draws "No matches" in the view's place. No symbols at all draws the empty list, there
+being no filter to blame.
 
 **A filtered list is ranked, an unfiltered one is not.** `Filtered` orders its indices by
 `filter::Rank`, which sits beside the matcher because it is the same regex asked a second question:
