@@ -526,8 +526,8 @@ fn headed(query: &Query, count: usize, list: Element) -> Element {
 /// because for a source-driven tab the active document is a file, and the whole point of
 /// choosing a row for one is that its assembly side changes; the lit row is the one
 /// answer the panel gives to which instance is up. Reading `Analysis` wakes the tab on
-/// the worker's `pending` and `slow` flips too, which the rows' data compares equal
-/// across, so nothing below re-renders for them.
+/// the worker's `pending` flipping too, which the rows' data compares equal across, so
+/// nothing below re-renders for it.
 #[derive(PartialEq)]
 pub(crate) struct LocationsPanel;
 

@@ -170,9 +170,6 @@ fn line_of(instruction: &Instruction, linked: bool) -> Line {
 pub(crate) struct AsmData {
     /// What the worker made of the symbol: the listing, its gutter layout and its lines.
     pub(crate) studied: Studied,
-    /// `studied.assembly` for a listing that has one, which is the only kind these rows are
-    /// built for: a symbol with nothing to decode draws no rows at all.
-    pub(crate) assembly: Arc<Assembly>,
     /// The source-driven tab this listing is the assembly side of and the file it is
     /// showing, or `None` for an assembly-driven tab's own listing. The file is compared
     /// by text, as `LinePos` is.
@@ -198,7 +195,6 @@ pub(crate) struct AsmData {
 impl PartialEq for AsmData {
     fn eq(&self, other: &Self) -> bool {
         self.studied == other.studied
-            && Arc::ptr_eq(&self.assembly, &other.assembly)
             && self.subject == other.subject
             && self.base == other.base
             && self.bias == other.bias
@@ -209,27 +205,39 @@ impl PartialEq for AsmData {
 
 impl AsmData {
     /// `studied` drawn in the listing the arguments after it describe (the fields of the
-    /// same names), `assembly` being the one the caller has already taken out of it. The one
-    /// way one of these is made, so the two listings cannot differ in what they hand their
-    /// rows.
+    /// same names). The one way one of these is made, so the two listings cannot differ in
+    /// what they hand their rows.
+    ///
+    /// [`None`] for a symbol with nothing to decode, which draws no rows at all. That
+    /// check is here and nowhere else, and it is what leaves [`AsmData::assembly`] an
+    /// answer rather than a question.
     pub(crate) fn of(
         studied: Studied,
-        assembly: Arc<Assembly>,
         subject: Option<(DocId, Arc<str>)>,
         base: usize,
         bias: u64,
         width: usize,
         code_tab: bool,
-    ) -> AsmData {
-        AsmData {
+    ) -> Option<AsmData> {
+        studied.assembly.as_ref()?;
+        Some(AsmData {
             studied,
-            assembly,
             subject,
             base,
             bias,
             width,
             code_tab,
-        }
+        })
+    }
+
+    /// The instructions the rows are drawn from: the worker's own, asked of it rather
+    /// than kept beside it, so the two cannot differ. There is always one, [`AsmData::of`]
+    /// making none of these for a symbol that has none.
+    pub(crate) fn assembly(&self) -> &Arc<Assembly> {
+        self.studied
+            .assembly
+            .as_ref()
+            .expect("a listing is made only for a symbol with an assembly")
     }
 
     /// The object the listing was read out of.
@@ -945,8 +953,8 @@ fn instruction_text(
     ctrl: Option<State<bool>>,
     alt: Option<State<bool>>,
 ) -> Text<Option<InlineLink>> {
-    let instruction = &data.assembly.instructions[index];
-    let (head, link, tail) = split(instruction, linked(&data.assembly, index));
+    let instruction = &data.assembly().instructions[index];
+    let (head, link, tail) = split(instruction, linked(data.assembly(), index));
     let inline: Option<InlineLink> = link.and_then(|link| {
         let door = match link.kind {
             // The relocation target's name -- in the operand the relocation applies to,
@@ -960,7 +968,7 @@ fn instruction_text(
             }
             // A branch's displacement is the other way to follow it: the row it lands
             // on, and the run a press on that row would have made.
-            Link::Branch => data.assembly.edge_from(index).map(|edge| Door::Row {
+            Link::Branch => data.assembly().edge_from(index).map(|edge| Door::Row {
                 to: data.base + data.lanes().row_of(edge.to),
                 at: data.position(edge.to),
             }),
@@ -1027,7 +1035,7 @@ fn instruction_text(
         );
     }
 
-    let line = instruction_line(&data.assembly, index);
+    let line = instruction_line(data.assembly(), index);
     Text {
         finds: marking
             .map(|marking| marking.hits(&line))
@@ -1064,7 +1072,7 @@ fn instruction_menu(
     index: usize,
     at: Option<LinePos>,
 ) -> Rc<dyn Fn(Event<PressEventData>, Option<usize>)> {
-    let instruction = &data.assembly.instructions[index];
+    let instruction = &data.assembly().instructions[index];
     // The source-driven tab this listing is the assembly side of, if it is one: a
     // location found from it is chosen for it.
     let subject = data.subject.clone();
@@ -1151,7 +1159,7 @@ impl Component for InstructionRow {
         let at = self.data.position(self.index);
         // The address as the listing draws it: the symbol's own, plus where the listing
         // has placed the symbol's section.
-        let address = self.data.assembly.instructions[self.index]
+        let address = self.data.assembly().instructions[self.index]
             .address
             .wrapping_add(self.data.bias);
 
@@ -1201,14 +1209,11 @@ impl Component for InstructionRow {
 struct InstructionList {
     /// The tab these rows are in.
     tab: DocId,
-    /// What the worker made of the symbol, held whole and handed to [`AsmData::of`]. It
-    /// carries the whole symbol and not just its object, because these rows draw a
-    /// disassembly *and* answer to it -- a relocation label navigates to a symbol in the
-    /// same object.
-    studied: Studied,
-    /// `studied.assembly`, taken out by the pane: rows are built only for a listing that
-    /// has one.
-    assembly: Arc<Assembly>,
+    /// The listing these rows draw, made by the pane -- which is what says there is one
+    /// to draw. It carries the whole of what the worker made of the symbol and not just
+    /// its object, because these rows draw a disassembly *and* answer to it: a relocation
+    /// label navigates to a symbol in the same object.
+    data: AsmData,
     /// The question this listing answers, and **not** the one being asked: while the
     /// worker catches up the pane is still drawing the listing being left. Two things
     /// come out of it -- [`asked_of`], the place on the tab's trail whose viewing
@@ -1220,10 +1225,7 @@ struct InstructionList {
 
 impl PartialEq for InstructionList {
     fn eq(&self, other: &Self) -> bool {
-        self.tab == other.tab
-            && self.studied == other.studied
-            && Arc::ptr_eq(&self.assembly, &other.assembly)
-            && self.asked == other.asked
+        self.tab == other.tab && self.data == other.data && self.asked == other.asked
     }
 }
 
@@ -1270,7 +1272,7 @@ impl Component for InstructionList {
         let pair = pair_of(marked, Pane::Assembly);
         // The listing these rows are of, which is this disassembly: what its widest row
         // and its kept position are held under.
-        let listing = Widest::key(Arc::as_ptr(&self.assembly).addr());
+        let listing = Widest::key(Arc::as_ptr(self.data.assembly()).addr());
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
@@ -1281,31 +1283,20 @@ impl Component for InstructionList {
         use_searching(
             at,
             Searchable::Symbol {
-                assembly: self.assembly.clone(),
-                lanes: self.studied.lanes.clone(),
+                assembly: self.data.assembly().clone(),
+                lanes: self.data.lanes().clone(),
             },
         );
         let (controller, viewport) = (list.controller, list.viewport);
 
-        let data = AsmData::of(
-            self.studied.clone(),
-            self.assembly.clone(),
-            match &self.asked {
-                Ask::Source { at, .. } => Some((self.tab, at.file.clone())),
-                Ask::Symbol(_) => None,
-            },
-            // A listing that is one symbol: its rows start at the top, its addresses are
-            // the file's own, its gutter is as wide as it needs, and it is not the code.
-            0,
-            0,
-            self.studied.lanes.width,
-            false,
-        );
+        let data = self.data.clone();
         // The listing's rows, which is the instructions plus a separator above every row a
         // branch lands on. Everything below that scrolls, picks out or counts rows is in
         // this space; `AsmData::position`, the gutter and the edges are in the
         // instructions'. `Lanes` converts, and is the only thing that may.
-        let length = data.lanes().listing_rows(data.assembly.instructions.len());
+        let length = data
+            .lanes()
+            .listing_rows(data.assembly().instructions.len());
         // Where this tab was left, put back when it is switched to and written down as it
         // is scrolled -- and the scroll this pane owes a run, which wins over it.
         let docs = doors.open.docs;
@@ -1375,7 +1366,7 @@ impl Component for InstructionList {
                     return;
                 };
                 plant.set(None);
-                let Some(index) = planted_index(&data.assembly.instructions, planting.address)
+                let Some(index) = planted_index(&data.assembly().instructions, planting.address)
                 else {
                     return;
                 };
@@ -1411,8 +1402,8 @@ impl Component for InstructionList {
         }
 
         let on_key_down = {
-            let assembly = self.assembly.clone();
-            let lanes = self.studied.lanes.clone();
+            let assembly = data.assembly().clone();
+            let lanes = data.lanes().clone();
             let (text_assembly, text_lanes) = (assembly.clone(), lanes.clone());
             let (seed_assembly, seed_lanes) = (assembly.clone(), lanes.clone());
             // A separator copies as the blank line it is drawn as, so a run lifted out of
@@ -1422,8 +1413,8 @@ impl Component for InstructionList {
                 at,
                 marked,
                 Searchable::Symbol {
-                    assembly: self.assembly.clone(),
-                    lanes: self.studied.lanes.clone(),
+                    assembly: assembly.clone(),
+                    lanes: lanes.clone(),
                 },
                 move |row| {
                     seed_lanes
@@ -1498,7 +1489,7 @@ fn asm_row(i: usize, rows: &AsmRows) -> Element {
         lit.corner = false;
 
         // Keyed by the row it opens, in a key space of its own: see `SeparatorRow`.
-        let address = rows.data.assembly.instructions[below].address;
+        let address = rows.data.assembly().instructions[below].address;
         return SeparatorRow {
             row: i,
             wash,
@@ -1538,7 +1529,7 @@ fn asm_row(i: usize, rows: &AsmRows) -> Element {
     }
     // Tagged, for the separators' sake: an address alone could be any
     // separator's too.
-    .key((false, rows.data.assembly.instructions[index].address))
+    .key((false, rows.data.assembly().instructions[index].address))
     .into()
 }
 
@@ -1602,8 +1593,23 @@ impl AssemblyPane {
             Showing::Message(text) => return placeholder(text),
             Showing::Nothing => return blank_pane(palette().asm_pane_bg),
         };
-        let studied = &shown.studied;
-        let Some(assembly) = studied.assembly.clone() else {
+        let studied = shown.studied.clone();
+        // A listing that is one symbol: its rows start at the top, its addresses are the
+        // file's own, its gutter is as wide as it needs, and it is not the code. None at
+        // all for a symbol with nothing to decode.
+        let width = studied.lanes.width;
+        let data = AsmData::of(
+            studied,
+            match &shown.ask {
+                Ask::Source { at, .. } => Some((self.tab, at.file.clone())),
+                Ask::Symbol(_) => None,
+            },
+            0,
+            0,
+            width,
+            false,
+        );
+        let Some(data) = data else {
             return rect()
                 .padding(5.0)
                 .child(label().text("Assembly unavailable"))
@@ -1612,7 +1618,7 @@ impl AssemblyPane {
         // An architecture no backend claims is a *third* answer -- the one above is only
         // "this symbol has no bytes" -- and it has to be said, an empty listing being
         // indistinguishable from a function that holds no code.
-        if let Some(architecture) = assembly.undecodable {
+        if let Some(architecture) = data.assembly().undecodable {
             return placeholder(format!("No disassembler for {architecture}"));
         }
 
@@ -1623,8 +1629,7 @@ impl AssemblyPane {
             .padding(5.0)
             .child(InstructionList {
                 tab: self.tab,
-                studied: studied.clone(),
-                assembly,
+                data,
                 // The question the *drawn* answer answers, never the one being asked.
                 asked: shown.ask.clone(),
             })

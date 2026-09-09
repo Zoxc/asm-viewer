@@ -244,10 +244,11 @@ symbol has already answered a later ask for that symbol outright, and the listin
 than worked out again. A dropped answer is what clicking twice quickly *means*, so nothing logs or
 retries. **What the panes show meanwhile** is the listing they already have. `Analyzed` holds
 `shown` (the listing actually drawn and the question it answers, which is the one asked *before*
-this one for as long as the worker takes), `answered`, `pending` and `slow`. A listing is replaced
+this one for as long as the worker takes), `answered` and `pending`. A listing is replaced
 by the next listing and never by a blank, or every click would flash the pane empty for a frame.
 Only after `SLOW_ANALYSIS` (180 ms, started by the request and never polled) does the message
-displace it. That is the order of the arms in `Analyzed::showing`, the one place either pane decides
+displace it -- which is a field of the `Pending` and not a flag beside it, there being nothing to
+be slow about while nothing is being waited for. That is the order of the arms in `Analyzed::showing`, the one place either pane decides
 what it is drawing, so the two cannot disagree. `showing` takes the **document** and not a word from
 its caller, which is what keeps that true: it says "Click a source line" where a symbol tab says "No
 symbol selected". `answered` is the last question answered *whatever it answered with*, the one

@@ -114,20 +114,18 @@ impl SectionRows {
         let rows = self.rows.as_ref()?;
         let stretched = rows.reading.held.get(&flat)?;
         let studied = stretched.code.as_ref()?;
-        let assembly = studied.assembly.clone()?;
         // A listing of the object's code: no source-driven tab behind it, this symbol's
         // rows starting where its stretch does, its addresses placed where the layout put
         // its section, and one gutter width for every symbol so the addresses start at one
         // x.
-        Some(AsmData::of(
+        AsmData::of(
             studied.clone(),
-            assembly,
             None,
             rows.body_start(flat)?,
             rows.bias(flat)?,
             lanes::MAX_LANES,
             true,
-        ))
+        )
     }
 }
 
@@ -879,7 +877,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             let Some(asm) = data.asm_data(stretch) else {
                 return blank();
             };
-            let address = asm.assembly.instructions[index]
+            let address = asm.assembly().instructions[index]
                 .address
                 .wrapping_add(asm.bias);
             // The rows either side, where they are instructions of this same stretch:
@@ -913,7 +911,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             let Some(asm) = data.asm_data(stretch) else {
                 return blank();
             };
-            let address = asm.assembly.instructions[below]
+            let address = asm.assembly().instructions[below]
                 .address
                 .wrapping_add(asm.bias);
             let mut lit = lanes::lit(touching(stretch), below);

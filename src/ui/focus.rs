@@ -582,7 +582,8 @@ pub(crate) fn use_clear_marks(
         // The *file the Source pane is drawing*, which is not the active document: two
         // functions from one file leave the same lines on screen. Compared against what
         // it last was rather than answered to directly, since reading the analysis
-        // subscribes this to writes -- a request, the slow flag -- that change no listing.
+        // subscribes this to writes -- a request, the word that it is taking a while --
+        // that change no listing.
         let active = active.read().clone();
         let document = active.as_ref().map(|(_, stop)| &stop.document);
         // No code rows: only the file is wanted, and it is the line of a code tab's

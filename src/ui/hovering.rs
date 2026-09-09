@@ -20,7 +20,8 @@
 //! the name's row, so one platform move takes the pointer out of the row and into the box,
 //! and the leave and the enter are emitted in the same batch against the tree measured
 //! before either ran (`notes/upstream/freya.md`). One flag would take the box away on the
-//! very move that reached it, half the time, depending on which handler ran first.
+//! very move that reached it, half the time, depending on which handler ran first. Both
+//! are the name's ([`Pointing`]), being about where the pointer is with respect to it.
 
 use super::*;
 
@@ -35,22 +36,33 @@ pub(crate) struct Pointed {
     pub(crate) drawn: Area,
 }
 
+/// The name the pointer came to, and everything that is only true while there is one:
+/// where the pointer is with respect to it, and the wait before the question about it.
+#[derive(Clone, PartialEq)]
+struct Pointing {
+    /// The name and where it is drawn.
+    pointed: Pointed,
+    /// Whether the pointer is on the name, and whether it is inside the box. Two flags
+    /// for the reason the module doc gives, and both about this name: neither can be
+    /// written down with no name for them to be about.
+    on_name: bool,
+    in_box: bool,
+    /// When the wait before the question runs out, which every move pushes back: the
+    /// waiting is a task, and this is what it wakes to read rather than a timer it would
+    /// have to be told to start again.
+    until: Instant,
+    /// Whether a task is waiting that out, so the effect below arms one wait per name and
+    /// not one per pointer move. Here beside the deadline, the two being one wait: it
+    /// begins and ends with the name it is for.
+    resting: bool,
+}
+
 /// The pointer's name, the question about it, and the answer.
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Hover {
     /// The name the box is about. It outlives the pointer leaving the name, which is what
     /// lets the pointer move into the box.
-    about: Option<Pointed>,
-    /// Whether the pointer is on that name, and whether it is inside the box.
-    on_name: bool,
-    in_box: bool,
-    /// The place a wait is running for, so the effect below arms one wait per name and not
-    /// one per pointer move.
-    resting: Option<Lookup>,
-    /// When that wait runs out, which every move pushes back: the waiting is a task, and
-    /// this is what it wakes to read rather than a timer it would have to be told to
-    /// start again.
-    until: Option<Instant>,
+    about: Option<Pointing>,
     /// The question in flight: the run it went out in, its id, and the place it is about.
     /// `Linked`'s reason for holding one -- an answer to a question nobody is waiting for
     /// is an answer to nobody -- and here it also keeps a second question about the one
@@ -64,53 +76,69 @@ impl Hover {
     /// The pointer is on `pointed`. Whether anything changed, so the caller writes only
     /// then: this is called from a pointer move, which arrives many times over one name.
     pub(crate) fn enter(&mut self, pointed: Pointed) -> bool {
-        let same = self.about.as_ref() == Some(&pointed) && self.on_name;
+        let held = self.about.take();
+        let same = held
+            .as_ref()
+            .is_some_and(|about| about.pointed == pointed && about.on_name);
         // A name is left by moving onto another as often as by moving off the row, so
         // what was asked about the last one goes here rather than only in `gone`. The wait
         // goes with it: it was for the name the pointer has left.
-        if self.about.as_ref().map(|about| &about.at) != Some(&pointed.at) {
-            self.resting = None;
+        let moved = held.as_ref().map(|about| &about.pointed.at) != Some(&pointed.at);
+        if moved {
             self.asked = None;
             self.said = None;
         }
-        self.about = Some(pointed);
-        self.on_name = true;
         // Every move puts the wait back to the beginning -- and only while there is
         // nothing to show, so a box already up is not written afresh by a pointer moving
         // about inside the name it is about.
-        if self.said.is_none() {
-            self.until = Some(Instant::now() + HOVER_DELAY);
-            return true;
-        }
-        !same
+        let pushed = self.said.is_none();
+        // What the pointer being in the box says is about the box and not about the name
+        // under it, so it survives a move onto another name the way it survives a move
+        // off the row; the wait and the wait's task do not.
+        let kept = held.as_ref().filter(|_| !moved);
+        self.about = Some(Pointing {
+            pointed,
+            on_name: true,
+            in_box: held.as_ref().is_some_and(|about| about.in_box),
+            until: match kept.filter(|_| !pushed) {
+                Some(about) => about.until,
+                None => Instant::now() + HOVER_DELAY,
+            },
+            resting: kept.is_some_and(|about| about.resting),
+        });
+        pushed || !same
     }
 
-    /// When the wait runs out, for the task waiting it out.
+    /// When the wait runs out, for the task waiting it out. [`None`] with no name under
+    /// the pointer, which is what stops that task.
     pub(crate) fn until(&self) -> Option<Instant> {
-        self.until
+        self.about.as_ref().map(|about| about.until)
     }
 
     /// The pointer has left the name. The box may still have it.
     pub(crate) fn left_name(&mut self) -> bool {
-        let held = self.on_name;
-        self.on_name = false;
+        let Some(about) = &mut self.about else {
+            return false;
+        };
+        let held = about.on_name;
+        about.on_name = false;
         held
     }
 
     /// The pointer is inside the box, or has left it.
     pub(crate) fn over_box(&mut self, over: bool) -> bool {
-        let held = self.in_box;
-        self.in_box = over;
+        let Some(about) = &mut self.about else {
+            return false;
+        };
+        let held = about.in_box;
+        about.in_box = over;
         held != over
     }
 
     /// Nothing is being hovered at all: the row moved under the pointer, something was
     /// pressed, a key was struck, or the server went away.
     pub(crate) fn gone(&mut self) -> bool {
-        let held = self.about.is_some()
-            || self.said.is_some()
-            || self.asked.is_some()
-            || self.until.is_some();
+        let held = self.about.is_some() || self.said.is_some() || self.asked.is_some();
         *self = Hover::default();
         held
     }
@@ -118,32 +146,36 @@ impl Hover {
     /// The place a wait is owed for: a name is hovered, nothing held answers it, none is
     /// already on its way in this run, and none is already being waited out.
     pub(crate) fn resting(&self, run: u64) -> Option<&Lookup> {
+        let armed = self.about.as_ref()?.resting;
         let at = self.pending(run)?;
-        (self.resting.as_ref() != Some(at)).then_some(at)
+        (!armed).then_some(at)
     }
 
     /// The wait for `at` has begun. Whether anything changed, so the caller writes only
     /// then.
     pub(crate) fn resting_on(&mut self, at: Lookup) -> bool {
-        let waiting = Some(at);
-        if self.resting == waiting {
+        let Some(about) = &mut self.about else {
+            return false;
+        };
+        if about.resting || about.pointed.at != at {
             return false;
         }
-        self.resting = waiting;
+        about.resting = true;
         true
     }
 
     /// Whether the pointer is still on `at` with the wait it armed run out, which is what
     /// says the question is worth putting now.
     pub(crate) fn rested(&self, at: &Lookup) -> bool {
-        self.resting.as_ref() == Some(at)
-            && self.about.as_ref().is_some_and(|about| &about.at == at)
+        self.about
+            .as_ref()
+            .is_some_and(|about| about.resting && about.pointed.at == *at)
     }
 
     /// The place a question is owed for: a name is hovered, nothing held answers it, and
     /// none is already on its way in this run.
     fn pending(&self, run: u64) -> Option<&Lookup> {
-        let at = &self.about.as_ref()?.at;
+        let at = &self.about.as_ref()?.pointed.at;
         if matches!(&self.asked, Some((asked, _, about)) if *asked == run && about == at) {
             return None;
         }
@@ -186,12 +218,15 @@ impl Hover {
     /// What the box draws: the name it is about and the server's words, once the pointer
     /// is on one of the two and there is something to say.
     pub(crate) fn showing(&self) -> Option<(&Pointed, &str)> {
-        if !self.on_name && !self.in_box {
+        let about = self.about.as_ref()?;
+        if !about.on_name && !about.in_box {
             return None;
         }
-        let about = self.about.as_ref()?;
-        let (_, said) = self.said.as_ref().filter(|(at, _)| *at == about.at)?;
-        (!said.is_empty()).then_some((about, said.as_str()))
+        let (_, said) = self
+            .said
+            .as_ref()
+            .filter(|(at, _)| *at == about.pointed.at)?;
+        (!said.is_empty()).then_some((&about.pointed, said.as_str()))
     }
 }
 

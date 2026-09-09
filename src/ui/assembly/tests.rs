@@ -169,10 +169,10 @@ fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
     let assembly = Arc::new(listing(symbol.data.clone()));
     let studied = Studied::with_assembly(symbol, Some(assembly.clone()));
     let width = studied.lanes.width;
-    let data = AsmData::of(studied, assembly, None, 0, 0, width, false);
+    let data = AsmData::of(studied, None, 0, 0, width, false).expect("the fixture decodes");
 
     in_runtime(|| {
-        for index in 0..data.assembly.instructions.len() {
+        for index in 0..data.assembly().instructions.len() {
             let text = instruction_text(&data, index, RowChars::default(), None, None, None);
             let (drawn, copied) = (drawn(&text), &text.line);
 

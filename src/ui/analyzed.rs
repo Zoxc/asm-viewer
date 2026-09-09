@@ -282,11 +282,26 @@ pub(crate) struct Analyzed {
     /// source line no object holds code from leaves the listing that is up and is
     /// recorded only here.
     pub(crate) answered: Option<Ask>,
-    /// The question the worker is working on, or `None` when it is idle -- which is what
-    /// tells the two ways `shown` can be `None` apart: nothing asked, and nothing yet.
-    pub(crate) pending: Option<Ask>,
-    /// Whether `pending` has been outstanding for [`SLOW_ANALYSIS`].
-    pub(crate) slow: bool,
+    /// What the worker is working on, or `None` when it is idle -- which is what tells
+    /// the two ways `shown` can be `None` apart: nothing asked, and nothing yet.
+    pub(crate) pending: Option<Pending>,
+}
+
+/// A question the worker has been sent and has not answered yet.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Pending {
+    pub(crate) ask: Ask,
+    /// Whether it has been outstanding for [`SLOW_ANALYSIS`] -- long enough to say so,
+    /// which is what displaces the listing that is up. A property of the wait and so a
+    /// field of it: there is nothing to be slow about while nothing is being waited for.
+    slow: bool,
+}
+
+impl Pending {
+    /// A question just sent: waited for, and not yet long enough to say so.
+    fn asked(ask: Ask) -> Pending {
+        Pending { ask, slow: false }
+    }
 }
 
 /// What a pane draws, which is one decision and not two panes' worth of `if`s.
@@ -311,15 +326,15 @@ impl Analyzed {
     /// wait beats a question that named nothing, because a stale *listing* is doctrine
     /// and a stale *sentence* is not.
     pub(crate) fn showing(&self, document: &Document) -> Showing<'_> {
-        match (&self.shown, &self.pending, self.slow) {
-            (_, Some(_), true) => Showing::Message("Analysing..."),
-            (Some(shown), _, _) => Showing::Listing(shown),
-            (None, Some(_), false) => Showing::Nothing,
+        match (&self.shown, &self.pending) {
+            (_, Some(pending)) if pending.slow => Showing::Message("Analysing..."),
+            (Some(shown), _) => Showing::Listing(shown),
+            (None, Some(_)) => Showing::Nothing,
             // Asked, and answered with no symbol at all. Only a source line can.
-            (None, None, _) if self.answered.is_some() => {
+            (None, None) if self.answered.is_some() => {
                 Showing::Message("No code compiled from this line")
             }
-            (None, None, _) => Showing::Message(match document {
+            (None, None) => Showing::Message(match document {
                 Document::Assembly(_) => "No symbol selected",
                 Document::Source(_) => "Click a source line",
                 // The listing beside this asks nothing; its source side follows the
@@ -363,9 +378,8 @@ impl Analyzed {
         });
         let landed = landed.filter(|shown| shown.still_open(open));
 
-        if self.pending.as_ref() == Some(&ask) {
+        if self.waiting() == Some(&ask) {
             self.pending = None;
-            self.slow = false;
         }
         self.answered = Some(ask.clone());
 
@@ -438,10 +452,9 @@ impl Analyzed {
             }
             self.answered = Some(ask.clone());
             self.pending = None;
-            self.slow = false;
             return None;
         }
-        if self.pending.as_ref() == Some(ask) {
+        if self.waiting() == Some(ask) {
             return None;
         }
 
@@ -454,9 +467,27 @@ impl Analyzed {
                 recent: recent_symbols(self.shown.as_ref(), visits),
             },
         };
-        self.pending = Some(ask.clone());
-        self.slow = false;
+        self.pending = Some(Pending::asked(ask.clone()));
         Some(question)
+    }
+
+    /// The question the worker is working on, and nothing while it is idle.
+    pub(crate) fn waiting(&self) -> Option<&Ask> {
+        self.pending.as_ref().map(|pending| &pending.ask)
+    }
+
+    /// [`SLOW_ANALYSIS`] has passed since `ask` was sent. Whether anything changed, so
+    /// the caller writes only then ([`write_if`]): a question answered since, or one the
+    /// reader has moved on from, is nothing to say the app is still working on.
+    fn slowed(&mut self, ask: &Ask) -> bool {
+        let Some(pending) = self.pending.as_mut().filter(|held| held.ask == *ask) else {
+            return false;
+        };
+        if pending.slow {
+            return false;
+        }
+        pending.slow = true;
+        true
     }
 }
 
@@ -795,11 +826,7 @@ pub(crate) fn use_analysis_with(
         // The wait, started by the request and never polled.
         spawn(async move {
             Timer::after(SLOW_ANALYSIS).await;
-            let mut analysis = analysis;
-            let still = analysis.peek().pending.as_ref() == Some(&ask);
-            if still {
-                analysis.write().slow = true;
-            }
+            write_if(analysis, |held| held.slowed(&ask));
         });
     });
 

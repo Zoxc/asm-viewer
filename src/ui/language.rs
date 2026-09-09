@@ -35,18 +35,114 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
 
-/// Where the language server is.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Where the language server is, and what having got there brings with it: the process
+/// to end, and what the server has said about itself. Only two of the four states have a
+/// server, so neither can be written down beside one that has none.
+#[derive(Clone, Default)]
 pub(crate) enum Lsp {
     #[default]
     Off,
     /// Asked for, and not yet answering: starting one takes a moment and reading the
-    /// project takes longer.
-    Starting,
-    Running,
+    /// project takes longer. `server` is [`None`] until the worker says the process is
+    /// there, which is before the handshake is over.
+    Starting {
+        server: Option<process::Handle>,
+        said: Remarks,
+    },
+    /// Answering, and `server` is what ends it.
+    Running {
+        server: process::Handle,
+        said: Remarks,
+    },
     /// It could not be started, or it stopped answering. What it says is the reason,
     /// which the control shows and nothing else does.
     Failed(String),
+}
+
+/// Two states are the same state when they are the same kind of state and the server has
+/// said the same things. The handle is not compared: there is one server per run, so a
+/// run that has not moved is the same server.
+impl PartialEq for Lsp {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Lsp::Off, Lsp::Off) => true,
+            (Lsp::Starting { said: ours, .. }, Lsp::Starting { said: theirs, .. })
+            | (Lsp::Running { said: ours, .. }, Lsp::Running { said: theirs, .. }) => {
+                ours == theirs
+            }
+            (Lsp::Failed(ours), Lsp::Failed(theirs)) => ours == theirs,
+            _ => false,
+        }
+    }
+}
+
+/// Written without the handle: a process is nothing to print, and has no `Debug` of its
+/// own.
+impl std::fmt::Debug for Lsp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Lsp::Off => write!(f, "Off"),
+            Lsp::Starting { said, .. } => write!(f, "Starting({said:?})"),
+            Lsp::Running { said, .. } => write!(f, "Running({said:?})"),
+            Lsp::Failed(why) => write!(f, "Failed({why:?})"),
+        }
+    }
+}
+
+/// What a server has said about itself while nothing was asked (`lsp::Note`). Kept across
+/// the handshake: what it says and the handshake's own answer are two messages, and
+/// either can arrive first.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Remarks {
+    /// Whether it is reading the project rather than answering about it.
+    pub(crate) working: bool,
+    /// What the server last said about having settled, and `None` for one that has never
+    /// said -- which is every server but rust-analyzer, the notification being its own
+    /// (`lsp::Note::Settled`).
+    pub(crate) settled: Option<bool>,
+}
+
+impl Remarks {
+    /// Whether the server is done reading the project and ready to answer about it.
+    ///
+    /// **What a server says about itself beats what its progress implies.** A server that
+    /// reports having settled is taken at its word; one that never does is judged by its
+    /// progress, which is the old rule and is only ever a guess: the gaps between progress
+    /// tokens are not readiness (`lsp::Note::Settled`).
+    fn ready(&self) -> bool {
+        match self.settled {
+            Some(settled) => settled,
+            None => !self.working,
+        }
+    }
+}
+
+impl Lsp {
+    /// What the server has said about itself, and nothing where there is no server.
+    pub(crate) fn said(&self) -> Option<&Remarks> {
+        match self {
+            Lsp::Starting { said, .. } | Lsp::Running { said, .. } => Some(said),
+            Lsp::Off | Lsp::Failed(_) => None,
+        }
+    }
+
+    /// The same, to write on. A remark about a server the app no longer has is about
+    /// nothing it still says.
+    fn said_mut(&mut self) -> Option<&mut Remarks> {
+        match self {
+            Lsp::Starting { said, .. } | Lsp::Running { said, .. } => Some(said),
+            Lsp::Off | Lsp::Failed(_) => None,
+        }
+    }
+
+    /// What ends the server, where there is one to end.
+    fn handle(&self) -> Option<&process::Handle> {
+        match self {
+            Lsp::Starting { server, .. } => server.as_ref(),
+            Lsp::Running { server, .. } => Some(server),
+            Lsp::Off | Lsp::Failed(_) => None,
+        }
+    }
 }
 
 /// A start the reader has not agreed to yet: what would be run, and where.
@@ -63,13 +159,6 @@ pub(crate) struct Asking {
 #[derive(Clone, Default)]
 pub(crate) struct Language {
     pub(crate) state: Lsp,
-    /// Whether it is reading the project rather than answering about it. Not a state of
-    /// its own: a server that is working is running, and this is what it is doing.
-    pub(crate) working: bool,
-    /// What the server last said about having settled, and `None` for one that has never
-    /// said -- which is every server but rust-analyzer, the notification being its own
-    /// (`lsp::Note::Settled`).
-    pub(crate) settled: Option<bool>,
     /// The start that has been asked about and not answered yet. `None` unless the
     /// prompt is up.
     pub(crate) asking: Option<Asking>,
@@ -83,19 +172,12 @@ pub(crate) struct Language {
     /// Which server the answers arriving are about, counted up by every start and every
     /// stop.
     pub(crate) run: u64,
-    /// What ends the server. Held from the moment the worker says the process is there,
-    /// which is before the handshake: a stop while it is starting has to reach it too.
-    server: Option<process::Handle>,
 }
 
 impl PartialEq for Language {
-    /// The handle is not compared: there is one server per run, so a run that has not
-    /// moved is the same server.
     fn eq(&self, other: &Self) -> bool {
         self.state == other.state
             && self.run == other.run
-            && self.working == other.working
-            && self.settled == other.settled
             && self.asking == other.asking
             && self.settings == other.settings
     }
@@ -104,30 +186,26 @@ impl PartialEq for Language {
 impl Language {
     /// Whether pressing the control stops it rather than starting it.
     pub(crate) fn started(&self) -> bool {
-        matches!(self.state, Lsp::Starting | Lsp::Running)
+        matches!(self.state, Lsp::Starting { .. } | Lsp::Running { .. })
     }
 
     /// Whether it is there to be asked a question about a whole file: running, and done
     /// reading the project. A question put before that would hold the one conversation
     /// until it was answered, with every click queued behind it (`src/ui/linking.rs`) --
-    /// and would be answered with as much as the server had worked out so far.
-    ///
-    /// **What a server says about itself beats what its progress implies.** A server that
-    /// reports having settled is taken at its word; one that never does is judged by its
-    /// progress, which is the old rule and is only ever a guess: the gaps between progress
-    /// tokens are not readiness (`lsp::Note::Settled`).
+    /// and would be answered with as much as the server had worked out so far. What being
+    /// done reading amounts to is [`Remarks::ready`].
     pub(crate) fn ready(&self) -> bool {
-        matches!(self.state, Lsp::Running)
-            && match self.settled {
-                Some(settled) => settled,
-                None => !self.working,
-            }
+        matches!(&self.state, Lsp::Running { said, .. } if said.ready())
     }
 
     /// Whether something is going on: starting one, or a server reading the project.
     /// What the control draws a turning loader for instead of its own icon.
     pub(crate) fn busy(&self) -> bool {
-        matches!(self.state, Lsp::Starting) || self.working
+        match &self.state {
+            Lsp::Starting { .. } => true,
+            Lsp::Running { said, .. } => said.working,
+            Lsp::Off | Lsp::Failed(_) => false,
+        }
     }
 
     /// What the Project view says about it.
@@ -140,9 +218,9 @@ impl Language {
         }
         match &self.state {
             Lsp::Off => Verdict::plain("Not running. The control in the top bar starts it."),
-            Lsp::Starting => Verdict::plain("Starting..."),
-            Lsp::Running if self.working => Verdict::plain("Reading the project..."),
-            Lsp::Running => Verdict::plain("Running"),
+            Lsp::Starting { .. } => Verdict::plain("Starting..."),
+            Lsp::Running { said, .. } if said.working => Verdict::plain("Reading the project..."),
+            Lsp::Running { .. } => Verdict::plain("Running"),
             Lsp::Failed(why) => Verdict::bad_news(why.clone()),
         }
     }
@@ -170,13 +248,19 @@ impl Language {
     /// ([`write_if`]) -- and so that a server reporting the same thing twice costs no
     /// render.
     ///
-    /// A remark from a server that has been stopped is about nothing the control still
-    /// says.
+    /// A remark from a server that has been stopped, or that stopped answering, is about
+    /// nothing the control still says: the state it would be written on is gone.
     fn noted(&mut self, run: u64, working: bool) -> bool {
-        if self.run != run || self.working == working {
+        if self.run != run {
             return false;
         }
-        self.working = working;
+        let Some(said) = self.state.said_mut() else {
+            return false;
+        };
+        if said.working == working {
+            return false;
+        }
+        said.working = working;
         true
     }
 
@@ -184,10 +268,16 @@ impl Language {
     /// answer about it. [`Language::noted`]'s rules: whether anything changed, and a
     /// remark from a server that has been stopped says nothing.
     fn noted_settled(&mut self, run: u64, settled: bool) -> bool {
-        if self.run != run || self.settled == Some(settled) {
+        if self.run != run {
             return false;
         }
-        self.settled = Some(settled);
+        let Some(said) = self.state.said_mut() else {
+            return false;
+        };
+        if said.settled == Some(settled) {
+            return false;
+        }
+        said.settled = Some(settled);
         true
     }
 
@@ -198,13 +288,19 @@ impl Language {
     /// **A handle for a server stopped while it was starting is killed here rather than
     /// dropped.** The stop found nothing to kill, so the kill is this; and dropping it
     /// would leave a server running that nothing could ever name again. The worker is in
-    /// the handshake, and the pipes closing is what lets it out.
+    /// the handshake, and the pipes closing is what lets it out. A handle for anything but
+    /// the start that is under way goes the same way, for the same reason.
     fn spawned(&mut self, run: u64, handle: process::Handle) -> bool {
-        if self.run != run {
+        let starting = self.run == run;
+        let Lsp::Starting { server, .. } = &mut self.state else {
+            handle.stop();
+            return false;
+        };
+        if !starting {
             handle.stop();
             return false;
         }
-        self.server = Some(handle);
+        *server = Some(handle);
         true
     }
 
@@ -221,16 +317,14 @@ impl Language {
             }
             return false;
         }
-        match server {
-            Ok(handle) => {
-                self.state = Lsp::Running;
-                self.server = Some(handle);
-            }
-            Err(failure) => {
-                self.state = Lsp::Failed(failure.to_string());
-                self.server = None;
-            }
-        }
+        let said = self.state.said().cloned().unwrap_or_default();
+        self.state = match server {
+            Ok(handle) => Lsp::Running {
+                server: handle,
+                said,
+            },
+            Err(failure) => Lsp::Failed(failure.to_string()),
+        };
         true
     }
 
@@ -241,9 +335,6 @@ impl Language {
             return false;
         }
         self.state = Lsp::Failed(why);
-        self.working = false;
-        self.settled = None;
-        self.server = None;
         true
     }
 
@@ -301,19 +392,19 @@ impl Language {
             Some(Ok(settings)) => Ok(settings.clone()),
             None => Ok(lsp::Settings::none()),
         };
-        if let Some(handle) = &self.server {
+        if let Some(handle) = self.state.handle() {
             handle.stop();
         }
-        self.working = false;
-        // A new server has said nothing about itself yet, and what the last one said is
-        // about a process that is gone.
-        self.settled = None;
         self.asking = None;
-        self.server = None;
         self.run += 1;
         match ready {
             Ok(settings) => {
-                self.state = Lsp::Starting;
+                // A new server has said nothing about itself yet, and what the last one
+                // said went with the state it was written on.
+                self.state = Lsp::Starting {
+                    server: None,
+                    said: Remarks::default(),
+                };
                 Some((self.run, settings))
             }
             Err(why) => {
@@ -330,17 +421,14 @@ impl Language {
     /// An unanswered question goes with it: it was about the project being left. The
     /// project's own settings stay, being the project's and not the server's.
     fn stopped(&mut self) -> bool {
-        if matches!(self.state, Lsp::Off) && self.server.is_none() && self.asking.is_none() {
+        if matches!(self.state, Lsp::Off) && self.asking.is_none() {
             return false;
         }
-        if let Some(handle) = &self.server {
+        if let Some(handle) = self.state.handle() {
             handle.stop();
         }
         self.state = Lsp::Off;
-        self.working = false;
-        self.settled = None;
         self.asking = None;
-        self.server = None;
         self.run += 1;
         true
     }
@@ -350,9 +438,11 @@ impl Language {
     pub(crate) fn words(&self) -> String {
         match &self.state {
             Lsp::Off => "Start rust-analyzer".to_owned(),
-            Lsp::Starting => "Starting rust-analyzer".to_owned(),
-            Lsp::Running if self.working => "rust-analyzer is reading the project".to_owned(),
-            Lsp::Running => "Stop rust-analyzer".to_owned(),
+            Lsp::Starting { .. } => "Starting rust-analyzer".to_owned(),
+            Lsp::Running { said, .. } if said.working => {
+                "rust-analyzer is reading the project".to_owned()
+            }
+            Lsp::Running { .. } => "Stop rust-analyzer".to_owned(),
             Lsp::Failed(why) => why.clone(),
         }
     }
@@ -1203,11 +1293,11 @@ impl Component for ServerButton {
             (Lsp::Failed(_), _) => palette().invalid_fg,
             (Lsp::Off, false) => Color::TRANSPARENT,
             (Lsp::Off, true) => palette().hairline,
-            (Lsp::Running, _) => dimmed(colour, palette().server_bg),
+            (Lsp::Running { .. }, _) => dimmed(colour, palette().server_bg),
             _ => dimmed(colour, palette().pane_bg),
         };
         let background = match (&held.state, hovering()) {
-            (Lsp::Running, _) => palette().server_bg,
+            (Lsp::Running { .. }, _) => palette().server_bg,
             (_, true) if live => palette().toggle_hover_bg,
             _ => Color::TRANSPARENT,
         };

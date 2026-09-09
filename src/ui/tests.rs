@@ -4006,7 +4006,7 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
         analysis.peek().shown.is_none(),
         "an answer for a symbol the reader had left was put on screen"
     );
-    assert!(analysis.peek().pending == Some(Ask::Symbol(second.clone())));
+    assert!(analysis.peek().waiting() == Some(&Ask::Symbol(second.clone())));
 
     // And the answer that is wanted lands.
     gate.send_blocking(()).expect("the gate");
@@ -4016,7 +4016,6 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
     let shown = state.shown.expect("the second symbol was analysed");
     assert!(shown.studied.symbol == second);
     assert!(state.pending.is_none());
-    assert!(!state.slow);
     assert_eq!(
         seen.peek().len(),
         1,
@@ -5314,7 +5313,7 @@ fn label_area(test: &TestingRunner, text: &str) -> Option<Area> {
 /// server said the name is one, and saying so is a question sent to the worker and an
 /// answer coming back, which is two turns of the loop and not one.
 fn serving(test: &mut TestingRunner, language: &mut State<Language>) {
-    language.write().state = Lsp::Running;
+    language.write().state = Lsp::running_to_nothing();
     // The worker is a real thread, so the answer arrives in its own time and not in this
     // one's: polling the executor without giving it any cannot see an answer that has not
     // been sent yet. A millisecond a turn, twenty turns, and the whole suite still runs
@@ -7898,7 +7897,7 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
     );
     let jobs = asking.read().clone().expect("the worker");
     start_server(language, states.proj, &jobs);
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
 
     // Asked, and refused. Nothing is drawn as a link, so a press on the call asks nobody
     // where it is defined.
@@ -7920,7 +7919,7 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
     let _ = notes.send_blocking((run, lsp::Note::Busy(true)));
     for _ in 0..500 {
         settle(&mut test);
-        let working = language.read().working;
+        let working = language.read().working();
         if working {
             break;
         }
@@ -8148,8 +8147,13 @@ fn a_file_is_asked_about_only_once_the_server_says_it_has_settled() {
     // Running, with nothing in flight, and saying it has not settled.
     {
         let mut held = language.write();
-        held.state = Lsp::Running;
-        held.settled = Some(false);
+        held.state = Lsp::Running {
+            server: process::Handle::to_nothing(),
+            said: Remarks {
+                working: false,
+                settled: Some(false),
+            },
+        };
     }
     for _ in 0..20 {
         settle(&mut test);
@@ -8164,7 +8168,13 @@ fn a_file_is_asked_about_only_once_the_server_says_it_has_settled() {
     );
 
     // And it settles.
-    language.write().settled = Some(true);
+    language.write().state = Lsp::Running {
+        server: process::Handle::to_nothing(),
+        said: Remarks {
+            working: false,
+            settled: Some(true),
+        },
+    };
     assert_eq!(
         until_tokens(&mut test, &asks).as_deref(),
         Some(&*file),
@@ -8221,7 +8231,7 @@ fn what_a_server_said_before_it_settled_is_asked_again_once_it_has() {
     );
     let jobs = asking.read().clone().expect("the worker");
     start_server(language, states.proj, &jobs);
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
 
     // Asked before it had settled, and answered with nothing it had placed: no links.
     assert_eq!(
@@ -8653,7 +8663,7 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
     );
     // And the server is still a server: refusing a question is answering it.
     assert!(
-        matches!(language.peek().state, Lsp::Running),
+        matches!(language.peek().state, Lsp::Running { .. }),
         "the control was told the server broke"
     );
 }
@@ -24310,20 +24320,37 @@ fn control_is_lit(test: &TestingRunner) -> bool {
     .is_some()
 }
 
-/// Sync until the control is in the state wanted, since the worker is a thread of its own
-/// and its answer arrives when it arrives -- and then a little further, so that what is
-/// drawn is that state and not the one before it. A pass is a render or a round of task
-/// polling and never both, so the pass that takes the answer draws nothing; ending on it
-/// leaves the control in the state before, which is what an assertion about its border
-/// then reads. `pump` settles again for the same reason.
+/// The control is running, whatever the server has said about itself since -- which is
+/// not what a test waiting for one is waiting for.
+fn running(state: &Lsp) -> bool {
+    matches!(state, Lsp::Running { .. })
+}
+
+/// The control has failed, for the reason given.
+fn failing(why: &str) -> impl Fn(&Lsp) -> bool + '_ {
+    move |state| matches!(state, Lsp::Failed(said) if said == why)
+}
+
+/// Sync until `wanted` says the control is where the test is waiting for it, since the
+/// worker is a thread of its own and its answer arrives when it arrives -- and then a
+/// little further, so that what is drawn is that state and not the one before it.
+///
+/// A pass is a render or a round of task polling and never both, so the pass that takes
+/// the answer draws nothing; ending on it leaves the control in the state before, which
+/// is what an assertion about its border then reads. `pump` settles again for the same
+/// reason.
 ///
 /// Gives up rather than hanging: the assertion after it is what says what went wrong.
-fn until_server(test: &mut TestingRunner, language: State<Language>, wanted: &Lsp) {
+fn until_server(
+    test: &mut TestingRunner,
+    language: State<Language>,
+    wanted: impl Fn(&Lsp) -> bool,
+) {
     for _ in 0..500 {
         settle(test);
         // Bound to a `let` of its own: the settle below polls the task that writes the
         // very state this read.
-        let arrived = &language.read().state == wanted;
+        let arrived = wanted(&language.read().state);
         if arrived {
             settle(test);
             return;
@@ -24367,13 +24394,13 @@ fn the_control_starts_a_server_and_lights_when_it_answers() {
     assert_eq!(language.read().state, Lsp::Off);
 
     press_at(&mut test, the_control());
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
 
     assert_eq!(
         next_job(&asks),
         Some(AskedOfServer::Start(PathBuf::from("/p")))
     );
-    assert_eq!(language.read().state, Lsp::Running);
+    assert!(matches!(language.read().state, Lsp::Running { .. }));
     assert!(control_is_lit(&test), "a running server is not lit");
 }
 
@@ -24412,7 +24439,7 @@ fn the_control_is_named_and_bordered_in_the_state_it_is_in() {
     until_server(
         &mut test,
         language,
-        &Lsp::Failed(lsp::Failure::NoServer("not found".to_owned()).to_string()),
+        failing(&lsp::Failure::NoServer("not found".to_owned()).to_string()),
     );
 
     assert!(
@@ -24441,8 +24468,8 @@ fn the_next_press_stops_the_server() {
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
-    until_server(&mut test, language, &Lsp::Running);
-    assert_eq!(language.read().state, Lsp::Running);
+    until_server(&mut test, language, running);
+    assert!(matches!(language.read().state, Lsp::Running { .. }));
 
     press_at(&mut test, the_control());
     settle(&mut test);
@@ -24477,7 +24504,7 @@ fn a_server_that_will_not_start_leaves_the_reason_on_the_control() {
     until_server(
         &mut test,
         language,
-        &Lsp::Failed(lsp::Failure::NoServer("not found".to_owned()).to_string()),
+        failing(&lsp::Failure::NoServer("not found".to_owned()).to_string()),
     );
 
     let state = language.read().state.clone();
@@ -24528,9 +24555,8 @@ fn an_answer_for_a_server_that_was_stopped_is_dropped() {
         std::thread::sleep(Duration::from_millis(1));
     }
 
-    assert_eq!(
-        language.read().state,
-        Lsp::Starting,
+    assert!(
+        matches!(language.read().state, Lsp::Starting { .. }),
         "an answer for another run was taken"
     );
     assert!(
@@ -24577,7 +24603,7 @@ fn a_stop_while_it_is_starting_still_kills_the_process() {
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert_eq!(language.read().state, Lsp::Starting);
+    assert!(matches!(language.read().state, Lsp::Starting { .. }));
     assert!(
         language.read().holding(),
         "the app is not holding a process it started"
@@ -24611,8 +24637,8 @@ fn changing_the_project_stops_the_server() {
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
-    until_server(&mut test, language, &Lsp::Running);
-    assert_eq!(language.read().state, Lsp::Running);
+    until_server(&mut test, language, running);
+    assert!(matches!(language.read().state, Lsp::Running { .. }));
 
     with_a_directory(&mut test, &states, "/elsewhere");
 
@@ -24665,7 +24691,7 @@ fn a_question_asked_with_no_server_running_asks_nobody() {
     until_server(
         &mut test,
         language,
-        &Lsp::Failed(lsp::Failure::NoServer("not found".to_owned()).to_string()),
+        failing(&lsp::Failure::NoServer("not found".to_owned()).to_string()),
     );
     assert!(matches!(language.read().state, Lsp::Failed(_)));
     assert_eq!(
@@ -24875,8 +24901,8 @@ fn the_project_views_button_starts_and_stops_the_language_server() {
 
     let start = centre_of(&test, "Start");
     press_at(&mut test, start);
-    until_server(&mut test, language, &Lsp::Running);
-    assert_eq!(language.read().state, Lsp::Running);
+    until_server(&mut test, language, running);
+    assert!(matches!(language.read().state, Lsp::Running { .. }));
 
     // And the button is the other one now, which is the whole of it being one control.
     let stop = centre_of(&test, "Stop");
@@ -24907,10 +24933,10 @@ fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
     for _ in 0..500 {
         settle(&mut test);
-        if language.read().working {
+        if language.read().working() {
             break;
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -24918,7 +24944,7 @@ fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
 
     let held = language.read().clone();
     assert!(
-        held.working,
+        held.working(),
         "the server's own account of itself was dropped"
     );
     // What the control draws a turning loader for instead of its icon, and what both
@@ -24945,7 +24971,7 @@ fn a_question_asked_while_it_is_starting_waits_for_it() {
 
     press_at(&mut test, the_control());
     settle(&mut test);
-    assert_eq!(language.read().state, Lsp::Starting);
+    assert!(matches!(language.read().state, Lsp::Starting { .. }));
 
     let jobs = asking.read().clone().expect("the worker");
     let at = Lookup {
@@ -25005,7 +25031,7 @@ fn a_start_carries_the_projects_own_settings() {
     pump(&mut test, || !language.peek().overrides().is_empty());
 
     press_at(&mut test, the_control());
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
 
     let options = options.try_recv().expect("the start carried options");
     assert_eq!(
@@ -25226,14 +25252,14 @@ fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
 
     let agree = centre_of(&test, "Start it");
     press_at(&mut test, agree);
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
 
     assert_eq!(
         next_job(&asks),
         Some(AskedOfServer::Start(PathBuf::from("/p")))
     );
     assert!(nothing_pressed(&asks), "the one press started two servers");
-    assert_eq!(language.read().state, Lsp::Running);
+    assert!(matches!(language.read().state, Lsp::Running { .. }));
 
     // The question is gone, and the answer is held. It is the *session* it reaches disk
     // through, never the project file, so a project that is shared asks whoever opens it.
@@ -25311,7 +25337,7 @@ fn a_project_that_agreed_before_the_app_opened_is_not_asked_again() {
     );
 
     press_at(&mut test, the_control());
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
 
     assert_eq!(
         next_job(&asks),
@@ -25340,7 +25366,7 @@ fn changing_the_directory_asks_about_the_new_one() {
     });
     with_a_directory(&mut test, &states, "/p");
     press_at(&mut test, the_control());
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/elsewhere".to_owned();
@@ -25383,7 +25409,7 @@ fn the_project_view_shows_the_agreement_and_takes_it_back() {
     settle(&mut test);
     let agree = centre_of(&test, "Start it");
     press_at(&mut test, agree);
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
     assert!(proj.read().trusted);
     assert!(labels(&test).iter().any(|text| text == "Agreed to"));
 
@@ -25419,7 +25445,7 @@ fn switching_projects_keeps_the_answer_the_new_one_brought() {
     });
     with_a_directory(&mut test, &states, "/p");
     press_at(&mut test, the_control());
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
 
     // What a switch does to these states: the file and the directory arrive together, out
     // of the other project's own file, with its own answer.
@@ -25444,7 +25470,7 @@ fn switching_projects_keeps_the_answer_the_new_one_brought() {
     // And a press starts it, rather than asking about a directory this project already
     // answered for.
     press_at(&mut test, the_control());
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
     let drawn = labels(&test);
     assert!(!drawn.iter().any(|text| text == "Start it"), "{drawn:?}");
 }
@@ -25471,9 +25497,9 @@ fn the_project_views_button_asks_before_it_starts_too() {
 
     let agree = centre_of(&test, "Start it");
     press_at(&mut test, agree);
-    until_server(&mut test, language, &Lsp::Running);
+    until_server(&mut test, language, running);
 
-    assert_eq!(language.read().state, Lsp::Running);
+    assert!(matches!(language.read().state, Lsp::Running { .. }));
     assert!(proj.read().trusted);
 }
 

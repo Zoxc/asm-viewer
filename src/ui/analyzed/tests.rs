@@ -51,7 +51,7 @@ fn an_answer_to_a_question_the_reader_has_clicked_past_is_not_taken() {
     let since = source("other.c", 3);
 
     let mut state = Analyzed {
-        pending: Some(since.clone()),
+        pending: Some(Pending::asked(since.clone())),
         ..Analyzed::default()
     };
     let studied = Some(Studied::new(symbol));
@@ -67,7 +67,7 @@ fn an_answer_out_of_a_binary_closed_since_it_was_asked_for_is_not_drawn() {
     let ask = source("line_fixture.c", 3);
 
     let mut state = Analyzed {
-        pending: Some(ask.clone()),
+        pending: Some(Pending::asked(ask.clone())),
         ..Analyzed::default()
     };
     let studied = Some(Studied::new(symbol));
@@ -171,7 +171,7 @@ fn a_listing_whose_binary_has_closed_is_asked_for_again_out_of_what_is_left() {
         state.shown.is_none(),
         "and the closed file's listing is gone"
     );
-    assert!(state.pending == Some(line));
+    assert!(state.waiting() == Some(&line));
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn a_question_already_on_its_way_is_not_asked_twice() {
     let object = fixture();
     let ask = Ask::Symbol(symbol_of(&object));
     let mut state = Analyzed {
-        pending: Some(ask.clone()),
+        pending: Some(Pending::asked(ask.clone())),
         ..Analyzed::default()
     };
     let visits = Visits::default();
@@ -191,11 +191,10 @@ fn a_place_with_no_listing_leaves_nothing_waiting() {
     let object = fixture();
     let ask = Ask::Symbol(symbol_of(&object));
     let mut state = Analyzed {
-        pending: Some(ask),
-        slow: true,
+        pending: Some(Pending { ask, slow: true }),
         ..Analyzed::default()
     };
     let visits = Visits::default();
     assert!(state.asked(None, &[object], &visits).is_none());
-    assert!(state.pending.is_none() && !state.slow);
+    assert!(state.pending.is_none(), "the wait outlived the question");
 }

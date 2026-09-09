@@ -472,7 +472,10 @@ Two things say which server an answer is about, and they are not the same thing:
   is a server nothing can ever find again (`pad.rs` has the same rule for a run's
   process). It is also what closes the race the other way -- a stop pressed before the
   worker has even spawned finds nothing, and the `Spawned` that follows it is for a run
-  that has moved, so the kill happens there.
+  that has moved, so the kill happens there. The handle is a field of the state that has
+  it and not one beside the state, so "there is a server" is written down once: `Lsp::Off`
+  and `Lsp::Failed` have none to hold, and a `Spawned` that finds one of them stops what
+  it was handed.
 
 Which **question** an answer is to is a third thing, and the run cannot stand in for it: a
 run lasts as long as the server, so two questions inside one is the ordinary case.
@@ -485,9 +488,11 @@ question the worker had already taken land on nobody.
 What the server says unasked comes back on a bounded channel the `Start` job carries, under
 the run it was started in, and the only thing said so far is whether it is working. Bounded
 so that a server reporting progress in a tight loop cannot outrun the app: the reader thread
-waiting is the whole of the backpressure. **Working is not a state**, it is what a running
-server is doing, so a handshake's answer and a first `$/progress` can arrive in either order
-without one undoing the other.
+waiting is the whole of the backpressure. **Working is not a state**, it is what a server
+that is there is doing, so it is carried by the two states that have one and cannot be
+written beside a state with none. A handshake's answer and a first `$/progress` arrive in
+either order without one undoing the other, since the remark is kept across the change of
+state; a remark about a server the app has let go of has nowhere to land.
 
 `worth_doing` drains the queue to the last question of each kind, keeping every start and
 stop: a reader clicking twice wants the second answer, a reader who asks for a name's

@@ -323,7 +323,10 @@ code, through the rows the section view shares as `CodeRows`) and keeping the li
 owing a scroll reveals: both listings light rows with it and both scroll by it, and a second
 spelling would light one row and scroll to another. `AsmData` holds the worker's `Studied` whole
 rather than copying its fields apart, so it is the same value both listings pair against and a
-field added there reaches the rows without a builder to thread it through.
+field added there reaches the rows without a builder to thread it through -- the disassembly
+included, which the rows ask it for rather than take from a second field beside it. Making one
+is what checks there is a disassembly at all, so a listing for a symbol with nothing to decode
+cannot be built.
 `row_background` is four colours (the pair's green, the selection's blue-grey for a row selected
 whole, that colour faded for the caret's row, and a deeper green for a row that is both; `Wash`),
 and a run of paired rows has a rule a step deeper along its top and its bottom (`pair_border`, on
