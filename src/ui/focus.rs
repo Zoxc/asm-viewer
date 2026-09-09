@@ -250,6 +250,34 @@ pub(crate) fn reveal_caret(
     }
 }
 
+/// [`reveal_caret`] with what a code listing already knows bound in: the reveal its
+/// keyboard and its find bar are each handed, a call apiece rather than a closure apiece.
+///
+/// **What it reads, it reads when the reveal is made and not when it is built.**
+/// `viewport` is kept as the state and peeked per call, since a pane measured after this
+/// was built would otherwise be revealed against a viewport of zero; the row height is
+/// asked for per call, being a function of the fonts. `length` alone is the render's own,
+/// which is what a reveal is about: the rows the render that made it drew.
+///
+/// The height is a code row's, so this is the code panes' rule and not the rule itself.
+/// The finder's list follows the same one in the interface font and calls
+/// [`reveal_caret`] for itself.
+pub(crate) fn caret_reveal(
+    mut controller: ScrollController,
+    viewport: State<f32>,
+    length: usize,
+) -> impl FnMut(usize) + 'static {
+    move |row| {
+        reveal_caret(
+            &mut controller,
+            *viewport.peek(),
+            code_row_height(),
+            length,
+            row,
+        )
+    }
+}
+
 /// What a pane's [`use_kept_position`] asks of it every render: the reveal it owes, the
 /// landing it can take, and the row it opens at. Held so the effect reads the latest and
 /// not the first.

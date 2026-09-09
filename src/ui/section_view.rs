@@ -749,7 +749,6 @@ impl Component for SectionList {
             let rows = built.clone();
             let drawn = built.clone();
             let seeded = built.clone();
-            let mut controller = controller;
             find_chord(
                 at,
                 marked,
@@ -779,16 +778,7 @@ impl Component for SectionList {
                             .map(|built| code_line(built, &built.reading, row))
                             .unwrap_or_default()
                     },
-                    // The caret's row, brought on screen after a key has moved it.
-                    move |row| {
-                        reveal_caret(
-                            &mut controller,
-                            *viewport.peek(),
-                            code_row_height(),
-                            length,
-                            row,
-                        )
-                    },
+                    caret_reveal(controller, viewport, length),
                 ),
             )
         };

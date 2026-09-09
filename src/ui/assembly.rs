@@ -1389,18 +1389,7 @@ impl Component for InstructionList {
 
         // The step the bar asked for, made here: the hits are rows, and only the list
         // knows how far to scroll to reach one.
-        {
-            let mut controller = controller;
-            use_find_steps(at, marked, None, move |row| {
-                reveal_caret(
-                    &mut controller,
-                    *viewport.peek(),
-                    code_row_height(),
-                    length,
-                    row,
-                )
-            });
-        }
+        use_find_steps(at, marked, None, caret_reveal(controller, viewport, length));
 
         let on_key_down = {
             let assembly = data.assembly().clone();
@@ -1409,7 +1398,6 @@ impl Component for InstructionList {
             let (seed_assembly, seed_lanes) = (assembly.clone(), lanes.clone());
             // A separator copies as the blank line it is drawn as, so a run lifted out of
             // the listing keeps the blocks apart on the way to the clipboard.
-            let mut controller = controller;
             find_chord(
                 at,
                 marked,
@@ -1443,16 +1431,7 @@ impl Component for InstructionList {
                             .map(|index| instruction_line(&text_assembly, index))
                             .unwrap_or_default()
                     },
-                    // The caret's row, brought on screen after a key has moved it.
-                    move |row| {
-                        reveal_caret(
-                            &mut controller,
-                            *viewport.peek(),
-                            code_row_height(),
-                            length,
-                            row,
-                        )
-                    },
+                    caret_reveal(controller, viewport, length),
                 ),
             )
         };

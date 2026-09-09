@@ -678,24 +678,17 @@ impl Component for SourceList {
 
         // The step the bar asked for, made here: the hits are rows, and only the list
         // knows how far to scroll to reach one.
-        {
-            let mut controller = controller;
-            use_find_steps(at, marked, Some(self.file.clone()), move |row| {
-                reveal_caret(
-                    &mut controller,
-                    *viewport.peek(),
-                    code_row_height(),
-                    length,
-                    row,
-                )
-            });
-        }
+        use_find_steps(
+            at,
+            marked,
+            Some(self.file.clone()),
+            caret_reveal(controller, viewport, length),
+        );
 
         let on_key_down = {
             let source = self.source.clone();
             let drawn = self.source.clone();
             let seeded = self.source.clone();
-            let mut controller = controller;
             find_chord(
                 at,
                 marked,
@@ -727,16 +720,7 @@ impl Component for SourceList {
                     // The characters are columns of the line as drawn, so that is what they
                     // copy: an indentation as the spaces the row draws it as.
                     move |index| source_line(&drawn, index),
-                    // The caret's row, brought on screen after a key has moved it.
-                    move |index| {
-                        reveal_caret(
-                            &mut controller,
-                            *viewport.peek(),
-                            code_row_height(),
-                            length,
-                            index,
-                        )
-                    },
+                    caret_reveal(controller, viewport, length),
                 ),
             )
         };
