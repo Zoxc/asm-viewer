@@ -2,12 +2,17 @@
 
 use super::*;
 
+/// The rule between two surfaces, drawn by whichever of them owns the edge: the palette's
+/// hairline along the one side the caller names, and nothing along the other three.
+fn hairline(side: BorderWidth) -> Border {
+    Border::new().fill(palette().hairline).width(side)
+}
+
+/// The rule under a bar drawn over what it belongs to.
 pub(crate) fn bottom_hairline() -> Border {
-    Border::new().fill(palette().hairline).width(BorderWidth {
-        top: 0.0,
-        right: 0.0,
+    hairline(BorderWidth {
         bottom: 0.5,
-        left: 0.0,
+        ..BorderWidth::default()
     })
 }
 
@@ -73,20 +78,16 @@ pub(crate) const LINK_BOX_INSET: f32 = 4.0;
 /// The rule over a bar drawn under what it belongs to, as [`bottom_hairline`] is the rule
 /// under one drawn over it.
 pub(crate) fn top_hairline() -> Border {
-    Border::new().fill(palette().hairline).width(BorderWidth {
+    hairline(BorderWidth {
         top: 0.5,
-        right: 0.0,
-        bottom: 0.0,
-        left: 0.0,
+        ..BorderWidth::default()
     })
 }
 
 pub(crate) fn right_hairline() -> Border {
-    Border::new().fill(palette().hairline).width(BorderWidth {
-        top: 0.0,
+    hairline(BorderWidth {
         right: 0.5,
-        bottom: 0.0,
-        left: 0.0,
+        ..BorderWidth::default()
     })
 }
 
@@ -158,6 +159,24 @@ pub(crate) fn verdict_line(verdict: Verdict) -> impl IntoElement {
                 .color(verdict_fg(verdict.bad))
                 .max_lines(1),
         )
+}
+
+/// What a bar with a pattern box says under it when the pattern will not compile: the
+/// regex's own complaint, in the colour every invalid thing wears and clipped to one line.
+/// Drawn by both filter bars and by the find bar.
+///
+/// **A pattern that will not compile has to read as one**: matching nothing looks exactly
+/// like a list with nothing in it, so the reason is written out.
+///
+/// The line sits in a `rect` because a `label` carries no padding and no clipping of its
+/// own.
+pub(crate) fn invalid_line(error: String) -> Element {
+    rect()
+        .width(Size::fill())
+        .padding(Gaps::new(0.0, 6.0, 5.0, 6.0))
+        .overflow(Overflow::Clip)
+        .child(label().text(error).color(palette().invalid_fg).max_lines(1))
+        .into_element()
 }
 
 /// The frame every sidebar-style row is drawn in: the height a list's rows are, the

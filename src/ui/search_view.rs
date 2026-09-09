@@ -226,10 +226,9 @@ impl Component for SearchPanel {
         // The rows the arrows step and Enter presses, shared by the two closures: a
         // `SearchRows` is the rows behind an `Arc`, so this is a pointer each.
         let listed = rows.clone();
-        let stepped = listed.clone();
         let keys = ListKeys {
             length: rows.len(),
-            at: Box::new(move |at| stepped.get(at).map(place_pick)),
+            at: place_picks(listed.clone()),
             open: Box::new(move |at| match listed.get(at) {
                 Some(row) => press_place(doors, places, ctrl, Folding::Hits(searched), row),
                 None => Pressed::Folded,

@@ -233,15 +233,7 @@ impl Component for FilterBar {
                         .into()
                     })),
             )
-            // A pattern that will not compile has to read *as* one: matching nothing
-            // looks exactly like a list with nothing in it, so the reason is written out.
-            .maybe_child(error.map(|error| {
-                rect()
-                    .width(Size::fill())
-                    .padding(Gaps::new(0.0, 6.0, 5.0, 6.0))
-                    .overflow(Overflow::Clip)
-                    .child(label().text(error).color(palette().invalid_fg).max_lines(1))
-            }))
+            .maybe_child(error.map(invalid_line))
     }
 }
 

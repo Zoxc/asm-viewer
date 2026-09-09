@@ -632,10 +632,9 @@ impl Component for LocationsPanel {
                 // The rows the arrows step and Enter presses: a `ReferenceRows` is the
                 // rows behind an `Arc`, so this is a pointer each.
                 let listed = used.clone();
-                let stepped = listed.clone();
                 keys = ListKeys {
                     length,
-                    at: Box::new(move |at| stepped.get(at).map(place_pick)),
+                    at: place_picks(listed.clone()),
                     open: Box::new(move |at| match listed.get(at) {
                         Some(row) => {
                             press_place(to.doors, places, to.ctrl, Folding::Places(located), row)

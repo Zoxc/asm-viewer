@@ -604,13 +604,7 @@ impl Component for FindBar {
                         step: EventHandler::new(move |_| step(false)),
                     }),
             )
-            .maybe_child(error.map(|error| {
-                rect()
-                    .width(Size::fill())
-                    .padding(Gaps::new(0.0, 6.0, 5.0, 6.0))
-                    .overflow(Overflow::Clip)
-                    .child(label().text(error).color(palette().invalid_fg).max_lines(1))
-            }))
+            .maybe_child(error.map(invalid_line))
     }
 }
 
