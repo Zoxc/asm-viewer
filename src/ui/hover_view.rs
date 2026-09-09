@@ -168,7 +168,7 @@ impl Component for HoverBox {
                             })
                             .child(
                                 MarkdownViewer::new(said.to_owned())
-                                    .code_editor_font_family(mono_family()),
+                                    .code_editor_font_family(fonts().mono.family()),
                             ),
                     ),
             )

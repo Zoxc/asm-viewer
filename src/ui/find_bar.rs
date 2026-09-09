@@ -497,9 +497,8 @@ impl Component for FindBar {
             .child(
                 rect()
                     .width(Size::fill())
-                    // The list height plus what an `Input`'s border and inner margin need,
-                    // exactly as a filter bar's row is.
-                    .height(Size::px(list_row_height() + 6.0))
+                    // Exactly as a filter bar's row is.
+                    .height(Size::px(text_box_height()))
                     .horizontal()
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)

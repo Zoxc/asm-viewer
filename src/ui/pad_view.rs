@@ -126,7 +126,7 @@ impl Component for DependencyRow {
             .child(
                 rect()
                     .width(Size::fill())
-                    .height(Size::px(list_row_height() + 8.0))
+                    .height(Size::px(text_box_height()))
                     .horizontal()
                     .cross_align(Alignment::Center)
                     .content(Content::Flex)
@@ -215,15 +215,9 @@ impl Component for SourceEditor {
 
         let font = fonts();
         let size = font.mono.size();
-        // The editor takes **one** family where everything else takes a chain, and freya
-        // appends the parent element's families behind an element's own -- so the rest of
-        // the chain arrives by inheritance from the box around it.
-        let family = font
-            .mono
-            .families
-            .first()
-            .map(|family| family.to_string())
-            .unwrap_or_default();
+        // The editor takes **one** family where everything else takes a chain; the rest of
+        // it arrives by inheritance from the box around it (`Font::family`).
+        let family = font.mono.family();
         // The editor multiplies its font size by this and floors the answer, so half a
         // pixel of slack is what lands the product on `code_row_height()` exactly.
         let line_height = (code_row_height() + 0.5) / size;

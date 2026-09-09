@@ -38,6 +38,19 @@ pub(crate) fn code_row_height() -> f32 {
     row_height_for(fonts().mono.size())
 }
 
+/// How tall anything holding a box to type in is: a **list** row and the air around it.
+/// The two filter bars, the find bar, the settings page's rows and the scratchpad's
+/// dependency rows, every one of them drawn in the interface font.
+///
+/// The six is air and not fit. freya sizes a compact `Input` from its own text and inner
+/// margin, which at the app's own fonts is 27 against a 24 row, so the height clears the
+/// box on its own and what the six buys is the space around it: a strip's box off the
+/// hairlines above and below it, and, where the rows are stacked into a column, the gap
+/// between one box and the next.
+pub(crate) fn text_box_height() -> f32 {
+    list_row_height() + 6.0
+}
+
 /// The device pixel grid the window is being drawn on, and a subscription to it.
 ///
 /// freya keeps the scale factor on `Platform`, a root context the renderer provides --
@@ -343,19 +356,6 @@ pub(crate) trait FontExt: TextStyleExt + Sized {
     fn assembly_font(self) -> Self {
         self.font(&fonts().mono)
     }
-}
-
-/// The fixed-width font's first family, for the one place that takes a family and not a
-/// chain: freya's markdown viewer names one font for its code. What it is missing is the
-/// fallbacks, which the box's own font supplies -- freya appends a parent's families
-/// behind an element's own.
-pub(crate) fn mono_family() -> String {
-    fonts()
-        .mono
-        .families
-        .first()
-        .map(|family| family.to_string())
-        .unwrap_or_default()
 }
 
 impl<T: TextStyleExt + Sized> FontExt for T {}

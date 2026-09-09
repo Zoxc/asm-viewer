@@ -146,9 +146,12 @@ agree without this file knowing which that is. Windows stores no desktop-wide mo
 so that half stays `Consolas`. Each font is then a *chain*: the desktop's answer in front of the
 platform's own (`Segoe UI`/`Consolas`, `.AppleSystemUIFont`/`Menlo`, else the generic
 `sans-serif`/`monospace` that skia resolves through fontconfig). A family named with no usable size
-keeps the family and takes the app's default size. The platform font must be named, since freya's
-global fallbacks are all proportional and a chain resolving to nothing silently takes the assembly
-view out of a monospaced face. It must equally not name *another* platform's families, which had a
+keeps the family and takes the app's default size. `Font::family` is the front of that chain on its
+own, for the three callers freya hands one family rather than a list -- the scratchpad's editor, the
+hover box's markdown and the placeholder saying what a font row is inheriting -- each of which gets
+the rest by inheriting the families of the box around it. The platform font must be named, since
+freya's global fallbacks are all proportional and a chain resolving to nothing silently takes the
+assembly view out of a monospaced face. It must equally not name *another* platform's families, which had a
 Windows box rendering in DejaVu. The one font freya will not let an element set is the tooltip's,
 hardcoded in its theme, so `interface_theme` provides a `Theme` with `tooltip.font_size` at the
 interface size. That sits on top of freya's own `light_theme()`/`dark_theme()` sheet, chosen by the
@@ -218,6 +221,15 @@ are called by `InstructionList` and `SourceList` and by nothing else. One thing 
 app's own defaults (9pt interface, 10.5pt fixed-width) a sidebar row is 24px where it was 26,
 because 26 was the *mono* font's number and had never been anything else. No floor holds it at 26;
 that would be the same coupling under another name.
+
+**A box to type in is a row and some air**, which is `text_box_height`: a list row and six more,
+wherever the interface font's rows hold a box rather than a line of text -- the two filter bars, the
+find bar, the settings page's rows and the scratchpad's dependency rows. The six is air and not fit.
+freya sizes a compact `Input` from its own text and inner margin, 27 against a 24 row at the app's
+own fonts, so the height clears the box on its own; what it buys is the space around it, a strip's
+box off the hairlines above and below it and, where the rows are stacked into a column, the gap
+between one box and the next. It was four sites writing `list_row_height()` plus a constant, two of
+them saying 8 with nothing saying why, and those two rows lost the two pixels.
 
 **The Settings page** (`Tab::Settings`) is where the theme choice and the two font overrides are
 edited. `Prefs` holds an `EditedSettings`, which has `OpenProject`'s shape for its reason: a family

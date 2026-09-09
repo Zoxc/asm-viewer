@@ -98,7 +98,7 @@ fn setting_row(
             .width(Size::flex(1.0))
             // Taller than a plain field row: what these rows hold is a box to type in or
             // a stepper, either of which is taller than a line of text.
-            .height(Size::px(list_row_height() + 8.0))
+            .height(Size::px(text_box_height()))
             .horizontal()
             .cross_align(Alignment::Center)
             .content(Content::Flex)
@@ -138,11 +138,7 @@ fn font_section(
     family: Writable<String>,
     size: impl FnMut(Option<f32>) + Clone + 'static,
 ) -> Element {
-    let inherited_family = inherited
-        .families
-        .first()
-        .map(|family| family.to_string())
-        .unwrap_or_default();
+    let inherited_family = inherited.family();
     // What the stepper moves from: the reader's size where there is one, otherwise the
     // one being inherited.
     let points = edited.size.unwrap_or(inherited.points);

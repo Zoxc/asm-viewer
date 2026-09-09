@@ -132,10 +132,9 @@ impl Component for FilterBar {
             .child(
                 rect()
                     .width(Size::fill())
-                    // Taller than a row by the room an `Input`'s border and inner margin
-                    // need. The **list** height, a filter bar sitting only ever over a
-                    // sidebar list.
-                    .height(Size::px(list_row_height() + 6.0))
+                    // A row and the room an `Input` needs around it: the **list** height,
+                    // a filter bar sitting only ever over a sidebar list.
+                    .height(Size::px(text_box_height()))
                     .horizontal()
                     // A `flex` child needs a `Content::Flex` parent for torin to size it.
                     .content(Content::Flex)

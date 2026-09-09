@@ -58,6 +58,20 @@ impl Font {
     pub fn size(&self) -> f32 {
         self.points * 96.0 / 72.0
     }
+
+    /// The first family, for the callers that take one family where everything else
+    /// takes a chain: freya's code editor and its markdown viewer each name a single
+    /// font for their code, and a placeholder shows the one family a reader would be
+    /// inheriting. What such a caller misses is the fallbacks, which the box around it
+    /// supplies -- freya appends a parent's families behind an element's own.
+    ///
+    /// Empty where there is no family at all, which is what freya reads as "unset".
+    pub fn family(&self) -> String {
+        self.families
+            .first()
+            .map(|family| family.to_string())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
