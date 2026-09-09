@@ -103,6 +103,20 @@ impl Matcher {
         }
     }
 
+    /// Whether the pattern marks anything in `text`: [`marks`](Self::marks) asked for a
+    /// yes or no, which allocates nothing and stops at the first mark.
+    ///
+    /// **Not [`matches`](Self::matches)**, which says `true` twice where this says
+    /// `false`: for a filter that matches everything, nothing having been typed and so
+    /// nothing marked, and for a zero-width match like `a*`, which is a match with no
+    /// width to wash.
+    pub fn marked(&self, text: &str) -> bool {
+        match self {
+            Matcher::Everything | Matcher::Invalid(_) => false,
+            Matcher::Pattern(regex) => regex.find_iter(text).any(|found| !found.is_empty()),
+        }
+    }
+
     /// What is wrong with the pattern, for the bar to show.
     pub fn error(&self) -> Option<&str> {
         match self {

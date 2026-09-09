@@ -237,6 +237,36 @@ fn the_marks_are_every_occurrence_and_nothing_where_nothing_was_typed() {
     assert_eq!(marks(&empty, "axxb"), [1..3]);
 }
 
+/// **The yes/no half of the marks**, and the two places it parts from
+/// [`Matcher::matches`] -- the mistake it is here to prevent: an empty box, which lets
+/// every row through and marks none of them, and a pattern that can match nothing, which
+/// matches everywhere and marks nowhere.
+#[test]
+fn marked_is_the_marks_and_not_the_match() {
+    let marked = |filter: &Filter, text: &str| filter.matcher().marked(text);
+
+    assert!(marked(&plain("iter"), "core::iter"));
+    assert!(!marked(&plain("nope"), "core::iter"));
+    let invalid = Filter {
+        regex: true,
+        ..plain("core::(iter")
+    };
+    assert!(!marked(&invalid, "core::iter"));
+
+    // Nothing typed.
+    assert!(hits(&Filter::default(), "iter"));
+    assert!(!marked(&Filter::default(), "iter"));
+
+    // A pattern that can match nothing, marking only where it matched something.
+    let empty = Filter {
+        regex: true,
+        ..plain("x*")
+    };
+    assert!(hits(&empty, "abc"));
+    assert!(!marked(&empty, "abc"));
+    assert!(marked(&empty, "axxb"));
+}
+
 /// The list the two tests below filter: against `next` it holds a prefix, two word starts
 /// of different lengths, a substring, and a name that does not match at all.
 fn names() -> Shared<String> {

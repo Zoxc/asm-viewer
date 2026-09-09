@@ -60,7 +60,7 @@ pub fn hits_in(line: &Line, matcher: &Matcher) -> Vec<Range<usize>> {
             }
             Piece::Inline(name) => {
                 flush(start, &mut run, &mut hits);
-                if !matcher.marks(name).is_empty() {
+                if matcher.marked(name) {
                     hits.push(column..column + 1);
                 }
                 column += 1;
