@@ -169,6 +169,18 @@ impl Language {
         }
     }
 
+    /// C's grammar. Named here and not in [`grammar`]'s arm because two answers are made
+    /// of it: the pair that colours a C file, and the parse [`functions`] finds one's
+    /// functions with. The second is not asking whether there is a grammar, so it reads
+    /// the constant and has no [`Option`] to unwrap.
+    ///
+    /// [`grammar`]: Language::grammar
+    /// [`functions`]: Language::functions
+    const C_GRAMMAR: LanguageFn = tree_sitter_c::LANGUAGE;
+
+    /// C++'s, for the same two answers.
+    const CPP_GRAMMAR: LanguageFn = tree_sitter_cpp::LANGUAGE;
+
     /// The tree-sitter grammar this is parsed with and the query that colours it, for the
     /// five that have one. [`None`] is not a failure: a file no grammar knows is drawn as
     /// one plain span per line.
@@ -185,8 +197,8 @@ impl Language {
                 tree_sitter_rust::LANGUAGE,
                 tree_sitter_rust::HIGHLIGHTS_QUERY,
             ),
-            Language::C => (tree_sitter_c::LANGUAGE, tree_sitter_c::HIGHLIGHT_QUERY),
-            Language::Cpp => (tree_sitter_cpp::LANGUAGE, tree_sitter_cpp::HIGHLIGHT_QUERY),
+            Language::C => (Language::C_GRAMMAR, tree_sitter_c::HIGHLIGHT_QUERY),
+            Language::Cpp => (Language::CPP_GRAMMAR, tree_sitter_cpp::HIGHLIGHT_QUERY),
             Language::Toml => (
                 tree_sitter_toml_ng::LANGUAGE,
                 tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
@@ -216,19 +228,16 @@ impl Language {
 
     /// The functions a file of this language defines, by the lines each spans: Rust by
     /// the scanner of its own (`functions::rust`, the grammar being behind the compiler),
-    /// C and C++ by a parse with [`grammar`].
+    /// C and C++ by a parse with the grammar that colours them.
     ///
     /// A grammar is not an answer on its own. TOML and JSON have one and define no
     /// functions, and the rest have no grammar to parse with, so both are no functions
     /// rather than a parse made to find that out.
-    ///
-    /// [`grammar`]: Language::grammar
     pub fn functions(self, text: &str) -> Vec<Function> {
         match self {
             Language::Rust => functions::rust::functions(text),
-            Language::C | Language::Cpp => self
-                .grammar()
-                .map_or_else(Vec::new, |(grammar, _)| functions::parsed(grammar, text)),
+            Language::C => functions::parsed(Language::C_GRAMMAR, text),
+            Language::Cpp => functions::parsed(Language::CPP_GRAMMAR, text),
             _ => Vec::new(),
         }
     }
