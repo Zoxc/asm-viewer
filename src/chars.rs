@@ -473,11 +473,30 @@ pub enum Piece {
 }
 
 impl Piece {
-    fn units(&self) -> usize {
+    /// What the piece draws, or the name an inline element copies as.
+    fn text(&self) -> &str {
         match self {
-            Piece::Text(text) => units(text),
-            Piece::Inline(_) => 1,
+            Piece::Text(text) | Piece::Inline(text) => text,
         }
+    }
+
+    /// The piece character by character: how many columns each takes, and the character
+    /// itself where the piece is text. An inline element is one character of its own, one
+    /// column wide whatever its name. The one place a piece's width is stated -- counting
+    /// a row's units, laying out its atoms and slicing it all step over this -- so no two
+    /// of them can put a column in a different place.
+    fn characters(&self) -> impl Iterator<Item = (usize, Option<char>)> + '_ {
+        let text = match self {
+            Piece::Text(text) => Some(text),
+            Piece::Inline(_) => None,
+        };
+        text.into_iter()
+            .flat_map(|text| text.chars().map(|c| (c.len_utf16(), Some(c))))
+            .chain(text.is_none().then_some((1, None)))
+    }
+
+    fn units(&self) -> usize {
+        self.characters().map(|(units, _)| units).sum()
     }
 }
 
@@ -603,26 +622,14 @@ impl Line {
         let mut atoms = Vec::new();
         let mut col = 0;
         for piece in &self.pieces {
-            match piece {
-                Piece::Inline(_) => {
-                    atoms.push(Atom {
-                        start: col,
-                        end: col + 1,
-                        class: Class::Inline,
-                    });
-                    col += 1;
-                }
-                Piece::Text(text) => {
-                    for c in text.chars() {
-                        let end = col + c.len_utf16();
-                        atoms.push(Atom {
-                            start: col,
-                            end,
-                            class: Class::of(c),
-                        });
-                        col = end;
-                    }
-                }
+            for (units, character) in piece.characters() {
+                let end = col + units;
+                atoms.push(Atom {
+                    start: col,
+                    end,
+                    class: character.map_or(Class::Inline, Class::of),
+                });
+                col = end;
             }
         }
         atoms
@@ -634,26 +641,17 @@ impl Line {
     pub fn slice(&self, from: usize, to: usize) -> String {
         let (from, to) = (from.min(to), from.max(to));
         let mut out = String::new();
-        let mut at = 0;
+        let mut col = 0;
         for piece in &self.pieces {
-            let units = piece.units();
-            let (start, end) = (at, at + units);
-            at = end;
-            if end <= from || start >= to {
-                continue;
-            }
-            match piece {
-                Piece::Inline(name) => out.push_str(name),
-                Piece::Text(text) => {
-                    let mut col = start;
-                    for c in text.chars() {
-                        let next = col + c.len_utf16();
-                        if next > from && col < to {
-                            out.push(c);
-                        }
-                        col = next;
+            for (units, character) in piece.characters() {
+                let end = col + units;
+                if end > from && col < to {
+                    match character {
+                        Some(character) => out.push(character),
+                        None => out.push_str(piece.text()),
                     }
                 }
+                col = end;
             }
         }
         out
@@ -663,9 +661,7 @@ impl Line {
 impl fmt::Display for Line {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for piece in &self.pieces {
-            match piece {
-                Piece::Text(text) | Piece::Inline(text) => f.write_str(text)?,
-            }
+            f.write_str(piece.text())?;
         }
         Ok(())
     }

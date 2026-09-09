@@ -127,6 +127,55 @@ fn an_inline_element_is_one_unit_and_copies_as_its_name() {
     assert_eq!(line.slice(0, 5), "call ");
 }
 
+/// How wide a piece draws is one rule, and counting a row's units, laying out its atoms
+/// and slicing it all read it off the same place: the atoms run end to end from nothing to
+/// the row's units, and slicing one atom's columns copies the one character it spans --
+/// the whole name for an inline element's one column.
+#[test]
+fn the_units_the_atoms_and_the_slice_put_a_column_in_the_same_place() {
+    let mut line = Line::default();
+    line.push_text("mov a\u{1F600}, ");
+    line.push_inline("core::fmt::write");
+    line.push_text("+8");
+
+    // What each column of the row copies, an inline element counting as one.
+    let copied = [
+        "m",
+        "o",
+        "v",
+        " ",
+        "a",
+        "\u{1F600}",
+        ",",
+        " ",
+        "core::fmt::write",
+        "+",
+        "8",
+    ];
+    let atoms = line.atoms();
+    assert_eq!(atoms.len(), copied.len());
+
+    let mut at = 0;
+    for (atom, text) in atoms.iter().zip(copied) {
+        assert_eq!(
+            atom.start, at,
+            "an atom starts where the one before it ended"
+        );
+        assert_eq!(
+            line.slice(atom.start, atom.end),
+            text,
+            "columns {}..{} copy the character they span",
+            atom.start,
+            atom.end
+        );
+        at = atom.end;
+    }
+    assert_eq!(at, line.units(), "the atoms end where the row's units do");
+    // The wide character is two columns and the inline element one, whatever its name.
+    assert_eq!(atoms[5].end - atoms[5].start, 2);
+    assert_eq!(atoms[8].end - atoms[8].start, 1);
+}
+
 /// A sweep that has left the rows reaches the row on screen nearest the pointer, at the
 /// pointer's x clamped into the box -- and nothing while the pointer is over a row, which
 /// answers for itself.
