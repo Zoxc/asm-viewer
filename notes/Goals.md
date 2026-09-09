@@ -496,6 +496,29 @@ leaves this list when it is. That is a move made on request, like everything els
   it names arrives — which also means deciding what such a tab does if the load finishes and the
   object never comes, where the answer is probably the same drop the restore does now, only
   later and visibly.
+- [ ] Save what each side of a tab is showing, and what each has picked out. A session restores
+  where every pane was scrolled and which line each place is, and keeps neither the other side's
+  subject nor either side's caret and run. Four facts, and the first is not derivable from the
+  second: a source line compiles into **many** symbols, which is why the symbol a tab follows is a
+  fact of its own (`Driven::chosen`, `src/positions.rs`) rather than something read off the line.
+  The code's companion file is read off the assembly pane's run today (`source_side`,
+  `src/ui/source_view.rs`), and that is a shortcut, not the model -- a restored code tab has no
+  source side at all until the reader clicks a row. So store, per place: **what each side shows**
+  -- the symbol on the assembly side, the file on the source side -- and **each side's caret and
+  run**, the two panes' independently. A line is not enough for either: a caret is a row and a
+  column, a run is two carets plus which end the reader is moving, which `ends()` sorts away, and
+  an assembly row has no line at all. The durable spelling differs per listing, a row index
+  meaning nothing across a restart -- a source file's is its line and a byte offset, a symbol's
+  assembly is the instruction's address, an object's whole code is the `Spot` the section view
+  already keeps -- and `Kept::spots_of` and `Kept::carry` (`src/ui/focus.rs`) are that conversion,
+  written for a re-decode. Three things stand in the way. `Positions<Entry, Kept>` cannot be
+  written as it stands -- an `Arc<str>`, an `Owed`, a generation -- so it wants a saved
+  counterpart the way a `Spot` reduces to `asm_address`. `keep_leaving` only writes `marks_at` on
+  leaving, so a save has to take the live `Marks` for the place on screen as well. And a code
+  tab's rows arrive after its document, so a run restored there has to be planted the way a
+  landing is (`Planting`) rather than sat in the map. Each restored fact also has to say what it
+  does when it no longer holds -- a file edited, a binary rebuilt, a symbol gone -- where the rule
+  everywhere else is that a saved position is a hint that clamps.
 - [x] A cursor in every list, and the arrows and Enter on it. A focused list had a cursor in
   neither sense — no row was current and nothing moved between rows — because the only lit row
   was whatever the tab on screen showed. A list holds its own pick now (`src/ui/picks.rs`): Up
