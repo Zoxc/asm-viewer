@@ -519,9 +519,10 @@ fn gone_instead(failure: Failure, ended: Option<String>, said: &str) -> Failure 
 /// What a program said, cut to a length a line of the interface can hold.
 fn elided(said: &str) -> String {
     const MOST: usize = 200;
-    match said.char_indices().nth(MOST) {
-        Some((at, _)) => format!("{}...", &said[..at]),
-        None => said.to_owned(),
+    let end = chars::byte_of_char(said, MOST);
+    match end < said.len() {
+        true => format!("{}...", &said[..end]),
+        false => said.to_owned(),
     }
 }
 

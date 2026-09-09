@@ -245,21 +245,13 @@ fn hit_from(matcher: &RegexMatcher, line: &[u8], number: u64) -> Hit {
 /// Shared with the references list, whose rows are these rows (`src/references.rs`).
 pub fn drawn(line: &str, spans: Vec<Range<usize>>) -> (String, Vec<Range<usize>>) {
     let start = line.len() - line.trim_start().len();
-    let end = cut(&line[start..], MAX_LINE) + start;
+    let end = chars::byte_of_char(&line[start..], MAX_LINE) + start;
     let spans = spans
         .into_iter()
         .map(|span| span.start.max(start) - start..span.end.clamp(start, end) - start)
         .filter(|span| span.start < span.end)
         .collect();
     (line[start..end].to_owned(), spans)
-}
-
-/// Where to cut `text` to keep `characters` of it: a byte index, always on a character
-/// boundary, since a slice taken anywhere else panics and this is file input.
-fn cut(text: &str, characters: usize) -> usize {
-    text.char_indices()
-        .nth(characters)
-        .map_or(text.len(), |(at, _)| at)
 }
 
 /// A line without the newline the searcher hands back with it, `\r\n` included.

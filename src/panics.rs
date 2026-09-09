@@ -35,6 +35,7 @@
 //! that one's place, so the app says the same thing in both builds -- and a guarded panic
 //! stops being fatal in a release build, which it was.
 
+use crate::chars;
 use crate::store::Store;
 use crate::{reveal, shutdown};
 use std::{
@@ -442,10 +443,12 @@ fn drawn(frame: &str) -> String {
 }
 
 /// `line` cut to `width` characters, with an ellipsis where anything was taken. Counted in
-/// `char`s, a name being text and not bytes.
+/// `char`s, a name being text and not bytes, and cut on a character boundary
+/// (`chars::byte_of_char`), which is also the one walk the decision takes.
 fn cut(line: &str, width: usize) -> String {
-    match line.chars().count() > width {
-        true => line.chars().take(width).collect::<String>() + "\u{2026}",
+    let end = chars::byte_of_char(line, width);
+    match end < line.len() {
+        true => format!("{}\u{2026}", &line[..end]),
         false => line.to_owned(),
     }
 }

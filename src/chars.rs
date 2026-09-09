@@ -10,8 +10,10 @@
 //!
 //! Everywhere else in the app a column is a **byte offset** into the file's line, which is
 //! what a language server is asked in and answers in (`src/lsp.rs`). So this module owns
-//! both counts and the one conversion between them ([`columns_of`], [`bytes_of`]): the
-//! drawing side converts, and nothing else has to know how a character is counted.
+//! both counts and every conversion between them ([`columns_of`], [`bytes_of`], and
+//! [`slice_of`], which refuses a cut the other two would round): the drawing side
+//! converts, and nothing else has to know how a character is counted. [`byte_of_char`] is
+//! the same kind of fact for the count a length written for a reader is in.
 
 use std::fmt;
 use std::ops::{Range, RangeInclusive};
@@ -341,6 +343,51 @@ pub fn columns_of(line: &str, bytes: Range<usize>) -> Range<usize> {
 pub fn bytes_of(line: &str, columns: Range<usize>) -> Range<usize> {
     let start = byte_at(line, columns.start);
     start..byte_at(line, columns.end).max(start)
+}
+
+/// The text of `line` between the UTF-16 offsets `units`, and `None` where either end
+/// falls inside a character, or where the range is empty or the wrong way round.
+///
+/// The opposite rule to [`bytes_of`]'s, and on purpose. `bytes_of` rounds an end down to
+/// the start of the character it is inside, which is what a run named by a stale answer
+/// wants: somewhere near beats a panic. A cut has to be refusable instead. The one caller
+/// cuts a drawn row's spans at the edges of a link (`cut_at`, `src/ui/code_row.rs`), and a
+/// piece taken from inside a character would shift what the row draws without saying so;
+/// refusing lets the caller keep the span whole.
+pub fn slice_of(line: &str, units: Range<usize>) -> Option<&str> {
+    let (mut from, mut to) = (None, None);
+    let mut seen = 0;
+    for (at, character) in line.char_indices() {
+        if seen == units.start {
+            from = Some(at);
+        }
+        if seen == units.end {
+            to = Some(at);
+        }
+        seen += character.len_utf16();
+    }
+    if seen == units.start {
+        from = Some(line.len());
+    }
+    if seen == units.end {
+        to = Some(line.len());
+    }
+    let (from, to) = (from?, to?);
+    (from < to).then(|| &line[from..to])
+}
+
+/// Where character `nth` of `text` begins in its bytes, and the text's length when it has
+/// no more than `nth` of them: where text kept to `nth` characters is cut.
+///
+/// One walk, and the answer says both things an elision asks -- where the kept part ends,
+/// and, by being short of `text.len()`, that there is more past it. Always a character
+/// boundary, so the slice it names cannot panic. Counted in `char`s, which is what a
+/// length written for a reader is counted in; a column is UTF-16 units and is
+/// [`bytes_of`]'s business.
+pub fn byte_of_char(text: &str, nth: usize) -> usize {
+    text.char_indices()
+        .nth(nth)
+        .map_or(text.len(), |(at, _)| at)
 }
 
 /// The last character boundary of `line` at or before `byte`, and the line's length for a

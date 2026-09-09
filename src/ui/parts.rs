@@ -481,17 +481,19 @@ fn name_box(line: Paragraph, dim: bool) -> impl IntoElement {
 }
 
 /// Whether [`elide`] would cut `text`: what a chip asks instead of measuring, its text
-/// being cut by the count and never by the room.
+/// being cut by the count and never by the room. The walk stops at the cut rather than
+/// counting the whole name (`chars::byte_of_char`).
 pub(crate) fn elided(text: &str) -> bool {
-    text.chars().count() > CHIP_NAME_CHARS
+    chars::byte_of_char(text, CHIP_NAME_CHARS) < text.len()
 }
 
 /// `text` cut down to [`CHIP_NAME_CHARS`], with an ellipsis where the rest was. On a
 /// character boundary, so a multi-byte name cannot panic here.
 pub(crate) fn elide(text: &str) -> String {
-    match text.char_indices().nth(CHIP_NAME_CHARS) {
-        Some((end, _)) => format!("{}\u{2026}", &text[..end]),
-        None => text.to_owned(),
+    let end = chars::byte_of_char(text, CHIP_NAME_CHARS);
+    match end < text.len() {
+        true => format!("{}\u{2026}", &text[..end]),
+        false => text.to_owned(),
     }
 }
 

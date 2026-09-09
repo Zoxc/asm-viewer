@@ -590,3 +590,49 @@ fn a_run_the_line_is_too_short_for_stops_at_its_end() {
 fn backwards(start: usize, end: usize) -> Range<usize> {
     start..end
 }
+
+/// The two ways a cut lands inside a character, side by side: `bytes_of` rounds it back to
+/// the character's start, `slice_of` refuses it, and a caller of `slice_of` can tell the
+/// two cases apart because refusing is the only way it says nothing.
+#[test]
+fn a_cut_inside_a_character_rounds_one_way_and_is_refused_the_other() {
+    // Column 4 is the crab's second unit. `bytes_of` takes the whole crab with it.
+    assert_eq!(bytes_of(WIDE, 0..4), 0..3);
+    assert_eq!(slice_of(WIDE, 0..4), None);
+    // From inside it as well as up to inside it.
+    assert_eq!(bytes_of(WIDE, 4..7), 3..9);
+    assert_eq!(slice_of(WIDE, 4..7), None);
+    // A cut on the boundaries either side of it is the same run for both.
+    assert_eq!(&WIDE[bytes_of(WIDE, 3..5)], "\u{1f980}");
+    assert_eq!(slice_of(WIDE, 3..5), Some("\u{1f980}"));
+    assert_eq!(slice_of(WIDE, 0..3), Some("// "));
+    assert_eq!(slice_of(WIDE, 5..12), Some(" helper"));
+}
+
+/// Nothing to cut is nothing to draw: an empty run and a reversed one both come back
+/// `None`, where `bytes_of` answers an empty range at a place. Past the end is `None` too,
+/// there being no character boundary there to land on.
+#[test]
+fn a_slice_of_nothing_is_refused() {
+    assert_eq!(slice_of(WIDE, 3..3), None);
+    assert_eq!(slice_of(WIDE, backwards(5, 3)), None);
+    assert_eq!(bytes_of(WIDE, backwards(5, 3)), 7..7);
+    assert_eq!(slice_of(WIDE, 0..99), None);
+    assert_eq!(bytes_of(WIDE, 0..99), 0..14);
+    assert_eq!(slice_of("", 0..0), None);
+}
+
+/// The nth character, in bytes: where an elision cuts, and the string's own length when
+/// there is nothing to cut. The crab is one character and four bytes, so the count and the
+/// offset part company at it.
+#[test]
+fn the_nth_character_is_where_an_elision_cuts() {
+    assert_eq!(byte_of_char(WIDE, 3), 3);
+    assert_eq!(&WIDE[..byte_of_char(WIDE, 3)], "// ");
+    assert_eq!(&WIDE[..byte_of_char(WIDE, 4)], "// \u{1f980}");
+    // Exactly as long as it is, and longer: both have nothing past the cut, which is what
+    // an answer of the string's own length says.
+    assert_eq!(byte_of_char(WIDE, WIDE.chars().count()), WIDE.len());
+    assert_eq!(byte_of_char(WIDE, 99), WIDE.len());
+    assert_eq!(byte_of_char("", 0), 0);
+}

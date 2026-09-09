@@ -1211,12 +1211,12 @@ pub(crate) fn cut_at(head: Vec<Span<'static>>, links: &[Range<usize>]) -> Vec<Sp
         edges.dedup();
         let mut at = 0;
         for edge in edges.into_iter().chain(std::iter::once(units)) {
-            let Some(piece) = utf16_slice(&span.text, at..edge) else {
+            let Some(piece) = chars::slice_of(&span.text, at..edge) else {
                 continue;
             };
             at = edge;
             cut.push(Span {
-                text: std::borrow::Cow::Owned(piece),
+                text: std::borrow::Cow::Owned(piece.to_owned()),
                 text_style_data: span.text_style_data.clone(),
             });
         }
@@ -1227,29 +1227,6 @@ pub(crate) fn cut_at(head: Vec<Span<'static>>, links: &[Range<usize>]) -> Vec<Sp
         }
     }
     cut
-}
-
-/// `text` between two UTF-16 offsets, and `None` where either falls inside a character.
-fn utf16_slice(text: &str, units: Range<usize>) -> Option<String> {
-    let (mut from, mut to) = (None, None);
-    let mut seen = 0;
-    for (at, character) in text.char_indices() {
-        if seen == units.start {
-            from = Some(at);
-        }
-        if seen == units.end {
-            to = Some(at);
-        }
-        seen += character.len_utf16();
-    }
-    if seen == units.start {
-        from = Some(text.len());
-    }
-    if seen == units.end {
-        to = Some(text.len());
-    }
-    let (from, to) = (from?, to?);
-    (from < to).then(|| text[from..to].to_owned())
 }
 
 /// `head` with the run at `columns` drawn as a link under the pointer, and unchanged
