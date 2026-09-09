@@ -409,6 +409,15 @@ leaves this list when it is. That is a move made on request, like everything els
   inline link being one unit to skia (U+FFFC) with no UTF-8 spelling. `notes/upstream/freya.md`
   has the ask.
 
+- [ ] Walk a menu, and answer a window, with the keyboard. Every menu the app opens is the
+  pointer's alone: the arrows move nothing in one, Enter presses nothing, and the only key any
+  of them answers is the Escape that closes it. The same is true of the two windows that ask
+  before they delete, where the reader has to reach for the pointer to say either word. What to
+  check first is whether freya's `Menu` and `MenuItem` answer a key at all, since neither takes
+  a focusable box today; what to decide is what a menu opened by a right-click puts the
+  keyboard on, and whether Enter in a window presses its affirmative -- which it must not where
+  that button deletes something, leaving those two on Escape and a press.
+
 ## Panels and tabs
 
 - [ ] A tab kind for a file, so an object or an archive can be opened and read about. Today
@@ -567,6 +576,14 @@ leaves this list when it is. That is a move made on request, like everything els
   `source::fits` asks `symlink_metadata`, which answers about the path and not what it
   points at, and the Files view drops a symlink from a level it reads. The project's own
   root is still resolved, so a project reached through a symlinked directory is read whole.
+
+- [ ] Reopen the tab last closed. A close is final: `close_tab` takes the document's trail with
+  it, and the History panel is places rather than tabs, so a tab shut by mistake is rebuilt by
+  hand from wherever it was opened. What has to exist first is a record of what was closed --
+  the document, where it sat in the bar, and the trail behind it -- which nothing keeps. The
+  decisions are how many closes back it reaches, whether a page counts as a tab here, whether
+  the tab comes back with its trail or only its place, and what happens to one whose binary has
+  since been closed, that being the one close that already strips its places from every trail.
 
 ## Projects
 
