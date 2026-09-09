@@ -303,6 +303,52 @@ fn output_row(line: &OutputLine) -> Element {
         .into_element()
 }
 
+/// What one run of [`use_follow_tail`] does. The three are exclusive: a run either moves
+/// the pane or judges where the reader is, never both.
+#[derive(Debug, PartialEq)]
+enum Tail {
+    /// Scroll to this offset, the bottom of the list as it stands now.
+    To(i32),
+    /// Nothing: lines arrived at a pane that is not following, or one already at the
+    /// bottom. **A scroll that moves nothing is still a write**, and this effect is
+    /// subscribed to what it writes, so it would wake itself for ever.
+    Stay,
+    /// Whether the reader is at the bottom, which is what arms the follow.
+    Follow(bool),
+}
+
+/// **What a run of [`use_follow_tail`] makes of where the pane is**: the arithmetic,
+/// apart from the effect that acts on it.
+///
+/// `arrived` says the run was woken by lines landing rather than by a scroll or a resize,
+/// and `following` is what the last run left armed.
+///
+/// Being at the bottom is **the newest row being drawn at all** rather than drawn entire:
+/// a scroll offset is a whole number of pixels where a list of rows is not, so a list
+/// clamped hard against its end stands a fraction of a pixel short of showing its last
+/// row and would arm nothing, ever.
+fn tail_move(
+    offset: i32,
+    height: f32,
+    viewport: f32,
+    length: usize,
+    arrived: bool,
+    following: bool,
+) -> Tail {
+    if arrived {
+        // Off the rows there are now, never a row index written down earlier.
+        let bottom = -(scroll_extent(length, height, viewport) as i32);
+        return match following && offset != bottom {
+            true => Tail::To(bottom),
+            false => Tail::Stay,
+        };
+    }
+    // Judged in rows against the viewport as it is now, which is `reveal_row`'s shape.
+    let top = (-offset).max(0) as f32;
+    let newest = length.saturating_sub(1) as f32 * height;
+    Tail::Follow(newest < top + viewport)
+}
+
 /// Follow the newest row: keep `controller` against the bottom of a list that is being
 /// appended to, for exactly as long as the reader is at the bottom of it.
 ///
@@ -345,27 +391,22 @@ fn use_follow_tail(mut controller: ScrollController, viewport: f32, output: usiz
                 return;
             }
 
-            let height = code_row_height();
-            let bottom = -(scroll_extent(length, height, viewport) as i32);
-
-            if seen.replace(Some(output)) != Some(output) {
-                // Only when it moves: `scroll_to_y` notifies whether or not the position
-                // changes, and this effect is subscribed to what it writes.
-                if following.get() && offset != bottom {
+            // Which of the two woke this run: lines landing, or a scroll or a resize.
+            let arrived = seen.replace(Some(output)) != Some(output);
+            match tail_move(
+                offset,
+                code_row_height(),
+                viewport,
+                length,
+                arrived,
+                following.get(),
+            ) {
+                Tail::To(bottom) => {
                     controller.scroll_to_y(bottom);
                 }
-                return;
+                Tail::Stay => {}
+                Tail::Follow(at_bottom) => following.set(at_bottom),
             }
-
-            // Judged in rows against the viewport as it is now, which is `reveal_row`'s
-            // shape. **The newest row being drawn at all** is what counts as being at the
-            // bottom, rather than being drawn entire: a scroll offset is a whole number of
-            // pixels where a list of rows is not, so a list clamped hard against its end
-            // stands a fraction of a pixel short of showing its last row and would arm
-            // nothing, ever.
-            let top = (-offset).max(0) as f32;
-            let newest = length.saturating_sub(1) as f32 * height;
-            following.set(newest < top + viewport);
         },
     );
 }
@@ -1325,3 +1366,6 @@ fn pad_key(pad: State<Pads>, jobs: &PadJobs, key: &Key, modifiers: Modifiers) {
         request_new_pad(jobs);
     }
 }
+
+#[cfg(test)]
+mod tests;

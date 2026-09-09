@@ -410,8 +410,8 @@ things are load-bearing. **A position is a file and a line** (`LinePos`), since 
 line 42 is not line 42 of the open file; it is the one `Arc` in the UI compared by *contents*. **A
 run is dropped only when its listing goes, or kept with its place**: the assembly's when the same
 place asks another question (a click on a line of a source-driven tab) or the rows are counted
-afresh, the source's when the pane moves *off the run's file* within one place (`use_clear_marks`)
-and not whenever the file changes, since a landing plants a run in the file the pane is about to
+afresh, the source's when the pane moves *off the run's file* within one place (`use_clear_marks`,
+the decision itself `moved_off`) and not whenever the file changes, since a landing plants a run in the file the pane is about to
 show and the switch it causes must not be what drops it. A change of the active *entry* is neither
 effect's to answer, being a switch of place, which `use_land` owns whole (below). And **the scroll
 is a request, answered once**: `Picked::owed` says which panes have yet to scroll to the run,
@@ -1089,7 +1089,8 @@ end), or from outside the panes (a caret at the line's start, or at the start of
 door named), is a selection like any other. The whole-row wash that preceded it made a gutter click
 look like a different kind of thing from a text click, which it is not. freya counts presses
 (`EventsCombos::pressed`, root state, 500 ms and 5 px): two on a word take the word as skia divides
-them (`get_word_boundary`), three the row's text, and a sweep after either goes on by character.
+them (`get_word_boundary`), three the row's text -- the count and the column in and the press out,
+`pressed` -- and a sweep after either goes on by character.
 Ctrl+C copies the characters where any are selected and otherwise the rows: the caret's row as its
 own line, address and all, as an editor copies the line under a caret with nothing selected
 (`copy_text`, pure, so the rule is tested without a clipboard). Escape collapses the selection to

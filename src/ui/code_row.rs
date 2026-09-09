@@ -1053,6 +1053,27 @@ fn on_measured(
     }
 }
 
+/// **What a press on a row's text means**, once the column it landed on is known: one
+/// press a caret there, two the word under it, three or more the row's whole text, as the
+/// text engine divides them.
+///
+/// `word` is asked only where the answer turns on it, and answers for the row as it is
+/// laid out now; a press on a row with no word boundary to give -- one not laid out yet
+/// -- is the caret the single press would have been.
+fn pressed(
+    presses: PressEventType,
+    col: usize,
+    word: impl FnOnce(usize) -> Option<(usize, usize)>,
+) -> Press {
+    match presses {
+        PressEventType::Double => word(col)
+            .map(|(from, to)| Press::Span(from, to))
+            .unwrap_or(Press::At(col)),
+        PressEventType::Triple | PressEventType::Quadruple => Press::Span(0, usize::MAX),
+        PressEventType::Single => Press::At(col),
+    }
+}
+
 /// The row's `on_pointer_down`: a link followed, a run started, or the menu.
 ///
 /// The *down* and not the press: a drag is over by the time a press fires, so a selection
@@ -1091,19 +1112,8 @@ fn on_down(
                 follow(links.columns[link].clone());
                 return;
             }
-            let press = at.map(|col| {
-                // Two presses on a word take the word, three the row's text, as the text
-                // engine divides them.
-                match presses {
-                    PressEventType::Double => word_at(&cells.holder.read(), col)
-                        .map(|(from, to)| Press::Span(from, to))
-                        .unwrap_or(Press::At(col)),
-                    PressEventType::Triple | PressEventType::Quadruple => {
-                        Press::Span(0, usize::MAX)
-                    }
-                    PressEventType::Single => Press::At(col),
-                }
-            });
+            let press =
+                at.map(|col| pressed(presses, col, |col| word_at(&cells.holder.read(), col)));
             mark_press(marked, *shift.peek(), pane, file.clone(), row, press);
             return;
         }
@@ -1424,3 +1434,6 @@ pub(crate) fn use_sweep_beyond(
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

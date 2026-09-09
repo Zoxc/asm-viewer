@@ -550,7 +550,8 @@ releases it and leaves them exactly where they are however much arrives after; c
 bottom arms it again. Being at the bottom is judged **in rows against the viewport as it is now**,
 `reveal_row`'s shape, and never as a row index written down earlier: past `MAX_OUTPUT_LINES` the
 oldest rows drop off the front and every index shifts by one for each line that lands. The whole of
-it is one effect, subscribed to the pane's own scroll, and **what it does depends on what woke it**.
+it is one effect, subscribed to the pane's own scroll, and **what it does depends on what woke it**
+(`tail_move`, the arithmetic apart from the effect).
 A line arriving is deliberately not an occasion to re-judge: the row that has just been added is
 below the viewport by definition, so a run that asked would find the pane scrolled away on the first
 line of every run and follow nothing, ever. So arriving lines only *spend* the answer, and a scroll,

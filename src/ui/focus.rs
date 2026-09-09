@@ -298,10 +298,58 @@ struct Latest {
 /// Both put a row at the top of the pane, which is what a first open wants and a reveal
 /// would not give: [`reveal_row`] leaves a row that is on screen already where it is, so
 /// a symbol ten lines into a file would open at the top of the file rather than on itself.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Move {
     Place(usize),
     Open(usize),
+}
+
+/// **Whose row the pane's current offset is, and where this run has to move the view
+/// to**: the decision [`use_kept_position`] makes once it knows what the controller is
+/// holding, apart from the effect that acts on it.
+///
+/// `holding` is the tab the controller is scrolled for, [`None`] before this pane has run
+/// at all; `tab` is the tab it is showing now. `known` says whether a row is remembered
+/// for `tab` and `back_to` is that row clamped to the listing's length. `opening` is the
+/// row a tab nothing is remembered for opens at, already clamped, and [`None`] for a pane
+/// with nothing better to say than the top.
+///
+/// The owner is the tab the offset belongs to, which the caller writes the row down
+/// under. It is the tab being **left** for the one run that switches: the offset on
+/// screen is still that tab's.
+fn kept_move(
+    holding: Option<&Entry>,
+    tab: &Entry,
+    known: bool,
+    back_to: usize,
+    opening: Option<usize>,
+) -> (Option<Entry>, Option<Move>) {
+    match (holding, known) {
+        // Still showing the tab the controller is scrolled for: nothing moves.
+        (Some(held), _) if held == tab => (Some(tab.clone()), None),
+        // A switch: the offset belongs to the tab being left, and the one arriving goes
+        // back to where it was, or to where a tab seen for the first time opens. A `0`
+        // moves here, where the first-run arm below leaves one alone: the offset on screen
+        // is the tab being left, and the arriving one must not inherit it.
+        (Some(out), true) => (Some(out.clone()), Some(Move::Place(back_to))),
+        (Some(out), false) => (
+            Some(out.clone()),
+            // The top where the arriving tab has no row of its own to open at: a place
+            // and not a reveal, since what must not survive the switch is the *outgoing*
+            // tab's offset, and a reveal of the top would leave a small one where it can
+            // already see row 0.
+            Some(opening.map_or(Move::Place(0), Move::Open)),
+        ),
+        // This pane's first run, on a tab it has a row for: a remount or a restored
+        // session. Nothing to write down, everything to put back.
+        (None, true) => (None, Some(Move::Place(back_to))),
+        // First run with nothing remembered -- which, both panes being mounted afresh for
+        // every document, is the ordinary first open of a tab. It moves only for a pane
+        // that has somewhere to open at: a `0` is left alone rather than scrolled to,
+        // since this runs a beat after the first render and setting the offset it already
+        // has would undo a wheel that got in.
+        (None, false) => (Some(tab.clone()), opening.map(Move::Open)),
+    }
 }
 
 /// Keep `controller` pointed at the row `tab` was last left at, and keep [`Positions`]
@@ -454,7 +502,7 @@ pub(crate) fn use_kept_position(
             // Cloned out of the borrow rather than held across the `borrow_mut` below.
             let holding = held.borrow().clone();
             let switching = holding.as_ref() != Some(tab);
-            let known = positions.peek().at(tab);
+            let known = positions.peek().at(tab).is_some();
             let back_to = positions.peek().row(tab, *length);
             // Clamped the way a remembered row is, and for the same reason: a symbol's line
             // is a hint out of debug info and the file under it may have been cut short since.
@@ -464,32 +512,7 @@ pub(crate) fn use_kept_position(
                 .map(|row| row.min(length.saturating_sub(1)));
 
             // Whose row the offset above is, and where this run has to move the view to.
-            let (owner, moving) = match (&holding, known) {
-                // Still showing the tab the controller is scrolled for: nothing moves.
-                (Some(held), _) if held == tab => (Some(tab.clone()), None),
-                // A switch: the offset belongs to the tab being left, and the one arriving
-                // goes back to where it was, or to where a tab seen for the first time opens.
-                // A `0` moves here, where the first run below leaves one alone: the offset on
-                // screen is the tab being left, and the arriving one must not inherit it.
-                (Some(out), Some(_)) => (Some(out.clone()), Some(Move::Place(back_to))),
-                (Some(out), None) => (
-                    Some(out.clone()),
-                    // The top where the arriving tab has no row of its own to open at:
-                    // a place and not a reveal, since what must not survive the switch
-                    // is the *outgoing* tab's offset, and a reveal of the top would
-                    // leave a small one where it can already see row 0.
-                    Some(opening.map_or(Move::Place(0), Move::Open)),
-                ),
-                // This pane's first run, on a tab it has a row for: a remount or a restored
-                // session. Nothing to write down, everything to put back.
-                (None, Some(_)) => (None, Some(Move::Place(back_to))),
-                // First run with nothing remembered -- which, both panes being mounted afresh
-                // for every document, is the ordinary first open of a tab. It moves only for
-                // a pane that has somewhere to open at: a `0` is left alone rather than
-                // scrolled to, since this runs a beat after the first render and setting the
-                // offset it already has would undo a wheel that got in.
-                (None, None) => (Some(tab.clone()), opening.map(Move::Open)),
-            };
+            let (owner, moving) = kept_move(holding.as_ref(), tab, known, back_to, opening);
 
             if let Some(owner) = owner {
                 // Only for a place still on an open tab's trail, for the reason the doc
@@ -560,6 +583,34 @@ pub(crate) fn use_kept_position(
     );
 }
 
+/// **Whether the Source pane has moved off the file its run is in**, which is when that
+/// run is dropped: the decision [`use_clear_marks`]'s second effect makes, apart from the
+/// effect that acts on it.
+///
+/// `was` and `active` are the entry this last ran for and the one it is running for now,
+/// `was_file` and `file` the file the pane was drawing and the one it draws now, and
+/// `picked` the file the run is in.
+///
+/// A switch of place is `false` and drops nothing, for the reason [`use_clear_marks`]
+/// gives; so is the pane going on drawing the file it was.
+///
+/// What is left is dropped only when the pane moves off the **run's** file, and not
+/// whenever the file changes: a run a landing plants is in the file the pane is about to
+/// show, and the switch that causes must not be what drops it. A run in a file the pane
+/// never reaches stays, undrawn, until the next question replaces it.
+fn moved_off(
+    was: Option<&Entry>,
+    active: Option<&Entry>,
+    was_file: Option<&Arc<str>>,
+    file: Option<&Arc<str>>,
+    picked: Option<&Arc<str>>,
+) -> bool {
+    if was != active || was_file == file {
+        return false;
+    }
+    picked.is_some() && was_file == picked
+}
+
 /// Drop a pane's picked-out rows when the listing they index into is replaced: the
 /// assembly pane's when another question is asked, the source pane's when the pane moves
 /// off the run's file. An object's code being counted afresh under its run is **not** a
@@ -620,23 +671,22 @@ pub(crate) fn use_clear_marks(
             .map(|side| side.file().clone());
         // Cloned out of the borrow before the `borrow_mut`.
         let (was_entry, was) = showing.borrow().clone();
-        let switched = was_entry != active;
-        *showing.borrow_mut() = (active, file.clone());
-        if switched || was == file {
-            return;
-        }
-
-        // Dropped only when the pane moves **off the run's file**, and not whenever the
-        // file changes: a run a landing plants is in the file the pane is about to show,
-        // and the switch it causes -- from the listing being left to the one arriving --
-        // must not be what drops it. A run in a file the pane never reaches stays,
-        // undrawn, until the next question replaces it.
+        // The file the run is in. Bound to a `let` of its own: the guard must be over
+        // before the write below.
         let picked = marked
             .peek()
             .source
             .as_ref()
             .and_then(|picked| picked.file.clone());
-        if picked.is_some() && was == picked {
+        let off = moved_off(
+            was_entry.as_ref(),
+            active.as_ref(),
+            was.as_ref(),
+            file.as_ref(),
+            picked.as_ref(),
+        );
+        *showing.borrow_mut() = (active, file);
+        if off {
             unmark(marked, Pane::Source);
         }
     });
@@ -908,3 +958,6 @@ fn assembly_run(step: &Step, code_rows: State<Option<Arc<Built>>>) -> Option<Pic
         kept.carry(|spot| row_of(&built, spot))
     }
 }
+
+#[cfg(test)]
+mod tests;
