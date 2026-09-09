@@ -1186,31 +1186,50 @@ fn held(alt: Option<State<bool>>) -> bool {
 ///
 /// Columns are UTF-16 units, and a boundary inside a character is not one: a split there
 /// would cut a `char` in half, so the span is left whole.
+///
+/// **`links` must be ascending and must not overlap.** The spans are walked left to right
+/// and so are the edges, once for the whole row rather than once per span, so an edge
+/// behind the one before it is passed over and the span it fell in is left whole -- the
+/// same fallback a cut inside a character takes, and never a lost piece of text. The order
+/// is `Links::of`'s, which sorts a file's names by line and column (`src/links.rs`) and
+/// which `Named::linked` keeps (`src/ui/source_view.rs`); a label in an object's listing is
+/// one run and the whole row (`src/ui/section_view.rs`).
 pub(crate) fn cut_at(head: Vec<Span<'static>>, links: &[Range<usize>]) -> Vec<Span<'static>> {
     if links.is_empty() {
         return head;
     }
     let mut cut = Vec::with_capacity(head.len());
     let mut column = 0;
+    // Every edge of every link, in the order they are drawn: one cursor carried across the
+    // spans, so each link is read once for the row.
+    let mut edges = links
+        .iter()
+        .flat_map(|link| [link.start, link.end])
+        .peekable();
     for span in head {
         let units = chars::units(&span.text);
         let (from, to) = (column, column + units);
         column = to;
-        // Where inside this span a link begins or ends, in the order they are drawn.
-        let mut edges: Vec<usize> = links
-            .iter()
-            .flat_map(|link| [link.start, link.end])
-            .filter(|edge| *edge > from && *edge < to)
-            .map(|edge| edge - from)
-            .collect();
-        if edges.is_empty() {
+        // What is behind this span is behind every span after it.
+        while edges.next_if(|edge| *edge <= from).is_some() {}
+        // Nothing begins or ends inside it, so there is nothing to cut. What is past it is
+        // left where it is, for the span it does fall in.
+        if edges.peek().is_none_or(|edge| *edge >= to) {
             cut.push(span);
             continue;
         }
-        edges.sort_unstable();
-        edges.dedup();
+        // Where inside this span a link begins or ends. Two links that touch state the one
+        // edge twice, and the span is cut there once.
+        let mut last = from;
+        let inside = std::iter::from_fn(|| loop {
+            let edge = edges.next_if(|edge| *edge < to)?;
+            if edge != last {
+                last = edge;
+                return Some(edge - from);
+            }
+        });
         let mut at = 0;
-        for edge in edges.into_iter().chain(std::iter::once(units)) {
+        for edge in inside.chain(std::iter::once(units)) {
             let Some(piece) = chars::slice_of(&span.text, at..edge) else {
                 continue;
             };

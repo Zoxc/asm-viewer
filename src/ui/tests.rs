@@ -5419,6 +5419,44 @@ fn a_cut_inside_a_character_is_not_made() {
     }
 }
 
+/// Two links that touch state the one edge twice -- the server places `println` and the
+/// `!` after it as two names -- and the span is cut there once, not into an empty piece
+/// and the rest.
+#[test]
+fn two_links_that_touch_are_cut_at_the_edge_they_share_once() {
+    let head = spans_of(&["println!(\"hi\");"]);
+    let cut = cut_at(head, &[0..7, 7..8]);
+
+    assert_eq!(texts_of(&cut), vec!["println", "!", "(\"hi\");"]);
+}
+
+/// A link whose edges are already span edges cuts nothing, however many spans it covers,
+/// and the link after it is still cut: the edges are read once for the row, so a span
+/// left whole may not swallow what the next one needs.
+#[test]
+fn a_link_on_the_span_boundaries_leaves_them_alone_and_the_next_link_is_still_cut() {
+    let head = spans_of(&["let x = ", "Vec", "::new", "(y);"]);
+    let cut = cut_at(head, &[8..16, 17..18]);
+
+    assert_eq!(
+        texts_of(&cut),
+        vec!["let x = ", "Vec", "::new", "(", "y", ");"]
+    );
+}
+
+/// Links out of order are not what the pane hands over (`Links::of` sorts them), and the
+/// cut reads them in one pass, so an edge behind the one before it is passed over. The
+/// span it fell in is left whole: a link that lights nothing, and never a piece of the
+/// row's text lost.
+#[test]
+fn links_out_of_order_leave_a_span_uncut_rather_than_losing_it() {
+    let head = spans_of(&["a.one().two()"]);
+    let cut = cut_at(head, &[8..11, 2..5]);
+
+    assert_eq!(texts_of(&cut).concat(), "a.one().two()");
+    assert_eq!(texts_of(&cut), vec!["a.one().", "two", "()"]);
+}
+
 /// Two lines of one file reached one after the other are two places on the tab's trail,
 /// so Back returns to the line the reader came from. A source file used to be "one
 /// place", and a door that landed on a line of the file already on screen left nothing

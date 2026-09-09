@@ -554,6 +554,11 @@ see. So the cut is made on **every** render and never only under the pointer: sk
 two spans a shade wider than the same characters in one, and a cut that came and went with
 the pointer would widen the listing for good. `light` then draws every span the run covers
 rather than the one that matches it, since a link may cross a colour boundary and be two.
+The cut walks the spans and the links' edges together, one pass over each rather than a
+scan of every link per span, so it takes the names **in the order the server placed them**:
+`Links::of` sorts a file's names by line and column and the pane keeps that order, and a
+link out of it would leave the span it falls in whole -- a link that lights nothing, which
+is the fallback a cut inside a character already takes.
 
 Which names are links at all is the server's answer and no longer a colour
 (`agents/Lsp.md`, `src/links.rs`); what a colour could never say -- whether a name is being
