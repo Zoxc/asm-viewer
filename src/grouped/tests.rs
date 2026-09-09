@@ -35,7 +35,7 @@ fn items_are_grouped_under_their_file_in_the_order_they_arrived() {
     assert_eq!(
         rows[1],
         Row::Item {
-            path: PathBuf::from("/p/a.rs"),
+            path: Arc::from(Path::new("/p/a.rs")),
             item: Arc::new(1),
         }
     );
@@ -62,8 +62,8 @@ fn a_file_that_comes_back_later_is_a_group_of_its_own() {
 #[test]
 fn a_folded_file_keeps_its_row_and_its_count() {
     let mut grouped = Grouped::from_files([
-        (PathBuf::from("/p/a.rs"), vec![1, 7]),
-        (PathBuf::from("/p/b.rs"), vec![2]),
+        (Path::new("/p/a.rs"), vec![1, 7]),
+        (Path::new("/p/b.rs"), vec![2]),
     ]);
 
     assert!(grouped.toggle(Path::new("/p/a.rs")));
@@ -82,8 +82,8 @@ fn a_folded_file_keeps_its_row_and_its_count() {
 #[test]
 fn the_filter_keeps_files_by_their_path() {
     let grouped = Grouped::from_files([
-        (PathBuf::from("/p/src/a.rs"), vec![1]),
-        (PathBuf::from("/p/tests/b.rs"), vec![2]),
+        (Path::new("/p/src/a.rs"), vec![1]),
+        (Path::new("/p/tests/b.rs"), vec![2]),
     ]);
 
     let filter = Filter {

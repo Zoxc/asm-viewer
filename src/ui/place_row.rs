@@ -110,10 +110,17 @@ pub(crate) struct PlaceRow<T> {
 
 /// What a row is picked out as: a file row is its path, and a place is what it opens --
 /// the file and the line together.
+///
+/// The path is copied here and not shared on, though the row holds it under an `Arc`
+/// (`src/grouped.rs`). A pick is minted per row **drawn**, which is a screenful, and never
+/// per row of a rebuild, so the copy is off the path that pays; and a [`Pick::Path`] is the
+/// Files tree's row and the Objects tree's too, neither of which shares its paths with
+/// anything. An `Arc` in a [`Pick`] would read as identity, which is what one means
+/// everywhere else in the UI, where a pick is about what a path spells.
 pub(crate) fn place_pick<T: Place>(row: &Row<T>) -> Pick {
     match row {
-        Row::File { path, .. } => Pick::Path(path.clone()),
-        Row::Item { path, item } => Pick::Place(path.clone(), item.line()),
+        Row::File { path, .. } => Pick::Path(path.to_path_buf()),
+        Row::Item { path, item } => Pick::Place(path.to_path_buf(), item.line()),
     }
 }
 
@@ -161,7 +168,9 @@ pub(crate) fn press_place<T: Place>(
 /// The row and where it is are the whole of what is drawn: the states in [`Folding`]
 /// compare equal whatever they hold, and a row never moves from one panel to the other. A
 /// [`Hit`] and a [`references::Reference`] are both [`Eq`], so two item rows holding the
-/// same `Arc` compare equal without reading it.
+/// same `Arc` compare equal without reading it. The file's path and name are `Arc`s for
+/// the copying and compare by what they say, which is what a row must be redrawn for
+/// (`src/grouped.rs`).
 impl<T: PartialEq> PartialEq for PlaceRow<T> {
     fn eq(&self, other: &Self) -> bool {
         self.row == other.row && self.at == other.at
@@ -223,7 +232,7 @@ fn row_children<T: Place>(row: &Row<T>) -> Vec<Element> {
             ..
         } => vec![
             disclosure(Some(!*folded)),
-            tree_name(name.clone(), false, &[]).into_element(),
+            tree_name(name.to_string(), false, &[]).into_element(),
             label()
                 .text(count.to_string())
                 .margin(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))

@@ -2,6 +2,7 @@ use super::*;
 use crate::filter::Matcher;
 use crate::grouped::Row;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// A place as the server answers one.
 fn place(file: &str, line: u32, columns: Range<u32>) -> lsp::Place {
@@ -68,8 +69,8 @@ fn the_answers_places_are_grouped_by_file_whatever_order_they_came_in() {
     assert_eq!(
         &rows[0],
         &Row::File {
-            path: PathBuf::from("/p/src/a.rs"),
-            name: "a.rs".to_owned(),
+            path: Arc::from(Path::new("/p/src/a.rs")),
+            name: Arc::from("a.rs"),
             count: 1,
             folded: false,
         }

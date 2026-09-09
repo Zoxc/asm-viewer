@@ -82,7 +82,7 @@ pub fn of(places: &[lsp::Place], read: impl Fn(&Path) -> Option<String>) -> Refe
         lines.sort_by(|one, other| {
             (one.line, one.columns.start).cmp(&(other.line, other.columns.start))
         });
-        (path.to_path_buf(), lines)
+        (path, lines)
     }))
 }
 

@@ -7,13 +7,18 @@
 //! What differs between the two is the caller's: how a list is built -- a search appends
 //! as it walks, a server's answer is grouped whole when it lands -- and what an item is.
 //!
-//! **An item is held under an `Arc` from the moment it is pushed**, so building a row is
-//! a pointer bump. The rows are made again whole every time the list grows, and a search
-//! grows a batch at a time up to [`crate::search::MAX_HITS`]: copying each item into each
-//! rebuild would be work that squares over one search, on the UI thread, for rows whose
-//! contents never change once pushed.
+//! **An item, and the path and name of the file it is under, are held under an `Arc` from
+//! the moment they are pushed**, so building a row is pointer bumps and nothing else. The
+//! rows are made again whole every time the list grows, and a search grows a batch at a
+//! time up to [`crate::search::MAX_HITS`]: copying an item, or copying a path into every
+//! row of every rebuild, would be work that squares over one search, on the UI thread, for
+//! rows whose contents never change once pushed.
+//!
+//! The `Arc`s here are for the copying and never for identity: two rows are the same row
+//! when they name the same file, whichever `Arc` each spells it with, so every comparison
+//! in this module -- the derived ones included -- is of what a path says (`AGENTS.md`).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::filter::Matcher;
@@ -29,8 +34,8 @@ pub struct Grouped<T> {
 /// One file and what was found in it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct InFile<T> {
-    path: PathBuf,
-    name: String,
+    path: Arc<Path>,
+    name: Arc<str>,
     items: Vec<Arc<T>>,
     folded: bool,
 }
@@ -49,12 +54,19 @@ impl<T> Default for Grouped<T> {
 impl<T> Grouped<T> {
     /// The files in the order given, each with its items: what an answer that arrives at
     /// once is grouped from.
-    pub fn from_files(files: impl IntoIterator<Item = (PathBuf, Vec<T>)>) -> Grouped<T> {
+    ///
+    /// Generic over the path so a caller hands over whichever it holds: a `PathBuf` it is
+    /// done with, or a `&Path` it is only borrowing. Either becomes the one `Arc` every
+    /// row of that file is built from.
+    pub fn from_files<P: Into<Arc<Path>>>(
+        files: impl IntoIterator<Item = (P, Vec<T>)>,
+    ) -> Grouped<T> {
         let mut grouped = Grouped::default();
         for (path, items) in files {
+            let path = path.into();
             grouped.count += items.len();
             grouped.files.push(InFile {
-                name: crate::source::name_of(&path),
+                name: crate::source::name_of(&path).into(),
                 path,
                 items: items.into_iter().map(Arc::new).collect(),
                 folded: false,
@@ -70,14 +82,14 @@ impl<T> Grouped<T> {
         self.count += 1;
         let item = Arc::new(item);
         if let Some(last) = self.files.last_mut() {
-            if last.path == path {
+            if *last.path == *path {
                 last.items.push(item);
                 return;
             }
         }
         self.files.push(InFile {
-            name: crate::source::name_of(path),
-            path: path.to_path_buf(),
+            name: crate::source::name_of(path).into(),
+            path: path.into(),
             items: vec![item],
             folded: false,
         });
@@ -86,7 +98,7 @@ impl<T> Grouped<T> {
     /// Fold the file at `path`, or unfold it. Whether anything changed, so the caller
     /// writes only then.
     pub fn toggle(&mut self, path: &Path) -> bool {
-        let Some(file) = self.files.iter_mut().find(|file| file.path == path) else {
+        let Some(file) = self.files.iter_mut().find(|file| *file.path == *path) else {
             return false;
         };
         file.folded = !file.folded;
@@ -109,8 +121,8 @@ impl<T> Grouped<T> {
     /// A file is what a filter matches here: an item is a line of one, and a line number
     /// is nothing to type at.
     ///
-    /// Called for the whole list every time it grows, so an item row is an `Arc` clone
-    /// and never a copy of the item.
+    /// Called for the whole list every time it grows, so every row is `Arc` clones and
+    /// never a copy of the item or of the path it is under.
     pub fn rows(&self, keep: &Matcher) -> Rows<T> {
         let mut rows = Vec::new();
         for file in self
@@ -140,13 +152,13 @@ impl<T> Grouped<T> {
 pub enum Row<T> {
     /// A file, and how many items are under it.
     File {
-        path: PathBuf,
-        name: String,
+        path: Arc<Path>,
+        name: Arc<str>,
         count: usize,
         folded: bool,
     },
     /// One item, with the file it is in: a row opens a place, and the place is both.
-    Item { path: PathBuf, item: Arc<T> },
+    Item { path: Arc<Path>, item: Arc<T> },
 }
 
 /// The rows a panel draws, in order.

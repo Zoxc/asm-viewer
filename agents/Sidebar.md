@@ -260,11 +260,16 @@ walk that answers as fast as it is asked can say nothing about superseding.
 file each is in with a fold per file, flattened into rows shared under one `Arc` so handing
 them to a scroll view is a pointer compare -- because it is the same drawing problem. That
 spares the handing over and not the building: the rows are made again from scratch every
-time a search's hits grow, which is once a batch. So **each item is under an `Arc` of its
-own from the moment it is pushed** and building an item row is a pointer bump. Copying a hit -- a path, up to
+time a search's hits grow, which is once a batch. So **each item, and the path and name of
+the file it is under, are under an `Arc` from the moment they are pushed**, and building a
+row is pointer bumps and nothing else. Copying a hit -- a path, up to
 300 characters of the line and a vector of spans -- into every rebuild is work that squares
 over one search, on the UI thread, for rows whose contents never change once pushed: over a
-capped 10,000-hit search the rebuilding measured 70 ms against 19 ms. What
+capped 10,000-hit search the rebuilding measured 70 ms against 19 ms. Sharing the file's
+path took most of what was left, a path being copied once per *row* where a hit is copied
+once per hit: 100 rebuilds of a 10,500-row list, 137 ms against 17 ms. The `Arc`s are for
+the copying and never for identity, so a row still compares by the path it says, and a
+`Pick` -- minted per row drawn and not per row built -- takes a copy of it. What
 differs is only how a list is built and what an item is: a search appends as it walks, and a
 server's answer, which lands whole, is grouped when it does -- files by path and references
 by line, so a reader can find a file, where a search keeps the order its walk found them in
