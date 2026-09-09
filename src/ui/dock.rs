@@ -21,6 +21,25 @@ pub(crate) enum Panel {
     Locations,
 }
 
+/// One panel's row of the table: the name a session stores it under, the title, and the
+/// two things drawn for it. A row per panel rather than a match per column, so a panel is
+/// one place and not four. [`Panel::row`] matches on every panel, so a panel added to the
+/// enum has no row until one is written for it.
+struct Row {
+    /// What a session names it. A name of its own rather than the title, for [`Page`]'s
+    /// reason: a title is what the reader sees and may be reworded, where a stored name
+    /// changing would empty every saved sidebar.
+    stored: &'static str,
+    /// What the reader sees on the panel's tab header.
+    title: &'static str,
+    /// The Lucide glyph drawn before that title ([`glyph`]). A function rather than an
+    /// element, so it is built in the scope that draws it: `glyph` asks for a colour, and
+    /// asking is what subscribes a scope to the palette.
+    icon: fn() -> Element,
+    /// The panel itself, built where it is drawn for the same reason.
+    body: fn() -> Element,
+}
+
 impl Panel {
     /// Every panel there is, grouped as the default sidebar stacks them: the groups top to
     /// bottom, each group's panels in their tab order. The one list a new panel goes in --
@@ -41,19 +60,57 @@ impl Panel {
         Panel::GROUPS.into_iter().flatten().copied()
     }
 
-    /// What a session names it. A name of its own rather than the title, for [`Page`]'s
-    /// reason: a title is what the reader sees and may be reworded, where a stored name
-    /// changing would empty every saved sidebar.
-    fn stored(self) -> &'static str {
+    /// This panel's [`Row`].
+    fn row(self) -> Row {
         match self {
-            Panel::Objects => "objects",
-            Panel::Files => "files",
-            Panel::Search => "search",
-            Panel::Symbols => "symbols",
-            Panel::History => "history",
-            Panel::Bookmarks => "bookmarks",
-            Panel::Locations => "locations",
+            Panel::Objects => Row {
+                stored: "objects",
+                title: "Objects",
+                icon: || glyph(("package", lucide::package())),
+                body: || ObjectsPanel.into_element(),
+            },
+            Panel::Files => Row {
+                stored: "files",
+                title: "Files",
+                icon: || glyph(("folder-tree", lucide::folder_tree())),
+                body: || FilesPanel.into_element(),
+            },
+            Panel::Search => Row {
+                stored: "search",
+                title: "Search",
+                icon: || glyph(("search", lucide::search())),
+                body: || SearchPanel.into_element(),
+            },
+            Panel::Symbols => Row {
+                stored: "symbols",
+                title: "Symbols",
+                icon: || glyph(("square-function", lucide::square_function())),
+                body: || SymbolsPanel.into_element(),
+            },
+            Panel::History => Row {
+                stored: "history",
+                title: "History",
+                icon: || glyph(("history", lucide::history())),
+                body: || HistoryPanel.into_element(),
+            },
+            Panel::Bookmarks => Row {
+                stored: "bookmarks",
+                title: "Bookmarks",
+                icon: || glyph(("bookmark", lucide::bookmark())),
+                body: || BookmarksPanel.into_element(),
+            },
+            Panel::Locations => Row {
+                stored: "locations",
+                title: "Locations",
+                icon: || glyph(("map-pin", lucide::map_pin())),
+                body: || LocationsPanel.into_element(),
+            },
         }
+    }
+
+    /// What a session names it ([`Row::stored`]).
+    fn stored(self) -> &'static str {
+        self.row().stored
     }
 
     /// The panel a session named, or `None` for a name this build does not have.
@@ -62,28 +119,12 @@ impl Panel {
     }
 
     fn title(self) -> &'static str {
-        match self {
-            Panel::Objects => "Objects",
-            Panel::Files => "Files",
-            Panel::Search => "Search",
-            Panel::Symbols => "Symbols",
-            Panel::History => "History",
-            Panel::Bookmarks => "Bookmarks",
-            Panel::Locations => "Locations",
-        }
+        self.row().title
     }
 
-    /// The Lucide glyph drawn before the title ([`glyph`]).
+    /// The glyph drawn before the title ([`Row::icon`]).
     fn icon(self) -> Element {
-        match self {
-            Panel::Objects => glyph(("package", lucide::package())),
-            Panel::Files => glyph(("folder-tree", lucide::folder_tree())),
-            Panel::Search => glyph(("search", lucide::search())),
-            Panel::Symbols => glyph(("square-function", lucide::square_function())),
-            Panel::History => glyph(("history", lucide::history())),
-            Panel::Bookmarks => glyph(("bookmark", lucide::bookmark())),
-            Panel::Locations => glyph(("map-pin", lucide::map_pin())),
-        }
+        (self.row().icon)()
     }
 
     /// Whether the panel draws a filter box over its list, which is **where a chord that
@@ -91,20 +132,16 @@ impl Panel {
     /// next narrows the list, and on the rows where there is not -- the Files tree, which
     /// has nothing to filter by. Either way the arrows, Enter and Escape are answered,
     /// the box handing on the keys the list under it owns (`ui/filter_bar.rs`).
+    ///
+    /// Not a column of [`Row`]: what there is to say is that one panel is the exception,
+    /// which seven booleans would say worse.
     pub(super) fn filters(self) -> bool {
         !matches!(self, Panel::Files)
     }
 
+    /// What the panel draws ([`Row::body`]).
     fn body(self) -> Element {
-        match self {
-            Panel::Objects => ObjectsPanel.into_element(),
-            Panel::Files => FilesPanel.into_element(),
-            Panel::Search => SearchPanel.into_element(),
-            Panel::Symbols => SymbolsPanel.into_element(),
-            Panel::History => HistoryPanel.into_element(),
-            Panel::Bookmarks => BookmarksPanel.into_element(),
-            Panel::Locations => LocationsPanel.into_element(),
-        }
+        (self.row().body)()
     }
 }
 
