@@ -771,7 +771,7 @@ impl Component for TabHeader {
                 // tab itself; what it does without is the one row that would do nothing.
                 // The document the rows are about is peeked here for the same reason: the
                 // chip draws a name, not the entry behind it.
-                let others = open.strip.peek().tabs().iter().any(|other| *other != tab);
+                let others = open.strip.peek().has_others(tab);
                 let subject = match tab {
                     Tab::Document(id) => open.docs.peek().get(id).cloned(),
                     Tab::Page(_) => None,

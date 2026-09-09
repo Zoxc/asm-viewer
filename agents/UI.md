@@ -450,8 +450,8 @@ than `close_tab` in a loop, because each of those would work out a landing of it
 bar through every intermediate state. **Add bookmark** / **Remove bookmark** is the same `bookmark_item` the
 sidebar rows and the instruction rows use (`agents/Sidebar.md`), for the tab's own document, and a
 page has neither it nor **Show in file manager**, being no place in a file. The close-others row is
-left out when nothing else is open, rather than drawn as a row that would do nothing,
-and the chip asks the strip for that at the **press**: whether a tab has company is not something a
+left out when nothing else is open, rather than drawn as a row that would do nothing, and the chip
+asks the strip (`Strip::has_others`) at the **press**: whether a tab has company is not something a
 chip draws, so subscribing to the strip for it would re-render every tab whenever any one of them
 opened.
 

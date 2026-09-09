@@ -85,6 +85,24 @@ fn raising_says_when_it_would_change_what_is_on_screen() {
     assert_eq!(strip.active(), Some(tabs[0]));
 }
 
+/// `has_others` is what a chip's menu asks before it draws the close-others row
+/// (`src/ui/strip.rs`). It asks about the tabs and not about the one handed in: any open
+/// tab that is not that one answers it true. So the only tab open has no company, a tab
+/// that is not open has company in every tab there is, and an empty strip answers false
+/// whatever it is asked about.
+#[test]
+fn a_tab_has_company_when_another_tab_is_open() {
+    let page = Tab::Page(Page::Settings);
+    let (three, tabs, _docs) = strip(3);
+    assert!(three.has_others(tabs[0]));
+
+    let (one, only, _docs) = strip(1);
+    assert!(!one.has_others(only[0]), "the only tab open");
+    assert!(one.has_others(page), "not open, and one other tab is");
+
+    assert!(!Strip::default().has_others(page), "nothing is open");
+}
+
 #[test]
 fn closing_the_tab_on_screen_lands_on_its_neighbour() {
     let (mut strip, tabs, _docs) = strip(3);

@@ -113,6 +113,15 @@ impl Strip {
         self.tabs.contains(&tab)
     }
 
+    /// Whether any open tab is not `tab`: for an open tab, whether it has company.
+    ///
+    /// The question is about the tabs and not about `tab`, so a tab that is not open has
+    /// company in every tab there is. What a chip's menu asks before it draws the row
+    /// that would close the others (`src/ui/strip.rs`).
+    pub fn has_others(&self, tab: Tab) -> bool {
+        self.tabs.iter().any(|open| *open != tab)
+    }
+
     /// Every open document tab's id, in the order the tabs are in.
     pub fn documents(&self) -> impl Iterator<Item = DocId> + '_ {
         self.tabs.iter().filter_map(|tab| match tab {
