@@ -434,16 +434,13 @@ impl Rows {
             }
             Kind::Instruction(index) | Kind::Separator { below: index } => {
                 let assembly = self.body(flat)?.assembly.as_ref()?;
-                assembly
-                    .instructions
-                    .get(index)?
-                    .address
-                    .wrapping_add(stretch.bias)
+                let address = assembly.instructions.get(index)?.address;
+                self.placed_of(flat)?.place(address)
             }
             Kind::Gap(index) => {
                 let gap = self.body(flat)?.gap.as_ref()?;
-                gap.start
-                    .wrapping_add(stretch.bias)
+                self.placed_of(flat)?
+                    .place(gap.start)
                     .saturating_add((index as u64).saturating_mul(GAP_BYTES_PER_ROW))
             }
         })
@@ -476,7 +473,7 @@ impl Rows {
                 Some(body + index)
             }
             BodyRows::Decoded(decoded) => {
-                let local = address.wrapping_sub(stretch.bias);
+                let local = self.placed_of(flat)?.local(address);
                 if let Some(gap) = decoded.gap.as_ref().filter(|gap| gap.contains(&local)) {
                     let index = ((local - gap.start) / GAP_BYTES_PER_ROW) as usize;
                     return Some(body + decoded.listing_rows() + index);

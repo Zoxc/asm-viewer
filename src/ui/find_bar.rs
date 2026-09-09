@@ -921,9 +921,8 @@ fn stretch_lines(object: &Object, index: &section::Flat, flat: usize) -> Vec<(u6
         return lines;
     };
     if let Some(assembly) = &decoded.code {
-        let bias = placed.bias();
         for index in 0..assembly.instructions.len() {
-            let address = assembly.instructions[index].address.wrapping_add(bias);
+            let address = placed.place(assembly.instructions[index].address);
             lines.push((address, instruction_line(assembly, index)));
         }
     }
