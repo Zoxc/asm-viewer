@@ -74,7 +74,9 @@ Nothing is shown while a menu is open or text is being selected.
 ## Selection
 
 A drag selects text; Shift+click extends the selection to the clicked place. A drag in the
-gutter selects whole rows. With Alt held a press on a link selects instead of following it.
+gutter selects whole rows.
+With Alt held no link lights, the pointer over one stays the I-beam, and a press on it
+selects instead of following it.
 Two clicks select a word, three the row's text. Ctrl+A selects the whole listing and Escape
 drops the selection. Each pane has its own. Ctrl+C copies the selected text of the pane with
 keyboard focus: the assembly as drawn, address and instruction with symbol names, and the

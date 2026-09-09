@@ -19,9 +19,10 @@ middle of a function keeps its address.
 A jump or call target is written without leading zeros: `jle short 4Bh`.
 A branch target inside the symbol is a link: clicking it scrolls to the target row and selects
 it, opening nothing and adding nothing to the history.
-A call or jump target that names no symbol keeps its address. Ctrl+click on it opens the
-object's code in a new tab at that address, on the row at or below it, with the caret there;
-"Show in unified view" and "Open as symbol" put the caret on their instruction the same way.
+A call or jump target that names no symbol keeps its address, which is a link. Clicking it
+opens the object's code in this tab, Ctrl+click in a new one, on the row at or below the
+address with the caret there; "Show in unified view" and "Open as symbol" put the caret on
+their instruction the same way.
 
 In an object's code, clicking a link opens nothing: the listing goes to the target's row and
 selects it. An address that names no symbol moves the same way. Back returns to the
