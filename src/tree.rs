@@ -168,108 +168,132 @@ pub type ObjectTree = Shared<TreeRow>;
 
 impl ObjectTree {
     /// Group `objects` by the file they came from, drop what the filter does not match,
-    /// and flatten what is left into rows.
-    ///
-    /// A file row is never hidden while a row under it is visible, so a file is shown when
-    /// its own name matches *or* any member's does, and the two differ:
-    ///
-    /// - The **file's name matched**: every member is under it, folded the way the reader
-    ///   left it.
-    /// - Only **members matched**: only those members are under it, and it is held open
-    ///   ([`Expansion::Forced`]).
-    /// - **Neither**, and the file is not there at all.
+    /// and flatten what is left into rows: the files that have produced objects, in the
+    /// order their objects are in, and then the files still working on their first.
     ///
     /// Matching is on the name each row shows, so the directory is not read.
-    ///
-    /// **A file still being read is always a file row**, even at one object: "one object
-    /// is its own row" needs to know the one is all there will be, and a row that promoted
-    /// itself to a parent as the second member landed would move the list under a reader
-    /// already reading it. One that has contributed nothing yet is a
-    /// [`TreeRow::Pending`].
     pub fn new(
         objects: &[Arc<Object>],
         loads: &Loads,
         matcher: &Matcher,
         expanded: &HashSet<usize>,
     ) -> Self {
-        // Nothing may be forced open while the filter is asking nothing.
-        let filtering = !matches!(matcher, Matcher::Everything);
-        let mut rows = Vec::new();
-        let mut rest = objects;
-
-        while let Some(first) = rest.first() {
-            let count = rest.iter().take_while(|o| o.path == first.path).count();
-            let (group, tail) = rest.split_at(count);
-            rest = tail;
-
-            let loading = loads.is_loading(&first.path);
-
-            if let ([object], false) = (group, loading) {
-                if matcher.matches(&object.name) {
-                    rows.push(TreeRow::Object {
-                        object: object.clone(),
-                        member: false,
-                    });
-                }
-                continue;
-            }
-
-            let name = source::name_of(&first.path);
-            let whole = matcher.matches(&name);
-            let members: Vec<&Arc<Object>> = group
-                .iter()
-                .filter(|object| whole || matcher.matches(&object.name))
-                .collect();
-            if members.is_empty() {
-                continue;
-            }
-
-            let group = Arc::as_ptr(first).addr();
-            let expansion = if filtering && !whole {
-                Expansion::Forced
-            } else if expanded.contains(&group) {
-                Expansion::Expanded
-            } else {
-                Expansion::Collapsed
-            };
-
-            rows.push(TreeRow::File {
-                name,
-                path: first.path.clone(),
-                group,
-                members: members.len(),
-                expansion,
-                loading,
-            });
-
-            if expansion != Expansion::Collapsed {
-                rows.extend(members.into_iter().map(|object| TreeRow::Object {
-                    object: object.clone(),
-                    member: true,
-                }));
-            }
-        }
-
-        // The files that have produced nothing yet cannot come out of the walk above, which
-        // is over objects. Appended rather than interleaved: there is no object to place
-        // them next to, and a file's row moves into the walk above once its first one
-        // lands. Only the file's own name is matched, there being no members yet.
-        for path in loads.paths() {
-            if objects_have(objects, path) {
-                continue;
-            }
-            let name = source::name_of(path);
-            if !matcher.matches(&name) {
-                continue;
-            }
-            rows.push(TreeRow::Pending {
-                name,
-                path: path.to_path_buf(),
-            });
-        }
-
+        let mut rows = opened(objects, loads, matcher, expanded);
+        rows.extend(pending(objects, loads, matcher));
         rows.into()
     }
+}
+
+/// The rows for the files that have produced objects, one file's run of them at a time.
+fn opened(
+    objects: &[Arc<Object>],
+    loads: &Loads,
+    matcher: &Matcher,
+    expanded: &HashSet<usize>,
+) -> Vec<TreeRow> {
+    // Nothing may be forced open while the filter is asking nothing.
+    let filtering = !matches!(matcher, Matcher::Everything);
+    objects
+        .chunk_by(|a, b| a.path == b.path)
+        .flat_map(|group| file(group, loads, matcher, expanded, filtering))
+        .collect()
+}
+
+/// The rows one file's `group` of objects makes: none, if the filter kept none of them;
+/// the object alone, if that is all the file will ever contribute; a file row otherwise,
+/// with what the filter kept under it unless the row is folded.
+///
+/// A file row is never hidden while a row under it is visible, so a file is shown when its
+/// own name matches *or* any member's does, and the two differ:
+///
+/// - The **file's name matched**: every member is under it, folded the way the reader left
+///   it.
+/// - Only **members matched**: only those members are under it, and it is held open
+///   ([`Expansion::Forced`]).
+/// - **Neither**, and the file is not there at all.
+///
+/// **A file still being read is always a file row**, even at one object: "one object is its
+/// own row" needs to know the one is all there will be, and a row that promoted itself to a
+/// parent as the second member landed would move the list under a reader already reading
+/// it.
+fn file(
+    group: &[Arc<Object>],
+    loads: &Loads,
+    matcher: &Matcher,
+    expanded: &HashSet<usize>,
+    filtering: bool,
+) -> Vec<TreeRow> {
+    let first = &group[0];
+    let loading = loads.is_loading(&first.path);
+
+    if let ([object], false) = (group, loading) {
+        if !matcher.matches(&object.name) {
+            return Vec::new();
+        }
+        return vec![TreeRow::Object {
+            object: object.clone(),
+            member: false,
+        }];
+    }
+
+    let name = source::name_of(&first.path);
+    let whole = matcher.matches(&name);
+    let members: Vec<&Arc<Object>> = group
+        .iter()
+        .filter(|object| whole || matcher.matches(&object.name))
+        .collect();
+    if members.is_empty() {
+        return Vec::new();
+    }
+
+    let key = Arc::as_ptr(first).addr();
+    let expansion = if filtering && !whole {
+        Expansion::Forced
+    } else if expanded.contains(&key) {
+        Expansion::Expanded
+    } else {
+        Expansion::Collapsed
+    };
+
+    let mut rows = vec![TreeRow::File {
+        name,
+        path: first.path.clone(),
+        group: key,
+        members: members.len(),
+        expansion,
+        loading,
+    }];
+
+    if expansion != Expansion::Collapsed {
+        rows.extend(members.into_iter().map(|object| TreeRow::Object {
+            object: object.clone(),
+            member: true,
+        }));
+    }
+
+    rows
+}
+
+/// The rows for the files being read that have produced nothing yet
+/// ([`TreeRow::Pending`]), in the order they were asked for.
+///
+/// They cannot come out of [`opened`], which is a walk over objects, and they go after it
+/// rather than among it: there is no object to place them next to, and a file's row moves
+/// into that walk once its first one lands. Only the file's own name is matched, there
+/// being no members yet.
+fn pending(objects: &[Arc<Object>], loads: &Loads, matcher: &Matcher) -> Vec<TreeRow> {
+    loads
+        .paths()
+        .into_iter()
+        .filter(|path| !objects_have(objects, path))
+        .filter_map(|path| {
+            let name = source::name_of(path);
+            matcher.matches(&name).then(|| TreeRow::Pending {
+                name,
+                path: path.to_path_buf(),
+            })
+        })
+        .collect()
 }
 
 /// The short tag a row wears to say what kind of file it is. Text and not an icon: nothing
