@@ -543,6 +543,19 @@ fn a_split_closes_up_around_the_group_it_emptied() {
     assert_eq!(dock.groups(), [vec![Panel::Files], vec![Panel::Objects]]);
 }
 
+/// A fresh sidebar is the one list of panels and nothing else, so a panel added to that
+/// list is in the sidebar a reader with no saved arrangement opens. Written out beside the
+/// list instead, the default could be written out a panel short, which is what this fails on.
+#[test]
+fn a_fresh_sidebar_holds_every_panel_once() {
+    let groups = DockArea::default().groups();
+    assert_eq!(
+        groups.concat(),
+        Panel::all().collect::<Vec<_>>(),
+        "the default sidebar is not the panels there are: {groups:?}"
+    );
+}
+
 /// Nothing on screen: what a project switch does is to the states. A runner all the same,
 /// because a `State` needs a runtime and because a borrow held across a write is a runtime
 /// panic rather than a compile error.
@@ -593,17 +606,7 @@ macro_rules! project_wiring {
         // The sidebar as `app()` builds it: a panel that brings another to the front
         // reaches for this, so a harness mounting one needs it provided.
         let dock = $runner
-            .provide_root_context(|| {
-                SidebarDock(State::create(DockArea::column(vec![
-                    vec![
-                        Panel::Objects,
-                        Panel::Files,
-                        Panel::Search,
-                        Panel::Locations,
-                    ],
-                    vec![Panel::Symbols, Panel::History, Panel::Bookmarks],
-                ])))
-            })
+            .provide_root_context(|| SidebarDock(State::create(DockArea::default())))
             .0;
         // What is open, and the derivation over it. `Active` is provided but not
         // returned: it is not one of the project's states, it is a reading of two of them.
@@ -951,31 +954,14 @@ fn the_bar_offers_a_close_or_a_save_and_a_delete() {
 fn the_sidebars_arrangement_survives_a_save_and_a_restore() {
     // The sidebar as `app()` builds it, and then not the default: a panel dragged into
     // another group, and another brought to the top of its own.
-    let mut dock = DockArea::column(vec![
-        vec![
-            Panel::Objects,
-            Panel::Files,
-            Panel::Search,
-            Panel::Locations,
-        ],
-        vec![Panel::Symbols, Panel::History, Panel::Bookmarks],
-    ]);
+    let mut dock = DockArea::default();
     dock.on_drop(Panel::Files, DropTarget::Center(1));
     dock.show_panel(Panel::Bookmarks);
 
     let saved = dock.saved();
     assert_ne!(
         saved,
-        DockArea::column(vec![
-            vec![
-                Panel::Objects,
-                Panel::Files,
-                Panel::Search,
-                Panel::Locations
-            ],
-            vec![Panel::Symbols, Panel::History, Panel::Bookmarks],
-        ])
-        .saved(),
+        DockArea::default().saved(),
         "the arrangement under test is the default one"
     );
     let back = DockArea::restored(&saved).expect("an arrangement");

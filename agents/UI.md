@@ -302,14 +302,16 @@ The sidebar is a `DockingArea` over a `DockArea` model whose `DockingModel::TabI
 of the seven, so **a document cannot be named there at all** and every rule about where one may go
 is a rule the type states. A panel is a **persistent pane**, not a slot the selection drives: each
 is a unit `Component` that consumes context and renders off the state it is about, so a selection
-change re-renders only the panes that read it and never the root. Adding or removing a panel needs
-no migration: the sidebar's layout is not persisted, so a removed one is a compile-time deletion and
-an added one starts where the default layout puts it. `Panel` is imported by name as well as through
-the glob (`src/ui.rs`), freya's prelude having a `Panel` of its own. The outer split stays a
-`ResizableContainer` because docking cannot express a literal width. That width is 380 because
-a group's tab bar neither elides nor scrolls (`notes/upstream/freya.md`): the sidebar has to open
-wide enough for the widest default group to name every panel in it, which is the four across the
-top.
+change re-renders only the panes that read it and never the root. Adding or removing a panel is one
+edit: `Panel::GROUPS` (`src/ui/dock.rs`) is every panel there is, grouped as the default sidebar
+stacks them, and both a fresh sidebar (`DockArea::default`) and `Panel::all` come off it -- so a
+panel added there is in a new sidebar, and in a saved one that never named it
+(`agents/Persistence.md`), while a removed one is a compile-time deletion. `Panel` is imported by
+name as well as through the glob (`src/ui.rs`), freya's prelude having a `Panel` of its own. The
+outer split stays a `ResizableContainer` because docking cannot express a literal width. That width
+is 380 because a group's tab bar neither elides nor scrolls (`notes/upstream/freya.md`): the
+sidebar has to open wide enough for the widest default group to name every panel in it, which is
+the four across the top.
 
 `tidy` is freya's `close_empty_panels` **written out rather than called**, because that sweep can
 leave a tree with no panel at all where this keeps one: an area that loses its last panel keeps an

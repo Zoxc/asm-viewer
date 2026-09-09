@@ -22,16 +22,24 @@ pub(crate) enum Panel {
 }
 
 impl Panel {
-    /// Every panel, in the order the default sidebar stacks them.
-    const ALL: [Panel; 7] = [
-        Panel::Objects,
-        Panel::Files,
-        Panel::Search,
-        Panel::Locations,
-        Panel::Symbols,
-        Panel::History,
-        Panel::Bookmarks,
+    /// Every panel there is, grouped as the default sidebar stacks them: the groups top to
+    /// bottom, each group's panels in their tab order. The one list a new panel goes in --
+    /// a fresh sidebar is built from it ([`DockArea::default`]) and a saved one is filled
+    /// out against it ([`DockArea::restored`]) -- so neither can come back without it.
+    const GROUPS: [&'static [Panel]; 2] = [
+        &[
+            Panel::Objects,
+            Panel::Files,
+            Panel::Search,
+            Panel::Locations,
+        ],
+        &[Panel::Symbols, Panel::History, Panel::Bookmarks],
     ];
+
+    /// Every panel, in the order those groups name them.
+    pub(super) fn all() -> impl Iterator<Item = Panel> {
+        Panel::GROUPS.into_iter().flatten().copied()
+    }
 
     /// What a session names it. A name of its own rather than the title, for [`Page`]'s
     /// reason: a title is what the reader sees and may be reworded, where a stored name
@@ -50,9 +58,7 @@ impl Panel {
 
     /// The panel a session named, or `None` for a name this build does not have.
     fn from_stored(stored: &str) -> Option<Panel> {
-        Panel::ALL
-            .into_iter()
-            .find(|panel| panel.stored() == stored)
+        Panel::all().find(|panel| panel.stored() == stored)
     }
 
     fn title(self) -> &'static str {
@@ -111,6 +117,14 @@ pub(crate) struct DockArea {
     next_panel_id: PanelId,
 }
 
+impl Default for DockArea {
+    /// The sidebar a reader with no saved arrangement of their own gets: [`Panel::GROUPS`]
+    /// as it stands.
+    fn default() -> Self {
+        Self::column(Panel::GROUPS.iter().map(|group| group.to_vec()).collect())
+    }
+}
+
 impl DockArea {
     /// The groups stacked top to bottom, which is what the sidebar looks like.
     pub(crate) fn column(groups: Vec<Vec<Panel>>) -> Self {
@@ -146,7 +160,7 @@ impl DockArea {
             tree,
             next_panel_id: next,
         };
-        for panel in Panel::ALL.into_iter().filter(|panel| !seen.contains(panel)) {
+        for panel in Panel::all().filter(|panel| !seen.contains(panel)) {
             area.add_to_first(panel);
         }
         Some(area)

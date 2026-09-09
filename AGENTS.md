@@ -301,7 +301,8 @@ command.
 - `src/ui/debug_view.rs` — the Debug page: the panics that can be raised on purpose, so the
   box `src/panics.rs` puts up is one press away rather than a patched build, and the files
   they left behind. In the pages menu only when Alt was held as it opened.
-- `src/ui/dock.rs` — the sidebar's dock: what a panel is, and the groups it can be arranged in.
+- `src/ui/dock.rs` — the sidebar's dock: what a panel is, every panel there is, and the groups
+  they can be arranged in.
 - `src/ui/strip.rs` — the app's own tab bar: the chips, the × on one, the list of every open
   tab, and the body under it all.
 - `src/ui/project_view.rs` — which project is open: the project's own fields, its binaries,

@@ -382,17 +382,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
 
     let objects = use_provide_context(|| Objects(State::create(Vec::new()))).0;
     let loading = use_provide_context(|| Loading(State::create(Loads::default()))).0;
-    use_provide_context(|| {
-        SidebarDock(State::create(DockArea::column(vec![
-            vec![
-                Panel::Objects,
-                Panel::Files,
-                Panel::Search,
-                Panel::Locations,
-            ],
-            vec![Panel::Symbols, Panel::History, Panel::Bookmarks],
-        ])))
-    });
+    use_provide_context(|| SidebarDock(State::create(DockArea::default())));
     // What is open, the strip and the id table together. Empty: what a restored session
     // puts in the bar is what the reader left, and a session that saved nothing opens on
     // the placeholder, the pages being one menu away.
