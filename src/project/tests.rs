@@ -685,6 +685,7 @@ fn saved_entry(document: SavedDocument, asm_row: usize) -> SavedEntry {
         src_row: 0,
         line: None,
         asm_address: None,
+        code_address: None,
         src_line: None,
         document,
     }
@@ -720,6 +721,7 @@ fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
         src_row,
         line: None,
         asm_address: None,
+        code_address: None,
         src_line: None,
         document: SavedDocument::Source {
             path: path.to_owned(),
@@ -741,6 +743,7 @@ fn restored(document: &Document, asm_row: usize, src_row: usize) -> RestoredTab 
             src_row,
             line: None,
             address: None,
+            code_address: None,
             src_line: None,
         }],
     }
@@ -2696,7 +2699,8 @@ fn a_code_tabs_address_is_written_before_its_document() {
     let back: Session = toml::from_str(&text).expect("parses back");
     assert_eq!(back.tabs, session.tabs);
 
-    // And it comes back as the tab's address, the rows past it being a nicety.
+    // And it comes back as the scroll of the place it was under, the rows past it being
+    // a nicety.
     let restored = session.restore(&objects).tabs;
     assert!(as_document(&restored[0]).2[0].document == code);
     assert_eq!(as_document(&restored[0]).2[0].address, Some(0x30));
@@ -2706,10 +2710,11 @@ fn a_code_tabs_address_is_written_before_its_document() {
 /// twice, at two addresses, and both come back: the trail is places and not documents, so
 /// the two do not collapse into one on the way out or on the way back.
 ///
-/// A place comes back named by the address it was *left* at, which is the one thing saved
-/// for it -- so the place a tab opened at and then scrolled away from comes back as that
-/// scrolled address rather than as the whole listing. Nothing reads a place's address for
-/// anything but telling one place from another and landing on it, which both hold.
+/// **A place and the scroll under it are two facts, and are saved as two.** The listing a
+/// tab opened at no place in particular and then scrolled away from comes back as the
+/// whole listing it was, not as the address it was scrolled to; a place at an address
+/// comes back at that address however far from it the reader then scrolled. Each keeps
+/// its own scroll beside it.
 #[test]
 fn a_trail_through_one_listing_comes_back_with_both_places() {
     let objects = objects();
@@ -2722,6 +2727,8 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
     let mut docs = Docs::default();
     let id = docs.open(first.clone());
     docs.trail_mut(id).expect("open").push(second.clone());
+    // Neither side is where it was scrolled to: the whole listing was scrolled to an
+    // address, and the place at one was scrolled past it.
     let mut spots = Positions::default();
     spots.remember(
         (id, first.clone()),
@@ -2733,7 +2740,7 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
     spots.remember(
         (id, second.clone()),
         Spot {
-            address: 0x40,
+            address: 0x50,
             rows: 0,
         },
     );
@@ -2756,25 +2763,29 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
         SavedUi::default(),
     );
     assert_eq!(session.tabs[0].entries.len(), 2, "the places collapsed");
+    // Newest first, and each states its place apart from its scroll.
+    let saved = &session.tabs[0].entries;
+    assert_eq!(saved[0].code_address, Some(0x40));
+    assert_eq!(saved[0].asm_address, Some(0x50));
+    assert_eq!(
+        saved[1].code_address, None,
+        "a scroll made a place of its own"
+    );
+    assert_eq!(saved[1].asm_address, Some(0x10));
     let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
 
     let restored = session.restore(&objects).tabs;
     assert!(
-        as_document(&restored[0]).1.entries()
-            == [
-                Stop::at(objects[1].clone(), 0x40),
-                Stop::at(objects[1].clone(), 0x10)
-            ],
-        "the trail came back as one place"
+        as_document(&restored[0]).1.entries() == [second, first],
+        "the trail came back as other places than it went out as"
     );
-    // Each place with the row it was left at: the newer where the jump landed, the older
-    // where the reader had scrolled to.
+    // And the scroll each was left at, beside the place and not as it.
     let addresses: Vec<Option<u64>> = as_document(&restored[0])
         .2
         .iter()
         .map(|entry| entry.address)
         .collect();
-    assert_eq!(addresses, [Some(0x40), Some(0x10)]);
+    assert_eq!(addresses, [Some(0x50), Some(0x10)]);
 }
 
 /// A place is where it is *in the document it is in*, so a saved entry whose half does
@@ -2791,12 +2802,12 @@ fn a_saved_place_whose_half_is_not_its_documents_is_the_whole_document() {
             [[tabs]]
 
             [[tabs.entries]]
-            asm_address = 16
+            code_address = 16
             [tabs.entries.document.Source]
             path = "/src/main.rs"
 
             [[tabs.entries]]
-            asm_address = 32
+            code_address = 32
             [tabs.entries.document.Source]
             path = "/src/main.rs"
         "#;

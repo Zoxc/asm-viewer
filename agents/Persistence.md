@@ -293,11 +293,11 @@ showed, so that Back works across a restart. Reopening after a rebuild is this a
 loop, and a trail lost on every restart would be worth little; the cost is a file a few entries
 longer per tab, capped at `history::MAX_ENTRIES` (50) per trail. Each place carries **the rows both
 of its sides were left at**: an entry is a `SavedEntry` (`asm_row` + `src_row` + `line` +
-`asm_address` + `src_line` + `document`), rather than the tab having arrays of rows beside its
-trail.
-`asm_address` is where an object's **code** tab was left, as a placed address, and is absent for
-every other kind: that listing's rows are counted afresh as it is decoded, so a row there is no
-place to come back to and an address is (`agents/UI.md`, `Places::code_at`). It is a claim about a layout, so
+`asm_address` + `code_address` + `src_line` + `document`), rather than the tab having arrays of
+rows beside its trail.
+`asm_address` is where an object's **code** tab was *scrolled* to, as a placed address, and is
+absent for every other kind: that listing's rows are counted afresh as it is decoded, so a row
+there is no place to come back to and an address is (`agents/UI.md`, `Places::code_at`). It is a claim about a layout, so
 a rebuilt binary takes it with the rows. How many rows past the address the tab was is not saved, a
 label being a fine place to come back to. The rows travel with their place because a restore
 drops the places that no longer resolve, which would shift every later row of a parallel array onto
@@ -312,7 +312,12 @@ it is which line of the file the **place** is, where the place is one in a file,
 back to. The two part company the moment the reader clicks elsewhere in the file, which is why one
 cannot be spelled with the other; the place's own is what the drive falls back to when nothing was
 clicked (`agents/Panes.md`). It is no more a claim about a layout than a file is, so a rebuilt
-binary keeps it. The file states the halves apart and so can state a pairing that means nothing --
+binary keeps it. `code_address` is that pair on the other side: which placed address the **place**
+is, where the place is one in an object's code, against `asm_address`'s scroll. The two part
+company the moment the reader scrolls, and spelling one with the other brings a listing opened at
+no place in particular back as the address it was scrolled to. It is a claim about a layout as the
+scroll is, so a rebuilt binary takes both, and the place comes back as the whole listing.
+The file states the halves apart and so can state a pairing that means nothing --
 a line of an object's code, an address in a file -- which a `history::Stop` cannot hold. So
 `RestoredEntry::stop` is where they are put back with the document each belongs to, and a half that
 does not belong to its document is the whole document rather than a guess. It is the last place the

@@ -119,6 +119,15 @@ impl Stop {
         }
     }
 
+    /// The placed address this is, for a stop in an object's code, and [`None`] for every
+    /// other place.
+    pub fn address(&self) -> Option<u64> {
+        match self.place() {
+            Place::Code(_, address) => Some(address),
+            Place::Whole | Place::Source(_) => None,
+        }
+    }
+
     /// Whether this names a place *inside* its document rather than the document itself.
     /// What decides whether arriving at it is a move worth putting on the trail: a door
     /// that names only a document has nothing to come back to that the document is not.

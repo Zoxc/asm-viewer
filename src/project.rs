@@ -545,8 +545,8 @@ pub struct SavedTab {
 
 /// One place on a saved tab's trail, and the row each of its two sides was left at.
 ///
-/// Field order is load-bearing: the rows, the line and the address are plain values and
-/// `document` is written as a sub-table.
+/// Field order is load-bearing: the rows, the lines and the addresses are plain values
+/// and `document` is written as a sub-table.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedEntry {
     /// Which row was at the top of the assembly side, `0` being the first instruction.
@@ -567,9 +567,19 @@ pub struct SavedEntry {
     /// The placed address at the top of an object's **code** tab, and absent for every
     /// other kind: that listing's rows are counted afresh as it is decoded, so a row
     /// there is no place to come back to and an address is. A claim about a layout, so a
-    /// rebuilt binary takes it with the rows.
+    /// rebuilt binary takes it with the rows. Where the tab was *scrolled* to and nothing
+    /// else; the place it is at is `code_address` below.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asm_address: Option<u64>,
+    /// The placed address this place *is*, for a stop in an object's code, and absent for
+    /// every other kind. Not the same thing as `asm_address` above, which is where that
+    /// listing was scrolled to: this is where the reader arrived and what Back comes back
+    /// to, and the two part company the moment they scroll.
+    ///
+    /// A claim about a layout as `asm_address` is, so a rebuilt binary takes it too and
+    /// the place comes back as the whole listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_address: Option<u64>,
     /// The line of the file this place *is*, for a stop in a source file, and absent for
     /// every other kind. Not the same thing as `line` above, which is what a
     /// source-driven place's assembly side follows: this is where the reader arrived and
@@ -609,15 +619,18 @@ pub enum RestoredTab {
 /// One place of a restored tab that still points somewhere, with the rows its two sides
 /// were left at.
 ///
-/// Named rather than a tuple because it is six things, and because the rows and the
-/// address drop under a rebuilt binary while the two lines do not.
+/// Named rather than a tuple because it is seven things, and because the rows and the
+/// two addresses drop under a rebuilt binary while the two lines do not.
 #[derive(Clone, PartialEq)]
 pub struct RestoredEntry {
     pub document: Document,
     pub asm_row: usize,
     pub src_row: usize,
     pub line: Option<u32>,
+    /// The address an object's code tab was scrolled to, and nothing else.
     pub address: Option<u64>,
+    /// The address the place itself is at, where it is a place in an object's code.
+    pub code_address: Option<u64>,
     /// The line the place itself is, where it is a place in a source file.
     pub src_line: Option<u32>,
 }
@@ -631,7 +644,7 @@ impl RestoredEntry {
     /// half does not belong to its document is the document itself and not a guess. Past
     /// here nothing carries the halves.
     pub fn stop(&self) -> Stop {
-        match (&self.document, self.address, self.src_line) {
+        match (&self.document, self.code_address, self.src_line) {
             (Document::Code(object), Some(address), _) => Stop::at(object.clone(), address),
             (Document::Source(file), _, Some(line)) => Stop::on(file.clone(), line),
             _ => Stop::whole(self.document.clone()),
@@ -1165,6 +1178,7 @@ impl Session {
                                     src_row: src_rows.at(&entry).unwrap_or(0),
                                     line: driven.line(&entry),
                                     asm_address: places.at(&entry).map(|spot| spot.address),
+                                    code_address: stop.address(),
                                     src_line: stop.line(),
                                     document: SavedDocument::from_document(&stop.document),
                                 }
@@ -1238,17 +1252,24 @@ impl Session {
                     .map(|entry| {
                         let document = entry.document.resolve(objects, rebuilt)?;
                         // A row is a claim about a listing, so a rebuilt listing takes
-                        // both its rows with it; the place itself survives. A file has
-                        // no binary path and so is never rebuilt. The driven line is a
-                        // claim about a *file* rather than about a listing, so it
-                        // survives a rebuild and is simply asked again.
+                        // both its rows with it, and an address is one too: the scroll
+                        // and the place's own address both go, so a place in an object's
+                        // code comes back as the whole listing. A file has no binary
+                        // path and so is never rebuilt. The two lines are claims about a
+                        // *file* rather than about a listing, so they survive a rebuild
+                        // and are simply asked again.
                         let changed = entry
                             .document
                             .binary_path()
                             .is_some_and(|path| rebuilt.changed(path));
-                        let (asm_row, src_row, address) = match changed {
-                            true => (0, 0, None),
-                            false => (entry.asm_row, entry.src_row, entry.asm_address),
+                        let (asm_row, src_row, address, code_address) = match changed {
+                            true => (0, 0, None, None),
+                            false => (
+                                entry.asm_row,
+                                entry.src_row,
+                                entry.asm_address,
+                                entry.code_address,
+                            ),
                         };
                         Some(RestoredEntry {
                             document,
@@ -1256,6 +1277,7 @@ impl Session {
                             src_row,
                             line: entry.line,
                             address,
+                            code_address,
                             src_line: entry.src_line,
                         })
                     })
