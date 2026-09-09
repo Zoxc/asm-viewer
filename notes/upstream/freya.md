@@ -309,6 +309,24 @@ width only because the paragraph asks for no ellipsis and no alignment. **A
 `.text_overflow(..)` added to a code row would collapse that to the pane's own width**, and
 the pane would scroll over nothing, with nothing failing anywhere else.
 
+## An event handler prop never compares equal, and a no-argument one always does
+
+`PartialEq for EventHandler` returns `false` whatever it is handed, under a `// TODO: Decide
+whether event handlers should be captured or not.`
+(`freya-core-0.4.3/src/event_handler.rs:85`; `Callback`, `:24`, is the same). Props are diffed
+with `PartialEq`, so a component with a handler among its props re-renders every time its
+parent does, whether or not anything it draws changed. `NoArgCallback` (`:55`) has the
+opposite `impl`: it returns `true` always, so props differing in nothing but the closure
+compare equal, `run_scope` keeps the old ones, and the component goes on calling the closure
+it mounted with. That is the same shape as `Writable`'s `true` above, and the worse of the
+two: a stale closure is closed over the state of an earlier render.
+
+**Cost:** every handler the app hands down is an `EventHandler`, so the price is a re-render
+and nothing worse. `PlaceTarget` (`src/ui/place_target.rs`) is one label and one hover flag
+for that reason, and the find bar's two step buttons (`src/ui/find_bar.rs`) are as small.
+`NoArgCallback` is used nowhere and should stay that way. Not reported yet; the `false` at
+least has the TODO over it, and the `true` has nothing.
+
 ## Wanted
 
 **A `SubMenu` that says it is one.** It renders a `MenuItem` around `rect().horizontal()`

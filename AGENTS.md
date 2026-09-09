@@ -468,6 +468,11 @@ feature there with the substitute, so a release that brings it is noticed.
   `width(Size::auto())` with a `min_width` either: torin sizes an auto-width node from its
   minimum *plus* its children. The code panes' rows take `Widest::row_width`
   (`src/ui/width.rs`) and report their content through `on_sized`'s `inner_sizes`.
+- An `EventHandler` prop never compares **equal**, nor does a `Callback`, so a component
+  holding one re-renders whenever its parent does; that is why `PlaceTarget` is one label and
+  one hover flag (`src/ui/place_target.rs`). A `NoArgCallback` prop always compares equal,
+  which is the opposite failure and the worse one: the component is never re-rendered and goes
+  on calling the closure it mounted with. The app uses none.
 - Two `Writable`s compare **equal**, always, so a component holding one mapped by a key is
   never handed a new map: it goes on reading whatever the key said when it mounted. Anything
   passing one down is keyed by that key, so a change remounts it (`src/ui/pad_view.rs`).
