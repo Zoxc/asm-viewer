@@ -336,7 +336,14 @@ accepted: the reader types in one pad at a time. Two builds cannot start at once
 (`enabled`) and in `request_build` both, because a build takes seconds and a second job queued
 behind the first would compile bytes that have since changed. **Nor does anything run while a build
 does**, on the button and in `request_run` both: cargo is writing over the very executable a run
-would start, and a run begun mid-build is not one that build's own `stop_run` took down. A build
+would start, and a run begun mid-build is not one that build's own `stop_run` took down. **The
+keys are the buttons and not a second copy of them.** Ctrl+B, F5, Shift+F5 and Ctrl+N call
+`request_build`, `request_run`, `stop_run` and `request_new_pad`, and ask nothing of the state
+themselves: every refusal above is a property of the request, so a key that went round it to read
+`building` for itself would be the second reading to drift. They are answered on `ScratchpadTab`'s
+own rect, which `page_body` mounts for the tab on screen alone, so they work while the reader is
+looking at the pad and nowhere else -- a build begun from a document tab shows no sign of itself,
+neither the button saying "Building..." nor the diagnostics it ends in being on screen. A build
 that comes back also **forgets what the panes have read of the pad's package**, which is written to the same
 `src/main.rs` every time and would otherwise be drawn as it was first read for the life of the
 process (`forget_source_under`, `agents/Panes.md`).

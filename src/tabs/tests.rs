@@ -215,3 +215,47 @@ fn landing_from_nothing_shown_is_the_last_survivor() {
         Some(tabs[2])
     );
 }
+
+/// A step along the bar **wraps at both ends**, so Ctrl+Tab held down walks the whole bar
+/// round rather than stopping at the last chip.
+#[test]
+fn a_step_along_the_bar_wraps_at_both_ends() {
+    let (mut strip, tabs, _docs) = strip(3);
+    strip.raise(tabs[0]);
+    assert_eq!(strip.stepped(Along::Next), Some(tabs[1]));
+    assert_eq!(strip.stepped(Along::Previous), Some(tabs[2]));
+
+    strip.raise(tabs[2]);
+    assert_eq!(strip.stepped(Along::Next), Some(tabs[0]));
+    assert_eq!(strip.stepped(Along::Previous), Some(tabs[1]));
+}
+
+/// One tab steps to itself, either way, which is a raise of the tab already on screen and
+/// so nothing at all. An empty bar has nothing to step from.
+#[test]
+fn a_bar_of_one_steps_to_itself_and_an_empty_one_nowhere() {
+    let (mut strip, tabs, _docs) = strip(1);
+    assert_eq!(strip.stepped(Along::Next), Some(tabs[0]));
+    assert_eq!(strip.stepped(Along::Previous), Some(tabs[0]));
+
+    strip.close(|_| true);
+    assert_eq!(strip.stepped(Along::Next), None);
+    assert_eq!(strip.stepped(Along::Previous), None);
+}
+
+/// The numbers count from 1, and **9 is the last however many there are** -- three tabs
+/// and Ctrl+9 is the third. A number the bar is too short for names nothing.
+#[test]
+fn the_ninth_tab_is_the_last_however_many_there_are() {
+    let (three, tabs, _docs) = strip(3);
+    assert_eq!(three.nth(1), Some(tabs[0]));
+    assert_eq!(three.nth(3), Some(tabs[2]));
+    assert_eq!(three.nth(9), Some(tabs[2]));
+    assert_eq!(three.nth(4), None);
+    assert_eq!(three.nth(0), None);
+
+    // Long enough for the digit to be a number in its own right, and 9 is still the last.
+    let (many, tabs, _docs) = strip(12);
+    assert_eq!(many.nth(8), Some(tabs[7]));
+    assert_eq!(many.nth(9), Some(tabs[11]));
+}

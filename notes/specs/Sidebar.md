@@ -6,17 +6,36 @@ Each panel has an icon and sits in one of the sidebar's groups. A group shows on
 time and names the rest across its top. A panel can be dragged to another group or split off
 into one of its own. Panels stay in the sidebar; no document goes there.
 
+## Keys
+
+Ctrl+Shift+E, Ctrl+Shift+O and Ctrl+T show the Files, Objects and Symbols panels, from
+anywhere, and focus the one shown, its filter box where it has one.
+
+In a list, Home and End go to the first row and the last, Page Up and Page Down a screen.
+In the Objects and Files trees, Right opens the selected row and Left folds it; a row with
+nothing under it does neither.
+Ctrl+Enter opens the selected row in a tab that stays.
+Escape puts the focus back in the tab on screen.
+
 ## Filter bar
 
 Each list panel has its own filter bar: Objects, Symbols, History, Bookmarks, Locations.
 Its three toggles are written as the regex they turn on: `Aa` for case, `\b` for whole word,
 `.*` for regex. A pattern that does not compile shows its error under the bar.
 
+Ctrl+F puts the caret in the filter box over the focused list.
+In the box, Enter and Ctrl+Enter still work the list; in the Search panel Enter runs the search
+instead.
+Escape puts the focus back on the list, what was typed still in the box.
+Alt+C, Alt+W and Alt+R work the three toggles, here and in a find bar.
+
 ## Bookmarks
 
 A bookmark is a symbol the user saved, listed in the Bookmarks panel in the order added and
 kept with the project. It is added or removed from the context menu of a Symbols item, a History
-item, a document's tab, or an instruction in the assembly pane. A bookmark whose binary is closed
+item, a document's tab, or an instruction in the assembly pane.
+Ctrl+D does the same for the place the tab on screen is showing.
+A bookmark whose binary is closed
 is kept, shown dimmed, and works again when the binary is opened.
 
 ## Symbols panel

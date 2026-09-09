@@ -273,14 +273,121 @@ impl Named {
     /// The name at `column` of row `index`, which the three questions a menu offers are
     /// about: [`None`] over no name, and over one this row draws nothing of.
     fn at_column(&self, source: &SourceText, index: usize, column: usize) -> Option<NameAt> {
-        let link = self
-            .links
-            .at(self.at.line, byte_column(&self.text, column))?;
-        Some(NameAt {
-            at: self.at.clone(),
-            name: name_at(source, index, &link.columns)?,
-            column: link.columns.start,
-        })
+        name_at_column(
+            source,
+            &self.at.file,
+            &self.links,
+            Caret {
+                row: index,
+                col: column,
+            },
+        )
+    }
+}
+
+/// The name at a place in `source`: the row read as a line of `file`, and the column --
+/// UTF-16 units, as every drawn column is -- read as the byte offset a language server
+/// counts in (`src/chars.rs`). [`None`] over no name the server placed, which is what a
+/// place on whitespace, on a keyword or past the end of a row is.
+///
+/// One rule for both ways of pointing at a name: [`Named::at_column`] asks it about the
+/// pointer and [`caret_questions`] about the caret, so a key and the menu item beside it
+/// cannot come to ask about two different places.
+fn name_at_column(
+    source: &SourceText,
+    file: &Arc<str>,
+    links: &links::Links,
+    place: Caret,
+) -> Option<NameAt> {
+    let line = u32::try_from(place.row).ok()?.checked_add(1)?;
+    let text = source_line(source, place.row).to_string();
+    let link = links.at(line, byte_column(&text, place.col))?;
+    Some(NameAt {
+        at: LinePos {
+            file: file.clone(),
+            line,
+        },
+        name: name_at(source, place.row, &link.columns)?,
+        column: link.columns.start,
+    })
+}
+
+/// What the Source pane answers over and above its own keys and the find bar's: **the
+/// four questions a row's menu offers, asked about the caret** -- F12 for where the name
+/// under it is defined, Shift+F12 for what refers to it, Ctrl+F12 for what implements it,
+/// and Alt+F12 for every symbol the caret's line was compiled into.
+///
+/// They are the same three calls the menu makes ([`name_menu`], [`locate_menu`]), so a
+/// key and the item beside it cannot come to mean two things; all that differs is where
+/// the place comes from -- the run's lead, and not the pointer.
+///
+/// **A caret on no name asks nothing.** The three about a name have nothing to ask about
+/// without one, and nobody to ask without a server. The line's locations are about the
+/// row and not about a name, exactly as the menu item is, so what they want is a caret;
+/// a pane with no run at all has none, and answers none of the four.
+///
+/// Wrapped around the pane's own handler as the find chord is, and offered in this pane
+/// alone: the two assembly listings draw no names.
+#[allow(clippy::too_many_arguments)]
+fn caret_questions(
+    marked: State<Marks>,
+    source: SourceText,
+    file: Arc<str>,
+    links: links::Links,
+    server: Option<Server>,
+    located: State<Located>,
+    dock: State<DockArea>,
+    open: Open,
+    subject: Option<(DocId, Arc<str>)>,
+    mut keys: impl FnMut(Event<KeyboardEventData>) + 'static,
+) -> impl FnMut(Event<KeyboardEventData>) + 'static {
+    move |e: Event<KeyboardEventData>| {
+        let asked = [
+            Chord::Definition,
+            Chord::References,
+            Chord::Implementations,
+            Chord::AllLocations,
+        ]
+        .into_iter()
+        .find(|chord| chord.is(&e.key, e.modifiers));
+        let Some(chord) = asked else {
+            return keys(e);
+        };
+        // Bound before anything is written, the read being a guard.
+        let caret = marked
+            .peek()
+            .of(Pane::Source)
+            .as_ref()
+            .map(|picked| picked.chars.lead());
+        let Some(caret) = caret else {
+            return;
+        };
+        if chord == Chord::AllLocations {
+            let Ok(row) = u32::try_from(caret.row) else {
+                return;
+            };
+            let at = LinePos {
+                file: file.clone(),
+                line: row.saturating_add(1),
+            };
+            find_locations(located, dock, Query::line(at), subject.clone());
+            return;
+        }
+        let named = name_at_column(&source, &file, &links, caret);
+        let (Some(named), Some(server)) = (named, server.as_ref()) else {
+            return;
+        };
+        match chord {
+            Chord::Definition => follow_name(
+                server,
+                open,
+                Lookup::at(&named.at, named.column),
+                lsp::Followed::Definition,
+                Reach::InPlace,
+            ),
+            Chord::References => find_listed(server, located, dock, named, lsp::Listed::References),
+            _ => find_listed(server, located, dock, named, lsp::Listed::Implementations),
+        }
     }
 }
 
@@ -328,7 +435,16 @@ fn source_menu(
             .zip(asking.clone())
             .map(|(name, server)| name_menu(&server, located, dock, open, name))
             .unwrap_or_default();
-        let menu = locate_menu(located, dock, at.clone(), subject.clone(), function, name);
+        let menu = locate_menu(
+            located,
+            dock,
+            at.clone(),
+            subject.clone(),
+            function,
+            name,
+            // The pane this menu is in is the one that answers Alt+F12.
+            Some(shortcuts::key!(AllLocations)),
+        );
         // The door into the file itself, which the tab has only beside it: the same
         // arrival every other door into a source file makes, so the assembly side follows
         // this line as it follows a clicked one.
@@ -613,9 +729,17 @@ impl Component for SourceList {
             .and_then(|held| held.0.read().links_in(&self.file).cloned())
             .unwrap_or_default();
 
+        // What the four questions the caret is asked about need: whom to ask, where the
+        // answers land, and the tab a definition opens in. Consumed in the render because
+        // the key handler runs long after it, where no hook may be called.
+        let server = try_use_server();
+        let located = use_consume::<Locations>().0;
+        let dock = use_consume::<SidebarDock>().0;
+
         let length = self.source.0.lines;
         // The tab's entry and not the file: see `SourceList::document`.
-        let docs = use_open().docs;
+        let open = use_open();
+        let docs = open.docs;
         // The place the tab is at: two lines of one file reached along one trail are two
         // entries, each with its own scroll. Read and not peeked, so a step between them
         // re-renders this pane and the hook sees the switch.
@@ -685,6 +809,10 @@ impl Component for SourceList {
             caret_reveal(controller, viewport, length),
         );
 
+        // The tab this file's own line questions are answered for, which is the tab it
+        // drives: a companion file beside a symbol drives none.
+        let drives = (self.document.driven_from() == Pane::Source).then_some(self.tab);
+
         let on_key_down = {
             let source = self.source.clone();
             let drawn = self.source.clone();
@@ -696,31 +824,42 @@ impl Component for SourceList {
                 // What Ctrl+F seeds the box with is what a copy would take: the columns
                 // are columns of the line as drawn.
                 move |index| source_line(&seeded, index),
-                on_listing_key(
+                caret_questions(
                     marked,
-                    Pane::Source,
-                    // Every run of this pane is a run of the file it is showing.
-                    Some(self.file.clone()),
-                    length,
-                    viewport,
-                    move |index| {
-                        // The file's own text and not the row's spans: what is pasted is the
-                        // line as it is on disk, tabs and all. The newline is the join's
-                        // business.
-                        source
-                            .0
-                            .rope
-                            .get_line(index)
-                            .map(|line| {
-                                let line = line.to_string();
-                                line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
-                            })
-                            .unwrap_or_default()
-                    },
-                    // The characters are columns of the line as drawn, so that is what they
-                    // copy: an indentation as the spaces the row draws it as.
-                    move |index| source_line(&drawn, index),
-                    caret_reveal(controller, viewport, length),
+                    self.source.clone(),
+                    self.file.clone(),
+                    links.clone(),
+                    server,
+                    located,
+                    dock,
+                    open,
+                    drives.map(|tab| (tab, self.file.clone())),
+                    on_listing_key(
+                        marked,
+                        Pane::Source,
+                        // Every run of this pane is a run of the file it is showing.
+                        Some(self.file.clone()),
+                        length,
+                        viewport,
+                        move |index| {
+                            // The file's own text and not the row's spans: what is pasted is the
+                            // line as it is on disk, tabs and all. The newline is the join's
+                            // business.
+                            source
+                                .0
+                                .rope
+                                .get_line(index)
+                                .map(|line| {
+                                    let line = line.to_string();
+                                    line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
+                                })
+                                .unwrap_or_default()
+                        },
+                        // The characters are columns of the line as drawn, so that is what they
+                        // copy: an indentation as the spaces the row draws it as.
+                        move |index| source_line(&drawn, index),
+                        caret_reveal(controller, viewport, length),
+                    ),
                 ),
             )
         };
@@ -741,7 +880,7 @@ impl Component for SourceList {
                     chars,
                     // A source-driven tab's subject is the file its own document names;
                     // a companion's tab is a symbol's.
-                    drives: (self.document.driven_from() == Pane::Source).then_some(self.tab),
+                    drives,
                     links,
                     marking,
                 },

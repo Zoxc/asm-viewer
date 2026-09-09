@@ -48,6 +48,40 @@ pub(crate) fn use_dragged_size(splits: State<ResizableContext>, mut size: State<
     });
 }
 
+/// Put the pane that follows away, or bring it back: the one write that gesture is,
+/// wherever it is made. The control on the bar ([`PaneToggle`]) and the window's key
+/// (`Chord::OtherPane`) both call this, so the two cannot come to mean different things.
+///
+/// Which flag it writes is [`Placing`]'s question -- a tab's under its id, the
+/// Scratchpad's the one flag at the root -- and what it flips is what [`following`] says
+/// is up **now**, read here rather than handed in: a gesture answers for the tab as it
+/// stands rather than for the render it was drawn in.
+///
+/// A tab whose document has left the table is nothing to flip: a menu or a key answered
+/// after the tab closed.
+pub(crate) fn toggle_pane(
+    of: Placing,
+    open: Open,
+    mut said: State<HashMap<DocId, bool>>,
+    mut pad_said: State<bool>,
+) {
+    match of {
+        Placing::Tab(tab) => {
+            // Both bound before the write: a read guard held across one panics.
+            let document = open.docs.peek().get(tab).cloned();
+            let Some(document) = document else {
+                return;
+            };
+            let up = following(tab, &document, &said.peek());
+            said.write().insert(tab, !up);
+        }
+        Placing::Pad => {
+            let up = *pad_said.peek();
+            pad_said.set(!up);
+        }
+    }
+}
+
 /// The control on the leading pane's bar that puts the pane the tab is not driven from
 /// away, and brings it back.
 ///
@@ -72,9 +106,10 @@ pub(crate) struct PaneToggle {
 
 impl Component for PaneToggle {
     fn render(&self) -> impl IntoElement {
-        let docs = use_open().docs;
-        let mut said = use_consume::<Follows>().0;
-        let mut pad_said = use_consume::<PadFollows>().0;
+        let open = use_open();
+        let docs = open.docs;
+        let said = use_consume::<Follows>().0;
+        let pad_said = use_consume::<PadFollows>().0;
         let mut hovering = use_state(|| false);
         // Not hit while a sweep is under way, as the names beside it are not: the pointer
         // dragging a selection up past the bar would otherwise arm this tooltip.
@@ -133,12 +168,9 @@ impl Component for PaneToggle {
                         })
                         .on_pointer_over(move |_| hovering.set_if_modified(true))
                         .on_pointer_out(move |_| hovering.set_if_modified(false))
-                        .on_press(move |_| match of {
-                            Placing::Tab(tab) => {
-                                said.write().insert(tab, !up);
-                            }
-                            Placing::Pad => pad_said.set(!up),
-                        })
+                        // The press writes nothing itself: which flag it is and the rule
+                        // for flipping it are `toggle_pane`'s, which the key calls too.
+                        .on_press(move |_| toggle_pane(of, open, said, pad_said))
                         .child(glyph(icon)),
                 ),
             ))

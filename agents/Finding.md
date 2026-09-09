@@ -138,6 +138,15 @@ fonts. It is called here directly and not through `caret_reveal` (`ui/focus.rs`)
 rule with a code row's height and a pane's viewport state already bound. Without it the highlight went under the panel's edge at the thirteenth press while Enter
 went on opening the row it was on: a file the reader never saw named.
 
+**A page is `FINDER_ROWS`, not a measured viewport.** Page Up and Page Down move a screen of the
+list, Home and End move to its ends, and all four go through the same clamp and the same reveal as
+an arrow. A code pane works its page out from the height `on_sized` reported, because a pane is as
+tall as the window lets it be; the panel is as tall as the rows it draws, so a page is the number
+the layout was *handed*, and measuring it back would only be asking the layout what the panel told
+it. The four keys go in the box's `declined` beside the arrows, which makes Home and End the
+list's ends here and not the query's -- a path is typed left to right into one line, and the ends
+of a twenty-file list are worth more than the ends of that.
+
 **The empty box is the UI's own.** What it lists is the source files visited most recently, which
 is not the walk's answer at all -- there are as many of them as the reader has been places, and a
 file opened before the walk finished is listed. It is worked out in the memo, on the branch that
@@ -151,18 +160,20 @@ the ranking was still here, a held Down ranked the walk at the keyboard's repeat
 overlay froze. `Asking` carries only the four things the list depends on, so it does run per
 press and hands back what it handed back before, and `set_if_modified` stops there.
 
-**A file picked out of the finder opens in a tab that stays**, `NewTab` rather than the `Preview`
-every sidebar row uses. A sidebar row is browsing -- walking a list to see what each one is, which
-is what the preview tab is for -- but typing a path out and picking it off the list is choosing
-that file, and the next row clicked would take a preview tab back. Ctrl says nothing here that a
-plain press does not, so the finder no longer reads it. Otherwise it is the Files row's door
-exactly, `open_source_file` (`ui/documents.rs`): the same guard on what the source pane would
-refuse, and the same uncanonicalised spelling of the path.
+**A file the finder opens obeys `Reach::outside`**, the rule every row outside the panes follows:
+the preview tab, or, with Ctrl held, a tab of its own that stays. It used to open `NewTab` whatever
+was held, on the grounds that typing a path out is choosing a file where walking a sidebar list is
+browsing one. What that cost was the one thing Ctrl means everywhere else in the app: the finder
+answered Enter and Ctrl+Enter with the same tab while every list beside it answered them with two.
+So the rule is the shared one, and it is one rule for both doors -- the key reads the modifiers off
+the event, the row reads the `Ctrl` state, a freya pointer event carrying none. Otherwise it is the
+Files row's door exactly, `open_source_file` (`ui/documents.rs`): the same guard on what the source
+pane would refuse, and the same uncanonicalised spelling of the path.
 
 **The chord is answered at the root**, in `root_key_down`, which stays the window's one
 `on_global_key_down` — a second one would replace it and take the modifier tracking with it,
 silently. Every text box has to **decline** Ctrl+P in its `on_pre_key_down`: the `_` arm there
 calls `prevent_default`, which cancels the global key event beside it, so a box that does not
 decline the chord both types a `p` and stops the finder opening. The decline is one call,
-`box_keys` (`ui/chords.rs`). The finder's own box names Escape, the arrows and Enter in it too —
-they belong to the panel's handler, not to the box.
+`box_keys` (`ui/chords.rs`). The finder's own box names Escape, Enter, the arrows and the four
+motion keys in it too — they belong to the panel's handler, not to the box.

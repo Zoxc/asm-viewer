@@ -527,8 +527,9 @@ pub(crate) fn copy_text(
 /// caret's keys -- the arrows by character and, with Ctrl, by word; Home and End to the
 /// row's ends and, with Ctrl, the listing's; Page Up and Page Down by a screen of rows
 /// -- each reaching the run out with Shift and collapsing it without ([`move_caret`]).
-/// `viewport` is how tall the list is, which is what a page is, and `reveal` is asked to
-/// bring the caret's row on screen after each move.
+/// Each answers under its own modifiers and no others, so the keys the window is spelt in
+/// stay the window's. `viewport` is how tall the list is, which is what a page is, and
+/// `reveal` is asked to bring the caret's row on screen after each move.
 ///
 /// Goes on the pane's own focusable box and **not** on a global key handler, which would
 /// fire while a filter bar had the keyboard and — sorting last (`EventName::cmp`) — would
@@ -550,22 +551,32 @@ pub(crate) fn on_listing_key(
     mut reveal: impl FnMut(usize) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     move |e: Event<KeyboardEventData>| {
-        let command = e.modifiers.contains(Modifiers::ctrl_or_meta());
         let shift = e.modifiers.contains(Modifiers::SHIFT);
+        // **A motion answers only for the modifiers that are its own.** Shift is every
+        // motion's -- it reaches the run out from the anchor rather than picking which
+        // motion the key is -- so it is taken off first and what is left says that:
+        // nothing held is the plain motions, Ctrl alone is the word and listing ones, and
+        // anything else is a gesture this handler was not asked. Alt+Left is the window's
+        // step back along the trail (`chords.rs`) and Ctrl+Page Up is nothing at all;
+        // reading the named key and asking no more than whether Ctrl was held made the
+        // first a character back and the second a screen.
+        let modifiers = chords::held(e.modifiers).difference(Modifiers::SHIFT);
+        let command = modifiers == Modifiers::ctrl_or_meta();
+        let plain = modifiers.is_empty();
 
         let motion = match &e.key {
             Key::Named(NamedKey::ArrowLeft) if command => Some(Motion::WordLeft),
             Key::Named(NamedKey::ArrowRight) if command => Some(Motion::WordRight),
-            Key::Named(NamedKey::ArrowLeft) => Some(Motion::Left),
-            Key::Named(NamedKey::ArrowRight) => Some(Motion::Right),
-            Key::Named(NamedKey::ArrowUp) => Some(Motion::Up),
-            Key::Named(NamedKey::ArrowDown) => Some(Motion::Down),
+            Key::Named(NamedKey::ArrowLeft) if plain => Some(Motion::Left),
+            Key::Named(NamedKey::ArrowRight) if plain => Some(Motion::Right),
+            Key::Named(NamedKey::ArrowUp) if plain => Some(Motion::Up),
+            Key::Named(NamedKey::ArrowDown) if plain => Some(Motion::Down),
             Key::Named(NamedKey::Home) if command => Some(Motion::ListingStart),
             Key::Named(NamedKey::End) if command => Some(Motion::ListingEnd),
-            Key::Named(NamedKey::Home) => Some(Motion::RowStart),
-            Key::Named(NamedKey::End) => Some(Motion::RowEnd),
-            Key::Named(NamedKey::PageUp) => Some(Motion::PageUp),
-            Key::Named(NamedKey::PageDown) => Some(Motion::PageDown),
+            Key::Named(NamedKey::Home) if plain => Some(Motion::RowStart),
+            Key::Named(NamedKey::End) if plain => Some(Motion::RowEnd),
+            Key::Named(NamedKey::PageUp) if plain => Some(Motion::PageUp),
+            Key::Named(NamedKey::PageDown) if plain => Some(Motion::PageDown),
             _ => None,
         };
         if let Some(motion) = motion {

@@ -198,6 +198,13 @@ about where it sits, with only the flag it writes differing. The toggle rides on
 drawn without one has none: an assembly side the worker has not answered for yet draws no bar, and
 the control arrives with the listing.
 
+**The write itself is neither the control's nor the key's** but `toggle_pane`'s, which both call:
+`Ctrl+\` is the same gesture from the keyboard (`root_key_down`, which asks the strip which
+`Placing` the tab on screen is -- a document's id, the Scratchpad's pad, or nothing for a page with
+no second pane). It flips what `following` says is up *now* rather than what a render was drawn
+with, so a press answers for the tab as it stands. A second copy of that rule in the control is
+what would drift: the button is on a bar the key is answered without.
+
 **Open or shut is the tab's and not the pane's**, which is `Expanded` at the root: both panes are
 mounted afresh for every document, so a `use_state` here would shut the section every time the
 reader looked at another tab, and a setting that undoes itself looks like a bug. It is keyed by
@@ -228,6 +235,22 @@ line's locations and, inside a function as the file's parse says, the function's
 answered in the Locations view (`agents/Worker.md`), whose rows are what choose. Over a name it
 opens `name_menu` above those, the three questions only a language server can answer
 (`agents/Lsp.md`).
+
+**Four of that menu are keys as well, asked about the caret** (`caret_questions`): `F12` for where
+the name under it is defined, `Shift+F12` for what refers to it, `Ctrl+F12` for what implements it
+and `Alt+F12` for the line's own locations. They make the same three calls the menu does --
+`follow_name`, `find_listed`, `find_locations` -- so a key and the item beside it cannot come to
+mean two things; all that differs is where the place comes from, the run's lead read as a place
+instead of the pointer's column. That makes the units the thing to get right: a drawn column is in
+UTF-16 units and a server's is a byte offset (`src/chars.rs`). `name_at_column` is where the one is
+read as the other, and the pointer's `Named::at_column` goes through it too, so the two ways of
+pointing at a name cannot land a column apart. A caret **on no name** asks nothing about
+one, and with no server there is nobody to ask; the line's locations are about the row and not
+about a name, so they are asked wherever the caret is, exactly as the menu item is offered on
+every row. A pane with **no run at all** has no caret and answers none of the four. Only the
+Source pane offers them: the two assembly listings draw no names. The states they need are
+consumed in the list's render and handed down to the handler, a handler being no place to call a
+hook.
 
 The rows are the app's own (`SourceRow`, a `VirtualScrollView`), **not** freya's `CodeEditor`, which
 paints a line background only for the cursor's row and keeps its scroll state private. So it cannot
@@ -1063,7 +1086,13 @@ measures a font.
 **The keyboard moves the caret** (`Motion`, `CharSelection::moved`, `src/chars.rs`; `move_caret` in
 `ui/marks.rs`): the arrows by character and, with Ctrl, by word; Home and End to the row's ends and,
 with Ctrl, the listing's; Page Up and Page Down by a screen of rows; Shift reaches the run out from
-its anchor and a key without it collapses the run to the new caret. The motions are framework-free
+its anchor and a key without it collapses the run to the new caret. **A motion answers only for the
+modifiers that are its own.** Shift is every motion's, so it is taken off first and what is left
+says which motion the key is: nothing held is the plain ones, Ctrl alone is the word and the
+listing ones, and anything else is a gesture this handler was not asked -- `Alt+Left` is the
+window's step back along the trail (`ui/chords.rs`) and `Ctrl+Page Up` is nothing at all. Reading
+the named key and asking no more than whether Ctrl was held made the first a character back and the
+second a screen, which is a window binding a pane had quietly taken. The motions are framework-free
 and tested against a five-row listing. A step is over a *character*, never a UTF-16 unit, so a
 two-unit character is one step and a column left inside one by a sweep rounds outward as `slice`
 does. An inline element is one step and one word. A word is a run of one kind, alphanumerics and
@@ -1105,6 +1134,13 @@ where each list already builds its handler. **The seed is the run picked out wit
 through the same `Fn(usize) -> Line` a copy is taken through: a run of rows is a page of disassembly
 and not a search term, so a run crossing rows leaves the box as it was.
 
+**`F3` and `Shift+F3` step that bar from inside the code**, where `Enter` and `Shift+Enter` step it
+from inside the box. They are answered in the same wrap and for the same reason: a key reaches the
+node that has the keyboard, so the bar stepped is the one over the pane being read. What they write
+is the ask the box's own Enter writes and nothing more -- the step itself stays the bar's -- and
+`edit_find` is what makes a pane with no bar do nothing at all, there being no entry to write into.
+The keyboard stays where it was, which is the whole point of the pair.
+
 **The bar is the last child of the pane's own flex column.** Both panes were already
 `Content::Flex` with a fixed-height bar and one `height(Size::flex(1.0))` body, so a third child
 takes its own height and the listing is given what is left -- which is also what keeps a page of
@@ -1145,8 +1181,9 @@ green still. Rects and not span
 splits, because a split that came and went with the pattern would grow `Widest` for good and the pane
 would never scroll back (`src/ui/width.rs`).
 
-**A step is a move within the pane**, exactly as a caret key is: it picks the hit out
-(`mark_columns`), reveals it with `reveal_caret`, and owes the other pane no scroll -- stepping
+**A step is a move within the pane**, exactly as a caret key is, and asked for from either side of
+it -- the box's Enter, or the pane's `F3`: it picks the hit out (`mark_columns`), reveals it with
+`reveal_caret`, and owes the other pane no scroll -- stepping
 through matches would otherwise yank the pane beside it to each one in turn. Which hit a step goes to
 is `find::step`: the index the bar is on wins, and the caret is what a *first* step reads, so a find
 starts from where the reader is looking rather than from the top.

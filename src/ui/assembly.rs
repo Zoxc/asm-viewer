@@ -1112,7 +1112,17 @@ fn instruction_menu(
     // server could be asked about.
     Rc::new(move |e: Event<PressEventData>, _| {
         let menu = match &at {
-            Some(at) => locate_menu(located, dock, at.clone(), subject.clone(), None, Vec::new()),
+            // No Alt+F12: the key asks about the caret in the **Source** pane, and this
+            // listing draws no source (`caret_questions`).
+            Some(at) => locate_menu(
+                located,
+                dock,
+                at.clone(),
+                subject.clone(),
+                None,
+                Vec::new(),
+                None,
+            ),
             None => Menu::new(),
         };
         let menu = menu.maybe_child(neighbours.clone().map(|(object, address)| {
@@ -1136,11 +1146,14 @@ fn instruction_menu(
                 .on_press(move |_| open_as_symbol(doors, symbol.clone(), address, at.clone()))
                 .child("Open as symbol")
         }));
+        // And no Ctrl+D: the key bookmarks the place the tab on screen is showing, which
+        // is this row's symbol only when the tab is that symbol read alone.
         let menu = menu.child(bookmark_item(
             bookmarked,
             objects,
             symbol_document.clone(),
             "Bookmark symbol",
+            None,
         ));
         ContextMenu::open_from_event(&e, menu);
     })

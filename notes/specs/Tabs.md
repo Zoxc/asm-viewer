@@ -13,6 +13,10 @@ The × has a square target with four pixels of air around it, and is highlighted
 pointer.
 The tabs are saved with the session in their order.
 
+Ctrl+W and Ctrl+F4 close the tab on screen.
+Ctrl+Tab shows the next tab and Ctrl+Shift+Tab the one before; both wrap.
+Ctrl+1 to Ctrl+8 show the tab at that place, Ctrl+9 the last.
+
 The tab on screen has a two-pixel rule along its top: lit while the tab has focus, dim
 otherwise. Every other tab's name is fainter.
 
@@ -39,7 +43,8 @@ closed one keeps its state: a build or a run it started goes on, and it comes ba
 ## Back and forward, per tab
 
 Each tab has its own history, which the mouse's side buttons and the toolbar's chevrons move
-through. It survives a restart, at most 50 entries per tab. A chevron's tooltip names where
+through, as do Alt+Left and Alt+Right.
+It survives a restart, at most 50 entries per tab. A chevron's tooltip names where
 it would go; one with nowhere to go is dimmed, not hidden.
 
 Where a click opens depends on where it was made.

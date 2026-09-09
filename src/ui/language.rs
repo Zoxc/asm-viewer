@@ -1090,6 +1090,22 @@ pub(crate) fn start_server(language: State<Language>, proj: State<OpenProject>, 
     write_if(language, |held| held.ask_to_start(asking));
 }
 
+/// Start the server or stop it, whichever the state asks for -- and put the question
+/// first where a start needs one ([`start_server`]).
+///
+/// One function because there are two ways to ask for the same thing: the control in the
+/// top bar, and the window's chord. A second spelling of the toggle is a second place for
+/// the two halves to drift apart.
+pub(crate) fn toggle_server(language: State<Language>, proj: State<OpenProject>, jobs: &LspJobs) {
+    // Bound to a `let` of its own: a `match` holds its scrutinee's guard to the end of
+    // the statement, and both arms below write the state it was read from.
+    let started = language.peek().started();
+    match started {
+        true => stop_server(language, jobs),
+        false => start_server(language, proj, jobs),
+    }
+}
+
 /// Start what was asked for, leaving whatever was running stopped.
 ///
 /// **A settings file that could not be read starts nothing.** What it would otherwise
@@ -1318,18 +1334,9 @@ impl Component for ServerButton {
                         .on_pointer_out(move |_| hovering.set_if_modified(false))
                         .on_press({
                             let jobs = jobs.clone();
-                            move |_| {
-                                // Bound to a `let` of its own: a `match` holds its
-                                // scrutinee's guard to the end of the statement, and both
-                                // arms below write the state it was read from.
-                                let started = language.peek().started();
-                                match started {
-                                    true => stop_server(language, &jobs),
-                                    // Which asks first where the reader has not agreed to
-                                    // the directory yet.
-                                    false => start_server(language, proj, &jobs),
-                                }
-                            }
+                            // The same call the window's chord makes, so the two
+                            // cannot come to mean different things.
+                            move |_| toggle_server(language, proj, &jobs)
                         })
                 })
                 // The same square either way, so nothing beside it moves.

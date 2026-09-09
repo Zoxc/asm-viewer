@@ -27,6 +27,12 @@ The bar names the project the app is in. Hovering says where it is kept. Pressin
 Project view. A close button beside it closes the project; an unsaved project has Save and
 Delete there instead.
 
+## Keys
+
+Ctrl+O asks for a project file.
+Ctrl+, shows the Settings page and F1 the Shortcuts page.
+A menu item with a key says it after the name, dimmed, and only where that key works.
+
 ## With no project open
 
 The window is the top bar and a screen under it: no sidebar, no panes. The screen offers the

@@ -146,6 +146,19 @@ acts. It sits after the name rather than out at the row's end: a row is a `MenuI
 window and drags the whole menu out to it, and nothing in the row can learn what the widest row
 made the menu (`notes/upstream/freya.md`).
 
+**A key beside a menu item is that same treatment**, and for that same reason: `menu_label` is
+what every item's text goes through, and where the item has a key it hands `marked_label` the key
+in place of the arrow -- after the name, behind `MENU_MARK_GAP`, in `address_fg`. Not flush right,
+which is where a desktop menu puts it. **The spelling is never written in a menu**: it comes from
+`shortcuts::key!`, the list the Shortcuts page is drawn from (`src/shortcuts.rs`), so a key that is
+changed is changed in both places or in neither -- a macro rather than constants because a row that
+carries two spellings is a `concat!` of them. And **a menu says only a key that would do what the
+row does where the menu was opened**: the pages menu says Ctrl+, and F1 because those are the
+root's, a chip's menu says Ctrl+W and Ctrl+D only when it is the tab on screen -- those keys are
+asked of that tab and not of the chip under the pointer -- and the F12 family is beside a source
+row's questions and beside no instruction row's, the four being the Source pane's caret keys. An
+item with no key to say is the bare label it always was.
+
 **With no project the pages are still ordinary tabs.** They went through a state of their own for
 a while, shown in place of the screen with no bar at all, and that was a second way for a page to
 be open beside the one the app already had -- a mark to resolve from whichever was answering, and
@@ -163,9 +176,53 @@ bindings data the handlers read rather than matches they are written as, and gen
 from that. It is a refactor of every handler in the app, and it buys nothing until something
 else wants bindings as data -- the goal about reaching the panels from the keyboard, which is
 not started. So the list is written out, and the module says at the top that nothing checks it.
-`Chord` (`ui/chords.rs`) is the only binding that is already data, and a test over those three
+`Chord` (`ui/chords.rs`) is the only binding that is already data, and a test over the chords
 alone would be worse than none: it reads as the list having been checked when forty-odd rows
 were not.
+
+**A chord is a key and the modifiers it wants** (`ui/chords.rs`). It was Ctrl-or-Meta and a
+letter, with Shift where the chord took it; the shortcuts plan needs shapes that has no room
+for -- a named key (`F1`, `Shift+F3`, `Alt+Left`, `Ctrl+Tab`), a digit (`Ctrl+1`) and
+punctuation (`Ctrl+,`). So a chord is one row of one table: the key it is pressed on, a
+character matched in either case or a `NamedKey`, and beside it the modifiers it wants
+**exactly** -- the four spellings of F12 differ in nothing else, and a chord with Ctrl alone is
+not one with Alt held too. What is compared is `chords::held`, the four modifiers a gesture is
+spelt in, since Caps Lock and Num Lock arrive in the same set and a chord read off the set whole
+would go unanswered on a keyboard with either on -- Caps Lock being the state that makes the `f`
+an `F` in the first place. `Chord::NthTab` carries the digit rather than being nine variants:
+the nine differ in nothing but the number, and the number is the argument the answer takes.
+
+**Every chord the plan needs is named, and the bindings are hung off them one at a time.**
+`Chord::ALL` is the list every text box declines, and a box keeps whatever nothing declined: it
+types the character, and its `prevent_default` cancels the global key event the root would have
+answered the chord by. So a chord named the day its binding lands is a chord that types a letter
+into four boxes until then, and the names went in one change. Only the **window's** keys are
+chords: the arrows, Home, End, Page Up, Page Down, Enter
+and Escape belong to the list, box, pane or finder that answers them where it is, and declining
+those at the root would take the keys a box is typed with. Nothing is added to `src/shortcuts.rs`
+until a binding exists, that list being what the reader is told the app answers to.
+
+**The window's own keys are answered in one function** (`root_key_down`, `src/ui.rs`), and
+each of them is a second door onto something the app already has rather than behaviour of its
+own. The tab keys go through `close_showing`, `step_tab` and `show_nth` (`ui/documents.rs`),
+which are `close_tab`, `close_page` and `raise_tab` with the bar asked first which tab they are
+about -- a page's close is not a document's, and neither key is a way round the doors. The
+trail keys are the `navigate` the mouse's side buttons and the toolbar's two chevrons already
+call. The two pages are `Strip::show`, what the pages menu's row does, so one opens beside the
+tab on screen and one already open is raised. And the server chord is `toggle_server`
+(`ui/language.rs`), pulled out of the control in the top bar so that a key and a button cannot
+come to mean different things. The four panel chords are `reach_panel` (`ui/dock.rs`), which
+raises a panel and asks for the keyboard to go into the box it registered -- one door for
+Ctrl+Shift+F and the three lists beside it (`agents/Sidebar.md`). Which tab a step or a number names is `Strip`'s own
+(`src/tabs.rs`): both wrap at the ends of the bar, and 9 is the last however many there are.
+
+So `root_key_down` takes the **bundles** -- `ProjectStates`, which carries `Open` and `Places`
+-- and not a state per binding, which is what it did with two chords and could not go on doing:
+the states a chord wants are the states its door wants, so a parameter per key would have grown
+the list by one on every binding. What is still handed in by name is what belongs to no bundle:
+where the keyboard can be put (`Keys`, which the panel chords ask through), the finder, the two
+windows a project that would not open puts up, and the language server with the worker it is
+spoken to through.
 
 The rows are handed to the view as `&'static Gesture`, which is why `SECTIONS` is a `static`
 and not a `const` -- a `const` is a value copied into each place it is named rather than one
@@ -449,9 +506,11 @@ readily as a document, since what the reader pointed at is the bar. It is its ow
 than `close_tab` in a loop, because each of those would work out a landing of its own and walk the
 bar through every intermediate state. **Add bookmark** / **Remove bookmark** is the same `bookmark_item` the
 sidebar rows and the instruction rows use (`agents/Sidebar.md`), for the tab's own document, and a
-page has neither it nor **Show in file manager**, being no place in a file. The close-others row is
-left out when nothing else is open, rather than drawn as a row that would do nothing, and the chip
-asks the strip (`Strip::has_others`) at the **press**: whether a tab has company is not something a
+page has neither it nor **Show in file manager**, being no place in a file. Close and the bookmark
+carry Ctrl+W and Ctrl+D on the chip of the tab **on screen** and on no other, `tab_menu` taking
+whether this is that chip. The close-others row is left out when nothing else is open, rather than
+drawn as a row that would do nothing, and the chip asks the strip (`Strip::has_others`) at the
+**press**: whether a tab has company is not something a
 chip draws, so subscribing to the strip for it would re-render every tab whenever any one of them
 opened.
 

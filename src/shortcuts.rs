@@ -38,6 +38,50 @@ const fn gesture(keys: &'static str, does: &'static str) -> Gesture {
     Gesture { keys, does }
 }
 
+/// **Every key a menu item says it has, spelled once.** The row below and the key drawn
+/// beside the item are the same expansion of this, so a binding that is renamed is
+/// renamed in both or in neither.
+///
+/// A macro and not a table of constants because a row that carries two spellings --
+/// `Ctrl+W, or Ctrl+F4` -- is those two `concat!`ed, and `concat!` takes literals. The
+/// names are the chords' own (`Chord`, `src/ui/chords.rs`), so the two lists read as one.
+/// A binding no menu names needs no arm: its row is written as it is pressed.
+macro_rules! key {
+    (CloseTab) => {
+        "Ctrl+W"
+    };
+    (CloseTabF4) => {
+        "Ctrl+F4"
+    };
+    (OpenProject) => {
+        "Ctrl+O"
+    };
+    (Settings) => {
+        "Ctrl+,"
+    };
+    (Shortcuts) => {
+        "F1"
+    };
+    (Bookmark) => {
+        "Ctrl+D"
+    };
+    (Definition) => {
+        "F12"
+    };
+    (References) => {
+        "Shift+F12"
+    };
+    (Implementations) => {
+        "Ctrl+F12"
+    };
+    (AllLocations) => {
+        "Alt+F12"
+    };
+}
+
+/// So a menu item can ask for a spelling by name: `shortcuts::key!(CloseTab)`.
+pub(crate) use key;
+
 /// Every section, the ones that work anywhere first.
 ///
 /// A `static` and not a `const`: the rows are handed to the view as `&'static Gesture`,
@@ -51,8 +95,50 @@ pub static SECTIONS: &[Section] = &[
                 "Ctrl+Shift+F",
                 "Open the Search panel and put the caret in its box.",
             ),
-            gesture("Back button", "Go back in this tab's history."),
-            gesture("Forward button", "Go forward in it."),
+            gesture(
+                "Ctrl+Shift+E",
+                "Raise the Files panel and put the keyboard on its list.",
+            ),
+            gesture(
+                "Ctrl+Shift+O",
+                "Raise the Objects panel and put the caret in its filter box.",
+            ),
+            gesture(
+                "Ctrl+T",
+                "Raise the Symbols panel and put the caret in its filter box.",
+            ),
+            gesture(
+                "Alt+Left, or the Back button",
+                "Go back in this tab's history.",
+            ),
+            gesture("Alt+Right, or the Forward button", "Go forward in it."),
+            gesture(
+                concat!(key!(CloseTab), ", or ", key!(CloseTabF4)),
+                "Close the tab on screen, page or document.",
+            ),
+            gesture(
+                "Ctrl+Tab, Ctrl+Shift+Tab",
+                "Show the next tab along the bar, or the one before it. Both wrap.",
+            ),
+            gesture(
+                "Ctrl+1 to Ctrl+8",
+                "Show the nth tab along the bar. Ctrl+9 shows the last, however many \
+                 there are.",
+            ),
+            gesture(key!(OpenProject), "Open a project..."),
+            gesture(key!(Settings), "The Settings page."),
+            gesture(key!(Shortcuts), "The Shortcuts page."),
+            gesture("Ctrl+Shift+L", "Start the language server, or stop it."),
+            gesture(
+                key!(Bookmark),
+                "Bookmark the place the tab on screen is showing, or take the bookmark \
+                 off it.",
+            ),
+            gesture(
+                "Ctrl+\\",
+                "Put the tab's other pane away, or bring it back. On the Scratchpad page \
+                 it is the listing beside the editor.",
+            ),
             gesture(
                 "Any key or press",
                 "Put away the box the language server's answer is in.",
@@ -111,6 +197,21 @@ pub static SECTIONS: &[Section] = &[
                 "Open the find bar over this pane. Text selected within one line becomes \
                  what it looks for.",
             ),
+            gesture(
+                "F3, Shift+F3",
+                "Go to the next match of the find bar over this pane, or the one before, \
+                 without leaving the code.",
+            ),
+            gesture(
+                key!(Definition),
+                "Go to what the name under the caret names.",
+            ),
+            gesture(key!(References), "Find references to it."),
+            gesture(key!(Implementations), "Find implementations of it."),
+            gesture(
+                key!(AllLocations),
+                "Find every symbol the caret's line was compiled into.",
+            ),
         ],
     },
     Section {
@@ -129,11 +230,20 @@ pub static SECTIONS: &[Section] = &[
             ),
             gesture("Right-click a row", "The row's menu."),
             gesture("Up, Down", "Move the pick to another row."),
+            gesture("Home, End", "Move it to the first row, or the last."),
+            gesture("Page Up, Page Down", "Move it a screen of rows."),
+            gesture(
+                "Left, Right",
+                "Fold the picked row away, or open it: an archive in the Objects tree, a \
+                 folder in the Files tree. A row with nothing under it does neither.",
+            ),
             gesture(
                 "Enter",
                 "Open the row the pick is on, exactly as pressing it would.",
             ),
+            gesture("Ctrl+Enter", "Open it in a tab that stays."),
             gesture("Ctrl+F", "Put the caret in the filter box over the list."),
+            gesture("Escape", "Put the keyboard back in the tab on screen."),
         ],
     },
     Section {
@@ -151,8 +261,14 @@ pub static SECTIONS: &[Section] = &[
         place: "The file finder",
         gestures: &[
             gesture("Up, Down", "Move to another file."),
+            gesture("Page Up, Page Down", "Move a screen of files."),
+            gesture("Home, End", "Move to the first file, or the last."),
             gesture("Enter", "Open the file."),
             gesture("Click a row", "Open that file."),
+            gesture(
+                "Ctrl+Enter, or Ctrl+click a row",
+                "Open it in a tab that stays.",
+            ),
             gesture("Alt+click a row", "Move to it and open nothing."),
             gesture("Escape, or click outside", "Close the finder."),
         ],
@@ -161,12 +277,30 @@ pub static SECTIONS: &[Section] = &[
         place: "A text box",
         gestures: &[
             gesture(
+                "Up, Down",
+                "In a filter box, move the pick on the list under it, without leaving the \
+                 box.",
+            ),
+            gesture(
                 "Enter",
-                "In the Search panel, run the search; in a find bar, go to the next \
-                 match.",
+                "In a filter box, open the row the pick is on; in the Search panel, run \
+                 the search; in a find bar, go to the next match.",
             ),
             gesture("Shift+Enter", "In a find bar, go to the match before."),
-            gesture("Escape", "Leave the box, closing a find bar."),
+            gesture(
+                "Ctrl+Enter",
+                "In a filter box, open the pick in a tab that stays.",
+            ),
+            gesture(
+                "Alt+C, Alt+W, Alt+R",
+                "The three toggles beside the box: match case, whole word, regular \
+                 expression.",
+            ),
+            gesture(
+                "Escape",
+                "Leave the box, keeping what was typed: from a filter box the keyboard \
+                 goes back to the list, and a find bar closes.",
+            ),
             gesture("Tab", "Nothing. It does not move the keyboard on."),
         ],
     },
@@ -174,6 +308,10 @@ pub static SECTIONS: &[Section] = &[
         place: "The scratchpad",
         gestures: &[
             gesture("Tab", "Indent."),
+            gesture("Ctrl+B", "Build the pad."),
+            gesture("F5", "Run what it built."),
+            gesture("Shift+F5", "Stop the run."),
+            gesture("Ctrl+N", "A new scratchpad."),
             gesture("Click a diagnostic", "Go to what it is about."),
         ],
     },

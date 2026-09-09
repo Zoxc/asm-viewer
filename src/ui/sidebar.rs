@@ -559,10 +559,12 @@ impl Component for ObjectsPanel {
         // What the rows mark in the names they draw, memoized on the filter beside the
         // tree above, which compiles one of its own to narrow the list with.
         let marking = use_list_marking(filter);
-        // One more clone of the rows, shared by the two closures the keys are: the arrows
-        // ask what a row is and Enter asks what pressing one does, and both are the tree
-        // the panel is drawing and not one worked out again.
+        // One more clone of the rows, shared by the three closures the keys are: the
+        // arrows ask what a row is, Enter asks what pressing one does and Left and Right
+        // ask which way it folds, and all three are the tree the panel is drawing and not
+        // one worked out again.
         let rows = Rc::new(tree.clone());
+        let folded = rows.clone();
         let keys = ListKeys {
             length,
             at: {
@@ -596,6 +598,23 @@ impl Component for ObjectsPanel {
                         Pressed::Opened
                     }
                 }
+            }),
+            // Only a file row has anything under it: an object's row is a leaf, and so is
+            // a file still being read, which has no members yet. A row already folded the
+            // way the key asks is left alone, and so is one the filter is holding open --
+            // `fold_archive`'s own rule, folding it away would hide the matches it points
+            // at.
+            fold: Box::new(move |at, unfold| {
+                let Some(TreeRow::File {
+                    group, expansion, ..
+                }) = (at < folded.len()).then(|| &folded[at])
+                else {
+                    return;
+                };
+                if unfold == (*expansion == Expansion::Expanded) {
+                    return;
+                }
+                fold_archive(expanded, *group, *expansion);
             }),
         };
 
@@ -735,6 +754,7 @@ impl Component for SymbolsPanel {
                 }
                 None => Pressed::Folded,
             }),
+            fold: ListKeys::flat(),
         };
 
         // An empty list means the same two things here as in `short_list`, and the whole
@@ -848,6 +868,7 @@ impl Component for HistoryPanel {
                     }
                     None => Pressed::Folded,
                 }),
+                fold: ListKeys::flat(),
             }
         };
 

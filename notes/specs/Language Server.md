@@ -9,7 +9,9 @@ Only the files it is for: Rust's, or the extensions the project named.
 A file that changes in a tab is handed over again.
 
 Nothing starts one by itself. A control at the right of the top bar, left of the chevrons,
-starts and stops it. It is marked `LSP` and drawn as its state: text alone when it is off, a
+starts and stops it.
+Ctrl+Shift+L does the same, from anywhere.
+It is marked `LSP` and drawn as its state: text alone when it is off, a
 border under the pointer and while a server is there, a colour of its own while one runs, a
 turning icon while one is starting or reading the project, and a failure's colour when one
 would not start. Hovering it says the same in words. It is off when the app opens, however

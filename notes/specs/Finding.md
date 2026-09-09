@@ -13,8 +13,11 @@ out, the start of a name before inside it, the shorter path on a tie. A row is t
 with its directory after it, dimmed. With nothing typed it lists the project's files opened
 recently, newest first.
 
-The list is moved through and opened from the keyboard, or a row is clicked. A file opens in an
-existing tab if present. The finder closes and keeps nothing of what was typed.
+Page Up and Page Down move a screen, Home and End the first and the last.
+Enter opens the file in a temporal tab, as clicking a row does; Ctrl+Enter and Ctrl+click open
+it in a tab that stays.
+A file already open is shown instead.
+The finder closes and keeps nothing of what was typed.
 
 It lists what the source pane can show, skipping what git is told to ignore, hidden files and
 files too big, as the Search panel does. The first walk fills the list; after that the finder

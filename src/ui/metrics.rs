@@ -145,6 +145,14 @@ pub(crate) fn chevron_width() -> f32 {
 /// How far an archive member is indented past the file it belongs to.
 pub(crate) const TREE_INDENT: f32 = 16.0;
 
+/// The gap between what a menu row says and the mark after it: the arrow on a row that
+/// opens a submenu, and the key beside an item that has one (`marked_label`,
+/// `src/ui/strip.rs`).
+///
+/// Wide enough that the mark does not read as the last word of the name, and no wider: a
+/// menu is as wide as its widest row, so the gap is paid for by every row in it.
+pub(crate) const MENU_MARK_GAP: f32 = 10.0;
+
 /// The column a project field's name is written in, so the values line up whatever each
 /// is called.
 ///

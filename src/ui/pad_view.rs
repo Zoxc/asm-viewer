@@ -1164,6 +1164,10 @@ impl Component for ScratchpadTab {
     fn render(&self) -> impl IntoElement {
         let pad = use_consume::<Pad>().0;
         let text = use_consume::<PadText>().0;
+        // Consumed here, because the key handler below runs no hook. The four chords are
+        // the four controls' own, so the pane holds them for exactly as long as it draws
+        // the controls.
+        let jobs = use_consume::<PadJobs>();
 
         // What the editor and the listing under it are drawn of: which pad, the program
         // it last built, and where its run got to. The rest of the pad is read by the
@@ -1288,10 +1292,36 @@ impl Component for ScratchpadTab {
             .horizontal()
             .content(Content::Flex)
             .background(palette().pane_bg)
+            // Global, so the four chords are answered wherever the keyboard is in the
+            // window -- the editor included, which declines them (`chords.rs`). And on
+            // this rect, so they are answered only while the page is the tab on screen:
+            // `page_body` mounts a page's body for that tab alone.
+            .on_global_key_down(move |e: Event<KeyboardEventData>| {
+                pad_key(pad, &jobs, &e.key, e.modifiers);
+            })
             // Over both of them, and drawn as nothing at all until a row has been asked
             // about.
             .child(DeletePopup)
             .child(PadList)
             .child(body)
+    }
+}
+
+/// The four chords the pad answers: Build, Run, the run stopped, and a new pad.
+///
+/// Each is the request the matching control presses, and **nothing but that request**:
+/// every refusal -- two builds at once, a run while a build is on, a pad whose disk has
+/// not been read yet -- lives in the request rather than in a button's `enabled`, so
+/// calling it obeys them all, and asking them again here would be a second reading to
+/// drift.
+fn pad_key(pad: State<Pads>, jobs: &PadJobs, key: &Key, modifiers: Modifiers) {
+    if Chord::Build.is(key, modifiers) {
+        request_build(pad, jobs);
+    } else if Chord::Run.is(key, modifiers) {
+        request_run(pad, jobs);
+    } else if Chord::StopRun.is(key, modifiers) {
+        stop_run(pad);
+    } else if Chord::NewPad.is(key, modifiers) {
+        request_new_pad(jobs);
     }
 }

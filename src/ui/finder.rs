@@ -679,7 +679,15 @@ impl Component for FinderOverlay {
                             // declines them so that they arrive here at all.
                             .on_global_key_down(move |e: Event<KeyboardEventData>| {
                                 // Peeked and not read: a handler subscribes to nothing.
-                                finder_key(finder, states, keyboard, list, &listed.peek(), &e.key);
+                                finder_key(
+                                    finder,
+                                    states,
+                                    keyboard,
+                                    list,
+                                    &listed.peek(),
+                                    &e.key,
+                                    e.modifiers,
+                                );
                             })
                             .child(FinderBox { a11y: box_id })
                             .child(body),
@@ -701,12 +709,12 @@ fn note(text: &str) -> Element {
         .into()
 }
 
-/// The keys the finder answers: the list moved through, a file opened, and the overlay
-/// closed. Every read is bound before any write.
+/// The keys the finder answers: the list moved through a row, a page or the whole of it,
+/// a file opened, and the overlay closed. Every read is bound before any write.
 ///
 /// The list is the one the panel drew, handed in rather than worked out again: Enter
-/// opens the row the reader is looking at, and neither arrow asks the query of every
-/// walked path afresh.
+/// opens the row the reader is looking at, no motion asks the query of every walked path
+/// afresh, and a page is a page of what is on screen.
 fn finder_key(
     finder: State<Finder>,
     states: ProjectStates,
@@ -714,20 +722,49 @@ fn finder_key(
     list: ScrollController,
     listed: &Listed,
     key: &Key,
+    modifiers: Modifiers,
 ) {
+    let page = page_of(listed);
     match key {
         Key::Named(NamedKey::Escape) => close_finder(finder),
         Key::Named(NamedKey::ArrowDown) => followed(list, moved(finder, listed, 1)),
         Key::Named(NamedKey::ArrowUp) => followed(list, moved(finder, listed, -1)),
+        Key::Named(NamedKey::PageDown) => followed(list, moved(finder, listed, page)),
+        Key::Named(NamedKey::PageUp) => followed(list, moved(finder, listed, -page)),
+        Key::Named(NamedKey::Home) => followed(list, moved_to(finder, listed, 0)),
+        Key::Named(NamedKey::End) => followed(list, moved_to(finder, listed, usize::MAX)),
         Key::Named(NamedKey::Enter) => {
             // Bound before the write below, so the read guard is gone by then.
             let at = listed.clamp(finder.peek().selected());
             if let Some(path) = listed.path(at) {
-                open_found(states, keyboard, &path);
+                open_found(states, keyboard, &path, reach_of(modifiers));
                 close_finder(finder);
             }
         }
         _ => {}
+    }
+}
+
+/// How far Page Up and Page Down move: a screen of the list, which is the panel's viewport
+/// over the row height.
+///
+/// The viewport is not measured, as a code pane's is. The panel is exactly as tall as the
+/// rows it draws -- [`FINDER_ROWS`] of them, or the whole list where it is shorter -- so a
+/// page is the number the layout was handed, and measuring it back would only be asking
+/// the layout what this told it.
+fn page_of(listed: &Listed) -> isize {
+    listed.len().min(FINDER_ROWS) as isize
+}
+
+/// Which tab a file the finder opens lands in: the rule every row that opens something
+/// from outside the panes follows ([`Reach::outside`]), read off the key rather than off
+/// the modifier states, since a key event carries its own modifiers where a press carries
+/// none.
+fn reach_of(modifiers: Modifiers) -> Reach {
+    if held(modifiers).contains(Modifiers::ctrl_or_meta()) {
+        Reach::NewTab
+    } else {
+        Reach::Preview
     }
 }
 
@@ -741,14 +778,19 @@ fn finder_key(
 ///
 /// Hands back the row it moved to and how many there are, which is what the scroll
 /// follows.
-fn moved(mut finder: State<Finder>, listed: &Listed, by: isize) -> (usize, usize) {
+fn moved(finder: State<Finder>, listed: &Listed, by: isize) -> (usize, usize) {
+    // Bound before the write below, so the read guard is gone by then.
+    let at = listed.clamp(finder.peek().selected());
+    moved_to(finder, listed, at.saturating_add_signed(by))
+}
+
+/// The same to a row named outright, which is what Home and End are: the first row, and
+/// the last however many there are ([`usize::MAX`], the clamp doing the counting).
+fn moved_to(mut finder: State<Finder>, listed: &Listed, to: usize) -> (usize, usize) {
     // Bound before the write, so the read guard is gone by then.
-    let (at, typed) = {
-        let state = finder.peek();
-        (listed.clamp(state.selected()), state.typed.clone())
-    };
+    let typed = finder.peek().typed.clone();
     let mut state = finder.write();
-    state.at = listed.clamp(at.saturating_add_signed(by));
+    state.at = listed.clamp(to);
     state.at_for = typed;
     (state.at, listed.len())
 }
@@ -781,15 +823,16 @@ fn followed(mut list: ScrollController, (at, rows): (usize, usize)) {
     );
 }
 
-/// Open a file the finder listed: a source-driven tab of its own that stays, since a
-/// reader who typed the path out and picked it off the list has chosen the file. A tab
-/// already showing it is raised. The Files row's own door, so it carries that guard too:
-/// a file the source pane would refuse opens nothing at all.
+/// Open a file the finder listed, the way `reach` says: the preview tab, or, with Ctrl
+/// held, a tab of its own that stays. A tab already showing it is raised either way. The
+/// Files row's own door, so it carries that guard too: a file the source pane would refuse
+/// opens nothing at all.
+///
 /// The keyboard goes with it, as it does out of every list a row is opened from
 /// (`ui/picks.rs`), and here it has nowhere else to be: the panel is closing and the box it
 /// was in goes with it.
-fn open_found(states: ProjectStates, keyboard: State<Keys>, path: &Path) {
-    open_source_file(states, path, Reach::NewTab);
+fn open_found(states: ProjectStates, keyboard: State<Keys>, path: &Path, reach: Reach) {
+    open_source_file(states, path, reach);
     ask_for_keyboard(keyboard);
 }
 
@@ -824,13 +867,19 @@ impl Component for FinderBox {
                 // width of a sidebar; there is room here for the text to sit in.
                 .width(Size::fill())
                 .a11y_id(a11y)
-                // The four keys the panel's own handler answers, declined here so they
-                // reach it (`chords.rs`).
+                // The keys the panel's own handler answers, declined here so they reach
+                // it (`chords.rs`). Home and End go with the arrows: they are the list's
+                // ends here rather than the query's, a path being typed left to right and
+                // the box holding one line of it.
                 .on_pre_key_down(box_keys(
                     Boxed::Input,
                     &[
                         NamedKey::ArrowUp,
                         NamedKey::ArrowDown,
+                        NamedKey::PageUp,
+                        NamedKey::PageDown,
+                        NamedKey::Home,
+                        NamedKey::End,
                         NamedKey::Enter,
                         NamedKey::Escape,
                     ],
@@ -868,6 +917,7 @@ impl Component for FoundRow {
         let finder = use_consume::<Finding>().0;
 
         let alt = use_consume::<Alt>().0;
+        let ctrl = use_consume::<Ctrl>().0;
         let keyboard = use_consume::<Keyboard>().0;
         let index = self.index;
 
@@ -892,7 +942,7 @@ impl Component for FoundRow {
                         pick_row(finder, index);
                         return;
                     }
-                    open_found(states, keyboard, &pressed);
+                    open_found(states, keyboard, &pressed, Reach::outside(ctrl));
                     close_finder(finder);
                 })
                 .child({

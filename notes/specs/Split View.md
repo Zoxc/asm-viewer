@@ -34,6 +34,11 @@ instruction the debug info places on a source line, in any file.
 In the pane the tab is not driven from, a context menu opens that pane as a tab of its own, on
 the instruction or line it was over.
 
+## Putting a pane away
+
+The bar over the leading pane has a control that toggles the other pane, as Ctrl+\ does;
+whether it is away is kept for the tab.
+
 ## Following a name
 
 While a language server is running, every name it can place is a link: a call, a type or a
@@ -53,6 +58,10 @@ does nothing.
 A name's context menu — a link, or the name where it is defined — has three questions for the
 server. "Go to definition" does what clicking a link does. "Find references to `foo`" and
 "Find implementations" answer in the Locations panel. A question with no answer says so.
+
+F12, Shift+F12 and Ctrl+F12 ask the same three about the name the cursor is on, and Alt+F12
+lists every symbol its line was compiled into. A cursor on no name asks nothing, and only the
+source pane answers.
 
 ## What a name is
 
@@ -97,7 +106,7 @@ nothing says so.
 
 Every match is marked. Enter goes to the next and Shift+Enter to the one before, wrapping at
 the ends; the buttons do the same. Each scrolls the pane to the match and selects it, so Ctrl+C
-copies it.
+copies it. F3 and Shift+F3 do the same with the focus still in the code.
 
 Escape closes the bar and puts the focus back in the pane. What was typed lasts as long as the
 tab is open.

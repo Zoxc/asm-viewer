@@ -10,6 +10,11 @@
 //! opens a document -- [`land`] included -- goes through [`open_document`]. A page is the
 //! one tab outside that: it draws state held at the root, so it has no trail, and
 //! [`close_page`] takes its chip out of the bar and nothing else.
+//!
+//! The window's tab keys are answered here too, and each of them is one of those doors
+//! and not a second way round it: [`step_tab`] and [`show_nth`] work out which tab the
+//! bar names and hand it to [`raise_tab`], and [`close_showing`] sends the tab on screen
+//! to whichever of [`close_tab`] and [`close_page`] it belongs to.
 
 use super::*;
 
@@ -200,6 +205,26 @@ pub(crate) fn raise_tab(open: Open, tab: Tab) {
     }
 }
 
+/// Show the tab a step along the bar lands on: the key's twin of pressing the chip
+/// beside the one on screen. The wrapping is [`Strip::stepped`]'s, and a bar of one tab
+/// steps to itself, which raises nothing.
+pub(crate) fn step_tab(open: Open, along: Along) {
+    // Bound in a statement of its own: the raise below writes the state this read.
+    let stepping = open.strip.peek().stepped(along);
+    if let Some(tab) = stepping {
+        raise_tab(open, tab);
+    }
+}
+
+/// Show the `nth` tab along the bar, 9 being the last however many there are
+/// ([`Strip::nth`]). A number the bar is too short for shows nothing.
+pub(crate) fn show_nth(open: Open, nth: usize) {
+    let numbered = open.strip.peek().nth(nth);
+    if let Some(tab) = numbered {
+        raise_tab(open, tab);
+    }
+}
+
 /// Close the tab `id`, moving to a neighbouring one when it was the tab on screen and
 /// to the placeholder when it was the last one open.
 ///
@@ -228,6 +253,22 @@ pub(crate) fn close_tab(open: Open, places: Places, id: DocId) {
 pub(crate) fn close_page(open: Open, page: Page) {
     let mut strip = open.strip;
     strip.write().close(|tab| *tab == Tab::Page(page));
+}
+
+/// Close the tab on screen, whichever kind it is: what the × on its chip does, and what
+/// the window's close key does from wherever the keyboard is. Nothing on screen is
+/// nothing to close.
+///
+/// Two doors and not one, because a page's close is not a document's: a page has no
+/// trail and nothing kept per place, so [`close_page`] is the whole of what it is owed.
+pub(crate) fn close_showing(open: Open, places: Places) {
+    // Bound in a statement of its own: both closes write the state this read.
+    let showing = open.strip.peek().active();
+    match showing {
+        Some(Tab::Document(id)) => close_tab(open, places, id),
+        Some(Tab::Page(page)) => close_page(open, page),
+        None => {}
+    }
 }
 
 /// Close every tab except `keep`, whatever kind either is, landing on the kept tab when

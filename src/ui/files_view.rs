@@ -193,6 +193,7 @@ impl Component for FilesPanel {
                 // shared by both closures rather than walked again.
                 let listed = rows.clone();
                 let stepped = listed.clone();
+                let folded = listed.clone();
                 keys = ListKeys {
                     length,
                     at: Box::new(move |at| {
@@ -204,6 +205,24 @@ impl Component for FilesPanel {
                             press_entry(states, tree, ctrl, row.fold, &row.path)
                         }
                         false => Pressed::Folded,
+                    }),
+                    // A file row has nothing under it, and a directory already the way
+                    // the key asks is left alone. A read that failed counts as folded, so
+                    // Right tries it again -- which is what a press on it does.
+                    fold: Box::new(move |at, unfold| {
+                        let Some(row) = (at < folded.len()).then(|| &folded[at]) else {
+                            return;
+                        };
+                        let Some(fold) = row.fold else {
+                            return;
+                        };
+                        if unfold == (fold == Fold::Unfolded) {
+                            return;
+                        }
+                        let mut tree = tree;
+                        if let Some(tree) = tree.write().as_mut() {
+                            tree.toggle(&row.path);
+                        }
                     }),
                 };
                 // `new_with_data`, never a capture: the builder closure is not compared

@@ -86,6 +86,15 @@ impl Panel {
         }
     }
 
+    /// Whether the panel draws a filter box over its list, which is **where a chord that
+    /// reaches it puts the keyboard**: in the box where there is one, so what is typed
+    /// next narrows the list, and on the rows where there is not -- the Files tree, which
+    /// has nothing to filter by. Either way the arrows, Enter and Escape are answered,
+    /// the box handing on the keys the list under it owns (`ui/filter_bar.rs`).
+    pub(super) fn filters(self) -> bool {
+        !matches!(self, Panel::Files)
+    }
+
     fn body(self) -> Element {
         match self {
             Panel::Objects => ObjectsPanel.into_element(),
@@ -103,6 +112,20 @@ impl Panel {
 /// question asked somewhere else does before it answers.
 pub(crate) fn raise_panel(mut dock: State<DockArea>, panel: Panel) {
     dock.write().show_panel(panel);
+}
+
+/// Bring `panel` to the front **and put the keyboard in it**: what each of the four
+/// panel chords does, from wherever the keyboard is. Both halves, and not a choice
+/// between them: a panel behind another in its group is not there to be typed in until it
+/// is raised, and one already on top is raised by a write that changes nothing.
+///
+/// The focus is asked for and not taken here, because only the panel on top in a group is
+/// mounted: the box to put the keyboard in does not exist until the raise above has been
+/// drawn. [`use_keyboard_asked`] spends the ask once the panel has registered one
+/// (`ui/keyboard.rs`).
+pub(crate) fn reach_panel(dock: State<DockArea>, keyboard: State<Keys>, panel: Panel) {
+    raise_panel(dock, panel);
+    ask_for_panel(keyboard, panel);
 }
 
 /// Panel ids are only ever looked up inside the area that handed them out, so the sidebar

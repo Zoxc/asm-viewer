@@ -44,7 +44,25 @@ impl Toggle {
         }
     }
 
-    fn flip(self, filter: &mut Filter) {
+    /// The chord that flips it from the box beside it. The toggles are one thing in all
+    /// four boxes -- the three filter bars and the find bar -- so the three keys are too,
+    /// and each is answered on the bar the box is in and nowhere else.
+    fn chord(self) -> Chord {
+        match self {
+            Toggle::Case => Chord::MatchCase,
+            Toggle::Word => Chord::WholeWord,
+            Toggle::Regex => Chord::Regex,
+        }
+    }
+
+    /// The toggle a key is the chord of, where it is one of the three.
+    pub(crate) fn pressed(key: &Key, modifiers: Modifiers) -> Option<Toggle> {
+        Toggle::ALL
+            .into_iter()
+            .find(|toggle| toggle.chord().is(key, modifiers))
+    }
+
+    pub(crate) fn flip(self, filter: &mut Filter) {
         match self {
             Toggle::Case => filter.case_sensitive = !filter.case_sensitive,
             Toggle::Word => filter.whole_word = !filter.whole_word,
@@ -177,14 +195,29 @@ impl Component for FilterBar {
                         .a11y_id(a11y)
                         // The window's chords declined before the edit, and Enter
                         // answered where the bar has something to submit (`chords.rs`).
-                        .on_pre_key_down(box_keys(Boxed::Input, &[], move |key, _| {
-                            if let (Key::Named(NamedKey::Enter), Some(mut submits)) = (key, submits)
-                            {
-                                // Bound before the write, so the read guard is gone by it.
-                                let next = submits.peek().wrapping_add(1);
-                                submits.set(next);
-                            }
-                        }))
+                        //
+                        // **The three keys the list under the box answers are declined
+                        // too**, so they reach the bar's own handler ([`handed`]) rather
+                        // than moving the caret or unfocusing the box: the arrows are the
+                        // pick's, and Escape puts the keyboard back on the list with what
+                        // was typed still here. Enter is not among them -- it is the
+                        // box's where the bar submits -- and arrives at that handler
+                        // anyway, an `Input` neither stopping nor cancelling it.
+                        .on_pre_key_down(box_keys(
+                            Boxed::Input,
+                            &[NamedKey::ArrowUp, NamedKey::ArrowDown, NamedKey::Escape],
+                            move |key, modifiers| {
+                                let plain = chords::held(modifiers).is_empty();
+                                if let (Key::Named(NamedKey::Enter), true, Some(mut submits)) =
+                                    (key, plain, submits)
+                                {
+                                    // Bound before the write, so the read guard is gone
+                                    // by it.
+                                    let next = submits.peek().wrapping_add(1);
+                                    submits.set(next);
+                                }
+                            },
+                        ))
                         .maybe(error.is_some(), |input| {
                             input
                                 .color(palette().invalid_fg)
@@ -241,9 +274,15 @@ pub(crate) fn use_list_pane(panel: Panel) -> ListPane {
     // Provided rather than passed as a prop: it is one fact about the pane and every row
     // of every list in it wants it (`ui/picks.rs`).
     use_provide_context(|| RowsBox(rows));
+    let box_id = use_hook(AccessibilityId::new_unique);
+    // Which of the two a chord that reaches this panel puts the keyboard in
+    // ([`Panel::filters`]), registered here and not by whichever of `filtered`, `plain`
+    // and `searched` the panel calls: this is the one function every panel calls once and
+    // unconditionally, and a hook behind a panel's early return is a hook that shifts.
+    use_panel_keyboard(panel, if panel.filters() { box_id } else { rows });
     ListPane {
         rows,
-        box_id: use_hook(AccessibilityId::new_unique),
+        box_id,
         controller: use_scroll_controller(ScrollConfig::default),
         viewport: use_state(|| 0.0f32),
         picking: use_picking(panel),
@@ -287,19 +326,15 @@ impl ListPane {
     }
 
     /// The Search panel's list under its own box: [`ListPane::filtered`] where Enter asks a
-    /// question rather than the typing filtering as it goes, and where the box's id comes
-    /// back, since the chord that reaches it is answered at the root and not on the rows.
+    /// question rather than the typing filtering as it goes.
     pub(crate) fn searched(
         &self,
         filter: State<Filter>,
         submits: State<u64>,
         keys: ListKeys,
         list: impl IntoElement,
-    ) -> (Element, AccessibilityId) {
-        (
-            self.boxed(Some((filter, "Search", Some(submits))), keys, list),
-            self.box_id,
-        )
+    ) -> Element {
+        self.boxed(Some((filter, "Search", Some(submits))), keys, list)
     }
 
     /// A list with no bar over it: the Files tree, which has nothing to filter by. Ctrl+F
@@ -316,18 +351,46 @@ impl ListPane {
         keys: ListKeys,
         list: impl IntoElement,
     ) -> Element {
+        // One list's keys, answered in two places: on the rows, and over the box for the
+        // keys it hands on. An `Rc` and not two `ListKeys`, the closures being the
+        // panel's own rows.
+        let keys = Rc::new(keys);
+        let over_the_box = keys.clone();
+        let (rows, picking) = (self.rows, self.picking);
+        let (controller, viewport) = (self.controller, self.viewport);
         rect()
             .expanded()
             .content(Content::Flex)
             .background(palette().pane_bg)
-            .maybe(bar.is_some(), |pane| {
+            .maybe(bar.is_some(), move |pane| {
                 let (filter, placeholder, submits) = bar.expect("the bar is there");
-                pane.child(FilterBar {
-                    filter,
-                    a11y: self.box_id,
-                    placeholder,
-                    submits,
-                })
+                pane.child(
+                    // A rect around the bar and not the bar itself: the keys below arrive
+                    // by bubbling out of the box, and only an **ancestor** of the box is
+                    // reached that way -- the rows are its sibling
+                    // (`notes/upstream/freya.md`). It is over the bar alone, so a key
+                    // answered on the rows is not answered again here.
+                    rect()
+                        .width(Size::fill())
+                        .on_key_down(move |e: Event<KeyboardEventData>| {
+                            handed(
+                                picking,
+                                &over_the_box,
+                                controller,
+                                viewport,
+                                rows,
+                                filter,
+                                submits.is_none(),
+                                &e,
+                            );
+                        })
+                        .child(FilterBar {
+                            filter,
+                            a11y: self.box_id,
+                            placeholder,
+                            submits,
+                        }),
+                )
             })
             .child(self.rows(keys, list))
             .into()
@@ -346,7 +409,7 @@ impl ListPane {
     /// because a key event is emitted only for a **focused node that listens for it** --
     /// bubbling to an ancestor's handler comes after that, and never happens when the
     /// focused node has no handler of its own (`notes/upstream/freya.md`).
-    fn rows(&self, keys: ListKeys, list: impl IntoElement) -> Rect {
+    fn rows(&self, keys: Rc<ListKeys>, list: impl IntoElement) -> Rect {
         let (rows, box_id, picking) = (self.rows, self.box_id, self.picking);
         let (controller, viewport) = (self.controller, self.viewport);
         let mut measured = viewport;
@@ -369,15 +432,23 @@ impl ListPane {
     }
 }
 
-/// What a focused list does with a key: the chord to its box, the arrows over its rows,
-/// and Enter on the row they left the pick on.
+/// What a focused list does with a key: the chord to its box, the pick moved over its
+/// rows, a tree row folded, Enter on the row the pick was left on, and Escape back to the
+/// tab on screen.
 ///
-/// The scroll follows the arrows for the finder's reason: the panel is a screenful of rows
-/// and the arrows walk past it, so a pick nobody can see is a row Enter opens unnamed.
+/// The scroll follows for the finder's reason: the panel is a screenful of rows and the
+/// keys walk past it, so a pick nobody can see is a row Enter opens unnamed.
+///
+/// **Each key answers under its own modifiers and no others**, which is the code panes'
+/// rule (`on_listing_key`, `ui/marks.rs`) and is what keeps the window's keys the
+/// window's: Alt+Left is a step back along the tab's trail and must not fold a row. Enter
+/// is the one exception, and the whole of what Ctrl+Enter is -- **a tab that stays** comes
+/// from the Ctrl every row already reads as it opens (`Reach::outside`), so the key opens
+/// the pick exactly as a Ctrl+click on it would.
 fn answer(
     picking: Picking,
     keys: &ListKeys,
-    mut controller: ScrollController,
+    controller: ScrollController,
     viewport: State<f32>,
     box_id: AccessibilityId,
     e: &Event<KeyboardEventData>,
@@ -386,18 +457,83 @@ fn answer(
         box_id.request_focus();
         return;
     }
-    let by = match &e.key {
-        Key::Named(NamedKey::ArrowDown) => 1,
-        Key::Named(NamedKey::ArrowUp) => -1,
-        Key::Named(NamedKey::Enter) => return picking.entered(keys),
+    let modifiers = chords::held(e.modifiers);
+    let plain = modifiers.is_empty();
+    let command = modifiers == Modifiers::ctrl_or_meta();
+    // A screen is the rows the box shows whole, as a code pane works its page out.
+    let page = (*viewport.peek() / list_row_height()).floor().max(0.0) as isize;
+    let moved = match &e.key {
+        // The way out, and the far end of the way in: a chord puts the keyboard in a
+        // panel, Escape in its box puts it on the rows, and Escape here hands it back to
+        // the tab. The pick stays where it was and goes grey, saying the list is still
+        // where the reader left it.
+        Key::Named(NamedKey::Escape) if plain => return picking.to_the_tab(),
+        Key::Named(NamedKey::Enter) if plain || command => return picking.entered(keys),
+        Key::Named(NamedKey::ArrowLeft) if plain => return picking.folded(keys, false),
+        Key::Named(NamedKey::ArrowRight) if plain => return picking.folded(keys, true),
+        Key::Named(NamedKey::ArrowDown) if plain => picking.stepped(keys, 1),
+        Key::Named(NamedKey::ArrowUp) if plain => picking.stepped(keys, -1),
+        Key::Named(NamedKey::PageDown) if plain => picking.stepped(keys, page),
+        Key::Named(NamedKey::PageUp) if plain => picking.stepped(keys, -page),
+        Key::Named(NamedKey::Home) if plain => picking.jumped(keys, 0),
+        Key::Named(NamedKey::End) if plain => picking.jumped(keys, usize::MAX),
         _ => return,
     };
-    if let Some(at) = picking.stepped(keys, by) {
+    followed(controller, viewport, keys.length, moved);
+}
+
+/// What a filter box hands on to the list under it: the arrows and Enter, so a reader can
+/// type, pick and open without a hand leaving the box, Escape to put the keyboard back on
+/// the rows with what was typed still in the box, and the three chords the toggles beside
+/// the box are pressed by.
+///
+/// Answered here and not on the rows because **a key event reaches the focused node's own
+/// listeners and then its ancestors**, and the rows are the box's sibling
+/// (`notes/upstream/freya.md`). The box declines each of these so that it neither types
+/// them nor cancels them (`box_keys`, `ui/chords.rs`).
+///
+/// `opens` is whether Enter is the list's here: in a bar that submits -- the Search
+/// panel's -- Enter asks the question and only Ctrl+Enter opens the pick.
+#[allow(clippy::too_many_arguments)]
+fn handed(
+    picking: Picking,
+    keys: &ListKeys,
+    controller: ScrollController,
+    viewport: State<f32>,
+    rows: AccessibilityId,
+    mut filter: State<Filter>,
+    opens: bool,
+    e: &Event<KeyboardEventData>,
+) {
+    if let Some(toggle) = Toggle::pressed(&e.key, e.modifiers) {
+        return toggle.flip(&mut filter.write());
+    }
+    let modifiers = chords::held(e.modifiers);
+    let plain = modifiers.is_empty();
+    let command = modifiers == Modifiers::ctrl_or_meta();
+    let moved = match &e.key {
+        Key::Named(NamedKey::Escape) => return rows.request_focus(),
+        Key::Named(NamedKey::Enter) if command || (plain && opens) => return picking.entered(keys),
+        Key::Named(NamedKey::ArrowDown) if plain => picking.stepped(keys, 1),
+        Key::Named(NamedKey::ArrowUp) if plain => picking.stepped(keys, -1),
+        _ => return,
+    };
+    followed(controller, viewport, keys.length, moved);
+}
+
+/// The list scrolled to the row a key moved the pick to, where one did.
+fn followed(
+    mut controller: ScrollController,
+    viewport: State<f32>,
+    length: usize,
+    at: Option<usize>,
+) {
+    if let Some(at) = at {
         reveal_caret(
             &mut controller,
             *viewport.peek(),
             list_row_height(),
-            keys.length,
+            length,
             at,
         );
     }

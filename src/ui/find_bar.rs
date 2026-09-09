@@ -532,6 +532,16 @@ impl Component for FindBar {
             .width(Size::fill())
             .background(palette().header_bg)
             .border(top_hairline())
+            // The three chords the toggles are pressed by, the same three in all four
+            // boxes. On the bar and not in the box's own hook: `box_keys` declines every
+            // chord before it, so a chord arrives here by bubbling out of the box, and
+            // this rect is the ancestor it bubbles to (`ui/filter_bar.rs`).
+            .on_key_down(move |e: Event<KeyboardEventData>| {
+                if let Some(toggle) = Toggle::pressed(&e.key, e.modifiers) {
+                    let mut filter = filter;
+                    toggle.flip(&mut filter.write());
+                }
+            })
             .child(
                 rect()
                     .width(Size::fill())
@@ -675,13 +685,18 @@ impl Component for StepButton {
 }
 
 /// What a code pane answers over and above its own keys: **Ctrl+F opens the bar over it**,
-/// seeded with the run picked out inside one line.
+/// seeded with the run picked out inside one line, and **F3 and Shift+F3 step through
+/// what it found** without the reader leaving the code.
 ///
-/// Wrapped around the pane's own handler rather than folded into it: the chord belongs to
+/// Wrapped around the pane's own handler rather than folded into it: the chords belong to
 /// the bar, and `on_listing_key` goes on being the whole of what a listing's keys are.
-/// The chord is answered on the pane's own focusable box for the reason a list answers it
+/// They are answered on the pane's own focusable box for the reason a list answers Ctrl+F
 /// on its rows (`filter_bar.rs`): a key event reaches the node that has the keyboard, so
-/// the bar a reader opens is the one they were reading.
+/// the bar a reader opens, and the one they step through, is the one they were reading.
+///
+/// A step is the same one [`FindBar`]'s Enter asks for -- the bar owns it, and this only
+/// puts the ask in -- and it is [`edit_find`] that makes a pane with no bar do nothing at
+/// all: there is no entry to write the ask into.
 pub(crate) fn find_chord(
     at: Where,
     marked: State<Marks>,
@@ -691,11 +706,25 @@ pub(crate) fn find_chord(
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     let finds = try_consume_context::<Looking>().map(|looking| looking.0);
     move |e: Event<KeyboardEventData>| {
-        let Some(finds) = finds.filter(|_| Chord::Find.is(&e.key, e.modifiers)) else {
+        let Some(finds) = finds else {
             return keys(e);
         };
-        let seed = seed_of(&marked.peek(), at.1, &text);
-        open_find(finds, at, seed, listing.clone());
+        if Chord::Find.is(&e.key, e.modifiers) {
+            let seed = seed_of(&marked.peek(), at.1, &text);
+            open_find(finds, at, seed, listing.clone());
+            return;
+        }
+        let back = if Chord::FindNext.is(&e.key, e.modifiers) {
+            Some(false)
+        } else if Chord::FindPrevious.is(&e.key, e.modifiers) {
+            Some(true)
+        } else {
+            None
+        };
+        let Some(back) = back else {
+            return keys(e);
+        };
+        edit_find(finds, at, move |bar| bar.step = Some(back));
     }
 }
 

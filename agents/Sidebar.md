@@ -57,11 +57,23 @@ bubbling afterwards, and a focused node with no handler of its own emits nothing
 (`notes/upstream/freya.md`). In the box the chord does nothing, the box being where it leads, but
 the bar still has to decline it: an `Input` inserts a character it has no chord of its own for, so
 Ctrl+F would type an `f` into the pattern. The hook is `box_keys` (`ui/chords.rs`), which every box
-that must not eat a chord takes: it declines all three before the edit and is otherwise freya's own
-default, written out once because the hook replaces it wholesale. The Project and Settings boxes are
+that must not eat a chord takes: it declines every chord in `Chord::ALL` before the edit, named
+keys among them, and is otherwise freya's own default, written out once because the hook replaces
+it wholesale. The Project and Settings boxes are
 still that default — they filter no list — and declining is one call if that changes. Two ids are
 minted in the pane, the rows' and the box's, the pane being what holds them both. The headless tests pin the whole door — the chord ignored with
 nothing focused, answered from a pressed row, and not typed into the box it reaches.
+
+**A filter box hands the list's own keys on**, so a reader types, picks and opens without a hand
+leaving it: the arrows move the pick while the caret stays, Enter opens what they left it on --
+Ctrl+Enter in a tab that stays, and in the Search box, where Enter asks the question, only
+Ctrl+Enter — and Escape puts the keyboard back on the rows with what was typed still in the box.
+The box declines the three named keys as the finder's does, and they are answered on **a rect around
+the bar** rather than on the rows: a key bubbles from the focused node to its ancestors, and the
+rows are the box's sibling. Over the bar alone, so a key the rows answered is not answered a second
+time on the way up. The three toggles' chords — Alt+C, Alt+W, Alt+R — arrive there the same way,
+`box_keys` declining every chord before the edit, and the find bar answers them on its own rect for
+the same reason: the toggles are one thing in all four boxes, so the three keys are too.
 
 **Pressing an object opens all of its code** as one listing (`Document::Code`, `agents/UI.md`). That
 is the one thing an object has to show that a symbol does not; the file's own facts belong to the
@@ -173,7 +185,10 @@ tab (`agents/UI.md`), or on an instruction row in either assembly listing (`agen
 says "Add bookmark" or "Remove bookmark" by `Bookmarks::matching` at the press, so a symbol that
 moved under a rebuild still shows as bookmarked. On an instruction row it says "Bookmark symbol",
 since the row is not the symbol and has to say what it would bookmark. The name a new one gets is
-the whole `entry_name`, what the row's tooltip says. The rows *consume* `Bookmarked` and `Objects`
+the whole `entry_name`, what the row's tooltip says. `Ctrl+D` is the same item without a pointer,
+asked of the tab on screen (`root_key_down`), and a page tab is no place and has none to add; the
+write both make is `toggle_bookmark` beside the item, so the key and the menu cannot come to mean
+different things. The rows *consume* `Bookmarked` and `Objects`
 and peek them in the handler; a `read` would subscribe 115k symbol rows to every bookmark made.
 Nothing on the symbol bar does this yet (`notes/Goals.md`).
 
@@ -309,14 +324,45 @@ builds (`Marking`), and each row washes what matched in the name it draws, which
 row is in a list that has been narrowed. The marks are byte ranges everywhere outside the text
 engine and UTF-16 units inside it, `marked_units` being the one place the two meet.
 
-**Ctrl+Shift+F is one more line in the key handler the root already has** (`root_key_down`), never a
-second one: an element keeps one handler per event name, so a second `on_global_key_down` would
-replace the first and take the modifier tracking -- and with it Ctrl-click and Shift-click -- away
-silently. It is a *global* handler, so it answers from wherever the keyboard is, including nowhere;
-what could still swallow it is the filter boxes' `prevent_default`, so they decline this chord as
-they decline Ctrl+F. The chord cannot focus the box itself, a panel that is not on top being unmounted:
-it raises the panel and leaves a flag the panel's effect spends once it has a node to focus, the
-`Landing` pattern.
+**Four chords reach a panel**: Ctrl+Shift+F, Ctrl+Shift+E, Ctrl+Shift+O and Ctrl+T raise Search,
+Files, Objects and Symbols and put the keyboard in them. Each is one more line in the key handler
+the root already has (`root_key_down`), never a second one: an element keeps one handler per event
+name, so a second `on_global_key_down` would replace the first and take the modifier tracking --
+and with it Ctrl-click and Shift-click -- away silently. It is a *global* handler, so a chord
+answers from wherever the keyboard is, including nowhere; what could still swallow one is the
+filter boxes' `prevent_default`, so they decline these as they decline Ctrl+F. History, Bookmarks
+and Locations get none: Locations is opened by the questions that fill it, the other two are a
+press away, and seven chords for seven panels is a lot of alphabet for panels a reader visits
+rarely.
+
+**A chord raises and focuses, both** (`reach_panel`, `ui/dock.rs`). A panel behind another in its
+group is not somewhere to type until it is raised, and raising without focusing would leave the
+hand on the mouse; a chord for a panel already on top is a raise that changes nothing. It cannot
+take the focus itself, an inactive dock tab being unmounted -- the box has no node until the raise
+has been drawn -- so it leaves an ask behind it.
+
+**"The panel the keyboard is in" is the box that panel registered.** The sidebar is arrangeable,
+so nothing about where a panel sits can be relied on; what can is that only the panel on top in a
+group is mounted, which makes a mounted panel exactly one box and a panel that is not showing
+none. `use_list_pane` registers it (`use_panel_keyboard`, `ui/keyboard.rs`), that being the one
+function every panel calls once and unconditionally -- a hook inside `filtered`, `plain` or
+`searched` would sit behind a panel's early return. `Panel::filters` says which one: **the filter
+box where the panel has one, the rows where it has not**, the Files tree being the only one with
+nothing to filter by. So Ctrl+T lands in the Symbols box, where what is typed next narrows the
+list, and Ctrl+Shift+E lands on the Files list itself; either way the keys a list answers are
+answered, the box handing on the arrows, Enter and Escape to the rows under it.
+
+**One ask, for the tab and for a panel alike.** `Keys` holds where the keyboard has been asked to
+go (`ui/keyboard.rs`), and `use_keyboard_asked` spends it at the root once there is a box --
+several renders later, where a panel had to be raised or a pane had nothing to draw yet. The same
+field a pressed chip and an opened row write, deliberately: the reader has one keyboard, so a chord
+that reaches a panel cancels the ask a row left rather than racing it. The Search panel kept a
+`focus` flag of its own in `Searched` and spent it in its own effect; one ask replaced it.
+
+**Escape is the way out, a step at a time**: in a filter box it puts the keyboard on the rows under
+it with what was typed still in the box, and on the rows it asks for the tab on screen -- the ask a
+pressed chip makes, so the pane also gets the caret a pane handed the keyboard needs. The pick stays
+where it was and goes grey.
 
 **A click opens a file as source; opening it as a binary is its menu, and the parser's call.** What
 a file *is* is not judged here: not by extension (this project's own binaries have none) and not by
@@ -544,11 +590,20 @@ the palette test holds it fainter than either -- the pointer passing over a row 
 reader having chosen it. The file finder is not a panel and keeps its own pick, its keyboard row
 being one already: an Alt+press there moves the arrows' row and leaves the panel up. **The pick is
 the list's cursor**, which is what makes a list something the keyboard can be used in at all: Up and
-Down move it, the list scrolling to keep it in view, and Enter opens it the way pressing its row
-would. What each list answers with is a `ListKeys` -- how many rows, which row is at a place, and
-what pressing the row at a place does -- built by the panel, since the panel is the only thing that
-knows its rows, and answered once on the box they are drawn in. Two closures and not a `Vec<Pick>`:
-the Symbols list is 115k rows. The place a pick was made at is remembered with it for the same
+Down move it, Home and End take it to the ends and the two page keys move it a screen, the list
+scrolling to keep it in view, Left and Right fold the row it is on, Enter opens it the way
+pressing its row would -- Ctrl+Enter in a tab that stays, which is nothing of its own: the row reads
+the Ctrl as it opens, exactly as it does under a Ctrl+click -- and Escape hands the keyboard back to
+the tab on screen. A screen is the **measured** rows box
+over `list_row_height`, as a code pane works its page out, and each key answers under its own
+modifiers and no others, `on_listing_key`'s rule: Alt+Left is the window's step back along the trail
+and must not fold a row. What each list answers with is a `ListKeys` -- how many rows, which row is
+at a place, what pressing the row at a place does, and which way it folds -- built by the panel,
+since the panel is the only thing that knows its rows, and answered once on the box they are drawn
+in. Three closures and not a `Vec<Pick>`: the Symbols list is 115k rows. The fold is its own closure
+and not the press under another name, a press *toggling* where Left and Right each say a direction;
+only the two trees have one (`src/tree.rs`, `src/files.rs`) and every other list hands over
+`ListKeys::flat`, which is what makes the two keys nothing at all on a row with nothing under it. The place a pick was made at is remembered with it for the same
 reason, finding one again being a walk of the whole list per keystroke; a place goes stale when the
 list moves under it, which the keys notice and start again from the end the arrow came from.
 **Opening a tab hands it the keyboard**, however the row was opened: a reader who has put a listing

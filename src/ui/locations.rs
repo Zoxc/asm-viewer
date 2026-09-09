@@ -417,6 +417,10 @@ pub(crate) fn find_listed(
 /// because the menu is offered over a name where one is **defined** too -- no link there,
 /// and where a reader asks what refers to it. The other two a click cannot ask at all.
 ///
+/// The three keys beside them are the **Source pane's** own -- F12 asked about the caret
+/// where the item is asked about the pointer (`caret_questions`) -- and this menu is
+/// offered in that pane and nowhere else, the assembly listings drawing no names.
+///
 /// Built per press, as [`locate_menu`] is: the states come in as arguments because a menu
 /// handler may run no hook.
 pub(crate) fn name_menu(
@@ -438,7 +442,10 @@ pub(crate) fn name_menu(
                     Reach::InPlace,
                 )
             })
-            .child("Go to definition")
+            .child(menu_label(
+                "Go to definition",
+                Some(shortcuts::key!(Definition)),
+            ))
     };
     // The two list questions are one shape; only which one differs.
     let listed = |of| {
@@ -447,8 +454,14 @@ pub(crate) fn name_menu(
     };
     vec![
         definition,
-        listed(lsp::Listed::References).child(format!("Find references to {}", named.name)),
-        listed(lsp::Listed::Implementations).child("Find implementations"),
+        listed(lsp::Listed::References).child(menu_label(
+            format!("Find references to {}", named.name),
+            Some(shortcuts::key!(References)),
+        )),
+        listed(lsp::Listed::Implementations).child(menu_label(
+            "Find implementations",
+            Some(shortcuts::key!(Implementations)),
+        )),
     ]
 }
 
@@ -458,6 +471,10 @@ pub(crate) fn name_menu(
 /// row is asked for that a click does not do. Built per press, as `close_menu` is, closing
 /// over the row's line; the states come in as arguments because this is called from an
 /// event handler, where no hook may run.
+///
+/// `key` is Alt+F12 where the pane the menu was opened in answers it, which is the Source
+/// pane alone: an instruction row's menu is the same rows without it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn locate_menu(
     located: State<Located>,
     dock: State<DockArea>,
@@ -465,6 +482,7 @@ pub(crate) fn locate_menu(
     subject: Option<(DocId, Arc<str>)>,
     function: Option<Function>,
     named: Vec<MenuButton>,
+    key: Option<&'static str>,
 ) -> Menu {
     let line = Query::line(at.clone());
     let instances = function.map(|function| {
@@ -482,7 +500,7 @@ pub(crate) fn locate_menu(
         .child(
             MenuButton::new()
                 .on_press(move |_| find_locations(located, dock, line.clone(), subject.clone()))
-                .child("Find all locations"),
+                .child(menu_label("Find all locations", key)),
         )
         .maybe_child(instances)
 }
@@ -624,6 +642,7 @@ impl Component for LocationsPanel {
                         }
                         None => Pressed::Folded,
                     }),
+                    fold: ListKeys::flat(),
                 };
                 headed(
                     query,
@@ -681,6 +700,7 @@ impl Component for LocationsPanel {
                         }
                         None => Pressed::Folded,
                     }),
+                    fold: ListKeys::flat(),
                 };
                 headed(
                     query,

@@ -38,9 +38,6 @@ pub(crate) struct Searched {
     /// Whether the walk is still going.
     pub(crate) running: bool,
     pub(crate) hits: SearchHits,
-    /// Whether the caret is wanted in the box: set by the chord and spent by the panel,
-    /// which may not be mounted at the moment the chord is pressed.
-    pub(crate) focus: bool,
 }
 
 impl Searched {
@@ -86,19 +83,7 @@ pub(crate) fn start_search(
         asked: Some(query),
         running: true,
         hits: SearchHits::default(),
-        focus: false,
     });
-    raise_panel(dock, Panel::Search);
-}
-
-/// Put the caret in the Search panel's box, raising the panel first. What Ctrl+Shift+F
-/// does, from wherever the keyboard is.
-///
-/// The focus is asked for through the state and not here, because the panel is a dock tab
-/// and an inactive one is not mounted: its box has no node to focus until the raise above
-/// has been drawn. The panel's own effect spends the flag once it has one.
-pub(crate) fn reach_search(mut searched: State<Searched>, dock: State<DockArea>) {
-    searched.write().focus = true;
     raise_panel(dock, Panel::Search);
 }
 
@@ -249,6 +234,7 @@ impl Component for SearchPanel {
                 Some(row) => press_place(doors, places, ctrl, Folding::Hits(searched), row),
                 None => Pressed::Folded,
             }),
+            fold: ListKeys::flat(),
         };
 
         let body: Element = match (&directory, &state.asked) {
@@ -290,20 +276,10 @@ impl Component for SearchPanel {
             }
         };
 
-        let (pane, box_id) = pane.searched(filter, submits, keys, body);
-
-        // The caret the chord asked for, spent here: the panel is mounted by now, which
-        // is the whole reason the chord leaves a flag rather than asking for the focus
-        // itself. Writing it back is what keeps a later mount from stealing the keyboard.
-        use_side_effect_with_deps(&state.focus, move |wanted: &bool| {
-            if *wanted {
-                let mut searched = searched;
-                box_id.request_focus();
-                searched.write().focus = false;
-            }
-        });
-
-        pane
+        // The caret Ctrl+Shift+F asks for is not asked for here: the box was registered
+        // as this panel's by `use_list_pane`, and the one ask every chord and every
+        // opened row leaves is spent on it at the root (`ui/keyboard.rs`).
+        pane.searched(filter, submits, keys, body)
     }
 }
 

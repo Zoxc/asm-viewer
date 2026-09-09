@@ -1118,7 +1118,12 @@ fn empty_recents_harness() -> impl IntoElement {
 
     rect().expanded().child(
         Menu::new()
-            .child(menu_row("Open a project...", close, || {}))
+            .child(menu_row(
+                "Open a project...",
+                Some(shortcuts::key!(OpenProject)),
+                close,
+                || {},
+            ))
             .child(recents_submenu(states, rescued, unopened, &[], close)),
     )
 }
@@ -2527,6 +2532,74 @@ fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
         "the page did not open beside the tab on screen"
     );
     assert_eq!(strip.active(), Some(Tab::Page(Page::Project)));
+}
+
+/// **A menu item that has grown a key says so**, the way a desktop menu does: the key
+/// after the name, in the spelling the Shortcuts page uses and nowhere written twice
+/// (`shortcuts::key!`). Here that is Ctrl+O on "Open a project...", Ctrl+, on Settings and
+/// F1 on Shortcuts.
+///
+/// The rest of the menu is untouched: the pages with no key of their own draw the name
+/// they always drew, and the key is a mark of its own beside the name rather than a word
+/// added to it -- which is what having both as labels of their own says.
+#[test]
+fn the_pages_menu_says_the_key_beside_the_items_that_have_one() {
+    let (mut test, _states) =
+        TestingRunner::new(pages_harness, (300., 300.).into(), project_states!(), 1.);
+    test.sync_and_update();
+
+    let area = test
+        .find(|node, _| {
+            let area = node.layout().area;
+            (area.width() == toggle_size() && area.height() == toggle_size()).then_some(area)
+        })
+        .expect("the button is a square of its own");
+    press_at(
+        &mut test,
+        (
+            (area.origin.x + area.width() / 2.0) as f64,
+            (area.origin.y + area.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    for name in ["Open a project...", "Settings", "Shortcuts"] {
+        assert!(drawn.contains(&name.to_owned()), "{name:?}: {drawn:?}");
+    }
+    // Every spelling a menu in this app can draw, so the ones that are here are told from
+    // the ones that are not by the same list the items ask.
+    let spellings = [
+        shortcuts::key!(CloseTab),
+        shortcuts::key!(CloseTabF4),
+        shortcuts::key!(OpenProject),
+        shortcuts::key!(Settings),
+        shortcuts::key!(Shortcuts),
+        shortcuts::key!(Bookmark),
+        shortcuts::key!(Definition),
+        shortcuts::key!(References),
+        shortcuts::key!(Implementations),
+        shortcuts::key!(AllLocations),
+    ];
+    let keys: Vec<&str> = spellings
+        .into_iter()
+        .filter(|key| drawn.iter().any(|text| text == key))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            shortcuts::key!(OpenProject),
+            shortcuts::key!(Settings),
+            shortcuts::key!(Shortcuts)
+        ],
+        "the menu says a key beside a row that has none, or misses one: {drawn:?}"
+    );
+    // And the key is dim, as the submenu arrow beside "Open recent" is: a mark about the
+    // row and not part of what it says.
+    assert_eq!(
+        label_colour(&test, shortcuts::key!(Settings)),
+        Some(Fill::Color(palette().address_fg))
+    );
 }
 
 /// A page closes like any other tab, landing on the neighbour, and what it was showing is
@@ -8616,6 +8689,43 @@ fn the_menus_definition_asks_where_a_click_on_the_link_does() {
     assert_eq!(want, lsp::Question::Followed(lsp::Followed::Definition));
 }
 
+/// **The four questions are four keys in this pane, and the menu says which.** The item
+/// and the key are the same call, asked about the pointer and about the caret
+/// (`caret_questions`), so the menu is where a reader learns the key -- and the name and
+/// the key are drawn as two labels, the key a mark beside what the row says rather than a
+/// word in it.
+#[test]
+fn a_source_rows_menu_says_the_key_beside_each_question() {
+    let (file, _directory) = calling_file("menukeys");
+    let (mut test, states, language, _location, _driven, _asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let drawn = labels(&test);
+    for (item, key) in [
+        ("Go to definition", shortcuts::key!(Definition)),
+        ("Find references to helper", shortcuts::key!(References)),
+        ("Find implementations", shortcuts::key!(Implementations)),
+        ("Find all locations", shortcuts::key!(AllLocations)),
+    ] {
+        assert!(drawn.contains(&item.to_owned()), "{item:?}: {drawn:?}");
+        assert!(
+            drawn.contains(&key.to_owned()),
+            "{item:?} does not say {key}: {drawn:?}"
+        );
+    }
+}
+
 /// The name where a function is **defined** offers its references too, though it is no
 /// link: where a name is defined is where a reader asks what refers to it.
 #[test]
@@ -8653,6 +8763,191 @@ fn a_right_click_on_a_definitions_own_name_offers_its_references() {
     assert_eq!(name, "main");
     // Where `main` begins on `fn main() {`.
     assert_eq!(*column, 3);
+}
+
+/// A chord pressed where the keyboard is, spelt by [`Chord`] itself so a test cannot
+/// press a gesture the app does not answer to.
+fn press_chord(test: &mut TestingRunner, chord: Chord) {
+    let (key, modifiers) = chord.pressed();
+    key_with(test, key, modifiers);
+}
+
+/// Put the keyboard in the Source pane with the caret inside `word`, the way a reader
+/// does. The word has to be one the pane draws no link on: a press on a link follows it
+/// rather than leaving a caret behind.
+fn caret_on(test: &mut TestingRunner, word: &str) {
+    let at = word_point(test, word);
+    press_at(test, at);
+    settle(test);
+}
+
+/// **The F12 family is a row's menu asked about the caret.** F12 goes to what the name
+/// under it names, Shift+F12 lists what refers to it, Ctrl+F12 what implements it, and
+/// Alt+F12 every symbol the caret's line was compiled into -- each the same call the menu
+/// item beside it makes, so the key and the item cannot come to mean two things.
+///
+/// The caret is put on `main`, where a function is defined: a name the server placed and
+/// no link, so the press that puts the caret there follows nothing.
+#[test]
+fn the_f12_family_asks_about_the_name_under_the_caret() {
+    let (file, _directory) = calling_file("f12caret");
+    let (mut test, states, language, location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+    caret_on(&mut test, "main");
+
+    // F12 asks the server where the name is, at the place a click on a link asks about:
+    // `main` begins the third byte into the file's first line.
+    press_chord(&mut test, Chord::Definition);
+    let (asked, want) = next_ask(&mut test, &asks).expect("F12 asked the server");
+    assert_eq!((asked.line, asked.column), (1, 3));
+    assert_eq!(want, lsp::Question::Followed(lsp::Followed::Definition));
+
+    // Shift+F12 and Ctrl+F12 are the panel's two list questions, told apart as the menu's
+    // are: what the answer is about is which question was put.
+    for (chord, of) in [
+        (Chord::References, lsp::Listed::References),
+        (Chord::Implementations, lsp::Listed::Implementations),
+    ] {
+        press_chord(&mut test, chord);
+        let query = location
+            .located
+            .peek()
+            .asked
+            .clone()
+            .unwrap_or_else(|| panic!("{of:?} was not asked"));
+        assert_eq!(query.at.line, 1);
+        let Scope::Listed {
+            of: asked,
+            name,
+            column,
+            ..
+        } = &query.scope
+        else {
+            panic!("{of:?} is not a question about a name");
+        };
+        assert_eq!((*asked, name.as_str(), *column), (of, "main", 3));
+        let (asked_of, _) = next_ask(&mut test, &asks).expect("the server was asked");
+        assert_eq!((asked_of.line, asked_of.column), (1, 3));
+    }
+
+    // Alt+F12 is the line's own locations, which is what the menu item under those three
+    // asks: the caret's row, and no name in it.
+    press_chord(&mut test, Chord::AllLocations);
+    let query = location
+        .located
+        .peek()
+        .asked
+        .clone()
+        .expect("Alt+F12 asked");
+    assert!(
+        query == Query::line(LinePos { file, line: 1 }),
+        "Alt+F12 asked about something other than the caret's line"
+    );
+}
+
+/// **A caret on no name asks nothing.** The three questions about a name have none to
+/// ask about, where the line's locations are about the row the caret is on and are asked
+/// as readily there as anywhere -- exactly as the menu item is offered on every row.
+#[test]
+fn a_caret_on_no_name_asks_nothing_about_one() {
+    let (file, _directory) = calling_file("f12space");
+    let (mut test, states, language, location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    // The caret in the indentation of `    let n = helper(1);`, which is the second line
+    // and where the server placed no name at all.
+    let (row, _, _) = paragraphs(&test)
+        .into_iter()
+        .find(|(_, text, _)| text.contains("let n"))
+        .expect("the file's second line is drawn");
+    press_at(&mut test, left_of(&row));
+    settle(&mut test);
+
+    for chord in [Chord::Definition, Chord::References, Chord::Implementations] {
+        press_chord(&mut test, chord);
+    }
+    assert!(
+        location.located.peek().asked.is_none(),
+        "a caret on whitespace asked the panel about a name"
+    );
+    assert!(
+        next_ask(&mut test, &asks).is_none(),
+        "a caret on whitespace asked the server about a name"
+    );
+
+    // The line's locations are still there to ask for: a row is a row whether or not the
+    // caret is on one of its names.
+    press_chord(&mut test, Chord::AllLocations);
+    let query = location
+        .located
+        .peek()
+        .asked
+        .clone()
+        .expect("Alt+F12 asked");
+    assert!(query == Query::line(LinePos { file, line: 2 }));
+}
+
+/// **A pane with no run at all answers none of the four.** The keyboard is in it -- a
+/// press put it there and Escape took the run away again -- so the keys arrive; what they
+/// are about does not exist.
+#[test]
+fn a_pane_with_no_run_answers_none_of_the_f12_family() {
+    let (file, _directory) = calling_file("f12norun");
+    let (mut test, states, language, location, _driven, asks) =
+        mount_linking!(|_job: LspJob| None, file.clone());
+    let mut language = language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+    caret_on(&mut test, "main");
+
+    // Escape peels the run away: a press leaves a caret and nothing selected, so the
+    // first press takes the whole run.
+    key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::empty());
+    assert!(
+        location.doors.marked.peek().source.is_none(),
+        "the pane still has a run"
+    );
+
+    for chord in [
+        Chord::Definition,
+        Chord::References,
+        Chord::Implementations,
+        Chord::AllLocations,
+    ] {
+        press_chord(&mut test, chord);
+    }
+    assert!(
+        location.located.peek().asked.is_none(),
+        "a pane with no run asked the panel something"
+    );
+    assert!(
+        next_ask(&mut test, &asks).is_none(),
+        "a pane with no run asked the server something"
+    );
 }
 
 /// A server that refuses the question answers it as far as the panel is concerned: the
@@ -12638,6 +12933,7 @@ fn scratchpad_view_harness() -> impl IntoElement {
 
     rect()
         .expanded()
+        .on_global_key_down(watch_key)
         .child(ContextMenuViewer::new())
         .child(ScratchpadTab)
 }
@@ -15051,6 +15347,141 @@ fn a_run_asked_for_during_a_build_starts_nothing() {
             "a run reached the worker during a build"
         );
     }
+}
+
+/// The pad's chords are its controls: Ctrl+B is Build, and a second Ctrl+B while that
+/// build is on is refused exactly as the dimmed button is -- the key goes through
+/// `request_build`, where the refusal lives, rather than around it.
+///
+/// F5 during that build is refused for the other reason, cargo writing over the very
+/// executable a run would start. Both are read off the worker: what the key must not do is
+/// reach it.
+#[test]
+fn the_pads_build_chord_is_refused_while_a_build_is_on() {
+    let (mut test, _states, pad, _text, _asking, _marked, asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            // The build never comes back: answering as a save does says nothing about it,
+            // so the pad stays `building` and the keys below are pressed during one.
+            PadJob::Build(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            // Asserted on below rather than here: a panic on the worker thread would say
+            // less than the assertion the run reached it at all.
+            PadJob::Run { scratchpad, .. } => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+        });
+
+    pump(&mut test, || pad.peek().state().opened());
+    already_built(pad, fixture_artifact());
+    test.sync_and_update();
+    while asks.try_recv().is_ok() {}
+
+    let source = pad.peek().state().scratchpad.source.clone();
+    let (key, modifiers) = Chord::Build.pressed();
+    key_with(&mut test, key.clone(), modifiers);
+    assert!(pad.peek().state().building, "Ctrl+B did not build the pad");
+
+    // The second Ctrl+B, while the first build is still in flight, and an F5 beside it.
+    // The pad has an executable, so what refuses the run is the build and nothing else.
+    key_with(&mut test, key, modifiers);
+    let (key, modifiers) = Chord::Run.pressed();
+    key_with(&mut test, key, modifiers);
+    assert!(
+        !pad.peek().state().is_running(),
+        "F5 started a run while a build was writing the executable"
+    );
+
+    for _ in 0..8 {
+        test.sync_and_update();
+    }
+    // Counted rather than read in order: a keystroke leaves a save behind it, and what is
+    // being asked here is how many of each reached the worker at all.
+    let (mut builds, mut runs) = (0, 0);
+    while let Ok(asked) = asks.try_recv() {
+        match asked {
+            Asked::Build(built) => {
+                assert_eq!(built, source, "the build was of something else");
+                builds += 1;
+            }
+            Asked::Run => runs += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        builds, 1,
+        "a second Ctrl+B started a second build of the same scratchpad"
+    );
+    assert_eq!(runs, 0, "F5 reached the worker during a build");
+}
+
+/// The other three: F5 runs what the last build made, Shift+F5 stops that run, and Ctrl+N
+/// makes a pad. Each is asserted against the state the control beside it reads -- the Run
+/// button is a Stop button while `is_running`, and the New button's answer is the pad the
+/// panel then shows.
+#[test]
+fn the_pads_run_and_new_chords_press_its_buttons() {
+    let answering = Scratchpad::new("pad-1").expect("an id");
+    let (mut test, _states, pad, _text, _asking, _marked, asks) =
+        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => PadAnswer::Created(Ok(answering.clone())),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad: pad_on_disk(scratchpad),
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            // The run is never answered, so the pad stays `Starting` and Shift+F5 below is
+            // pressed on a run that is going as far as the app is concerned.
+            PadJob::Run { scratchpad, .. } => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+        });
+
+    pump(&mut test, || pad.peek().state().opened());
+    // A build the app already has, so that there is an executable to run without a
+    // compiler: no test in this repo runs cargo.
+    already_built(pad, fixture_artifact());
+    test.sync_and_update();
+    while asks.try_recv().is_ok() {}
+
+    let (key, modifiers) = Chord::Run.pressed();
+    key_with(&mut test, key, modifiers);
+    assert!(pad.peek().state().is_running(), "F5 did not start the run");
+
+    let (key, modifiers) = Chord::StopRun.pressed();
+    key_with(&mut test, key, modifiers);
+    assert!(
+        !pad.peek().state().is_running(),
+        "Shift+F5 did not stop the run"
+    );
+
+    let (key, modifiers) = Chord::NewPad.pressed();
+    key_with(&mut test, key, modifiers);
+    pump(&mut test, || pad.peek().shown().as_str() == "pad-1");
+    assert!(
+        std::iter::from_fn(|| asks.try_recv().ok()).any(|asked| asked == Asked::New),
+        "Ctrl+N asked the worker for no pad"
+    );
 }
 
 /// The lines a run has written, for [`output_harness`] to draw and a test to push into.
@@ -19125,6 +19556,7 @@ fn a_bookmark_row_is_removed_from_its_menu() {
 fn symbols_harness() -> impl IntoElement {
     rect()
         .expanded()
+        .on_global_key_down(watch_key)
         .child(ContextMenuViewer::new())
         .child(SymbolsPanel)
 }
@@ -19320,6 +19752,77 @@ fn a_tabs_menu_bookmarks_its_document() {
     assert!(drawn.contains(&"Remove bookmark".to_owned()), "{drawn:?}");
 }
 
+/// The same chip drawn as one that is **not** the tab on screen, which is what the bar
+/// draws for every chip but one.
+fn other_header_menu_harness() -> impl IntoElement {
+    let open = use_open();
+    let id = open.strip.read().documents().next();
+
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .maybe_child(id.map(|id| {
+            TabHeader {
+                tab: Tab::Document(id),
+                active: false,
+                landing: false,
+                key: DiffKey::None,
+            }
+            .into_element()
+        }))
+}
+
+/// The labels of the menu a right-click on `harness`'s chip opens, over one loaded
+/// document. Generic over the harness because the two here are two opaque types.
+fn chip_menu_labels<E: IntoElement + 'static>(
+    harness: fn() -> E,
+    document: &Document,
+    object: Arc<Object>,
+) -> Vec<String> {
+    let (mut test, states) =
+        TestingRunner::new(harness, (300., 100.).into(), project_states!(), 1.);
+    let mut objects = states.objects;
+    objects.set(vec![object]);
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    let tab = centre_of(&test, &entry_text(document));
+    right_click(&mut test, tab);
+    labels(&test)
+}
+
+/// **A menu says only a key that does what the row does.** Ctrl+W closes the tab on
+/// screen and Ctrl+D bookmarks what it is showing, so the chip of that tab says both --
+/// and the chip of any other says neither, the rows being about the tab under the pointer
+/// while the keys are about the tab being read.
+#[test]
+fn a_tabs_menu_says_the_windows_keys_only_on_the_tab_on_screen() {
+    let symbols = fixture_symbols();
+    let document = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let object = symbols[0].object.clone();
+    let keys = [shortcuts::key!(CloseTab), shortcuts::key!(Bookmark)];
+
+    let drawn = chip_menu_labels(header_menu_harness, &document, object.clone());
+    for key in keys {
+        assert!(
+            drawn.contains(&key.to_owned()),
+            "the tab on screen does not say {key}: {drawn:?}"
+        );
+    }
+
+    // Every row is the same on a chip that is not the one on screen; the keys are not.
+    let drawn = chip_menu_labels(other_header_menu_harness, &document, object);
+    for item in ["Close", "Add bookmark"] {
+        assert!(drawn.contains(&item.to_owned()), "{item:?}: {drawn:?}");
+    }
+    for key in keys {
+        assert!(
+            !drawn.contains(&key.to_owned()),
+            "another tab's chip claims {key}: {drawn:?}"
+        );
+    }
+}
+
 /// An instruction row's menu bookmarks the symbol the row is code of, and says so, the
 /// row being an instruction and not the symbol.
 #[test]
@@ -19359,6 +19862,60 @@ fn an_instruction_rows_menu_bookmarks_its_symbol() {
     assert!(
         states.open.active() == Some(symbol),
         "the menu moved the reader"
+    );
+}
+
+/// **And an instruction row's menu claims none of the Source pane's keys.** The F12
+/// family asks about the caret in the pane that draws source (`caret_questions`), which
+/// this listing is not: the rows it shares with a source row's menu are the same rows,
+/// and a key beside one here would be a key this pane never answers.
+#[test]
+fn an_instruction_rows_menu_says_none_of_the_source_panes_keys() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let studied = Studied::new(sum_to.clone());
+    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+        menu_listing_harness,
+        (600., 400.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![sum_to.object.clone()]);
+    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    open_document(states.open, states.visits, symbol, Reach::NewTab);
+    settle(&mut test);
+
+    let row = centre_of(&test, &format!("{first:016X} "));
+    right_click(&mut test, row);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"Find all locations".to_owned()),
+        "the row has no line, so this proves nothing: {drawn:?}"
+    );
+    for key in [
+        shortcuts::key!(Definition),
+        shortcuts::key!(References),
+        shortcuts::key!(Implementations),
+        shortcuts::key!(AllLocations),
+    ] {
+        assert!(
+            !drawn.contains(&key.to_owned()),
+            "an instruction row claims {key}: {drawn:?}"
+        );
+    }
+    // The row's own bookmark item says nothing either: Ctrl+D is the tab's place, and
+    // this row is an instruction of a symbol.
+    assert!(
+        !drawn.contains(&shortcuts::key!(Bookmark).to_owned()),
+        "{drawn:?}"
     );
 }
 
@@ -20805,6 +21362,74 @@ fn the_arrow_keys_move_the_caret_and_the_run_of_rows_with_it() {
     );
     let picked = marked.peek().assembly.clone().unwrap();
     assert_eq!(picked.chars.rows(), 0..=0);
+}
+
+/// **A motion answers only for the modifiers that are its own.** The handler read the
+/// named key and asked no more than whether Ctrl was held, so `Alt+Left` -- the window's
+/// step back along the trail -- moved the caret a character, and `Ctrl+Page Down` moved it
+/// a screen. Shift and Ctrl still do what they did: the run reaches out, and the word
+/// motions answer.
+#[test]
+fn a_modifier_a_motion_does_not_take_leaves_the_caret_where_it_is() {
+    let shown = shown_sum_to();
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let drawn = paragraphs(&test);
+    let at = left_of(&drawn[0].0);
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    mark_release(marked);
+    settle(&mut test);
+
+    // Two characters in, so a motion in either direction would show.
+    test.press_key(Key::Named(NamedKey::ArrowRight));
+    test.press_key(Key::Named(NamedKey::ArrowRight));
+    settle(&mut test);
+    let lead = || marked.peek().assembly.clone().unwrap().chars.lead();
+    let before = lead();
+    assert_eq!(before, Caret { row: 0, col: 2 });
+
+    for (key, modifiers) in [
+        (Key::Named(NamedKey::ArrowLeft), Modifiers::ALT),
+        (Key::Named(NamedKey::ArrowRight), Modifiers::ALT),
+        (
+            Key::Named(NamedKey::ArrowLeft),
+            Modifiers::ALT | Modifiers::CONTROL,
+        ),
+        (Key::Named(NamedKey::PageDown), Modifiers::CONTROL),
+        (Key::Named(NamedKey::PageUp), Modifiers::CONTROL),
+        (Key::Named(NamedKey::Home), Modifiers::ALT),
+    ] {
+        key_with(&mut test, key.clone(), modifiers);
+        assert_eq!(
+            lead(),
+            before,
+            "{key:?} under {modifiers:?} moved the caret"
+        );
+    }
+
+    // The motion's own modifiers still answer: Ctrl+Left is a word back, and Shift+Right
+    // reaches the run out rather than collapsing it.
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowLeft),
+        Modifiers::CONTROL,
+    );
+    assert_eq!(lead(), Caret { row: 0, col: 0 });
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowRight),
+        Modifiers::SHIFT,
+    );
+    let picked = marked.peek().assembly.clone().unwrap();
+    assert_eq!(picked.chars.lead(), Caret { row: 0, col: 1 });
+    assert!(!picked.chars.is_empty(), "Shift did not reach the run out");
 }
 
 /// With Shift held a key reaches the run out from its anchor, characters and rows both,
@@ -22305,10 +22930,10 @@ fn the_temporal_tabs_name_is_italic_and_a_double_press_makes_it_stay() {
     assert_eq!(label_slant(&test, &name), None);
 }
 
-/// Each chord is its own letter and its own Shift -- `F` too, for Caps Lock -- and none
-/// of them is a bare letter, an Alt or the chord next to it.
+/// A letter chord is its own letter and its own Shift -- `F` too, for Caps Lock -- and
+/// none of them is a bare letter, an Alt or the chord next to it.
 #[test]
-fn every_chord_is_its_letter_and_nothing_wider() {
+fn a_letter_chord_is_its_letter_and_nothing_wider() {
     let f = Key::Character("f".into());
     let upper = Key::Character("F".into());
     let p = Key::Character("p".into());
@@ -22333,6 +22958,168 @@ fn every_chord_is_its_letter_and_nothing_wider() {
     assert!(!Chord::Finder.is(&p, Modifiers::CONTROL | Modifiers::ALT));
     assert!(!Chord::Finder.is(&p, Modifiers::default()));
     assert!(!Chord::Finder.is(&f, Modifiers::CONTROL));
+}
+
+/// A chord is a key and the modifiers it wants, and the key is as often a named one, a
+/// digit or a piece of punctuation as a letter. Each of the four shapes here, and each
+/// answered for its own modifiers and no others: the four F12s differ in nothing else.
+#[test]
+fn a_chord_is_its_key_under_its_own_modifiers_whatever_the_key_is() {
+    let f12 = Key::Named(NamedKey::F12);
+    let ctrl = Modifiers::CONTROL;
+    let none = Modifiers::default();
+
+    // A named key with no modifier at all, which a letter chord never is.
+    assert!(Chord::Shortcuts.is(&Key::Named(NamedKey::F1), none));
+    assert!(!Chord::Shortcuts.is(&Key::Named(NamedKey::F1), ctrl));
+    assert!(Chord::FindNext.is(&Key::Named(NamedKey::F3), none));
+    assert!(Chord::FindPrevious.is(&Key::Named(NamedKey::F3), Modifiers::SHIFT));
+    assert!(!Chord::FindNext.is(&Key::Named(NamedKey::F3), Modifiers::SHIFT));
+
+    // The four spellings of one key, each declining the others' modifiers.
+    assert!(Chord::Definition.is(&f12, none));
+    assert!(Chord::References.is(&f12, Modifiers::SHIFT));
+    assert!(Chord::Implementations.is(&f12, ctrl));
+    assert!(Chord::AllLocations.is(&f12, Modifiers::ALT));
+    assert!(!Chord::Definition.is(&f12, Modifiers::ALT));
+    assert!(!Chord::Implementations.is(&f12, ctrl | Modifiers::SHIFT));
+
+    // A named key that wants a modifier, and is nothing without it: Left is the caret's
+    // in both code panes.
+    assert!(Chord::Back.is(&Key::Named(NamedKey::ArrowLeft), Modifiers::ALT));
+    assert!(!Chord::Back.is(&Key::Named(NamedKey::ArrowLeft), none));
+    assert!(!Chord::Back.is(&Key::Named(NamedKey::ArrowRight), Modifiers::ALT));
+    assert!(Chord::NextTab.is(&Key::Named(NamedKey::Tab), ctrl));
+    assert!(Chord::PreviousTab.is(&Key::Named(NamedKey::Tab), ctrl | Modifiers::SHIFT));
+
+    // A digit, and one the bar has no key for.
+    assert!(Chord::NthTab(1).is(&Key::Character("1".into()), ctrl));
+    assert!(Chord::NthTab(9).is(&Key::Character("9".into()), ctrl));
+    assert!(!Chord::NthTab(1).is(&Key::Character("2".into()), ctrl));
+    assert!(!Chord::NthTab(0).is(&Key::Character("0".into()), ctrl));
+    assert!(!Chord::NthTab(10).is(&Key::Character("0".into()), ctrl));
+
+    // Punctuation, which has one case and no letter to be confused with.
+    assert!(Chord::Settings.is(&Key::Character(",".into()), ctrl));
+    assert!(Chord::OtherPane.is(&Key::Character("\\".into()), ctrl));
+    assert!(!Chord::Settings.is(&Key::Character(".".into()), ctrl));
+}
+
+/// **A lock is not part of any gesture.** Caps Lock and Num Lock arrive in the same set
+/// as Ctrl and Shift, so a chord compared against the set whole would go unanswered on a
+/// keyboard with either of them on -- and Caps Lock is exactly the state that also makes
+/// `f` an `F`.
+#[test]
+fn a_lock_held_is_not_part_of_a_chord() {
+    let held = Modifiers::CONTROL | Modifiers::CAPS_LOCK | Modifiers::NUM_LOCK;
+    assert!(Chord::Find.is(&Key::Character("F".into()), held));
+    assert!(Chord::Shortcuts.is(&Key::Named(NamedKey::F1), Modifiers::CAPS_LOCK));
+}
+
+/// **No two chords are the same key under the same modifiers.** A duplicate would be two
+/// bindings on one gesture, of which the reader would only ever get one, and nothing else
+/// in the app would say which.
+#[test]
+fn no_two_chords_are_the_same_gesture() {
+    for (at, chord) in Chord::ALL.iter().enumerate() {
+        let (key, modifiers) = chord.pressed();
+        let same: Vec<usize> = Chord::ALL
+            .iter()
+            .enumerate()
+            .filter(|(_, other)| other.is(&key, modifiers))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            same,
+            [at],
+            "{key:?} under {modifiers:?} is more than one chord"
+        );
+    }
+}
+
+thread_local! {
+    /// Every key the stand-in for the root's global handler was given ([`watch_key`]).
+    /// A thread-local and not a context, since `mount_scratchpad!` builds the contexts
+    /// its harness gets and cannot be given another; freya-testing runs the whole app on
+    /// the test's own thread, so this is per test exactly as `palette()` is
+    /// (`agents/Headless.md`).
+    static WATCHED: RefCell<Vec<(Key, Modifiers)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// As much of the root's own key handler as a chord needs: a **global** one, so it
+/// answers from wherever the keyboard is, recording what reached it. A key a text box
+/// declines reaches this; one the box keeps is cancelled by the `prevent_default` in the
+/// box's tail and never arrives.
+fn watch_key(e: Event<KeyboardEventData>) {
+    WATCHED.with_borrow_mut(|watched| watched.push((e.key.clone(), e.modifiers)));
+}
+
+/// What has reached it since the last look, and nothing left for the next.
+fn watched() -> Vec<(Key, Modifiers)> {
+    WATCHED.with_borrow_mut(std::mem::take)
+}
+
+/// Every chord in turn, pressed with the keyboard in a text box: each has to reach the
+/// root and to leave the box holding exactly what it held. `holds` is what the box has --
+/// whatever the test can read of it -- and is asked before and after each.
+fn every_chord_into_a_box<T: PartialEq + std::fmt::Debug>(
+    test: &mut TestingRunner,
+    mut holds: impl FnMut(&TestingRunner) -> T,
+) {
+    for chord in Chord::ALL {
+        let (key, modifiers) = chord.pressed();
+        let before = holds(test);
+        watched();
+        key_with(test, key.clone(), modifiers);
+        assert_eq!(
+            watched(),
+            [(key.clone(), modifiers)],
+            "{key:?} under {modifiers:?} did not reach the root"
+        );
+        assert_eq!(
+            holds(test),
+            before,
+            "{key:?} under {modifiers:?} was typed into the box"
+        );
+    }
+}
+
+/// **Every chord reaches the root from inside a filter box, and none of them is typed
+/// into it.** The two halves are one mechanism: the box's own hook cancels the key it
+/// keeps, and the cancelled event is the global one the root would have answered, so a
+/// chord the box did not decline is both a character in the pattern and a binding that
+/// does nothing.
+#[test]
+fn every_chord_reaches_the_root_from_a_filter_box() {
+    let symbols = fixture_symbols();
+    let (mut test, states) =
+        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let mut objects = states.objects;
+    objects.set(vec![symbols[0].object.clone()]);
+    settle(&mut test);
+
+    // The keyboard into the box, through the chord that puts it there, and a pattern in
+    // it: the box draws what it holds, so a character typed by a chord would show.
+    //
+    // A **whole** word, since three of the chords are the toggles beside the box and one
+    // of them is whole word: what is drawn has to be the same list either way, or the
+    // rows would move under a test that is about the box.
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum_to");
+    settle(&mut test);
+    assert_eq!(
+        labels(&test)
+            .iter()
+            .filter(|label| *label == "sum_to")
+            .count(),
+        2,
+        "the box and the one row it left"
+    );
+
+    every_chord_into_a_box(&mut test, labels);
 }
 
 /// The Assembly pane with the find worker behind it, which is what a bar over it needs:
@@ -22531,25 +23318,7 @@ fn a_step_picks_out_the_match_and_the_rows_wear_the_wash() {
         1.,
     );
     settle(&mut test);
-    // A word this listing draws on more than one row, so that stepping has somewhere to
-    // go: taken off the rows rather than written here, since what is asserted is what a
-    // find does and not what this fixture disassembles to.
-    let mut counted: HashMap<String, usize> = HashMap::new();
-    for (_, text, _) in paragraphs(&test) {
-        for word in text.split_whitespace().collect::<HashSet<_>>() {
-            *counted.entry(word.to_owned()).or_default() += 1;
-        }
-    }
-    let mut repeated: Vec<String> = counted
-        .into_iter()
-        .filter(|(_, rows)| *rows > 1)
-        .map(|(word, _)| word)
-        .collect();
-    repeated.sort();
-    let mnemonic = repeated
-        .first()
-        .expect("the listing draws one word on two rows")
-        .clone();
+    let mnemonic = drawn_twice(&test);
 
     open_find_bar(&mut test);
     test.write_text(&mnemonic);
@@ -22592,6 +23361,167 @@ fn a_step_picks_out_the_match_and_the_rows_wear_the_wash() {
     settle(&mut test);
     let second = finds.peek().get(&at).at.expect("the bar is on a match");
     assert_ne!(second, first, "the second step went nowhere");
+}
+
+/// A word the listing draws on more than one row, so that stepping has somewhere to go.
+///
+/// Taken off the rows rather than written into a test, since what those assert is what a
+/// find does and not what the fixture disassembles to.
+fn drawn_twice(test: &TestingRunner) -> String {
+    let mut counted: HashMap<String, usize> = HashMap::new();
+    for (_, text, _) in paragraphs(test) {
+        for word in text.split_whitespace().collect::<HashSet<_>>() {
+            *counted.entry(word.to_owned()).or_default() += 1;
+        }
+    }
+    let mut repeated: Vec<String> = counted
+        .into_iter()
+        .filter(|(_, rows)| *rows > 1)
+        .map(|(word, _)| word)
+        .collect();
+    repeated.sort();
+    repeated
+        .first()
+        .expect("the listing draws one word on two rows")
+        .clone()
+}
+
+/// **F3 and Shift+F3 step the bar from inside the code**: the next match and the one
+/// before, which is what Enter and Shift+Enter ask for from inside the box. The step is
+/// the bar's own either way -- what the keys add is a way to ask for one without the
+/// reader's hands leaving the listing.
+///
+/// The keyboard stays in the pane, which is the whole point of the pair: nothing typed
+/// afterwards reaches the box, and the pane goes on answering its own keys.
+#[test]
+fn f3_steps_the_find_bar_with_the_keyboard_still_in_the_pane() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+        find_harness,
+        (600., 600.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let mnemonic = drawn_twice(&test);
+
+    open_find_bar(&mut test);
+    test.write_text(&mnemonic);
+    let at = find_at(&states, &document);
+    let finds = states.places.finds;
+    find_answered(&mut test, finds, at, &mnemonic);
+
+    // The keyboard back in the code, the way a reader puts it there: a press on a row.
+    // **Twice**, and that is freya's: the box gives its focus up from a global press,
+    // which is cancellable and sorts last, so the first press only takes the keyboard off
+    // the box and the second is what the pane's own `request_focus` survives
+    // (`filter_bar.rs` cancels the same thing for a toggle). The bar stays open either
+    // way -- only Escape closes one.
+    let row = paragraphs(&test)[0].0;
+    press_at(&mut test, left_of(&row));
+    press_at(&mut test, left_of(&row));
+    settle(&mut test);
+    assert!(finds.peek().open(&at), "the press closed the bar");
+    assert!(
+        finds.peek().get(&at).at.is_none(),
+        "the pane is on a match before anything was stepped to"
+    );
+
+    press_chord(&mut test, Chord::FindNext);
+    let first = finds.peek().get(&at).at.expect("F3 stepped to nothing");
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the step picked the match out");
+    let (from, to) = picked.chars.ends();
+    assert_eq!(from.row, to.row, "the run crossed rows");
+    assert_eq!(
+        to.col - from.col,
+        crate::chars::units(&mnemonic),
+        "the run is not the match"
+    );
+
+    press_chord(&mut test, Chord::FindNext);
+    let second = finds.peek().get(&at).at.expect("the bar is on a match");
+    assert_ne!(second, first, "the second F3 went nowhere");
+
+    // And back to the one before it.
+    press_chord(&mut test, Chord::FindPrevious);
+    assert_eq!(
+        finds.peek().get(&at).at,
+        Some(first),
+        "Shift+F3 did not step back"
+    );
+
+    // The keyboard never left the pane: what is typed goes nowhere, and the caret keys
+    // are still the pane's.
+    test.write_text("zzz");
+    settle(&mut test);
+    assert_eq!(
+        finds.peek().get(&at).filter.pattern,
+        mnemonic,
+        "the keys went into the find bar's box"
+    );
+    let landed = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the step's run")
+        .chars
+        .lead()
+        .row;
+    test.press_key(Key::Named(NamedKey::ArrowDown));
+    settle(&mut test);
+    let moved = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the caret's run")
+        .chars
+        .lead()
+        .row;
+    assert_ne!(moved, landed, "the pane did not answer its own arrow key");
+}
+
+/// **With no bar over the pane, F3 does nothing at all.** A step is an entry in the bar
+/// being written, and there is no entry: the key neither opens a bar nor moves the run.
+#[test]
+fn f3_with_no_find_bar_open_does_nothing() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+        find_harness,
+        (600., 600.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    let at = find_at(&states, &document);
+    let finds = states.places.finds;
+
+    // The keyboard in the pane, and nothing over it.
+    let row = paragraphs(&test)[0].0;
+    press_at(&mut test, left_of(&row));
+    settle(&mut test);
+    let before = marked.peek().assembly.clone();
+
+    press_chord(&mut test, Chord::FindNext);
+    press_chord(&mut test, Chord::FindPrevious);
+    assert!(!finds.peek().open(&at), "a step opened a bar");
+    assert!(
+        finds.peek().get(&at).step.is_none(),
+        "a step was asked for with no bar to make it"
+    );
+    assert!(
+        marked.peek().assembly == before,
+        "a step with no bar moved the run"
+    );
+    assert!(
+        !labels(&test).iter().any(|label| label == "Aa"),
+        "a step drew a bar"
+    );
 }
 
 /// **Selected text within one line becomes the search term**, and a selection crossing
@@ -22864,6 +23794,16 @@ fn search_harness() -> impl IntoElement {
     let searched = use_consume::<Searching>().0;
     let work = use_consume::<Walk>().0;
     use_search_with(searched, move |query, emit| work(query, emit));
+    // The root's one key handler answers every chord, so a test that presses one here has
+    // to be able to hand it the states no harness returns.
+    use_root_key_states();
+    // And what `app()` calls at the root: the chord that reaches this panel leaves an ask
+    // behind it, and this is what spends it on the box the panel registers.
+    use_keyboard_asked(
+        use_consume::<Keyboard>().0,
+        use_open(),
+        use_consume::<Marked>().0,
+    );
 
     // What spends the landing a hit's press leaves, as `app()` does: without it a row
     // opens its tab and picks nothing out.
@@ -23337,36 +24277,49 @@ fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
     // is what spends what the chord asks for.
     let (mut test, states, _directory, keys, shift, ctrl, finder, dock) =
         search_with_modifiers(line!());
-    let searched = states.searched;
-    let proj = states.proj;
 
     let chord = |key: Key, modifiers: Modifiers| {
-        root_key_down(keys, searched, finder, proj, dock, &key, modifiers)
+        let held = root_key_states();
+        root_key_down(
+            keys,
+            with_dock(states, dock),
+            held.keyboard,
+            finder,
+            held.rescued,
+            held.unopened,
+            held.language,
+            &held.jobs,
+            held.follows,
+            held.pad_follows,
+            &key,
+            modifiers,
+        )
     };
 
     chord(Key::Character("f".into()), Modifiers::CONTROL);
-    assert!(!searched.peek().focus, "Ctrl+F is the filter boxes' own");
+    settle(&mut test);
+    test.write_text("nothing");
+    settle(&mut test);
+    assert!(
+        !labels(&test).iter().any(|label| label == "nothing"),
+        "Ctrl+F is the filter boxes' own"
+    );
     assert!(*ctrl.peek(), "and the modifier is tracked all the same");
 
     chord(
         Key::Character("F".into()),
         Modifiers::CONTROL | Modifiers::SHIFT,
     );
-    assert!(searched.peek().focus, "the chord asks for the box");
     assert!(
         *ctrl.peek() && *shift.peek(),
         "and the modifiers still land"
     );
 
-    // And the panel spends it: the caret is in the box, so what is typed next is the
-    // pattern and not a keystroke into nothing.
+    // And the ask is spent on the box the panel registered: the caret is in it, so what
+    // is typed next is the pattern and not a keystroke into nothing.
     settle(&mut test);
     test.write_text("needle");
     settle(&mut test);
-    assert!(
-        !searched.peek().focus,
-        "the flag is spent, not left standing"
-    );
     assert!(labels(&test).iter().any(|label| label == "needle"));
 }
 
@@ -26705,6 +27658,410 @@ fn the_arrows_move_the_pick_and_enter_opens_the_row() {
     );
 }
 
+/// Where a panel's pick is, as the table at the root holds it.
+fn picked_place(picks: State<HashMap<Panel, PickedRow>>, panel: Panel) -> Option<usize> {
+    picks.peek().get(&panel).map(|picked| picked.at)
+}
+
+/// The Symbols list over `objects` copies of the fixture, with the pick table and the two
+/// modifiers a test drives by hand: the list is longer than the window, which is what the
+/// keys below are about.
+#[allow(clippy::type_complexity)]
+fn a_long_list(
+    objects: usize,
+) -> (
+    TestingRunner,
+    ProjectStates,
+    State<HashMap<Panel, PickedRow>>,
+    State<bool>,
+    State<bool>,
+    usize,
+) {
+    let (_path, listed) = fixture_objects(objects);
+    let (mut test, (states, picks, alt, ctrl)) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| {
+            let states = symbol_states!(runner);
+            // After the macro, which provides one of each that these replace.
+            let picks = runner
+                .provide_root_context(|| Picks(State::create(HashMap::new())))
+                .0;
+            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
+            let ctrl = runner.provide_root_context(|| Ctrl(State::create(false))).0;
+            (states, picks, alt, ctrl)
+        },
+        1.,
+    );
+    let mut all = states.objects;
+    all.set(listed);
+    settle(&mut test);
+    let length = collect_symbols(&states.objects).len();
+    (test, states, picks, alt, ctrl, length)
+}
+
+/// Put the keyboard on the list and the pick on its first row, opening nothing: Alt is what
+/// makes a press a pick and not a door.
+fn pick_the_first_row(test: &mut TestingRunner, mut alt: State<bool>) {
+    alt.set(true);
+    settle(test);
+    press_at(
+        test,
+        (150.0, (text_box_height() + list_row_height() / 2.0) as f64),
+    );
+    settle(test);
+    alt.set(false);
+    settle(test);
+}
+
+/// **Home, End and the two page keys move the pick over a list longer than its box.** A
+/// screen is the box over `list_row_height`, as a code pane works its page out, and both
+/// ends stop at the list rather than counting on past it.
+///
+/// Headless because none of it is visible to a unit test: that the keys reach the list's
+/// handler at all, and that the page is the *measured* height of the rows box and not the
+/// window's.
+#[test]
+fn the_list_keys_reach_both_ends_and_step_a_screen() {
+    let (mut test, _states, picks, alt, _ctrl, length) = a_long_list(12);
+    // The rows box is what the bar leaves of the window, and a page is what it shows
+    // whole.
+    let page = ((300.0 - text_box_height()) / list_row_height()).floor() as usize;
+    assert!(
+        page > 1 && length > 2 * page,
+        "the list is not longer than two screens of it: {length} rows, {page} to a screen"
+    );
+
+    pick_the_first_row(&mut test, alt);
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(0));
+
+    // End to the last row, and the list scrolled to show it.
+    key_with(&mut test, Key::Named(NamedKey::End), Modifiers::empty());
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(length - 1));
+    assert!(
+        !picked_rows(&test).is_empty(),
+        "the pick went off the end of the list and nothing scrolled to it"
+    );
+
+    key_with(&mut test, Key::Named(NamedKey::Home), Modifiers::empty());
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(0));
+
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::PageDown),
+        Modifiers::empty(),
+    );
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(page));
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::PageDown),
+        Modifiers::empty(),
+    );
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(2 * page));
+    key_with(&mut test, Key::Named(NamedKey::PageUp), Modifiers::empty());
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(page));
+
+    // Both ends stop at the list.
+    key_with(&mut test, Key::Named(NamedKey::End), Modifiers::empty());
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::PageDown),
+        Modifiers::empty(),
+    );
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(length - 1));
+    key_with(&mut test, Key::Named(NamedKey::Home), Modifiers::empty());
+    key_with(&mut test, Key::Named(NamedKey::PageUp), Modifiers::empty());
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(0));
+
+    // Alt+Left is the window's step back along the trail, so the keys here answer under
+    // their own modifiers and no others.
+    key_with(&mut test, Key::Named(NamedKey::End), Modifiers::ALT);
+    assert_eq!(
+        picked_place(picks, Panel::Symbols),
+        Some(0),
+        "End answered with Alt held"
+    );
+}
+
+/// **Ctrl+Enter opens the pick in a tab that stays**, which is what Ctrl+click on the row
+/// asks for: the next row opened plainly makes a tab of its own rather than reusing it.
+///
+/// The contrast is the whole test. A preview tab is the one the next row *does* reuse, so
+/// a Ctrl+Enter that opened one would leave a single document behind both keys.
+#[test]
+fn ctrl_enter_opens_a_tab_the_next_row_does_not_reuse() {
+    let (mut test, states, picks, alt, mut ctrl, _length) = a_long_list(1);
+    pick_the_first_row(&mut test, alt);
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(0));
+
+    // Ctrl is held, which is what the row reads as it opens: the key event carries it and
+    // the root's own handler is what keeps the flag in the real window.
+    ctrl.set(true);
+    settle(&mut test);
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::CONTROL);
+    ctrl.set(false);
+    settle(&mut test);
+    assert_eq!(open_documents(states.open).len(), 1);
+
+    // The next row, opened plainly: the temporal tab it makes is a second one.
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    assert_eq!(
+        open_documents(states.open).len(),
+        2,
+        "the row Ctrl+Enter opened was reused by the next one"
+    );
+}
+
+/// **Left folds a tree row and Right opens it, and a row with nothing under it does
+/// neither.** The fold is the one a press on the row writes, asked for a direction instead
+/// of toggled -- so Left on a folded row leaves it folded, where a second press would open
+/// it again.
+///
+/// The leaf is the half that fails on a key answered through the row's own press: a file
+/// row pressed opens the file, and Right on one must open nothing at all.
+#[test]
+fn left_and_right_fold_a_tree_row_and_leave_a_leaf_alone() {
+    let (mut test, states, directory) = files_over(line!());
+    std::fs::create_dir_all(directory.join("a")).expect("creating the test directory");
+    std::fs::write(directory.join("a/b.c"), "int x;\n").expect("writing the source");
+    std::fs::write(directory.join("leaf.rs"), "fn main() {}\n").expect("writing the source");
+    // Made after the mount, so the root has to be read again to see them.
+    press(&mut test, "project");
+    press(&mut test, "project");
+
+    // The directory's row pressed: it unfolds, and the press leaves the keyboard on the
+    // list with the pick on that row.
+    press(&mut test, "a");
+    assert!(label_area(&test, "b.c").is_some());
+
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowLeft),
+        Modifiers::empty(),
+    );
+    assert!(label_area(&test, "b.c").is_none(), "Left did not fold it");
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowLeft),
+        Modifiers::empty(),
+    );
+    assert!(
+        label_area(&test, "b.c").is_none(),
+        "Left on a folded row opened it again"
+    );
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowRight),
+        Modifiers::empty(),
+    );
+    assert!(label_area(&test, "b.c").is_some(), "Right did not open it");
+
+    // Down onto the file under it, which has nothing to fold and must not be opened
+    // either.
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    let before = labels(&test);
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowRight),
+        Modifiers::empty(),
+    );
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowLeft),
+        Modifiers::empty(),
+    );
+    assert_eq!(labels(&test), before, "the leaf row answered a fold key");
+    assert!(
+        open_documents(states.open).is_empty(),
+        "a fold key on a file row opened it"
+    );
+}
+
+/// **A filter box hands the arrows and Enter to the list under it**, so a reader types,
+/// picks and opens without a hand leaving the box: the pick moves while the caret stays,
+/// which is what the pick's grey says.
+///
+/// The two halves fail apart. A box that declines nothing swallows the arrows, and a list
+/// answering them on its rows never sees a key pressed in the box -- a key event reaches
+/// the focused node's own listeners and then its ancestors, and the rows are the box's
+/// sibling.
+#[test]
+fn a_filter_box_hands_the_arrows_and_enter_to_its_list() {
+    let (mut test, states, picks, alt, _ctrl, _length) = a_long_list(1);
+    pick_the_first_row(&mut test, alt);
+
+    // Into the box, and a pattern that leaves one row of the three.
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum");
+    settle(&mut test);
+    let row = label_area(&test, "sum_to").expect("the row the filter left");
+
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(0));
+    assert_eq!(
+        drawn_at(&test, row.origin.y),
+        Chosen::Idle,
+        "the arrow took the caret out of the box"
+    );
+    assert!(
+        labels(&test).iter().any(|label| label == "sum"),
+        "the arrow was typed into the box"
+    );
+
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    let open = states.open.active().expect("Enter opened nothing");
+    // The panel's own symbol, out of the object the list was built from: a second parse of
+    // the fixture is a second `Arc` and not the same symbol.
+    let wanted = collect_symbols(&states.objects)
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture's symbol");
+    assert!(
+        open == Document::Assembly(Selection::Symbol(wanted)),
+        "Enter from the box opened something else"
+    );
+}
+
+/// **Escape in a filter box puts the keyboard back on the list and keeps what was typed.**
+/// The box is where the reader narrowed the list; leaving it must not undo that.
+#[test]
+fn escape_in_a_filter_box_lands_on_the_list_with_the_pattern_kept() {
+    let (mut test, _states, _picks, alt, _ctrl, _length) = a_long_list(1);
+    pick_the_first_row(&mut test, alt);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum");
+    settle(&mut test);
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    let row = label_area(&test, "sum_to").expect("the row the filter left");
+    assert_eq!(drawn_at(&test, row.origin.y), Chosen::Idle);
+
+    key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::empty());
+    assert!(
+        labels(&test).iter().any(|label| label == "sum"),
+        "Escape emptied the box"
+    );
+    assert_eq!(
+        drawn_at(&test, row.origin.y),
+        Chosen::Live,
+        "Escape left the keyboard in the box"
+    );
+}
+
+/// Which of the three toggles beside a box are on, by the wash behind each glyph.
+fn toggles_on(test: &TestingRunner) -> Vec<&'static str> {
+    let lit = rects_with(test, palette().toggle_on_bg);
+    ["Aa", "\\b", ".*"]
+        .into_iter()
+        .filter(|glyph| {
+            let Some(area) = label_area(test, glyph) else {
+                return false;
+            };
+            // The glyph's middle and not its box: "Aa" is drawn wider than the square
+            // behind it, so a containment would say the toggle is off whatever it is.
+            let (x, y) = (
+                area.origin.x + area.width() / 2.0,
+                area.origin.y + area.height() / 2.0,
+            );
+            lit.iter().any(|button| {
+                button.origin.x <= x
+                    && x <= button.max_x()
+                    && button.origin.y <= y
+                    && y <= button.max_y()
+            })
+        })
+        .collect()
+}
+
+/// Press the chord `toggle` is flipped by.
+fn press_toggle_chord(test: &mut TestingRunner, chord: Chord) {
+    let (key, modifiers) = chord.pressed();
+    key_with(test, key, modifiers);
+}
+
+/// **The three toggle chords flip the same fields the three buttons do**, in a filter box:
+/// Alt+C match case, Alt+W whole word, Alt+R regular expression. Each is a chord, so the
+/// box declines it before it can be typed and it is answered on the bar the box is in --
+/// which is what makes it the toggle of *this* list's filter and not of another's.
+#[test]
+fn the_toggle_chords_flip_the_filter_boxs_own_toggles() {
+    let (mut test, _states, _picks, alt, _ctrl, _length) = a_long_list(1);
+    pick_the_first_row(&mut test, alt);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    settle(&mut test);
+    assert_eq!(toggles_on(&test), Vec::<&str>::new());
+
+    press_toggle_chord(&mut test, Chord::MatchCase);
+    assert_eq!(toggles_on(&test), ["Aa"]);
+    press_toggle_chord(&mut test, Chord::WholeWord);
+    assert_eq!(toggles_on(&test), ["Aa", "\\b"]);
+    press_toggle_chord(&mut test, Chord::Regex);
+    assert_eq!(toggles_on(&test), ["Aa", "\\b", ".*"]);
+    press_toggle_chord(&mut test, Chord::MatchCase);
+    assert_eq!(toggles_on(&test), ["\\b", ".*"]);
+
+    // The same field the button writes: pressing it puts back what the chord took off.
+    let button = centre_of(&test, "Aa");
+    press_at(&mut test, button);
+    settle(&mut test);
+    assert_eq!(toggles_on(&test), ["Aa", "\\b", ".*"]);
+
+    // And it is whole word that Alt+W turned on, not merely a toggle: `\bsum\b` is not in
+    // `sum_to`, so the list the box is over says so.
+    test.write_text("sum");
+    settle(&mut test);
+    assert!(
+        labels(&test).iter().any(|label| label == "No matches"),
+        "Alt+W flipped something other than whole word: {:?}",
+        labels(&test)
+    );
+}
+
+/// The find bar's box answers the same three, its toggles being the same three: one
+/// gesture, one meaning, in all four boxes.
+#[test]
+fn the_toggle_chords_flip_the_find_bars_toggles_too() {
+    let shown = shown_sum_to();
+    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+        find_harness,
+        (600., 400.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    open_find_bar(&mut test);
+    assert_eq!(toggles_on(&test), Vec::<&str>::new());
+
+    press_toggle_chord(&mut test, Chord::MatchCase);
+    press_toggle_chord(&mut test, Chord::WholeWord);
+    press_toggle_chord(&mut test, Chord::Regex);
+    assert_eq!(toggles_on(&test), ["Aa", "\\b", ".*"]);
+
+    // The same fields the buttons write: each press takes off what its chord put on.
+    for glyph in ["Aa", "\\b", ".*"] {
+        let button = centre_of(&test, glyph);
+        press_at(&mut test, button);
+        settle(&mut test);
+    }
+    assert_eq!(toggles_on(&test), Vec::<&str>::new());
+}
+
 // ---------------------------------------------------------------------------------------
 // The file finder.
 
@@ -26718,8 +28075,13 @@ fn finder_harness() -> impl IntoElement {
     let finder = use_consume::<Finding>().0;
     let work = use_consume::<Walking>().0;
     use_finder_with(finder, move |root, emit| work(root, emit));
+    // The same: Ctrl+P is answered by the handler that answers all of them.
+    use_root_key_states();
 
-    rect().expanded().child(FinderOverlay)
+    rect()
+        .expanded()
+        .on_global_key_down(watch_key)
+        .child(FinderOverlay)
 }
 
 /// The overlay over `work`, with the project's directory set to a real one of this test's
@@ -26872,14 +28234,20 @@ fn press_finder_chord(
     keys: ModifierKeys,
     dock: State<DockArea>,
 ) {
+    let (key, modifiers) = Chord::Finder.pressed();
     root_key_down(
         keys,
-        states.searched,
+        with_dock(*states, dock),
+        root_key_states().keyboard,
         finder,
-        states.proj,
-        dock,
-        &Key::Character("p".into()),
-        Modifiers::CONTROL,
+        root_key_states().rescued,
+        root_key_states().unopened,
+        root_key_states().language,
+        &root_key_states().jobs,
+        root_key_states().follows,
+        root_key_states().pad_follows,
+        &key,
+        modifiers,
     );
 }
 
@@ -27051,10 +28419,11 @@ fn typing_narrows_the_list_to_the_characters_in_order() {
     );
 }
 
-/// Enter opens the row the keyboard is on in a tab that stays, and the finder closes
-/// behind it: a file picked off the list is chosen, not previewed.
+/// Enter opens the row the keyboard is on the ordinary way -- the preview tab, which is
+/// where every row outside the panes opens what it names -- and the finder closes behind
+/// it. Ctrl+Enter is the tab that stays, and the test under this one.
 #[test]
-fn enter_opens_the_selected_file_in_a_tab_that_stays() {
+fn enter_opens_the_selected_file_in_the_preview_tab() {
     let (mut test, states, finder, keys, directory, dock) =
         finder_over(line!(), move |root, emit| {
             let _ = emit(walked_file(root, "first.rs"));
@@ -27080,14 +28449,14 @@ fn enter_opens_the_selected_file_in_a_tab_that_stays() {
 
     let first = tab_showing(&states, &opened(&rows[0])).expect("the first row's file opened");
     assert!(!finder.peek().open, "the finder closes behind the file");
-    assert_ne!(
+    assert_eq!(
         states.open.docs.peek().temporal(),
         Some(first),
-        "a file picked out of the finder opens in a tab that stays"
+        "Enter opened a tab that stays"
     );
 
-    // The row under it, opened the same way: a tab of its own, with the first still open
-    // because no preview tab was there to be taken back.
+    // The row under it, opened the same way: into the same preview tab, which takes the
+    // first file's place.
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
@@ -27101,16 +28470,73 @@ fn enter_opens_the_selected_file_in_a_tab_that_stays() {
     settle(&mut test);
 
     let second = tab_showing(&states, &opened(&rows[1])).expect("the second row's file opened");
-    assert_ne!(second, first, "the second file opened in a tab of its own");
+    assert_eq!(
+        second, first,
+        "the second file did not take the preview tab"
+    );
+    assert_eq!(
+        tab_showing(&states, &opened(&rows[0])),
+        None,
+        "the first file was left in a tab of its own"
+    );
+}
+
+/// Ctrl+Enter opens it in a tab that stays instead, which is what a menu item asks for
+/// everywhere else in the app: the row opened after it does not take that tab back.
+///
+/// Fails on a finder that reads no modifier -- there both files would land in one tab, or
+/// both in tabs of their own, and the difference between the two keys would be nothing.
+#[test]
+fn ctrl_enter_opens_a_file_in_a_tab_the_next_row_does_not_take_back() {
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "first.rs"));
+            let _ = emit(walked_file(root, "second.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
+    // The files have to be there: a file the source pane would refuse opens nothing.
+    for name in ["first.rs", "second.rs"] {
+        std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
+    }
+    let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
+
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+    type_into_finder(&mut test, finder, "rs");
+    let rows = finder_rows(&test);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::CONTROL);
+    settle(&mut test);
+
+    let first = tab_showing(&states, &opened(&rows[0])).expect("the first row's file opened");
+    assert!(!finder.peek().open, "the finder closes behind the file");
+    assert_ne!(
+        states.open.docs.peek().temporal(),
+        Some(first),
+        "Ctrl+Enter opened the preview tab"
+    );
+
+    // The row under it, opened the ordinary way: a preview tab of its own, with the first
+    // file's tab left exactly where it was.
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+    type_into_finder(&mut test, finder, "rs");
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    settle(&mut test);
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    settle(&mut test);
+
+    let second = tab_showing(&states, &opened(&rows[1])).expect("the second row's file opened");
+    assert_ne!(second, first, "the second file took the tab that stays");
     assert_eq!(
         tab_showing(&states, &opened(&rows[0])),
         Some(first),
-        "the first file's tab stayed"
-    );
-    assert_eq!(
-        states.open.docs.peek().temporal(),
-        None,
-        "neither is the preview tab"
+        "the tab Ctrl+Enter opened did not stay"
     );
 }
 
@@ -27205,6 +28631,94 @@ fn the_list_scrolls_to_the_row_the_keyboard_is_on() {
     );
 }
 
+/// Page Down moves a screen of files and Page Up moves back, where an arrow moves one.
+/// A page is the panel's own viewport -- `FINDER_ROWS` rows of it -- and the list follows
+/// the row as it does after an arrow, or a page would move to a file nobody could see
+/// named.
+#[test]
+fn a_page_moves_the_finder_a_screen_of_files() {
+    let walked: Vec<String> = (0..20).map(|n| format!("f{n:02}.rs")).collect();
+    let (mut test, states, finder, keys, _directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            for name in &walked {
+                let _ = emit(walked_file(root, name));
+            }
+            let _ = emit(WalkEvent::Finished);
+        });
+
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+    type_into_finder(&mut test, finder, "rs");
+    // The screenful the panel drew before the key: the list is longer than it, which is
+    // the whole of what makes a page differ from an arrow.
+    let screen = finder_rows(&test);
+    assert!(screen.len() <= FINDER_ROWS + 1, "{screen:?}");
+
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::PageDown),
+        Modifiers::empty(),
+    );
+    assert_eq!(
+        finder.peek().at,
+        FINDER_ROWS,
+        "Page Down did not move a screen of files"
+    );
+    // The panel holds `FINDER_ROWS`; the view builds one row past its foot, and that one
+    // is under the edge -- so a page down that scrolled nothing would leave the row it
+    // moved to drawn, and drawn exactly there.
+    let lit = finder_selected(&test).expect("the row the keyboard is on is drawn");
+    let drawn = finder_rows(&test);
+    let place = drawn.iter().position(|row| *row == lit);
+    assert!(
+        place.is_some_and(|place| place < FINDER_ROWS),
+        "the list did not follow the row a page down: {drawn:?}"
+    );
+
+    key_with(&mut test, Key::Named(NamedKey::PageUp), Modifiers::empty());
+    assert_eq!(finder.peek().at, 0, "Page Up did not move back a screen");
+    assert_eq!(
+        finder_selected(&test).as_deref(),
+        screen.first().map(String::as_str),
+        "the list did not come back with it"
+    );
+}
+
+/// Home and End are the ends of the **list**, not of the query: the first file and the
+/// last, however many there are, with the list scrolled to whichever it landed on.
+#[test]
+fn home_and_end_move_to_the_first_file_and_the_last() {
+    let walked: Vec<String> = (0..20).map(|n| format!("f{n:02}.rs")).collect();
+    let (mut test, states, finder, keys, _directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            for name in &walked {
+                let _ = emit(walked_file(root, name));
+            }
+            let _ = emit(WalkEvent::Finished);
+        });
+
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+    type_into_finder(&mut test, finder, "rs");
+    let screen = finder_rows(&test);
+
+    key_with(&mut test, Key::Named(NamedKey::End), Modifiers::empty());
+    assert_eq!(finder.peek().at, 19, "End did not move to the last file");
+    let last = finder_selected(&test).expect("the last row is drawn");
+    assert!(
+        !screen.contains(&last),
+        "the list did not follow End: {last}"
+    );
+
+    key_with(&mut test, Key::Named(NamedKey::Home), Modifiers::empty());
+    assert_eq!(finder.peek().at, 0, "Home did not move to the first file");
+    assert_eq!(
+        finder_selected(&test).as_deref(),
+        screen.first().map(String::as_str),
+        "the list did not come back to the top"
+    );
+}
+
 /// Escape closes it, and keeps nothing of what was typed.
 #[test]
 fn escape_closes_the_finder_and_keeps_nothing_typed() {
@@ -27288,9 +28802,11 @@ fn the_finder_chord_is_declined_by_a_filter_box() {
     assert!(labels(&test).iter().any(|label| label == "sum_to"));
 }
 
-/// The window's chords are not typed into the scratchpad's editor either. The editor
-/// inserts any character it has no chord of its own for, Ctrl held or not, so without the
-/// decline Ctrl+P puts a `p` in the source and never opens the finder, and Ctrl+F an `f`.
+/// The window's chords are not typed into the scratchpad's editor either, and every one
+/// of them reaches the root from inside it. The editor inserts any character it has no
+/// chord of its own for, Ctrl held or not, so without the decline Ctrl+P puts a `p` in the
+/// source and never opens the finder; and the decline is also what leaves the global key
+/// event standing, the editor's tail cancelling the one it keeps.
 #[test]
 fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
     let (mut test, _states, pad, text, _asking, _marked, _asks) =
@@ -27311,30 +28827,18 @@ fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
         });
 
     pump(&mut test, || pad.peek().state().opened());
-    let before = shown_rope(text, pad);
 
     let editor = centre_of(&test, "fn");
     press_at(&mut test, editor);
     settle(&mut test);
-    key_with(&mut test, Key::Character("p".into()), Modifiers::CONTROL);
-    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
-    key_with(
-        &mut test,
-        Key::Character("f".into()),
-        Modifiers::CONTROL | Modifiers::SHIFT,
-    );
-    settle(&mut test);
 
-    assert_eq!(
-        shown_rope(text, pad),
-        before,
-        "a chord was typed into the source"
-    );
+    every_chord_into_a_box(&mut test, |_| shown_rope(text, pad));
 }
 
 /// The finder's own box declines them too, Ctrl+P included: a box that kept a chord would
 /// type the letter into the query instead, and the chord would reach neither the root nor
-/// the panel's handler.
+/// the panel's handler. The box names four keys of its own beside them (the arrows, Enter
+/// and Escape), and a chord is declined whether or not it is a named key like those.
 #[test]
 fn the_windows_chords_are_declined_by_the_finder_box() {
     let (mut test, states, finder, keys, _directory, dock) =
@@ -27345,16 +28849,7 @@ fn the_windows_chords_are_declined_by_the_finder_box() {
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, || !finder.peek().walking);
 
-    key_with(&mut test, Key::Character("p".into()), Modifiers::CONTROL);
-    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
-    key_with(
-        &mut test,
-        Key::Character("f".into()),
-        Modifiers::CONTROL | Modifiers::SHIFT,
-    );
-    settle(&mut test);
-
-    assert_eq!(finder.peek().typed, "", "a chord was typed into the query");
+    every_chord_into_a_box(&mut test, |_| finder.peek().typed.clone());
 }
 
 /// The box is the panel's width, less the air around it, and inside the panel. Centring
@@ -27447,7 +28942,8 @@ fn a_file_outside_the_project_is_not_listed() {
     );
 }
 
-/// Pressing a row opens its file, as Enter on it does.
+/// Pressing a row opens its file the way Enter on it does: the preview tab, Ctrl held
+/// saying a tab of its own here as it does on every row outside the panes.
 #[test]
 fn pressing_a_row_opens_its_file() {
     let (mut test, states, finder, keys, directory, dock) =
@@ -27470,10 +28966,10 @@ fn pressing_a_row_opens_its_file() {
     let file = Document::Source(Arc::from(&*directory.join("kept.rs").to_string_lossy()));
     let opened = tab_showing(&states, &file).expect("the pressed file opened");
     assert!(!finder.peek().open, "the finder closes behind the file");
-    assert_ne!(
+    assert_eq!(
         states.open.docs.peek().temporal(),
         Some(opened),
-        "a row opens in a tab that stays, as Enter on it does"
+        "a row opens the preview tab, as Enter on it does"
     );
 }
 
@@ -27768,4 +29264,887 @@ fn a_row_whose_text_fits_has_no_tooltip() {
     test.move_cursor((11., 11.));
     test.poll_n(Duration::from_millis(20), 4);
     assert_eq!(drawn(&test, "ab"), 1, "the row alone");
+}
+
+// ---------------------------------------------------------------------------------------
+// The window's own keys: the bar, the trail, the two pages and the language server.
+
+thread_local! {
+    /// What the root's key handler is given that no harness hands back, put here by
+    /// [`use_root_key_states`] as the harness mounts and taken by [`root_key_states`] in
+    /// the test body. A thread-local for [`WATCHED`]'s reason: a harness built by a macro
+    /// cannot be given another context, and freya-testing runs the whole app on the test's
+    /// own thread, so this is per test exactly as `palette()` is (`agents/Headless.md`).
+    static ROOT_STATES: RefCell<Option<RootStates>> = const { RefCell::new(None) };
+}
+
+/// What `root_key_down` takes beside the project's own bundle and the modifiers: where
+/// the keyboard can be put, the two windows a project that would not open puts up, the
+/// language server with the worker it is spoken to through, and the two flags saying
+/// whether a following pane is up.
+#[derive(Clone)]
+struct RootStates {
+    keyboard: State<Keys>,
+    rescued: State<Vec<PathBuf>>,
+    unopened: State<Option<project::Failure>>,
+    language: State<Language>,
+    jobs: LspJobs,
+    /// Whether each tab's following pane is up, and whether the Scratchpad's is: what
+    /// `Ctrl+\` writes, and what a test reads it back out of.
+    follows: State<HashMap<DocId, bool>>,
+    pad_follows: State<bool>,
+}
+
+/// Mount those states the way `app()` mounts them, over a server worker that answers
+/// nothing. Called in a harness's render, and its answer read back out of the
+/// thread-local rather than returned, so a harness gains the root's keys without its
+/// tests' tuples growing four states none of them looks at.
+fn use_root_key_states() {
+    let proj = use_consume::<Proj>().0;
+    let keyboard = use_consume::<Keyboard>().0;
+    let rescued = use_consume::<Rescued>().0;
+    let unopened = use_consume::<Unopened>().0;
+    let language = use_provide_root_context(|| Talking(State::create(Language::default()))).0;
+    let follow = use_provide_root_context(|| Following(State::create(Follow::default()))).0;
+    let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
+    let linked = use_provide_root_context(|| Linking(State::create(Linked::default()))).0;
+    let hover = use_provide_root_context(|| Hovering(State::create(Hover::default()))).0;
+    let jobs = use_language_with(language, follow, located, linked, hover, proj, |_| None);
+    let follows = use_consume::<Follows>().0;
+    let pad_follows = use_consume::<PadFollows>().0;
+    use_hook(move || {
+        ROOT_STATES.with_borrow_mut(|held| {
+            *held = Some(RootStates {
+                keyboard,
+                rescued,
+                unopened,
+                language,
+                jobs,
+                follows,
+                pad_follows,
+            })
+        })
+    });
+}
+
+/// The project's bundle pointed at `dock`: the sidebar's dock a harness provided *after*
+/// `project_states!` is not the one the bundle was built with, and the root's key handler
+/// reaches the Search panel through the bundle.
+fn with_dock(states: ProjectStates, dock: State<DockArea>) -> ProjectStates {
+    let mut states = states;
+    states.arranged.dock = dock;
+    states
+}
+
+/// What the harness mounted, as a test body reads it.
+fn root_key_states() -> RootStates {
+    ROOT_STATES
+        .with_borrow(Clone::clone)
+        .expect("a harness that called use_root_key_states")
+}
+
+/// The root's one global key handler and the states `app()` hands it, drawn as nothing:
+/// a global key is emitted to every listener with no hit test, so this needs no area and
+/// a harness can hang it under whatever it wants to read a chord's answer off. The states
+/// behind it are [`use_root_key_states`]'s, which the harness itself calls: what that
+/// provides -- the language server's jobs among them -- has to be at the root, where the
+/// controls beside this find it.
+#[derive(Clone, PartialEq)]
+struct ChordKeys;
+
+impl Component for ChordKeys {
+    fn render(&self) -> impl IntoElement {
+        let states = use_project_states();
+        let finder = use_consume::<Finding>().0;
+        let held = use_consume::<Modifiers5>();
+        let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
+
+        rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
+            let RootStates {
+                keyboard,
+                rescued,
+                unopened,
+                language,
+                jobs,
+                follows,
+                pad_follows,
+            } = root_key_states();
+            root_key_down(
+                keys,
+                states,
+                keyboard,
+                finder,
+                rescued,
+                unopened,
+                language,
+                &jobs,
+                follows,
+                pad_follows,
+                &e.key,
+                e.modifiers,
+            );
+        })
+    }
+}
+
+/// The window's own keys: the handler above over the app's states, with the bar and the
+/// server's control drawn under it, so a chord's answer is read off what the reader would
+/// be looking at.
+fn chord_harness() -> impl IntoElement {
+    use_root_key_states();
+    let states = use_project_states();
+
+    // Read and not peeked: the bar is what a chord changes, so it has to repaint.
+    let (tabs, active) = {
+        let strip = states.open.strip.read();
+        (strip.tabs().to_vec(), strip.active())
+    };
+
+    rect()
+        .expanded()
+        .child(ChordKeys)
+        .child(
+            rect().horizontal().children(
+                tabs.into_iter()
+                    .map(|tab| {
+                        TabHeader {
+                            tab,
+                            active: Some(tab) == active,
+                            landing: false,
+                            key: DiffKey::None,
+                        }
+                        .key(tab)
+                        .into_element()
+                    })
+                    .collect::<Vec<Element>>(),
+            ),
+        )
+        .child(ServerButton)
+        .child(TrustPrompt)
+}
+
+/// What the root's key handler wants beside the project's own bundle: the finder's
+/// overlay and the five modifier flags. A macro for `project_states!`'s reason -- the
+/// runner's type cannot be named here.
+macro_rules! chord_wiring {
+    ($runner:expr) => {{
+        $runner.provide_root_context(|| Finding(State::create(Finder::default())));
+        $runner.provide_root_context(|| {
+            Modifiers5(
+                State::create(false),
+                State::create(false),
+                State::create(false),
+                State::create(false),
+                State::create(false),
+            )
+        });
+    }};
+}
+
+/// The harness over the app's own states, with the finder and the modifiers the root's
+/// handler wants.
+fn mount_chords() -> (TestingRunner, ProjectStates) {
+    let (mut test, states) = TestingRunner::new(
+        chord_harness,
+        (700., 200.).into(),
+        |runner: &mut _| {
+            chord_wiring!(runner);
+            project_states!(runner)
+        },
+        1.,
+    );
+    settle(&mut test);
+    (test, states)
+}
+
+/// Press one of the window's chords, as a reader does: a key event with nothing focused,
+/// which the root's **global** handler answers wherever the keyboard is.
+fn chord(test: &mut TestingRunner, chord: Chord) {
+    let (key, modifiers) = chord.pressed();
+    key_with(test, key, modifiers);
+}
+
+/// Open `count` source tabs, each in a tab that stays, and hand back the file each shows.
+fn opened_tabs(test: &mut TestingRunner, states: &ProjectStates, count: usize) -> Vec<String> {
+    let files: Vec<String> = (0..count).map(|nth| format!("/src/{nth}.rs")).collect();
+    for file in &files {
+        let document = Document::Source(Arc::from(file.as_str()));
+        open_document(states.open, states.visits, document, Reach::NewTab);
+    }
+    settle(test);
+    files
+}
+
+/// The bar, as a test reads it: what each tab shows, and which of them is on screen.
+fn bar(states: &ProjectStates) -> (Vec<Tab>, Option<Tab>) {
+    let strip = states.open.strip.peek();
+    (strip.tabs().to_vec(), strip.active())
+}
+
+/// Which document tab is on screen, by the file it shows. A `Document` is not `Debug`, so
+/// a name is what an `assert_eq!` can say went wrong.
+fn showing(states: &ProjectStates) -> Option<String> {
+    match states.open.active()? {
+        Document::Source(file) => Some(file.to_string()),
+        _ => None,
+    }
+}
+
+/// **Ctrl+W closes the tab on screen and Ctrl+F4 is the same door**, landing on the
+/// neighbour the × would land on, and the last one leaves the placeholder: no tabs and
+/// nothing on screen.
+#[test]
+fn the_close_keys_take_the_tab_on_screen_out_of_the_bar() {
+    let (mut test, states) = mount_chords();
+    let files = opened_tabs(&mut test, &states, 3);
+    let (tabs, _) = bar(&states);
+    let ids = tabs.clone();
+
+    // The middle one on screen, and closed with the first spelling.
+    chord(&mut test, Chord::NthTab(2));
+    assert_eq!(showing(&states), Some(files[1].clone()));
+    chord(&mut test, Chord::CloseTab);
+    assert_eq!(bar(&states).0, vec![ids[0], ids[2]], "the bar's order");
+    assert_eq!(
+        showing(&states),
+        Some(files[2].clone()),
+        "the close did not land on the neighbour"
+    );
+    // And the row for it is gone from the bar as drawn.
+    let drawn = labels(&test);
+    assert!(!drawn.iter().any(|text| text == "1.rs"), "{drawn:?}");
+
+    // The second spelling is the same door.
+    chord(&mut test, Chord::CloseTabF4);
+    assert_eq!(bar(&states).0, vec![ids[0]], "Ctrl+F4 closed nothing");
+
+    // The last one leaves the placeholder.
+    chord(&mut test, Chord::CloseTab);
+    assert_eq!(bar(&states), (Vec::new(), None), "the bar is not empty");
+}
+
+/// **A page's close is not a document's.** Ctrl+W on a page takes its chip out of the bar
+/// and leaves every document tab and its trail where they were.
+#[test]
+fn the_close_key_on_a_page_takes_its_chip_out_and_leaves_the_documents() {
+    let (mut test, states) = mount_chords();
+    let files = opened_tabs(&mut test, &states, 1);
+    let mut strip = states.open.strip;
+    strip.write().show(Tab::Page(Page::Settings));
+    settle(&mut test);
+    assert_eq!(bar(&states).1, Some(Tab::Page(Page::Settings)));
+
+    chord(&mut test, Chord::CloseTab);
+    let (tabs, active) = bar(&states);
+    assert!(
+        !tabs.contains(&Tab::Page(Page::Settings)),
+        "the page's chip stayed in the bar"
+    );
+    assert_eq!(tabs.len(), 1, "the document went with the page");
+    assert_eq!(active, Some(tabs[0]));
+    assert_eq!(showing(&states), Some(files[0].clone()));
+}
+
+/// **The step keys walk the bar and wrap at both ends**, and move nothing else: the order
+/// is the reader's and a step does not touch it.
+#[test]
+fn the_step_keys_walk_the_bar_and_wrap_at_both_ends() {
+    let (mut test, states) = mount_chords();
+    let files = opened_tabs(&mut test, &states, 3);
+    let (order, _) = bar(&states);
+
+    // The last opened is on screen, so the next along is the first: the wrap.
+    assert_eq!(showing(&states), Some(files[2].clone()));
+    chord(&mut test, Chord::NextTab);
+    assert_eq!(showing(&states), Some(files[0].clone()));
+    chord(&mut test, Chord::NextTab);
+    assert_eq!(showing(&states), Some(files[1].clone()));
+
+    // And back the other way, wrapping at the first.
+    chord(&mut test, Chord::PreviousTab);
+    assert_eq!(showing(&states), Some(files[0].clone()));
+    chord(&mut test, Chord::PreviousTab);
+    assert_eq!(showing(&states), Some(files[2].clone()));
+
+    assert_eq!(bar(&states).0, order, "a step moved a tab along the bar");
+}
+
+/// **Ctrl+1 to Ctrl+8 are the nth tab and Ctrl+9 is the last**, however many there are; a
+/// number the bar is too short for shows nothing.
+#[test]
+fn the_number_keys_show_the_nth_tab_and_the_ninth_the_last() {
+    let (mut test, states) = mount_chords();
+    let files = opened_tabs(&mut test, &states, 3);
+
+    chord(&mut test, Chord::NthTab(1));
+    assert_eq!(showing(&states), Some(files[0].clone()));
+    chord(&mut test, Chord::NthTab(9));
+    assert_eq!(
+        showing(&states),
+        Some(files[2].clone()),
+        "Ctrl+9 with three tabs is the third"
+    );
+    chord(&mut test, Chord::NthTab(2));
+    assert_eq!(showing(&states), Some(files[1].clone()));
+    chord(&mut test, Chord::NthTab(4));
+    assert_eq!(
+        showing(&states),
+        Some(files[1].clone()),
+        "a number the bar has no tab for moved the screen"
+    );
+}
+
+/// **Alt+Left and Alt+Right are the two chevrons' twin**: a step along the trail of the
+/// tab on screen, and nothing at all where the trail has no such step.
+#[test]
+fn the_trail_keys_step_back_and_forward_and_a_tab_with_nowhere_to_go_does_nothing() {
+    let (mut test, states) = mount_chords();
+    let (first, second) = ("/src/first.rs", "/src/second.rs");
+    let document = |file: &str| Document::Source(Arc::from(file));
+    open_document(states.open, states.visits, document(first), Reach::NewTab);
+    // In place, so both places are on the one tab's trail.
+    open_document(states.open, states.visits, document(second), Reach::InPlace);
+    settle(&mut test);
+    assert_eq!(
+        bar(&states).0.len(),
+        1,
+        "the second opened a tab of its own"
+    );
+    assert_eq!(showing(&states).as_deref(), Some(second));
+
+    chord(&mut test, Chord::Back);
+    assert_eq!(
+        showing(&states).as_deref(),
+        Some(first),
+        "Back did not step"
+    );
+    chord(&mut test, Chord::Back);
+    assert_eq!(
+        showing(&states).as_deref(),
+        Some(first),
+        "Back stepped off the end of the trail"
+    );
+
+    chord(&mut test, Chord::Forward);
+    assert_eq!(showing(&states).as_deref(), Some(second));
+    chord(&mut test, Chord::Forward);
+    assert_eq!(
+        showing(&states).as_deref(),
+        Some(second),
+        "Forward stepped past the end of the trail"
+    );
+}
+
+/// **A page chord opens its page once and raises it after.** The second press is a raise
+/// and not a second chip, and the two pages are two chords.
+#[test]
+fn each_page_chord_opens_its_page_once_and_raises_it_after() {
+    let (mut test, states) = mount_chords();
+    let files = opened_tabs(&mut test, &states, 1);
+
+    chord(&mut test, Chord::Shortcuts);
+    assert_eq!(bar(&states).1, Some(Tab::Page(Page::Shortcuts)));
+    chord(&mut test, Chord::Settings);
+    assert_eq!(bar(&states).1, Some(Tab::Page(Page::Settings)));
+    let (tabs, _) = bar(&states);
+    assert_eq!(tabs.len(), 3, "{tabs:?}");
+    // Both chips are in the bar as drawn.
+    let drawn = labels(&test);
+    for title in ["Shortcuts", "Settings"] {
+        assert!(drawn.iter().any(|text| text == title), "{drawn:?}");
+    }
+
+    // Away from both, and back: the second press raises rather than opening again.
+    chord(&mut test, Chord::NthTab(1));
+    assert_eq!(showing(&states), Some(files[0].clone()));
+    chord(&mut test, Chord::Shortcuts);
+    assert_eq!(bar(&states).1, Some(Tab::Page(Page::Shortcuts)));
+    assert_eq!(bar(&states).0, tabs, "the page opened a second chip");
+}
+
+/// **Ctrl+Shift+L is the control in the top bar**: it starts the server over a directory
+/// the reader has agreed to, and the second press stops it.
+#[test]
+fn the_server_chord_starts_the_server_and_stops_it() {
+    let (mut test, states) = mount_chords();
+    let language = root_key_states().language;
+    with_a_directory(&mut test, &states, "/p");
+    assert!(!language.peek().started(), "mounting one started a server");
+
+    chord(&mut test, Chord::Server);
+    assert!(
+        language.peek().started(),
+        "the chord started nothing: {:?}",
+        language.peek().words()
+    );
+
+    chord(&mut test, Chord::Server);
+    assert!(
+        !language.peek().started(),
+        "the second press stopped nothing"
+    );
+}
+
+/// And it puts the same question the control does over a directory the reader has not
+/// agreed to: nothing is started until they answer.
+#[test]
+fn the_server_chord_asks_about_a_directory_the_reader_has_not_agreed_to() {
+    let (mut test, states) = mount_chords();
+    let language = root_key_states().language;
+    let mut proj = states.proj;
+    proj.write().workspace_text = "/p".to_owned();
+    settle(&mut test);
+
+    chord(&mut test, Chord::Server);
+    assert!(
+        !language.peek().started(),
+        "the chord started a server unasked"
+    );
+    assert!(
+        language.peek().asking.is_some(),
+        "the chord asked nothing and started nothing"
+    );
+    // The question is on screen, where the control's own press puts it.
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|text| text.contains("/p")), "{drawn:?}");
+}
+
+/// The Bookmarks panel under the root's keys: `Ctrl+D` writes the reader's own list, so
+/// what it did is read off the rows the panel draws as well as off the list itself.
+fn bookmark_chord_harness() -> impl IntoElement {
+    use_root_key_states();
+    rect()
+        .expanded()
+        .child(ChordKeys)
+        // What a row's own menu needs; opening one without it panics.
+        .child(ContextMenuViewer::new())
+        .child(BookmarksPanel)
+}
+
+fn mount_bookmark_chords() -> (TestingRunner, ProjectStates) {
+    let (mut test, states) = TestingRunner::new(
+        bookmark_chord_harness,
+        (300., 300.).into(),
+        |runner: &mut _| {
+            chord_wiring!(runner);
+            project_states!(runner)
+        },
+        1.,
+    );
+    settle(&mut test);
+    (test, states)
+}
+
+/// **Ctrl+D is the tab menu's bookmark item asked of the tab on screen.** The first press
+/// adds a bookmark of the place the tab is showing, under the name `entry_name` gives it,
+/// and the panel draws its row; the second press takes that same bookmark off rather than
+/// adding a second of the same place.
+#[test]
+fn the_bookmark_key_adds_the_place_on_screen_and_the_second_press_takes_it_off() {
+    let (mut test, states) = mount_bookmark_chords();
+    let file = "/src/first.rs";
+    let document = Document::Source(Arc::from(file));
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    settle(&mut test);
+    assert!(states.bookmarks.peek().entries().is_empty());
+
+    chord(&mut test, Chord::Bookmark);
+    assert_eq!(
+        states.bookmarks.peek().entries().to_vec(),
+        [bookmark_of(&document)],
+        "Ctrl+D bookmarked something else, or nothing"
+    );
+    // And the panel is drawing it, under the name a row is called by.
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|text| text == "first.rs"), "{drawn:?}");
+
+    chord(&mut test, Chord::Bookmark);
+    assert!(
+        states.bookmarks.peek().entries().is_empty(),
+        "the second press did not take the bookmark off"
+    );
+    let drawn = labels(&test);
+    assert!(!drawn.iter().any(|text| text == "first.rs"), "{drawn:?}");
+}
+
+/// **A page is no place, so it has nothing to bookmark.** The key asks the tab on screen
+/// and not the last document opened: a page raised over one leaves the list alone.
+#[test]
+fn the_bookmark_key_on_a_page_has_no_place_to_add() {
+    let (mut test, states) = mount_bookmark_chords();
+    let document = Document::Source(Arc::from("/src/first.rs"));
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    let mut strip = states.open.strip;
+    strip.write().show(Tab::Page(Page::Settings));
+    settle(&mut test);
+
+    chord(&mut test, Chord::Bookmark);
+    assert!(
+        states.bookmarks.peek().entries().is_empty(),
+        "the page's key bookmarked the document behind it"
+    );
+}
+
+/// The document on screen with the root's keys over it: what `Ctrl+\` puts away is read
+/// off the panes themselves. [`panes_harness`]'s own hooks, called here rather than
+/// copied, so the panes are the ones the strip mounts.
+fn pane_chord_harness() -> impl IntoElement {
+    use_root_key_states();
+    rect().expanded().child(ChordKeys).child(panes_harness())
+}
+
+fn mount_pane_chords(shown: Shown) -> (TestingRunner, ProjectStates) {
+    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+        pane_chord_harness,
+        (600., 300.).into(),
+        |runner| {
+            let states = listing_states!(runner, shown);
+            chord_wiring!(runner);
+            // What `DocumentBody` registers its two panels into.
+            runner.provide_root_context(|| {
+                Splits(State::create(ResizableContext {
+                    direction: Direction::Horizontal,
+                    ..Default::default()
+                }))
+            });
+            states
+        },
+        1.,
+    );
+    settle(&mut test);
+    (test, states)
+}
+
+/// **Ctrl+\ is the toggle on the leading bar, pressed by key**: the pane the tab is not
+/// driven from goes, the pane it is driven from stays, and the second press brings the
+/// other back. Headless because what is asserted is which panes were laid out, which only
+/// the runner has.
+#[test]
+fn the_other_pane_key_puts_the_following_pane_away_and_brings_it_back() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let mut studied = Studied::new(sum_to.clone());
+    // A companion file no filesystem has, so the source side is one findable label rather
+    // than a listing of somebody else's build directory.
+    studied.lines.file = Some("own.c".into());
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, states) = mount_pane_chords(shown);
+    let follows = root_key_states().follows;
+
+    let document = Document::Assembly(Selection::Symbol(sum_to));
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    settle(&mut test);
+    // The two sides, each by something only it draws.
+    let source_up = |test: &TestingRunner| {
+        labels(test)
+            .iter()
+            .any(|text| text == "Source file not found: own.c")
+    };
+    let assembly_up = |test: &TestingRunner| labels(test).iter().any(|text| text == "sum_to");
+    assert!(source_up(&test), "the tab opened without its source side");
+    assert!(assembly_up(&test));
+
+    chord(&mut test, Chord::OtherPane);
+    assert!(!source_up(&test), "Ctrl+\\ left the following pane up");
+    assert!(
+        assembly_up(&test),
+        "it took the pane the tab is driven from as well"
+    );
+    assert_eq!(
+        follows.peek().values().copied().collect::<Vec<bool>>(),
+        [false],
+        "the tab's own flag is what it wrote"
+    );
+
+    chord(&mut test, Chord::OtherPane);
+    assert!(
+        source_up(&test),
+        "the second press did not bring the pane back"
+    );
+}
+
+/// **The Scratchpad's is the same key over the one flag its own listing follows.** The
+/// pad is no tab and has no id to file a flag under, so what the key writes there is the
+/// flag at the root that `PadFollows` is.
+#[test]
+fn the_other_pane_key_on_the_scratchpad_writes_the_pads_own_flag() {
+    let (mut test, states) = mount_chords();
+    let pad_follows = root_key_states().pad_follows;
+    let mut strip = states.open.strip;
+    strip.write().show(Tab::Page(Page::Scratchpad));
+    settle(&mut test);
+    assert!(*pad_follows.peek(), "the pad's listing starts up");
+
+    chord(&mut test, Chord::OtherPane);
+    assert!(!*pad_follows.peek(), "Ctrl+\\ left the pad's listing up");
+    chord(&mut test, Chord::OtherPane);
+    assert!(
+        *pad_follows.peek(),
+        "the second press did not bring it back"
+    );
+}
+
+/// **A page with one side has no other pane to put away.** Settings is drawn whole and
+/// has no split, so the key writes neither flag -- including the flag of the document tab
+/// the page was raised over, which is not the tab on screen.
+#[test]
+fn the_other_pane_key_on_a_page_with_one_side_does_nothing() {
+    let (mut test, states) = mount_chords();
+    let held = root_key_states();
+    opened_tabs(&mut test, &states, 1);
+    let mut strip = states.open.strip;
+    strip.write().show(Tab::Page(Page::Settings));
+    settle(&mut test);
+
+    chord(&mut test, Chord::OtherPane);
+    assert!(
+        held.follows.peek().is_empty(),
+        "the page's key put a document tab's pane away"
+    );
+    assert!(
+        *held.pad_follows.peek(),
+        "the page's key put the Scratchpad's listing away"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// Reaching a panel from the keyboard.
+
+/// Where the keyboard is, in one label: the panel whose box has it, the tab's own pane, or
+/// nowhere. A component of its own, so that the focus moving repaints this and nothing
+/// else, and the one thing these tests read -- a focus is nothing a test can ask the
+/// platform about from outside a render.
+#[derive(Clone, PartialEq)]
+struct KeyboardSaid {
+    /// The one box the tab on screen has here, registered as the assembly pane's.
+    pane: AccessibilityId,
+}
+
+impl Component for KeyboardSaid {
+    fn render(&self) -> impl IntoElement {
+        let keyboard = use_consume::<Keyboard>().0;
+        let pane = self.pane;
+        // Read and not peeked: a panel registers its box as it mounts, so a chord that
+        // raised one gives this something new to ask about a render later.
+        let panels: Vec<(Panel, AccessibilityId)> = {
+            let keys = keyboard.read();
+            [Panel::Files, Panel::Objects, Panel::Symbols]
+                .into_iter()
+                .filter_map(|panel| keys.panel_box(panel).map(|a11y| (panel, a11y)))
+                .collect()
+        };
+        let said = match panels.iter().find(|(_, a11y)| a11y.is_focused()) {
+            Some((panel, _)) => format!("{panel:?}"),
+            None if pane.is_focused() => "the pane".to_owned(),
+            None => "nowhere".to_owned(),
+        };
+
+        label().text(format!("keyboard: {said}"))
+    }
+}
+
+/// What the probe above says.
+fn keyboard_said(test: &TestingRunner) -> String {
+    labels(test)
+        .into_iter()
+        .find(|label| label.starts_with("keyboard: "))
+        .expect("the probe is drawn")
+}
+
+/// The sidebar as the chords reach it, with the root's one key handler over it and one box
+/// standing in for the tab on screen: what a panel hands the keyboard back to.
+fn reaching_harness() -> impl IntoElement {
+    use_root_key_states();
+    let states = use_project_states();
+    let dock = use_consume::<SidebarDock>().0;
+    let finder = use_consume::<Finding>().0;
+    let held = use_consume::<Modifiers5>();
+    let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
+    // What `app()` calls at the root: a chord leaves an ask behind it, and this is what
+    // spends it once the panel it named has drawn a box.
+    use_keyboard_asked(
+        use_consume::<Keyboard>().0,
+        use_open(),
+        use_consume::<Marked>().0,
+    );
+    // The tab's own box, as a pane registers one.
+    let pane = use_a11y();
+    use_tab_keyboard(Some(Pane::Assembly), pane);
+
+    rect()
+        .expanded()
+        .on_global_key_down(move |e: Event<KeyboardEventData>| {
+            let root = root_key_states();
+            root_key_down(
+                keys,
+                with_dock(states, dock),
+                root.keyboard,
+                finder,
+                root.rescued,
+                root.unopened,
+                root.language,
+                &root.jobs,
+                root.follows,
+                root.pad_follows,
+                &e.key,
+                e.modifiers,
+            );
+        })
+        .child(KeyboardSaid { pane })
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(40.0))
+                .a11y_id(pane)
+                .a11y_focusable(true)
+                .on_pointer_down(move |_| pane.request_focus())
+                .child(label().text("the pane")),
+        )
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .child(docking_area(dock)),
+        )
+}
+
+/// That harness with **Objects behind Files** in the first group, so a chord for a panel
+/// that is not on top has one to raise, and with an object loaded so the two lists have
+/// rows.
+fn mount_reaching() -> (TestingRunner, State<DockArea>, Vec<Symbol>) {
+    let symbols = fixture_symbols();
+    let (mut test, (states, dock)) = TestingRunner::new(
+        reaching_harness,
+        (500., 500.).into(),
+        |runner: &mut _| {
+            chord_wiring!(runner);
+            let states = symbol_states!(runner);
+            // After the macro, whose own dock this replaces: the sidebar these tests
+            // reach into, and the handle they read the raise back out of.
+            let dock = runner
+                .provide_root_context(|| {
+                    SidebarDock(State::create(DockArea::column(vec![
+                        vec![Panel::Files, Panel::Objects],
+                        vec![Panel::Symbols],
+                    ])))
+                })
+                .0;
+            (states, dock)
+        },
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![symbols[0].object.clone()]);
+    settle(&mut test);
+    (test, dock, symbols)
+}
+
+/// **Each of the three chords raises its panel and puts the keyboard in it**, from
+/// wherever the keyboard was -- here the tab's own pane, which is where a reader pressing
+/// one is. Objects starts behind Files in its group, so its chord has a panel to bring to
+/// the front as well as one to focus: a chord that only focused would put the keyboard in
+/// a panel nobody can see, and one that only raised would leave the hand on the mouse.
+#[test]
+fn each_panel_chord_raises_its_panel_and_puts_the_keyboard_in_it() {
+    let (mut test, dock, _symbols) = mount_reaching();
+    let at = centre_of(&test, "the pane");
+    press_at(&mut test, at);
+    settle(&mut test);
+    assert_eq!(keyboard_said(&test), "keyboard: the pane");
+
+    // A panel already on top of its own group: nothing to raise, and the keyboard moves.
+    chord(&mut test, Chord::Symbols);
+    settle(&mut test);
+    assert!(dock.peek().is_active(Panel::Symbols));
+    assert_eq!(keyboard_said(&test), "keyboard: Symbols");
+
+    // One behind another: raised out from behind Files, and then handed the keyboard.
+    chord(&mut test, Chord::Objects);
+    settle(&mut test);
+    assert!(
+        dock.peek().is_active(Panel::Objects),
+        "the panel behind Files was not brought to the front"
+    );
+    assert_eq!(keyboard_said(&test), "keyboard: Objects");
+
+    // And back to the one it was raised over.
+    chord(&mut test, Chord::Files);
+    settle(&mut test);
+    assert!(dock.peek().is_active(Panel::Files));
+    assert_eq!(keyboard_said(&test), "keyboard: Files");
+}
+
+/// **The caret goes in the panel's filter box where it has one**, so that what is typed
+/// after the chord narrows the list rather than landing nowhere. The Files tree has no box
+/// to filter by and is reached on its rows instead, which is the same rule read the other
+/// way: the keyboard goes wherever the panel answers keys.
+#[test]
+fn the_chord_puts_the_caret_in_the_filter_box_where_the_panel_has_one() {
+    let (mut test, _dock, symbols) = mount_reaching();
+    let other = symbols
+        .iter()
+        .map(|symbol| symbol.data.display().to_owned())
+        .find(|name| name != "sum_to")
+        .expect("the fixture has a name beside sum_to");
+    assert!(labels(&test).iter().any(|label| label == &other));
+
+    chord(&mut test, Chord::Symbols);
+    settle(&mut test);
+    test.write_text("sum_to");
+    settle(&mut test);
+
+    let shown = labels(&test);
+    assert!(
+        !shown.iter().any(|label| label == &other),
+        "what was typed after the chord did not reach the filter box: {shown:?}"
+    );
+    assert!(shown.iter().any(|label| label == "sum_to"), "{shown:?}");
+}
+
+/// **Escape hands the keyboard back a step at a time**: out of the filter box onto the
+/// list under it, with what was typed still in the box, and out of the list into the tab
+/// on screen. Two steps and not one, so a reader who typed a filter can walk what it left
+/// with the arrows before leaving the panel.
+#[test]
+fn escape_walks_the_keyboard_out_of_a_panel_and_back_into_the_tab() {
+    let (mut test, _dock, _symbols) = mount_reaching();
+    let at = centre_of(&test, "the pane");
+    press_at(&mut test, at);
+    settle(&mut test);
+
+    chord(&mut test, Chord::Symbols);
+    settle(&mut test);
+    test.write_text("sum_to");
+    settle(&mut test);
+    assert_eq!(keyboard_said(&test), "keyboard: Symbols");
+
+    // Out of the box and onto the rows beside it. The probe names the box a chord
+    // reaches and the rows are not it, so what this says is that the keyboard is still in
+    // the panel -- and the pattern typed is still in the box.
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::Escape),
+        Modifiers::default(),
+    );
+    settle(&mut test);
+    assert_ne!(
+        keyboard_said(&test),
+        "keyboard: the pane",
+        "Escape in the box left the panel outright"
+    );
+    assert!(labels(&test).iter().any(|label| label == "sum_to"));
+
+    // And out of the list, into the pane the tab is driven from.
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::Escape),
+        Modifiers::default(),
+    );
+    settle(&mut test);
+    assert_eq!(keyboard_said(&test), "keyboard: the pane");
 }

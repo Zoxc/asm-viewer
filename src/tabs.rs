@@ -97,6 +97,14 @@ pub struct Strip {
     active: Option<Tab>,
 }
 
+/// Which way a step along the bar goes: the tab after the one on screen, or the one
+/// before it ([`Strip::stepped`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Along {
+    Next,
+    Previous,
+}
+
 impl Strip {
     /// The tabs, in the order they are drawn in.
     pub fn tabs(&self) -> &[Tab] {
@@ -175,6 +183,36 @@ impl Strip {
     pub fn raise(&mut self, tab: Tab) {
         if self.contains(tab) {
             self.active = Some(tab);
+        }
+    }
+
+    /// The tab a step along the bar lands on, **wrapping at both ends**: after the last
+    /// comes the first, and before the first comes the last. `None` where there is
+    /// nothing on screen to step from, which is a bar with nothing in it.
+    ///
+    /// Which tab and not the raise itself, so this stays the bar's rule and nothing
+    /// else: what is on screen is changed through `raise_tab` (`src/ui/documents.rs`),
+    /// which asks [`Strip::would_raise`] before it writes.
+    pub fn stepped(&self, along: Along) -> Option<Tab> {
+        let active = self.active?;
+        let at = self.tabs.iter().position(|open| *open == active)?;
+        let last = self.tabs.len().checked_sub(1)?;
+        let to = match along {
+            Along::Next if at == last => 0,
+            Along::Next => at + 1,
+            Along::Previous if at == 0 => last,
+            Along::Previous => at - 1,
+        };
+        self.tabs.get(to).copied()
+    }
+
+    /// The tab `nth` names, counted from 1 -- and **9 is the last, however many there
+    /// are**, which is the number a reader arrives with from every browser and editor
+    /// they have. A number a shorter bar has no tab for names nothing.
+    pub fn nth(&self, nth: usize) -> Option<Tab> {
+        match nth {
+            9 => self.tabs.last().copied(),
+            _ => self.tabs.get(nth.checked_sub(1)?).copied(),
         }
     }
 

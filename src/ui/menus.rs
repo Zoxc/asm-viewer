@@ -13,10 +13,17 @@ use super::*;
 ///
 /// The chip says whether there is another tab to close, so the one row that would do
 /// nothing is left out rather than drawn dead.
+///
+/// **Only the keys that would do what the row does.** Ctrl+W and Ctrl+D are answered for
+/// the tab **on screen** (`root_key_down`), and this menu opens on whichever chip was
+/// under the pointer, so a menu on any other chip says neither: the rows do what they
+/// say, and a key beside one would be closing or bookmarking somebody else. `showing` is
+/// whether this chip is that tab.
 pub(crate) fn tab_menu(
     states: ProjectStates,
     keep: Tab,
     others: bool,
+    showing: bool,
     document: Option<Document>,
 ) -> Menu {
     let ProjectStates {
@@ -34,7 +41,10 @@ pub(crate) fn tab_menu(
                     Tab::Document(id) => close_tab(open, places, id),
                     Tab::Page(page) => close_page(open, page),
                 })
-                .child("Close"),
+                .child(menu_label(
+                    "Close",
+                    showing.then_some(shortcuts::key!(CloseTab)),
+                )),
         )
         .maybe_child(others.then(|| {
             MenuButton::new()
@@ -45,11 +55,15 @@ pub(crate) fn tab_menu(
         }))
         // The file the tab is a place in: the binary for an assembly tab, the source file
         // for a file's. A page is neither, and has neither row.
-        .maybe_child(
-            document
-                .clone()
-                .map(|document| bookmark_item(bookmarks, objects, document, "Add bookmark")),
-        )
+        .maybe_child(document.clone().map(|document| {
+            bookmark_item(
+                bookmarks,
+                objects,
+                document,
+                "Add bookmark",
+                showing.then_some(shortcuts::key!(Bookmark)),
+            )
+        }))
         .maybe_child(document.map(|document| reveal_item(document.file().to_path_buf())))
 }
 
@@ -108,11 +122,16 @@ pub(crate) fn file_menu(states: ProjectStates, path: PathBuf) -> Menu {
 /// row's tooltip says. `add` is what the item says when there is none yet: a sidebar row
 /// and a tab say "Add bookmark", an instruction row "Bookmark symbol", since the row is not
 /// the symbol and has to say what it would bookmark.
+///
+/// `key` is Ctrl+D where this menu was opened somewhere that key means this very
+/// document, which is the tab on screen and nowhere else: the key is asked of that tab
+/// (`root_key_down`) and not of the row under the pointer.
 pub(crate) fn bookmark_item(
     bookmarked: State<Bookmarks>,
     objects: State<Vec<Arc<Object>>>,
     document: Document,
     add: &'static str,
+    key: Option<&'static str>,
 ) -> MenuButton {
     let bookmarked_already = bookmarked
         .peek()
@@ -123,16 +142,28 @@ pub(crate) fn bookmark_item(
         false => add,
     };
     MenuButton::new()
-        .on_press(move |_| {
-            let mut bookmarked = bookmarked;
-            // The objects are peeked before the list is written: two different states,
-            // and the write wakes the panel.
-            let loaded = objects.peek().clone();
-            bookmarked
-                .write()
-                .toggle(&document, entry_name(&document), &loaded);
-        })
-        .child(text)
+        .on_press(move |_| toggle_bookmark(bookmarked, objects, &document))
+        .child(menu_label(text, key))
+}
+
+/// The write every bookmark gesture makes: a bookmark of `document` added, or the one
+/// pointing at it taken off. The item above presses it and so does the window's key
+/// (`Chord::Bookmark`), so the two cannot come to mean different things.
+///
+/// Which of the two happens is [`Bookmarks::toggle`]'s own question, asked by resolving
+/// each entry against what is loaded; the name a new one is made under is the whole
+/// [`entry_name`].
+pub(crate) fn toggle_bookmark(
+    mut bookmarked: State<Bookmarks>,
+    objects: State<Vec<Arc<Object>>>,
+    document: &Document,
+) {
+    // The objects are peeked before the list is written: two different states, and the
+    // write wakes the panel.
+    let loaded = objects.peek().clone();
+    bookmarked
+        .write()
+        .toggle(document, entry_name(document), &loaded);
 }
 
 /// The item that shows a file, or a folder, where the rest of the reader's tools are: on

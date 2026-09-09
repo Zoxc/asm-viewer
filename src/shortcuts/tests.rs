@@ -117,3 +117,45 @@ fn no_place_is_named_twice() {
         assert!(!earlier, "{:?} twice", section.place);
     }
 }
+
+/// Every binding [`key`] names, so the two tests below can walk them. Written out here
+/// and not in the module, because it is the tests that want a list: a menu item asks for
+/// one spelling by name.
+const NAMED: &[&str] = &[
+    key!(CloseTab),
+    key!(CloseTabF4),
+    key!(OpenProject),
+    key!(Settings),
+    key!(Shortcuts),
+    key!(Bookmark),
+    key!(Definition),
+    key!(References),
+    key!(Implementations),
+    key!(AllLocations),
+];
+
+/// A menu item draws a key by name, and this page is where the reader looks it up, so a
+/// name with no row is a key the app answers to and does not list.
+#[test]
+fn every_key_a_menu_can_name_is_on_the_page() {
+    for named in NAMED {
+        let listed = SECTIONS
+            .iter()
+            .flat_map(|section| section.gestures)
+            .any(|gesture| gesture.keys.contains(named));
+
+        assert!(listed, "{named:?} is drawn in a menu and is on no row");
+    }
+}
+
+/// Two names for one spelling is two bindings the reader cannot tell apart, whichever of
+/// them a menu says it has.
+#[test]
+fn no_two_named_bindings_are_spelled_the_same() {
+    for (at, named) in NAMED.iter().enumerate() {
+        assert!(
+            !NAMED[..at].contains(named),
+            "{named:?} is the spelling of two bindings"
+        );
+    }
+}

@@ -364,6 +364,17 @@ fn page_icon(page: Page) -> Element {
     }
 }
 
+/// The window's own key for a page, where it has one: what the pages menu draws beside
+/// the row. The two keys are the root's ([`root_key_down`]), so they work wherever this
+/// menu is opened from.
+fn page_key(page: Page) -> Option<&'static str> {
+    match page {
+        Page::Settings => Some(shortcuts::key!(Settings)),
+        Page::Shortcuts => Some(shortcuts::key!(Shortcuts)),
+        Page::Project | Page::Scratchpad | Page::Debug => None,
+    }
+}
+
 /// What a page's tab draws under the bar -- and what a window with no project draws in
 /// place of its screen, there being no bar there to put a tab in.
 pub(crate) fn page_body(page: Page) -> Element {
@@ -479,20 +490,70 @@ impl Component for PagesButton {
     }
 }
 
-/// One row of that menu: a word, and what pressing it does. A helper and not a component,
-/// the hover being `MenuItem`'s own.
+/// One row of that menu: a word, the key it has where it has one, and what pressing it
+/// does. A helper and not a component, the hover being `MenuItem`'s own.
 pub(crate) fn menu_row(
     text: &str,
+    key: Option<&'static str>,
     mut close: State<bool>,
     mut act: impl FnMut() + 'static,
 ) -> MenuButton {
-    let text = text.to_owned();
     MenuButton::new()
         .on_press(move |_| {
             act();
             close.set(false);
         })
-        .child(label().text(text).max_lines(1))
+        .child(menu_label(text, key))
+}
+
+/// **What every menu item's text is drawn as**: what the item does, and -- where the
+/// gesture has a key where the menu was opened -- how that key is pressed, after the name
+/// and a step back from it.
+///
+/// The spelling is never written here. It comes from `shortcuts::key!`, the list the
+/// Shortcuts page draws (`src/shortcuts.rs`), so a menu and that page cannot come to say
+/// different things. An item with no key is the bare label it always was.
+pub(crate) fn menu_label(text: impl Into<String>, key: Option<&'static str>) -> Element {
+    match key {
+        None => item_name(text.into(), None).into_element(),
+        Some(key) => marked_label(text.into(), key, None),
+    }
+}
+
+/// The name of a menu row, in `colour` where it is not the menu's own.
+fn item_name(text: String, colour: Option<Color>) -> Label {
+    label()
+        .text(text)
+        .max_lines(1)
+        .map(colour, |name, colour| name.color(colour))
+}
+
+/// A menu row's name with a mark after it: the arrow on a row that opens a submenu, or
+/// the key on a row that has one. One treatment for the two, so they sit alike.
+///
+/// **After the name and not out at the row's own end**, which is where a desktop menu puts
+/// it. A row here is a `MenuItem` -- `fill_minimum` inside a container that fits its
+/// content -- so a child asking to fill takes the *window* and drags the menu out to it,
+/// and nothing in the row can learn how wide the widest row made the menu
+/// (`notes/upstream/freya.md`). [`MENU_MARK_GAP`] is what keeps the mark from reading as
+/// part of the word.
+///
+/// `colour` is the dim row's, which is drawn in place of a live one and has to look like
+/// it; a live row inherits the menu's own and is handed `None`. The mark is a step back
+/// from the name either way, being about the row rather than part of what it says.
+fn marked_label(text: String, mark: &str, colour: Option<Color>) -> Element {
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .spacing(MENU_MARK_GAP)
+        .child(item_name(text, colour))
+        .child(
+            label()
+                .text(mark.to_owned())
+                .max_lines(1)
+                .color(colour.unwrap_or_else(|| palette().address_fg)),
+        )
+        .into_element()
 }
 
 /// What freya lays a `MenuItem` out at, so a row of the app's own beside them lines up.
@@ -505,36 +566,10 @@ const MENU_ROW_PADDING: (f32, f32) = (6.0, 12.0);
 /// points one way everywhere.
 const SUBMENU_ARROW: &str = "\u{25b8}";
 
-/// One of those rows: the name, and the arrow after it.
-///
-/// **After the name and not out at the row's own end**, which is where a desktop menu puts
-/// it. A row here is a `MenuItem` -- `fill_minimum` inside a container that fits its
-/// content -- so a child asking to fill takes the *window* and drags the menu out to it,
-/// and nothing in the row can learn how wide the widest row made the menu
-/// (`notes/upstream/freya.md`). The gap is what keeps the mark from reading as part of the
-/// word.
-///
-/// `colour` is the dim row's, which is drawn in place of the live one and has to look like
-/// it; a live row inherits the menu's own and is handed `None`. The arrow is a step back
-/// from the name either way, being a mark about the row rather than part of what it says.
+/// One of those rows: the name, and the arrow after it -- [`marked_label`] with the arrow
+/// as its mark, the treatment a key beside an item is drawn with too.
 fn submenu_label(text: &str, colour: Option<Color>) -> Element {
-    rect()
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .spacing(10.0)
-        .child(
-            label()
-                .text(text.to_owned())
-                .max_lines(1)
-                .map(colour, |name, colour| name.color(colour)),
-        )
-        .child(
-            label()
-                .text(SUBMENU_ARROW.to_owned())
-                .max_lines(1)
-                .color(colour.unwrap_or_else(|| palette().address_fg)),
-        )
-        .into_element()
+    marked_label(text.to_owned(), SUBMENU_ARROW, colour)
 }
 
 /// A line between two groups of the menu. freya has no separator, and a `Menu` takes any
@@ -565,26 +600,33 @@ fn main_menu(
     let unsaved = open.as_deref().is_some_and(project::unsaved);
 
     let mut menu = Menu::new()
-        .child(menu_row("Open a project...", close, move || {
-            ask_for_a_project(states, rescued, unopened)
-        }))
+        .child(menu_row(
+            "Open a project...",
+            Some(shortcuts::key!(OpenProject)),
+            close,
+            move || ask_for_a_project(states, rescued, unopened),
+        ))
         .child(recents_submenu(states, rescued, unopened, recents, close))
         .child(menu_row(
             "Open a directory as a project...",
+            None,
             close,
             move || ask_for_a_directory(states),
         ))
-        .child(menu_row("Open a file as a project...", close, move || {
-            ask_for_a_binary(states)
-        }));
+        .child(menu_row(
+            "Open a file as a project...",
+            None,
+            close,
+            move || ask_for_a_binary(states),
+        ));
 
     if open.is_some() && !unsaved {
-        menu = menu.child(menu_row("Save as...", close, move || {
+        menu = menu.child(menu_row("Save as...", None, close, move || {
             ask_where_to_save(states, project::Put::Copy)
         }));
     }
     if open.is_some() {
-        menu = menu.child(menu_row("Close project", close, move || {
+        menu = menu.child(menu_row("Close project", None, close, move || {
             close_project(states)
         }));
     }
@@ -616,7 +658,7 @@ fn main_menu(
                             .cross_align(Alignment::Center)
                             .spacing(6.0)
                             .child(page_icon(page))
-                            .child(label().text(page.title()).max_lines(1)),
+                            .child(menu_label(page.title(), page_key(page))),
                     )
                     .into_element()
             })
@@ -658,7 +700,7 @@ pub(crate) fn recents_submenu(
         .iter()
         .map(|recent| {
             let path = recent.path.clone();
-            menu_row(&project::label(&recent.path), close, move || {
+            menu_row(&project::label(&recent.path), None, close, move || {
                 switch_project(states, rescued, unopened, path.clone())
             })
             .key(recent.path.to_string_lossy().into_owned())
@@ -711,10 +753,13 @@ impl Component for TabHeader {
         let open = states.open;
         let keyboard = use_consume::<Keyboard>().0;
         let tab = self.tab;
+        // Copied out for the menu: whether this chip is the tab on screen is what says
+        // which of the window's keys the menu may claim.
+        let active = self.active;
         // Asked only of the chip that is showing, which is the only one that draws the
         // mark: asking is a subscription to the focus moving, and every chip taking one
         // would re-render the whole bar whenever it did.
-        let mark = match self.active {
+        let mark = match active {
             true => Mark::Active {
                 typing: keyboard_in_tab(keyboard),
             },
@@ -776,7 +821,7 @@ impl Component for TabHeader {
                     Tab::Document(id) => open.docs.peek().get(id).cloned(),
                     Tab::Page(_) => None,
                 };
-                ContextMenu::open_from_event(&e, tab_menu(states, tab, others, subject));
+                ContextMenu::open_from_event(&e, tab_menu(states, tab, others, active, subject));
             })
             .on_press(move |e: Event<PressEventData>| {
                 raise_tab(open, tab);

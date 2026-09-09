@@ -349,6 +349,19 @@ request that outranked it, would remove the workaround.
 
 ## Wanted
 
+**A `MenuItem` that says its key.** Nothing on it takes one: the struct is a theme, its
+children, the two handlers, `selected`, a padding and a diff key (`menu.rs:299`), so an item
+that doubles a keyboard shortcut has no way to name it. What the app does instead: the row
+draws the key itself, a dim label after the name, which is the treatment `submenu_label` gives
+the arrow -- and after the name for the same reason it is, since a child that asks to fill the
+row takes the window instead (above). One spelling for both places, the row and the Shortcuts
+page, is the app's own (`src/shortcuts.rs`).
+
+**A menu the keyboard can walk.** `Menu` answers one key, the Escape that closes it
+(`menu.rs:154`), and neither it nor `MenuItem` takes a focusable box, so the arrows move
+nothing in a menu and Enter presses nothing. Everything a menu offers is a pointer's alone.
+There is no substitute here: it is a goal rather than a workaround (`notes/Goals.md`).
+
 **A `SubMenu` that says it is one.** It renders a `MenuItem` around `rect().horizontal()`
 and the label it was given, and nothing else (`menu.rs:600-603`): no arrow, no marker of any
 kind, so a row that opens a list looks exactly like a row that acts. What the app does

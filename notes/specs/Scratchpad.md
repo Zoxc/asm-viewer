@@ -9,6 +9,13 @@ unnamed one is shown as `<pad-3>`. The Scratchpad view's side panel lists them, 
 last opened opens first. A new scratchpad is made at once. Each has its own editor state and
 its own run, so switching pads stops nothing. Scratchpads cannot be deleted.
 
+## Keys
+
+These work while the page is on screen.
+Ctrl+N makes a new scratchpad, Ctrl+B builds the one shown, F5 runs it and Shift+F5 stops the
+run.
+Ctrl+\ toggles the listing beside the editor.
+
 ## Crates
 
 A scratchpad's crates.io dependencies are a list in the UI, a name and a version per row. A

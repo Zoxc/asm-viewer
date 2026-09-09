@@ -23,11 +23,13 @@
 //! its pane made focusable ([`RowsBox`]), which is the pane's rows and not its filter box.
 //!
 //! **The pick is the list's cursor**, which is what makes a list something the keyboard can
-//! be used in: Up and Down move it ([`Picking::stepped`]), the list scrolling to keep it in
-//! view, and Enter opens it the way pressing its row would ([`Picking::entered`]). What each
-//! list answers with is its [`ListKeys`], built by the panel because the panel is the only
-//! thing that knows its rows; the keys themselves are answered once, on the box they are
-//! drawn in (`ui/filter_bar.rs`).
+//! be used in: Up and Down move it ([`Picking::stepped`]), Home, End and the two page keys
+//! move it further ([`Picking::jumped`]), the list scrolling to keep it in view, Left and
+//! Right fold the row it is on ([`Picking::folded`]), Enter opens it the way pressing its
+//! row would ([`Picking::entered`]), and Escape hands the keyboard back to the tab on
+//! screen ([`Picking::to_the_tab`]). What each list answers with is its [`ListKeys`],
+//! built by the panel because the panel is the only thing that knows its rows; the keys
+//! themselves are answered once, on the box they are drawn in (`ui/filter_bar.rs`).
 //!
 //! **Opening a tab hands it the keyboard**, however the row was opened: a reader who has
 //! put a listing on screen is reading it, so the next key is answered there and not in the
@@ -163,6 +165,15 @@ pub(crate) struct ListKeys {
     /// not by row: a fold is about where a row is in the tree, and this way each panel says
     /// once what its rows do rather than once per kind of pick.
     pub(crate) open: Box<dyn Fn(usize) -> Pressed>,
+    /// What Left and Right do to the row at a place: `false` folds the group under it
+    /// away and `true` opens it. A row already the way the key asks, and a row with
+    /// nothing under it at all, is left alone -- which is the two keys in a flat list,
+    /// where every row is one ([`ListKeys::flat`]).
+    ///
+    /// Its own closure and not [`ListKeys::open`] under another name: a press *toggles*,
+    /// and these two say which way, so what a panel writes here is the same fold with
+    /// the direction asked for rather than assumed.
+    pub(crate) fold: Box<dyn Fn(usize, bool)>,
 }
 
 impl ListKeys {
@@ -173,7 +184,13 @@ impl ListKeys {
             length: 0,
             at: Box::new(|_| None),
             open: Box::new(|_| Pressed::Folded),
+            fold: ListKeys::flat(),
         }
+    }
+
+    /// A list with nothing to fold: every list but the Objects tree and the Files tree.
+    pub(crate) fn flat() -> Box<dyn Fn(usize, bool)> {
+        Box::new(|_, _| {})
     }
 
     /// Whether `picked` is still where it says it is.
@@ -260,6 +277,36 @@ impl Picking {
         Some(at)
     }
 
+    /// Home, End and the two page keys: the pick put on `at`, clamped to the list, and
+    /// where it landed for the list to scroll to.
+    ///
+    /// [`Picking::stepped`]'s counterpart for the keys that name a row rather than a
+    /// distance: nothing is read of the pick that was there, so neither key cares whether
+    /// the list has moved under one.
+    pub(crate) fn jumped(self, keys: &ListKeys, at: usize) -> Option<usize> {
+        let last = keys.length.checked_sub(1)?;
+        let at = at.min(last);
+        let pick = keys.at(at)?;
+        self.pick(PickedRow { pick, at });
+        Some(at)
+    }
+
+    /// Left and Right: the group under the picked row folded away, or opened. The pick
+    /// stays where it is -- a fold is about the row the reader is on -- and a row with
+    /// nothing under it does nothing at all.
+    ///
+    /// A pick the list has moved under folds nothing, [`Picking::entered`]'s rule: what is
+    /// in its place now is not what the reader picked.
+    pub(crate) fn folded(self, keys: &ListKeys, unfold: bool) {
+        // Bound in a statement of its own, so no read guard is alive while the fold below
+        // writes the tree.
+        let held = self.picks.peek().get(&self.panel).cloned();
+        let Some(picked) = held.filter(|picked| keys.held(picked)) else {
+            return;
+        };
+        (keys.fold)(picked.at, unfold);
+    }
+
     /// Enter: open what the pick names, exactly as pressing its row would, the keyboard
     /// included.
     ///
@@ -277,6 +324,15 @@ impl Picking {
     /// pane is not theirs and is dropped ([`unask_keyboard`]).
     pub(crate) fn unasked(self) {
         unask_keyboard(self.keyboard);
+    }
+
+    /// Escape: the keyboard back in the tab on screen. The same ask a pressed chip makes
+    /// ([`ask_for_keyboard`]) and not a focus taken here, a list knowing nothing about
+    /// which box the tab has -- and it is the ask that puts a caret in a pane that has
+    /// none, which a reader arriving from a list needs as much as one arriving from a
+    /// chip.
+    pub(crate) fn to_the_tab(self) {
+        ask_for_keyboard(self.keyboard);
     }
 
     /// Where the keyboard goes once a row has been acted on: into the tab a row opened,

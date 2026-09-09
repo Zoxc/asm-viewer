@@ -662,6 +662,10 @@ through the same `open_source_place` the definition uses -- the same landing, th
 drive, and the answer's columns selected there, where a definition leaves only a caret at
 their start.
 
+The three are keys as well: `F12`, `Shift+F12` and `Ctrl+F12` put them about the name under
+the **caret** rather than the pointer (`agents/Panes.md`). The `NameAt` is built by the same
+rule either way, so a key and the menu item beside it cannot ask about two different places.
+
 **An empty answer is nothing found; a refusal is not an answer at all.** A question about
 a place takes both as nothing found -- a click is a question, not a promise -- and the
 `-32801` and `-32800` "not now" codes arrive there as an empty answer. The question about a

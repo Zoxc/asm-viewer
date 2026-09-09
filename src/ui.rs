@@ -67,7 +67,7 @@ pub(crate) use crate::shared::{same_arc, Shared};
 pub(crate) use crate::shortcuts;
 pub(crate) use crate::source::{self, showable, SourceFile};
 pub(crate) use crate::store::{self, Store};
-pub(crate) use crate::tabs::{Page, Strip, Tab};
+pub(crate) use crate::tabs::{Along, Page, Strip, Tab};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
 };
@@ -312,30 +312,135 @@ fn toolbar() -> impl IntoElement {
 }
 
 /// Every key the window answers to whatever holds the keyboard: the modifiers each
-/// pointer gesture is read against, and the two chords that reach a panel and the file
-/// finder.
+/// pointer gesture is read against, and every chord that is the window's own rather than
+/// a list's, a box's or a pane's ([`Chord`]).
 ///
 /// **One handler and not two.** An element keeps one handler per event name, so a second
 /// `on_global_key_down` on the root would replace this one and take the modifier tracking
 /// with it -- silently, with Ctrl-click and Shift-click going quiet. And a **global**
 /// handler, since a plain key event is emitted only for the focused node that listens for
 /// it: this one has to answer from wherever the keyboard is, including nowhere.
+///
+/// **It takes the bundles and not a state per binding.** Every chord below is a second
+/// door onto something the app already has, so the states it wants are the states those
+/// doors want, and a parameter per key would grow this list by one on every binding
+/// added. What is passed by hand is what belongs to no bundle: where the keyboard can be
+/// put, the finder, the two windows a project that would not open puts up, the language
+/// server with the worker it is spoken to through, and the two flags saying whether a
+/// following pane is up.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn root_key_down(
     keys: ModifierKeys,
-    searched: State<Searched>,
+    states: ProjectStates,
+    keyboard: State<Keys>,
     finder: State<Finder>,
-    proj: State<OpenProject>,
-    dock: State<DockArea>,
+    rescued: State<Vec<PathBuf>>,
+    unopened: State<Option<project::Failure>>,
+    language: State<Language>,
+    jobs: &LspJobs,
+    follows: State<HashMap<DocId, bool>>,
+    pad_follows: State<bool>,
     key: &Key,
     modifiers: Modifiers,
 ) {
     keys.down(key, modifiers);
-    if Chord::Search.is(key, modifiers) {
-        reach_search(searched, dock);
+    let ProjectStates {
+        proj,
+        open,
+        places,
+        bookmarks,
+        objects,
+        arranged,
+        ..
+    } = states;
+    let mut strip = open.strip;
+
+    // The panels and the overlay that are reached from anywhere. Each panel chord raises
+    // its panel and puts the keyboard in it (`reach_panel`); a table and not four arms,
+    // since they differ in the panel alone and the panel is the argument the answer
+    // takes. The three lists a reader lives in, and Search: History, Bookmarks and
+    // Locations have none, being a press away or opened by the question that fills them.
+    if let Some((_, panel)) = [
+        (Chord::Search, Panel::Search),
+        (Chord::Files, Panel::Files),
+        (Chord::Objects, Panel::Objects),
+        (Chord::Symbols, Panel::Symbols),
+    ]
+    .into_iter()
+    .find(|(chord, _)| chord.is(key, modifiers))
+    {
+        reach_panel(arranged.dock, keyboard, panel);
     }
     if Chord::Finder.is(key, modifiers) {
         let root = proj.peek().workspace();
         open_finder(finder, root);
+    }
+
+    // The bar. Two spellings of the close, one door: the tab on screen goes whether it is
+    // a page or a document (`close_showing`).
+    if Chord::CloseTab.is(key, modifiers) || Chord::CloseTabF4.is(key, modifiers) {
+        close_showing(open, places);
+    }
+    if Chord::NextTab.is(key, modifiers) {
+        step_tab(open, Along::Next);
+    }
+    if Chord::PreviousTab.is(key, modifiers) {
+        step_tab(open, Along::Previous);
+    }
+    // The nine asked for as one: they differ in the digit alone, and the digit is the
+    // argument the answer takes.
+    if let Some(nth) = (1..=9).find(|nth| Chord::NthTab(*nth).is(key, modifiers)) {
+        show_nth(open, nth as usize);
+    }
+
+    // The trail of the tab on screen: the same call the mouse's side buttons and the
+    // toolbar's two chevrons make, and nothing at all where the trail has no such step.
+    if Chord::Back.is(key, modifiers) {
+        navigate(open, Nav::Back);
+    }
+    if Chord::Forward.is(key, modifiers) {
+        navigate(open, Nav::Forward);
+    }
+
+    // The window's own doors. `Strip::show` for the two pages, which opens one beside the
+    // tab on screen and raises one already open -- what the pages menu's row does.
+    if Chord::OpenProject.is(key, modifiers) {
+        ask_for_a_project(states, rescued, unopened);
+    }
+    if Chord::Settings.is(key, modifiers) {
+        strip.write().show(Tab::Page(Page::Settings));
+    }
+    if Chord::Shortcuts.is(key, modifiers) {
+        strip.write().show(Tab::Page(Page::Shortcuts));
+    }
+    if Chord::Server.is(key, modifiers) {
+        toggle_server(language, proj, jobs);
+    }
+
+    // The reader's own list, added to or taken from: the tab menu's item asked of the tab
+    // on screen rather than of the tab under the pointer. A page is no place, so it has
+    // nothing to bookmark.
+    if Chord::Bookmark.is(key, modifiers) {
+        // Bound in a statement of its own: the toggle writes a state this read.
+        let showing = open.active();
+        if let Some(document) = showing {
+            toggle_bookmark(bookmarks, objects, &document);
+        }
+    }
+
+    // The pane that follows the one on screen, put away or brought back: the toggle on the
+    // leading bar, pressed by key. A document tab writes its own flag and the Scratchpad
+    // page the one at the root; every other page has no second pane and does nothing.
+    if Chord::OtherPane.is(key, modifiers) {
+        let showing = strip.peek().active();
+        let of = match showing {
+            Some(Tab::Document(id)) => Some(Placing::Tab(id)),
+            Some(Tab::Page(Page::Scratchpad)) => Some(Placing::Pad),
+            Some(Tab::Page(_)) | None => None,
+        };
+        if let Some(of) = of {
+            toggle_pane(of, open, follows, pad_follows);
+        }
     }
 }
 
@@ -427,7 +532,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // not its dock tab's is unmounted, and a pick outlives the reader looking elsewhere.
     use_provide_context(|| Picks(State::create(HashMap::new())));
     let keyboard = use_provide_context(|| Keyboard(State::create(Keys::default()))).0;
-    use_provide_context(|| Follows(State::create(HashMap::new())));
+    let follows = use_provide_context(|| Follows(State::create(HashMap::new()))).0;
     // The Shortcuts page's box. Provided here for the reason the type gives: the page is
     // unmounted whenever another tab is on screen.
     use_provide_context(|| Shortcuts(State::create(Filter::default())));
@@ -490,7 +595,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // After the restore, which is the last of the loads a startup makes: `Settings::load`
     // above, and the project the line above reopened. Both are synchronous, so one ask
     // here catches everything they moved aside.
-    use_provide_context(|| Rescued(State::create(store::moved())));
+    let rescued = use_provide_context(|| Rescued(State::create(store::moved()))).0;
 
     let symbols = use_memo(move || {
         objects
@@ -565,7 +670,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
             ..Default::default()
         }))
     });
-    use_provide_context(|| PadFollows(State::create(true)));
+    let pad_follows = use_provide_context(|| PadFollows(State::create(true))).0;
     let pad = use_provide_context(|| Pad(State::create(Pads::default()))).0;
     let pad_text = use_provide_context(|| PadText(State::create(PadBuffers::default()))).0;
     use_scratchpad_with(pad, pad_text, store, pad_work);
@@ -601,7 +706,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     use_follow(follow, doors, places);
     use_opened(language, opened, open, proj, jobs.clone());
     use_linking(language, linked, opened, jobs.clone());
-    use_hovering(language, hover, jobs);
+    use_hovering(language, hover, jobs.clone());
 
     rect()
         .expanded()
@@ -637,10 +742,15 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
             hover_struck(hover, &e.key);
             root_key_down(
                 keys,
-                searched,
+                states,
+                keyboard,
                 finder,
-                proj,
-                arranged.dock,
+                rescued,
+                unopened,
+                language,
+                &jobs,
+                follows,
+                pad_follows,
                 &e.key,
                 e.modifiers,
             )
