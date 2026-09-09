@@ -801,31 +801,37 @@ impl Component for HistoryPanel {
         let (rows, listed, visited): (Vec<Element>, Vec<Document>, bool) = {
             let visits = visits.read();
             let visited = !visits.entries().is_empty();
-            // The places the rows are of, kept beside them: a couple of hundred at most,
-            // and what the arrows step and Enter opens.
-            let listed: Vec<Document> = visits
+            // The places the rows are of, with the name each row draws beside it: a
+            // couple of hundred at most, and what the arrows step and Enter opens. Both
+            // spellings are built once here, the filter reading the whole one and the row
+            // marking the short one it draws.
+            let kept: Vec<(Document, String)> = visits
                 .entries()
                 .iter()
-                // The whole name and not the shortened one the row draws: the generic
-                // arguments a tab has no room for are still worth searching for.
-                .filter(|entry| matcher.matches(&entry_name(entry)))
-                .cloned()
+                .filter_map(|entry| {
+                    let (text, whole) = entry_spellings(entry);
+                    // The whole name and not the shortened one the row draws: the generic
+                    // arguments a tab has no room for are still worth searching for.
+                    matcher.matches(&whole).then(|| (entry.clone(), text))
+                })
                 .collect();
-            let rows = listed
+            let rows = kept
                 .iter()
                 .enumerate()
-                .map(|(at, entry)| {
+                .map(|(at, (entry, text))| {
                     HistoryRow {
                         entry: entry.clone(),
                         current: current.as_ref() == Some(entry),
                         at,
-                        marks: matcher.marks(&entry_text(entry)),
+                        marks: matcher.marks(text),
                         key: DiffKey::None,
                     }
                     .key(entry_key(entry))
                     .into()
                 })
                 .collect();
+
+            let listed = kept.into_iter().map(|(entry, _)| entry).collect();
 
             (rows, listed, visited)
         };

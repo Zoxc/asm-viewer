@@ -79,11 +79,15 @@ impl Links {
         links.into()
     }
 
-    /// The columns of the names on `line` that can be followed, in the order they are
-    /// drawn: what a row draws as links, once the pane has counted them in its own units.
-    /// Borrowed rather than collected: a row asks on every render.
-    pub fn followed_on(&self, line: u32) -> impl Iterator<Item = &Range<u32>> + '_ {
-        self.on_line(line)
+    /// The columns of the names among `on_line` that can be followed, in the order they
+    /// are drawn: what a row draws as links, once the pane has counted them in its own
+    /// units. Borrowed rather than collected: a row asks on every render.
+    ///
+    /// Takes what [`Links::on_line`] found rather than looking the line up itself: a row
+    /// draws these and hit-tests every name on the line beside them, so the two searches
+    /// are made once and both rules read the answer.
+    pub fn followed(on_line: &[Link]) -> impl Iterator<Item = &Range<u32>> + '_ {
+        on_line
             .iter()
             .filter(|link| link.asks.is_some())
             .map(|link| &link.columns)

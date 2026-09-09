@@ -547,9 +547,12 @@ question only a view has.
 `entry_text` is where it is applied and is the one spelling a document tab and a History row
 share; `entry_name` beside it is the whole name, which is what a tooltip says where the two differ
 and what the History filter matches, so a generic argument no tab draws is still something a reader
-can search for. `entry_labels` answers both at once, for a chip and a History row, which draw the
-one and say the other: a demangled name averages a hundred and fifty characters, and building it
-once and cutting the short spelling from it is one such string per row per render rather than two.
+can search for. Two functions answer with both at once, for a caller that needs both: `entry_labels`
+the drawn name with the tooltip beside it, for a chip and a History row, which draw the one and say
+the other; and `entry_spellings` the drawn name with the whole one, for the History panel, which
+draws the one and filters on the other. A demangled name averages a hundred and fifty characters,
+and building it once and cutting the short spelling from it is one such string per row per render
+rather than two -- three, where the filter asked for the whole name and the mark for the short one.
 
 **Nothing in that scanner recurses.** A name is file input, and reading a `<Type as Trait>`
 qualifier used to be one call per group: a symbol of a hundred thousand `<` -- which a string table

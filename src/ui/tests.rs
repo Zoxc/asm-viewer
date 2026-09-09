@@ -1330,6 +1330,9 @@ fn history_harness() -> impl IntoElement {
 /// `entry_text` is the one spelling a tab and a history row share, and it is [`short_name`]
 /// over the demangled name; the whole of it stays on the entry, where the tooltip and the
 /// filter read it.
+///
+/// **The filter reads the whole one**, which is the half of the rule the drawn row cannot
+/// show: a pattern only in the part no row has room for still leaves the row on screen.
 #[test]
 fn a_history_row_names_the_function_and_not_the_whole_symbol() {
     let object = fixture_symbols()[0].object.clone();
@@ -1367,6 +1370,18 @@ fn a_history_row_names_the_function_and_not_the_whole_symbol() {
             .iter()
             .any(|text| text.starts_with("<viewer::ui::pad_view")),
         "the whole demangled name is on screen: {drawn:?}"
+    );
+
+    // The trait the row has no room for, typed into the filter.
+    let box_at = centre_of(&test, "Filter");
+    press_at(&mut test, box_at);
+    test.write_text("freya_core");
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "ScratchpadTab::render"),
+        "the filter read only the name the row draws: {drawn:?}"
     );
 }
 

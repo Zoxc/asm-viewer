@@ -209,19 +209,23 @@ impl Named {
         Lookup::at(&self.at, byte_column(&self.text, column))
     }
 
-    /// The names in this row the server placed, and what a press on one does: ask it
-    /// where that name is, and go to what it answers. [`None`] with nobody to ask, so no
-    /// link is ever drawn that could not be followed.
+    /// Every name the server placed on this row, in the order they are drawn: the slice
+    /// both rules below read, taken once because finding it is a pair of binary searches.
+    fn on_line(&self) -> &[links::Link] {
+        self.links.on_line(self.at.line)
+    }
+
+    /// The names in `on_line` a press can follow, and what a press on one does: ask the
+    /// server where that name is, and go to what it answers. [`None`] with nobody to ask,
+    /// so no link is ever drawn that could not be followed.
     ///
     /// A press with Ctrl held opens what it names in a tab of its own, the rule every
     /// door inside a pane follows.
-    fn linked(&self, open: Open, ctrl: State<bool>) -> Option<TextLinks> {
+    fn linked(&self, on_line: &[links::Link], open: Open, ctrl: State<bool>) -> Option<TextLinks> {
         let server = self.server.clone()?;
         let named = self.clone();
         Some(TextLinks {
-            columns: self
-                .links
-                .followed_on(self.at.line)
+            columns: links::Links::followed(on_line)
                 .map(|columns| self.drawn(columns))
                 .collect(),
             // Always a door: nothing here is a link until the server has said the name is
@@ -241,12 +245,12 @@ impl Named {
         })
     }
 
-    /// Every name the server placed on this row, links and the places where one is
-    /// defined alike: what a reader hovers is a name and not a door, and a hover over the
-    /// name where a function is defined is where its own signature and doc comment are.
-    fn names(&self) -> Vec<Range<usize>> {
-        self.links
-            .on_line(self.at.line)
+    /// All of `on_line` as the units this row is drawn in, links and the places where a
+    /// name is defined alike: what a reader hovers is a name and not a door, and a hover
+    /// over the name where a function is defined is where its own signature and doc
+    /// comment are.
+    fn names(&self, on_line: &[links::Link]) -> Vec<Range<usize>> {
+        on_line
             .iter()
             .map(|link| self.drawn(&link.columns))
             .collect()
@@ -393,6 +397,9 @@ impl Component for SourceRow {
             links: self.links.clone(),
             server,
         };
+        // The names on this row, found once: what the row draws as links and what it
+        // hover-tests are both cut from the same slice.
+        let on_line = named.on_line();
 
         let text = Text {
             finds: self
@@ -407,8 +414,8 @@ impl Component for SourceRow {
                 .collect(),
             tail: Vec::new(),
             chars: self.chars,
-            links: named.linked(doors.open, ctrl),
-            names: named.names(),
+            links: named.linked(on_line, doors.open, ctrl),
+            names: named.names(on_line),
             // What the pointer on one of them says. Consumed in the render, as everything
             // a handler here reaches for is: a handler may not run a hook.
             on_hover: hover.map(|hover| {
