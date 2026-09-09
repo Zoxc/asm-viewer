@@ -230,14 +230,24 @@ impl Hover {
     }
 }
 
+/// The box goes, and the question and the answer with it. Nothing is written where there
+/// was nothing to take away, so an occasion may call this on every press and every key.
+///
+/// Peek, clone, change, set -- and not read and write. A `State`'s read hands back a
+/// guard, and holding one across the write panics the moment it runs (`AGENTS.md`);
+/// `gone` needs `&mut` besides. So the value is taken out, changed, and put back, and
+/// only where it changed.
+pub(crate) fn hover_gone(mut hover: State<Hover>) {
+    let mut waiting = hover.peek().clone();
+    if waiting.gone() {
+        hover.set(waiting);
+    }
+}
+
 /// Something was pressed: the box goes, wherever the press landed. The reader is doing
 /// something else now, and the box is over what they pressed.
 pub(crate) fn hover_pressed(hover: State<Hover>) {
-    let mut waiting = hover.peek().clone();
-    if waiting.gone() {
-        let mut hover = hover;
-        hover.set(waiting);
-    }
+    hover_gone(hover);
 }
 
 /// A key was struck: the box goes, unless the key is a bare modifier.
@@ -253,11 +263,7 @@ pub(crate) fn hover_struck(hover: State<Hover>, key: &Key) {
     ) {
         return;
     }
-    let mut waiting = hover.peek().clone();
-    if waiting.gone() {
-        let mut hover = hover;
-        hover.set(waiting);
-    }
+    hover_gone(hover);
 }
 
 /// What the source rows write and the box reads.
@@ -280,11 +286,7 @@ pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs:
         if !held.started() {
             // Nothing to answer for, so nothing is held about a name: the box would
             // otherwise go on saying what a server that is gone once said.
-            let mut waiting = hover.peek().clone();
-            if waiting.gone() {
-                let mut hover = hover;
-                hover.set(waiting);
-            }
+            hover_gone(hover);
             return;
         }
         let resting = hover.read().resting(held.run).cloned();
