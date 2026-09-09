@@ -605,9 +605,11 @@ impl Scratchpad {
     /// hand-edited scratchpad opens with the bad row visible rather than not opening. A
     /// manifest with no name in its metadata reads back as a pad nobody has named, which is
     /// what one written by hand is.
+    ///
+    /// [`stated_in`] and then the source, so the rule for what a scratchpad is stays in
+    /// one place.
     pub fn load_from(directory: &Path) -> Option<Scratchpad> {
-        let manifest = fs::read_to_string(directory.join(cargo::MANIFEST)).ok()?;
-        let manifest: Manifest = toml::from_str(&manifest).ok()?;
+        let manifest = stated_in(directory)?;
         let source = fs::read_to_string(directory.join(SOURCE_FILE)).ok()?;
 
         let mut scratchpad = Scratchpad::of(manifest.package.name);
@@ -681,6 +683,27 @@ fn pad_in(store: &Store, id: &PadId) -> PathBuf {
     store.scratchpads().join(id.as_str())
 }
 
+/// What the package in `directory` says it is, or `None` where there is no scratchpad
+/// there: the manifest read and parsed, with a source file beside it.
+///
+/// **The one rule for which directories are scratchpads**, and all the questions short of
+/// opening a pad need. [`pads`] wants a name and [`delete_pad`] wants a yes or no, and
+/// neither is worth the reader's document: the manifest is a few lines, `src/main.rs` is
+/// as long as they have made it, so this reads the small file and asks only whether the
+/// large one is there.
+///
+/// [`Scratchpad::load_from`] is this and then that file, so what one answers for the other
+/// answers for -- bar the one case they part over on purpose. A `src/main.rs` that is there
+/// and is not text is a scratchpad here and not one to load, so the pad is listed and says
+/// [`Failure::Unreadable`] when it is opened, which is what this module says about any
+/// package it cannot read. Missing from the list, it would be a pad the reader cannot
+/// fix.
+fn stated_in(directory: &Path) -> Option<Manifest> {
+    let manifest = fs::read_to_string(directory.join(cargo::MANIFEST)).ok()?;
+    let manifest: Manifest = toml::from_str(&manifest).ok()?;
+    directory.join(SOURCE_FILE).is_file().then_some(manifest)
+}
+
 /// Whether `directory` holds either half of a package. What tells "nothing there" from
 /// "something there this module cannot read"; see [`Scratchpad::opened_in`].
 fn holds_package(directory: &Path) -> bool {
@@ -748,20 +771,26 @@ fn load_order(store: &Store) -> PadOrder {
 /// Every scratchpad there is, in the order they were last opened, then the ones the order
 /// does not name in id order.
 ///
-/// Each row carries the name out of that pad's **own package**, read at the moment the list
-/// is asked for, which is what lets the panel draw a pad it has never opened. It is also
-/// why the order file holds ids alone: a name lives in one place, the one the reader edits.
+/// Each row carries the name out of that pad's **own manifest**, read at the moment the
+/// list is asked for, which is what lets the panel draw a pad it has never opened. It is
+/// also why the order file holds ids alone: a name lives in one place, the one the reader
+/// edits. The manifest and no more: a name is all a row shows, and listing N pads is N
+/// small files rather than the N sources as well ([`stated_in`]).
 ///
-/// A directory [`Scratchpad::load_from`] answers for is a pad and anything else is not, so
-/// an id in the order whose directory has gone — or was never a package — is dropped here
-/// rather than repaired on load. The strays are appended because this is the list a reader
+/// A directory [`stated_in`] answers for is a pad and anything else is not, so an id in
+/// the order whose directory has gone — or was never a package — is dropped here rather
+/// than repaired on load. The strays are appended because this is the list a reader
 /// picks from and every pad has to be reachable: one that fell off the end of the order, or
 /// one made outside the app, is still a scratchpad. That is the difference from
 /// `recent_projects`, which lists the projects a reader has *opened*.
 pub fn pads(store: &Store) -> Vec<PadListing> {
     let scratchpads = store.scratchpads();
     let listing = |id: PadId| {
-        let name = Scratchpad::load_from(&pad_in(store, &id))?.name;
+        let name = stated_in(&pad_in(store, &id))?
+            .package
+            .metadata
+            .scratchpad
+            .name;
         Some(PadListing { id, name })
     };
 
@@ -820,8 +849,8 @@ pub fn new_pad(store: &Store) -> Result<Scratchpad, Failure> {
 ///
 /// **The path is narrowed twice.** It is [`pad_in`]'s and nothing else, and an id is a
 /// checked crate name, so it can be neither `..`, nor a separator, nor an absolute path.
-/// Then the directory must still be one [`Scratchpad::load_from`] answers for, so a
-/// `remove_dir_all` can only reach a directory holding a manifest this module wrote.
+/// Then the directory must still be one [`stated_in`] answers for, so a `remove_dir_all`
+/// can only reach a directory holding a manifest this module wrote.
 /// [`fs::symlink_metadata`] is what makes that the directory itself rather than whatever a
 /// link put in its place.
 ///
@@ -835,7 +864,7 @@ pub fn delete_pad(store: &Store, id: &PadId) -> Result<(), Failure> {
         Err(error) => return Err(Failure::Delete(error.to_string())),
     };
 
-    if !entry.is_dir() || Scratchpad::load_from(&directory).is_none() {
+    if !entry.is_dir() || stated_in(&directory).is_none() {
         return Err(Failure::Delete(format!(
             "{} is not a scratchpad",
             directory.display()

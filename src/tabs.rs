@@ -189,26 +189,24 @@ impl Strip {
     }
 
     /// Close every tab `closing` answers true for, landing on the neighbour when the tab
-    /// on screen was one of them. Answers what it removed, in the order the tabs were in.
+    /// on screen was one of them. Answers whether it removed anything.
+    ///
+    /// Whether and not what: a caller that has to let go of what the closed tabs kept
+    /// works out which documents are going before the close, the bar being what it asks,
+    /// so a list handed back afterwards would be one nobody reads.
     ///
     /// The landing is worked out before anything is removed, which is what [`landing`]
     /// asks of its caller, and the tab on screen is left alone when it survives.
-    pub fn close(&mut self, closing: impl Fn(&Tab) -> bool) -> Vec<Tab> {
-        let closed: Vec<Tab> = self
-            .tabs
-            .iter()
-            .copied()
-            .filter(|tab| closing(tab))
-            .collect();
-        if closed.is_empty() {
-            return closed;
+    pub fn close(&mut self, closing: impl Fn(&Tab) -> bool) -> bool {
+        if !self.tabs.iter().any(&closing) {
+            return false;
         }
         let showing = self.active.is_some_and(|active| closing(&active));
         if showing {
             self.active = landing(&self.tabs, self.active, &closing);
         }
         self.tabs.retain(|tab| !closing(tab));
-        closed
+        true
     }
 }
 

@@ -234,7 +234,7 @@ pub(crate) fn close_tab(open: Open, places: Places, id: DocId) {
     // not open -- a menu left open while its tab closed -- and the trail and the
     // positions below belong to whatever holds the id now.
     let closed = strip.write().close(|open| *open == tab);
-    if closed.is_empty() {
+    if !closed {
         return;
     }
     docs.write().close(id);
@@ -281,7 +281,7 @@ pub(crate) fn close_others(open: Open, places: Places, keep: Tab) {
     };
 
     let closed = strip.write().close(|tab| *tab != keep);
-    if closed.is_empty() {
+    if !closed {
         return;
     }
     {

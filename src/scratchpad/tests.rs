@@ -412,6 +412,57 @@ fn the_listing_drops_what_is_not_a_pad_and_keeps_what_the_order_forgot() {
     assert_eq!(pads(&store), [row("kept", "Kept one"), row("stray", "")]);
 }
 
+/// The listing asks each pad's **manifest** and leaves the source where it is, so a name
+/// costs one small file and not the reader's document beside it. What it answers is what a
+/// whole load answers: the same name for a pad, and nothing at all for a package short of
+/// its source, which is also what a delete refuses.
+///
+/// The one place the two part is a `src/main.rs` that is there and is not text. That is a
+/// scratchpad to the listing and unreadable to a load, so the pad is on the list to be
+/// opened and told about rather than missing from it.
+#[test]
+fn the_listing_asks_the_manifest_and_not_the_source() {
+    let base = directory(line!());
+    let store = Store::at(&base);
+    let scratchpads = store.scratchpads();
+    fs::create_dir_all(&scratchpads).expect("the directory");
+
+    let written = [
+        ("bytes", "Not text"),
+        ("headless", "No source"),
+        ("plain", "Plain one"),
+    ];
+    for (pad, name) in written {
+        let mut scratchpad = Scratchpad::of(id(pad));
+        scratchpad.name = name.to_owned();
+        scratchpad
+            .write_to(&scratchpads.join(pad))
+            .expect("writing");
+    }
+    // A source that is not text, and a package whose source has gone.
+    fs::write(scratchpads.join("bytes").join(SOURCE_FILE), [0xff, 0xfe]).expect("the bytes");
+    fs::remove_file(scratchpads.join("headless").join(SOURCE_FILE)).expect("removing the source");
+
+    let listed = pads(&store);
+    assert_eq!(
+        listed,
+        [row("bytes", "Not text"), row("plain", "Plain one")]
+    );
+    // The name a row carries is the name a load would give the same pad.
+    let loaded = Scratchpad::load_from(&scratchpads.join("plain")).expect("the pad");
+    assert_eq!(listed[1].name, loaded.name);
+
+    // The source is the whole of what the two paths differ over: text is a load's question
+    // and not the listing's, where being there at all is both their question.
+    assert_eq!(Scratchpad::load_from(&scratchpads.join("bytes")), None);
+    assert_eq!(Scratchpad::load_from(&scratchpads.join("headless")), None);
+    assert!(matches!(
+        delete_pad(&store, &id("headless")),
+        Err(Failure::Delete(_))
+    ));
+    assert!(scratchpads.join("headless").exists());
+}
+
 /// A new pad claims its directory with the `create_dir` that fails rather than opens, so an
 /// id another copy of the app is already using is stepped over rather than taken. The
 /// package goes in at once: a claimed directory with nothing in it is not a pad, and the

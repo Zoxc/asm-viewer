@@ -89,7 +89,7 @@ fn raising_says_when_it_would_change_what_is_on_screen() {
 fn closing_the_tab_on_screen_lands_on_its_neighbour() {
     let (mut strip, tabs, _docs) = strip(3);
     strip.raise(tabs[1]);
-    assert_eq!(strip.close(|tab| *tab == tabs[1]), [tabs[1]]);
+    assert!(strip.close(|tab| *tab == tabs[1]));
     assert_eq!(strip.tabs(), [tabs[0], tabs[2]]);
     assert_eq!(strip.active(), Some(tabs[2]));
 }
@@ -100,7 +100,7 @@ fn closing_the_tab_on_screen_lands_on_its_neighbour() {
 fn closing_around_the_tab_on_screen_leaves_it_showing() {
     let (mut strip, tabs, _docs) = strip(3);
     strip.raise(tabs[1]);
-    assert_eq!(strip.close(|tab| *tab != tabs[1]), [tabs[0], tabs[2]]);
+    assert!(strip.close(|tab| *tab != tabs[1]));
     assert_eq!(strip.tabs(), [tabs[1]]);
     assert_eq!(strip.active(), Some(tabs[1]));
 }
@@ -110,17 +110,15 @@ fn closing_around_the_tab_on_screen_leaves_it_showing() {
 #[test]
 fn closing_nothing_removes_nothing() {
     let (mut strip, tabs, _docs) = strip(2);
-    assert!(strip
-        .close(|tab| *tab == Tab::Page(Page::Project))
-        .is_empty());
+    assert!(!strip.close(|tab| *tab == Tab::Page(Page::Project)));
     assert_eq!(strip.tabs(), tabs);
     assert_eq!(strip.active(), Some(tabs[1]));
 }
 
 #[test]
 fn closing_the_last_tab_shows_nothing() {
-    let (mut strip, tabs, _docs) = strip(1);
-    assert_eq!(strip.close(|_| true), tabs);
+    let (mut strip, _tabs, _docs) = strip(1);
+    assert!(strip.close(|_| true));
     assert!(strip.tabs().is_empty());
     assert_eq!(strip.active(), None);
 }

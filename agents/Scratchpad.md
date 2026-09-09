@@ -31,9 +31,15 @@ newtype whose `Deserialize` goes through the checked constructor, because it is 
 path *and* read back out of two files a user can edit, the order beside the pads and every pad's own
 `Cargo.toml`, where it is what `[package] name` says. `check_name` is the one check, and the
 crate-name rules it applies are strictly stronger than what a safe path component needs. It has no
-`Display`, deliberately. That is also what gives the enumeration its rule: `Scratchpad::load_from`
-answers `None` for a manifest whose crate name is not an id, so **a directory `load_from` answers
-for is a pad and anything else is not**, repaired at the point of use and never on load.
+`Display`, deliberately. That is also what gives the enumeration its rule: the manifest read
+answers `None` for a crate name that is not an id, so **a directory whose manifest parses, with a
+source file beside it, is a pad and anything else is not**, repaired at the point of use and never
+on load. `stated_in` is that sentence, and it is all the questions short of opening a pad ask: the
+listing wants a name and a delete wants a yes or no, and neither is worth reading the reader's own
+document. `load_from` is `stated_in` and then that document, so what one answers for the other
+does -- bar the one case they part over on purpose. A `src/main.rs` that is there and is not text
+lists as a pad and refuses to open, which is what this module says about any package it cannot
+read; missing from the list, it would be a pad the reader cannot fix.
 
 **The name lives in the package, under `[package.metadata]`**, the one place cargo reserves for a
 tool of its own and ignores itself. So "the package is the storage" still holds: nothing describes a
@@ -61,12 +67,13 @@ so an order that dropped its own tail would drop exactly the pads the listing be
 trouble of appending. It is also loaded through `Store::read` like everything else, which is what
 it was not: it parsed its own file and answered a default, so the next `remember` wrote over a pad
 order the reader never heard was unreadable. **`pads()` is the order's ids then the pads it does
-not name**, in id order. Each row carries the name out of that pad's own package, read at the
+not name**, in id order. Each row carries the name out of that pad's own manifest, read at the
 moment the list is asked for, which is what lets the panel draw a pad nothing has ever opened.
 That second half is the
 difference from `recent_projects`, which lists only the projects a reader has opened: this is the
 list a reader picks a pad from, so a pad that fell off the end of `MAX_ORDER` or was made
-outside the app has to be reachable. A pad is remembered when it is **opened**, and only if there is
+outside the app has to be reachable. The manifest and no more: a name is all a row shows, so
+listing N pads reads N small files and not the N sources with them. A pad is remembered when it is **opened**, and only if there is
 a directory for it, which keeps the "nothing is written until there is something to say" rule: the
 pad a first run holds is in memory until something is typed into it.
 
@@ -87,7 +94,7 @@ does.
 **A delete is the one thing here that destroys what the reader wrote**, so it is behind a question
 (below) and the module's half of that is being narrow. `delete_pad` builds the path out of the id
 alone, a checked crate name that can be neither `..`, nor a separator, nor absolute, and then
-refuses a directory `load_from` no longer answers for -- so a `remove_dir_all` can only ever reach a
+refuses a directory `stated_in` no longer answers for -- so a `remove_dir_all` can only ever reach a
 directory holding a manifest this module wrote. `symlink_metadata` is what makes that the directory
 itself rather than whatever a link put in its place, and a pad with no directory is already deleted
 and says so. What goes is the whole directory, cargo's `target/` included: the package is the
