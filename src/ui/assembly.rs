@@ -1546,15 +1546,18 @@ impl PartialEq for AssemblyPane {
 }
 
 impl AssemblyPane {
-    /// What the bar over this pane names, which is what the pane itself is drawing -- and
-    /// for a tab that is a whole object, the object, that being the one selection no
-    /// listing is ever worked out for.
-    fn named(&self, analysis: &Analyzed) -> Option<Named> {
+    /// What the bar over this pane names, which is what the pane itself is drawing.
+    ///
+    /// A tab that is a whole object, and one that is an object's code, are asked of no
+    /// worker ([`ask`] answers `None` for both, and the hook then resets [`Analyzed`]), so
+    /// there is never an analysis of either and the bar has to fall back to the document
+    /// to name the object. Everything else is the symbol the pane is drawing.
+    fn named(&self, analysis: &Analyzed) -> Option<Selection> {
         match analysis.showing(&self.document) {
-            Showing::Listing(shown) => Some(Named::Symbol(shown.studied.symbol.clone())),
+            Showing::Listing(shown) => Some(Selection::Symbol(shown.studied.symbol.clone())),
             _ => match &self.document {
                 Document::Assembly(Selection::Object(object)) | Document::Code(object) => {
-                    Some(Named::Object(object.clone()))
+                    Some(Selection::Object(object.clone()))
                 }
                 _ => None,
             },

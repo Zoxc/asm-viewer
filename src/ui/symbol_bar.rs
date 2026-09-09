@@ -10,27 +10,6 @@
 
 use super::*;
 
-/// What the bar names.
-///
-/// A tab that is a whole object is asked of no worker ([`ask`] answers `None` for one, and
-/// the hook then resets [`Analyzed`]), so there is never an analysis of one and the bar has
-/// to fall back to the document for it. Everything else is the symbol the pane is drawing.
-#[derive(Clone)]
-pub(crate) enum Named {
-    Symbol(Symbol),
-    Object(Arc<Object>),
-}
-
-impl PartialEq for Named {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Named::Symbol(a), Named::Symbol(b)) => a == b,
-            (Named::Object(a), Named::Object(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        }
-    }
-}
-
 /// One name in the bar: one line however long the name is, and **copied when it is
 /// pressed**.
 ///
@@ -116,9 +95,9 @@ fn fact(name: &str, value: String) -> impl IntoElement {
 
 /// The rest of what is known about what the bar names, which is what the Info pane
 /// answered before it. The two names are the bar's own rows and are not repeated here.
-fn facts(named: &Named) -> Vec<Element> {
+fn facts(named: &Selection) -> Vec<Element> {
     match named {
-        Named::Symbol(symbol) => {
+        Selection::Symbol(symbol) => {
             let data = &symbol.data;
             vec![
                 fact(
@@ -146,7 +125,7 @@ fn facts(named: &Named) -> Vec<Element> {
                 fact("Object", symbol.object.name.clone()).into_element(),
             ]
         }
-        Named::Object(object) => vec![
+        Selection::Object(object) => vec![
             fact("Format", format!("{:?}", object.format)).into_element(),
             fact("Symbols", object.symbols.len().to_string()).into_element(),
             fact("Path", object.path.display().to_string()).into_element(),
@@ -157,7 +136,7 @@ fn facts(named: &Named) -> Vec<Element> {
 /// The bar over the Assembly pane, naming what that pane is drawing, and the section it
 /// expands into.
 ///
-/// **The drawn symbol and never the selected one.** It is handed a [`Named`] worked out
+/// **The drawn symbol and never the selected one.** It is handed a [`Selection`] worked out
 /// from the same [`Analyzed::showing`] the listing under it is built from, rather than
 /// reading `Active` the way the Info pane it replaces did: the two disagree for as long as
 /// the worker takes, and a bar naming a function the rows below it are not of is worse than
@@ -168,7 +147,7 @@ fn facts(named: &Named) -> Vec<Element> {
 /// be gone the moment the reader looked at another tab.
 #[derive(Clone, PartialEq)]
 pub(crate) struct SymbolBar {
-    pub(crate) named: Named,
+    pub(crate) named: Selection,
     /// The tab this bar is in, which is what its open-or-shut is filed under -- the tab
     /// and not the place on its trail, so the section stays open along the trail.
     pub(crate) tab: DocId,
@@ -185,7 +164,7 @@ impl Component for SymbolBar {
         // The mangled row only where there is a demangling: `display()` falls back to the
         // mangled name, so a symbol that was never mangled would otherwise be named twice.
         let names: Vec<Element> = match &self.named {
-            Named::Symbol(symbol) => {
+            Selection::Symbol(symbol) => {
                 let data = &symbol.data;
                 std::iter::once(
                     NameRow {
@@ -203,7 +182,7 @@ impl Component for SymbolBar {
                 }))
                 .collect()
             }
-            Named::Object(object) => vec![NameRow {
+            Selection::Object(object) => vec![NameRow {
                 text: object.name.clone(),
                 dim: false,
             }

@@ -149,7 +149,7 @@ makes a project to put the binary in.
 **A file row is also how a binary is closed.** Right-click opens a `ContextMenu` (which needs the
 `ContextMenuViewer` mounted at the root of `app()`; opening one without it panics) with a single
 "Close file". A member row has nothing: the unit that closes is the file. `close_binary` is composed
-of rules from the modules that own them, `Selection::in_file`, `tabs::landing`,
+of rules from the modules that own them, `Document::in_file`, `tabs::landing`,
 `Docs::retain_entries` and `Visits::retaining`, plus one for a file that is still arriving
 (`Loads::cancel`, without which the objects still coming out of the worker would put the file back
 one member at a time). Three decisions inside it matter. A tab **showing** a place in the file

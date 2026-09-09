@@ -24,13 +24,6 @@ pub enum Selection {
 }
 
 impl Selection {
-    /// Whether this points into the file at `path`. A symbol answers for the file its
-    /// *object* came out of, and `path` is [`Object::path`] and never an object's name,
-    /// so an archive closes members and all.
-    pub fn in_file(&self, path: &Path) -> bool {
-        self.file() == path
-    }
-
     /// The file it came out of: an archive for a member, and never an object's name.
     pub fn file(&self) -> &Path {
         match self {
