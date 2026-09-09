@@ -247,6 +247,16 @@ leaves this list when it is. That is a move made on request, like everything els
   be taken off the operand and the relocation kind's implicit bias read per format, a COFF
   `REL32` counting from the byte after the field and `REL32_1`..`_5` from further on — so the
   two are one piece of work, this being the half that already has a name to hang the number on.
+- [ ] Light only as much of a target row's horizontal run as a picked-out branch reaches. Where
+  two branches have an end on one row the gutter draws a single run out to the listing, from the
+  outermost of their lanes (`RowLanes::stub`, `src/lanes.rs`), since ends at the same height
+  would merge anyway. But `Lit::corner` is one flag for the whole row, so `gutter`
+  (`src/ui/assembly.rs`) draws that run lit end to end as soon as a branch of the picked-out row
+  ends there -- the stretch outside that branch's own lane included, which belongs to the
+  crossing branch alone. The reader is shown a lit line running further out than anything lit
+  goes. `Lit` would have to say which lane its outermost corner is in, and the run be drawn as
+  two pieces. The arrowhead reads the same flag and has the same gap: a branch that *starts* on
+  a row another branch lands on lights the arrowhead, though nothing picked out lands there.
 
 ## UI
 
