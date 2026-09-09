@@ -510,14 +510,19 @@ read instead. The copies had drifted into two paddings, two spacings and two hov
 folding them together settled each. Three more joined later, from outside the sidebar: the pad
 list's row, the build-artefact row and the recent-project row. Each had a padding and a spacing of
 its own, and all three took the shared ones, so a row in the Scratchpad or the Project view sits on
-the same grid as one in the Objects tree. The two washes looked like one per pane ground -- one over
+the same grid as one in the Objects tree. Three more again after that: the Debug page's panic-file
+row, and the Project view's binary and override rows. They too were the frame written out by hand
+and none of them matched it -- two spaced at 8 where the shared spacing is 5, one padded at 4 and
+one not padded at all, and none of the three clipping. Taking the shared frame moves what they draw
+by a pixel or two and clips what overruns, which is the point: a row is a row wherever it is drawn.
+The panic-file row keeps its rounded corners, which are its own and not drift. The two washes looked like one per pane ground -- one over
 `pane_bg`, another over the cream four of the panels sat on -- but the Locations panel drew its
 reference rows in one and its location rows in the other on the same ground, which is what makes it
 drift and not a rule. So one wash lights a row wherever it is drawn. The grounds went next: **every
 panel is on `pane_bg`** and the cream is out of the palette, and no caller names a surface any more
 -- `use_filter_pane` and `use_search_pane` took one as an argument, which is what let the three tabs
-of one sidebar disagree. `dead_list_row` is the same frame with no hover, for the bookmark whose
-place does not resolve.
+of one sidebar disagree. `dead_list_row` is the same frame with no hover, for the rows nothing is
+pressed on: the bookmark whose place does not resolve, and the Project view's two.
 
 **What a list lights is its own pick.** A lit row used to be one fact -- the row *is* what the tab
 on screen shows -- so four lists lit one row each, four lit none, and there was no way to point at a

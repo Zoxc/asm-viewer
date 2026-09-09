@@ -193,8 +193,9 @@ pub(crate) fn list_row(mut hovering: State<bool>, chosen: Chosen) -> Rect {
         .on_pointer_out(move |_| hovering.set_if_modified(false))
 }
 
-/// A list row that answers the pointer with nothing: a bookmark whose place does not
-/// resolve, which is drawn dimmed and goes nowhere, so it has no hover to light.
+/// A list row that answers the pointer with nothing: the bookmark whose place does not
+/// resolve, drawn dimmed and going nowhere, and the Project view's binary and override
+/// rows, which state what is there. Nothing to press, so no hover to light.
 pub(crate) fn dead_list_row() -> Rect {
     row_frame(Color::TRANSPARENT)
 }

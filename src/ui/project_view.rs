@@ -121,13 +121,7 @@ impl Component for BinaryRow {
         cut_tooltip(
             fitted.cut(),
             text.clone(),
-            rect()
-                .width(Size::fill())
-                .height(Size::px(list_row_height()))
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .spacing(8.0)
-                .content(Content::Flex)
+            dead_list_row()
                 .child(tree_name_fitted(fitted, text, false, &[]))
                 .child(
                     label()
@@ -149,14 +143,7 @@ impl Component for BinaryRow {
 /// A row and not a `field_row`: these names are long enough to be the whole of the left
 /// column and there is no reason for the values to line up with the fields above.
 fn override_row(name: &str, value: &str) -> Element {
-    rect()
-        .width(Size::fill())
-        .height(Size::px(list_row_height()))
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .content(Content::Flex)
-        .spacing(8.0)
-        .padding(Gaps::new_symmetric(0.0, 5.0))
+    dead_list_row()
         .child(
             label()
                 .text(name.to_owned())

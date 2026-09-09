@@ -111,7 +111,7 @@ struct FileRow {
 
 impl Component for FileRow {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let path = self.path.clone();
         let name = self
             .path
@@ -119,19 +119,8 @@ impl Component for FileRow {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.path.display().to_string());
 
-        rect()
-            .width(Size::fill())
-            .height(Size::px(list_row_height()))
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .padding(Gaps::new_symmetric(0.0, 4.0))
+        list_row(hovering, Chosen::No)
             .corner_radius(4.0)
-            .background(match hovering() {
-                true => palette().row_hover_bg,
-                false => Color::TRANSPARENT,
-            })
-            .on_pointer_over(move |_| hovering.set_if_modified(true))
-            .on_pointer_out(move |_| hovering.set_if_modified(false))
             // `spawn_forever` is not needed: nothing here takes this row down, and the
             // call is a thread of `reveal`'s own either way.
             .on_press(move |_| reveal::reveal(path.clone()))
