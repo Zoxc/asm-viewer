@@ -432,6 +432,49 @@ impl PartialEq for SourceList {
     }
 }
 
+/// The row of `file` the reveal `owing` asks for goes to, and [`None`] where the pane
+/// showing that file cannot answer it -- which leaves the request owed rather than spent
+/// on a guess.
+///
+/// A run of the pane's own is a run of the file it is showing, so the run's first row is
+/// the answer. The other pane's run is answered by the line its first placed instruction
+/// came from, which `places` reads off the listing: nothing to scroll to when that is a
+/// file this pane is not showing -- an inlined header's line 42 is not line 42 of the
+/// file on screen -- nor when the line is past the end of a file that has moved on since
+/// it was compiled.
+fn owed_row(
+    owing: &Owing,
+    file: &Arc<str>,
+    length: usize,
+    places: impl FnOnce(&Picked) -> Vec<LinePos>,
+) -> Option<usize> {
+    let index = match owing {
+        Owing::Own(rows) => *rows.start(),
+        Owing::Pair(pair) => {
+            let line = places(pair).into_iter().find(|at| at.file == *file)?.line;
+            (line as usize).checked_sub(1)?
+        }
+    };
+    (index < length).then_some(index)
+}
+
+/// The row of `file` a landing names for the pane drawing `document`, and [`None`] where
+/// it names another place, another file, or a line the file does not have.
+fn landing_row(
+    asked: &Landing,
+    document: &Document,
+    file: &Arc<str>,
+    length: usize,
+) -> Option<usize> {
+    if asked.tab != *document {
+        return None;
+    }
+    let at = asked.at.as_ref().filter(|at| at.file == *file)?;
+    (at.line as usize)
+        .checked_sub(1)
+        .filter(|index| *index < length)
+}
+
 impl Component for SourceList {
     fn render(&self) -> impl IntoElement {
         let marked = use_consume::<Marked>().0;
@@ -494,35 +537,22 @@ impl Component for SourceList {
                 let file = self.file.clone();
                 let document = self.document.clone();
                 move |controller: &mut ScrollController| {
-                    let index = match owed_reveal(marked, Pane::Source) {
-                        None => return false,
-                        Some(Owing::Own(rows)) => *rows.start(),
-                        // The line the run's first placed instruction came from. Nothing
-                        // to scroll to when that is a file this pane is not showing --
-                        // an inlined header's line 42 is not line 42 of the file on
-                        // screen -- nor when the line is past the end of a file that
-                        // has moved on since it was compiled.
-                        Some(Owing::Pair(pair)) => {
-                            let places = places_of(
-                                &document,
-                                &pair,
-                                &analysis.peek(),
-                                code_rows.peek().as_deref(),
-                            );
-                            let Some(line) =
-                                places.iter().find(|at| at.file == file).map(|at| at.line)
-                            else {
-                                return false;
-                            };
-                            let Some(index) = (line as usize).checked_sub(1) else {
-                                return false;
-                            };
-                            index
-                        }
-                    };
-                    if index >= length {
+                    // Asked before anything else: `owed_reveal` reads the marks, and that
+                    // read is what wakes this on the next click.
+                    let Some(owing) = owed_reveal(marked, Pane::Source) else {
                         return false;
-                    }
+                    };
+                    let owed = owed_row(&owing, &file, length, |pair| {
+                        places_of(
+                            &document,
+                            pair,
+                            &analysis.peek(),
+                            code_rows.peek().as_deref(),
+                        )
+                    });
+                    let Some(index) = owed else {
+                        return false;
+                    };
                     if !reveal_row(controller, *viewport.read(), length, index) {
                         return false;
                     }
@@ -539,16 +569,7 @@ impl Component for SourceList {
                 let file = self.file.clone();
                 let document = self.document.clone();
                 move |asked: &Landing, controller: &mut ScrollController| {
-                    if asked.tab != document {
-                        return false;
-                    }
-                    let Some(at) = asked.at.as_ref().filter(|at| at.file == file) else {
-                        return false;
-                    };
-                    let Some(index) = (at.line as usize)
-                        .checked_sub(1)
-                        .filter(|index| *index < length)
-                    else {
+                    let Some(index) = landing_row(asked, &document, &file, length) else {
                         return false;
                     };
                     // Answered only where the pane could go there: a landing is gone

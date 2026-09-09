@@ -412,6 +412,29 @@ impl PartialEq for Door {
     }
 }
 
+/// Where a press on a link goes, once the door and the modifiers have been asked
+/// ([`Door::opens`]): the decision, apart from the four ways of going there.
+enum Opens {
+    /// The target's own rows, further down the listing already on screen: moved to, which
+    /// is a scroll and a caret and neither a tab nor a visit, since `land` plants an
+    /// address in the tab that is already showing it. `placed` is the address in the space
+    /// that listing draws.
+    InCode { object: Arc<Object>, placed: u64 },
+    /// The target as a listing of its own: followed in place, the way a browser follows a
+    /// link, so the function left is one Back away -- or, with Ctrl, in a tab of its own.
+    Symbol {
+        object: Arc<Object>,
+        target: Arc<SymbolData>,
+    },
+    /// The object's code at an address: moved to where this listing is that code already,
+    /// opened in place from a symbol's own listing, and in a tab of its own with Ctrl.
+    Code { object: Arc<Object>, address: u64 },
+    /// A row of the listing on screen, with the place it names for the source pane.
+    Row { to: usize, at: Option<LinePos> },
+    /// Nothing, the press being the door's all the same. See [`Door::opens`].
+    Nothing,
+}
+
 impl Door {
     /// **Whether a press on the link is a door now**, which is the one answer the light,
     /// the pointer's icon and the press are all picked by, so none of the three can offer
@@ -430,6 +453,46 @@ impl Door {
             Door::Symbol { .. } | Door::Address { .. } | Door::Row { .. } => true,
             Door::Label { .. } => ctrl(),
         }
+    }
+
+    /// **What a press on the link opens**, with the two modifiers as they were when the
+    /// button went down. [`None`] is a press that is not a door: it goes on into the row,
+    /// which picks the line out and opens nothing.
+    ///
+    /// Alt says the press is a selection this time and shuts every door; so does a door
+    /// [`open_now`](Self::open_now) says is not open, which for a label is Ctrl not being
+    /// held. A label with Ctrl held **is** a door and opens [`Opens::Nothing`]: it is a
+    /// run of its row's own text and the row is what follows it (`section_view`), so the
+    /// press is still the door's and must not reach the row.
+    fn opens(&self, alt: bool, ctrl: bool) -> Option<Opens> {
+        if alt || !self.open_now(|| ctrl) {
+            return None;
+        }
+        Some(match self {
+            // In the unified view the target is further down this same listing: moved to,
+            // at the address that listing draws it at, which is the placed one.
+            Door::Symbol {
+                object,
+                target,
+                code_tab,
+            } if *code_tab && !ctrl => Opens::InCode {
+                object: object.clone(),
+                placed: target.placed(target.address),
+            },
+            Door::Symbol { object, target, .. } => Opens::Symbol {
+                object: object.clone(),
+                target: target.clone(),
+            },
+            Door::Address { object, address } => Opens::Code {
+                object: object.clone(),
+                address: *address,
+            },
+            Door::Label { .. } => Opens::Nothing,
+            Door::Row { to, at } => Opens::Row {
+                to: *to,
+                at: at.clone(),
+            },
+        })
     }
 
     /// The colour the label is drawn in at rest, and the one it takes while it is lit --
@@ -499,63 +562,38 @@ impl Component for DoorLabel {
             .on_pointer_over(move |_| hovering.set_if_modified(true))
             .on_pointer_out(move |_| hovering.set_if_modified(false))
             .on_press(move |e: Event<PressEventData>| {
-                // Alt says this press is not a door: it is left to the row, whose
-                // `pointer_down` has already begun a selection over the link. Nor is a
-                // press the door is not open to: it goes on into the row, which is
-                // picked out, and opens nothing.
-                if *alt.peek() || !door.open_now(|| *ctrl.peek()) {
+                // What this press is, decided before anything is opened. A press that is
+                // no door is left to the row, whose `pointer_down` has already begun a
+                // selection over the link.
+                let Some(opens) = door.opens(*alt.peek(), *ctrl.peek()) else {
                     return;
-                }
+                };
                 // Or the press bubbles into the row, which would pin the line the
                 // instruction being left came from.
                 e.stop_propagation();
 
-                match &door {
-                    // In the unified view the target is further down this same listing:
-                    // moved to, which is a scroll and a caret and neither a tab nor a
-                    // visit, since `land` plants an address in the tab that is already
-                    // showing it.
-                    Door::Symbol {
-                        object,
-                        target,
-                        code_tab,
-                    } if *code_tab && !*ctrl.peek() => {
-                        // Where the target is drawn in the object's own listing: its
-                        // address placed, which is the one address space that listing
-                        // draws.
-                        let placed = target.placed(target.address);
-                        show_in_code(doors, places, object.clone(), placed, None, Reach::InPlace);
+                match opens {
+                    Opens::InCode { object, placed } => {
+                        show_in_code(doors, places, object, placed, None, Reach::InPlace);
                     }
-                    // A link inside the tab: followed in place, the way a browser follows
-                    // one, so the function left is one Back away -- or, with Ctrl, in a
-                    // tab of its own beside this one.
-                    Door::Symbol { object, target, .. } => {
+                    Opens::Symbol { object, target } => {
                         open_document(
                             doors.open,
                             doors.visits,
                             Document::Assembly(Selection::Symbol(Symbol {
-                                object: object.clone(),
-                                data: target.clone(),
+                                object,
+                                data: target,
                             })),
                             Reach::inside(ctrl),
                         );
                     }
-                    // The object's code at that address: moved to where this listing is
-                    // that code already, which `show_in_code` leaves to `land`; opened in
-                    // place from a symbol's own listing, as a name is, and in a tab of
-                    // its own with Ctrl, as everything is.
-                    Door::Address { object, address } => show_in_code(
-                        doors,
-                        places,
-                        object.clone(),
-                        *address,
-                        None,
-                        Reach::inside(ctrl),
-                    ),
-                    // A label is the one door no `DoorLabel` carries: it is a run of its
-                    // row's own text, and the row follows it (`section_view`).
-                    Door::Label { .. } => {}
-                    Door::Row { to, at } => {
+                    // `show_in_code` leaves the move to `land` where this listing is that
+                    // code already.
+                    Opens::Code { object, address } => {
+                        show_in_code(doors, places, object, address, None, Reach::inside(ctrl));
+                    }
+                    Opens::Nothing => {}
+                    Opens::Row { to, at } => {
                         // The row is reached by a press, so the pane is on screen and
                         // measured.
                         let mut controller = listing.controller;
@@ -563,14 +601,14 @@ impl Component for DoorLabel {
                             &mut controller,
                             listing.bounds.get().height(),
                             listing.rows(),
-                            *to,
+                            to,
                         );
                         // The row landed on becomes the picked-out one, replacing the row
                         // the press started on -- which `pointer_down` has already marked,
                         // that being the one handler a stopped press does not undo. The
                         // source pane owes the scroll to the target's line, where it has
                         // one; this pane has just been given its own, above.
-                        mark_row(marked, at.as_ref().map(|at| at.file.clone()), *to);
+                        mark_row(marked, at.map(|at| at.file), to);
                     }
                 }
             })
@@ -1181,6 +1219,40 @@ impl PartialEq for InstructionList {
     }
 }
 
+/// The listing row the reveal `owing` asks for goes to, and [`None`] where this listing
+/// cannot answer it -- which leaves the request owed rather than spent on a guess.
+///
+/// A run of the pane's own is a run of these rows, so the run's first row is the answer.
+/// The other pane's run is answered by the first instruction compiled from a line of it.
+/// Nothing at all when those lines produced no instruction here -- ones the optimiser
+/// folded away, or belonging to another function, or, in a source-driven tab, the listing
+/// this very click is asking for not having arrived yet. Scrolling somewhere arbitrary
+/// would be worse than not scrolling.
+///
+/// The own run is already in the listing's rows and the paired instruction is not, so
+/// `lanes` is what makes a row of it: the separators above it are rows too.
+fn owed_row(
+    owing: &Owing,
+    lanes: &Lanes,
+    paired: impl FnOnce(&Picked) -> Option<usize>,
+) -> Option<usize> {
+    match owing {
+        Owing::Own(rows) => Some(*rows.start()),
+        Owing::Pair(pair) => paired(pair).map(|index| lanes.row_of(index)),
+    }
+}
+
+/// The instruction a door's planted `address` lands on: the last one at or below it, so a
+/// door into the middle of an instruction lands on the instruction holding the byte.
+///
+/// [`None`] where the address is before the listing's first instruction, which is a
+/// planting dropped rather than left.
+fn planted_index(instructions: &[Instruction], address: u64) -> Option<usize> {
+    instructions
+        .partition_point(|instruction| instruction.address <= address)
+        .checked_sub(1)
+}
+
 impl Component for InstructionList {
     fn render(&self) -> impl IntoElement {
         let doors = use_doors();
@@ -1243,23 +1315,17 @@ impl Component for InstructionList {
             {
                 let data = data.clone();
                 move |controller: &mut ScrollController| {
-                    let row = match owed_reveal(marked, Pane::Assembly) {
-                        None => return false,
-                        Some(Owing::Own(rows)) => *rows.start(),
-                        // The first instruction compiled from a line of the source
-                        // pane's run. Nothing at all when the lines produced no
-                        // instruction here -- ones the optimiser folded away, or
-                        // belonging to another function, or, in a source-driven tab,
-                        // the listing this very click is asking for not having arrived
-                        // yet. Scrolling somewhere arbitrary would be worse than not
-                        // scrolling, and **the request is left owed**, so the listing
-                        // that can answer it still finds it.
-                        Some(Owing::Pair(pair)) => {
-                            let Some(index) = data.studied.first_paired(&pair) else {
-                                return false;
-                            };
-                            data.lanes().row_of(index)
-                        }
+                    // Asked before anything else: `owed_reveal` reads the marks, and that
+                    // read is what wakes this on the next click. **The request it answers
+                    // nothing for is left owed**, so the listing that can answer it still
+                    // finds it.
+                    let Some(owing) = owed_reveal(marked, Pane::Assembly) else {
+                        return false;
+                    };
+                    let owed =
+                        owed_row(&owing, data.lanes(), |pair| data.studied.first_paired(pair));
+                    let Some(row) = owed else {
+                        return false;
                     };
                     if !reveal_row(controller, *viewport.read(), length, row) {
                         return false;
@@ -1301,11 +1367,8 @@ impl Component for InstructionList {
                     return;
                 };
                 plant.set(None);
-                let after = data
-                    .assembly
-                    .instructions
-                    .partition_point(|instruction| instruction.address <= planting.address);
-                let Some(index) = after.checked_sub(1) else {
+                let Some(index) = planted_index(&data.assembly.instructions, planting.address)
+                else {
                     return;
                 };
                 let file = data.position(index).map(|at| at.file);
@@ -1408,62 +1471,67 @@ impl Component for InstructionList {
                 chars,
                 marking,
             },
-            move |i, rows: &AsmRows| {
-                let wash = wash_of(rows.chars, i);
-                let Some(index) = rows.data.lanes().instruction_at(i) else {
-                    // A separator, which belongs to the instruction below it: the lanes it
-                    // carries are that row's, and it lights with them but never draws their
-                    // corner.
-                    let below = rows.data.lanes().instruction_at(i + 1).unwrap_or(0);
-                    let mut lit = lanes::lit(&rows.touching, below);
-                    lit.corner = false;
-
-                    // Keyed by the row it opens, in a key space of its own: see `SeparatorRow`.
-                    let address = rows.data.assembly.instructions[below].address;
-                    return SeparatorRow {
-                        row: i,
-                        wash,
-                        width: rows.data.width,
-                        arrows: RowArrows {
-                            lanes: rows.data.lanes().boundary(below),
-                            lit,
-                        },
-                        key: DiffKey::None,
-                    }
-                    .key((true, address))
-                    .into();
-                };
-
-                // Paired, and if so whether the rows either side are too: the listing's rows,
-                // a separator being nobody's pair.
-                let paired_at = |row: usize| {
-                    rows.data
-                        .lanes()
-                        .instruction_at(row)
-                        .is_some_and(|index| rows.data.paired(index, rows.pair.as_ref()))
-                };
-                let paired = paired_at(i).then(|| Edges::of(i, paired_at));
-                InstructionRow {
-                    paired,
-                    data: rows.data.clone(),
-                    index,
-                    row: i,
-                    wash,
-                    chars: RowChars::of(rows.chars, i),
-                    marking: rows.marking.clone(),
-                    arrows: RowArrows {
-                        lanes: rows.data.lanes().row(index),
-                        lit: lanes::lit(&rows.touching, index),
-                    },
-                    key: DiffKey::None,
-                }
-                // Tagged, for the separators' sake: an address alone could be any
-                // separator's too.
-                .key((false, rows.data.assembly.instructions[index].address))
-                .into()
-            },
+            asm_row,
         )
     }
+}
+
+/// One row of the listing: an instruction, or the separator above a row a branch lands
+/// on. Its own function rather than a closure, `new_with_data` never comparing one: what
+/// the rows are built from travels in [`AsmRows`] and nothing is captured here.
+fn asm_row(i: usize, rows: &AsmRows) -> Element {
+    let wash = wash_of(rows.chars, i);
+    let Some(index) = rows.data.lanes().instruction_at(i) else {
+        // A separator, which belongs to the instruction below it: the lanes it
+        // carries are that row's, and it lights with them but never draws their
+        // corner.
+        let below = rows.data.lanes().instruction_at(i + 1).unwrap_or(0);
+        let mut lit = lanes::lit(&rows.touching, below);
+        lit.corner = false;
+
+        // Keyed by the row it opens, in a key space of its own: see `SeparatorRow`.
+        let address = rows.data.assembly.instructions[below].address;
+        return SeparatorRow {
+            row: i,
+            wash,
+            width: rows.data.width,
+            arrows: RowArrows {
+                lanes: rows.data.lanes().boundary(below),
+                lit,
+            },
+            key: DiffKey::None,
+        }
+        .key((true, address))
+        .into();
+    };
+
+    // Paired, and if so whether the rows either side are too: the listing's rows,
+    // a separator being nobody's pair.
+    let paired_at = |row: usize| {
+        rows.data
+            .lanes()
+            .instruction_at(row)
+            .is_some_and(|index| rows.data.paired(index, rows.pair.as_ref()))
+    };
+    let paired = paired_at(i).then(|| Edges::of(i, paired_at));
+    InstructionRow {
+        paired,
+        data: rows.data.clone(),
+        index,
+        row: i,
+        wash,
+        chars: RowChars::of(rows.chars, i),
+        marking: rows.marking.clone(),
+        arrows: RowArrows {
+            lanes: rows.data.lanes().row(index),
+            lit: lanes::lit(&rows.touching, index),
+        },
+        key: DiffKey::None,
+    }
+    // Tagged, for the separators' sake: an address alone could be any
+    // separator's too.
+    .key((false, rows.data.assembly.instructions[index].address))
+    .into()
 }
 
 /// The Assembly pane: a bar naming what is drawn over a dispatch over the things

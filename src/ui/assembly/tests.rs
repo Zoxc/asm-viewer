@@ -273,3 +273,144 @@ fn every_kind_of_link_is_one_inline_piece() {
         );
     }
 }
+
+/// **A reveal the pane owes goes to a listing row, and the pair's is an instruction.**
+/// The pane's own run is already counted in listing rows; the other pane's is the first
+/// instruction its lines produced, which the separators above it make a row of.
+#[test]
+fn the_row_a_reveal_goes_to_is_the_runs_own_or_the_paired_instructions() {
+    // A listing of six instructions with a branch landing on the fourth, which is the
+    // one separator: instruction 3 is drawn at row 4.
+    let lanes = Lanes::new(&[BranchEdge { from: 0, to: 3 }], 6);
+    let pick = line_pick(Arc::from("now.c"), 7, None, Owed::default());
+
+    assert_eq!(
+        owed_row(&Owing::Own(4..=6), &lanes, |_| panic!(
+            "its own run asks the listing nothing"
+        )),
+        Some(4),
+        "a run of this pane's own is already in listing rows"
+    );
+    assert_eq!(
+        owed_row(&Owing::Pair(pick.clone()), &lanes, |_| Some(3)),
+        Some(4),
+        "the paired instruction, as a listing row"
+    );
+    assert_eq!(
+        owed_row(&Owing::Pair(pick), &lanes, |_| None),
+        None,
+        "lines that produced no instruction in this listing"
+    );
+}
+
+/// **A planted address lands on the instruction holding it**, which is the last one at or
+/// below it; an address before the first is dropped.
+#[test]
+fn a_planted_address_lands_on_the_instruction_holding_it() {
+    let instructions = [instruction(0x10, Vec::new()), instruction(0x18, Vec::new())];
+    assert_eq!(planted_index(&instructions, 0x10), Some(0));
+    assert_eq!(
+        planted_index(&instructions, 0x14),
+        Some(0),
+        "inside the first"
+    );
+    assert_eq!(planted_index(&instructions, 0x18), Some(1));
+    assert_eq!(planted_index(&instructions, 0x20), Some(1), "past the last");
+    assert_eq!(
+        planted_index(&instructions, 0x0),
+        None,
+        "before the listing's first instruction"
+    );
+    assert_eq!(planted_index(&[], 0x10), None, "a listing with no rows");
+}
+
+/// **One answer for what a press on a link does**, over the two modifiers and the listing
+/// the link is drawn in. A press that is no door is left to the row -- and a label with
+/// Ctrl held is a door that opens nothing, so the row does not get that one either.
+#[test]
+fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");
+    let objects = analysis::open_files(vec![path]);
+    let object = objects.first().expect("the fixture parses").clone();
+    let target = Arc::new(SymbolData {
+        name: "_ZN3add3addE".to_owned(),
+        demangled: Some("add".to_owned()),
+        address: 0x100,
+        section: None,
+        size: 0,
+    });
+    let in_code = Door::Symbol {
+        object: object.clone(),
+        target: target.clone(),
+        code_tab: true,
+    };
+    let alone = Door::Symbol {
+        object: object.clone(),
+        target: target.clone(),
+        code_tab: false,
+    };
+    let address = Door::Address {
+        object: object.clone(),
+        address: 0x2000,
+    };
+    let label = Door::Label {
+        symbol: Symbol {
+            object,
+            data: target.clone(),
+        },
+    };
+    let row = Door::Row {
+        to: 12,
+        at: Some(LinePos {
+            file: Arc::from("now.c"),
+            line: 3,
+        }),
+    };
+
+    // Alt shuts every door in every pane: the press is a selection this time.
+    for door in [&in_code, &alone, &address, &label, &row] {
+        assert!(door.opens(true, false).is_none());
+        assert!(door.opens(true, true).is_none());
+    }
+    assert!(
+        label.opens(false, false).is_none(),
+        "a label without Ctrl has nowhere to go, and the press is the row's"
+    );
+    assert!(
+        matches!(label.opens(false, true), Some(Opens::Nothing)),
+        "a label with Ctrl is a door the row must not also get"
+    );
+
+    // In the unified view a plain press moves down the listing already on screen, at the
+    // address that listing draws the target at; Ctrl opens the symbol on its own.
+    assert!(matches!(
+        in_code.opens(false, false),
+        Some(Opens::InCode { placed, .. }) if placed == target.placed(target.address)
+    ));
+    assert!(matches!(
+        in_code.opens(false, true),
+        Some(Opens::Symbol { .. })
+    ));
+    // In a symbol's own listing there is nowhere to move to, with Ctrl or without.
+    assert!(matches!(
+        alone.opens(false, false),
+        Some(Opens::Symbol { .. })
+    ));
+    assert!(matches!(
+        alone.opens(false, true),
+        Some(Opens::Symbol { .. })
+    ));
+
+    assert!(matches!(
+        address.opens(false, false),
+        Some(Opens::Code {
+            address: 0x2000,
+            ..
+        })
+    ));
+    assert!(matches!(
+        row.opens(false, false),
+        Some(Opens::Row { to: 12, at: Some(at) }) if at.line == 3
+    ));
+}

@@ -98,3 +98,55 @@ fn a_close_drops_the_symbols_it_takes_with_it_and_a_load_writes_nothing() {
     let found = state.found.expect("the question is still answered");
     assert!(found.symbols().expect("symbols").is_empty());
 }
+
+/// **A location row drives the tab the question was asked from, and only while that tab
+/// is still open on that file.** The drive is written under the place the tab is at and
+/// not under the file, a stop the trail does not hold being a drive nothing reads.
+#[test]
+fn which_door_a_location_row_presses_through() {
+    let file: Arc<str> = Arc::from("now.c");
+    let at = LinePos {
+        file: file.clone(),
+        line: 9,
+    };
+    let mut docs = Docs::default();
+    let id = docs.open(Document::Source(file.clone()));
+    // The tab has since been stepped to a line of its own, which is the place it is at.
+    docs.push(id, Stop::on(file.clone(), 4));
+    let subject = Some((id, file.clone()));
+
+    assert!(
+        matches!(chosen(&docs, None, subject.clone()), Chosen::Alone),
+        "an answer naming no line opens the symbol alone"
+    );
+    match chosen(&docs, Some(at.clone()), subject.clone()) {
+        Chosen::Driving { entry, at: line } => {
+            assert!(entry.0 == id);
+            assert!(
+                entry.1 == Stop::on(file.clone(), 4),
+                "the place the tab is at, not the file"
+            );
+            assert_eq!(
+                line.line, 9,
+                "driven from the line the question was asked on"
+            );
+        }
+        _ => panic!("the tab the question was asked from is still open on the file"),
+    }
+
+    docs.close(id);
+    assert!(
+        matches!(chosen(&docs, Some(at.clone()), subject), Chosen::Landing(_)),
+        "a tab that has been closed drives nothing"
+    );
+
+    let mut docs = Docs::default();
+    let elsewhere = docs.open(Document::Source(Arc::from("before.h")));
+    assert!(
+        matches!(
+            chosen(&docs, Some(at), Some((elsewhere, file))),
+            Chosen::Landing(_)
+        ),
+        "a tab that has moved off the file drives nothing"
+    );
+}

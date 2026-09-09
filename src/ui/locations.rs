@@ -776,6 +776,38 @@ fn use_landings() -> Landings {
     }
 }
 
+/// Which door a location row's press goes through, decided before anything is opened.
+enum Chosen {
+    /// The symbol alone, the answer naming no line to open it on.
+    Alone,
+    /// The tab the question was asked from, which is still open and still on that file:
+    /// this symbol is chosen for the place it is at, and its source side drives from the
+    /// line the question was asked from.
+    Driving { entry: Entry, at: LinePos },
+    /// A landing on the line, in a tab for the symbol: the row names a place in a file,
+    /// and the assembly pane's caret is the pair's.
+    Landing(LinePos),
+}
+
+/// Which of the three a press on a location row is: `at` is the answer's own line, and
+/// `subject` the source-driven tab the question was asked from.
+///
+/// The subject is taken only while `docs` still has that tab open on that file, and the
+/// entry is **the place the tab is at** and not the file: a drive written under a stop the
+/// trail does not hold is a drive nothing reads.
+fn chosen(docs: &Docs, at: Option<LinePos>, subject: Option<(DocId, Arc<str>)>) -> Chosen {
+    let Some(at) = at else {
+        return Chosen::Alone;
+    };
+    let subject = subject
+        .filter(|(id, file)| docs.get(*id) == Some(&Document::Source(file.clone())))
+        .map(|(id, file)| (id, place_at(docs, id, &Document::Source(file))));
+    match subject {
+        Some(entry) => Chosen::Driving { entry, at },
+        None => Chosen::Landing(at),
+    }
+}
+
 /// What pressing a location row does: open the symbol, on the line the question was asked
 /// from where there was one. Shared by the press and by Enter on the row the arrows left
 /// the pick on.
@@ -796,24 +828,18 @@ fn press_location(
     } = to;
     let open = doors.open;
     let symbol_tab = Document::Assembly(Selection::Symbol(symbol.clone()));
-    let Some(at) = at else {
-        open_document(open, doors.visits, symbol_tab, Reach::outside(ctrl));
-        return Pressed::Opened;
-    };
-    // Chosen for the tab the question was asked from. The choice is that entry's, and the
-    // entry is driven from the line the question was asked from, so the tab's assembly
-    // side becomes this symbol -- for an instance, provided the instance holds code from
-    // that line, which `compiled::pick` falls back from where it does not. Bound to a
-    // `let` so the table's guard is gone before `driven` is written.
-    let subject = subject
-        .filter(|(id, file)| open.docs.peek().get(*id) == Some(&Document::Source(file.clone())));
-    match subject {
-        Some((id, file)) => {
-            // The place that tab is at, not the file: a drive written under a stop the
-            // trail does not hold is a drive nothing reads. The guard is gone before
-            // `driven` is written.
-            let at_place = place_at(&open.docs.peek(), id, &Document::Source(file));
-            let entry = (id, at_place);
+    // Bound to a `let` so the table's guard is gone before `driven` is written.
+    let press = chosen(&open.docs.peek(), at, subject);
+    match press {
+        Chosen::Alone => {
+            open_document(open, doors.visits, symbol_tab, Reach::outside(ctrl));
+        }
+        // The choice is that entry's, and the entry is driven from the line the question
+        // was asked from, so the tab's assembly side becomes this symbol -- for an
+        // instance, provided the instance holds code from that line, which
+        // `compiled::pick` falls back from where it does not.
+        Chosen::Driving { entry, at } => {
+            let id = entry.0;
             {
                 let mut driven = driven;
                 let mut driven = driven.write();
@@ -822,9 +848,7 @@ fn press_location(
             }
             land_on(doors, id, at);
         }
-        None => {
-            // A line and no instruction: the row names a place in a file, and the
-            // assembly pane's caret is the pair's.
+        Chosen::Landing(at) => {
             land(
                 doors,
                 Landing {

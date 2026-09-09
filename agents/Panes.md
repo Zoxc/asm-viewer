@@ -471,7 +471,11 @@ nearest (`agents/UI.md`).
 **`Door::open_now` is the one answer to "is this a link now"**, and the light, the pointer's icon
 and the press are all picked by it, so none of the three can offer what the others will not do. The
 label that draws itself by it, the closure the row is handed for the icon (`InlineLink`,
-`TextLinks`) and the press ask the same rule. **All three operand doors are one label**, a
+`TextLinks`) and the press ask the same rule, the press through `Door::opens`: the door and the
+two modifiers in, and what the press opens out, so the rule can be read and tested apart from the
+four ways of going there. A label with Ctrl held is a door that opens nothing -- it is a run of its
+row's own text and the row is what follows it -- and eats the press all the same.
+**All three operand doors are one label**, a
 `DoorLabel` with a `Door` saying which. The hover, the chrome, the Alt rule and the text are the
 same for each; the press and the two colours are all that differ. Ctrl is read in the render only
 where the answer turns on it, so only a label is drawn again as Ctrl goes down and up.
