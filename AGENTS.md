@@ -223,7 +223,8 @@ command.
 - `src/functions.rs` — the functions a source file defines, by the lines they span, and which
   one a line is inside; `functions/rust.rs` is the scanner that finds Rust's without the grammar.
 - `src/ui.rs` — the freya UI's root: its prelude, the list of its files, `toolbar` with its two
-  history buttons, and `app`.
+  history buttons, `app`, and `roots` — the one list of root contexts, which the headless tests
+  are given too.
 - `src/ui/metrics.rs` — every measurement no component owns, and the fonts they follow.
 - `src/ui/palette.rs` — every colour, the theme it is resolved from, and the compositing rules.
 - `src/ui/state.rs` — what the root provides and no one mechanism owns, and the bundles the

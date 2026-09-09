@@ -482,7 +482,7 @@ impl ProjectStates {
 /// way to a context is `use_consume`, which is a hook -- so a restore that asked for them
 /// itself would be calling hooks from wherever it was called from. A restore runs inside
 /// `use_hook` at startup and inside a press handler on a switch, and neither may
-/// (`src/ui/session.rs`, `restore_ui`). Consumed by whoever is rendering and handed
+/// (`src/ui/session.rs`, `restore_ui`). Built where the three are made (`roots`) and handed
 /// down instead.
 #[derive(Clone, Copy)]
 pub(crate) struct Arrangement {
@@ -505,15 +505,6 @@ pub(crate) fn use_places() -> Places {
 /// so a view that switches projects needs none of them handed down to it.
 pub(crate) fn use_project_states() -> ProjectStates {
     use_consume::<ProjectStates>()
-}
-
-/// The window's arrangement, out of the three contexts it is kept in.
-pub(crate) fn use_arrangement() -> Arrangement {
-    Arrangement {
-        dock: use_consume::<SidebarDock>().0,
-        sidebar: use_consume::<SidebarWidth>().0,
-        split: use_consume::<SplitRatio>().0,
-    }
 }
 
 /// Every object's text symbols flattened into one list, rebuilt only when the object list

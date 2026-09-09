@@ -591,154 +591,14 @@ fn test_store() -> PathBuf {
     std::env::temp_dir().join(format!("assembly-viewer-ui-test-{}", std::process::id()))
 }
 
-/// What `app()` provides, in the bundles it provides them in: the project's own states and
-/// the doors. A macro and not a function: the runner's type is
-/// `freya_core::integration::Runner`, which freya's prelude does not re-export, so naming
-/// it would mean naming a crate the app does not depend on.
-macro_rules! project_wiring {
-    ($runner:expr) => {{
-        // Where a harness's files would go. Never the machine's own store: a load through
-        // one moves a file that will not parse aside, so a test reading the reader's
-        // `recents.toml` could take it away. Nothing here writes, so nothing is made.
-        let store = $runner
-            .provide_root_context(|| Storage(State::create(Some(Store::at(test_store())))))
-            .0;
-        // The sidebar as `app()` builds it: a panel that brings another to the front
-        // reaches for this, so a harness mounting one needs it provided.
-        let dock = $runner
-            .provide_root_context(|| SidebarDock(State::create(DockArea::default())))
-            .0;
-        // What is open, and the derivation over it. `Active` is provided but not
-        // returned: it is not one of the project's states, it is a reading of two of them.
-        let open = $runner.provide_root_context(|| Open {
-            strip: State::create(Strip::default()),
-            docs: State::create(Docs::default()),
-        });
-        let (strip, docs) = (open.strip, open.docs);
-        $runner.provide_root_context(move || {
-            Active(Memo::create(move || {
-                active_tab(&strip.read(), &docs.read())
-            }))
-        });
-        // Provided but not returned, like `Active`: nothing here asserts on it, and the
-        // Assembly pane's bar reads it wherever a harness mounts one.
-        $runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
-        // Likewise: every pane registers its focusable box here, and every chip asks it
-        // whether the keyboard is in the tab.
-        $runner.provide_root_context(|| Keyboard(State::create(Keys::default())));
-        // Likewise: the Shortcuts page's box is at the root, since only the tab on screen
-        // is mounted.
-        $runner.provide_root_context(|| Shortcuts(State::create(Filter::default())));
-        // Likewise: both panes' bars read it, and `DocumentBody` asks it which panes
-        // there are. `PadFollows` beside it because one control asks both -- the toggle
-        // is the same control on a document's bar and in the Scratchpad's heading row.
-        $runner.provide_root_context(|| Follows(State::create(HashMap::new())));
-        $runner.provide_root_context(|| PadFollows(State::create(true)));
-        // Likewise: the Source pane writes the file it is drawing into it, and every
-        // harness that mounts one reads the parse back out with `use_source_reading_now`.
-        $runner.provide_root_context(|| Sourcing(State::create(Sourced::default())));
-        // Likewise: every row and link asks it whether a press opens a tab of its own.
-        $runner.provide_root_context(|| Ctrl(State::create(false)));
-        // And whether it is a door at all: Alt held says it is not.
-        $runner.provide_root_context(|| Alt(State::create(false)));
-        // Likewise: every list row reads its own list's pick out of it, and writes it
-        // when it is pressed.
-        $runner.provide_root_context(|| Picks(State::create(HashMap::new())));
-        // Likewise: the root spends an ask for the keyboard on the caret the pane it hands
-        // it to wants. Provided and not returned -- a harness about the runs themselves
-        // provides its own after this one and hands that back (`listing_states!`).
-        $runner.provide_root_context(|| Marked(State::create(Marks::default())));
-        // Likewise: a recent project's row hands it to the switch, which is one of the two
-        // places a file can be moved aside.
-        $runner.provide_root_context(|| Rescued(State::create(Vec::new())));
-
-        // How the window is arranged, which the save observer reads and the window's body
-        // draws from. Provided in `app()`'s own order, beside the dock above.
-        let sidebar = $runner
-            .provide_root_context(|| SidebarWidth(State::create(380.0)))
-            .0;
-        // The third of the arrangement below, which used to be provided by each harness
-        // that draws a document. Here instead, and **only** here: a second
-        // `provide_root_context` for a type already provided replaces it, so a harness
-        // providing its own would leave the save observer reading one state and the pane
-        // another. A test wanting a different ratio writes `states.arranged.split`.
-        let split = $runner
-            .provide_root_context(|| SplitRatio(State::create(50.0)))
-            .0;
-        $runner.provide_root_context(|| {
-            SidebarSplits(State::create(ResizableContext {
-                direction: Direction::Horizontal,
-                ..Default::default()
-            }))
-        });
-
-        // The four the project's views reach for beside their own states. Provided and
-        // not returned: a test that wants one asks for it again by name.
-        $runner.provide_root_context(|| Rescued(State::create(Vec::new())));
-        $runner.provide_root_context(|| Unopened(State::create(None)));
-        $runner.provide_root_context(|| Deleting(State::create(None)));
-
-        // Everything kept per place, the runs, and what a door is given, in `app()`'s own
-        // order: the doors carry the same runs `Marked` hands the panes.
-        let places = $runner.provide_root_context(Places::create);
-        // Likewise: every code pane asks whether a find bar is open over it, and the
-        // panes that draw a listing claim it as what a find would search.
-        $runner.provide_root_context(move || Looking(places.finds));
-        let marked = $runner
-            .provide_root_context(|| Marked(State::create(Marks::default())))
-            .0;
-        let doors = $runner.provide_root_context(move || Doors {
-            open,
-            visits: State::create(Visits::default()),
-            marked,
-            land: State::create(None),
-            plant: State::create(None),
-        });
-
-        let states = ProjectStates {
-            proj: $runner
-                .provide_root_context(|| Proj(State::create(OpenProject::default())))
-                .0,
-            store,
-            objects: $runner
-                .provide_root_context(|| Objects(State::create(Vec::new())))
-                .0,
-            loading: $runner
-                .provide_root_context(|| Loading(State::create(Loads::default())))
-                .0,
-            open,
-            places,
-            visits: doors.visits,
-            bookmarks: $runner
-                .provide_root_context(|| Bookmarked(State::create(Bookmarks::default())))
-                .0,
-            searched: $runner
-                .provide_root_context(|| Searching(State::create(Searched::default())))
-                .0,
-            build: $runner
-                .provide_root_context(|| Building(State::create(Builds::default())))
-                .0,
-            arranged: Arrangement {
-                dock,
-                sidebar,
-                split,
-            },
-        };
-        $runner.provide_root_context(move || states);
-        (states, doors)
-    }};
-}
-
-/// The project's states alone, which is what most harnesses want. Take the doors above
-/// instead when a test writes or reads one of the states a door is given: the runs, or
-/// either half of a landing.
-macro_rules! project_states {
-    () => {
-        |runner: &mut _| project_states!(runner)
-    };
-    ($runner:expr) => {{
-        project_wiring!($runner).0
-    }};
+/// Every root context, as a test is given them: the one list `app()` is given (`roots`),
+/// over a store nothing here writes through and settings that were never on disk.
+///
+/// A plain function, called through the runner -- `runner.provide_root_context(test_roots)`
+/// -- because that is what runs it in the root scope, which is where a `State` a context
+/// holds has to be made.
+fn test_roots() -> Roots {
+    roots(Some(Store::at(test_store())), &Settings::default())
 }
 
 /// With no project open the window is the top bar and one screen: no tab bar, no sidebar,
@@ -750,35 +610,7 @@ fn a_window_with_no_project_is_one_screen() {
     let (mut test, states) = TestingRunner::new(
         body_harness,
         (900., 600.).into(),
-        |runner: &mut _| {
-            let states = project_states!(runner);
-            // What the sidebar and the panes want when they *are* mounted, so that the
-            // half of this test where a project arrives is a real mount and not a panic.
-            let objects = states.objects;
-            runner.provide_root_context(move || {
-                Symbols(Memo::create(move || collect_symbols(&objects).into()))
-            });
-            runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
-            runner.provide_root_context(|| Locations(State::create(Located::default())));
-            runner.provide_root_context(|| Coding(State::create(Coded::default())));
-            runner.provide_root_context(|| Sections(State::create(Reading::default())));
-            runner.provide_root_context(|| Beside(State::create(None)));
-            runner.provide_root_context(|| Window(State::create(None)));
-            runner.provide_root_context(|| Expanded(State::create(HashSet::new())));
-            runner.provide_root_context(|| Keyboard(State::create(Keys::default())));
-            runner.provide_root_context(|| Follows(State::create(HashMap::new())));
-            runner.provide_root_context(|| PadFollows(State::create(true)));
-            runner.provide_root_context(|| Talking(State::create(Language::default())));
-            runner.provide_root_context(|| Finding(State::create(Finder::default())));
-            runner.provide_root_context(|| CodeRows(State::create(None)));
-            runner.provide_root_context(|| {
-                Splits(State::create(ResizableContext {
-                    direction: Direction::Horizontal,
-                    ..Default::default()
-                }))
-            });
-            states
-        },
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     settle(&mut test);
@@ -820,7 +652,7 @@ fn a_page_opens_as_a_tab_with_no_project() {
         body_harness,
         (900., 600.).into(),
         |runner: &mut _| {
-            let states = project_states!(runner);
+            let states = runner.provide_root_context(test_roots).states;
             // The settings page's own state, since that is the page this opens.
             runner.provide_root_context(|| {
                 Prefs(State::create(EditedSettings::of(&Settings::default())))
@@ -882,11 +714,8 @@ fn the_bar_offers_a_close_or_a_save_and_a_delete() {
         chip_harness,
         (400., 100.).into(),
         |runner: &mut _| {
-            let states = project_states!(runner);
-            let deleting = runner
-                .provide_root_context(|| Deleting(State::create(None)))
-                .0;
-            (states, deleting)
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.asking)
         },
         1.,
     );
@@ -1054,8 +883,12 @@ fn a_saved_arrangement_keeps_every_panel_this_build_has() {
 /// state of its own, so the two never met. A test that set that state by hand could not tell.
 #[test]
 fn a_page_picked_with_no_project_opens_as_a_tab() {
-    let (mut test, states) =
-        TestingRunner::new(pages_harness, (300., 400.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        pages_harness,
+        (300., 400.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     settle(&mut test);
     assert!(states.open.strip.peek().tabs().is_empty());
 
@@ -1133,7 +966,7 @@ fn open_recent_is_dim_when_there_is_nothing_in_it() {
     let (mut test, _states) = TestingRunner::new(
         empty_recents_harness,
         (300., 400.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     settle(&mut test);
@@ -1271,8 +1104,12 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     let object = first.object.clone();
     let source = Document::Source(Arc::from("/src/main.rs"));
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
 
     // The app as a session leaves it: a binary open, two of its functions in the strip with
@@ -1354,8 +1191,12 @@ fn a_history_row_names_the_function_and_not_the_whole_symbol() {
         }),
     };
 
-    let (mut test, states) =
-        TestingRunner::new(history_harness, (400., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        history_harness,
+        (400., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     open_document(
         states.open,
@@ -1406,8 +1247,12 @@ fn menu_harness() -> impl IntoElement {
 /// contrived case: the tab list fills in from a worker.
 #[test]
 fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
-    let (mut test, states) =
-        TestingRunner::new(menu_harness, (600., 300.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        menu_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
 
     // A page is a tab, so the button is there before any document is.
@@ -1479,8 +1324,12 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
 fn the_tab_menu_hangs_from_the_buttons_right_edge() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
-    let (mut test, states) =
-        TestingRunner::new(menu_harness, (600., 300.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        menu_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -1545,8 +1394,12 @@ fn the_document_menu_opens_and_closes() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
 
-    let (mut test, states) =
-        TestingRunner::new(menu_harness, (400., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        menu_harness,
+        (400., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
 
     let mut objects = states.objects;
@@ -1649,8 +1502,12 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
 
-    let (mut test, states) =
-        TestingRunner::new(nav_harness, (200., 100.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        nav_harness,
+        (200., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
 
     let mut objects = states.objects;
@@ -1727,8 +1584,12 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
 /// who has been nowhere yet can still see that it is there.
 #[test]
 fn a_history_button_with_nowhere_to_go_is_still_drawn() {
-    let (mut test, _states) =
-        TestingRunner::new(nav_harness, (200., 100.).into(), project_states!(), 1.);
+    let (mut test, _states) = TestingRunner::new(
+        nav_harness,
+        (200., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
 
     let side = toggle_size();
@@ -1744,8 +1605,12 @@ fn a_history_button_with_nowhere_to_go_is_still_drawn() {
 /// says so.
 #[test]
 fn pressing_a_chip_takes_the_keyboard_into_the_tab() {
-    let (mut test, states) =
-        TestingRunner::new(marker_harness, (400., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        marker_harness,
+        (400., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     for name in ["/src/one.rs", "/src/two.rs"] {
         let document = Document::Source(Arc::from(name));
         open_document(states.open, states.visits, document, Reach::NewTab);
@@ -1783,8 +1648,12 @@ fn pressing_a_chip_takes_the_keyboard_into_the_tab() {
 /// through a dozen of them is in the one place that names them all.
 #[test]
 fn the_tab_list_closes_a_tab_from_its_own_row() {
-    let (mut test, states) =
-        TestingRunner::new(menu_harness, (600., 300.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        menu_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let documents: Vec<Document> = ["/src/one.rs", "/src/two.rs"]
         .into_iter()
         .map(|name| Document::Source(Arc::from(name)))
@@ -1847,8 +1716,12 @@ fn bar_harness() -> impl IntoElement {
 /// wider than the window, and going to one whose chip is off the end has to show it.
 #[test]
 fn the_bar_scrolls_and_the_tab_on_screen_is_brought_into_view() {
-    let (mut test, states) =
-        TestingRunner::new(bar_harness, (240., 100.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        bar_harness,
+        (240., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let documents: Vec<Document> = (0..8)
         .map(|nth| Document::Source(Arc::from(format!("/src/file{nth}.rs").as_str())))
         .collect();
@@ -1903,8 +1776,12 @@ fn the_bar_scrolls_and_the_tab_on_screen_is_brought_into_view() {
 /// moving **along the row**, which the strip being scrolled never does.
 #[test]
 fn a_close_or_a_move_brings_the_tab_on_screen_back_into_view() {
-    let (mut test, states) =
-        TestingRunner::new(bar_harness, (240., 100.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        bar_harness,
+        (240., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let documents: Vec<Document> = (0..8)
         .map(|nth| Document::Source(Arc::from(format!("/src/file{nth}.rs").as_str())))
         .collect();
@@ -1974,7 +1851,7 @@ fn the_bar_forgets_the_place_of_a_chip_whose_tab_has_closed() {
         bar_harness,
         (240., 100.).into(),
         |runner: &mut _| {
-            let states = project_states!(runner);
+            let states = runner.provide_root_context(test_roots).states;
             let measured =
                 runner.provide_root_context(|| Measured(State::create(Chips::default())));
             (states, measured)
@@ -2271,8 +2148,12 @@ fn a_drag_held_near_either_end_scrolls_the_strip_towards_it() {
 /// the moves are what let the drop zones be measured after the drag has begun.
 #[test]
 fn a_tab_is_dragged_along_the_bar_to_move_it() {
-    let (mut test, states) =
-        TestingRunner::new(bar_harness, (600., 100.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        bar_harness,
+        (600., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let documents: Vec<Document> = ["/src/one.rs", "/src/two.rs", "/src/three.rs"]
         .into_iter()
         .map(|name| Document::Source(Arc::from(name)))
@@ -2360,8 +2241,12 @@ fn marker_harness() -> impl IntoElement {
 /// anywhere else. Only the tab on screen wears one.
 #[test]
 fn the_tab_on_screen_is_marked_and_the_mark_says_where_the_keyboard_is() {
-    let (mut test, states) =
-        TestingRunner::new(marker_harness, (400., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        marker_harness,
+        (400., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     for name in ["/src/one.rs", "/src/two.rs"] {
         let document = Document::Source(Arc::from(name));
         open_document(states.open, states.visits, document, Reach::NewTab);
@@ -2422,9 +2307,8 @@ fn alt_held_as_the_menu_opens_is_what_offers_the_debug_page() {
         pages_harness,
         (300., 300.).into(),
         |runner: &mut _| {
-            let states = project_states!(runner);
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (states, alt)
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.alt)
         },
         1.,
     );
@@ -2469,8 +2353,12 @@ fn alt_held_as_the_menu_opens_is_what_offers_the_debug_page() {
 
 #[test]
 fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
-    let (mut test, states) =
-        TestingRunner::new(pages_harness, (300., 300.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        pages_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     // A project open: the Project page is a reading of one, so with none the menu leaves
     // it out.
     let mut proj = states.proj;
@@ -2544,8 +2432,12 @@ fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
 /// added to it -- which is what having both as labels of their own says.
 #[test]
 fn the_pages_menu_says_the_key_beside_the_items_that_have_one() {
-    let (mut test, _states) =
-        TestingRunner::new(pages_harness, (300., 300.).into(), project_states!(), 1.);
+    let (mut test, _states) = TestingRunner::new(
+        pages_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
 
     let area = test
@@ -2606,8 +2498,12 @@ fn the_pages_menu_says_the_key_beside_the_items_that_have_one() {
 /// there again when it is reopened: the state it draws lives at the root of the app.
 #[test]
 fn closing_a_page_lands_on_its_neighbour_and_keeps_what_it_held() {
-    let (mut test, states) =
-        TestingRunner::new(chips_harness, (400., 100.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        chips_harness,
+        (400., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     {
         let mut strip = states.open.strip;
         let mut strip = strip.write();
@@ -2658,8 +2554,12 @@ fn closing_a_page_lands_on_its_neighbour_and_keeps_what_it_held() {
 /// as the restore.
 #[test]
 fn a_saved_page_comes_back_with_no_binaries() {
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let session: Session = toml::from_str(
         "active_page = \"settings\"\n\n[[tabs]]\npage = \"project\"\n\n[[tabs]]\npage = \"settings\"\n",
     )
@@ -2733,7 +2633,7 @@ fn a_restore_survives_the_row_that_asked_for_it() {
         move |runner: &mut _| {
             runner.provide_root_context(|| Gone(State::create(false)));
             runner.provide_root_context(move || Restoring(held));
-            project_states!(runner)
+            runner.provide_root_context(test_roots).states
         },
         1.,
     );
@@ -2770,7 +2670,7 @@ fn a_restore_that_arranges_the_window_leaves_the_hook_order_alone() {
         || Restorer.into_element(),
         (200., 200.).into(),
         |runner: &mut _| {
-            project_states!(runner);
+            runner.provide_root_context(test_roots).states;
             runner.provide_root_context(|| Gone(State::create(false))).0
         },
         1.,
@@ -2820,7 +2720,7 @@ fn the_debug_page_offers_the_three_panics_the_hook_tells_apart() {
     let (mut test, _states) = TestingRunner::new(
         || page_body(Page::Debug),
         (500., 400.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     settle(&mut test);
@@ -2854,7 +2754,7 @@ fn a_debug_rows_name_takes_the_width_its_button_leaves() {
     let (mut test, _states) = TestingRunner::new(
         || page_body(Page::Debug),
         (WIDTH, 400.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     settle(&mut test);
@@ -2911,7 +2811,7 @@ fn the_ui_threads_panic_button_panics_on_the_ui_thread() {
     let (mut test, _states) = TestingRunner::new(
         || page_body(Page::Debug),
         (500., 400.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     settle(&mut test);
@@ -2949,7 +2849,7 @@ fn the_shortcuts_page_draws_each_gesture_under_the_place_it_applies() {
     let (mut test, _states) = TestingRunner::new(
         || page_body(Page::Shortcuts),
         (700., 500.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     settle(&mut test);
@@ -2971,7 +2871,7 @@ fn the_filter_drops_a_section_with_no_row_left() {
     let (mut test, _states) = TestingRunner::new(
         || page_body(Page::Shortcuts),
         (700., 500.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     settle(&mut test);
@@ -3013,7 +2913,7 @@ fn the_filter_box_declines_the_chords_the_page_names() {
     let (mut test, _states) = TestingRunner::new(
         || page_body(Page::Shortcuts),
         (700., 500.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     settle(&mut test);
@@ -3068,8 +2968,12 @@ fn chips_harness() -> impl IntoElement {
 /// the chip and stops there would leave the bar drawing tabs that cannot be switched to.
 #[test]
 fn pressing_a_chip_shows_its_tab() {
-    let (mut test, states) =
-        TestingRunner::new(chips_harness, (400., 100.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        chips_harness,
+        (400., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let documents = [
         Document::Source(Arc::from("/src/one.rs")),
         Document::Source(Arc::from("/src/two.rs")),
@@ -3151,8 +3055,12 @@ fn one_close_target(test: &mut TestingRunner, states: &ProjectStates) -> Area {
 /// control lays out is the test below.
 #[test]
 fn the_close_target_is_the_glyph_and_its_air() {
-    let (mut test, _states) =
-        TestingRunner::new(close_harness, (200., 100.).into(), project_states!(), 1.);
+    let (mut test, _states) = TestingRunner::new(
+        close_harness,
+        (200., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
 
     assert_eq!(
@@ -3172,8 +3080,12 @@ fn the_close_target_is_the_glyph_and_its_air() {
 /// there is around the glyph and not about where the control happens to sit.
 #[test]
 fn a_press_beside_the_glyph_still_closes_the_tab() {
-    let (mut test, states) =
-        TestingRunner::new(close_harness, (200., 100.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        close_harness,
+        (200., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let target = one_close_target(&mut test, &states);
 
@@ -3220,8 +3132,12 @@ fn a_press_beside_the_glyph_still_closes_the_tab() {
 /// than the tab's own is `every_wash_reads_against_the_pane_under_it`.
 #[test]
 fn the_close_target_lights_under_the_pointer() {
-    let (mut test, states) =
-        TestingRunner::new(close_harness, (200., 100.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        close_harness,
+        (200., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let target = one_close_target(&mut test, &states);
 
@@ -3272,8 +3188,12 @@ fn the_panel_and_the_table_hold_the_same_documents() {
         .chain([Document::Source(Arc::from("/src/main.rs"))])
         .collect();
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -3326,8 +3246,12 @@ fn a_bulk_close_takes_the_trails_with_the_chips() {
         Document::Assembly(Selection::Symbol(symbols[1].clone())),
     ];
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -3374,8 +3298,12 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
         .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
         .collect();
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -3420,8 +3348,12 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
         .collect();
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -3490,8 +3422,12 @@ fn switching_to_an_open_tab_is_not_a_visit() {
         Document::Assembly(Selection::Symbol(symbols[1].clone())),
     );
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
 
     let mut objects = states.objects;
@@ -3545,8 +3481,12 @@ fn closing_a_binary_keeps_the_source_tabs() {
     let source = Document::Source(Arc::from("/src/main.rs"));
     let function = Document::Assembly(Selection::Symbol(symbol));
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
 
     let mut objects = states.objects;
@@ -3648,7 +3588,7 @@ fn mount_loads(
         (300., 300.).into(),
         move |runner| {
             runner.provide_root_context(|| Feed(loads.clone()));
-            project_states!(runner)
+            runner.provide_root_context(test_roots).states
         },
         1.,
     );
@@ -3857,7 +3797,7 @@ fn archive_row(width: f32, objects: &[Arc<Object>]) -> (Area, Area) {
     let (mut test, mut states) = TestingRunner::new(
         objects_harness,
         (width, 300.).into(),
-        |runner| project_states!(runner),
+        |runner| runner.provide_root_context(test_roots).states,
         1.,
     );
     states.objects.write().extend(objects.iter().cloned());
@@ -3966,55 +3906,20 @@ fn analysis_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// The states an analysis test drives the harness through, provided in the order `app()`
-/// provides them. A macro for [`project_states!`]'s reason.
-macro_rules! analysis_states {
-    ($runner:expr, $work:expr) => {{
-        $runner.provide_root_context(|| Work(Arc::new($work)));
-        (
-            $runner
-                .provide_root_context(|| Driving(State::create(None)))
-                .0,
-            $runner
-                .provide_root_context(|| Analysis(State::create(Analyzed::default())))
-                .0,
-            $runner
-                .provide_root_context(|| Seen(State::create(Vec::new())))
-                .0,
-            $runner
-                .provide_root_context(|| Objects(State::create(Vec::new())))
-                .0,
-            // The record a finished analysis writes into, which lives in the doors: the
-            // one state of theirs this harness has any use for.
-            $runner
-                .provide_root_context(|| Doors {
-                    open: Open {
-                        strip: State::create(Strip::default()),
-                        docs: State::create(Docs::default()),
-                    },
-                    visits: State::create(Visits::default()),
-                    marked: State::create(Marks::default()),
-                    land: State::create(None),
-                    plant: State::create(None),
-                })
-                .visits,
-            {
-                $runner.provide_root_context(|| Coding(State::create(Coded::default())));
-                $runner
-                    .provide_root_context(|| Locations(State::create(Located::default())))
-                    .0
-            },
-            $runner
-                .provide_root_context(|| Sections(State::create(Reading::default())))
-                .0,
-            {
-                $runner.provide_root_context(|| Beside(State::create(None)));
-                $runner
-                    .provide_root_context(|| Window(State::create(None)))
-                    .0
-            },
-        )
-    }};
+/// The states an analysis test drives the harness through: the root's own list, and the
+/// two the harness adds -- what is being asked, and the record of what was drawn.
+///
+/// The work is substituted here rather than the answer: `use_analysis_with` runs, and what
+/// a test controls is what the worker thread is handed.
+fn analysis_states(
+    work: impl Fn(Question) -> Answer + Send + Sync + 'static,
+) -> (Roots, State<Option<Ask>>, State<Vec<Symbol>>) {
+    provide(Work(Arc::new(work)));
+    (
+        test_roots(),
+        provide(Driving(State::create(None))).0,
+        provide(Seen(State::create(Vec::new()))).0,
+    )
 }
 
 /// One file read and parsed where the test stands, which is what the reader's worker
@@ -4090,13 +3995,13 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
         answer(Question::Study(symbol))
     };
 
-    let (mut test, (asking, analysis, seen, _objects, _history, _located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            move |runner| analysis_states!(runner, work),
-            1.,
-        );
+    let (mut test, (roots, asking, seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(work)),
+        1.,
+    );
+    let analysis = roots.analysis;
     let mut asking = asking;
     let settle = |test: &mut TestingRunner| {
         for _ in 0..8 {
@@ -4157,13 +4062,13 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
 
-    let (mut test, (asking, analysis, seen, _objects, _history, _located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            |runner| analysis_states!(runner, answer),
-            1.,
-        );
+    let (mut test, (roots, asking, seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let analysis = roots.analysis;
     let mut asking = asking;
     test.sync_and_update();
 
@@ -4257,13 +4162,14 @@ fn a_source_line_answers_with_the_symbol_it_was_compiled_into() {
         .clone();
     let at = a_line_of(&wanted);
 
-    let (mut test, (asking, analysis, _seen, objects, _history, _located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            |runner| analysis_states!(runner, answer),
-            1.,
-        );
+    let (mut test, (roots, asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let analysis = roots.analysis;
+    let objects = roots.states.objects;
     let (mut asking, mut objects) = (asking, objects);
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
@@ -4313,13 +4219,14 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
         line: 999_999,
     };
 
-    let (mut test, (asking, analysis, _seen, objects, _history, _located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            |runner| analysis_states!(runner, answer),
-            1.,
-        );
+    let (mut test, (roots, asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let analysis = roots.analysis;
+    let objects = roots.states.objects;
     let (mut asking, mut objects) = (asking, objects);
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
@@ -4474,13 +4381,15 @@ fn the_queue_keeps_the_newest_question_of_each_kind() {
 fn a_window_lands_in_the_reading_with_the_skeleton() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
-    let (mut test, (_asking, _analysis, _seen, open, _history, _located, reading, window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            move |runner| analysis_states!(runner, answer),
-            1.,
-        );
+    let (mut test, (roots, _asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let open = roots.states.objects;
+    let reading = roots.reading;
+    let window = roots.window;
     let (mut open, mut reading, mut window) = (open, reading, window);
     open.write().push(object.clone());
     reading.set(Reading::of(Some(object.clone())));
@@ -4573,13 +4482,15 @@ fn a_window_answer_for_a_reading_that_moved_on_is_dropped() {
         let _ = gated.recv_blocking();
         answer(question)
     };
-    let (mut test, (_asking, _analysis, _seen, open, _history, _located, reading, window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            move |runner| analysis_states!(runner, work),
-            1.,
-        );
+    let (mut test, (roots, _asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(work)),
+        1.,
+    );
+    let open = roots.states.objects;
+    let reading = roots.reading;
+    let window = roots.window;
     let (mut open, mut reading, mut window) = (open, reading, window);
     open.write().extend([first.clone(), second.clone()]);
     reading.set(Reading::of(Some(first.clone())));
@@ -4690,13 +4601,14 @@ fn a_lines_locations_come_back_from_every_open_object() {
     // The same file parsed twice is two objects, and both answer.
     let twin = fixture_symbols()[0].object.clone();
 
-    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            |runner| analysis_states!(runner, answer),
-            1.,
-        );
+    let (mut test, (roots, _asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let objects = roots.states.objects;
+    let located = roots.located;
     let (mut objects, mut located) = (objects, located);
     objects.set(vec![wanted.object.clone(), twin.clone()]);
     test.sync_and_update();
@@ -4774,13 +4686,14 @@ fn locations_for_a_line_no_longer_asked_about_are_dropped() {
         answer(Question::Locate { query, objects })
     };
 
-    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            move |runner| analysis_states!(runner, work),
-            1.,
-        );
+    let (mut test, (roots, _asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(work)),
+        1.,
+    );
+    let objects = roots.states.objects;
+    let located = roots.located;
     let (mut objects, mut located) = (objects, located);
     objects.set(vec![symbols[0].object.clone()]);
     let settle = |test: &mut TestingRunner| {
@@ -4840,13 +4753,14 @@ fn a_locate_being_worked_is_not_sent_again_by_a_write_beside_it() {
         answer(Question::Locate { query, objects })
     };
 
-    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            move |runner| analysis_states!(runner, work),
-            1.,
-        );
+    let (mut test, (roots, _asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(work)),
+        1.,
+    );
+    let objects = roots.states.objects;
+    let located = roots.located;
     let (mut objects, mut located) = (objects, located);
     objects.set(vec![symbols[0].object.clone()]);
     let settle = |test: &mut TestingRunner| {
@@ -4914,13 +4828,15 @@ fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
         answer(question)
     };
 
-    let (mut test, (asking, analysis, _seen, objects, _history, located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            move |runner| analysis_states!(runner, work),
-            1.,
-        );
+    let (mut test, (roots, asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(work)),
+        1.,
+    );
+    let analysis = roots.analysis;
+    let objects = roots.states.objects;
+    let located = roots.located;
     let (mut asking, mut objects, mut located) = (asking, objects, located);
     objects.set(vec![symbol.object.clone()]);
     let settle = |test: &mut TestingRunner| {
@@ -4973,13 +4889,14 @@ fn closing_a_binary_takes_its_locations_with_it() {
     let at = a_line_of(&wanted);
     let twin = fixture_symbols()[0].object.clone();
 
-    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            |runner| analysis_states!(runner, answer),
-            1.,
-        );
+    let (mut test, (roots, _asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let objects = roots.states.objects;
+    let located = roots.located;
     let (mut objects, mut located) = (objects, located);
     objects.set(vec![wanted.object.clone(), twin.clone()]);
     test.sync_and_update();
@@ -5056,37 +4973,6 @@ fn locations_harness() -> impl IntoElement {
     rect().expanded().child(LocationsPanel)
 }
 
-/// The contexts [`locations_harness`] reads beside the project's.
-#[derive(Clone, Copy)]
-struct LocationStates {
-    located: State<Located>,
-    /// The bundle a row lands through, as the root provided it.
-    doors: Doors,
-    analysis: State<Analyzed>,
-}
-
-macro_rules! location_states {
-    ($runner:expr) => {{
-        let (states, doors) = project_wiring!($runner);
-        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
-        let located = $runner
-            .provide_root_context(|| Locations(State::create(Located::default())))
-            .0;
-        let analysis = $runner
-            .provide_root_context(|| Analysis(State::create(Analyzed::default())))
-            .0;
-        $runner.provide_root_context(|| CodeRows(State::create(None)));
-        (
-            states,
-            LocationStates {
-                located,
-                doors,
-                analysis,
-            },
-        )
-    }};
-}
-
 /// Pressing a use opens its file on its line with the name selected there, and the
 /// assembly side follows that line as it follows a clicked one.
 #[test]
@@ -5099,13 +4985,14 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
         .expect("writing the source file");
     let used = path.to_str().expect("a utf-8 temporary path").to_owned();
 
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let mut located = location.located;
+    let states = roots.states;
+    let mut located = roots.located;
     settle(&mut test);
 
     let at = LinePos {
@@ -5143,7 +5030,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
         "the row opened nothing"
     );
     assert!(
-        source_line(location.doors.marked)
+        source_line(roots.doors.marked)
             == Some(LinePos {
                 file: opened,
                 line: 2,
@@ -5151,7 +5038,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
         "the line was not picked out"
     );
     // The name is selected there, which is what the answer's columns are for.
-    let picked = location
+    let picked = roots
         .doors
         .marked
         .peek()
@@ -5203,13 +5090,13 @@ fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)])
 /// each use is in, and folds a file away when its row is pressed.
 #[test]
 fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
-    let (mut test, (_states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let mut located = location.located;
+    let mut located = roots.located;
     let at = LinePos {
         file: Arc::from("/p/src/main.rs"),
         line: 2,
@@ -5304,13 +5191,13 @@ fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
 /// answering all leave the panel saying there are none.
 #[test]
 fn a_references_question_that_answers_nothing_says_there_are_none() {
-    let (mut test, (_states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let mut located = location.located;
+    let mut located = roots.located;
     let at = LinePos {
         file: Arc::from("/p/src/main.rs"),
         line: 2,
@@ -5587,12 +5474,13 @@ fn links_out_of_order_leave_a_span_uncut_rather_than_losing_it() {
 fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     let file: Arc<str> = Arc::from("/src/main.rs");
     let document = Document::Source(file.clone());
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let states = roots.states;
     settle(&mut test);
     let id = open_document(states.open, states.visits, document.clone(), Reach::NewTab)
         .expect("the file opens");
@@ -5614,7 +5502,7 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
         columns: Some(3..7),
     };
     let land_on_line = |test: &mut TestingRunner, line: u32| {
-        land(location.doors, at(line), Reach::InPlace);
+        land(roots.doors, at(line), Reach::InPlace);
         settle(test);
     };
 
@@ -5638,10 +5526,10 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     // And the landing is picked out at the place landed on, columns and all: moving to a
     // new place inside the file must leave the same run behind it as arriving at one in
     // another file does.
-    let (_, source) = runs_of(location.doors.marked);
+    let (_, source) = runs_of(roots.doors.marked);
     let source = source.expect("the landing picked nothing out");
     assert!(
-        source_line(location.doors.marked)
+        source_line(roots.doors.marked)
             == Some(LinePos {
                 file: file.clone(),
                 line: 40,
@@ -5675,12 +5563,13 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
 fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
     let file: Arc<str> = Arc::from("/src/main.rs");
     let document = Document::Source(file.clone());
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let states = roots.states;
     settle(&mut test);
     open_document(states.open, states.visits, document.clone(), Reach::NewTab)
         .expect("the file opens");
@@ -5689,7 +5578,7 @@ fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
     // The columns are a search hit's: what the landing carries beyond the line.
     let land_on_line = |test: &mut TestingRunner, line: u32| {
         land(
-            location.doors,
+            roots.doors,
             Landing {
                 tab: document.clone(),
                 at: Some(LinePos {
@@ -5706,7 +5595,7 @@ fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
 
     land_on_line(&mut test, 20);
     land_on_line(&mut test, 40);
-    let (_, source) = runs_of(location.doors.marked);
+    let (_, source) = runs_of(roots.doors.marked);
     let source = source.expect("the landing picked nothing out");
     assert!(
         source.chars.ends() == (Caret { row: 39, col: 3 }, Caret { row: 39, col: 7 }),
@@ -5718,7 +5607,7 @@ fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
     // what is on screen when the place changes belongs to the place being left.
     navigate(states.open, Nav::Back);
     settle(&mut test);
-    let (_, source) = runs_of(location.doors.marked);
+    let (_, source) = runs_of(roots.doors.marked);
     let source = source.expect("the place came back with no run");
     assert_eq!(
         source.chars.anchor().row,
@@ -5744,13 +5633,13 @@ fn the_locations_panel_draws_a_row_per_symbol() {
         .expect("the fixture holds sum_to");
     let at = a_line_of(&wanted);
 
-    let (mut test, (_states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let mut located = location.located;
+    let mut located = roots.located;
     settle(&mut test);
     assert!(labels(&test).contains(&"Nothing looked for yet".to_owned()));
 
@@ -5811,13 +5700,14 @@ fn a_location_row_opens_its_symbol() {
         .clone();
     let at = a_line_of(&wanted);
 
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let mut located = location.located;
+    let states = roots.states;
+    let mut located = roots.located;
     located.write().asked = Some(Query::line(at.clone()));
     located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
     settle(&mut test);
@@ -5853,13 +5743,14 @@ fn a_location_row_lands_on_its_line() {
         .clone();
     let at = a_line_of(&wanted);
 
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let mut located = location.located;
+    let states = roots.states;
+    let mut located = roots.located;
     // Another document on top first, so the press is a change of document.
     open_document(
         states.open,
@@ -5870,7 +5761,7 @@ fn a_location_row_lands_on_its_line() {
     located.write().asked = Some(Query::line(at.clone()));
     located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
     settle(&mut test);
-    assert!(location.doors.marked.peek().source.is_none());
+    assert!(roots.doors.marked.peek().source.is_none());
 
     let row = label_area(&test, "sum_to").expect("the row is drawn");
     let press = ((row.origin.x + 5.0) as f64, (row.origin.y + 5.0) as f64);
@@ -5882,10 +5773,10 @@ fn a_location_row_lands_on_its_line() {
     let document = Document::Assembly(Selection::Symbol(wanted.clone()));
     assert!(states.open.active() == Some(document));
     assert!(
-        source_line(location.doors.marked) == Some(at.clone()),
+        source_line(roots.doors.marked) == Some(at.clone()),
         "the line was not picked out"
     );
-    let picked = location
+    let picked = roots
         .doors
         .marked
         .peek()
@@ -5894,19 +5785,19 @@ fn a_location_row_lands_on_its_line() {
         .expect("checked above");
     assert!(picked.owed == Owed::BOTH);
     assert!(
-        location.doors.land.peek().is_none(),
+        roots.doors.land.peek().is_none(),
         "the landing was not spent by the document it named"
     );
     // Both panes are owed the scroll -- the source pane to its own run, the assembly
     // pane to the pair -- and each pays its own.
-    assert!(owes_pair(location.doors.marked, Pane::Assembly));
+    assert!(owes_pair(roots.doors.marked, Pane::Assembly));
     assert!(matches!(
-        owed_reveal(location.doors.marked, Pane::Source),
+        owed_reveal(roots.doors.marked, Pane::Source),
         Some(Owing::Own(_))
     ));
-    reveal_made(location.doors.marked, Pane::Source);
-    assert!(owes_pair(location.doors.marked, Pane::Assembly));
-    assert!(owed_reveal(location.doors.marked, Pane::Source).is_none());
+    reveal_made(roots.doors.marked, Pane::Source);
+    assert!(owes_pair(roots.doors.marked, Pane::Assembly));
+    assert!(owed_reveal(roots.doors.marked, Pane::Source).is_none());
 }
 
 /// Landing on the document already on top picks the line out at once: `activate` then
@@ -5921,18 +5812,19 @@ fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
         .clone();
     let at = a_line_of(&wanted);
 
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let states = roots.states;
     let document = Document::Assembly(Selection::Symbol(wanted.clone()));
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     settle(&mut test);
 
     land(
-        location.doors,
+        roots.doors,
         Landing {
             tab: document.clone(),
             at: Some(at.clone()),
@@ -5942,13 +5834,13 @@ fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
         Reach::NewTab,
     );
     assert!(
-        location.doors.land.peek().is_none(),
+        roots.doors.land.peek().is_none(),
         "a landing was left to an effect that cannot run"
     );
-    assert!(source_line(location.doors.marked) == Some(at.clone()));
+    assert!(source_line(roots.doors.marked) == Some(at.clone()));
     settle(&mut test);
     assert!(
-        source_line(location.doors.marked) == Some(at.clone()),
+        source_line(roots.doors.marked) == Some(at.clone()),
         "the run was dropped though no document changed"
     );
     assert!(states.open.active() == Some(document));
@@ -6035,13 +5927,14 @@ fn a_chosen_symbol_wins_the_pick_for_its_line() {
         .expect("the fixture holds another function")
         .clone();
 
-    let (mut test, (asking, analysis, _seen, objects, _history, _located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            |runner| analysis_states!(runner, answer),
-            1.,
-        );
+    let (mut test, (roots, asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let analysis = roots.analysis;
+    let objects = roots.states.objects;
     let (mut asking, mut objects) = (asking, objects);
     objects.set(vec![wanted.object.clone(), twin.object.clone()]);
     test.sync_and_update();
@@ -6118,13 +6011,14 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
     let at = a_line_of(&wanted);
     let tab = Document::Source(at.file.clone());
 
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let mut located = location.located;
+    let states = roots.states;
+    let mut located = roots.located;
     open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
     let entry = entry_of(&states, &tab);
     located.write().asked = Some(Query::line(at.clone()));
@@ -6150,7 +6044,7 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
     );
     assert!(states.places.driven.peek().choice(&entry) == Some(wanted.clone()));
     assert_eq!(states.places.driven.peek().line(&entry), Some(at.line));
-    assert!(source_line(location.doors.marked) == Some(at.clone()));
+    assert!(source_line(roots.doors.marked) == Some(at.clone()));
     // Which is the question the tab now asks.
     assert!(
         ask(Some(&entry), &states.places.driven.peek())
@@ -6179,15 +6073,16 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
     let symbols = fixture_symbols();
     let at = a_line_of(&symbols[0]);
 
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let states = roots.states;
     settle(&mut test);
 
-    let mut landing = location.doors.land;
+    let mut landing = roots.doors.land;
     landing.set(Some(Landing {
         tab: Document::Assembly(Selection::Symbol(symbols[0].clone())),
         at: Some(at.clone()),
@@ -6203,11 +6098,11 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
     settle(&mut test);
 
     assert!(
-        location.doors.marked.peek().source.is_none(),
+        roots.doors.marked.peek().source.is_none(),
         "a landing picked a line out in another document"
     );
     assert!(
-        location.doors.land.peek().is_none(),
+        roots.doors.land.peek().is_none(),
         "a spent landing was left lying"
     );
 }
@@ -6232,13 +6127,14 @@ fn an_instance_query_answers_each_symbol_once() {
     };
     let query = Query::function(at.clone(), &function("everything", 21..=39));
 
-    let (mut test, (_asking, _analysis, _seen, objects, _history, located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            |runner| analysis_states!(runner, answer),
-            1.,
-        );
+    let (mut test, (roots, _asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let objects = roots.states.objects;
+    let located = roots.located;
     let (mut objects, mut located) = (objects, located);
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
@@ -6313,13 +6209,13 @@ fn the_locations_panel_names_the_function_an_instance_query_is_of() {
         },
     );
 
-    let (mut test, (_states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let mut located = location.located;
+    let mut located = roots.located;
 
     located.write().asked = Some(query.clone());
     settle(&mut test);
@@ -6377,13 +6273,14 @@ fn the_row_lit_is_the_symbol_drawn_and_not_the_active_document() {
     let at = a_line_of(&wanted);
     let tab = Document::Source(at.file.clone());
 
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let (mut located, mut analysis) = (location.located, location.analysis);
+    let states = roots.states;
+    let (mut located, mut analysis) = (roots.located, roots.analysis);
     open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
     located.write().asked = Some(Query::line(at.clone()));
     located.write().found = Some(Found::new(
@@ -6473,7 +6370,7 @@ fn linking_harness() -> impl IntoElement {
     let located = use_consume::<Locations>().0;
     let linked = use_consume::<Linking>().0;
     let work = use_consume::<ServerWorking>().0;
-    let hover = use_provide_root_context(|| Hovering(State::create(Hover::default()))).0;
+    let hover = use_consume::<Hovering>().0;
     let jobs = use_language_with(
         language,
         follow,
@@ -6548,70 +6445,72 @@ fn calling_links() -> links::Links {
 ///
 /// The question about a file's names is answered for it, with [`calling_links`]: every
 /// test here is over the one file, and none of them is about what a server calls a name.
-macro_rules! mount_linking {
-    ($answer:expr, $file:expr) => {
-        mount_linking!($answer, $file, calling_links())
-    };
-    ($answer:expr, $file:expr, $links:expr) => {{
-        let links: links::Links = $links;
-        let (test, states, language, location, driven, _asking, _opened, asks) =
-            mount_linking!(classifying: move || Ok(links.clone()), $answer, $file);
-        (test, states, language, location, driven, asks)
-    }};
-    (classifying: $classify:expr, $answer:expr, $file:expr) => {{
-        let (asked, asks) = async_channel::unbounded::<AskedOfServer>();
-        let answer = $answer;
-        let classify = $classify;
-        let work = move |job: LspJob| {
-            let recorded = match &job {
-                LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
-                LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
-                LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
-                LspJob::Hover { at, .. } => AskedOfServer::Hover(at.clone()),
-                LspJob::Opened { file, .. } => AskedOfServer::Opened(file.clone()),
-                LspJob::Closed { file, .. } => AskedOfServer::Closed(file.clone()),
-                LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
-                LspJob::Stop => AskedOfServer::Stop,
-            };
-            let _ = asked.send_blocking(recorded);
-            match &job {
-                LspJob::Tokens { run, file } => Some(LspAnswer::Linked {
-                    run: *run,
-                    file: file.clone(),
-                    links: classify(),
-                }),
-                _ => answer(job),
-            }
+fn mount_linking(
+    answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
+    file: Arc<str>,
+) -> (TestingRunner, Roots, async_channel::Receiver<AskedOfServer>) {
+    mount_linking_calling(answer, file, calling_links())
+}
+
+/// The same over a file whose names are `links` rather than [`calling_links`]'s.
+fn mount_linking_calling(
+    answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
+    file: Arc<str>,
+    links: links::Links,
+) -> (TestingRunner, Roots, async_channel::Receiver<AskedOfServer>) {
+    let (test, roots, _asking, asks) =
+        mount_linking_classifying(move || Ok(links.clone()), answer, file);
+    (test, roots, asks)
+}
+
+/// The same again with the classification made per question, for the tests that are about
+/// a file whose names the server answers differently the second time it is asked.
+fn mount_linking_classifying(
+    classify: impl Fn() -> Result<links::Links, lsp::Failure> + Send + Sync + 'static,
+    answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
+    file: Arc<str>,
+) -> (
+    TestingRunner,
+    Roots,
+    State<Option<LspJobs>>,
+    async_channel::Receiver<AskedOfServer>,
+) {
+    let (asked, asks) = async_channel::unbounded::<AskedOfServer>();
+    let work = move |job: LspJob| {
+        let recorded = match &job {
+            LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
+            LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
+            LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
+            LspJob::Hover { at, .. } => AskedOfServer::Hover(at.clone()),
+            LspJob::Opened { file, .. } => AskedOfServer::Opened(file.clone()),
+            LspJob::Closed { file, .. } => AskedOfServer::Closed(file.clone()),
+            LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
+            LspJob::Stop => AskedOfServer::Stop,
         };
-        let file: Arc<str> = $file;
-        let (mut test, (states, language, location, driven, asking, opened)) = TestingRunner::new(
-            linking_harness,
-            (700., 400.).into(),
-            move |runner: &mut _| {
-                let (states, location) = location_states!(runner);
-                runner.provide_root_context(|| Shift(State::create(false)));
-                runner.provide_root_context(move || ServerWorking(Arc::new(work)));
-                let language = runner
-                    .provide_root_context(|| Talking(State::create(Language::default())))
-                    .0;
-                runner.provide_root_context(|| Following(State::create(Follow::default())));
-                runner.provide_root_context(|| Linking(State::create(Linked::default())));
-                let opened = runner
-                    .provide_root_context(|| Documents(State::create(Opened::default())))
-                    .0;
-                runner.provide_root_context(move || Subject(file.clone()));
-                let asking = runner
-                    .provide_root_context(|| ServerAsking(State::create(None)))
-                    .0;
-                // Which line each tab's assembly side follows: what the answer writes.
-                let driven = states.places.driven;
-                (states, language, location, driven, asking, opened)
-            },
-            1.,
-        );
-        test.sync_and_update();
-        (test, states, language, location, driven, asking, opened, asks)
-    }};
+        let _ = asked.send_blocking(recorded);
+        match &job {
+            LspJob::Tokens { run, file } => Some(LspAnswer::Linked {
+                run: *run,
+                file: file.clone(),
+                links: classify(),
+            }),
+            _ => answer(job),
+        }
+    };
+    let (mut test, (roots, asking)) = TestingRunner::new(
+        linking_harness,
+        (700., 400.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context(move || {
+                provide(ServerWorking(Arc::new(work)));
+                provide(Subject(file.clone()));
+                (test_roots(), provide(ServerAsking(State::create(None))).0)
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
+    (test, roots, asking, asks)
 }
 
 /// The middle of the run reading `word` in the one code row that draws it.
@@ -6667,7 +6566,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
         line: 1,
         columns: 3..9,
     };
-    let (mut test, states, language, location, driven, _asks) = mount_linking!(
+    let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
@@ -6676,8 +6575,11 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
             }),
             _ => None,
         },
-        file.clone()
+        file.clone(),
     );
+    let states = roots.states;
+    let language = roots.language;
+    let driven = roots.states.places.driven;
     let mut language = language;
     let calling = Document::Source(file.clone());
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
@@ -6703,7 +6605,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
     let id = states.open.active_id().expect("a tab");
     let entry = (id, Stop::on(file_of(&document), 1));
     assert_eq!(
-        location
+        roots
             .doors
             .marked
             .peek()
@@ -6742,7 +6644,7 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
         line: 1,
         columns: 7..13,
     };
-    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+    let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
@@ -6751,9 +6653,10 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
             }),
             _ => None,
         },
-        file.clone()
+        file.clone(),
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -6765,9 +6668,9 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    pump(&mut test, || location.doors.marked.peek().source.is_some());
+    pump(&mut test, || roots.doors.marked.peek().source.is_some());
 
-    let picked = location
+    let picked = roots
         .doors
         .marked
         .peek()
@@ -6813,7 +6716,7 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
         line: 1,
         columns: 19..25,
     };
-    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+    let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
@@ -6823,9 +6726,10 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
             }),
             _ => None,
         },
-        file.clone()
+        file.clone(),
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -6838,14 +6742,14 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
     let call = word_point(&test, "helper");
     let before = source::touches();
     press_at(&mut test, call);
-    pump(&mut test, || location.doors.marked.peek().source.is_some());
+    pump(&mut test, || roots.doors.marked.peek().source.is_some());
 
     assert_eq!(
         source::touches(),
         before,
         "the answer was opened with a read on the thread that draws"
     );
-    let picked = location
+    let picked = roots
         .doors
         .marked
         .peek()
@@ -6874,7 +6778,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
         line: 2,
         columns: 12..18,
     };
-    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+    let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
@@ -6883,9 +6787,10 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
             }),
             _ => None,
         },
-        file.clone()
+        file.clone(),
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -6897,9 +6802,9 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    pump(&mut test, || location.doors.marked.peek().source.is_some());
+    pump(&mut test, || roots.doors.marked.peek().source.is_some());
 
-    let picked = location
+    let picked = roots
         .doors
         .marked
         .peek()
@@ -6952,7 +6857,7 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
     // The first question waits here until the test lets it go, so the second is asked
     // while it is in flight and answered after it.
     let (release, held) = async_channel::bounded::<()>(1);
-    let (mut test, states, language, _location, _driven, asks) = mount_linking!(
+    let (mut test, roots, asks) = mount_linking_calling(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, at, want } => {
                 let first = at.column == 12;
@@ -6973,9 +6878,10 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
             _ => None,
         },
         file.clone(),
-        two_calling_links()
+        two_calling_links(),
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     let calling = Document::Source(file.clone());
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
     settle(&mut test);
@@ -7033,7 +6939,7 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
     // The question waits here until the test lets it go, so the answer lands after the
     // reader has moved to the other tab.
     let (release, held) = async_channel::bounded::<()>(1);
-    let (mut test, states, language, _location, _driven, asks) = mount_linking!(
+    let (mut test, roots, asks) = mount_linking(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => {
                 let _ = held.recv_blocking();
@@ -7045,9 +6951,10 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
             }
             _ => None,
         },
-        file.clone()
+        file.clone(),
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     let calling = Document::Source(file.clone());
     let elsewhere = Document::Source(Arc::from("/p/src/elsewhere.rs"));
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
@@ -7105,39 +7012,46 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
 /// The answer is written under the run and id the question went out with, which is what
 /// makes it the answer to *that* question: a hover the pointer has moved off is answered
 /// to nobody.
-macro_rules! hovering_over {
-    ($said:expr, $word:expr) => {{
-        let said: &str = $said;
-        let (file, directory) = calling_file("hover");
-        let (mut test, states, language, _location, _driven, asks) = mount_linking!(
-            move |job: LspJob| match job {
-                LspJob::Hover { run, id, .. } => Some(LspAnswer::Hovered {
-                    run,
-                    id,
-                    said: Ok(Some(lsp::Hovered {
-                        text: said.to_owned(),
-                        line: 2,
-                        columns: 12..18,
-                    })),
-                }),
-                _ => None,
-            },
-            file.clone()
-        );
-        let mut language = language;
-        open_document(
-            states.open,
-            states.visits,
-            Document::Source(file.clone()),
-            Reach::NewTab,
-        );
-        settle(&mut test);
-        serving(&mut test, &mut language);
-        let at = word_point(&test, $word);
-        test.move_cursor(at);
-        hovered(&mut test);
-        (test, at, asks, directory)
-    }};
+fn hovering_over(
+    said: &str,
+    word: &str,
+) -> (
+    TestingRunner,
+    (f64, f64),
+    async_channel::Receiver<AskedOfServer>,
+    Seeded,
+) {
+    let said = said.to_owned();
+    let (file, directory) = calling_file("hover");
+    let (mut test, roots, asks) = mount_linking(
+        move |job: LspJob| match job {
+            LspJob::Hover { run, id, .. } => Some(LspAnswer::Hovered {
+                run,
+                id,
+                said: Ok(Some(lsp::Hovered {
+                    text: said.clone(),
+                    line: 2,
+                    columns: 12..18,
+                })),
+            }),
+            _ => None,
+        },
+        file.clone(),
+    );
+    let states = roots.states;
+    let mut language = roots.language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+    let at = word_point(&test, word);
+    test.move_cursor(at);
+    hovered(&mut test);
+    (test, at, asks, directory)
 }
 
 /// The wait the pointer owes (`HOVER_DELAY`), the question after it, the worker's thread
@@ -7182,7 +7096,7 @@ fn word_row(test: &TestingRunner, word: &str) -> Area {
 /// or the pane.
 #[test]
 fn the_box_sits_against_the_row_of_the_name_it_is_about() {
-    let (test, at, _asks, _directory) = hovering_over!("`helper`: fn(u32) -> u32", "helper");
+    let (test, at, _asks, _directory) = hovering_over("`helper`: fn(u32) -> u32", "helper");
     let drawn = hover_box(&test).expect("the box is drawn");
     let row = word_row(&test, "helper");
     assert_eq!(
@@ -7286,9 +7200,9 @@ fn a_move_inside_the_name_puts_the_wait_back_to_the_beginning() {
 #[test]
 fn a_sweep_along_a_line_asks_about_none_of_the_names_it_passes() {
     let (file, _directory) = calling_file("resting");
-    let (mut test, states, language, _location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -7336,7 +7250,7 @@ fn a_sweep_along_a_line_asks_about_none_of_the_names_it_passes() {
 #[test]
 fn the_box_draws_the_answer_as_markdown() {
     let said = "```rust\npub fn helper(n: u32) -> u32\n```\n\n---\n\nAdds **one** to a number.";
-    let (test, _at, _asks, _directory) = hovering_over!(said, "helper");
+    let (test, _at, _asks, _directory) = hovering_over(said, "helper");
     assert!(hover_box(&test).is_some(), "the box is drawn");
 
     let drawn = labels(&test).join("\n");
@@ -7359,7 +7273,7 @@ fn the_box_draws_the_answer_as_markdown() {
 /// with more in it than the box may be tall reaches that limit.
 #[test]
 fn a_short_answer_makes_a_short_box() {
-    let (test, _at, _asks, _directory) = hovering_over!("what it is", "helper");
+    let (test, _at, _asks, _directory) = hovering_over("what it is", "helper");
     let drawn = hover_box(&test).expect("the box is drawn");
     assert!(
         drawn.height() < hover_height(),
@@ -7380,7 +7294,7 @@ fn a_long_answer_is_capped_and_scrolls_inside_the_box() {
             .join("\n\n")
             .into_boxed_str(),
     );
-    let (mut test, _at, _asks, _directory) = hovering_over!(pages, "helper");
+    let (mut test, _at, _asks, _directory) = hovering_over(pages, "helper");
     let drawn = hover_box(&test).expect("the box is drawn");
     assert!(
         drawn.height() <= hover_height() + 2.0 * HOVER_PAD + 2.0,
@@ -7435,7 +7349,7 @@ fn a_long_answer_is_capped_and_scrolls_inside_the_box() {
 #[test]
 fn a_name_the_server_says_nothing_about_draws_no_box() {
     let (file, _directory) = calling_file("hover-nothing");
-    let (mut test, states, language, _location, _driven, _asks) = mount_linking!(
+    let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
             LspJob::Hover { run, id, .. } => Some(LspAnswer::Hovered {
                 run,
@@ -7444,9 +7358,10 @@ fn a_name_the_server_says_nothing_about_draws_no_box() {
             }),
             _ => None,
         },
-        file.clone()
+        file.clone(),
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -7466,7 +7381,7 @@ fn a_name_the_server_says_nothing_about_draws_no_box() {
 /// reader reads its own signature.
 #[test]
 fn the_name_under_the_pointer_is_asked_about_link_or_not() {
-    let (mut test, _at, asks, _directory) = hovering_over!("what it is", "main");
+    let (mut test, _at, asks, _directory) = hovering_over("what it is", "main");
     settle(&mut test);
     let asked: Vec<Lookup> = std::iter::from_fn(|| next_job(&asks))
         .filter_map(|job| match job {
@@ -7490,9 +7405,9 @@ fn the_name_under_the_pointer_is_asked_about_link_or_not() {
 #[test]
 fn with_no_server_there_is_no_name_to_hover_at_all() {
     let (file, _directory) = calling_file("hover-no-server");
-    let (mut test, states, language, _location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -7529,7 +7444,7 @@ fn with_no_server_there_is_no_name_to_hover_at_all() {
 /// time.
 #[test]
 fn the_box_stays_while_the_pointer_moves_into_it() {
-    let (mut test, _at, _asks, _directory) = hovering_over!("what it is", "helper");
+    let (mut test, _at, _asks, _directory) = hovering_over("what it is", "helper");
     let drawn = hover_box(&test).expect("the box is drawn");
 
     let inside = (
@@ -7555,7 +7470,7 @@ fn the_box_stays_while_the_pointer_moves_into_it() {
 /// A press takes it down, wherever it lands: the reader is doing something else now.
 #[test]
 fn a_press_takes_the_box_down() {
-    let (mut test, at, _asks, _directory) = hovering_over!("what it is", "helper");
+    let (mut test, at, _asks, _directory) = hovering_over("what it is", "helper");
     assert!(hover_box(&test).is_some(), "the box is drawn");
     press_at(&mut test, at);
     settle(&mut test);
@@ -7566,7 +7481,7 @@ fn a_press_takes_the_box_down() {
 /// open the very link they are hovering in a tab of its own.
 #[test]
 fn a_key_takes_the_box_down_and_a_bare_modifier_does_not() {
-    let (mut test, _at, _asks, _directory) = hovering_over!("what it is", "helper");
+    let (mut test, _at, _asks, _directory) = hovering_over("what it is", "helper");
 
     key_with(&mut test, Key::Named(NamedKey::Control), Modifiers::CONTROL);
     assert!(
@@ -7584,9 +7499,9 @@ fn a_key_takes_the_box_down_and_a_bare_modifier_does_not() {
 #[test]
 fn a_right_click_on_a_link_offers_the_names_references() {
     let (file, _directory) = calling_file("uses");
-    let (mut test, states, language, location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -7626,7 +7541,7 @@ fn a_right_click_on_a_link_offers_the_names_references() {
     settle(&mut test);
 
     // The question the panel now holds: the name, and where it was asked about.
-    let asked = location.located.peek().asked.clone().expect("a question");
+    let asked = roots.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 2, "the question is about the wrong line");
     let Scope::Listed { name, column, .. } = &asked.scope else {
         panic!("the question is not about a name's references");
@@ -7649,9 +7564,9 @@ fn a_right_click_on_a_link_offers_the_names_references() {
 #[test]
 fn a_name_where_one_is_defined_is_not_a_link() {
     let (file, _directory) = calling_file("defined");
-    let (mut test, states, language, location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -7671,7 +7586,7 @@ fn a_name_where_one_is_defined_is_not_a_link() {
         "a definition's own name asked the server where it is"
     );
     assert!(
-        location.doors.marked.peek().source.is_some(),
+        roots.doors.marked.peek().source.is_some(),
         "a press on it did not pick its line out, as a press on text does"
     );
 }
@@ -7779,7 +7694,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
         line: 1,
         columns: 3..9,
     };
-    let (mut test, states, language, _location, _driven, _asks) = mount_linking!(
+    let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
@@ -7788,9 +7703,10 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
             }),
             _ => None,
         },
-        dotted.clone()
+        dotted.clone(),
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -7857,7 +7773,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
         line: 1,
         columns: 3..9,
     };
-    let (mut test, states, language, _location, _driven, _asks) = mount_linking!(
+    let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
@@ -7866,9 +7782,10 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
             }),
             _ => None,
         },
-        stepped.clone()
+        stepped.clone(),
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -7905,12 +7822,10 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
 #[test]
 fn a_stopped_server_leaves_no_links_behind() {
     let (file, _directory) = calling_file("stopped");
-    let (mut test, states, language, _location, _driven, asking, _opened, _asks) = mount_linking!(
-        classifying: || Ok(calling_links()),
-        |_job: LspJob| None,
-        file.clone()
-    );
-    let mut language = language;
+    let (mut test, roots, asking, _asks) =
+        mount_linking_classifying(|| Ok(calling_links()), |_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -7990,8 +7905,8 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
     };
     let handle = process::Handle::to_nothing();
     let (told, channel) = async_channel::unbounded();
-    let (mut test, states, language, _location, _driven, asking, _opened, asks) = mount_linking!(
-        classifying: classify,
+    let (mut test, roots, asking, asks) = mount_linking_classifying(
+        classify,
         move |job: LspJob| match job {
             // A real start, since what puts the question again is the server's own
             // account of itself, and it arrives on the channel a start hands over.
@@ -8004,8 +7919,10 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
             }
             _ => None,
         },
-        file.clone()
+        file.clone(),
     );
+    let states = roots.states;
+    let language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8076,9 +7993,9 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
 #[test]
 fn the_server_is_told_which_files_the_reader_has_open() {
     let (file, _directory) = calling_file("shown");
-    let (mut test, states, language, _location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8121,11 +8038,11 @@ fn the_server_is_told_which_files_the_reader_has_open() {
 #[test]
 fn a_file_read_afresh_is_opened_with_the_server_again() {
     let (file, directory) = calling_file("reread");
-    let (mut test, states, language, _location, _driven, _asking, opened, asks) = mount_linking!(
-        classifying: || Ok(calling_links()),
-        |_job: LspJob| None,
-        file.clone()
-    );
+    let (mut test, roots, _asking, asks) =
+        mount_linking_classifying(|| Ok(calling_links()), |_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let language = roots.language;
+    let opened = roots.opened;
     let mut language = language;
     open_document(
         states.open,
@@ -8177,9 +8094,9 @@ fn a_file_the_server_is_not_for_is_neither_opened_nor_asked_about() {
         "add.c",
         "struct Counter { int seen; };\nint bump(struct Counter *counter) {\n    return counter->seen;\n}\n",
     );
-    let (mut test, states, language, _location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8209,9 +8126,9 @@ fn a_file_the_server_is_not_for_is_neither_opened_nor_asked_about() {
 fn a_project_names_the_files_its_server_is_for() {
     let directory = Seeded::directory("named-files");
     let file = directory.named("add.c", "int bump(int n) {\n    return n + 1;\n}\n");
-    let (mut test, states, language, _location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8256,9 +8173,9 @@ fn a_project_names_the_files_its_server_is_for() {
 #[test]
 fn a_file_is_asked_about_only_once_the_server_says_it_has_settled() {
     let (file, _directory) = calling_file("unsettled");
-    let (mut test, states, language, _location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8324,8 +8241,8 @@ fn what_a_server_said_before_it_settled_is_asked_again_once_it_has() {
     };
     let handle = process::Handle::to_nothing();
     let (told, channel) = async_channel::unbounded();
-    let (mut test, states, language, _location, _driven, asking, _opened, asks) = mount_linking!(
-        classifying: classify,
+    let (mut test, roots, asking, asks) = mount_linking_classifying(
+        classify,
         move |job: LspJob| match job {
             // A real start, since what puts the question again is the server's own
             // account of itself, and it arrives on the channel a start hands over.
@@ -8338,8 +8255,10 @@ fn what_a_server_said_before_it_settled_is_asked_again_once_it_has() {
             }
             _ => None,
         },
-        file.clone()
+        file.clone(),
     );
+    let states = roots.states;
+    let language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8421,7 +8340,7 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
         line: 2,
         columns: 12..18,
     };
-    let (mut test, states, language, location, _driven, asks) = mount_linking!(
+    let (mut test, roots, asks) = mount_linking_calling(
         move |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
@@ -8431,9 +8350,10 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
             _ => None,
         },
         file.clone(),
-        in_an_impl
+        in_an_impl,
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     let calling = Document::Source(file.clone());
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
     settle(&mut test);
@@ -8453,7 +8373,7 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
     settle(&mut test);
 
     assert!(
-        location.doors.marked.peek().source.is_none(),
+        roots.doors.marked.peek().source.is_none(),
         "an answer naming the line it was asked about picked a line out"
     );
     assert_eq!(
@@ -8505,9 +8425,10 @@ fn a_link_that_is_not_a_colour_run_is_still_a_span_of_its_own() {
             modifiers: 0,
         }],
     );
-    let (mut test, states, language, _location, _driven, _asks) =
-        mount_linking!(|_job: LspJob| None, file.clone(), inside_a_run);
-    let mut language = language;
+    let (mut test, roots, _asks) =
+        mount_linking_calling(|_job: LspJob| None, file.clone(), inside_a_run);
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8541,9 +8462,9 @@ fn a_link_that_is_not_a_colour_run_is_still_a_span_of_its_own() {
 #[test]
 fn a_name_in_the_source_wears_the_links_own_box() {
     let (file, _directory) = calling_file("lit");
-    let (mut test, states, language, _location, _driven, _asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, _asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8587,9 +8508,10 @@ fn an_item_in_a_trait_impl_asks_the_server_for_its_declaration() {
             modifiers: 0b11,
         }],
     );
-    let (mut test, states, language, _location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone(), in_an_impl);
-    let mut language = language;
+    let (mut test, roots, asks) =
+        mount_linking_calling(|_job: LspJob| None, file.clone(), in_an_impl);
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8618,9 +8540,9 @@ fn an_item_in_a_trait_impl_asks_the_server_for_its_declaration() {
 #[test]
 fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
     let (file, _directory) = calling_file("asks3");
-    let (mut test, states, language, location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8647,7 +8569,7 @@ fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
 
     // Its own kind of question, and not the references one under another name: the two
     // supersede each other in the panel, which is why they are told apart at all.
-    let asked = location.located.peek().asked.clone().expect("a question");
+    let asked = roots.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 2, "the question is about the wrong line");
     let Scope::Listed { name, column, .. } = &asked.scope else {
         panic!("the question is not about what implements a name");
@@ -8665,9 +8587,9 @@ fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
 #[test]
 fn the_menus_definition_asks_where_a_click_on_the_link_does() {
     let (file, _directory) = calling_file("asksdef");
-    let (mut test, states, language, _location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8697,9 +8619,9 @@ fn the_menus_definition_asks_where_a_click_on_the_link_does() {
 #[test]
 fn a_source_rows_menu_says_the_key_beside_each_question() {
     let (file, _directory) = calling_file("menukeys");
-    let (mut test, states, language, _location, _driven, _asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, _asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8731,9 +8653,9 @@ fn a_source_rows_menu_says_the_key_beside_each_question() {
 #[test]
 fn a_right_click_on_a_definitions_own_name_offers_its_references() {
     let (file, _directory) = calling_file("defuses");
-    let (mut test, states, language, location, _driven, _asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, _asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8755,7 +8677,7 @@ fn a_right_click_on_a_definitions_own_name_offers_its_references() {
     press_at(&mut test, entry);
     settle(&mut test);
 
-    let asked = location.located.peek().asked.clone().expect("a question");
+    let asked = roots.located.peek().asked.clone().expect("a question");
     assert_eq!(asked.at.line, 1);
     let Scope::Listed { name, column, .. } = &asked.scope else {
         panic!("the question is not about a name's references");
@@ -8791,9 +8713,9 @@ fn caret_on(test: &mut TestingRunner, word: &str) {
 #[test]
 fn the_f12_family_asks_about_the_name_under_the_caret() {
     let (file, _directory) = calling_file("f12caret");
-    let (mut test, states, language, location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8818,7 +8740,7 @@ fn the_f12_family_asks_about_the_name_under_the_caret() {
         (Chord::Implementations, lsp::Listed::Implementations),
     ] {
         press_chord(&mut test, chord);
-        let query = location
+        let query = roots
             .located
             .peek()
             .asked
@@ -8842,12 +8764,7 @@ fn the_f12_family_asks_about_the_name_under_the_caret() {
     // Alt+F12 is the line's own locations, which is what the menu item under those three
     // asks: the caret's row, and no name in it.
     press_chord(&mut test, Chord::AllLocations);
-    let query = location
-        .located
-        .peek()
-        .asked
-        .clone()
-        .expect("Alt+F12 asked");
+    let query = roots.located.peek().asked.clone().expect("Alt+F12 asked");
     assert!(
         query == Query::line(LinePos { file, line: 1 }),
         "Alt+F12 asked about something other than the caret's line"
@@ -8860,9 +8777,9 @@ fn the_f12_family_asks_about_the_name_under_the_caret() {
 #[test]
 fn a_caret_on_no_name_asks_nothing_about_one() {
     let (file, _directory) = calling_file("f12space");
-    let (mut test, states, language, location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8885,7 +8802,7 @@ fn a_caret_on_no_name_asks_nothing_about_one() {
         press_chord(&mut test, chord);
     }
     assert!(
-        location.located.peek().asked.is_none(),
+        roots.located.peek().asked.is_none(),
         "a caret on whitespace asked the panel about a name"
     );
     assert!(
@@ -8896,12 +8813,7 @@ fn a_caret_on_no_name_asks_nothing_about_one() {
     // The line's locations are still there to ask for: a row is a row whether or not the
     // caret is on one of its names.
     press_chord(&mut test, Chord::AllLocations);
-    let query = location
-        .located
-        .peek()
-        .asked
-        .clone()
-        .expect("Alt+F12 asked");
+    let query = roots.located.peek().asked.clone().expect("Alt+F12 asked");
     assert!(query == Query::line(LinePos { file, line: 2 }));
 }
 
@@ -8911,9 +8823,9 @@ fn a_caret_on_no_name_asks_nothing_about_one() {
 #[test]
 fn a_pane_with_no_run_answers_none_of_the_f12_family() {
     let (file, _directory) = calling_file("f12norun");
-    let (mut test, states, language, location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8928,7 +8840,7 @@ fn a_pane_with_no_run_answers_none_of_the_f12_family() {
     // first press takes the whole run.
     key_with(&mut test, Key::Named(NamedKey::Escape), Modifiers::empty());
     assert!(
-        location.doors.marked.peek().source.is_none(),
+        roots.doors.marked.peek().source.is_none(),
         "the pane still has a run"
     );
 
@@ -8941,7 +8853,7 @@ fn a_pane_with_no_run_answers_none_of_the_f12_family() {
         press_chord(&mut test, chord);
     }
     assert!(
-        location.located.peek().asked.is_none(),
+        roots.located.peek().asked.is_none(),
         "a pane with no run asked the panel something"
     );
     assert!(
@@ -8956,7 +8868,7 @@ fn a_pane_with_no_run_answers_none_of_the_f12_family() {
 #[test]
 fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
     let (file, _directory) = calling_file("refused");
-    let (mut test, states, language, location, _driven, _asks) = mount_linking!(
+    let (mut test, roots, _asks) = mount_linking(
         |job: LspJob| match job {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
@@ -8972,9 +8884,10 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
             }),
             _ => None,
         },
-        file.clone()
+        file.clone(),
     );
-    let mut language = language;
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8990,9 +8903,9 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
     press_at(&mut test, entry);
     // Waited for rather than counted in passes: two workers stand between the press and
     // the panel, and how many turns they take is not something a test can know.
-    pump(&mut test, || location.located.peek().found.is_some());
+    pump(&mut test, || roots.located.peek().found.is_some());
 
-    let state = location.located.peek().clone();
+    let state = roots.located.peek().clone();
     assert!(
         state.pending().is_none(),
         "the panel is still looking for an answer that will not come"
@@ -9018,8 +8931,8 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
 #[test]
 fn a_right_click_with_no_server_offers_no_references() {
     let (file, _directory) = calling_file("nouses");
-    let (mut test, states, _language, _location, _driven, _asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
+    let (mut test, roots, _asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
     open_document(
         states.open,
         states.visits,
@@ -9044,9 +8957,9 @@ fn a_right_click_with_no_server_offers_no_references() {
 #[test]
 fn a_press_on_a_call_asks_where_the_name_is_defined() {
     let (file, _directory) = calling_file("asks");
-    let (mut test, states, language, location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
     let document = Document::Source(file.clone());
     open_document(states.open, states.visits, document, Reach::NewTab);
     settle(&mut test);
@@ -9073,7 +8986,7 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
     // trait `impl`, whose definition is itself.
     assert_eq!(want, lsp::Question::Followed(lsp::Followed::Definition));
     assert!(
-        location.doors.marked.peek().source.is_none(),
+        roots.doors.marked.peek().source.is_none(),
         "the press picked a line out"
     );
 }
@@ -9099,9 +9012,9 @@ fn a_press_after_a_wide_character_asks_at_its_byte() {
             modifiers: 0,
         }],
     );
-    let (mut test, states, language, _location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone(), links);
-    let mut language = language;
+    let (mut test, roots, asks) = mount_linking_calling(|_job: LspJob| None, file.clone(), links);
+    let states = roots.states;
+    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -9124,8 +9037,8 @@ fn a_press_after_a_wide_character_asks_at_its_byte() {
 #[test]
 fn a_press_on_a_call_with_no_server_picks_the_line_out() {
     let (file, _directory) = calling_file("nobody");
-    let (mut test, states, _language, location, _driven, asks) =
-        mount_linking!(|_job: LspJob| None, file.clone());
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
     let document = Document::Source(file.clone());
     open_document(states.open, states.visits, document, Reach::NewTab);
     settle(&mut test);
@@ -9141,7 +9054,7 @@ fn a_press_on_a_call_with_no_server_picks_the_line_out() {
         "a question was asked with no server"
     );
     assert!(
-        location.doors.marked.peek().source.is_some(),
+        roots.doors.marked.peek().source.is_some(),
         "the press picked no line out"
     );
 }
@@ -9174,25 +9087,6 @@ fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
         test.sync_and_update();
     }
     settle(test);
-}
-
-/// The contexts a companion's rows read, beside the project's: the analysis the pane takes
-/// its file from, and the two states a door lands through.
-macro_rules! companion_states {
-    ($runner:expr, $shown:expr) => {{
-        let (states, doors) = project_wiring!($runner);
-        $runner.provide_root_context(|| Shift(State::create(false)));
-        $runner.provide_root_context(|| CodeRows(State::create(None)));
-        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
-        $runner.provide_root_context(|| Locations(State::create(Located::default())));
-        $runner.provide_root_context(|| {
-            Analysis(State::create(Analyzed {
-                shown: Some($shown),
-                ..Analyzed::default()
-            }))
-        });
-        (states, doors.land)
-    }};
 }
 
 /// The Source pane over a **companion** -- the file a drawn symbol was compiled from,
@@ -9251,12 +9145,14 @@ fn a_companions_line_opens_the_file_it_is_in() {
     let entry = "Open door.c".to_string();
 
     let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
-    let (mut test, (states, landing)) = TestingRunner::new(
+    let shown = companion(Ask::Symbol(sum_to.clone()));
+    let (mut test, roots) = TestingRunner::new(
         companion_menu_harness,
         (500., 400.).into(),
-        |runner| companion_states!(runner, companion(Ask::Symbol(sum_to.clone()))),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let (states, landing) = (roots.states, roots.doors.land);
     open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
     settle(&mut test);
 
@@ -9294,12 +9190,14 @@ fn a_companions_line_opens_the_file_it_is_in() {
         file: file.clone(),
         line: 1,
     };
-    let (mut test, (states, _landing)) = TestingRunner::new(
+    let shown = companion(Ask::Source { at, chosen: None });
+    let (mut test, roots) = TestingRunner::new(
         companion_menu_harness,
         (500., 400.).into(),
-        |runner| companion_states!(runner, companion(Ask::Source { at, chosen: None })),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
     open_document(states.open, states.visits, opened, Reach::NewTab);
     settle(&mut test);
     let row = centre_of(&test, "3\u{a0}");
@@ -9328,17 +9226,12 @@ fn a_source_row_inside_a_function_offers_its_instances() {
         (500., 400.).into(),
         {
             let file = file.clone();
-            move |runner| {
-                let states = project_states!(runner);
-                runner.provide_root_context(|| Shift(State::create(false)));
-                runner.provide_root_context(|| CodeRows(State::create(None)));
-                runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
-                runner.provide_root_context(|| Subject(file.clone()));
-                runner.provide_root_context(|| Coding(State::create(Coded::default())));
-                let located = runner
-                    .provide_root_context(|| Locations(State::create(Located::default())))
-                    .0;
-                (states, located)
+            move |runner: &mut _| {
+                runner.provide_root_context(move || {
+                    provide(Subject(file.clone()));
+                    let roots = test_roots();
+                    (roots.states, roots.located)
+                })
             }
         },
         1.,
@@ -9425,28 +9318,24 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
         .clone();
     let at = a_line_of(&wanted);
 
-    let (
-        mut test,
-        ((_asking, _analysis, _seen, objects, _history, located, _reading, _window), sidebar),
-    ) = TestingRunner::new(
+    let (mut test, (roots, sidebar)) = TestingRunner::new(
         analysis_harness,
         (100., 100.).into(),
-        |runner| {
-            let states = analysis_states!(runner, answer);
-            // One group, with Locations behind History.
-            let sidebar = runner
-                .provide_root_context(|| {
-                    SidebarDock(State::create(DockArea::column(vec![vec![
-                        Panel::History,
-                        Panel::Locations,
-                    ]])))
-                })
-                .0;
-            (states, sidebar)
+        |runner: &mut _| {
+            let (roots, _asking, _seen) = runner.provide_root_context(|| analysis_states(answer));
+            // One group, with Locations behind History. Written into the dock the root
+            // made and not provided over it, which would leave two.
+            let mut sidebar = roots.states.arranged.dock;
+            sidebar.set(DockArea::column(vec![vec![
+                Panel::History,
+                Panel::Locations,
+            ]]));
+            (roots, sidebar)
         },
         1.,
     );
-    let mut objects = objects;
+    let located = roots.located;
+    let mut objects = roots.states.objects;
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
 
@@ -9462,7 +9351,6 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
     assert_eq!(found.symbols().expect("symbols").len(), 1);
 
     // The same line again is asked again, out of whatever is open now.
-    let mut objects = objects;
     objects.set(vec![
         wanted.object.clone(),
         fixture_symbols()[0].object.clone(),
@@ -9522,13 +9410,14 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
         answer(question)
     };
 
-    let (mut test, (asking, analysis, seen, objects, _history, _located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            move |runner| analysis_states!(runner, work),
-            1.,
-        );
+    let (mut test, (roots, asking, seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(work)),
+        1.,
+    );
+    let analysis = roots.analysis;
+    let objects = roots.states.objects;
     let (mut asking, mut objects) = (asking, objects);
     objects.set(vec![wanted.object.clone()]);
     let settle = |test: &mut TestingRunner| {
@@ -9641,13 +9530,14 @@ fn closing_a_binary_lets_go_of_the_listing_it_answered() {
     drop(symbols);
     let before = Arc::strong_count(&object);
 
-    let (mut test, (asking, analysis, seen, objects, _history, _located, _reading, _window)) =
-        TestingRunner::new(
-            analysis_harness,
-            (100., 100.).into(),
-            |runner| analysis_states!(runner, answer),
-            1.,
-        );
+    let (mut test, (roots, asking, seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let analysis = roots.analysis;
+    let objects = roots.states.objects;
     let (mut asking, mut objects, mut seen) = (asking, objects, seen);
     objects.set(vec![object.clone()]);
     test.sync_and_update();
@@ -9765,28 +9655,17 @@ fn listing_harness() -> impl IntoElement {
     })
 }
 
-/// The contexts a listing's rows read, beside the project's.
-macro_rules! listing_states {
-    ($runner:expr, $shown:expr) => {{
-        let (states, doors) = project_wiring!($runner);
-        let marked = doors.marked;
-        $runner.provide_root_context(|| Shift(State::create(false)));
-        $runner.provide_root_context(|| Locations(State::create(Located::default())));
-        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
-        $runner.provide_root_context(|| CodeRows(State::create(None)));
-        $runner.provide_root_context(|| {
-            Analysis(State::create(Analyzed {
-                shown: Some($shown),
-                ..Analyzed::default()
-            }))
-        });
-        // The row's door into the object's code reads these three, and lands through the
-        // doors above.
-        $runner.provide_root_context(|| Sections(State::create(Reading::default())));
-        $runner.provide_root_context(|| Beside(State::create(None)));
-        $runner.provide_root_context(|| Window(State::create(None)));
-        (states, marked, doors.land, doors)
-    }};
+/// The root's contexts with `shown` already analysed, which is what a listing's rows are
+/// drawn from. Written into the state the root made rather than provided over it: a
+/// second provide of a type leaves the harness reading one state and the test another.
+fn listing_states(shown: Shown) -> Roots {
+    let roots = test_roots();
+    let mut analysis = roots.analysis;
+    analysis.set(Analyzed {
+        shown: Some(shown),
+        ..Analyzed::default()
+    });
+    roots
 }
 
 /// A listing scrolled by a separator's distance puts a *different* separator in the slot
@@ -9815,10 +9694,10 @@ fn scrolling_past_a_separator_keeps_every_row_its_own() {
         studied,
     };
 
-    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, _roots) = TestingRunner::new(
         listing_harness,
         (500., 300.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -9921,7 +9800,7 @@ fn a_wide_instruction_is_reached_by_scrolling_sideways() {
     let (mut test, _) = TestingRunner::new(
         listing_harness,
         (250., 300.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -10020,12 +9899,13 @@ fn a_wide_source_line_is_reached_by_scrolling_sideways() {
 fn a_picked_rows_wash_runs_as_wide_as_the_widest_row() {
     let wash_at = |width: f32| {
         let shown = shown_sum_to();
-        let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+        let (mut test, roots) = TestingRunner::new(
             listing_harness,
             (width, 300.).into(),
-            |runner| listing_states!(runner, shown),
+            move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
             1.,
         );
+        let marked = roots.doors.marked;
         let mut marked = marked;
         settle(&mut test);
         // The first row, `push rbp`: the shortest an instruction row gets.
@@ -10106,18 +9986,12 @@ fn source_file_harness(
         size.into(),
         {
             let file = file.clone();
-            move |runner| {
-                let (states, doors) = project_wiring!(runner);
-                let marked = doors.marked;
-                runner.provide_root_context(|| Shift(State::create(false)));
-                runner.provide_root_context(|| CodeRows(State::create(None)));
-                runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
-                runner.provide_root_context(|| Locations(State::create(Located::default())));
-                runner.provide_root_context(|| Coding(State::create(Coded::default())));
-                let showing = runner
-                    .provide_root_context(|| Showing(State::create(file.clone())))
-                    .0;
-                (states, showing, marked)
+            move |runner: &mut _| {
+                runner.provide_root_context(move || {
+                    let showing = provide(Showing(State::create(file.clone()))).0;
+                    let roots = test_roots();
+                    (roots.states, showing, roots.doors.marked)
+                })
             }
         },
         1.,
@@ -10177,14 +10051,8 @@ fn reading_file_harness(file: &Arc<str>) -> (TestingRunner, async_channel::Sende
                         }
                     }))
                 });
-                let states = project_states!(runner);
-                runner.provide_root_context(|| Shift(State::create(false)));
-                runner.provide_root_context(|| CodeRows(State::create(None)));
-                runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
-                runner.provide_root_context(|| Locations(State::create(Located::default())));
-                runner.provide_root_context(|| Coding(State::create(Coded::default())));
                 runner.provide_root_context(|| Showing(State::create(file.clone())));
-                states
+                runner.provide_root_context(test_roots).states
             }
         },
         1.,
@@ -10408,12 +10276,14 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     // Tall enough that the `jmp`'s row is drawn whole -- a row the pane clips is a row a
     // press at its middle misses -- and short enough that the row it lands on is not
     // already on screen, which the next assertion states.
-    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (500., 220.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
+    let marked = roots.doors.marked;
     settle(&mut test);
 
     let drawn = labels(&test);
@@ -10539,7 +10409,7 @@ fn a_row_a_branch_lands_on_starts_a_block() {
     let (mut test, _) = TestingRunner::new(
         listing_harness,
         (500., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -10666,7 +10536,7 @@ fn the_gutter_runs_straight_through_a_separator() {
     let (mut test, _) = TestingRunner::new(
         listing_harness,
         (500., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -10767,10 +10637,10 @@ fn the_assembly_pane_names_the_symbol_in_both_spellings() {
         studied: Studied::new(symbol.clone()),
     };
 
-    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, _roots) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -10799,12 +10669,12 @@ fn the_bar_names_the_drawn_symbol_and_not_the_tab() {
     };
     let tab = Document::Assembly(Selection::Symbol(elsewhere.clone()));
 
-    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, _roots) = TestingRunner::new(
         tab_pane_harness,
         (600., 300.).into(),
         move |runner| {
             runner.provide_root_context(|| PaneTab(State::create(tab.clone())));
-            listing_states!(runner, shown)
+            runner.provide_root_context(move || listing_states(shown))
         },
         1.,
     );
@@ -10832,8 +10702,7 @@ fn an_object_tab_is_named_by_its_object() {
         (600., 300.).into(),
         move |runner| {
             runner.provide_root_context(|| PaneTab(State::create(tab.clone())));
-            runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
-            project_states!(runner)
+            runner.provide_root_context(test_roots).states
         },
         1.,
     );
@@ -10881,12 +10750,13 @@ fn the_expanded_section_says_what_the_info_pane_said() {
         studied: Studied::new(sum_to.clone()),
     };
 
-    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 400.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
     // Opened, or the table has no id for this tab and the bar files its flag nowhere --
     // which is a bar with no triangle to press.
     open_document(
@@ -10942,8 +10812,7 @@ fn the_symbol_section_is_remembered_per_tab() {
                 let showing = runner
                     .provide_root_context(|| PaneTab(State::create(tab(&first))))
                     .0;
-                runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
-                (project_states!(runner), showing)
+                (runner.provide_root_context(test_roots).states, showing)
             }
         },
         1.,
@@ -11068,7 +10937,8 @@ fn a_landing_is_gone_to_once_and_does_not_drag_the_pane_back() {
         (500., 400.).into(),
         |runner| {
             runner.provide_root_context(|| Mounted(State::create(true)));
-            let (states, _marked, landing, _doors) = listing_states!(runner, shown);
+            let roots = runner.provide_root_context(move || listing_states(shown));
+            let (states, landing) = (roots.states, roots.doors.land);
             (states, landing)
         },
         1.,
@@ -11148,7 +11018,9 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
             let mounted = runner
                 .provide_root_context(|| Mounted(State::create(true)))
                 .0;
-            let (states, _marked, _landing, _doors) = listing_states!(runner, shown);
+            let states = runner
+                .provide_root_context(move || listing_states(shown))
+                .states;
             (states, mounted)
         },
         1.,
@@ -11231,7 +11103,7 @@ fn a_block_rule_lands_on_whole_device_pixels() {
     let (mut test, _) = TestingRunner::new(
         listing_harness,
         (500., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -11304,7 +11176,7 @@ fn the_gutter_puts_its_strokes_on_whole_device_pixels() {
     let (mut test, _) = TestingRunner::new(
         listing_harness,
         (500., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -11398,28 +11270,25 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
         studied,
     };
 
-    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
-        |runner| {
-            let states = listing_states!(runner, shown);
-            // The split `DocumentBody` sizes its panels from, written and not provided:
-            // the macro above provides it, and a second provide would replace it with a
-            // state nothing else reads. Deliberately *uneven*: the number is the leading
-            // pane's width in both kinds of tab, so the wide half moving with the swap is
-            // half of what is asserted below.
-            let mut split = states.0.arranged.split;
-            split.set(LEADING);
-            runner.provide_root_context(|| {
-                Splits(State::create(ResizableContext {
-                    direction: Direction::Horizontal,
-                    ..Default::default()
-                }))
-            });
-            states
+        move |runner: &mut _| {
+            runner.provide_root_context(move || {
+                let roots = listing_states(shown);
+                // The split `DocumentBody` sizes its panels from, written and not
+                // provided: the root makes one, and a second provide would leave a state
+                // nothing else reads. Deliberately *uneven*: the number is the leading
+                // pane's width in both kinds of tab, so the wide half moving with the
+                // swap is half of what is asserted below.
+                let mut split = roots.states.arranged.split;
+                split.set(LEADING);
+                roots
+            })
         },
         1.,
     );
+    let states = roots.states;
     settle(&mut test);
 
     // The assembly side draws one 16-digit address per row and the source side one label
@@ -11484,11 +11353,11 @@ fn a_file_in_no_compiled_language_opens_without_an_assembly_side() {
         studied: Studied::new(sum_to.clone()),
     };
 
-    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
         |runner| {
-            let states = listing_states!(runner, shown);
+            let states = runner.provide_root_context(move || listing_states(shown));
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,
@@ -11499,6 +11368,7 @@ fn a_file_in_no_compiled_language_opens_without_an_assembly_side() {
         },
         1.,
     );
+    let states = roots.states;
     settle(&mut test);
 
     // The assembly side draws one 16-digit address per row, so whether any was laid out
@@ -11559,11 +11429,11 @@ fn the_leading_bar_puts_the_following_pane_away() {
         studied: Studied::new(sum_to.clone()),
     };
 
-    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
         |runner| {
-            let states = listing_states!(runner, shown);
+            let states = runner.provide_root_context(move || listing_states(shown));
             runner.provide_root_context(|| {
                 Splits(State::create(ResizableContext {
                     direction: Direction::Horizontal,
@@ -11574,6 +11444,7 @@ fn the_leading_bar_puts_the_following_pane_away() {
         },
         1.,
     );
+    let states = roots.states;
     settle(&mut test);
 
     // The assembly side draws one 16-digit address per row, so whether any was laid out
@@ -11734,11 +11605,11 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
             studied,
         };
 
-        let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+        let (mut test, roots) = TestingRunner::new(
             panes_harness,
             (600., 300.).into(),
             |runner| {
-                let states = listing_states!(runner, shown);
+                let states = runner.provide_root_context(move || listing_states(shown));
                 runner.provide_root_context(|| {
                     Splits(State::create(ResizableContext {
                         direction: Direction::Horizontal,
@@ -11749,6 +11620,7 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
             },
             1.,
         );
+        let states = roots.states;
         settle(&mut test);
         open_document(
             states.open,
@@ -12992,71 +12864,52 @@ fn fixture_artifact() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o")
 }
 
-/// Mount the wiring over a worker that records every job and answers from `answer`. A
-/// macro for `project_states!`'s reason: the runner's type is not one this crate can name.
-macro_rules! mount_scratchpad {
-    ($harness:expr, $answer:expr) => {{
-        let (asked, asks) = async_channel::unbounded::<Asked>();
-        let answer = $answer;
-        let work = move |job: PadJob| {
-            let recorded = match &job {
-                PadJob::List => Asked::List,
-                PadJob::New => Asked::New,
-                PadJob::Delete(name) => Asked::Delete(name.as_str().to_owned()),
-                PadJob::Open(scratchpad) => Asked::Open(scratchpad.id().as_str().to_owned()),
-                PadJob::Save(scratchpad) => Asked::Save(scratchpad.source.clone()),
-                PadJob::Build(scratchpad) => Asked::Build(scratchpad.source.clone()),
-                PadJob::Run { .. } => Asked::Run,
-            };
-            let _ = asked.send_blocking(recorded);
-            answer(job)
+/// Mount `harness` over a worker that records every job and answers from `answer`.
+///
+/// `fn() -> E` and not `impl Into<AppComponent>`, which is what `TestingRunner::new`
+/// wants: that type is `freya_core`'s and freya's prelude does not carry it, while a
+/// harness is a plain function returning an element either way.
+fn mount_scratchpad<E: IntoElement + 'static>(
+    harness: fn() -> E,
+    answer: impl Fn(PadJob) -> PadAnswer + Send + Sync + 'static,
+) -> (
+    TestingRunner,
+    Roots,
+    State<Option<PadJobs>>,
+    async_channel::Receiver<Asked>,
+) {
+    let (asked, asks) = async_channel::unbounded::<Asked>();
+    let work = move |job: PadJob| {
+        let recorded = match &job {
+            PadJob::List => Asked::List,
+            PadJob::New => Asked::New,
+            PadJob::Delete(name) => Asked::Delete(name.as_str().to_owned()),
+            PadJob::Open(scratchpad) => Asked::Open(scratchpad.id().as_str().to_owned()),
+            PadJob::Save(scratchpad) => Asked::Save(scratchpad.source.clone()),
+            PadJob::Build(scratchpad) => Asked::Build(scratchpad.source.clone()),
+            PadJob::Run { .. } => Asked::Run,
         };
+        let _ = asked.send_blocking(recorded);
+        answer(job)
+    };
 
-        let (mut test, (states, pad, text, asking, marked)) = TestingRunner::new(
-            $harness,
-            // Wider than a document harness's, because the pane is three columns now: the
-            // pad list, the reader's own side and the listing beside it. At 400 the middle
-            // one is about 125px and a diagnostic's own place is clipped out of it.
-            (700., 400.).into(),
-            move |runner: &mut _| {
-                let (states, doors) = project_wiring!(runner);
-                runner.provide_root_context(move || Working(Arc::new(work)));
-                // The pane's own split, and everything its listing consumes: a pad with a
-                // program draws an object's code exactly as a code tab does.
-                runner.provide_root_context(|| PadSplit(State::create(50.0)));
-                runner.provide_root_context(|| {
-                    PadSplits(State::create(ResizableContext {
-                        direction: Direction::Horizontal,
-                        ..Default::default()
-                    }))
-                });
-                let marked = doors.marked;
-                runner.provide_root_context(|| Shift(State::create(false)));
-                runner.provide_root_context(|| CodeRows(State::create(None)));
-                runner.provide_root_context(|| Sections(State::create(Reading::default())));
-                runner.provide_root_context(|| Window(State::create(None)));
-                runner.provide_root_context(|| Beside(State::create(None)));
-                runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
-                runner.provide_root_context(|| Locations(State::create(Located::default())));
-                runner.provide_root_context(|| Coding(State::create(Coded::default())));
-                let pad = runner
-                    .provide_root_context(|| Pad(State::create(Pads::default())))
-                    .0;
-                let text = runner
-                    .provide_root_context(|| PadText(State::create(PadBuffers::default())))
-                    .0;
-                let asking = runner
-                    .provide_root_context(|| Asking(State::create(None)))
-                    .0;
+    let (mut test, (roots, asking)) = TestingRunner::new(
+        harness,
+        // Wider than a document harness's, because the pane is three columns now: the
+        // pad list, the reader's own side and the listing beside it. At 400 the middle
+        // one is about 125px and a diagnostic's own place is clipped out of it.
+        (700., 400.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context(move || {
+                provide(Working(Arc::new(work)));
+                (test_roots(), provide(Asking(State::create(None))).0)
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
 
-                (states, pad, text, asking, marked)
-            },
-            1.,
-        );
-        test.sync_and_update();
-
-        (test, states, pad, text, asking, marked, asks)
-    }};
+    (test, roots, asking, asks)
 }
 
 /// Every `label()` on screen, by its text, and every span of every paragraph -- a code
@@ -13155,9 +13008,9 @@ fn pad_on_disk(scratchpad: Scratchpad) -> Scratchpad {
 /// pad there is gets a row, in that order, or the reader has no way back to one.
 #[test]
 fn the_front_of_the_order_is_the_pad_that_opens() {
-    let (mut test, _states, pad, text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
-            PadJob::List => PadAnswer::Listed(vec![pad_listing("second"), pad_listing("first"),]),
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("second"), pad_listing("first")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
@@ -13171,6 +13024,8 @@ fn the_front_of_the_order_is_the_pad_that_opens() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -13207,8 +13062,8 @@ fn a_listing_longer_than_the_order_file_is_drawn_whole() {
     let last = listing.last().expect("a row").id.clone();
     let listed = listing.clone();
 
-    let (mut test, _states, pad, _text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(listed.clone()),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -13223,6 +13078,7 @@ fn a_listing_longer_than_the_order_file_is_drawn_whole() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -13249,9 +13105,9 @@ fn a_listing_longer_than_the_order_file_is_drawn_whole() {
 /// buffer, its model and its baseline all being held from then on.
 #[test]
 fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
-    let (mut test, _states, pad, text, asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
-            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
@@ -13265,6 +13121,8 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
     assert_eq!(asks.try_recv(), Ok(Asked::List));
@@ -13324,8 +13182,8 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
 #[test]
 fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
     let (letting, through) = async_channel::unbounded::<()>();
-    let (mut test, _states, pad, text, asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -13348,6 +13206,8 @@ fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     // The listing has landed and the front of the order is shown, its read on the worker.
     pump(&mut test, || pad.peek().shown().as_str() == "one");
@@ -13404,8 +13264,8 @@ fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
 /// falls back to a placeholder rather than to its id.
 #[test]
 fn the_panel_draws_names_and_never_ids() {
-    let (mut test, _states, pad, _text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![
                 PadListing {
                     id: pad_id("pad-7"),
@@ -13429,6 +13289,7 @@ fn the_panel_draws_names_and_never_ids() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -13461,8 +13322,8 @@ fn the_panel_draws_names_and_never_ids() {
 fn a_new_pad_is_written_and_shown_at_once() {
     let made = Scratchpad::new("pad-1").expect("an id");
     let answering = made.clone();
-    let (mut test, _states, pad, text, asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("pad")]),
             PadJob::New => PadAnswer::Created(Ok(answering.clone())),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -13477,6 +13338,8 @@ fn a_new_pad_is_written_and_shown_at_once() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
     assert_eq!(pad.peek().shown().as_str(), "pad");
@@ -13512,8 +13375,8 @@ fn a_new_pad_is_written_and_shown_at_once() {
 /// they come back.
 #[test]
 fn a_refusal_is_kept_and_the_next_one_replaces_it() {
-    let (mut test, _states, pad, text, asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one")]),
             PadJob::New => PadAnswer::Created(Err(Failure::Write("no room".to_owned()))),
             PadJob::Delete(_) => PadAnswer::Deleted(Some(Failure::Delete("busy".to_owned()))),
@@ -13528,6 +13391,8 @@ fn a_refusal_is_kept_and_the_next_one_replaces_it() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -13555,8 +13420,8 @@ fn a_refusal_is_kept_and_the_next_one_replaces_it() {
 /// thing -- which is the whole of what hiding the id buys.
 #[test]
 fn renaming_a_pad_is_a_save_and_moves_nothing() {
-    let (mut test, _states, pad, _text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
                 scratchpad: pad_on_disk(scratchpad),
@@ -13571,6 +13436,7 @@ fn renaming_a_pad_is_a_save_and_moves_nothing() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     while asks.try_recv().is_ok() {}
@@ -13605,9 +13471,9 @@ fn renaming_a_pad_is_a_save_and_moves_nothing() {
 /// being gone.
 #[test]
 fn a_delete_is_asked_for_before_anything_goes() {
-    let (mut test, _states, pad, _text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
-            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("a pad was deleted without being asked about"),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
@@ -13621,6 +13487,7 @@ fn a_delete_is_asked_for_before_anything_goes() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     while asks.try_recv().is_ok() {}
@@ -13668,9 +13535,9 @@ fn a_delete_is_asked_for_before_anything_goes() {
 /// a pad behind it, and as the last one.
 #[test]
 fn confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from() {
-    let (mut test, _states, mut pad, text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
-            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => PadAnswer::Deleted(None),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
@@ -13684,6 +13551,8 @@ fn confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let mut pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
     let (one, two) = (pad_id("one"), pad_id("two"));
@@ -13746,9 +13615,9 @@ fn two_sources(scratchpad: Scratchpad) -> Scratchpad {
 /// already read has no such gap, and the editor goes on drawing the pad it was left on.
 #[test]
 fn coming_back_to_a_pad_already_read_draws_its_own_buffer() {
-    let (mut test, _states, pad, text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
-            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => unreachable!("no pad is deleted here"),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
@@ -13762,6 +13631,8 @@ fn coming_back_to_a_pad_already_read_draws_its_own_buffer() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
     let (one, two) = (pad_id("one"), pad_id("two"));
@@ -13794,9 +13665,9 @@ fn coming_back_to_a_pad_already_read_draws_its_own_buffer() {
 /// lines in it for the line it drew last -- inside freya, where nothing here can catch it.
 #[test]
 fn deleting_a_pad_that_is_not_shown_leaves_the_editor_standing() {
-    let (mut test, _states, mut pad, text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
-            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two"),]),
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => PadAnswer::Deleted(None),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
@@ -13810,6 +13681,8 @@ fn deleting_a_pad_that_is_not_shown_leaves_the_editor_standing() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let mut pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
     let (one, two) = (pad_id("one"), pad_id("two"));
@@ -13925,8 +13798,8 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
     saved.add_dependency("anyhow", "1.0.86");
 
     let answering = saved.clone();
-    let (mut test, _states, pad, text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             // Nothing on this machine's disk: the pad the app booted holding is the one
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
@@ -13943,6 +13816,8 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -13968,8 +13843,8 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
 /// and no save -- only the reason, where the pane says it.
 #[test]
 fn a_pad_that_will_not_load_is_left_unopened_and_never_written() {
-    let (mut test, _states, pad, text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -13981,6 +13856,8 @@ fn a_pad_that_will_not_load_is_left_unopened_and_never_written() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().unsaved.is_some());
 
@@ -14007,8 +13884,8 @@ fn a_pad_that_will_not_load_is_left_unopened_and_never_written() {
 /// rather than the button, the guard being a property of asking.
 #[test]
 fn a_pad_that_will_not_load_is_not_built_over_either() {
-    let (mut test, _states, pad, _text, asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -14020,6 +13897,7 @@ fn a_pad_that_will_not_load_is_not_built_over_either() {
             PadJob::Build(_) => unreachable!("a pad that will not load is not built over"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().unsaved.is_some());
     assert!(!pad.peek().state().opened());
@@ -14042,8 +13920,8 @@ fn a_pad_that_will_not_load_is_not_built_over_either() {
 /// lets the pane mark them in place.
 #[test]
 fn an_edit_is_written_and_a_bad_row_says_which_row() {
-    let (mut test, _states, pad, text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             // Nothing on this machine's disk: the pad the app booted holding is the one
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
@@ -14062,6 +13940,8 @@ fn an_edit_is_written_and_a_bad_row_says_which_row() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
     assert_eq!(asks.try_recv(), Ok(Asked::List));
@@ -14113,8 +13993,8 @@ fn an_edit_is_written_and_a_bad_row_says_which_row() {
 fn a_build_runs_once_and_opens_nothing_in_the_project() {
     let artifact = fixture_artifact();
     let built = artifact.clone();
-    let (mut test, states, pad, _text, asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             // Nothing on this machine's disk: the pad the app booted holding is the one
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
@@ -14137,6 +14017,8 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
             },
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let states = roots.states;
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     assert_eq!(asks.try_recv(), Ok(Asked::List));
@@ -14196,8 +14078,8 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
 /// The pane says what there is before a build, rather than an empty half.
 #[test]
 fn the_scratchpad_says_there_is_nothing_built_yet() {
-    let (mut test, _states, pad, _text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
                 scratchpad: scratchpad,
@@ -14209,6 +14091,7 @@ fn the_scratchpad_says_there_is_nothing_built_yet() {
             },
             _ => unreachable!("this test only lists, opens and saves"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     assert!(
@@ -14224,8 +14107,8 @@ fn the_scratchpad_says_there_is_nothing_built_yet() {
 #[test]
 fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
     let built = fixture_artifact();
-    let (mut test, _states, pad, _text, asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_listing_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_listing_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
                 scratchpad: scratchpad,
@@ -14242,6 +14125,7 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
             },
             _ => unreachable!("this test only lists, opens, saves and builds"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
@@ -14282,8 +14166,8 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
 /// the editor having none.
 #[test]
 fn the_scratchpads_listing_can_be_put_away() {
-    let (mut test, _states, pad, _text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
                 scratchpad: scratchpad,
@@ -14295,6 +14179,7 @@ fn the_scratchpads_listing_can_be_put_away() {
             },
             _ => unreachable!("this test only lists, opens and saves"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     assert!(
@@ -14355,8 +14240,8 @@ fn the_scratchpads_listing_can_be_put_away() {
 #[test]
 fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
     let built = fixture_artifact();
-    let (mut test, _states, pad, text, asking, marked, _asks) =
-        mount_scratchpad!(scratchpad_listing_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_listing_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
                 scratchpad: scratchpad,
@@ -14373,6 +14258,9 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
             },
             _ => unreachable!("this test only lists, opens, saves and builds"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
+    let marked = roots.doors.marked;
 
     pump(&mut test, || pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
@@ -14465,8 +14353,8 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
     let built = fixture_artifact();
     let refuse = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let refusing = refuse.clone();
-    let (mut test, _states, pad, text, asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
                 scratchpad: scratchpad,
@@ -14494,6 +14382,8 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
             }
             _ => unreachable!("this test only lists, opens, saves and builds"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
@@ -14580,8 +14470,8 @@ fn a_pad_built_in_an_earlier_run_opens_on_its_program() {
     };
     let restored = opened.clone();
 
-    let (mut test, _states, pad, _text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             // What the worker does for a pad whose package names a build.
             PadJob::Open(_) => PadAnswer::Opened {
@@ -14598,6 +14488,7 @@ fn a_pad_built_in_an_earlier_run_opens_on_its_program() {
             PadJob::Build(_) => unreachable!("nothing here builds"),
             _ => unreachable!("this test only lists, opens and saves"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().program.is_some());
     assert!(
@@ -14637,8 +14528,8 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
     // Held until the pad has been deleted, which is what puts the build's answer after the
     // delete without the test having to guess at the timing.
     let (finish, waiting) = async_channel::bounded::<()>(1);
-    let (mut test, states, pad, text, asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
             PadJob::New => unreachable!("no pad is made here"),
             PadJob::Delete(_) => PadAnswer::Deleted(None),
@@ -14660,6 +14551,9 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
             }
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let states = roots.states;
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
     let one = pad.peek().shown().clone();
@@ -14707,8 +14601,8 @@ fn a_finished_pad_build_forgets_the_pad_package() {
     let directory = Seeded::directory("pad-build");
     let stand_in = source_text(&directory.file("stand-in.rs", "fn main() {}\n")).expect("the file");
 
-    let (mut test, states, pad, _text, asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_harness, |job: PadJob| match job {
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_harness, |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
                 scratchpad: scratchpad,
@@ -14724,6 +14618,8 @@ fn a_finished_pad_build_forgets_the_pad_package() {
             },
             _ => unreachable!("this test only opens and builds"),
         });
+    let states = roots.states;
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     let store = states
@@ -14760,44 +14656,41 @@ fn crate_names(pad: State<Pads>) -> Vec<String> {
 
 /// The pane over a pad of this test's own, one row per name in `rows`, with the keyboard
 /// put in the box of the row `focus` names -- which is where the keystrokes after it land.
-macro_rules! mount_rows {
-    ($rows:expr, $focus:expr) => {{
-        let (mut test, _states, pad, _text, _asking, _marked, _asks) =
-            mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
-                // Nothing on this machine's disk: the pad the app booted holding is the
-                // one that is opened.
-                PadJob::List => PadAnswer::Listed(Vec::new()),
-                PadJob::New => unreachable!("this test has one pad"),
-                PadJob::Delete(_) => unreachable!("this test deletes nothing"),
-                PadJob::Open(scratchpad) => PadAnswer::Opened {
-                    scratchpad,
-                    program: None,
-                },
-                PadJob::Save(scratchpad) => PadAnswer::Saved {
-                    pad: scratchpad.id().clone(),
-                    failure: scratchpad.manifest().err(),
-                },
-                PadJob::Build(_) => unreachable!("this test never builds"),
-                PadJob::Run { .. } => unreachable!("this test never runs"),
-            });
-        pump(&mut test, || pad.peek().state().opened());
+fn mount_rows(rows: &[&str], focus: &str) -> (TestingRunner, State<Pads>, Vec<RowId>) {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            // Nothing on this machine's disk: the pad the app booted holding is the
+            // one that is opened.
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: scratchpad.manifest().err(),
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+    let mut pad = roots.pad;
+    pump(&mut test, || pad.peek().state().opened());
 
-        let mut pad = pad;
-        let ids: Vec<RowId> = {
-            let mut pads = pad.write();
-            let scratchpad = &mut pads.state_mut().scratchpad;
-            $rows
-                .iter()
-                .map(|name| scratchpad.add_dependency(*name, "1"))
-                .collect()
-        };
-        settle(&mut test);
+    let ids: Vec<RowId> = {
+        let mut pads = pad.write();
+        let scratchpad = &mut pads.state_mut().scratchpad;
+        rows.iter()
+            .map(|name| scratchpad.add_dependency(*name, "1"))
+            .collect()
+    };
+    settle(&mut test);
 
-        let box_of = centre_of(&test, $focus);
-        press_at(&mut test, box_of);
-        settle(&mut test);
-        (test, pad, ids)
-    }};
+    let box_of = centre_of(&test, focus);
+    press_at(&mut test, box_of);
+    settle(&mut test);
+    (test, pad, ids)
 }
 
 /// **A write through a row that has gone lands on the spare.** Each of a row's two boxes
@@ -14808,7 +14701,7 @@ macro_rules! mount_rows {
 /// is a panic and not a compile error.
 #[test]
 fn a_write_through_a_row_that_has_gone_lands_on_the_spare() {
-    let (mut test, mut pad, ids) = mount_rows!(["alpha", "beta"], "beta");
+    let (mut test, mut pad, ids) = mount_rows(&["alpha", "beta"], "beta");
 
     // The keyboard is in the last row's box, which is where the next keystroke goes.
     test.write_text("!");
@@ -14831,7 +14724,7 @@ fn a_write_through_a_row_that_has_gone_lands_on_the_spare() {
 /// of text boxes must not do.
 #[test]
 fn taking_a_row_away_leaves_the_caret_in_the_row_it_was_in() {
-    let (mut test, mut pad, ids) = mount_rows!(["alpha", "beta", "gamma"], "beta");
+    let (mut test, mut pad, ids) = mount_rows(&["alpha", "beta", "gamma"], "beta");
 
     test.write_text("!");
     settle(&mut test);
@@ -14880,8 +14773,8 @@ fn label_centre(test: &TestingRunner, text: &str) -> Option<(f64, f64)> {
 /// artifact as a binary on its way past; what is under test is the pane.
 #[test]
 fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
-    let (mut test, _states, pad, text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -14896,6 +14789,8 @@ fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -14965,8 +14860,8 @@ fn washed(test: &TestingRunner) -> usize {
 /// promise a press, and no press. An affordance that did nothing would be the worse answer.
 #[test]
 fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
-    let (mut test, _states, pad, text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -14981,6 +14876,8 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -15042,8 +14939,8 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
 /// over the path rather than a `cfg` buys.
 #[test]
 fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
-    let (mut test, _states, pad, text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -15058,6 +14955,8 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -15161,8 +15060,8 @@ fn pad_rejected(diagnostics: Vec<Diagnostic>, message: String) -> Build {
 /// line the reader reads.
 #[test]
 fn a_run_that_cannot_start_says_why() {
-    let (mut test, _states, pad, _text, asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             // Nothing on this machine's disk: the pad the app booted holding is the one
             // that is opened.
             PadJob::List => PadAnswer::Listed(Vec::new()),
@@ -15185,6 +15084,7 @@ fn a_run_that_cannot_start_says_why() {
             },
             PadJob::Build(_) => unreachable!("this test never builds"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     already_built(pad, fixture_artifact());
@@ -15235,8 +15135,8 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
     let emitters: Arc<Mutex<Vec<Box<dyn FnMut(RunEvent) + Send>>>> =
         Arc::new(Mutex::new(Vec::new()));
     let handed = emitters.clone();
-    let (mut test, _states, pad, _text, asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -15261,6 +15161,7 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
                 }
             }
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     already_built(pad, fixture_artifact());
@@ -15323,8 +15224,8 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
 /// and a run begun mid-build is not one that build's own `stop_run` has taken down.
 #[test]
 fn a_run_asked_for_during_a_build_starts_nothing() {
-    let (mut test, _states, pad, _text, asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -15349,6 +15250,7 @@ fn a_run_asked_for_during_a_build_starts_nothing() {
                 failure: None,
             },
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     already_built(pad, fixture_artifact());
@@ -15383,8 +15285,8 @@ fn a_run_asked_for_during_a_build_starts_nothing() {
 /// reach it.
 #[test]
 fn the_pads_build_chord_is_refused_while_a_build_is_on() {
-    let (mut test, _states, pad, _text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -15409,6 +15311,7 @@ fn the_pads_build_chord_is_refused_while_a_build_is_on() {
                 failure: None,
             },
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     already_built(pad, fixture_artifact());
@@ -15460,8 +15363,8 @@ fn the_pads_build_chord_is_refused_while_a_build_is_on() {
 #[test]
 fn the_pads_run_and_new_chords_press_its_buttons() {
     let answering = Scratchpad::new("pad-1").expect("an id");
-    let (mut test, _states, pad, _text, _asking, _marked, asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => PadAnswer::Created(Ok(answering.clone())),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -15481,6 +15384,7 @@ fn the_pads_run_and_new_chords_press_its_buttons() {
                 failure: None,
             },
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
     // A build the app already has, so that there is an executable to run without a
@@ -15649,8 +15553,8 @@ fn label_boxes(test: &TestingRunner, prefix: &str) -> Vec<Area> {
 /// label no wider than the window that is several lines tall is a label that wrapped.
 #[test]
 fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
-    let (mut test, _states, pad, _text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -15665,6 +15569,7 @@ fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -15825,7 +15730,7 @@ fn picking_out_a_row_below_a_separator_lights_that_rows_own_branch() {
     let (mut test, _) = TestingRunner::new(
         listing_harness,
         (500., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -15932,12 +15837,13 @@ fn a_picked_out_line_lights_the_instructions_it_was_compiled_from() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (500., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     let mut marked = marked;
     settle(&mut test);
 
@@ -16054,7 +15960,8 @@ fn a_picked_out_instruction_lights_its_line() {
         (500., 600.).into(),
         |runner| {
             runner.provide_root_context(|| Mounted(State::create(true)));
-            let (states, marked, _landing, _doors) = listing_states!(runner, shown);
+            let roots = runner.provide_root_context(move || listing_states(shown));
+            let (states, marked) = (roots.states, roots.doors.marked);
             (states, marked)
         },
         1.,
@@ -16138,13 +16045,8 @@ fn the_gutter_marks_the_lines_that_have_code() {
         (500., 600.).into(),
         |runner| {
             runner.provide_root_context(|| Mounted(State::create(true)));
-            let (states, _marked, _landing, _doors) = listing_states!(runner, shown);
-            // After the macro, which provides one of its own: a root context is
-            // overwritten by whoever writes it last, so this is the one the pane reads.
-            let coded = runner
-                .provide_root_context(|| Coding(State::create(Coded::default())))
-                .0;
-            (states, coded)
+            let roots = runner.provide_root_context(move || listing_states(shown));
+            (roots.states, roots.coded)
         },
         1.,
     );
@@ -16199,36 +16101,18 @@ fn the_gutter_marks_the_lines_that_have_code() {
 /// analysis and so cannot be given a tab that has none.
 #[test]
 fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
-    let sum_to = fixture_symbols()
-        .into_iter()
-        .find(|symbol| symbol.data.name == "sum_to")
-        .expect("the fixture holds sum_to");
     let directory = Seeded::directory("driven");
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
     let file = directory.named("driven.c", &text);
 
-    let shown = Shown {
-        ask: Ask::Symbol(sum_to.clone()),
-        studied: Studied::new(sum_to.clone()),
-    };
     let (mut test, (states, coded)) = TestingRunner::new(
         panes_harness,
         (600., 400.).into(),
-        |runner| {
-            let (states, _marked, _landing, _doors) = listing_states!(runner, shown);
+        |runner: &mut _| {
             // No listing at all, which is what a source-driven tab has before a line in
-            // it has been clicked. Provided after the macro, which fills one in.
-            runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
-            let coded = runner
-                .provide_root_context(|| Coding(State::create(Coded::default())))
-                .0;
-            runner.provide_root_context(|| {
-                Splits(State::create(ResizableContext {
-                    direction: Direction::Horizontal,
-                    ..Default::default()
-                }))
-            });
-            (states, coded)
+            // it has been clicked -- so the root's own `Analysis`, left empty.
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.coded)
         },
         1.,
     );
@@ -16329,7 +16213,7 @@ fn the_assembly_gutter_marks_the_instructions_with_a_source_line() {
         let (mut test, _states) = TestingRunner::new(
             listing_harness,
             (500., 900.).into(),
-            |runner| listing_states!(runner, shown),
+            move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
             1.,
         );
         settle(&mut test);
@@ -16404,12 +16288,13 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
     let file: Arc<str> = "driven.c".into();
     let tab = Document::Source(file.clone());
 
-    let (mut test, (states, location)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         locations_harness,
         (300., 300.).into(),
-        |runner| location_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let states = roots.states;
     let mut driven = states.places.driven;
     open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
     driven.write().remember(entry_of(&states, &tab), 7);
@@ -16420,10 +16305,10 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
         line: 7,
     };
     assert!(
-        source_line(location.doors.marked) == Some(expected.clone()),
+        source_line(roots.doors.marked) == Some(expected.clone()),
         "the driven line was not picked out"
     );
-    let picked = location
+    let picked = roots
         .doors
         .marked
         .peek()
@@ -16443,13 +16328,13 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
     );
     settle(&mut test);
     assert!(
-        location.doors.marked.peek().source.is_none(),
+        roots.doors.marked.peek().source.is_none(),
         "the run outlived its tab"
     );
 
     open_document(states.open, states.visits, tab, Reach::NewTab);
     settle(&mut test);
-    assert!(source_line(location.doors.marked) == Some(expected));
+    assert!(source_line(roots.doors.marked) == Some(expected));
 }
 
 /// The address a copied line spells is the listing's, which is the instruction's own plus
@@ -16480,7 +16365,7 @@ fn pressing_an_object_row_opens_its_code() {
     let (mut test, mut states) = TestingRunner::new(
         objects_harness,
         (300., 300.).into(),
-        |runner| project_states!(runner),
+        |runner| runner.provide_root_context(test_roots).states,
         1.,
     );
     states.objects.write().push(object.clone());
@@ -16543,30 +16428,14 @@ fn code_harness() -> impl IntoElement {
     }
 }
 
-/// The contexts the section view reads, beside the project's: the listing's own states
-/// and a reading of `object` with `held` decoded.
-macro_rules! code_states {
-    ($runner:expr, $reading:expr) => {{
-        let (states, doors) = project_wiring!($runner);
-        let marked = doors.marked;
-        $runner.provide_root_context(|| Shift(State::create(false)));
-        $runner.provide_root_context(|| Locations(State::create(Located::default())));
-        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
-        $runner.provide_root_context(|| CodeRows(State::create(None)));
-        $runner.provide_root_context(|| Analysis(State::create(Analyzed::default())));
-        let reading = $runner
-            .provide_root_context(|| Sections(State::create($reading)))
-            .0;
-        let window = $runner
-            .provide_root_context(|| Window(State::create(None)))
-            .0;
-        $runner.provide_root_context(|| Beside(State::create(None)));
-        let landing = doors.land;
-        let ctrl = $runner
-            .provide_root_context(|| Ctrl(State::create(false)))
-            .0;
-        (states, marked, reading, window, landing, ctrl, doors)
-    }};
+/// The root's contexts with `reading` already decoded, which is what the section view
+/// draws its rows out of. Written into the state the root made, for [`listing_states`]'s
+/// reason.
+fn code_states(reading: Reading) -> Roots {
+    let roots = test_roots();
+    let mut sections = roots.reading;
+    sections.set(reading);
+    roots
 }
 
 /// A reading of `object`'s code with its skeleton and the stretches in `held` decoded the
@@ -16630,7 +16499,7 @@ fn a_code_tab_draws_its_labels_and_empty_rows_before_a_byte_is_decoded() {
     let (mut test, _) = TestingRunner::new(
         code_harness,
         (600., 900.).into(),
-        |runner| code_states!(runner, reading),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
         1.,
     );
     settle(&mut test);
@@ -16675,13 +16544,14 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
     let rows = rows_of(&reading);
-    let (mut test, (states, _marked, sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 300.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let sections = roots.reading;
     let mut sections = sections;
     let document = Document::Code(object.clone());
     // Open, as a tab is in the app: a place is written down only for an open tab.
@@ -16743,12 +16613,13 @@ fn a_code_tab_comes_back_to_the_address_it_was_left_at() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (mut states, ..)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         code_harness,
         (600., 300.).into(),
-        |runner| code_states!(runner, reading),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
         1.,
     );
+    let mut states = roots.states;
     let document = Document::Code(object.clone());
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     states.places.code_at.write().remember(
@@ -16774,13 +16645,13 @@ fn scrolling_asks_for_a_buffer_of_screens_nearest_the_reader_first() {
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
     let rows = rows_of(&reading);
-    let (mut test, (_states, _marked, _sections, window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 300.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let window = roots.window;
     settle(&mut test);
     settle(&mut test);
 
@@ -16810,7 +16681,7 @@ fn closing_a_code_tab_forgets_its_address() {
     let (mut test, mut states) = TestingRunner::new(
         bare_harness,
         (100., 100.).into(),
-        |runner| project_states!(runner),
+        |runner| runner.provide_root_context(test_roots).states,
         1.,
     );
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
@@ -16858,13 +16729,13 @@ fn a_run_in_the_section_view_opens_its_file_beside_it() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (_states, marked, ..)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         code_source_harness,
         (600., 300.).into(),
-        |runner| code_states!(runner, reading),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
         1.,
     );
-    let mut marked = marked;
+    let mut marked = roots.doors.marked;
     settle(&mut test);
     assert!(
         labels(&test).contains(&"Click an instruction".to_string()),
@@ -16940,11 +16811,8 @@ fn the_pane_beside_an_objects_code_opens_on_the_pressed_rows_line() {
         code_source_harness,
         (600., 300.).into(),
         |runner| {
-            let (states, marked, ..) = code_states!(runner, reading);
-            let code_rows = runner
-                .provide_root_context(|| CodeRows(State::create(None)))
-                .0;
-            (states, marked, code_rows)
+            let roots = runner.provide_root_context(move || code_states(reading));
+            (roots.states, roots.doors.marked, roots.code_rows)
         },
         1.,
     );
@@ -16986,13 +16854,15 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, marked, sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let marked = roots.doors.marked;
+    let sections = roots.reading;
     let mut sections = sections;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -17118,12 +16988,13 @@ fn a_carried_run_keeps_the_caret_at_the_end_it_was_swept_to() {
 #[test]
 fn a_key_moves_the_view_only_when_the_caret_leaves_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let height = code_row_height() as f64;
     // Scrolled down five rows, so there are rows above the view to be brought back.
@@ -17178,12 +17049,13 @@ fn a_key_moves_the_view_only_when_the_caret_leaves_it() {
 #[test]
 fn a_caret_walked_past_the_panes_edge_brings_the_pane_sideways_to_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (300., 300.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let first = paragraphs(&test)[0].0;
     assert!(
@@ -17265,13 +17137,14 @@ fn a_source_click_beside_the_section_view_reveals_its_instruction() {
     };
     let at = a_line_of(&sum_to);
     let reading = reading_of(&object, &[]);
-    let (mut test, (_states, marked, sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 300.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let marked = roots.doors.marked;
+    let sections = roots.reading;
     let (mut marked, mut sections) = (marked, sections);
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000000 ");
@@ -17323,14 +17196,14 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, _marked, _sections, _window, _landing, ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
-    let mut ctrl = ctrl;
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let mut ctrl = roots.ctrl;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -17410,12 +17283,14 @@ fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
         },
         studied: studied.clone(),
     };
-    let (mut test, (states, _marked, landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
+    let landing = roots.doors.land;
     let file = Document::Source(at.file.clone());
     open_document(states.open, states.visits, file.clone(), Reach::NewTab);
     settle(&mut test);
@@ -17445,12 +17320,13 @@ fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
     open_document(states.open, states.visits, symbol, Reach::NewTab);
     settle(&mut test);
     let row = centre_of(&test, &format!("{first:016X} "));
@@ -17480,12 +17356,14 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (states, _marked, landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
+    let landing = roots.doors.land;
     let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
     open_document(states.open, states.visits, symbol, Reach::NewTab);
     settle(&mut test);
@@ -17530,13 +17408,15 @@ fn show_in_unified_view_keeps_the_rows_before_the_instruction() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0]);
-    let (mut test, (states, _marked, sections, _window, _landing, _ctrl, doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 30.0 * code_row_height()).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 30.0 * code_row_height()).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let sections = roots.reading;
+    let doors = roots.doors;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -17583,13 +17463,14 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl, doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 300.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let doors = roots.doors;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -17697,18 +17578,14 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
         ask: Ask::Symbol(f.clone()),
         studied: Studied::new(f.clone()),
     };
-    let (mut test, ((states, _marked, landing, _doors), ctrl)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 400.).into(),
-        |runner| {
-            let states = listing_states!(runner, shown);
-            // Re-provided, as `code_states!` does, to be driven from the test.
-            let ctrl = runner.provide_root_context(|| Ctrl(State::create(false))).0;
-            (states, ctrl)
-        },
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
-    let mut ctrl = ctrl;
+    let (states, landing) = (roots.states, roots.doors.land);
+    let mut ctrl = roots.ctrl;
     let symbol = Document::Assembly(Selection::Symbol(f.clone()));
     open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
     settle(&mut test);
@@ -17780,13 +17657,15 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0, 1, 2]);
     let rows = rows_of(&reading);
-    let (mut test, (states, marked, _sections, _window, _landing, ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let marked = roots.doors.marked;
+    let ctrl = roots.ctrl;
     let mut ctrl = ctrl;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -17878,13 +17757,13 @@ fn leaving_a_text_row_puts_the_pointers_icon_back() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0, 1, 2]);
-    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code, Reach::NewTab);
     settle(&mut test);
@@ -17916,7 +17795,7 @@ fn a_rule_is_drawn_over_every_symbol_in_the_unified_view() {
     let (mut test, _) = TestingRunner::new(
         code_harness,
         (600., 900.).into(),
-        |runner| code_states!(runner, reading),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
         1.,
     );
     settle(&mut test);
@@ -17978,13 +17857,13 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     let reading = reading_of(&object, &[0, 1, 2]);
     let rows = rows_of(&reading);
     let decoded = reading_of(&object, &[0, 1, 2]);
-    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 10.0 * code_row_height()).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 10.0 * code_row_height()).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
     let code = Document::Code(object.clone());
     let id = open_document(states.open, states.visits, code.clone(), Reach::NewTab)
         .expect("a document panel");
@@ -18099,13 +17978,15 @@ fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
     };
     let operand = call_operand(&f);
     let reading = reading_of(&object, &[0]);
-    let (mut test, (states, marked, sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 6.0 * code_row_height()).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 6.0 * code_row_height()).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let marked = roots.doors.marked;
+    let sections = roots.reading;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -18151,13 +18032,13 @@ fn the_hand_is_shown_over_a_bare_target_in_the_unified_view() {
     };
     let operand = call_operand(&f);
     let reading = reading_of(&object, &[0]);
-    let (mut test, (states, _marked, _sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 6.0 * code_row_height()).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 6.0 * code_row_height()).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -18226,13 +18107,14 @@ fn an_operand_and_a_label_wear_the_same_box() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0, 1, 2]);
-    let (mut test, (states, _marked, _sections, _window, _landing, ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let ctrl = roots.ctrl;
     let mut ctrl = ctrl;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code, Reach::NewTab);
@@ -18292,10 +18174,16 @@ fn alt_held_darkens_every_link_and_the_hand() {
         code_harness,
         (600., 900.).into(),
         |runner| {
-            let (states, marked, sections, window, landing, ctrl, _doors) =
-                code_states!(runner, reading);
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (states, marked, sections, window, landing, ctrl, alt)
+            let roots = runner.provide_root_context(move || code_states(reading));
+            (
+                roots.states,
+                roots.doors.marked,
+                roots.reading,
+                roots.window,
+                roots.doors.land,
+                roots.ctrl,
+                roots.alt,
+            )
         },
         1.,
     );
@@ -18377,13 +18265,16 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     // `f` decoded and `g` not, so the target's row is a guess.
     let reading = reading_of(&object, &[0]);
     let guessed = rows_of(&reading);
-    let (mut test, (states, marked, sections, _window, _landing, ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 6.0 * code_row_height()).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 6.0 * code_row_height()).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let marked = roots.doors.marked;
+    let sections = roots.reading;
+    let ctrl = roots.ctrl;
     let (mut ctrl, mut sections) = (ctrl, sections);
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -18544,7 +18435,7 @@ fn a_gap_row_is_marked_as_data() {
     let (mut test, _) = TestingRunner::new(
         code_harness,
         (600., 900.).into(),
-        |runner| code_states!(runner, reading),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
         1.,
     );
     settle(&mut test);
@@ -18642,13 +18533,14 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
             .clone(),
     };
     let reading = reading_of(&object, &[1]);
-    let (mut test, (states, _marked, _sections, _window, landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            menu_code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        menu_code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let landing = roots.doors.land;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code, Reach::NewTab);
     settle(&mut test);
@@ -18708,31 +18600,6 @@ fn doors_harness() -> impl IntoElement {
         .maybe_child(entry.map(|(tab, document)| AssemblyPane { tab, document }.into_element()))
 }
 
-/// The contexts [`doors_harness`] reads beside the project's.
-#[derive(Clone, Copy)]
-struct DoorStates {
-    analysis: State<Analyzed>,
-    sections: State<Reading>,
-}
-
-macro_rules! door_states {
-    ($runner:expr) => {{
-        let (states, doors) = project_wiring!($runner);
-        $runner.provide_root_context(|| Shift(State::create(false)));
-        $runner.provide_root_context(|| Locations(State::create(Located::default())));
-        $runner.provide_root_context(|| Coding(State::create(Coded::default())));
-        $runner.provide_root_context(|| CodeRows(State::create(None)));
-        let analysis = $runner
-            .provide_root_context(|| Analysis(State::create(Analyzed::default())))
-            .0;
-        let sections = $runner
-            .provide_root_context(|| Sections(State::create(Reading::default())))
-            .0;
-        $runner.provide_root_context(|| Beside(State::create(None)));
-        $runner.provide_root_context(|| Window(State::create(None)));
-        (states, doors, DoorStates { analysis, sections })
-    }};
-}
 /// Both panes of the active document, as `DocumentBody` mounts them, under what the app
 /// puts at the root for a door: [`doors_harness`]'s hooks with the source side beside the
 /// assembly one, so a door's arrival can be asked what the reader is left looking at.
@@ -18794,22 +18661,14 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
         .expect("sum_to's instructions name a place");
     let address = assembly.instructions[index].address.wrapping_add(bias);
 
-    let (mut test, (states, doors, held)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         door_panes_harness,
         (900., 20.0 * code_row_height()).into(),
-        |runner| {
-            let states = door_states!(runner);
-            runner.provide_root_context(|| SplitRatio(State::create(50.0)));
-            runner.provide_root_context(|| {
-                Splits(State::create(ResizableContext {
-                    direction: Direction::Horizontal,
-                    ..Default::default()
-                }))
-            });
-            states
-        },
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let states = roots.states;
+    let doors = roots.doors;
     let mut open = states.objects;
     open.write().push(object.clone());
     settle(&mut test);
@@ -18827,7 +18686,7 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
     assert!(states.open.active() == Some(Document::Code(object.clone())));
 
     // The skeleton, as the worker answers first: every body row is still a guess.
-    let mut sections = held.sections;
+    let mut sections = roots.reading;
     sections.set(reading_of(&object, &[]));
     settle(&mut test);
     settle(&mut test);
@@ -18910,12 +18769,14 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
     assert!(matches!(kind_at(&guessed, guess), Some(Kind::Empty(_))));
     assert!(matches!(kind_at(&exact, row), Some(Kind::Instruction(at)) if at == index));
 
-    let (mut test, (states, doors, held)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         doors_harness,
         (600., 5.0 * code_row_height()).into(),
-        |runner| door_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let states = roots.states;
+    let doors = roots.doors;
     let mut open = states.objects;
     open.write().push(object.clone());
     settle(&mut test);
@@ -18933,7 +18794,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
     let code = Document::Code(object.clone());
     assert!(states.open.active() == Some(code.clone()));
     assert!(
-        held.sections.peek().is_about(&object),
+        roots.reading.peek().is_about(&object),
         "the reading did not follow the tab"
     );
     // No rows yet: the instruction waits for them, and no caret is planted in nothing.
@@ -18947,7 +18808,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
 
     // The worker's first answer, `sum_to` still a guess: the caret on the guessed row,
     // the planting spent.
-    let mut sections = held.sections;
+    let mut sections = roots.reading;
     sections.set(before);
     settle(&mut test);
     settle(&mut test);
@@ -19037,12 +18898,14 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     let address = assembly.instructions[index].address;
     let row = studied.lanes.row_of(index);
 
-    let (mut test, (states, doors, held)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         doors_harness,
         (600., 900.).into(),
-        |runner| door_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let states = roots.states;
+    let doors = roots.doors;
     let mut open = states.objects;
     open.write().push(object.clone());
     settle(&mut test);
@@ -19050,8 +18913,8 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
     settle(&mut test);
-    assert!(held.sections.peek().is_about(&object));
-    let mut sections = held.sections;
+    assert!(roots.reading.peek().is_about(&object));
+    let mut sections = roots.reading;
     sections.set(reading_of(&object, &[1]));
     settle(&mut test);
     settle(&mut test);
@@ -19078,7 +18941,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     assert!(planting.tab == symbol && planting.address == address);
 
     // The worker's answer: the listing is drawn, and the caret is on the row.
-    let mut analysis = held.analysis;
+    let mut analysis = roots.analysis;
     analysis.set(Analyzed {
         shown: Some(Shown {
             ask: Ask::Symbol(twice.clone()),
@@ -19118,12 +18981,14 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     let symbols = fixture_symbols();
     let (first, second) = (symbols[0].clone(), symbols[1].clone());
     let studied = Studied::new(first.clone());
-    let (mut test, (states, doors, held)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         doors_harness,
         (600., 400.).into(),
-        |runner| door_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let doors = roots.doors;
+    let states = roots.states;
     settle(&mut test);
 
     let first_tab = Document::Assembly(Selection::Symbol(first.clone()));
@@ -19154,7 +19019,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     assert!(doors.plant.peek().is_none(), "a landing was left lying");
 
     // The first symbol's listing comes, and its tab is raised: nothing is planted.
-    let mut analysis = held.analysis;
+    let mut analysis = roots.analysis;
     analysis.set(Analyzed {
         shown: Some(Shown {
             ask: Ask::Symbol(first),
@@ -19204,19 +19069,19 @@ struct PaneObject(Arc<Object>);
 fn a_unified_view_asks_for_its_skeleton_once_the_reading_is_its_own() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
-    let (mut test, (states, _marked, sections, window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            app_like_code_harness,
-            (600., 300.).into(),
-            {
-                let object = object.clone();
-                move |runner| {
-                    runner.provide_root_context(|| PaneObject(object.clone()));
-                    code_states!(runner, Reading::default())
-                }
-            },
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        app_like_code_harness,
+        (600., 300.).into(),
+        {
+            let object = object.clone();
+            move |runner| {
+                runner.provide_root_context(|| PaneObject(object.clone()));
+                runner.provide_root_context(|| code_states(Reading::default()))
+            }
+        },
+        1.,
+    );
+    let (states, sections, window) = (roots.states, roots.reading, roots.window);
     let mut open = states.objects;
     open.write().push(object.clone());
     settle(&mut test);
@@ -19275,13 +19140,15 @@ fn switched_code_harness() -> impl IntoElement {
 fn switching_between_two_objects_code_tabs_asks_for_the_second() {
     let (_path, objects) = fixture_objects(2);
     let (first, second) = (objects[0].clone(), objects[1].clone());
-    let (mut test, (states, _marked, sections, window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            switched_code_harness,
-            (600., 300.).into(),
-            |runner| code_states!(runner, Reading::default()),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        switched_code_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(|| code_states(Reading::default())),
+        1.,
+    );
+    let states = roots.states;
+    let sections = roots.reading;
+    let window = roots.window;
     let mut open = states.objects;
     open.write().extend([first.clone(), second.clone()]);
     settle(&mut test);
@@ -19354,13 +19221,13 @@ fn a_stretch_let_go_under_the_rows_on_screen_still_draws_as_it_was() {
             }
         )]
     ));
-    let (mut test, (_states, _marked, sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let sections = roots.reading;
     let mut sections = sections;
     settle(&mut test);
     assert!(labels(&test).contains(&"dq\u{a0}".to_string()));
@@ -19475,7 +19342,7 @@ fn a_bookmark_row_opens_its_place() {
     let (mut test, states) = TestingRunner::new(
         bookmarks_harness,
         (300., 300.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     let (mut objects, mut bookmarks) = (states.objects, states.bookmarks);
@@ -19515,7 +19382,7 @@ fn a_bookmark_is_kept_when_its_binary_closes() {
     let (mut test, states) = TestingRunner::new(
         bookmarks_harness,
         (300., 300.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     let (mut objects, mut bookmarks) = (states.objects, states.bookmarks);
@@ -19553,7 +19420,7 @@ fn a_bookmark_row_is_removed_from_its_menu() {
     let (mut test, states) = TestingRunner::new(
         bookmarks_harness,
         (300., 300.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     let mut bookmarks = states.bookmarks;
@@ -19594,39 +19461,6 @@ fn history_menu_harness() -> impl IntoElement {
         .child(HistoryPanel)
 }
 
-/// The project's states plus the `Symbols` memo, built over the objects the way `app()`
-/// builds it.
-macro_rules! symbol_states {
-    // The closure `TestingRunner::new` wants, and the same over a runner already in
-    // hand -- which is what a test that provides something of its own beside these
-    // writes, a closure inside a closure inferring neither's runner.
-    () => {
-        |runner: &mut _| symbol_states!(runner)
-    };
-    ($runner:expr) => {{
-        {
-            let states = project_states!($runner);
-            let objects = states.objects;
-            $runner.provide_root_context(move || {
-                Symbols(Memo::create(move || {
-                    objects
-                        .read()
-                        .iter()
-                        .flat_map(|object| {
-                            object.symbols_sorted.iter().cloned().map(|data| Symbol {
-                                object: object.clone(),
-                                data,
-                            })
-                        })
-                        .collect::<Vec<Symbol>>()
-                        .into()
-                }))
-            });
-            states
-        }
-    }};
-}
-
 /// Presses the one entry of the menu a right-click at `row` opened, and says what it read.
 fn choose_from_menu(test: &mut TestingRunner, row: (f64, f64), entry: &str) {
     right_click(test, row);
@@ -19649,8 +19483,12 @@ fn a_symbol_row_bookmarks_its_symbol_from_its_menu() {
         .expect("the fixture holds sum_to")
         .clone();
 
-    let (mut test, states) =
-        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let (mut objects, bookmarks) = (states.objects, states.bookmarks);
     objects.set(vec![wanted.object.clone()]);
     settle(&mut test);
@@ -19692,7 +19530,7 @@ fn a_history_row_bookmarks_its_place_from_its_menu() {
     let (mut test, states) = TestingRunner::new(
         history_menu_harness,
         (300., 300.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     open_document(states.open, states.visits, file.clone(), Reach::NewTab);
@@ -19745,7 +19583,7 @@ fn a_tabs_menu_bookmarks_its_document() {
     let (mut test, states) = TestingRunner::new(
         header_menu_harness,
         (300., 100.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     let mut objects = states.objects;
@@ -19804,8 +19642,12 @@ fn chip_menu_labels<E: IntoElement + 'static>(
     document: &Document,
     object: Arc<Object>,
 ) -> Vec<String> {
-    let (mut test, states) =
-        TestingRunner::new(harness, (300., 100.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        harness,
+        (300., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let mut objects = states.objects;
     objects.set(vec![object]);
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
@@ -19862,12 +19704,13 @@ fn an_instruction_rows_menu_bookmarks_its_symbol() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
     let mut objects = states.objects;
     objects.set(vec![sum_to.object.clone()]);
     let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
@@ -19906,12 +19749,13 @@ fn an_instruction_rows_menu_says_none_of_the_source_panes_keys() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         menu_listing_harness,
         (600., 400.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
     let mut objects = states.objects;
     objects.set(vec![sum_to.object.clone()]);
     let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
@@ -19957,8 +19801,12 @@ fn files_harness() -> impl IntoElement {
 /// the panel mounted over it as the project's directory.
 fn files_over(line: u32) -> (TestingRunner, ProjectStates, Temporary) {
     let directory = run_directory_under(line, "project");
-    let (mut test, states) =
-        TestingRunner::new(files_harness, (300., 400.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        files_harness,
+        (300., 400.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
     settle(&mut test);
@@ -20113,8 +19961,12 @@ fn a_file_past_the_source_bound_does_nothing_when_pressed() {
 /// is what brings the tree up, and clearing it takes the tree down again.
 #[test]
 fn no_directory_draws_the_placeholder() {
-    let (mut test, states) =
-        TestingRunner::new(files_harness, (300., 400.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        files_harness,
+        (300., 400.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     settle(&mut test);
     assert!(label_area(&test, "No project directory. Set one in the Project view.").is_some());
 
@@ -20156,7 +20008,7 @@ fn the_root_is_read_once_at_the_first_render() {
         files_harness,
         (300., 400.).into(),
         move |runner: &mut _| {
-            let states = project_states!(runner);
+            let states = runner.provide_root_context(test_roots).states;
             let mut proj = states.proj;
             proj.write().workspace_text = over;
             states
@@ -20292,12 +20144,13 @@ fn right_of(area: &Area) -> (f64, f64) {
 #[test]
 fn a_sweep_along_the_text_picks_characters_out() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
 
     let drawn = paragraphs(&test);
@@ -20398,12 +20251,13 @@ fn a_sweep_along_the_text_picks_characters_out() {
 #[test]
 fn a_press_in_the_gutter_places_the_caret_and_a_sweep_takes_whole_rows() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let addresses = labels_with_areas(&test)
         .into_iter()
@@ -20512,12 +20366,13 @@ fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
     // Escape, through the pane's own key handler: the box has to have the keyboard,
     // which a press in it asks for.
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     let mut marked = marked;
     settle(&mut test);
     let first = paragraphs(&test)[0].0;
@@ -20583,12 +20438,14 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
     .units();
     assert!(before > 0 && before < line.units(), "{line:?}");
 
-    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
+    let marked = roots.doors.marked;
     settle(&mut test);
     let link = label_area(&test, target.display()).expect("the link is drawn");
 
@@ -20665,9 +20522,13 @@ fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
         listing_harness,
         (600., 900.).into(),
         |runner| {
-            let (states, marked, landing, _doors) = listing_states!(runner, shown);
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (states, marked, landing, alt)
+            let roots = runner.provide_root_context(move || listing_states(shown));
+            (
+                roots.states,
+                roots.doors.marked,
+                roots.doors.land,
+                roots.alt,
+            )
         },
         1.,
     );
@@ -20713,10 +20574,16 @@ fn alt_held_shuts_the_unified_views_own_door() {
         code_harness,
         (600., 900.).into(),
         |runner| {
-            let (states, marked, sections, window, landing, ctrl, _doors) =
-                code_states!(runner, reading);
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (states, marked, sections, window, landing, ctrl, alt)
+            let roots = runner.provide_root_context(move || code_states(reading));
+            (
+                roots.states,
+                roots.doors.marked,
+                roots.reading,
+                roots.window,
+                roots.doors.land,
+                roots.ctrl,
+                roots.alt,
+            )
         },
         1.,
     );
@@ -20751,12 +20618,13 @@ fn alt_held_shuts_the_unified_views_own_door() {
 #[test]
 fn a_double_press_takes_the_word_under_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let (first, text, _) = paragraphs(&test)[0].clone();
     let word = text.split(' ').next().expect("a mnemonic").len();
@@ -20848,10 +20716,10 @@ fn offset_listing_harness() -> impl IntoElement {
 #[test]
 fn a_listings_rows_sit_on_whole_device_pixels_wherever_it_is_laid_out() {
     let shown = shown_sum_to();
-    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, _roots) = TestingRunner::new(
         offset_listing_harness,
         (600., 300.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -20896,12 +20764,13 @@ fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
         let assembly = studied.assembly.as_ref().expect("sum_to has bytes");
         studied.lanes.listing_rows(assembly.instructions.len())
     };
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let drawn = paragraphs(&test);
     let (first, third) = (drawn[0].0, drawn[2].0);
@@ -21313,12 +21182,13 @@ fn key_with(test: &mut TestingRunner, key: Key, modifiers: Modifiers) {
 #[test]
 fn the_arrow_keys_move_the_caret_and_the_run_of_rows_with_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let drawn = paragraphs(&test);
     let (first, second) = (drawn[0].0, drawn[1].0);
@@ -21397,12 +21267,13 @@ fn the_arrow_keys_move_the_caret_and_the_run_of_rows_with_it() {
 #[test]
 fn a_modifier_a_motion_does_not_take_leaves_the_caret_where_it_is() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let drawn = paragraphs(&test);
     let at = left_of(&drawn[0].0);
@@ -21462,12 +21333,13 @@ fn a_modifier_a_motion_does_not_take_leaves_the_caret_where_it_is() {
 #[test]
 fn shift_and_a_key_reach_the_run_out_and_a_key_alone_collapses_it() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let drawn = paragraphs(&test);
     let (first, second) = (drawn[0].0, drawn[1].0);
@@ -21542,12 +21414,13 @@ fn ctrl_end_goes_to_the_listings_end_and_the_pane_scrolls_to_it() {
     let length = shown.studied.lanes.listing_rows(instructions.len());
     let first_address = format!("{:016X} ", instructions[0].address);
     let last_address = format!("{:016X} ", instructions.last().unwrap().address);
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     assert!(
         !labels(&test).contains(&last_address),
@@ -21650,13 +21523,14 @@ fn the_keys_move_the_caret_along_a_row_the_worker_decoded() {
         panic!("a window is answered with a window");
     };
     assert!(reading.take(&ask, code, decoded));
-    let (mut test, (states, marked, _sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_harness,
-            (600., 900.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let marked = roots.doors.marked;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -21714,12 +21588,13 @@ fn the_keys_move_the_caret_along_a_row_the_worker_decoded() {
 #[test]
 fn a_sweep_held_past_the_panes_edge_scrolls_the_view() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 300.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let before = paragraphs(&test);
     let first = before[0].0;
@@ -21771,12 +21646,13 @@ fn a_sweep_held_past_the_panes_edge_scrolls_the_view() {
 #[test]
 fn a_sweep_held_past_the_panes_side_scrolls_the_view_sideways() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (300., 300.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     let rows = paragraphs(&test);
     // A row longer than the pane, with room to scroll.
@@ -21832,8 +21708,12 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
         .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
         .collect();
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -21912,8 +21792,12 @@ fn a_link_followed_with_a_page_on_screen_lands_in_a_tab_of_its_own() {
         .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
         .collect();
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -21985,8 +21869,12 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
         .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
         .collect();
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -22072,8 +21960,12 @@ fn a_new_tab_opens_beside_the_one_on_screen() {
         .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
         .collect();
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -22144,8 +22036,12 @@ fn a_temporal_tab_is_promoted_by_ctrl_and_by_a_link_followed_in_it_and_not_by_ba
         .collect();
     let source = Document::Source(Arc::from("/src/main.rs"));
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -22213,8 +22109,12 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
     let other = Document::Assembly(Selection::Symbol(symbols[1].clone()));
     let source = Document::Source(Arc::from("/src/main.rs"));
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -22312,20 +22212,17 @@ fn navigating_panes() -> (
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let (test, (states, marked, landing, doors)) = TestingRunner::new(
+    let (test, roots) = TestingRunner::new(
         navigating_harness,
         (700., 400.).into(),
-        |runner| {
-            let states = listing_states!(runner, shown);
-            runner.provide_root_context(|| {
-                Splits(State::create(ResizableContext {
-                    direction: Direction::Horizontal,
-                    ..Default::default()
-                }))
-            });
-            states
-        },
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
+    );
+    let (states, marked, landing, doors) = (
+        roots.states,
+        roots.doors.marked,
+        roots.doors.land,
+        roots.doors,
     );
     let document = Document::Assembly(Selection::Symbol(sum_to));
     (
@@ -22526,18 +22423,6 @@ fn land_harness() -> impl IntoElement {
     rect().expanded()
 }
 
-/// The one context [`land_harness`] reads beside the project's, and the doors, which is
-/// where the runs are.
-macro_rules! land_states {
-    ($runner:expr) => {{
-        let (states, doors) = project_wiring!($runner);
-        let code_rows = $runner
-            .provide_root_context(|| CodeRows(State::create(None)))
-            .0;
-        (states, doors, code_rows)
-    }};
-}
-
 /// The run standing in the source pane as a switch wakes the effect belongs to the place
 /// being left, and is the arriving place's own **only where it is a run of the very row
 /// that place is driven from**: a door onto the file already on top marks its line itself
@@ -22551,12 +22436,14 @@ macro_rules! land_states {
 fn a_standing_run_of_another_line_is_not_kept_over_the_driven_one() {
     let symbols = fixture_symbols();
     let file: Arc<str> = Arc::from("/p/src/main.rs");
-    let (mut test, (mut states, doors, _code_rows)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         land_harness,
         (200., 200.).into(),
-        |runner| land_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
+    let doors = roots.doors;
+    let mut states = roots.states;
     let mut marked = doors.marked;
 
     // The file's own tab, and a symbol's tab over it, which is the one the reader is on:
@@ -22606,8 +22493,12 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
     let other = Document::Assembly(Selection::Symbol(symbols[1].clone()));
     let source = Document::Source(Arc::from("/src/main.rs"));
 
-    let (mut test, states) =
-        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     test.sync_and_update();
     let mut objects = states.objects;
     objects.write().push(object);
@@ -22710,20 +22601,20 @@ fn code_navigating_harness() -> impl IntoElement {
 fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
-    let (mut test, (states, marked, sections, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_navigating_harness,
-            (600., 900.).into(),
-            {
-                let object = object.clone();
-                move |runner| {
-                    runner.provide_root_context(|| PaneObject(object.clone()));
-                    code_states!(runner, Reading::default())
-                }
-            },
-            1.,
-        );
-    let mut sections = sections;
+    let (mut test, roots) = TestingRunner::new(
+        code_navigating_harness,
+        (600., 900.).into(),
+        {
+            let object = object.clone();
+            move |runner| {
+                runner.provide_root_context(|| PaneObject(object.clone()));
+                runner.provide_root_context(|| code_states(Reading::default()))
+            }
+        },
+        1.,
+    );
+    let (states, marked) = (roots.states, roots.doors.marked);
+    let mut sections = roots.reading;
     let mut open = states.objects;
     open.write().push(object.clone());
     settle(&mut test);
@@ -22848,13 +22739,15 @@ fn a_kept_run_is_carried_when_the_rows_on_screen_are_of_another_generation() {
     let (was, now) = (label_row(&guessed_rows), label_row(&built.rows));
     assert_ne!(now, was, "the guess for add was exact, proving nothing");
 
-    let (mut test, (mut states, doors, code_rows)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         land_harness,
         (200., 200.).into(),
-        |runner| land_states!(runner),
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
     );
-    let (marked, mut code_rows) = (doors.marked, code_rows);
+    let doors = roots.doors;
+    let mut states = roots.states;
+    let (marked, mut code_rows) = (doors.marked, roots.code_rows);
 
     // The code tab, left for another: the caret on the label, and the place that row
     // stood for kept beside it under the generation it was taken at, as the section view
@@ -22926,7 +22819,7 @@ fn the_temporal_tabs_name_is_italic_and_a_double_press_makes_it_stay() {
     let (mut test, states) = TestingRunner::new(
         header_menu_harness,
         (300., 100.).into(),
-        project_states!(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
     let mut objects = states.objects;
@@ -23064,7 +22957,7 @@ fn no_two_chords_are_the_same_gesture() {
 
 thread_local! {
     /// Every key the stand-in for the root's global handler was given ([`watch_key`]).
-    /// A thread-local and not a context, since `mount_scratchpad!` builds the contexts
+    /// A thread-local and not a context, since `mount_scratchpad` builds the contexts
     /// its harness gets and cannot be given another; freya-testing runs the whole app on
     /// the test's own thread, so this is per test exactly as `palette()` is
     /// (`agents/Headless.md`).
@@ -23117,8 +23010,12 @@ fn every_chord_into_a_box<T: PartialEq + std::fmt::Debug>(
 #[test]
 fn every_chord_reaches_the_root_from_a_filter_box() {
     let symbols = fixture_symbols();
-    let (mut test, states) =
-        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let mut objects = states.objects;
     objects.set(vec![symbols[0].object.clone()]);
     settle(&mut test);
@@ -23194,10 +23091,10 @@ fn find_answered(test: &mut TestingRunner, finds: State<Finds>, at: Where, patte
 #[test]
 fn ctrl_f_opens_the_find_bar_over_the_pane_the_keyboard_is_in() {
     let shown = shown_sum_to();
-    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, _roots) = TestingRunner::new(
         find_harness,
         (600., 400.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -23232,12 +23129,13 @@ fn ctrl_f_opens_the_find_bar_over_the_pane_the_keyboard_is_in() {
 #[test]
 fn one_press_in_the_code_takes_the_keyboard_back_from_a_text_box() {
     let shown = shown_sum_to();
-    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         find_harness,
         (600., 400.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let marked = roots.doors.marked;
     settle(&mut test);
     // The caret is in the find bar's box, which is where Ctrl+F leaves it.
     open_find_bar(&mut test);
@@ -23285,10 +23183,10 @@ fn one_press_in_the_code_takes_the_keyboard_back_from_a_text_box() {
 #[test]
 fn the_find_bar_takes_its_room_from_the_code() {
     let shown = shown_sum_to();
-    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, _roots) = TestingRunner::new(
         find_harness,
         (600., 240.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -23336,12 +23234,14 @@ fn the_find_bar_takes_its_room_from_the_code() {
 fn a_step_picks_out_the_match_and_the_rows_wear_the_wash() {
     let shown = shown_sum_to();
     let document = asked_of(&shown.ask);
-    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         find_harness,
         (600., 600.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
+    let marked = roots.doors.marked;
     settle(&mut test);
     let mnemonic = drawn_twice(&test);
 
@@ -23422,12 +23322,14 @@ fn drawn_twice(test: &TestingRunner) -> String {
 fn f3_steps_the_find_bar_with_the_keyboard_still_in_the_pane() {
     let shown = shown_sum_to();
     let document = asked_of(&shown.ask);
-    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         find_harness,
         (600., 600.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
+    let marked = roots.doors.marked;
     settle(&mut test);
     let mnemonic = drawn_twice(&test);
 
@@ -23516,12 +23418,14 @@ fn f3_steps_the_find_bar_with_the_keyboard_still_in_the_pane() {
 fn f3_with_no_find_bar_open_does_nothing() {
     let shown = shown_sum_to();
     let document = asked_of(&shown.ask);
-    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         find_harness,
         (600., 600.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
+    let marked = roots.doors.marked;
     settle(&mut test);
     let at = find_at(&states, &document);
     let finds = states.places.finds;
@@ -23555,12 +23459,14 @@ fn f3_with_no_find_bar_open_does_nothing() {
 fn a_run_inside_one_line_seeds_the_box_and_one_across_lines_does_not() {
     let shown = shown_sum_to();
     let document = asked_of(&shown.ask);
-    let (mut test, (states, marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         find_harness,
         (600., 600.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
+    let states = roots.states;
+    let marked = roots.doors.marked;
     settle(&mut test);
     let at = find_at(&states, &document);
     let finds = states.places.finds;
@@ -23618,13 +23524,14 @@ fn a_step_through_an_objects_code_walks_on_until_it_finds_a_match() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, marked, _reading, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_find_harness,
-            (600., 400.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_find_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let marked = roots.doors.marked;
     settle(&mut test);
     let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
     let finds = states.places.finds;
@@ -23667,13 +23574,13 @@ fn a_walk_that_finds_nothing_says_so_and_stops() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
     let reading = reading_of(&object, &[]);
-    let (mut test, (states, _marked, _reading, _window, _landing, _ctrl, _doors)) =
-        TestingRunner::new(
-            code_find_harness,
-            (600., 400.).into(),
-            |runner| code_states!(runner, reading),
-            1.,
-        );
+    let (mut test, roots) = TestingRunner::new(
+        code_find_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
     settle(&mut test);
     let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
     let finds = states.places.finds;
@@ -23717,8 +23624,12 @@ fn ctrl_f_reaches_the_filter_box_only_from_the_list_under_it() {
         .expect("the fixture has a name beside sum_to")
         .to_string();
 
-    let (mut test, states) =
-        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let mut objects = states.objects;
     objects.set(vec![symbols[0].object.clone()]);
     settle(&mut test);
@@ -23753,8 +23664,12 @@ fn ctrl_f_reaches_the_filter_box_only_from_the_list_under_it() {
 #[test]
 fn the_chord_is_not_typed_into_the_box_it_reaches() {
     let symbols = fixture_symbols();
-    let (mut test, states) =
-        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let mut objects = states.objects;
     objects.set(vec![symbols[0].object.clone()]);
     settle(&mut test);
@@ -23775,8 +23690,12 @@ fn the_chord_is_not_typed_into_the_box_it_reaches() {
 #[test]
 fn the_symbols_list_says_when_its_filter_left_nothing() {
     let symbols = fixture_symbols();
-    let (mut test, states) =
-        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let mut objects = states.objects;
     settle(&mut test);
 
@@ -23870,36 +23789,23 @@ fn search_and_modifiers(
         search_harness,
         (300., 400.).into(),
         move |runner: &mut _| {
-            runner.provide_root_context({
-                let work = work.clone();
-                move || Walk(work.clone())
-            });
-            // What a row's press reaches through: the landing a hit makes, and the runs
-            // it picks out on the other side of it.
-            runner.provide_root_context(|| CodeRows(State::create(None)));
-            let held = runner.provide_root_context(|| {
-                Modifiers5(
+            runner.provide_root_context(move || {
+                provide(Walk(work.clone()));
+                let roots = test_roots();
+                // The five the root's key handler is made of, three of them the
+                // contexts every row reads, as `app()` builds `ModifierKeys`.
+                let held = provide(Modifiers5(
+                    roots.shift,
+                    roots.ctrl,
+                    roots.alt,
                     State::create(false),
                     State::create(false),
-                    State::create(false),
-                    State::create(false),
-                    State::create(false),
-                )
-            });
-            // The root's key handler answers the finder's chord beside the Search
-            // panel's, so it needs the state the finder is opened through.
-            let finder = runner
-                .provide_root_context(|| Finding(State::create(Finder::default())))
-                .0;
-            let (states, doors) = project_wiring!(runner);
-            let marked = doors.marked;
-            // The same context again, so this test holds the handle the panel reads.
-            let dock = runner
-                .provide_root_context(|| {
-                    SidebarDock(State::create(DockArea::column(vec![vec![Panel::Search]])))
-                })
-                .0;
-            (states, held, marked, finder, dock)
+                ));
+                // The group the panel is drawn in, written into the dock the root made.
+                let mut dock = roots.states.arranged.dock;
+                dock.set(DockArea::column(vec![vec![Panel::Search]]));
+                (roots.states, held, roots.doors.marked, roots.finder, dock)
+            })
         },
         1.,
     );
@@ -23921,6 +23827,19 @@ struct Modifiers5(
     State<bool>,
     State<bool>,
 );
+
+/// The five as `app()` makes them: the three contexts every row reads, and two states of
+/// the root's own. So a chord pressed through the root's handler holds the same Shift,
+/// Ctrl and Alt the rows under it are looking at.
+fn held_by(roots: &Roots) -> Modifiers5 {
+    Modifiers5(
+        roots.shift,
+        roots.ctrl,
+        roots.alt,
+        State::create(false),
+        State::create(false),
+    )
+}
 
 /// The panel over a walk that answers nothing, and the modifier states the root's one key
 /// handler writes beside the chord.
@@ -24354,8 +24273,12 @@ fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
 #[test]
 fn the_search_chord_is_declined_by_a_filter_box() {
     let symbols = fixture_symbols();
-    let (mut test, states) =
-        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let mut objects = states.objects;
     objects.set(vec![symbols[0].object.clone()]);
     settle(&mut test);
@@ -24402,10 +24325,10 @@ fn project_view_harness() -> Element {
     // A start is answered, so that a press here can reach a running server the way the top
     // bar's does; and the project's own settings are really read, so the view lists what
     // that read answered and a file on disk is what it is being asked about.
-    let follow = use_provide_root_context(|| Following(State::create(Follow::default()))).0;
-    let linked = use_provide_root_context(|| Linking(State::create(Linked::default()))).0;
-    let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
-    let hover = use_provide_root_context(|| Hovering(State::create(Hover::default()))).0;
+    let follow = use_consume::<Following>().0;
+    let linked = use_consume::<Linking>().0;
+    let located = use_consume::<Locations>().0;
+    let hover = use_consume::<Hovering>().0;
     use_language_with(
         language,
         follow,
@@ -24438,7 +24361,7 @@ fn build_wiring() {
     let work = use_consume::<BuildWorking>().0;
     let mut asking = use_consume::<BuildAsking>().0;
 
-    let opened = use_provide_root_context(|| Documents(State::create(Opened::default()))).0;
+    let opened = use_consume::<Documents>().0;
     let jobs = use_building_with(states.build, states, opened, move |job| work(job));
     use_hook(move || asking.set(Some(jobs)));
 }
@@ -24466,44 +24389,52 @@ fn leaving_project_harness() -> Element {
 }
 
 /// Mount the Project view over a worker that records every job and answers from `answer`.
-macro_rules! mount_project {
-    ($answer:expr) => {
-        mount_project!(project_view_harness, $answer)
-    };
-    ($harness:expr, $answer:expr) => {{
-        let (asked, asks) = async_channel::unbounded::<AskedToBuild>();
-        let answer = $answer;
-        let work = move |job: BuildJob| {
-            let recorded = match &job.what {
-                BuildWhat::Read => AskedToBuild::Read,
-                BuildWhat::Build => AskedToBuild::Build,
-                BuildWhat::AddDebugLines => AskedToBuild::AddDebugLines,
-            };
-            let _ = asked.send_blocking(recorded);
-            answer(job)
+fn mount_project(
+    answer: impl Fn(BuildJob) -> BuildAnswer + Send + Sync + 'static,
+) -> (
+    TestingRunner,
+    Roots,
+    State<Option<BuildJobs>>,
+    async_channel::Receiver<AskedToBuild>,
+) {
+    mount_project_over(project_view_harness, answer)
+}
+
+/// The same over a harness of the test's own, for the one that takes the view away.
+fn mount_project_over<E: IntoElement + 'static>(
+    harness: fn() -> E,
+    answer: impl Fn(BuildJob) -> BuildAnswer + Send + Sync + 'static,
+) -> (
+    TestingRunner,
+    Roots,
+    State<Option<BuildJobs>>,
+    async_channel::Receiver<AskedToBuild>,
+) {
+    let (asked, asks) = async_channel::unbounded::<AskedToBuild>();
+    let work = move |job: BuildJob| {
+        let recorded = match &job.what {
+            BuildWhat::Read => AskedToBuild::Read,
+            BuildWhat::Build => AskedToBuild::Build,
+            BuildWhat::AddDebugLines => AskedToBuild::AddDebugLines,
         };
+        let _ = asked.send_blocking(recorded);
+        answer(job)
+    };
 
-        let (mut test, (states, language, asking)) = TestingRunner::new(
-            $harness,
-            (600., 700.).into(),
-            move |runner: &mut _| {
-                let states = project_states!(runner);
-                runner.provide_root_context(move || BuildWorking(Arc::new(work)));
-                // The view says how the language server went; what it is is the root's.
-                let language = runner
-                    .provide_root_context(|| Talking(State::create(Language::default())))
-                    .0;
-                let asking = runner
-                    .provide_root_context(|| BuildAsking(State::create(None)))
-                    .0;
-                (states, language, asking)
-            },
-            1.,
-        );
-        test.sync_and_update();
+    let (mut test, (roots, asking)) = TestingRunner::new(
+        harness,
+        (600., 700.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context(move || {
+                provide(BuildWorking(Arc::new(work)));
+                (test_roots(), provide(BuildAsking(State::create(None))).0)
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
 
-        (test, states, language, asking, asks)
-    }};
+    (test, roots, asking, asks)
 }
 
 /// A finished build as the worker answers with one, naming no diagnostic file: what a
@@ -24549,7 +24480,8 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
             },
         }
     };
-    let (mut test, states, _language, asking, asks) = mount_project!(answer);
+    let (mut test, roots, asking, asks) = mount_project(answer);
+    let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
@@ -24620,14 +24552,13 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
 /// put there.
 #[test]
 fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
-    let (mut test, states, _language, _asking, _asks) = mount_project!(|_job: BuildJob| {
-        BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: true,
-            refused: None,
-        }
+    let (mut test, roots, _asking, _asks) = mount_project(|_job: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        profiles: None,
+        debug_lines: true,
+        refused: None,
     });
+    let states = roots.states;
 
     // A target of its own per artifact, because the row draws its target beside the path
     // and the path is also the tooltip's text: the target is the one label that names a
@@ -24713,8 +24644,8 @@ fn an_artifact_load_survives_the_view_being_left() {
             },
         }
     };
-    let (mut test, states, _language, asking, _asks) =
-        mount_project!(leaving_project_harness, answer);
+    let (mut test, roots, asking, _asks) = mount_project_over(leaving_project_harness, answer);
+    let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
@@ -24772,16 +24703,16 @@ fn a_finished_build_forgets_the_workspace_sources() {
     std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
 
     // Nothing is opened: what a build produced is another rule, tested above.
-    let (mut test, states, _language, asking, _asks) =
-        mount_project!(|job: BuildJob| match job.what {
-            BuildWhat::Build => done(built(&[])),
-            _ => BuildAnswer::Read {
-                manifest: None,
-                profiles: None,
-                debug_lines: true,
-                refused: None,
-            },
-        });
+    let (mut test, roots, asking, _asks) = mount_project(|job: BuildJob| match job.what {
+        BuildWhat::Build => done(built(&[])),
+        _ => BuildAnswer::Read {
+            manifest: None,
+            profiles: None,
+            debug_lines: true,
+            refused: None,
+        },
+    });
+    let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
@@ -24829,7 +24760,8 @@ fn a_build_replaces_what_the_build_before_it_produced() {
             },
         }
     };
-    let (mut test, states, _language, asking, _asks) = mount_project!(answer);
+    let (mut test, roots, asking, _asks) = mount_project(answer);
+    let states = roots.states;
     let jobs = asking.peek().clone().expect("the wiring handed one back");
 
     // Both files are open, and only one of them is the last build's.
@@ -24884,13 +24816,13 @@ fn a_build_replaces_what_the_build_before_it_produced() {
 /// on it starts nothing.
 #[test]
 fn a_directory_with_no_manifest_builds_nothing() {
-    let (mut test, states, _language, _asking, _asks) =
-        mount_project!(|_: BuildJob| BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: false,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        profiles: None,
+        debug_lines: false,
+        refused: None,
+    });
+    let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/not-a-workspace".to_owned();
@@ -24947,7 +24879,8 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
             },
         }
     };
-    let (mut test, states, _language, _asking, _asks) = mount_project!(answer);
+    let (mut test, roots, _asking, _asks) = mount_project(answer);
+    let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
@@ -24994,7 +24927,8 @@ fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
         refused: matches!(job.what, BuildWhat::AddDebugLines)
             .then(|| "Permission denied (os error 13)".to_owned()),
     };
-    let (mut test, states, _language, _asking, _asks) = mount_project!(answer);
+    let (mut test, roots, _asking, _asks) = mount_project(answer);
+    let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
@@ -25094,13 +25028,13 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     };
 
     let manifest = directory.join("Cargo.toml");
-    let (mut test, states, _language, _asking, _asks) =
-        mount_project!(move |_: BuildJob| BuildAnswer::Read {
-            manifest: Some(manifest.clone()),
-            profiles: None,
-            debug_lines: true,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(move |_: BuildJob| BuildAnswer::Read {
+        manifest: Some(manifest.clone()),
+        profiles: None,
+        debug_lines: true,
+        refused: None,
+    });
+    let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
@@ -25167,13 +25101,13 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
     };
 
     let manifest = directory.join("Cargo.toml");
-    let (mut test, states, _language, _asking, _asks) =
-        mount_project!(move |_: BuildJob| BuildAnswer::Read {
-            manifest: Some(manifest.clone()),
-            profiles: None,
-            debug_lines: true,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(move |_: BuildJob| BuildAnswer::Read {
+        manifest: Some(manifest.clone()),
+        profiles: None,
+        debug_lines: true,
+        refused: None,
+    });
+    let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
@@ -25226,7 +25160,7 @@ fn the_recent_projects_are_read_once_for_the_project_on_screen() {
         project_view_harness,
         (600., 700.).into(),
         move |runner: &mut _| {
-            let states = project_states!(runner);
+            let states = runner.provide_root_context(test_roots).states;
             // The store the sections read through, in place of the one that is never made.
             let mut store = states.store;
             store.set(Some(Store::at(&opened)));
@@ -25238,7 +25172,6 @@ fn the_recent_projects_are_read_once_for_the_project_on_screen() {
                     refused: None,
                 }))
             });
-            runner.provide_root_context(|| Talking(State::create(Language::default())));
             runner.provide_root_context(|| BuildAsking(State::create(None)));
             states
         },
@@ -25350,9 +25283,9 @@ fn server_harness() -> Element {
     let mut asking = use_consume::<ServerAsking>().0;
 
     let follow = use_consume::<Following>().0;
-    let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
-    let linked = use_provide_root_context(|| Linking(State::create(Linked::default()))).0;
-    let hover = use_provide_root_context(|| Hovering(State::create(Hover::default()))).0;
+    let located = use_consume::<Locations>().0;
+    let linked = use_consume::<Linking>().0;
+    let hover = use_consume::<Hovering>().0;
     let jobs = use_language_with(
         language,
         follow,
@@ -25373,56 +25306,62 @@ fn server_harness() -> Element {
 }
 
 /// Mount the control over a worker that records every job and answers from `answer`.
-///
-/// The second form mounts over a project that is already there, which is what a restore
-/// leaves behind: it is set before the first render, so what the effects see on mount is
-/// the reopened project and not the empty one.
-macro_rules! mount_server {
-    ($answer:expr) => {
-        mount_server!($answer, OpenProject::default())
-    };
-    ($answer:expr, $open:expr) => {{
-        let (asked, asks) = async_channel::unbounded::<AskedOfServer>();
-        let answer = $answer;
-        let work = move |job: LspJob| {
-            let recorded = match &job {
-                LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
-                LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
-                LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
-                LspJob::Hover { at, .. } => AskedOfServer::Hover(at.clone()),
-                LspJob::Opened { file, .. } => AskedOfServer::Opened(file.clone()),
-                LspJob::Closed { file, .. } => AskedOfServer::Closed(file.clone()),
-                LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
-                LspJob::Stop => AskedOfServer::Stop,
-            };
-            let _ = asked.send_blocking(recorded);
-            answer(job)
+fn mount_server(
+    answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
+) -> (
+    TestingRunner,
+    Roots,
+    State<Option<LspJobs>>,
+    async_channel::Receiver<AskedOfServer>,
+) {
+    mount_server_over(answer, OpenProject::default())
+}
+
+/// The same over a project that is already there, which is what a restore leaves behind:
+/// it is set before the first render, so what the effects see on mount is the reopened
+/// project and not the empty one.
+fn mount_server_over(
+    answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
+    open: OpenProject,
+) -> (
+    TestingRunner,
+    Roots,
+    State<Option<LspJobs>>,
+    async_channel::Receiver<AskedOfServer>,
+) {
+    let (asked, asks) = async_channel::unbounded::<AskedOfServer>();
+    let work = move |job: LspJob| {
+        let recorded = match &job {
+            LspJob::Start { directory, .. } => AskedOfServer::Start(directory.clone()),
+            LspJob::Ask { at, want, .. } => AskedOfServer::Ask(at.clone(), *want),
+            LspJob::Tokens { file, .. } => AskedOfServer::Tokens(file.clone()),
+            LspJob::Hover { at, .. } => AskedOfServer::Hover(at.clone()),
+            LspJob::Opened { file, .. } => AskedOfServer::Opened(file.clone()),
+            LspJob::Closed { file, .. } => AskedOfServer::Closed(file.clone()),
+            LspJob::ReadSettings { directory } => AskedOfServer::Read(directory.clone()),
+            LspJob::Stop => AskedOfServer::Stop,
         };
+        let _ = asked.send_blocking(recorded);
+        answer(job)
+    };
 
-        let (mut test, (states, language, asking)) = TestingRunner::new(
-            server_harness,
-            (200., 100.).into(),
-            move |runner: &mut _| {
-                let states = project_states!(runner);
-                let mut proj = states.proj;
-                proj.set($open);
-                runner.provide_root_context(move || ServerWorking(Arc::new(work)));
-                let language = runner
-                    .provide_root_context(|| Talking(State::create(Language::default())))
-                    .0;
-                let asking = runner
-                    .provide_root_context(|| ServerAsking(State::create(None)))
-                    .0;
-                runner.provide_root_context(|| Following(State::create(Follow::default())));
-                runner.provide_root_context(|| Linking(State::create(Linked::default())));
-                (states, language, asking)
-            },
-            1.,
-        );
-        test.sync_and_update();
+    let (mut test, (roots, asking)) = TestingRunner::new(
+        server_harness,
+        (200., 100.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context(move || {
+                provide(ServerWorking(Arc::new(work)));
+                let roots = test_roots();
+                let mut proj = roots.states.proj;
+                proj.set(open);
+                (roots, provide(ServerAsking(State::create(None))).0)
+            })
+        },
+        1.,
+    );
+    test.sync_and_update();
 
-        (test, states, language, asking, asks)
-    }};
+    (test, roots, asking, asks)
 }
 
 /// The next job the worker was given, waited for: it takes them on a thread of its own.
@@ -25534,7 +25473,7 @@ fn with_a_directory(test: &mut TestingRunner, states: &ProjectStates, directory:
 #[test]
 fn the_control_starts_a_server_and_lights_when_it_answers() {
     let handle = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, asks) = mount_server!({
+    let (mut test, roots, _asking, asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
             LspJob::Start { run, .. } => Some(LspAnswer::Started {
@@ -25544,6 +25483,8 @@ fn the_control_starts_a_server_and_lights_when_it_answers() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     // Mounting one, and giving the project a directory, are not asking for a server.
@@ -25565,13 +25506,15 @@ fn the_control_starts_a_server_and_lights_when_it_answers() {
 /// is the failure's colour when there is one.
 #[test]
 fn the_control_is_named_and_bordered_in_the_state_it_is_in() {
-    let (mut test, states, language, _asking, _asks) = mount_server!(|job: LspJob| match job {
+    let (mut test, roots, _asking, _asks) = mount_server(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
             server: Err(lsp::Failure::NoServer("not found".to_owned())),
         }),
         _ => None,
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     assert!(
@@ -25612,7 +25555,7 @@ fn the_control_is_named_and_bordered_in_the_state_it_is_in() {
 #[test]
 fn the_next_press_stops_the_server() {
     let handle = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, asks) = mount_server!({
+    let (mut test, roots, _asking, asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
             LspJob::Start { run, .. } => Some(LspAnswer::Started {
@@ -25622,6 +25565,8 @@ fn the_next_press_stops_the_server() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
@@ -25648,13 +25593,15 @@ fn the_next_press_stops_the_server() {
 /// an error anywhere: the control goes back to off, and the reason is on it.
 #[test]
 fn a_server_that_will_not_start_leaves_the_reason_on_the_control() {
-    let (mut test, states, language, _asking, _asks) = mount_server!(|job: LspJob| match job {
+    let (mut test, roots, _asking, _asks) = mount_server(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
             server: Err(lsp::Failure::NoServer("not found".to_owned())),
         }),
         _ => None,
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
@@ -25689,7 +25636,7 @@ fn a_server_that_will_not_start_leaves_the_reason_on_the_control() {
 #[test]
 fn an_answer_for_a_server_that_was_stopped_is_dropped() {
     let late = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, _asks) = mount_server!({
+    let (mut test, roots, _asking, _asks) = mount_server({
         let late = late.clone();
         move |job: LspJob| match job {
             // An answer for the run before this one, which is what a start that was
@@ -25701,6 +25648,8 @@ fn an_answer_for_a_server_that_was_stopped_is_dropped() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
@@ -25733,7 +25682,7 @@ fn an_answer_for_a_server_that_was_stopped_is_dropped() {
 #[test]
 fn a_stop_while_it_is_starting_still_kills_the_process() {
     let handle = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, _asks) = mount_server!({
+    let (mut test, roots, _asking, _asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
             // The process is there and the handshake is where the worker stays: no
@@ -25748,6 +25697,8 @@ fn a_stop_while_it_is_starting_still_kills_the_process() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
@@ -25781,7 +25732,7 @@ fn a_stop_while_it_is_starting_still_kills_the_process() {
 #[test]
 fn changing_the_project_stops_the_server() {
     let handle = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, asks) = mount_server!({
+    let (mut test, roots, _asking, asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
             LspJob::Start { run, .. } => Some(LspAnswer::Started {
@@ -25791,6 +25742,8 @@ fn changing_the_project_stops_the_server() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
@@ -25815,13 +25768,15 @@ fn changing_the_project_stops_the_server() {
 /// one, which is the other half of "the control is what starts it".
 #[test]
 fn a_question_asked_with_no_server_running_asks_nobody() {
-    let (mut test, states, language, asking, asks) = mount_server!(|job: LspJob| match job {
+    let (mut test, roots, asking, asks) = mount_server(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
             server: Err(lsp::Failure::NoServer("not found".to_owned())),
         }),
         _ => None,
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     let jobs = asking.read().clone().expect("the worker");
@@ -25874,13 +25829,14 @@ fn a_question_asked_with_no_server_running_asks_nobody() {
 /// twice belongs somewhere it stays.
 #[test]
 fn the_project_view_says_how_the_language_server_went() {
-    let (mut test, states, language, _asking, _asks) =
-        mount_project!(|_: BuildJob| BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: false,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        profiles: None,
+        debug_lines: false,
+        refused: None,
+    });
+    let states = roots.states;
+    let language = roots.language;
 
     let says = |test: &TestingRunner, wanted: &str| {
         labels(test).iter().any(|label| label.starts_with(wanted))
@@ -25948,13 +25904,14 @@ fn the_project_view_lists_the_settings_the_project_gave_the_server() {
             "git.detectSubmodulesLimit": 20
         }"#,
     );
-    let (mut test, states, language, _asking, _asks) =
-        mount_project!(|_: BuildJob| BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: false,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        profiles: None,
+        debug_lines: false,
+        refused: None,
+    });
+    let states = roots.states;
+    let language = roots.language;
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
@@ -25985,13 +25942,14 @@ fn the_project_view_says_why_a_settings_file_could_not_be_used() {
         line!(),
         r#"{ "rust-analyzer.cargo.sysrootSrc": "${userHome}/rust" }"#,
     );
-    let (mut test, states, language, _asking, _asks) =
-        mount_project!(|_: BuildJob| BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: false,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        profiles: None,
+        debug_lines: false,
+        refused: None,
+    });
+    let states = roots.states;
+    let language = roots.language;
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
@@ -26013,13 +25971,13 @@ fn the_project_view_says_why_a_settings_file_could_not_be_used() {
 /// the view, saved with it, and what the press actually starts.
 #[test]
 fn the_project_names_the_language_server_it_is_read_with() {
-    let (mut test, states, _language, _asking, _asks) =
-        mount_project!(|_: BuildJob| BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: false,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        profiles: None,
+        debug_lines: false,
+        refused: None,
+    });
+    let states = roots.states;
     let mut proj = states.proj;
 
     // Unsaid, it is the usual one, and nothing is written into the file about it.
@@ -26043,13 +26001,14 @@ fn the_project_names_the_language_server_it_is_read_with() {
 /// top bar's control is, so a reader who is in the Project view need not go looking.
 #[test]
 fn the_project_views_button_starts_and_stops_the_language_server() {
-    let (mut test, states, language, _asking, _asks) =
-        mount_project!(|_: BuildJob| BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: false,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        profiles: None,
+        debug_lines: false,
+        refused: None,
+    });
+    let states = roots.states;
+    let language = roots.language;
     let mut proj = states.proj;
     proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
@@ -26073,7 +26032,7 @@ fn the_project_views_button_starts_and_stops_the_language_server() {
 #[test]
 fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
     let handle = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, _asks) = mount_server!({
+    let (mut test, roots, _asking, _asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
             LspJob::Start { run, notes, .. } => {
@@ -26087,6 +26046,8 @@ fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
@@ -26123,7 +26084,9 @@ fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
 #[test]
 fn a_question_asked_while_it_is_starting_waits_for_it() {
     // Nothing answers the start, so the control stays on `Starting`.
-    let (mut test, states, language, asking, asks) = mount_server!(|_: LspJob| None);
+    let (mut test, roots, asking, asks) = mount_server(|_: LspJob| None);
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
 
     press_at(&mut test, the_control());
@@ -26168,7 +26131,7 @@ fn a_start_carries_the_projects_own_settings() {
     )
     .expect("a file that reads");
     let (sent, options) = async_channel::unbounded::<String>();
-    let (mut test, states, language, _asking, _asks) = mount_server!({
+    let (mut test, roots, _asking, _asks) = mount_server({
         move |job: LspJob| match job {
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
                 settings: Ok(read.clone()),
@@ -26184,6 +26147,8 @@ fn a_start_carries_the_projects_own_settings() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
     pump(&mut test, || !language.peek().overrides().is_empty());
 
@@ -26202,7 +26167,7 @@ fn a_start_carries_the_projects_own_settings() {
 /// is not there, which is worse than not starting.
 #[test]
 fn a_settings_file_that_could_not_be_read_starts_nothing() {
-    let (mut test, states, language, _asking, asks) = mount_server!(|job: LspJob| match job {
+    let (mut test, roots, _asking, asks) = mount_server(|job: LspJob| match job {
         LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
             settings: Err(lsp::Unreadable::NotAnObject),
             directory,
@@ -26213,6 +26178,8 @@ fn a_settings_file_that_could_not_be_read_starts_nothing() {
         }),
         _ => None,
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
     pump(&mut test, || language.peek().unreadable().is_some());
 
@@ -26360,13 +26327,15 @@ fn a_question_about_references_does_not_cancel_one_about_a_definition() {
 /// runs the project's own build scripts and macros, so the reader is asked first.
 #[test]
 fn a_press_over_a_directory_nobody_agreed_to_asks_before_it_starts() {
-    let (mut test, states, language, _asking, asks) = mount_server!(|job: LspJob| match job {
+    let (mut test, roots, _asking, asks) = mount_server(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
             server: Ok(process::Handle::to_nothing()),
         }),
         _ => None,
     });
+    let states = roots.states;
+    let language = roots.language;
     let mut proj = states.proj;
     proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
@@ -26391,7 +26360,7 @@ fn a_press_over_a_directory_nobody_agreed_to_asks_before_it_starts() {
 #[test]
 fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
     let handle = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, asks) = mount_server!({
+    let (mut test, roots, _asking, asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
             LspJob::Start { run, .. } => Some(LspAnswer::Started {
@@ -26401,6 +26370,8 @@ fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     let mut proj = states.proj;
     proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
@@ -26428,13 +26399,15 @@ fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
 /// what was answered was the press and not the project.
 #[test]
 fn declining_starts_nothing_and_is_not_remembered() {
-    let (mut test, states, language, _asking, asks) = mount_server!(|job: LspJob| match job {
+    let (mut test, roots, _asking, asks) = mount_server(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
             server: Ok(process::Handle::to_nothing()),
         }),
         _ => None,
     });
+    let states = roots.states;
+    let language = roots.language;
     let mut proj = states.proj;
     proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
@@ -26467,7 +26440,7 @@ fn declining_starts_nothing_and_is_not_remembered() {
 #[test]
 fn a_project_that_agreed_before_the_app_opened_is_not_asked_again() {
     let handle = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, asks) = mount_server!(
+    let (mut test, roots, _asking, asks) = mount_server_over(
         {
             let handle = handle.clone();
             move |job: LspJob| match job {
@@ -26482,8 +26455,10 @@ fn a_project_that_agreed_before_the_app_opened_is_not_asked_again() {
             workspace_text: "/p".to_owned(),
             trusted: true,
             ..OpenProject::default()
-        }
+        },
     );
+    let states = roots.states;
+    let language = roots.language;
 
     // Settled first, so the effect that drops an agreement on a change has been round:
     // its first run is the mount, and the mount is not a change.
@@ -26511,7 +26486,7 @@ fn a_project_that_agreed_before_the_app_opened_is_not_asked_again() {
 #[test]
 fn changing_the_directory_asks_about_the_new_one() {
     let handle = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, _asks) = mount_server!({
+    let (mut test, roots, _asking, _asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
             LspJob::Start { run, .. } => Some(LspAnswer::Started {
@@ -26521,6 +26496,8 @@ fn changing_the_directory_asks_about_the_new_one() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
     press_at(&mut test, the_control());
     until_server(&mut test, language, running);
@@ -26545,13 +26522,14 @@ fn changing_the_directory_asks_about_the_new_one() {
 /// something about the one reading it now.
 #[test]
 fn the_project_view_shows_the_agreement_and_takes_it_back() {
-    let (mut test, states, language, _asking, _asks) =
-        mount_project!(|_: BuildJob| BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: false,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        profiles: None,
+        debug_lines: false,
+        refused: None,
+    });
+    let states = roots.states;
+    let language = roots.language;
     let mut proj = states.proj;
     proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
@@ -26590,7 +26568,7 @@ fn the_project_view_shows_the_agreement_and_takes_it_back() {
 #[test]
 fn switching_projects_keeps_the_answer_the_new_one_brought() {
     let handle = process::Handle::to_nothing();
-    let (mut test, states, language, _asking, _asks) = mount_server!({
+    let (mut test, roots, _asking, _asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
             LspJob::Start { run, .. } => Some(LspAnswer::Started {
@@ -26600,6 +26578,8 @@ fn switching_projects_keeps_the_answer_the_new_one_brought() {
             _ => None,
         }
     });
+    let states = roots.states;
+    let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
     press_at(&mut test, the_control());
     until_server(&mut test, language, running);
@@ -26636,13 +26616,14 @@ fn switching_projects_keeps_the_answer_the_new_one_brought() {
 /// same place: the two presses are one control.
 #[test]
 fn the_project_views_button_asks_before_it_starts_too() {
-    let (mut test, states, language, _asking, _asks) =
-        mount_project!(|_: BuildJob| BuildAnswer::Read {
-            manifest: None,
-            profiles: None,
-            debug_lines: false,
-            refused: None,
-        });
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
+        manifest: None,
+        profiles: None,
+        debug_lines: false,
+        refused: None,
+    });
+    let states = roots.states;
+    let language = roots.language;
     let mut proj = states.proj;
     proj.write().workspace_text = "/p".to_owned();
     settle(&mut test);
@@ -26670,27 +26651,13 @@ fn landing_panes_harness() -> impl IntoElement {
 }
 
 /// [`landing_panes_harness`] over the contexts `app()` gives it.
-fn landing_panes() -> (TestingRunner, ProjectStates, LocationStates) {
-    let (test, (states, location)) = TestingRunner::new(
+fn landing_panes() -> (TestingRunner, Roots) {
+    TestingRunner::new(
         landing_panes_harness,
         (500., 300.).into(),
-        |runner| {
-            let (states, location) = location_states!(runner);
-            // Whether Shift is held, which every code row reads.
-            runner.provide_root_context(|| Shift(State::create(false)));
-            // The two `app()` provides beside the project's, which `DocumentBody` sizes
-            // its panels from.
-            runner.provide_root_context(|| {
-                Splits(State::create(ResizableContext {
-                    direction: Direction::Horizontal,
-                    ..Default::default()
-                }))
-            });
-            (states, location)
-        },
+        |runner: &mut _| runner.provide_root_context(test_roots),
         1.,
-    );
-    (test, states, location)
+    )
 }
 
 /// **A door into another file scrolls the pane to the line it landed on, in a tab that
@@ -26712,7 +26679,8 @@ fn a_door_into_another_file_shows_the_line_it_landed_on() {
     let landed = directory.named("second.rs", &text);
     const LINE: u32 = 150;
 
-    let (mut test, states, location) = landing_panes();
+    let (mut test, roots) = landing_panes();
+    let states = roots.states;
     open_document(
         states.open,
         states.visits,
@@ -26726,7 +26694,7 @@ fn a_door_into_another_file_shows_the_line_it_landed_on() {
     // The door: the same `land` a followed name and a search hit both make, in place, so
     // the tab on screen is handed the second file rather than mounting a new one.
     land(
-        location.doors,
+        roots.doors,
         Landing {
             tab: Document::Source(landed.clone()),
             at: Some(LinePos {
@@ -26825,7 +26793,8 @@ fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
     source_text(Path::new(&*opened)).expect("the first file");
     source_text(Path::new(&*landed)).expect("the second file");
 
-    let (mut test, states, location) = landing_panes();
+    let (mut test, roots) = landing_panes();
+    let states = roots.states;
     open_document(
         states.open,
         states.visits,
@@ -26840,7 +26809,7 @@ fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
     // screen is handed the document rather than mounting a pane for it.
     let door = |test: &mut TestingRunner, file: &Arc<str>, line: u32| {
         land(
-            location.doors,
+            roots.doors,
             Landing {
                 tab: Document::Source(file.clone()),
                 at: Some(LinePos {
@@ -26919,7 +26888,8 @@ fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
     source_text(Path::new(&*opened)).expect("the first file");
     source_text(Path::new(&*landed)).expect("the second file");
 
-    let (mut test, states, location) = landing_panes();
+    let (mut test, roots) = landing_panes();
+    let states = roots.states;
     open_document(
         states.open,
         states.visits,
@@ -26933,7 +26903,7 @@ fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
     // A door, and the pass on which the row it landed on first shows.
     let door = |test: &mut TestingRunner, file: &Arc<str>, line: u32| -> Option<usize> {
         land(
-            location.doors,
+            roots.doors,
             Landing {
                 tab: Document::Source(file.clone()),
                 at: Some(LinePos {
@@ -27034,10 +27004,8 @@ fn alt_makes_a_press_pick_the_row_out_and_open_nothing() {
         symbols_harness,
         (300., 300.).into(),
         |runner: &mut _| {
-            let states = symbol_states!(runner);
-            // After the macro, which provides an `Alt` of its own that this replaces.
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (states, alt)
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.alt)
         },
         1.,
     );
@@ -27096,9 +27064,8 @@ fn a_lists_pick_is_its_own_and_the_tab_is_only_the_fallback() {
         symbols_harness,
         (300., 300.).into(),
         |runner: &mut _| {
-            let states = symbol_states!(runner);
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (states, alt)
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.alt)
         },
         1.,
     );
@@ -27163,9 +27130,8 @@ fn the_list_with_the_keyboard_draws_its_pick_live_and_the_other_grey() {
         two_lists_harness,
         (600., 300.).into(),
         |runner: &mut _| {
-            let states = symbol_states!(runner);
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (states, alt)
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.alt)
         },
         1.,
     );
@@ -27239,8 +27205,12 @@ fn marked_runs(test: &TestingRunner) -> Vec<(String, Vec<(usize, usize)>)> {
 fn a_filtered_row_marks_what_the_filter_matched() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
-    let (mut test, states) =
-        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let mut objects = states.objects;
     objects.set(vec![object]);
     settle(&mut test);
@@ -27363,12 +27333,8 @@ fn a_pane_handed_the_keyboard_gets_a_caret_in_it() {
         two_panes_harness,
         (300., 400.).into(),
         |runner: &mut _| {
-            let states = symbol_states!(runner);
-            // After the macro, which provides a `Marked` of its own that this replaces.
-            let marked = runner
-                .provide_root_context(|| Marked(State::create(Marks::default())))
-                .0;
-            (states, marked)
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.doors.marked)
         },
         1.,
     );
@@ -27405,12 +27371,8 @@ fn the_ask_goes_to_the_pane_that_leads_the_tab() {
         two_panes_harness,
         (300., 400.).into(),
         |runner: &mut _| {
-            let states = symbol_states!(runner);
-            // After the macro, which provides a `Keyboard` of its own that this replaces.
-            let keyboard = runner
-                .provide_root_context(|| Keyboard(State::create(Keys::default())))
-                .0;
-            (states, keyboard)
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.keyboard)
         },
         1.,
     );
@@ -27505,7 +27467,7 @@ fn the_keyboard_is_asked_for_until_there_is_a_pane_to_put_it_in() {
         late_pane_harness,
         (300., 400.).into(),
         |runner: &mut _| {
-            let states = symbol_states!(runner);
+            let states = runner.provide_root_context(test_roots).states;
             let mounted = runner
                 .provide_root_context(|| PaneMounted(State::create(false)))
                 .0;
@@ -27553,10 +27515,8 @@ fn opening_a_tab_hands_it_the_keyboard() {
         list_and_pane_harness,
         (300., 400.).into(),
         |runner: &mut _| {
-            let states = symbol_states!(runner);
-            // After the macro, which provides an `Alt` of its own that this replaces.
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (states, alt)
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.alt)
         },
         1.,
     );
@@ -27607,9 +27567,8 @@ fn the_arrows_move_the_pick_and_enter_opens_the_row() {
         symbols_harness,
         (300., 300.).into(),
         |runner: &mut _| {
-            let states = symbol_states!(runner);
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (states, alt)
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.alt)
         },
         1.,
     );
@@ -27707,14 +27666,11 @@ fn a_long_list(
         symbols_harness,
         (300., 300.).into(),
         |runner: &mut _| {
-            let states = symbol_states!(runner);
-            // After the macro, which provides one of each that these replace.
-            let picks = runner
-                .provide_root_context(|| Picks(State::create(HashMap::new())))
-                .0;
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            let ctrl = runner.provide_root_context(|| Ctrl(State::create(false))).0;
-            (states, picks, alt, ctrl)
+            let roots = runner.provide_root_context(test_roots);
+            // The one context a test wants back that no field of `Roots` carries: taken
+            // out of the root the way freya's own states are taken (`agents/Headless.md`).
+            let picks = runner.provide_root_context(consume_context::<Picks>).0;
+            (roots.states, picks, roots.alt, roots.ctrl)
         },
         1.,
     );
@@ -28063,10 +28019,10 @@ fn the_toggle_chords_flip_the_filter_boxs_own_toggles() {
 #[test]
 fn the_toggle_chords_flip_the_find_bars_toggles_too() {
     let shown = shown_sum_to();
-    let (mut test, (_states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, _roots) = TestingRunner::new(
         find_harness,
         (600., 400.).into(),
-        |runner| listing_states!(runner, shown),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     settle(&mut test);
@@ -28128,38 +28084,26 @@ fn finder_over(
         finder_harness,
         (800., 600.).into(),
         move |runner: &mut _| {
-            runner.provide_root_context({
-                let work = work.clone();
-                move || Walking(work.clone())
-            });
-            let finder = runner
-                .provide_root_context(|| Finding(State::create(Finder::default())))
-                .0;
-            // The root's one key handler tracks the modifiers beside answering the
-            // chord, so the chord is pressed through the real thing.
-            let held = runner.provide_root_context(|| {
-                Modifiers5(
+            runner.provide_root_context(move || {
+                provide(Walking(work.clone()));
+                let roots = test_roots();
+                // The root's one key handler tracks the modifiers beside answering the
+                // chord, so the chord is pressed through the real thing -- and out of
+                // the same three contexts the rows read, as `app()` builds it. A test
+                // holds a key down through `keys` and the rows see it.
+                let held = provide(Modifiers5(
+                    roots.shift,
+                    roots.ctrl,
+                    roots.alt,
                     State::create(false),
                     State::create(false),
-                    State::create(false),
-                    State::create(false),
-                    State::create(false),
-                )
-            });
-            let states = project_states!(runner);
-            // The Alt a row reads is the one `ModifierKeys` writes, as it is in the real
-            // window: a test holds the key down through `keys` and the rows see it.
-            // After the macro, which provides an `Alt` of its own that this replaces.
-            runner.provide_root_context(move || Alt(held.2));
-            // The same context again, so the chord is pressed with the handle the
-            // sidebar reads: the root answers Ctrl+P and Ctrl+Shift+F in the one
-            // handler, and the second of them reaches for the dock.
-            let dock = runner
-                .provide_root_context(|| {
-                    SidebarDock(State::create(DockArea::column(vec![vec![Panel::Search]])))
-                })
-                .0;
-            (states, finder, held, dock)
+                ));
+                // The group the chord for the Search panel reaches into: Ctrl+P and
+                // Ctrl+Shift+F are answered in the one handler.
+                let mut dock = roots.states.arranged.dock;
+                dock.set(DockArea::column(vec![vec![Panel::Search]]));
+                (roots.states, roots.finder, held, dock)
+            })
         },
         1.,
     );
@@ -28274,6 +28218,11 @@ fn press_finder_chord(
         &key,
         modifiers,
     );
+    // And let go of, as the reader does before reaching for a row. The three the root
+    // keeps are the three every row reads, so a chord left held would make the next
+    // press a Ctrl-press.
+    keys.up(&key, modifiers);
+    keys.up(&Key::Named(NamedKey::Control), Modifiers::empty());
 }
 
 /// The overlay is drawn as nothing at all until the chord, and the walk's files are what
@@ -28809,8 +28758,12 @@ fn the_second_open_shows_the_files_the_first_walk_found() {
 #[test]
 fn the_finder_chord_is_declined_by_a_filter_box() {
     let symbols = fixture_symbols();
-    let (mut test, states) =
-        TestingRunner::new(symbols_harness, (300., 300.).into(), symbol_states!(), 1.);
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
     let mut objects = states.objects;
     objects.set(vec![symbols[0].object.clone()]);
     settle(&mut test);
@@ -28834,8 +28787,8 @@ fn the_finder_chord_is_declined_by_a_filter_box() {
 /// event standing, the editor's tail cancelling the one it keeps.
 #[test]
 fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
-    let (mut test, _states, pad, text, _asking, _marked, _asks) =
-        mount_scratchpad!(scratchpad_view_harness, move |job: PadJob| match job {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
             PadJob::Delete(_) => unreachable!("this test deletes nothing"),
@@ -28850,6 +28803,8 @@ fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
+    let pad = roots.pad;
+    let text = roots.pad_text;
 
     pump(&mut test, || pad.peek().state().opened());
 
@@ -29215,17 +29170,11 @@ fn fitting_harness() -> impl IntoElement {
 }
 
 /// The two states [`fitting_harness`] is wired to.
-macro_rules! fitting_states {
-    ($runner:ident) => {
-        (
-            $runner
-                .provide_root_context(|| FittedText(State::create(LONG_NAME.to_owned())))
-                .0,
-            $runner
-                .provide_root_context(|| WasCut(State::create(false)))
-                .0,
-        )
-    };
+fn fitting_states() -> (State<String>, State<bool>) {
+    (
+        provide(FittedText(State::create(LONG_NAME.to_owned()))).0,
+        provide(WasCut(State::create(false))).0,
+    )
 }
 
 /// A name no box a hundred pixels wide can hold, in any font.
@@ -29245,7 +29194,7 @@ fn a_line_of_text_says_whether_it_was_cut() {
     let (mut test, (text, cut)) = TestingRunner::new(
         fitting_harness,
         (400., 200.).into(),
-        |runner| fitting_states!(runner),
+        |runner: &mut _| runner.provide_root_context(fitting_states),
         1.,
     );
     settle(&mut test);
@@ -29266,7 +29215,7 @@ fn a_row_whose_text_fits_has_no_tooltip() {
     let (mut test, (text, _cut)) = TestingRunner::new(
         fitting_harness,
         (400., 200.).into(),
-        |runner| fitting_states!(runner),
+        |runner: &mut _| runner.provide_root_context(fitting_states),
         1.,
     );
     settle(&mut test);
@@ -29329,11 +29278,11 @@ fn use_root_key_states() {
     let keyboard = use_consume::<Keyboard>().0;
     let rescued = use_consume::<Rescued>().0;
     let unopened = use_consume::<Unopened>().0;
-    let language = use_provide_root_context(|| Talking(State::create(Language::default()))).0;
-    let follow = use_provide_root_context(|| Following(State::create(Follow::default()))).0;
-    let located = use_provide_root_context(|| Locations(State::create(Located::default()))).0;
-    let linked = use_provide_root_context(|| Linking(State::create(Linked::default()))).0;
-    let hover = use_provide_root_context(|| Hovering(State::create(Hover::default()))).0;
+    let language = use_consume::<Talking>().0;
+    let follow = use_consume::<Following>().0;
+    let located = use_consume::<Locations>().0;
+    let linked = use_consume::<Linking>().0;
+    let hover = use_consume::<Hovering>().0;
     let jobs = use_language_with(language, follow, located, linked, hover, proj, |_| None);
     let follows = use_consume::<Follows>().0;
     let pad_follows = use_consume::<PadFollows>().0;
@@ -29448,24 +29397,6 @@ fn chord_harness() -> impl IntoElement {
         .child(TrustPrompt)
 }
 
-/// What the root's key handler wants beside the project's own bundle: the finder's
-/// overlay and the five modifier flags. A macro for `project_states!`'s reason -- the
-/// runner's type cannot be named here.
-macro_rules! chord_wiring {
-    ($runner:expr) => {{
-        $runner.provide_root_context(|| Finding(State::create(Finder::default())));
-        $runner.provide_root_context(|| {
-            Modifiers5(
-                State::create(false),
-                State::create(false),
-                State::create(false),
-                State::create(false),
-                State::create(false),
-            )
-        });
-    }};
-}
-
 /// The harness over the app's own states, with the finder and the modifiers the root's
 /// handler wants.
 fn mount_chords() -> (TestingRunner, ProjectStates) {
@@ -29473,8 +29404,14 @@ fn mount_chords() -> (TestingRunner, ProjectStates) {
         chord_harness,
         (700., 200.).into(),
         |runner: &mut _| {
-            chord_wiring!(runner);
-            project_states!(runner)
+            runner.provide_root_context(|| {
+                // The five modifier flags the root's handler is made of, which nothing
+                // else provides: `ModifierKeys` is built in `app()` out of three
+                // contexts and two plain states.
+                let roots = test_roots();
+                provide(held_by(&roots));
+                roots.states
+            })
         },
         1.,
     );
@@ -29751,8 +29688,19 @@ fn mount_bookmark_chords() -> (TestingRunner, ProjectStates) {
         bookmark_chord_harness,
         (300., 300.).into(),
         |runner: &mut _| {
-            chord_wiring!(runner);
-            project_states!(runner)
+            runner.provide_root_context(|| {
+                // The five modifier flags the root's handler is made of, which nothing
+                // else provides: `ModifierKeys` is built in `app()` out of three
+                // contexts and two plain states.
+                provide(Modifiers5(
+                    State::create(false),
+                    State::create(false),
+                    State::create(false),
+                    State::create(false),
+                    State::create(false),
+                ));
+                test_roots().states
+            })
         },
         1.,
     );
@@ -29819,23 +29767,19 @@ fn pane_chord_harness() -> impl IntoElement {
 }
 
 fn mount_pane_chords(shown: Shown) -> (TestingRunner, ProjectStates) {
-    let (mut test, (states, _marked, _landing, _doors)) = TestingRunner::new(
+    let (mut test, roots) = TestingRunner::new(
         pane_chord_harness,
         (600., 300.).into(),
-        |runner| {
-            let states = listing_states!(runner, shown);
-            chord_wiring!(runner);
-            // What `DocumentBody` registers its two panels into.
-            runner.provide_root_context(|| {
-                Splits(State::create(ResizableContext {
-                    direction: Direction::Horizontal,
-                    ..Default::default()
-                }))
-            });
-            states
+        move |runner: &mut _| {
+            runner.provide_root_context(move || {
+                let roots = listing_states(shown);
+                provide(held_by(&roots));
+                roots
+            })
         },
         1.,
     );
+    let states = roots.states;
     settle(&mut test);
     (test, states)
 }
@@ -30047,19 +29991,18 @@ fn mount_reaching() -> (TestingRunner, State<DockArea>, Vec<Symbol>) {
         reaching_harness,
         (500., 500.).into(),
         |runner: &mut _| {
-            chord_wiring!(runner);
-            let states = symbol_states!(runner);
-            // After the macro, whose own dock this replaces: the sidebar these tests
-            // reach into, and the handle they read the raise back out of.
-            let dock = runner
-                .provide_root_context(|| {
-                    SidebarDock(State::create(DockArea::column(vec![
-                        vec![Panel::Files, Panel::Objects],
-                        vec![Panel::Symbols],
-                    ])))
-                })
-                .0;
-            (states, dock)
+            runner.provide_root_context(|| {
+                let roots = test_roots();
+                provide(held_by(&roots));
+                // The sidebar these tests reach into, written into the dock the root
+                // made: the handle they read the raise back out of is that same state.
+                let mut dock = roots.states.arranged.dock;
+                dock.set(DockArea::column(vec![
+                    vec![Panel::Files, Panel::Objects],
+                    vec![Panel::Symbols],
+                ]));
+                (roots.states, dock)
+            })
         },
         1.,
     );

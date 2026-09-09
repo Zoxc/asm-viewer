@@ -396,13 +396,22 @@ The shape every test in `ui.rs` follows:
    under test is the states; `scratchpad_view_harness` mounts the real pane, because what is under
    test is whether its rows survive the list being shortened. Mount the pane only when the pane is
    the question.
-2. **Contexts through the setup closure**, returned as a tuple the body keeps. When the set is the
-   app's own, use the `project_states!` macro: it provides everything `ProjectStates` holds in
-   `app()`'s order, including the `Active` memo derived from the strip and the docs, so a test
-   drives what the app drives. Its sibling `project_wiring!` hands back the `Doors` beside them,
-   for a test that writes or reads the runs or either half of a landing. They are macros and not
-   functions because the runner's type is `freya_core::integration::Runner`, which freya's prelude
-   does not re-export and this crate does not depend on by name.
+2. **Contexts through the setup closure**, returned as a tuple the body keeps. When the set is
+   the app's own, that is `runner.provide_root_context(test_roots)`: `test_roots` is `roots`
+   (`src/ui.rs`) over a store of this process's own, so a harness is given **the list `app()` is
+   given** and not a second one written beside it. It hands back a flat `Roots`, so a test takes
+   the state it wants by name -- `roots.states`, `roots.doors`, `roots.analysis`, `roots.alt`.
+   Anything the test substitutes goes beside it in the same closure, and a state whose *value*
+   differs is **written** rather than provided a second time: a second provide of a type replaces
+   the first, which leaves the harness reading one state and the test another. That is what
+   `listing_states` and `code_states` do -- the root's list with one answer already in it.
+
+   None of this needs a macro. The two freya types a signature would have to name are
+   `freya_core::integration::Runner` and `freya_core::element::AppComponent`, neither in freya's
+   prelude and this crate does not depend on `freya-core` by name -- so a helper that provides
+   contexts is called *inside* `runner.provide_root_context(..)` and names no runner, and one
+   that takes a harness takes `fn() -> E` where `E: IntoElement`, which is what `Into<AppComponent>`
+   is satisfied by.
 3. **Substitute the worker, not the work.** `Study`, `Working` and `Feed` are `Arc<dyn Fn>` or a
    channel handed in through a context, so the real `use_analysis_with` / `use_scratchpad_with` /
    `take_load` machinery runs against an answer the test controls. That is what turns "the stale

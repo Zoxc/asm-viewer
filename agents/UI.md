@@ -77,8 +77,16 @@ a global, a capture; `name.rs:248-254`) is nothing at all. And the walk starts a
 node for a key: a node that does not listen itself emits nothing, so an ancestor's `on_key_down`
 never runs (`notes/upstream/freya.md`, and the filter panes' Ctrl+F in `agents/Sidebar.md`).
 
-**State** is a handful of `State`s provided at the root with `use_provide_context` and read with
-`use_consume`: `Objects`; `Active` (the active tab and the `Document` it shows); `Open` (the open
+**State** is a handful of `State`s provided at the root and read with `use_consume`. **One
+function makes and provides every one of them** (`roots`, `src/ui.rs`), and hands back a flat
+`Roots` of the handles: `app()` calls it in a `use_hook`, and a headless test's setup closure
+calls that same function through the runner (`test_roots`, `src/ui/tests.rs`), so a context
+added reaches the tests without a second list being kept in step by hand. It can serve both
+because `provide_root_context` is a free function -- a write into the root scope's storage
+that takes no hook slot -- so all it wants of a caller is a current scope, which a render has
+and so does the runner's own `provide_root_context`. The list:
+
+`Objects`; `Active` (the active tab and the `Document` it shows); `Open` (the open
 tabs and the trail behind each); `Bookmarked` (the project's bookmarks, in their saved shape);
 `Proj` (which project all of that belongs to); `Loading` (the files on their way into `Objects`);
 `Marked` (each pane's selected run, and what it owes the other) with `Shift` and `Ctrl`;
@@ -89,6 +97,11 @@ decoded of the object whose code is on screen, and the stretches the view wants 
 `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad); `Talking` (whether a
 language server is running, and what would stop it -- `agents/Lsp.md`); `SplitRatio`/`Splits`
 (how wide a document's leading side is); plus the memos `Symbols` and `Active`.
+
+**Three of them a run has to decide for itself**, and they are what `roots` takes or leaves.
+Where the files go and what the settings file said are handed in, so a test can name a store of
+its own; and `Rescued` starts empty and is *written* after the restore rather than provided
+with a value, because what a load moved aside is only known once the load has run.
 
 **A context lives with the mechanism that owns it, and so does the bundle that groups it.**
 `src/ui/state.rs` holds only what belongs to no one mechanism -- the objects, the store, the
