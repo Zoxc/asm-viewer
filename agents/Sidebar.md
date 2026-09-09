@@ -275,20 +275,21 @@ number they already have. The panels draw one row too (`ui::place_row`), down to
 text with the name marked in it (`search::drawn` cuts a long line for both, `found_line`
 washes what matched in both): a list of line numbers says where a name is used and not how.
 `Folding` is what is left of the difference -- which state a press on a file row writes its
-fold to, whether a press on a place may refuse the path, and which panel's pick the row is
-drawn against. The filter matches the file's path, applied where the rows are built rather than
-through `Filtered`'s memo -- that is for the thousands a line's symbols can be, and a name's
-references are tens.
+fold to, and which panel's pick the row is drawn against. The filter matches the file's path,
+applied where the rows are built rather than through `Filtered`'s memo -- that is for the
+thousands a line's symbols can be, and a name's references are tens.
 
 **A place row opens through `open_source_place`** (`agents/Panes.md`), the arrival every door
 into a place in a source file makes, so a hit opens exactly as a reference does, down to the tab's
-assembly side being driven from the line it landed on. A hit's press is guarded by
-`source::showable` in front of that call, so a row cannot open a tab the pane would refuse: that
-path came off a walk of the directory, where the guard is the Files row's own. A reference's is
-not, the other doors into that arrival taking a path a server or the debug info named, for which
-opening the file and letting the pane say what is wrong with it is the honest answer. It lands
-on the **match** and not just its line: a `Landing` carries the columns to select, and `line_pick`
-makes them the row's `CharSelection` where a door naming no columns leaves a caret at column 0. So
+assembly side being driven from the line it landed on. **Neither press asks the filesystem
+first.** A hit came off the walk of the project's directory (`src/walk.rs`), which already refuses
+a symlink and anything past the source pane's bound, so it is a file the pane will take; the
+`source::showable` that used to stand in front of the call put that walk's own question again, on
+the thread that draws. A reference was named by a server or by the debug info, for which opening
+the file and letting the pane say what is wrong with it is the honest answer -- a check in the way
+would silently swallow a move inside a tab already open. It lands on the **match** and not just
+its line: a `Landing` carries the columns to select, and `line_pick` makes them the row's
+`CharSelection` where a door naming no columns leaves a caret at column 0. So
 Ctrl+C there copies the match, `copy_text` preferring characters to rows. The columns are the
 *file's* line in UTF-16 units, counted before the line is trimmed for drawing and counted in units
 rather than bytes, or a multi-byte character ahead of the match would move it. What matched is drawn

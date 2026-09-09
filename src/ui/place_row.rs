@@ -2,9 +2,9 @@
 //!
 //! The two ask different questions and hold their answers in different states, but what
 //! comes back is the same shape -- places under the file each is in (`src/grouped.rs`) --
-//! and so is the drawing of it. One component for both, with [`Folding`] naming the three
-//! things they differ in: which state a fold is written to, whether a press may refuse the
-//! path it would open, and which panel's pick the row is drawn against (`ui/picks.rs`).
+//! and so is the drawing of it. One component for both, with [`Folding`] naming the two
+//! things they differ in: which state a fold is written to, and which panel's pick the row
+//! is drawn against (`ui/picks.rs`).
 
 use super::*;
 use crate::grouped::Row;
@@ -60,8 +60,8 @@ impl Place for references::Reference {
     }
 }
 
-/// Which panel's answer a row belongs to: the state its fold is written to, whether a
-/// press may refuse the path it would open, and which panel's pick it is drawn against.
+/// Which panel's answer a row belongs to: the state its fold is written to, and which
+/// panel's pick it is drawn against.
 #[derive(Clone, Copy)]
 pub(crate) enum Folding {
     /// The Search panel's hits.
@@ -95,20 +95,6 @@ impl Folding {
             Folding::Places(_) => Panel::Locations,
         }
     }
-
-    /// Whether a press may open `path` at all.
-    ///
-    /// A hit came off a walk of the project's directory, where a file the source pane
-    /// would refuse is a row a press should do nothing with. The Locations panel's places
-    /// were named by a language server or the debug info, and for those, opening the file
-    /// and letting the pane say what is wrong with it is the honest answer -- a `stat` in
-    /// the way would silently swallow a move inside a tab already open.
-    fn opens(self, path: &Path) -> bool {
-        match self {
-            Folding::Hits(_) => showable(path),
-            Folding::Places(_) => true,
-        }
-    }
 }
 
 /// One row of a grouped answer: a file, or one of the places under it.
@@ -137,6 +123,14 @@ pub(crate) fn place_pick<T: Place>(row: &Row<T>) -> Pick {
 /// source file makes, so both panels' rows open one the same way, down to the tab's
 /// assembly side being driven from that line.
 ///
+/// **Neither panel asks the filesystem first.** A hit came off the walk of the project's
+/// directory, which already refuses a symlink and anything past the source pane's bound
+/// (`src/walk.rs`), so a hit is a file the pane will take and a `stat` here would only put
+/// that walk's question again. A place the Locations panel lists was named by a language
+/// server or by the debug info, and for those opening the file and letting the pane say
+/// what is wrong with it is the honest answer -- a check in the way would silently swallow
+/// a move inside a tab already open.
+///
 /// Shared by the press and by Enter on the row the arrows left the pick on.
 pub(crate) fn press_place<T: Place>(
     doors: Doors,
@@ -151,9 +145,6 @@ pub(crate) fn press_place<T: Place>(
             Pressed::Folded
         }
         Row::Item { path, item } => {
-            if !folding.opens(path) {
-                return Pressed::Folded;
-            }
             open_source_place(
                 doors,
                 places,

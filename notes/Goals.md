@@ -308,16 +308,19 @@ leaves this list when it is. That is a move made on request, like everything els
   a build says two hundred things as readily as two. And the caret a followed definition lands
   on is counted on the language worker (`follow::Arrival`); the effect that opens the answer
   read the file to count it, up to 4 ms cold for a megabyte, and for nobody — the pane's own
-  read of that file is the highlighter's worker. A headless test holds both to it, counting
+  read of that file is the highlighter's worker. And a press on a Search hit asks nothing at
+  all now: the walk that found it already refuses a symlink and anything past the source
+  pane's bound, so the `source::showable` in front of the press was that walk's own question
+  put again (`ui::place_row`). A headless test holds each of the three to it, counting
   through `source::touches` what the thread that draws asked the filesystem. What is known not
   to be across — `project::flush` writes both TOML files from a timer task on the executor
   every thirty seconds, and again from the window's close hook; `fonts::resolve` spawns
   `kreadconfig`/`gsettings` subprocesses, on the first frame and again on a settings change
   (the answer is cached per process, so it is the first call that costs); startup reads
   `settings.toml`, `recents.toml` and the open project's two files synchronously inside
-  `app()`; and two presses ask the filesystem once each, a Search hit's checking
-  `source::showable` before it opens (`ui::place_row`) and a followed name canonicalising the
-  path once per open source tab to find the tab it belongs to (`follow::spelling`). None of
+  `app()`; and a followed name canonicalises the path once per open source tab to find the
+  tab it belongs to (`follow::spelling`), which is a press's own call on the thread that
+  draws — on Unix only, the reduction being `path::absolute` on Windows. None of
   those is measured, which is where this starts: the rule is worth keeping, and an atomic write
   of a few hundred bytes may still be cheaper than the channel it would take to move it.
 - [x] Rank the finder's list on the worker beside the walk, not on the UI thread. The walked

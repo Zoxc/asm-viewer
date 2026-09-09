@@ -359,10 +359,11 @@ pub(crate) fn open_source_place(
 /// already reading, splitting its trail, its positions and its driven line across the two.
 fn spelling(open: Open, path: &Path) -> Arc<str> {
     // `path` is the same path every time round, so it is reduced once for the whole walk
-    // and not once per tab. What is left is one filesystem call per open source tab, on
-    // the UI thread. There are a handful of them and this is a press behind a round trip
-    // to the server, so it costs what following a link already costs.
-    let real = path.canonicalize().ok();
+    // and not once per tab. What is left is one reduction per open source tab, on the UI
+    // thread and a filesystem call on Unix. There are a handful of them and this is a
+    // press behind a round trip to the server, so it costs what following a link already
+    // costs.
+    let real = reduced(path);
     let held = {
         let docs = open.docs.peek();
         open.ids()
@@ -377,7 +378,7 @@ fn spelling(open: Open, path: &Path) -> Arc<str> {
 }
 
 /// Whether `one` names the file `path` does, `real` being `path` reduced or [`None`] where
-/// it will not reduce -- a file that is not there to be looked up.
+/// it will not reduce.
 ///
 /// Spelled alike is the answer without asking. Otherwise both have to reduce to one path,
 /// so two that will not reduce are the same only when they are spelled alike.
@@ -385,5 +386,28 @@ fn spelling(open: Open, path: &Path) -> Arc<str> {
 /// The reduction of `path` is the caller's and not taken here: it is one path against
 /// every open tab, and taking it per tab is the same call over again.
 fn same_file(one: &Path, real: Option<&Path>, path: &Path) -> bool {
-    one == path || matches!((one.canonicalize(), real), (Ok(one), Some(real)) if one == real)
+    one == path || matches!((reduced(one), real), (Some(one), Some(real)) if one == real)
+}
+
+/// `path` reduced, so that two spellings of one file come out alike; [`None`] where it will
+/// not reduce. Not the same call on both platforms.
+///
+/// On Unix it is `fs::canonicalize`: a project directory reached through a symlink is the
+/// case this walk is for, and only the filesystem resolves one. That is the call the walk
+/// costs, one per open source tab.
+///
+/// On Windows it is `path::absolute`, which is `GetFullPathNameW`: `.` and `..` collapsed
+/// by spelling, the prefix left plain, and nothing asked of the filesystem at all.
+/// `fs::canonicalize` there answers verbatim (`\\?\C:\work\app`), a spelling nothing else
+/// in the app uses -- not the debug info's, not a project directory joined with a Files
+/// row, and not what a `file:` URI comes back as. `Path` reads that prefix as a different
+/// component, so reducing to it would spell one file two ways, which is the one thing this
+/// walk exists to prevent.
+fn reduced(path: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let full = std::path::absolute(path);
+    #[cfg(not(windows))]
+    let full = path.canonicalize();
+
+    full.ok()
 }

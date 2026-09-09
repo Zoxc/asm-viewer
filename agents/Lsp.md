@@ -287,8 +287,17 @@ directory typed with a `..`, a `./` or through a symlink spells one file two way
 platform. `open_source_place` names the document by the spelling an **open source tab**
 already has for that file, and by the answer's only where no tab has one.
 
-That walk asks the filesystem, on the UI thread. The answer's path is reduced once for the
-whole walk, so the cost is one `canonicalize` per open source tab: measured at 11 µs a call
+**Reducing a path is not the same call on both platforms.** On Unix it is
+`fs::canonicalize`: a project directory reached through a symlink is the case the walk is
+for, and only the filesystem resolves one. On Windows it is `path::absolute`, which collapses
+`.` and `..` by spelling, leaves the prefix plain and asks the filesystem nothing.
+`fs::canonicalize` there answers verbatim (`\\?\C:\work\app`), a spelling nothing else in the
+app uses -- not the debug info's, not a project directory joined with a Files row, and not
+what a `file:` URI comes back as -- and `Path` reads that prefix as a different component, so
+reducing to it would spell one file two ways, which is what the walk exists to prevent.
+
+So on Unix the walk asks the filesystem, on the UI thread. The answer's path is reduced once for
+the whole walk, so the cost is one `canonicalize` per open source tab: measured at 11 µs a call
 on a warm local directory, ten source tabs come to 0.1 ms, behind a round trip to a server
 that answers in hundreds of milliseconds. **Nothing is remembered between walks.** A
 canonical path goes stale the way a read file does -- a symlink repointed, a file created

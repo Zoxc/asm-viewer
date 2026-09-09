@@ -22823,7 +22823,9 @@ fn a_walk_of_the_project_left_cannot_answer_into_the_next() {
 }
 
 /// Pressing a match opens its file as a source-driven tab landed on the line it was found
-/// at, and a file the source pane would refuse opens nothing.
+/// at. A file that has gone since the walk found it opens too, and the pane says what is
+/// wrong with it: the press asks the filesystem nothing, the walk having already refused
+/// what the pane would.
 #[test]
 fn pressing_a_hit_opens_its_file_on_the_line() {
     let (mut test, states, directory, _, marked, _, _) =
@@ -22854,8 +22856,8 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
     press_at(&mut test, at);
     settle(&mut test);
     assert!(
-        states.open.active().is_none(),
-        "a file that is not there opens nothing"
+        states.open.active() == Some(Document::Source(Arc::from(&*missing.to_string_lossy()))),
+        "a hit whose file has gone since the walk opened nothing"
     );
 
     let at = centre_of(&test, "int y;");
@@ -22917,6 +22919,49 @@ fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
             .line(&(id, Stop::on(file_of(&document), 2))),
         Some(2),
         "the assembly side follows no line"
+    );
+}
+
+/// **A press on a hit asks the filesystem nothing.** The walk that found it already
+/// refused what the source pane would -- no symlink, and nothing past the pane's bound
+/// (`src/walk.rs`) -- so a hit is a file the pane will take, and a `stat` at the press only
+/// puts that walk's question again.
+///
+/// The count is per thread and `freya-testing` runs the app on this one, so what it counts
+/// is exactly what the UI thread did.
+#[test]
+fn pressing_a_hit_asks_the_filesystem_nothing() {
+    let (mut test, states, directory, _, _, _, _) =
+        search_and_modifiers(line!(), |_query, _emit| {});
+    let path = directory.join("x.c");
+    std::fs::write(&path, "int x;\nint y;\nint z;\n").expect("writing the source");
+
+    let mut searched = states.searched;
+    searched.write().asked = Some(SearchQuery {
+        root: directory.to_path_buf(),
+        filter: Filter {
+            pattern: "y".to_owned(),
+            ..Filter::default()
+        },
+    });
+    searched.write().hits.push(&path, hit_at(2, "int y;"));
+    settle(&mut test);
+
+    let at = centre_of(&test, "int y;");
+    let before = source::touches();
+    press_at(&mut test, at);
+    settle(&mut test);
+    assert_eq!(
+        source::touches(),
+        before,
+        "the press asked the filesystem about the file the hit names"
+    );
+
+    // Not vacuous: the row opened its file, which is the press that did the asking.
+    let document = Document::Source(Arc::from(&*path.to_string_lossy()));
+    assert!(
+        open_documents(states.open) == [document],
+        "the hit did not open the file it names"
     );
 }
 
