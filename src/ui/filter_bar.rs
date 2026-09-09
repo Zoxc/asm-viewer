@@ -55,11 +55,21 @@ impl Toggle {
 
 /// One toggle button. Whether it is on is a prop rather than something read here, so that
 /// typing a character re-renders the bar and none of the toggles.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) struct FilterToggle {
     pub(crate) filter: State<Filter>,
     pub(crate) toggle: Toggle,
     pub(crate) on: bool,
+}
+
+/// Written out because the filter cannot be compared: two `State`s are equal always, so a
+/// derive would put a line there that reads as a comparison and is a no-op. Nothing is
+/// lost by leaving it out -- the toggle only writes the filter, and `on` is what says it
+/// has to be drawn again.
+impl PartialEq for FilterToggle {
+    fn eq(&self, other: &Self) -> bool {
+        self.toggle == other.toggle && self.on == other.on
+    }
 }
 
 impl Component for FilterToggle {
@@ -100,7 +110,7 @@ impl Component for FilterToggle {
 
 /// The filter over one of the sidebar lists: a text box, and the three toggles that say
 /// how to read what is in it. The state it edits arrives as a prop, never as a context.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct FilterBar {
     filter: State<Filter>,
     /// The box's own id, minted by the pane so the rows' handler can ask for it.
@@ -112,6 +122,18 @@ struct FilterBar {
     /// a callback: a `Callback` is never equal to another, so a bar holding one would
     /// re-render on every render of whatever holds it.
     submits: Option<State<u64>>,
+}
+
+/// Written out because neither state can be compared: two `State`s are equal always, so a
+/// derive would put two lines there that read as comparisons and are no-ops. What makes
+/// the bar draw again is reading the filter in `render`, which is what subscribes it.
+/// Whether there is a `submits` at all is a real difference and is still compared.
+impl PartialEq for FilterBar {
+    fn eq(&self, other: &Self) -> bool {
+        self.a11y == other.a11y
+            && self.placeholder == other.placeholder
+            && self.submits.is_some() == other.submits.is_some()
+    }
 }
 
 impl Component for FilterBar {

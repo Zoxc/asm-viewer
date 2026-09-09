@@ -681,10 +681,7 @@ impl Component for FinderOverlay {
                                 // Peeked and not read: a handler subscribes to nothing.
                                 finder_key(finder, states, keyboard, list, &listed.peek(), &e.key);
                             })
-                            .child(FinderBox {
-                                finder,
-                                a11y: box_id,
-                            })
+                            .child(FinderBox { a11y: box_id })
                             .child(body),
                     ),
             )
@@ -797,15 +794,17 @@ fn open_found(states: ProjectStates, keyboard: State<Keys>, path: &Path) {
 }
 
 /// The box at the top of the overlay.
+///
+/// The finder's state is the root's own, so the box reaches for it as the rows do; only
+/// the id is the panel's to hand down.
 #[derive(Clone, PartialEq)]
 struct FinderBox {
-    finder: State<Finder>,
     a11y: AccessibilityId,
 }
 
 impl Component for FinderBox {
     fn render(&self) -> impl IntoElement {
-        let finder = self.finder;
+        let finder = use_consume::<Finding>().0;
         let a11y = self.a11y;
 
         rect()

@@ -40,7 +40,7 @@ impl Component for ShortcutsTab {
             .background(palette().pane_bg)
             .font(&fonts().ui)
             .color(palette().text_fg)
-            .child(FilterBox { filter })
+            .child(FilterBox)
             .child(
                 ScrollView::new().child(
                     rect()
@@ -126,15 +126,14 @@ impl Component for GestureRow {
 /// The box over the list, and the one thing on this page that answers to a key.
 ///
 /// A component of its own so the `Input` is not remounted whenever a row is filtered out
-/// under it, which would take the caret with it.
+/// under it, which would take the caret with it. The filter is the root's own, reached
+/// for here rather than handed down.
 #[derive(PartialEq)]
-struct FilterBox {
-    filter: State<Filter>,
-}
+struct FilterBox;
 
 impl Component for FilterBox {
     fn render(&self) -> impl IntoElement {
-        let filter = self.filter;
+        let filter = use_consume::<Shortcuts>().0;
 
         rect()
             .width(Size::fill())
