@@ -917,7 +917,7 @@ fn bring_caret_into_view(listing: &Listing, row_left: f32, at: f32) {
 
 /// The box a lit run of the row's own text wears: [`link_chrome`], the one answer to what
 /// a lit link looks like, placed by the run's columns and inside the row's height
-/// (`LINK_BOX_INSET`). So a name in the source and a label in the object's listing are lit
+/// ([`link_box_height`]). So a name in the source and a label in the object's listing are lit
 /// exactly as an operand of an instruction is, which wears the same chrome as an element.
 ///
 /// A rect of the row's own, as the selection's is, because a span carries no box: freya's
@@ -941,7 +941,7 @@ fn lit_box(cells: &RowCells, grid: Grid, columns: Option<&Range<usize>>, units: 
             .interactive(false)
             .position(Position::new_absolute().left(span.near).top(LINK_BOX_INSET))
             .width(Size::px(span.thick))
-            .height(Size::px(code_row_height() - 2.0 * LINK_BOX_INSET)),
+            .height(Size::px(link_box_height())),
         Some(palette().name_hover_fg),
     )
 }

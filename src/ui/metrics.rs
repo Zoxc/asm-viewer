@@ -38,6 +38,22 @@ pub(crate) fn code_row_height() -> f32 {
     row_height_for(fonts().mono.size())
 }
 
+/// How far inside a code row's top and bottom edge the box round a lit link is drawn,
+/// where the link is a run of the row's own text and the row draws the box for it
+/// (`lit_box`, `src/ui/code_row.rs`). A row is its font plus twelve of leading
+/// ([`code_row_height`]), so the inset keeps the wash around the text rather than around
+/// the row, and the rule under it about where an underline would be.
+pub(crate) const LINK_BOX_INSET: f32 = 4.0;
+
+/// How tall that box is: the row, less [`LINK_BOX_INSET`] at each edge.
+///
+/// A function and not a `const`, [`code_row_height`]'s reasoning: it is a row height in
+/// all but name, so it has to be read in the same render pass as the row it is drawn in.
+/// A number kept anywhere else would be the height of some earlier font.
+pub(crate) fn link_box_height() -> f32 {
+    code_row_height() - 2.0 * LINK_BOX_INSET
+}
+
 /// How tall anything holding a box to type in is: a **list** row and the air around it.
 /// The two filter bars, the find bar, the settings page's rows and the scratchpad's
 /// dependency rows, every one of them drawn in the interface font.
@@ -163,6 +179,21 @@ pub(crate) const MENU_MARK_GAP: f32 = 10.0;
 pub(crate) fn field_label_width() -> f32 {
     fonts().ui.size() * 6.0
 }
+
+/// The cell at the right of a row on the Settings page, holding either the **Clear**
+/// button or the word "inherited". Wide enough for the button, so the value boxes above
+/// and below one another end at the same x whichever state each is in.
+///
+/// A `const` and not a function of the font, unlike [`field_label_width`] above it:
+/// six times the size *is* that column's 72, where this is 76 and the one under it 52,
+/// neither of which is a whole share of the 12 px the interface font starts at. They are
+/// fitted to what is drawn in them, the way [`LINE_NUMBER_WIDTH`] and [`TAG_WIDTH`] are,
+/// so a multiplier here would be invented rather than read off.
+pub(crate) const CLEAR_CELL_WIDTH: f32 = 76.0;
+
+/// The column the font size is written in, between the stepper's two buttons. Fixed, so
+/// `+` does not move under the finger as the number beside it grows a digit.
+pub(crate) const SIZE_READOUT_WIDTH: f32 = 52.0;
 
 /// How wide the column of gestures on the Shortcuts page is.
 ///

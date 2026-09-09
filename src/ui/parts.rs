@@ -69,12 +69,6 @@ pub(crate) fn link_chrome(rect: Rect, underline: Option<Color>) -> Rect {
     }
 }
 
-/// How far inside a code row's top and bottom edge that box is drawn, where the link is a
-/// run of the row's own text and the row draws the box for it: a row is its font plus
-/// twelve of leading (`code_row_height`), so this keeps the wash around the text instead
-/// of around the row, and the rule under it about where an underline would be.
-pub(crate) const LINK_BOX_INSET: f32 = 4.0;
-
 /// The rule over a bar drawn under what it belongs to, as [`bottom_hairline`] is the rule
 /// under one drawn over it.
 pub(crate) fn top_hairline() -> Border {

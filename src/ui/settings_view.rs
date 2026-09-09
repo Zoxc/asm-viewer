@@ -106,9 +106,7 @@ fn setting_row(
             .child(value)
             .child(
                 rect()
-                    // Wide enough for the **Clear** button, so the value boxes above and
-                    // below one another end at the same x whichever state each is in.
-                    .width(Size::px(76.0))
+                    .width(Size::px(CLEAR_CELL_WIDTH))
                     .horizontal()
                     .main_align(Alignment::End)
                     .cross_align(Alignment::Center)
@@ -184,9 +182,7 @@ fn font_section(
                 .child(
                     label()
                         .text(format!("{} pt", points_text(points)))
-                        // A fixed column, so `+` does not move under the finger as the
-                        // number beside it grows a digit.
-                        .width(Size::px(52.0))
+                        .width(Size::px(SIZE_READOUT_WIDTH))
                         .text_align(TextAlign::Center)
                         .color(match edited.size {
                             Some(_) => palette().text_fg,

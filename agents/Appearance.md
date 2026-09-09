@@ -180,7 +180,10 @@ row, was worse than the work. It is safe because the scroll view's `item_size` a
 height are read in the **same render pass**, so they cannot see different numbers, and because the
 per-tab positions saved are *rows* rather than pixel offsets. The floor (`MIN_ROW_HEIGHT`) is
 against a hand-edited `settings.toml`, where a size of 0.1 is positive enough to pass
-`FontSetting::size` and would make `item_size` a fraction of a pixel.
+`FontSetting::size` and would make `item_size` a fraction of a pixel. `link_box_height` is that
+rule once more: the box a code row draws round a lit run of its own text is the row less
+`LINK_BOX_INSET` at each edge, so it is a function beside the height it comes from and never a
+number kept anywhere.
 
 **`FONTS` starts at the app's own fonts, and `app` writes the real pair before anything draws.**
 The thread-local initialises from `fonts::defaults()` -- the platform families at 9pt and 10.5pt,
@@ -257,5 +260,9 @@ emptied, a stepper cannot.
 
 The row itself is `parts::field_row_in` -- `field_row` with the name's colour handed in -- so the
 theme row above and the font rows below line up in one column and move together when it changes.
-All `setting_row` draws of its own is the cell on the right, 76px wide so the value boxes end at
-the same x whether the cell holds the button or the word "inherited".
+All `setting_row` draws of its own is the cell on the right, `CLEAR_CELL_WIDTH` so the value boxes
+end at the same x whether the cell holds the button or the word "inherited". That number and the
+column the size is written in between the stepper's two buttons (`SIZE_READOUT_WIDTH`) sit in
+`ui/metrics.rs`, beside `field_label_width` -- the same page's other column -- as `const`s and not
+functions of the font: six times the size *is* the label column's 72, where 76 and 52 are no whole
+share of the 12 px the interface font starts at.
