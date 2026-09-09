@@ -173,45 +173,206 @@ pub(crate) fn source_line(source: &SourceText, index: usize) -> Line {
     line
 }
 
+/// What a press, a right-click or the pointer on one of a row's names is answered from:
+/// where the row is, the text its columns are counted through, which of the file's names
+/// the language server placed, and whom to ask about one.
+///
+/// Cloned once into each closure a row's names need, rather than the same four values
+/// cloned one by one into every one. The rules those closures carry out are the methods
+/// below, so a closure is the call and nothing else.
+#[derive(Clone)]
+struct Named {
+    /// The position this row is, and so the one its questions are about. Lines are
+    /// 1-based, as DWARF's are.
+    at: LinePos,
+    /// The row's text as it is drawn, which the columns here are counted through: a
+    /// link's are byte offsets into the file's line (`src/links.rs`) and a row's are the
+    /// UTF-16 units the text engine answers in. The drawn text and not the rope's, and
+    /// the two agree wherever a column can land: what the row draws differently is the
+    /// indentation, one space per character of it.
+    text: Rc<str>,
+    /// Which of the file's names the server placed. See [`SourceData::links`].
+    links: links::Links,
+    /// Whom a press on a link or a name asks, and [`None`] where there is nobody: a pane
+    /// mounted without a server draws its text and no links (`links_in`).
+    server: Option<Server>,
+}
+
+impl Named {
+    /// A run of a name's byte columns as the units this row is drawn in.
+    fn drawn(&self, columns: &Range<u32>) -> Range<usize> {
+        drawn_columns(&self.text, columns)
+    }
+
+    /// A column of this row as the place a language server is asked about.
+    fn lookup(&self, column: usize) -> Lookup {
+        Lookup::at(&self.at, byte_column(&self.text, column))
+    }
+
+    /// The names in this row the server placed, and what a press on one does: ask it
+    /// where that name is, and go to what it answers. [`None`] with nobody to ask, so no
+    /// link is ever drawn that could not be followed.
+    ///
+    /// A press with Ctrl held opens what it names in a tab of its own, the rule every
+    /// door inside a pane follows.
+    fn linked(&self, open: Open, ctrl: State<bool>) -> Option<TextLinks> {
+        let server = self.server.clone()?;
+        let named = self.clone();
+        Some(TextLinks {
+            columns: self
+                .links
+                .followed_on(self.at.line)
+                .map(|columns| self.drawn(columns))
+                .collect(),
+            // Always a door: nothing here is a link until the server has said the name is
+            // one, so there is nothing to hold a modifier back for.
+            is_link: Rc::new(|| true),
+            follow: Rc::new(move |columns: Range<usize>| {
+                let column = byte_column(&named.text, columns.start);
+                follow_link(
+                    &server,
+                    &named.links,
+                    open,
+                    &named.at,
+                    column,
+                    Reach::inside(ctrl),
+                );
+            }),
+        })
+    }
+
+    /// Every name the server placed on this row, links and the places where one is
+    /// defined alike: what a reader hovers is a name and not a door, and a hover over the
+    /// name where a function is defined is where its own signature and doc comment are.
+    fn names(&self) -> Vec<Range<usize>> {
+        self.links
+            .on_line(self.at.line)
+            .iter()
+            .map(|link| self.drawn(&link.columns))
+            .collect()
+    }
+
+    /// What the pointer moving onto one of those names, off them all, or out from under
+    /// the row itself says: `waiting` as the move leaves it, and whether it moved at all,
+    /// so the caller writes only then.
+    fn pointed(&self, waiting: &mut Hover, under: Under) -> bool {
+        match under {
+            Under::Name(columns, drawn) => waiting.enter(Pointed {
+                at: self.lookup(columns.start),
+                drawn,
+            }),
+            Under::Off => waiting.left_name(),
+            Under::Moved => waiting.gone(),
+        }
+    }
+
+    /// The name at `column` of row `index`, which the three questions a menu offers are
+    /// about: [`None`] over no name, and over one this row draws nothing of.
+    fn at_column(&self, source: &SourceText, index: usize, column: usize) -> Option<NameAt> {
+        let link = self
+            .links
+            .at(self.at.line, byte_column(&self.text, column))?;
+        Some(NameAt {
+            at: self.at.clone(),
+            name: name_at(source, index, &link.columns)?,
+            column: link.columns.start,
+        })
+    }
+}
+
+/// What the right button offers on row `index`: the three questions for the server where
+/// the press was on a name, then the line's locations and, inside a function as the
+/// file's parse says, the function's instances. A location found from the file a
+/// source-driven tab is about is chosen for that tab; from a companion it opens the
+/// symbol, and the menu offers the file itself as a tab of its own.
+///
+/// Both the name under the pointer and the function this row is a line of are looked for
+/// on the press and not per render -- the function being a walk of the file's own -- since
+/// a row is rendered far more often than it is right-clicked.
+///
+/// Every state is handed in, because reaching for a context is a hook and the handler runs
+/// long after the render that built it.
+#[allow(clippy::too_many_arguments)]
+fn source_menu(
+    doors: Doors,
+    places: Places,
+    located: State<Located>,
+    dock: State<DockArea>,
+    named: Named,
+    source: SourceText,
+    index: usize,
+    drives: Option<DocId>,
+    file: Arc<str>,
+) -> Rc<dyn Fn(Event<PressEventData>, Option<usize>)> {
+    let open = doors.open;
+    // The file this row is in, where the pane is showing it beside somebody else's tab. A
+    // subject is that tab already and has nothing to open.
+    let opens = drives.is_none().then(|| file.clone());
+    let subject = drives.map(|tab| (tab, file));
+    // Whom to ask about a name, where this row's names are links at all. A row drawing
+    // none is a row over no server, and a question nobody could answer is not offered.
+    let asking = (!named.links.is_empty())
+        .then(|| named.server.clone())
+        .flatten();
+
+    Rc::new(move |e: Event<PressEventData>, column| {
+        let at = named.at.clone();
+        let function = functions::enclosing(&source.0.functions, at.line).cloned();
+        // The name the press was on, which the three questions are about.
+        let name = column
+            .and_then(|column| named.at_column(&source, index, column))
+            .zip(asking.clone())
+            .map(|(name, server)| name_menu(&server, located, dock, open, name))
+            .unwrap_or_default();
+        let menu = locate_menu(located, dock, at.clone(), subject.clone(), function, name);
+        // The door into the file itself, which the tab has only beside it: the same
+        // arrival every other door into a source file makes, so the assembly side follows
+        // this line as it follows a clicked one.
+        let menu = menu.maybe_child(opens.clone().map(|file| {
+            let (line, name) = (at.line, source::name_of(Path::new(&*file)));
+            MenuButton::new()
+                .on_press(move |_| {
+                    open_source_place(doors, places, Path::new(&*file), line, None, Reach::NewTab)
+                })
+                .child(format!("Open {name}"))
+        }));
+        ContextMenu::open_from_event(&e, menu);
+    })
+}
+
+/// A press in the file a source-driven tab is about, which is what says which assembly
+/// its other side shows.
+///
+/// **The only writer of `Driven` inside the panes.** A click in a companion file picks
+/// the line out and no more, and a click in the assembly pane never comes here at all, so
+/// there is no way for the listing to re-drive itself.
+fn drive(docs: State<Docs>, mut driven: State<Driven>, tab: DocId, at: &LinePos) {
+    // The place the tab is at and not the file: two lines of one file reached along one
+    // trail are two entries, and a drive written under the wrong one is a drive nothing
+    // reads. Bound before the write, the guard being live until the end of the statement.
+    let entry = place_at(&docs.peek(), tab, &Document::Source(at.file.clone()));
+    driven.write().remember((tab, entry), at.line);
+}
+
 impl Component for SourceRow {
     fn render(&self) -> impl IntoElement {
         let places = use_places();
-        let mut driven = places.driven;
         // Consumed here, in the render, because the menu handler may not run a hook.
         let located = use_consume::<Locations>().0;
         // Which tab a press on a link is made in: where its answer opens, and the two
         // halves of the landing a companion's door leaves.
         let doors = use_doors();
-        let open = doors.open;
-        let docs = open.docs;
+        let docs = doors.open.docs;
         let ctrl = use_consume::<Ctrl>().0;
-        // Whom a press on a link or a name asks, and `None` where there is nobody: a pane
-        // mounted without a server draws its text and no links (`links_in`).
         let server = try_use_server();
-        // Where the name under the pointer is written, for the same reason: a pane
-        // mounted without it draws its text and says nothing about a name.
+        // Where the name under the pointer is written, and `None` where there is nobody
+        // to write it: a pane mounted without it draws its text and says nothing about a
+        // name.
         let hover = try_consume_context::<Hovering>().map(|hovering| hovering.0);
         let dock = use_consume::<SidebarDock>().0;
         let index = self.index;
 
-        // The position this row is, and so the one its questions are about. Lines are
-        // 1-based, as DWARF's are.
-        let at = LinePos {
-            file: self.file.clone(),
-            line: self.index as u32 + 1,
-        };
-
         let pieces = source_pieces(&self.source, index);
-        // The row's text as it is drawn, which the columns below are counted through: a
-        // link's are byte offsets into the file's line (`src/links.rs`) and a row's are
-        // the UTF-16 units the text engine answers in. The drawn text and not the rope's,
-        // and the two agree wherever a column can land: what the row draws differently is
-        // the indentation, one space per character of it.
-        let row_text: Rc<str> = pieces
-            .iter()
-            .map(|(_, text)| text.as_str())
-            .collect::<String>()
-            .into();
         let line = {
             let mut line = Line::default();
             for (_, text) in &pieces {
@@ -219,6 +380,20 @@ impl Component for SourceRow {
             }
             line
         };
+        let named = Named {
+            at: LinePos {
+                file: self.file.clone(),
+                line: index as u32 + 1,
+            },
+            text: pieces
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<String>()
+                .into(),
+            links: self.links.clone(),
+            server,
+        };
+
         let text = Text {
             finds: self
                 .marking
@@ -232,118 +407,33 @@ impl Component for SourceRow {
                 .collect(),
             tail: Vec::new(),
             chars: self.chars,
-            // The names in this row the server placed, and what a press on one does: ask
-            // it where that name is, and go to what it answers. Nothing is a link until
-            // the server has said so -- and none at all with nobody to ask, so no link is
-            // ever drawn that could not be followed. A press with Ctrl held opens what it
-            // names in a tab of its own, the rule every door inside a pane follows.
-            links: server.clone().map(|server| {
-                let (at, links) = (at.clone(), self.links.clone());
-                let pressed = row_text.clone();
-                TextLinks {
-                    columns: self
-                        .links
-                        .followed_on(at.line)
-                        .map(|columns| drawn_columns(&row_text, columns))
-                        .collect(),
-                    // Always a door: nothing here is a link until the server has said
-                    // the name is one, so there is nothing to hold a modifier back for.
-                    is_link: Rc::new(|| true),
-                    follow: Rc::new(move |columns: Range<usize>| {
-                        let column = byte_column(&pressed, columns.start);
-                        follow_link(&server, &links, open, &at, column, Reach::inside(ctrl));
-                    }),
-                }
-            }),
-            // Every name the server placed on this row, links and the places where one is
-            // defined alike: what a reader hovers is a name and not a door, and a hover
-            // over the name where a function is defined is where its own signature and
-            // doc comment are.
-            names: self
-                .links
-                .on_line(at.line)
-                .iter()
-                .map(|link| drawn_columns(&row_text, &link.columns))
-                .collect(),
+            links: named.linked(doors.open, ctrl),
+            names: named.names(),
             // What the pointer on one of them says. Consumed in the render, as everything
             // a handler here reaches for is: a handler may not run a hook.
             on_hover: hover.map(|hover| {
-                let (at, row_text) = (at.clone(), row_text.clone());
+                let named = named.clone();
                 Rc::new(move |under: Under| {
                     let mut hover = hover;
                     let mut waiting = hover.peek().clone();
-                    let moved = match under {
-                        Under::Name(columns, drawn) => waiting.enter(Pointed {
-                            at: Lookup::at(&at, byte_column(&row_text, columns.start)),
-                            drawn,
-                        }),
-                        Under::Off => waiting.left_name(),
-                        Under::Moved => waiting.gone(),
-                    };
-                    if moved {
+                    if named.pointed(&mut waiting, under) {
                         hover.set(waiting);
                     }
                 }) as Rc<dyn Fn(Under)>
             }),
         };
 
-        // The menu: the three questions for the server where the press was on a name,
-        // then the line's locations and, inside a function as the file's parse says, the
-        // function's instances. A location found from the file a source-driven tab is
-        // about is chosen for that tab; from a companion it opens the symbol. Both the
-        // name under the pointer and the function this row is a line of are looked for on
-        // the press and not per render -- the function being a walk of the file's own --
-        // since a row is rendered far more often than it is right-clicked.
-        let menu: Rc<dyn Fn(Event<PressEventData>, Option<usize>)> = Rc::new({
-            let at = at.clone();
-            let subject = self.drives.map(|tab| (tab, self.file.clone()));
-            // The file this row is in, where the pane is showing it beside somebody
-            // else's tab. A subject is that tab already and has nothing to open.
-            let opens = self.drives.is_none().then(|| self.file.clone());
-            let source = self.source.clone();
-            let links = self.links.clone();
-            // Whom to ask about a name, where this row's names are links at all. A row
-            // drawing none is a row over no server, and a question nobody could answer is
-            // not offered.
-            let asking = (!self.links.is_empty()).then_some(server).flatten();
-            let row_text = row_text.clone();
-            move |e: Event<PressEventData>, column| {
-                let function = functions::enclosing(&source.0.functions, at.line).cloned();
-                // The name the press was on, which the three questions are about.
-                let named = column
-                    .and_then(|column| links.at(at.line, byte_column(&row_text, column)))
-                    .and_then(|link| {
-                        Some(NameAt {
-                            at: at.clone(),
-                            name: name_at(&source, index, &link.columns)?,
-                            column: link.columns.start,
-                        })
-                    })
-                    .zip(asking.clone())
-                    .map(|(named, server)| name_menu(&server, located, dock, open, named))
-                    .unwrap_or_default();
-                let menu = locate_menu(located, dock, at.clone(), subject.clone(), function, named);
-                // The door into the file itself, which the tab has only beside it: the
-                // same arrival every other door into a source file makes, so the
-                // assembly side follows this line as it follows a clicked one.
-                let menu = menu.maybe_child(opens.clone().map(|file| {
-                    let (line, name) = (at.line, source::name_of(Path::new(&*file)));
-                    MenuButton::new()
-                        .on_press(move |_| {
-                            open_source_place(
-                                doors,
-                                places,
-                                Path::new(&*file),
-                                line,
-                                None,
-                                Reach::NewTab,
-                            )
-                        })
-                        .child(format!("Open {name}"))
-                }));
-                ContextMenu::open_from_event(&e, menu);
-            }
-        });
+        let menu = source_menu(
+            doors,
+            places,
+            located,
+            dock,
+            named.clone(),
+            self.source.clone(),
+            index,
+            self.drives,
+            self.file.clone(),
+        );
 
         // The line number, which is gutter: a press on it picks the row out and no
         // characters. A fixed width and not a minimum: skia lays a paragraph out to the
@@ -378,20 +468,10 @@ impl Component for SourceRow {
         // A press in a source-driven tab's own file also says which listing the
         // other side shows; the row is picked out by `pointer_down` either way.
         .maybe(self.drives.is_some(), |el| {
-            let tab = self.drives;
+            let (drives, at) = (self.drives, named.at.clone());
             el.on_press(move |_| {
-                // **The only writer of `Driven` inside the panes.** A click in the
-                // file a source-driven tab is about is what says which assembly its
-                // other side shows; a click in a companion file picks the line out
-                // and no more, and a click in the assembly pane never comes here at
-                // all, so there is no way for the listing to re-drive itself.
-                if let Some(tab) = tab {
-                    // The place the tab is at and not the file: two lines of one file
-                    // reached along one trail are two entries, and a drive written
-                    // under the wrong one is a drive nothing reads. Bound before the
-                    // write, the guard being live until the end of the statement.
-                    let entry = place_at(&docs.peek(), tab, &Document::Source(at.file.clone()));
-                    driven.write().remember((tab, entry), at.line);
+                if let Some(tab) = drives {
+                    drive(docs, places.driven, tab, &at);
                 }
             })
         })

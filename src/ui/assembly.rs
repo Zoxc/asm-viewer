@@ -413,7 +413,7 @@ impl PartialEq for Door {
 }
 
 /// Where a press on a link goes, once the door and the modifiers have been asked
-/// ([`Door::opens`]): the decision, apart from the four ways of going there.
+/// ([`Door::opens`]): the decision, which [`Opens::go`] carries out.
 enum Opens {
     /// The target's own rows, further down the listing already on screen: moved to, which
     /// is a scroll and a caret and neither a tab nor a visit, since `land` plants an
@@ -433,6 +433,54 @@ enum Opens {
     Row { to: usize, at: Option<LinePos> },
     /// Nothing, the press being the door's all the same. See [`Door::opens`].
     Nothing,
+}
+
+impl Opens {
+    /// Go there: the four ways of carrying the decision out, apart from making it.
+    ///
+    /// `listing` is the list's own scroll and box, read at the press rather than at the
+    /// render that drew the label, so a row moved to is a row of the listing on screen
+    /// now.
+    fn go(self, doors: Doors, places: Places, listing: &Listing, ctrl: State<bool>) {
+        match self {
+            Opens::InCode { object, placed } => {
+                show_in_code(doors, places, object, placed, None, Reach::InPlace);
+            }
+            Opens::Symbol { object, target } => {
+                open_document(
+                    doors.open,
+                    doors.visits,
+                    Document::Assembly(Selection::Symbol(Symbol {
+                        object,
+                        data: target,
+                    })),
+                    Reach::inside(ctrl),
+                );
+            }
+            // `show_in_code` leaves the move to `land` where this listing is that code
+            // already.
+            Opens::Code { object, address } => {
+                show_in_code(doors, places, object, address, None, Reach::inside(ctrl));
+            }
+            Opens::Nothing => {}
+            Opens::Row { to, at } => {
+                // The row is reached by a press, so the pane is on screen and measured.
+                let mut controller = listing.controller;
+                let _ = reveal_row(
+                    &mut controller,
+                    listing.bounds.get().height(),
+                    listing.rows(),
+                    to,
+                );
+                // The row landed on becomes the picked-out one, replacing the row the
+                // press started on -- which `pointer_down` has already marked, that being
+                // the one handler a stopped press does not undo. The source pane owes the
+                // scroll to the target's line, where it has one; this pane has just been
+                // given its own, above.
+                mark_row(doors.marked, at.map(|at| at.file), to);
+            }
+        }
+    }
 }
 
 impl Door {
@@ -543,7 +591,6 @@ impl Component for DoorLabel {
         let alt = use_consume::<Alt>().0;
         let doors = use_doors();
         let places = use_places();
-        let marked = doors.marked;
         // The list's own scroll and its box, which `reveal_row` needs at the moment of
         // the press rather than at the render that drew this label.
         let listing = use_consume::<Listing>();
@@ -571,46 +618,7 @@ impl Component for DoorLabel {
                 // Or the press bubbles into the row, which would pin the line the
                 // instruction being left came from.
                 e.stop_propagation();
-
-                match opens {
-                    Opens::InCode { object, placed } => {
-                        show_in_code(doors, places, object, placed, None, Reach::InPlace);
-                    }
-                    Opens::Symbol { object, target } => {
-                        open_document(
-                            doors.open,
-                            doors.visits,
-                            Document::Assembly(Selection::Symbol(Symbol {
-                                object,
-                                data: target,
-                            })),
-                            Reach::inside(ctrl),
-                        );
-                    }
-                    // `show_in_code` leaves the move to `land` where this listing is that
-                    // code already.
-                    Opens::Code { object, address } => {
-                        show_in_code(doors, places, object, address, None, Reach::inside(ctrl));
-                    }
-                    Opens::Nothing => {}
-                    Opens::Row { to, at } => {
-                        // The row is reached by a press, so the pane is on screen and
-                        // measured.
-                        let mut controller = listing.controller;
-                        let _ = reveal_row(
-                            &mut controller,
-                            listing.bounds.get().height(),
-                            listing.rows(),
-                            to,
-                        );
-                        // The row landed on becomes the picked-out one, replacing the row
-                        // the press started on -- which `pointer_down` has already marked,
-                        // that being the one handler a stopped press does not undo. The
-                        // source pane owes the scroll to the target's line, where it has
-                        // one; this pane has just been given its own, above.
-                        mark_row(marked, at.map(|at| at.file), to);
-                    }
-                }
+                opens.go(doors, places, &listing, ctrl);
             })
             .child(label().text(self.text.clone()).max_lines(1).color(if lit {
                 lit_fg
