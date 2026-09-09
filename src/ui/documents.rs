@@ -4,8 +4,10 @@
 //! closed together. (The other, that the tab on screen is one of the open ones, is
 //! [`Strip`]'s own and cannot be broken from here.) [`open_document`], [`raise`],
 //! [`raise_tab`], [`navigate`], [`close_tab`], [`close_others`] and [`close_binary`] are
-//! what change what is open or what a tab shows, and every path that opens a document --
-//! [`land`] included -- goes through [`open_document`].
+//! what open or close a **document** tab or change what one shows, and every path that
+//! opens a document -- [`land`] included -- goes through [`open_document`]. A page is the
+//! one tab outside that: it draws state held at the root, so it has no trail, and
+//! [`close_page`] takes its chip out of the bar and nothing else.
 
 use super::*;
 

@@ -417,7 +417,9 @@ feature there with the substitute, so a release that brings it is noticed.
   file would blank every file already read on a tab switch.
 - **A document is a place in a binary or a file; everything else is a view.** `open_document`,
   `raise`, `navigate`, `close_tab`, `close_others` and `close_binary` are the only six functions
-  that change what is open or what a tab shows.
+  that open or close a **document** tab, or change what one shows. A page's chip goes in and
+  comes out on its own, through `Strip::show` and `close_page`: a page draws state held at the
+  root, so it has no trail to keep in step and closing one loses nothing.
 - **Identity in the UI is `Arc` pointer identity**, never names or indices: list keys are
   `Arc::as_ptr(..).addr()` and prop `PartialEq`s are hand-written with `Arc::ptr_eq`. A list
   of rows is a `Shared` (`src/shared.rs`), which is that rule written once, and an optional
