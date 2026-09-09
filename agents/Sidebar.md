@@ -303,10 +303,11 @@ span carries a colour and a weight and no fill of its own. It was a bold orange 
 which made a match a thing of its own rather than a place in a line and cut the row's text into
 three pieces to carry it; the wash leaves the text one piece and says the same thing over a
 picked-out row as over a plain one. **A filtered list marks the same way**: `Matcher::marks` hands
-back where the pattern is in a name, the panel compiles the filter once per render and shares it
-with the rows it builds (`Marking`), and each row washes what matched in the name it draws -- which
-is what says why a row is in a list that has been narrowed. The marks are byte ranges everywhere
-outside the text engine and UTF-16 units inside it, `marked_units` being the one place the two meet.
+back where the pattern is in a name, the panel compiles the filter once per pattern -- a memo of
+its own, `use_list_marking`, beside the one that narrows the list -- and shares it with the rows it
+builds (`Marking`), and each row washes what matched in the name it draws, which is what says why a
+row is in a list that has been narrowed. The marks are byte ranges everywhere outside the text
+engine and UTF-16 units inside it, `marked_units` being the one place the two meet.
 
 **Ctrl+Shift+F is one more line in the key handler the root already has** (`root_key_down`), never a
 second one: an element keeps one handler per event name, so a second `on_global_key_down` would

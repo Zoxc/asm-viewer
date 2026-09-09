@@ -403,13 +403,13 @@ fn answer(
     }
 }
 
-/// The compiled filter, as the rows of a list are handed it: made once per render of the
-/// panel and shared by every row it builds, since compiling a regex per row is not free.
+/// The compiled filter, as the rows of a list are handed it: made once per pattern and
+/// shared by every row the list builds, since compiling a regex per row is not free.
 ///
 /// Compared by the pointer, as everything else in the UI with an `Rc` or an `Arc` behind
-/// it is. A fresh one every render is not equal to the last, so the scroll view builds its
-/// rows again -- which costs the rows themselves nothing, their own props being what says
-/// whether one has to be drawn again.
+/// it is. A new one is not equal to the last, so the scroll view builds its rows again --
+/// which costs the rows themselves nothing, their own props being what says whether one
+/// has to be drawn again.
 #[derive(Clone)]
 pub(crate) struct Marking(Rc<Matcher>);
 
@@ -435,4 +435,15 @@ impl Marking {
     pub(crate) fn hits(&self, line: &Line) -> Vec<Range<usize>> {
         crate::find::hits_in(line, &self.0)
     }
+}
+
+/// The [`Marking`] a sidebar panel hands its rows, out of the panel's own filter state.
+///
+/// A memo, so the regex is compiled when the pattern changes and not when the list does.
+/// A panel redraws most while its box is being typed in, which is exactly when compiling
+/// is not free. [`use_marking`] is the same hook for a find bar, whose filter is held in
+/// a context rather than a state.
+pub(crate) fn use_list_marking(filter: State<Filter>) -> Marking {
+    let marking = use_memo(move || Marking::new(filter.read().matcher()));
+    marking.read().clone()
 }

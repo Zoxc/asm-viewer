@@ -577,9 +577,9 @@ impl Component for LocationsPanel {
         let asked_at = state.found.as_ref().map(|found| found.of.at.clone());
         let subject = state.subject.clone();
 
-        // The filter compiled once for the rows to mark what it matched in them, beside
-        // the memos above which compile one of their own to narrow the lists with.
-        let marking = Marking::new(filter.read().matcher());
+        // What the rows mark in the text they draw, memoized on the filter beside the
+        // two lists above, which compile one of their own to narrow themselves with.
+        let marking = use_list_marking(filter);
 
         let mut keys = ListKeys::none();
         let body: Element = match (&state.asked, state.pending(), &state.found) {

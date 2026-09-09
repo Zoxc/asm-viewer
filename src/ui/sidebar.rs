@@ -556,9 +556,9 @@ impl Component for ObjectsPanel {
             _ => None,
         };
         let length = tree.len();
-        // The filter compiled once for the rows to mark what it matched in them, beside
-        // the memo above which compiles one of its own to narrow the list with.
-        let marking = Marking::new(filter.read().matcher());
+        // What the rows mark in the names they draw, memoized on the filter beside the
+        // tree above, which compiles one of its own to narrow the list with.
+        let marking = use_list_marking(filter);
         // One more clone of the rows, shared by the two closures the keys are: the arrows
         // ask what a row is and Enter asks what pressing one does, and both are the tree
         // the panel is drawing and not one worked out again.
@@ -712,8 +712,9 @@ impl Component for SymbolsPanel {
             _ => None,
         };
         let length = filtered.len();
-        // The filter compiled once for the rows to mark what it matched in them.
-        let marking = Marking::new(filter.read().matcher());
+        // What the rows mark in the names they draw, memoized on the filter beside the
+        // list above.
+        let marking = use_list_marking(filter);
         // Cheap to hand to both closures: a `Filtered` is the list behind an `Arc` and
         // the indices the filter kept.
         let rows = Rc::new(filtered.clone());
