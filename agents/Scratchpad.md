@@ -327,8 +327,10 @@ a job that names the same pad *and* writes or removes its package, and hands any
 hold-back queue rather than stepping over it. That a build of one pad delays another's save is
 accepted: the reader types in one pad at a time. Two builds cannot start at once, on the button
 (`enabled`) and in `request_build` both, because a build takes seconds and a second job queued
-behind the first would compile bytes that have since changed. A build that comes back also
-**forgets what the panes have read of the pad's package**, which is written to the same
+behind the first would compile bytes that have since changed. **Nor does anything run while a build
+does**, on the button and in `request_run` both: cargo is writing over the very executable a run
+would start, and a run begun mid-build is not one that build's own `stop_run` took down. A build
+that comes back also **forgets what the panes have read of the pad's package**, which is written to the same
 `src/main.rs` every time and would otherwise be drawn as it was first read for the life of the
 process (`forget_source_under`, `agents/Panes.md`).
 

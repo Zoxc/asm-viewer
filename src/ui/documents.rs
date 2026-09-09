@@ -524,17 +524,16 @@ pub(crate) enum Nav {
 
 impl Nav {
     /// The entry this step would land on along `trail`, or `None` when it would not
-    /// move. What the toolbar's two buttons name in their tooltips, and the one place the
-    /// answer is worked out, so a button that is live and a step that does something
-    /// cannot disagree.
+    /// move. What the toolbar's two buttons name in their tooltips.
+    ///
+    /// The trail is asked rather than read: where a step lands is [`History::behind`] and
+    /// [`History::ahead`], which is what `back` and `forward` themselves move by, so a
+    /// button that is live and a step that does something cannot disagree.
     pub(crate) fn destination(self, trail: &History) -> Option<&Stop> {
-        let cursor = trail.cursor()?;
-        // The trail is newest first, so a step back is a step *up* the indices.
-        let index = match self {
-            Self::Back => cursor + 1,
-            Self::Forward => cursor.checked_sub(1)?,
-        };
-        trail.entries().get(index)
+        match self {
+            Self::Back => trail.behind(),
+            Self::Forward => trail.ahead(),
+        }
     }
 
     /// Move the cursor and hand back the entry it landed on.

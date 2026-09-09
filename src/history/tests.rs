@@ -37,8 +37,8 @@ fn an_empty_history_goes_nowhere() {
     let mut history = History::default();
     assert!(history.current().is_none());
     assert!(history.cursor().is_none());
-    assert!(!history.can_back());
-    assert!(!history.can_forward());
+    assert!(history.behind().is_none());
+    assert!(history.ahead().is_none());
     assert!(history.back().is_none());
     assert!(history.forward().is_none());
 }
@@ -50,13 +50,13 @@ fn pushing_records_and_moves_the_cursor() {
 
     history.push(a.clone());
     assert!(history.current() == Some(&a));
-    assert!(!history.can_back());
+    assert!(history.behind().is_none());
 
     history.push(b.clone());
     assert!(history.current() == Some(&b));
     assert!(history.cursor() == Some(0));
-    assert!(history.can_back());
-    assert!(!history.can_forward());
+    assert!(history.behind().is_some());
+    assert!(history.ahead().is_none());
 }
 
 #[test]
@@ -69,14 +69,38 @@ fn back_and_forward_move_the_cursor_without_pushing() {
 
     assert!(history.back() == Some(b.clone()));
     assert!(history.back() == Some(a.clone()));
-    assert!(!history.can_back());
+    assert!(history.behind().is_none());
     assert!(history.back().is_none());
 
     assert!(history.forward() == Some(b));
     assert!(history.forward() == Some(c.clone()));
-    assert!(!history.can_forward());
+    assert!(history.ahead().is_none());
     assert!(history.forward().is_none());
     assert!(history.current() == Some(&c));
+}
+
+/// Where a step would land and whether it can be taken are one question. `behind` and
+/// `ahead` answer both, and are what `back` and `forward` move by and what the toolbar
+/// names in its tooltips (`Nav::destination`, `src/ui/documents.rs`), so a step that names
+/// one entry and lands on another is what this is here to catch. Off either end they say
+/// nothing and the step does nothing.
+#[test]
+fn a_steps_destination_is_where_the_step_lands() {
+    let (a, b, c) = (selection("a"), selection("b"), selection("c"));
+    let mut history = History::default();
+    for entry in [&a, &b, &c] {
+        history.push(entry.clone());
+    }
+
+    for expected in [Some(b.clone()), Some(a.clone()), None] {
+        assert!(history.behind() == expected.as_ref());
+        assert!(history.back() == expected);
+    }
+
+    for expected in [Some(b), Some(c), None] {
+        assert!(history.ahead() == expected.as_ref());
+        assert!(history.forward() == expected);
+    }
 }
 
 #[test]
@@ -91,8 +115,8 @@ fn navigating_back_does_not_re_record_where_it_landed() {
     history.push(landed);
 
     assert!(history.current() == Some(&a));
-    assert!(history.can_forward());
-    assert!(!history.can_back());
+    assert!(history.ahead().is_some());
+    assert!(history.behind().is_none());
 }
 
 #[test]
@@ -124,10 +148,10 @@ fn revisiting_bumps_an_entry_out_of_the_middle() {
     assert!(history.entries() == [b.clone(), c.clone(), a.clone()]);
     assert!(history.current() == Some(&b));
     assert!(history.cursor() == Some(0));
-    assert!(!history.can_forward());
+    assert!(history.ahead().is_none());
     assert!(history.back() == Some(c));
     assert!(history.back() == Some(a));
-    assert!(!history.can_back());
+    assert!(history.behind().is_none());
 }
 
 #[test]
@@ -146,7 +170,7 @@ fn pushing_the_entry_under_the_cursor_is_still_a_no_op() {
     assert!(history.entries() == [c, b.clone(), a]);
     assert!(history.current() == Some(&b));
     assert!(history.cursor() == Some(1));
-    assert!(history.can_forward());
+    assert!(history.ahead().is_some());
 }
 
 #[test]
@@ -165,9 +189,9 @@ fn a_bump_after_going_back_still_drops_the_forward_entries() {
     assert!(history.entries() == [a.clone(), b.clone()]);
     assert!(history.current() == Some(&a));
     assert!(history.cursor() == Some(0));
-    assert!(!history.can_forward());
+    assert!(history.ahead().is_none());
     assert!(history.back() == Some(b));
-    assert!(!history.can_back());
+    assert!(history.behind().is_none());
 }
 
 #[test]
@@ -179,7 +203,7 @@ fn restoring_collapses_duplicates_onto_the_newest_occurrence() {
     assert!(history.entries() == [a.clone(), b.clone()]);
     assert!(history.current() == Some(&a));
     assert!(history.cursor() == Some(0));
-    assert!(!history.can_forward());
+    assert!(history.ahead().is_none());
     assert!(!history.would_push(&a));
 
     // Every occurrence collapses, not just the first pair.
@@ -197,8 +221,8 @@ fn a_restored_cursor_follows_the_entry_it_was_on() {
     assert!(history.entries() == [a.clone(), b.clone()]);
     assert!(history.current() == Some(&b));
     assert!(history.cursor() == Some(1));
-    assert!(!history.can_back());
-    assert!(history.can_forward());
+    assert!(history.behind().is_none());
+    assert!(history.ahead().is_some());
 
     // And on the *older* of two equal entries, which the collapse drops in favour of the
     // newer one: the cursor goes to the entry that was kept.
@@ -206,7 +230,7 @@ fn a_restored_cursor_follows_the_entry_it_was_on() {
     assert!(history.entries() == [a.clone(), b]);
     assert!(history.current() == Some(&a));
     assert!(history.cursor() == Some(0));
-    assert!(!history.can_forward());
+    assert!(history.ahead().is_none());
 }
 
 /// `count` distinct selections, oldest first, pushed onto a fresh history — the caller
@@ -232,7 +256,7 @@ fn pushing_past_the_cap_drops_the_oldest_entries() {
     // The cursor is still on the entry the last push put in front.
     assert!(history.cursor() == Some(0));
     assert!(history.current() == entries.last());
-    assert!(!history.can_forward());
+    assert!(history.ahead().is_none());
 
     // And walking all the way back reaches the oldest survivor rather than running off an
     // index the drop left naming nothing.
@@ -259,7 +283,7 @@ fn pushing_past_the_cap_after_going_back_truncates_first() {
     let fresh: Vec<Stop> = (0..10).map(|i| selection(&format!("n{i}"))).collect();
     history.push(fresh[0].clone());
     assert!(history.entries().len() == MAX_ENTRIES - 4);
-    assert!(!history.can_forward());
+    assert!(history.ahead().is_none());
 
     for entry in &fresh[1..] {
         history.push(entry.clone());
@@ -267,7 +291,7 @@ fn pushing_past_the_cap_after_going_back_truncates_first() {
     assert!(history.entries().len() == MAX_ENTRIES);
     assert!(history.cursor() == Some(0));
     assert!(history.current() == fresh.last());
-    assert!(!history.can_forward());
+    assert!(history.ahead().is_none());
 
     // Ten pushes onto a list the truncation left five short of the cap, so five more
     // entries went off the end on top of the fifty the fill had already dropped.
@@ -289,7 +313,7 @@ fn restoring_keeps_the_newest_entries_and_carries_the_cursor() {
     assert!(history.entries().last() == Some(&entries[MAX_ENTRIES - 1]));
     assert!(history.current() == Some(&entries[cursor]));
     assert!(history.cursor() == Some(cursor));
-    assert!(history.can_forward());
+    assert!(history.ahead().is_some());
     assert!(!history.would_push(&entries[cursor]));
 
     // A cursor so deep in the back stack that the trim drops its entry: it lands on the
@@ -298,8 +322,8 @@ fn restoring_keeps_the_newest_entries_and_carries_the_cursor() {
     assert!(history.entries().len() == MAX_ENTRIES);
     assert!(history.cursor() == Some(MAX_ENTRIES - 1));
     assert!(history.current() == Some(&entries[MAX_ENTRIES - 1]));
-    assert!(!history.can_back());
-    assert!(history.can_forward());
+    assert!(history.behind().is_none());
+    assert!(history.ahead().is_some());
 
     // A cursor past the end is clamped before any of that happens.
     let history = History::restored(entries.clone(), over + 100);
@@ -342,7 +366,7 @@ fn retaining_drops_what_it_rejects_and_leaves_the_cursor_where_it_was() {
     assert!(history.entries() == [c.clone(), a.clone()]);
     assert!(history.current() == Some(&c));
     assert!(history.back() == Some(a));
-    assert!(!history.can_back());
+    assert!(history.behind().is_none());
 }
 
 /// Two places in one document are two entries, which is the whole of what a stop is for:
@@ -361,7 +385,7 @@ fn two_places_in_one_document_are_two_entries() {
     assert!(history.current() == Some(&Stop::at(object.clone(), 0x40)));
     assert!(history.back() == Some(Stop::at(object.clone(), 0x10)));
     assert!(history.back() == Some(Stop::whole(code.clone())));
-    assert!(!history.can_back());
+    assert!(history.behind().is_none());
 
     // And a place still behind the cursor is bumped to the end rather than doubled, as a
     // revisited document is: going back to 0x10 the long way leaves one entry for it.
@@ -392,8 +416,8 @@ fn retaining_falls_back_to_the_nearest_older_survivor() {
 
     let history = history.retaining(|entry| named(entry) != "b");
     assert!(history.current() == Some(&a));
-    assert!(!history.can_back());
-    assert!(history.can_forward());
+    assert!(history.behind().is_none());
+    assert!(history.ahead().is_some());
 }
 
 /// Nothing older than the cursor survived either, so it lands on the oldest entry left
@@ -410,8 +434,8 @@ fn retaining_with_no_older_survivor_lands_on_the_oldest_left() {
 
     let history = history.retaining(|entry| named(entry) != "a");
     assert!(history.current() == Some(&b));
-    assert!(!history.can_back());
-    assert!(history.can_forward());
+    assert!(history.behind().is_none());
+    assert!(history.ahead().is_some());
 }
 
 #[test]
@@ -426,7 +450,7 @@ fn retaining_everything_changes_nothing() {
     let history = history.retaining(|_| true);
     assert!(history.entries() == [b, a.clone()]);
     assert!(history.current() == Some(&a));
-    assert!(history.can_forward());
+    assert!(history.ahead().is_some());
 }
 
 #[test]
@@ -438,6 +462,6 @@ fn retaining_nothing_is_the_empty_history() {
     let history = history.retaining(|_| false);
     assert!(history.entries().is_empty());
     assert!(history.current().is_none());
-    assert!(!history.can_back());
-    assert!(!history.can_forward());
+    assert!(history.behind().is_none());
+    assert!(history.ahead().is_none());
 }

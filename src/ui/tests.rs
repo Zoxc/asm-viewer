@@ -14898,6 +14898,62 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
     assert!(!verdict.bad);
 }
 
+/// **Nothing runs while a build does**, and the rule is `request_run`'s rather than the
+/// Run button's `enabled`: cargo is writing over the very executable a run would start,
+/// and a run begun mid-build is not one that build's own `stop_run` has taken down.
+#[test]
+fn a_run_asked_for_during_a_build_starts_nothing() {
+    let (mut test, _states, pad, _text, asking, _marked, asks) =
+        mount_scratchpad!(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            // The build never comes back: answering as a save does says nothing about it,
+            // so the pad stays `building` and the run below is asked for during one.
+            PadJob::Build(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            // Asserted on below rather than here: a panic on the worker thread would say
+            // less than the assertion the run reached it at all.
+            PadJob::Run { scratchpad, .. } => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+        });
+
+    pump(&mut test, || pad.peek().state().opened());
+    already_built(pad, fixture_artifact());
+    test.sync_and_update();
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_build(pad, &jobs);
+    assert!(pad.peek().state().building);
+
+    request_run(pad, &jobs);
+    assert!(
+        !pad.peek().state().is_running(),
+        "a run started while a build was writing the executable"
+    );
+    for _ in 0..8 {
+        test.sync_and_update();
+    }
+    while let Ok(asked) = asks.try_recv() {
+        assert!(
+            !matches!(asked, Asked::Run),
+            "a run reached the worker during a build"
+        );
+    }
+}
+
 /// The lines a run has written, for [`output_harness`] to draw and a test to push into.
 #[derive(Clone, Copy)]
 struct RunLines(State<Arc<RunOutput>>);

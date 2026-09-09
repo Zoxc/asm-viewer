@@ -1218,12 +1218,19 @@ pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
     jobs.jobs.send(PadJob::Build(state.scratchpad));
 }
 
-/// Run what the last build made. Nothing happens without an executable, which is why the
-/// button is unavailable until a build has succeeded. Whatever was running is stopped
-/// first: two generations of output arriving into one list is a pane with no answer to
-/// "what is this".
+/// Run what the last build made. Nothing happens without an executable, and nothing
+/// happens while a build is running: cargo is about to write over the very file this
+/// would start, and the run would not be stopped by that build the way a run started
+/// before it is. Both guards are here as well as on the button, so they are properties of
+/// the request rather than of one control's disabled state.
+///
+/// Whatever was running is stopped first: two generations of output arriving into one list
+/// is a pane with no answer to "what is this".
 pub(crate) fn request_run(mut pad: State<Pads>, jobs: &PadJobs) {
     let state = pad.peek().state().clone();
+    if state.building {
+        return;
+    }
     let Some(executable) = state.executable().map(Path::to_path_buf) else {
         return;
     };

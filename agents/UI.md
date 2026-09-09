@@ -290,8 +290,10 @@ than hidden**, the first disabled drawing in this app: hiding it would slide the
 pointer, and a reader who has been nowhere yet would never learn the pair is there. Disabled is the
 whole of the drawing (no hover wash, no press handler, and the chevron in
 `dimmed(icon_fg, pane_bg)`) while the tooltip stays, naming the direction where `entry_text` gives
-it nothing to name. `Nav::destination` is the one place the answer is worked out and `Nav::possible`
-is it asked as a question, so a live button and a step that does something cannot disagree.
+it nothing to name. Where a step lands is the trail's own -- `History::behind` and
+`History::ahead`, which is what `back` and `forward` move by and the only place the question is
+answered -- and `Nav::destination` asks it rather than deriving it again from the cursor, so a live
+button and a step that does something cannot disagree.
 Headless, the runner can be asked whether a button washes under the pointer and whether it kept its
 box, and not what colour the chevron came out: an `SvgViewer` rasterises its colour into an image
 that is not in the element tree.

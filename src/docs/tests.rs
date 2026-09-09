@@ -138,7 +138,7 @@ fn a_restored_trail_opens_whole_and_an_empty_one_opens_nothing() {
 
     let id = docs.open_trail(trail, true).expect("a trail with entries");
     assert!(docs.get(id) == Some(&file("a.rs")));
-    assert!(docs.trail(id).is_some_and(|trail| trail.can_forward()));
+    assert!(docs.trail(id).is_some_and(|trail| trail.ahead().is_some()));
     assert_eq!(docs.temporal(), Some(id));
 
     assert!(docs.open_trail(History::default(), false).is_none());

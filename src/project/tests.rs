@@ -569,7 +569,7 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
             .map(|stop| &stop.document)
             == Some(&tab(&objects[1]))
     );
-    assert!(as_document(&restored[0]).1.can_forward());
+    assert!(as_document(&restored[0]).1.ahead().is_some());
     let rows: Vec<usize> = as_document(&restored[0])
         .2
         .iter()

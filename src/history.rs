@@ -250,29 +250,37 @@ impl History {
         (self.cursor < self.entries.len()).then_some(self.cursor)
     }
 
-    pub fn can_back(&self) -> bool {
-        self.cursor + 1 < self.entries.len()
+    /// The entry a step back would land on, or `None` at the oldest one. The list is
+    /// newest first, so a step back is a step *up* the indices.
+    ///
+    /// **The one place a step's destination is worked out**, and the one place "can it be
+    /// taken" is answered: they are the same question, and a second spelling of either is
+    /// a second rule to keep in step. [`History::back`] moves by this, and so does the
+    /// toolbar's tooltip through `Nav::destination` (`src/ui/documents.rs`), so a live
+    /// button and a step that does something cannot disagree.
+    pub fn behind(&self) -> Option<&Stop> {
+        self.entries.get(self.cursor + 1)
     }
 
-    pub fn can_forward(&self) -> bool {
-        self.cursor > 0
+    /// The entry a step forward would land on, or `None` at the newest one. The other
+    /// half of [`History::behind`], asked by the same callers.
+    pub fn ahead(&self) -> Option<&Stop> {
+        self.entries.get(self.cursor.checked_sub(1)?)
     }
 
     /// Step the cursor back one entry and hand back what is now current, or `None` at the
     /// oldest entry. Nothing is recorded.
     pub fn back(&mut self) -> Option<Stop> {
-        self.can_back().then(|| {
-            self.cursor += 1;
-            self.entries()[self.cursor].clone()
-        })
+        let stop = self.behind()?.clone();
+        self.cursor += 1;
+        Some(stop)
     }
 
     /// Step the cursor forward one entry, or `None` at the newest one. Equally not a push.
     pub fn forward(&mut self) -> Option<Stop> {
-        self.can_forward().then(|| {
-            self.cursor -= 1;
-            self.entries()[self.cursor].clone()
-        })
+        let stop = self.ahead()?.clone();
+        self.cursor -= 1;
+        Some(stop)
     }
 }
 

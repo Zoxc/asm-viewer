@@ -959,6 +959,8 @@ impl Component for PadHeader {
                     )
                     .child(
                         Button::new()
+                            // "Nothing runs while a build does", on the control as well as
+                            // in `request_run`: cargo is writing over the executable.
                             .enabled(running || (runnable && !building))
                             .on_press(move |_| match running {
                                 true => stop_run(pad),
