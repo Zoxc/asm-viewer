@@ -22628,13 +22628,14 @@ fn a_step_through_an_objects_code_walks_on_until_it_finds_a_match() {
         finds
             .peek()
             .get(&at)
-            .hunt
-            .as_ref()
-            .is_some_and(|hunt| !hunt.walking)
+            .hunt()
+            .is_some_and(|hunt| !hunt.walking())
     });
 
-    let hunt = finds.peek().get(&at).hunt.clone().expect("a walk");
-    let (_, columns) = hunt.found.clone().expect("the walk found sum_to");
+    let hunt = finds.peek().get(&at).hunt().cloned().expect("a walk");
+    let Walked::Found(_, columns) = hunt.walked else {
+        panic!("the walk did not find sum_to: {:?}", hunt.walked);
+    };
     assert_eq!(columns.len(), "sum_to".len(), "the run is not the match");
     // The label the walk found is drawn at that address, which is what the pane lands on.
     let picked = marked
@@ -22676,14 +22677,16 @@ fn a_walk_that_finds_nothing_says_so_and_stops() {
         finds
             .peek()
             .get(&at)
-            .hunt
-            .as_ref()
-            .is_some_and(|hunt| !hunt.walking)
+            .hunt()
+            .is_some_and(|hunt| !hunt.walking())
     });
 
-    let hunt = finds.peek().get(&at).hunt.clone().expect("a walk");
-    assert!(hunt.found.is_none(), "it found something: {:?}", hunt.found);
-    assert_eq!(hunt.through, 1.0, "it stopped short of the whole listing");
+    let hunt = finds.peek().get(&at).hunt().cloned().expect("a walk");
+    assert_eq!(
+        hunt.walked,
+        Walked::Nothing,
+        "the walk found something, or stopped short of the whole listing"
+    );
     assert!(
         labels(&test).iter().any(|label| label == "No matches"),
         "the bar did not say the walk found nothing: {:?}",

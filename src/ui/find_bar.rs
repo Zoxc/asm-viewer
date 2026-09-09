@@ -96,6 +96,22 @@ pub(crate) fn look(listed: &Searchable, filter: &Filter) -> Vec<Hit> {
     hits
 }
 
+/// What a bar has of its listing: the hits of one searched whole, or the walk through an
+/// object's code.
+///
+/// One field and not two, so a listing cannot be both: it is searched whole or walked.
+#[derive(Clone, Default)]
+enum Sought {
+    /// Neither: nothing has answered, and no walk has been asked for.
+    #[default]
+    Nothing,
+    /// A listing searched whole: which listing and pattern the hits are about, and the
+    /// hits in order.
+    Hits(usize, Filter, Arc<Vec<Hit>>),
+    /// The walk a step through an object's code asked for ([`Hunt`]).
+    Walk(Hunt),
+}
+
 /// One pane's find bar: what is typed, what the worker said about it, and where the pane
 /// has got to in the answer.
 #[derive(Clone, Default)]
@@ -107,17 +123,14 @@ pub(crate) struct Find {
     pub(crate) listing: Option<Searchable>,
     /// What was last asked, so a question in flight is not asked again every render.
     asked: Option<(usize, Filter)>,
-    /// The answer: which listing and pattern it is about, and the hits in order.
-    found: Option<(usize, Filter, Arc<Vec<Hit>>)>,
+    /// What came back, whichever way this listing is searched.
+    sought: Sought,
     /// Which hit the pane is on, `None` until a step has landed. A new pattern clears it,
     /// so the next step starts from the caret and not from wherever the last one ended.
     pub(crate) at: Option<usize>,
     /// A step the bar has asked for and the pane has not made yet, and which way. Spent
     /// by the list, which is what knows where its rows are and can scroll to one.
     pub(crate) step: Option<bool>,
-    /// The walk through an object's code a step there asked for, where the listing is one
-    /// ([`Hunt`]). Never set beside `found`: a listing is searched whole or walked.
-    pub(crate) hunt: Option<Hunt>,
     /// The caret the opening asked for, spent by the box once it is mounted.
     pub(crate) focus: bool,
 }
@@ -127,11 +140,36 @@ impl Find {
     /// A stale answer draws nothing rather than the last file's marks.
     pub(crate) fn hits(&self) -> Option<&Arc<Vec<Hit>>> {
         let listing = self.listing.as_ref()?.id();
-        match &self.found {
-            Some((about, filter, hits)) if *about == listing && *filter == self.filter => {
+        match &self.sought {
+            Sought::Hits(about, filter, hits) if *about == listing && *filter == self.filter => {
                 Some(hits)
             }
             _ => None,
+        }
+    }
+
+    /// The walk, where the bar is on one.
+    pub(crate) fn hunt(&self) -> Option<&Hunt> {
+        match &self.sought {
+            Sought::Walk(hunt) => Some(hunt),
+            _ => None,
+        }
+    }
+
+    fn hunt_mut(&mut self) -> Option<&mut Hunt> {
+        match &mut self.sought {
+            Sought::Walk(hunt) => Some(hunt),
+            _ => None,
+        }
+    }
+
+    /// Let go of the walk, where the bar is on one: what it says next is about a pattern
+    /// or a listing that has gone, and the take that finds it gone drops the receiver,
+    /// which is what calls the walk off. Hits are left where they are, stale or not:
+    /// `hits` is what refuses a stale answer.
+    fn stop_walking(&mut self) {
+        if matches!(self.sought, Sought::Walk(_)) {
+            self.sought = Sought::Nothing;
         }
     }
 
@@ -159,7 +197,7 @@ impl Find {
         if self.listing.as_ref().map(Searchable::id) != Some(listing) || self.filter != filter {
             return false;
         }
-        self.found = Some((listing, filter, hits));
+        self.sought = Sought::Hits(listing, filter, hits);
         true
     }
 }
@@ -301,7 +339,7 @@ pub(crate) fn use_searching(at: Where, searchable: Searchable) {
         bar.listing = listing;
         // Another listing is another set of hits, so the pane is on none of them.
         bar.at = None;
-        bar.hunt = None;
+        bar.stop_walking();
         finds.set(next);
     };
     let held = claim.clone();
@@ -468,7 +506,7 @@ impl Component for FindBar {
                 // the next step reads the caret -- and the walk before it is given up,
                 // its answer being about what was typed then.
                 bar.at = None;
-                bar.hunt = None;
+                bar.stop_walking();
             });
         });
 
@@ -575,14 +613,12 @@ impl Component for FindBar {
 fn counted(bar: &Find) -> String {
     // An object's code has no count: it is read a piece at a time, so what there is to
     // say is how far the walk has got, and that one came back with nothing.
-    if let Some(hunt) = &bar.hunt {
-        if hunt.walking {
-            return format!("{}%", (hunt.through * 100.0).round() as u32);
-        }
-        if hunt.found.is_none() {
-            return "No matches".to_owned();
-        }
-        return String::new();
+    if let Some(hunt) = bar.hunt() {
+        return match &hunt.walked {
+            Walked::Walking(through) => format!("{}%", (through * 100.0).round() as u32),
+            Walked::Nothing => "No matches".to_owned(),
+            Walked::Found(..) => String::new(),
+        };
     }
     // A pattern that will not compile has the error under the box already; a count beside
     // it saying nothing matched would read as an answer about the pattern.
@@ -731,8 +767,7 @@ pub(crate) fn use_find_steps(
     });
 }
 
-/// A search through an object's code: what it is looking for, how far it has got, and what
-/// it found.
+/// A search through an object's code: what it is looking for, and where it has got to.
 ///
 /// **No count and no list of hits**, which is what tells this apart from a listing searched
 /// whole: the code is read a piece at a time, so what a step asks for is the *next* match
@@ -746,12 +781,26 @@ pub(crate) struct Hunt {
     pub(crate) back: bool,
     /// The address it started from, which is where the pane was.
     pub(crate) from: u64,
-    /// How much of the code has been walked, none to all of it.
-    pub(crate) through: f32,
-    /// Still walking. A walk that has stopped either found something or found nothing.
-    pub(crate) walking: bool,
-    /// The match, as the address of the line it is on and its columns.
-    pub(crate) found: Option<(u64, Range<usize>)>,
+    /// Where it has got to.
+    pub(crate) walked: Walked,
+}
+
+impl Hunt {
+    /// Still going. A walk that has stopped found something or found nothing.
+    pub(crate) fn walking(&self) -> bool {
+        matches!(self.walked, Walked::Walking(_))
+    }
+}
+
+/// Where a walk has got to: still going, stopped on a match, or stopped with none.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Walked {
+    /// Still going, and how much of the code it has been through, none to all of it.
+    Walking(f32),
+    /// The match it stopped on: the address of the line it is on, and its columns.
+    Found(u64, Range<usize>),
+    /// All the way round, and nothing.
+    Nothing,
 }
 
 /// What a walk says as it goes.
@@ -928,14 +977,12 @@ pub(crate) fn use_code_hunt(
         let mut state = finds.peek().clone();
         let entry = state.get_mut(&at);
         entry.step = None;
-        entry.hunt = Some(Hunt {
+        entry.sought = Sought::Walk(Hunt {
             id,
             filter: bar.filter.clone(),
             back,
             from: from(),
-            through: 0.0,
-            walking: true,
-            found: None,
+            walked: Walked::Walking(0.0),
         });
         finds.set(state);
     });
@@ -946,8 +993,8 @@ pub(crate) fn use_code_hunt(
     let asked = use_memo(move || {
         let finds = finds?;
         let bar = finds.read();
-        let hunt = bar.get(&at).hunt.as_ref()?;
-        hunt.walking
+        let hunt = bar.get(&at).hunt()?;
+        hunt.walking()
             .then_some((hunt.id, hunt.filter.clone(), hunt.from, hunt.back))
     });
     let started = asked.read().clone();
@@ -973,11 +1020,11 @@ pub(crate) fn use_code_hunt(
         let Some(finds) = finds else {
             return;
         };
-        let hunt = finds.read().get(&at).hunt.clone();
+        let hunt = finds.read().get(&at).hunt().cloned();
         let Some(hunt) = hunt else {
             return;
         };
-        let Some((address, columns)) = hunt.found.clone() else {
+        let Walked::Found(address, columns) = hunt.walked else {
             return;
         };
         if *landed.peek() == Some(hunt.id) {
@@ -1003,24 +1050,17 @@ async fn take_hunt(
 ) {
     while let Some(batch) = next_batch(&events).await {
         let mut state = finds.peek().clone();
-        let Some(hunt) = state
-            .get_mut(&at)
-            .hunt
-            .as_mut()
-            .filter(|hunt| hunt.id == id)
-        else {
+        let Some(hunt) = state.get_mut(&at).hunt_mut().filter(|hunt| hunt.id == id) else {
             return;
         };
         for event in batch {
-            match event {
-                Hunted::Through(through) => hunt.through = through,
-                Hunted::Found(address, columns) => {
-                    hunt.found = Some((address, columns));
-                    hunt.walking = false;
-                }
-            }
+            // A walk says nothing after the match it found, so nothing here undoes one.
+            hunt.walked = match event {
+                Hunted::Through(through) => Walked::Walking(through),
+                Hunted::Found(address, columns) => Walked::Found(address, columns),
+            };
         }
-        let done = !hunt.walking;
+        let done = !hunt.walking();
         finds.set(state);
         if done {
             return;
@@ -1031,13 +1071,11 @@ async fn take_hunt(
     let mut state = finds.peek().clone();
     let Some(hunt) = state
         .get_mut(&at)
-        .hunt
-        .as_mut()
-        .filter(|hunt| hunt.id == id && hunt.walking)
+        .hunt_mut()
+        .filter(|hunt| hunt.id == id && hunt.walking())
     else {
         return;
     };
-    hunt.walking = false;
-    hunt.through = 1.0;
+    hunt.walked = Walked::Nothing;
     finds.set(state);
 }
