@@ -593,7 +593,10 @@ impl Component for SectionList {
         // is walked rather than passed over, so the bar has no count over it.
         let at = (self.place, Pane::Assembly);
         let marking = use_marking(at);
-        use_searching(at, Searchable::Code(self.object.clone()));
+        // One value for the claim and for the chord below, which have to name the same
+        // listing: an answer is judged by `Searchable::id`.
+        let searchable = Searchable::Code(self.object.clone());
+        use_searching(at, searchable.clone());
         // The rows, produced by the place-keeping effect and rendered from here, so that
         // new rows and the offset that keeps the reader's place under them land together.
         let rows = use_consume::<CodeRows>().0;
@@ -750,7 +753,7 @@ impl Component for SectionList {
             find_chord(
                 at,
                 marked,
-                Searchable::Code(self.object.clone()),
+                searchable,
                 move |row| {
                     seeded
                         .as_ref()

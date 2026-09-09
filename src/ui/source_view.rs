@@ -596,7 +596,10 @@ impl Component for SourceList {
         // what it searches, claimed for as long as these rows are drawn.
         let at = (Placing::Tab(self.tab), Pane::Source);
         let marking = use_marking(at);
-        use_searching(at, Searchable::Source(self.source.clone()));
+        // One value for the claim and for the chord below, which have to name the same
+        // listing: an answer is judged by `Searchable::id`.
+        let searchable = Searchable::Source(self.source.clone());
+        use_searching(at, searchable.clone());
         let (controller, viewport) = (list.controller, list.viewport);
 
         // Which of this file's names are links, which is the server's to say and not the
@@ -696,7 +699,7 @@ impl Component for SourceList {
             find_chord(
                 at,
                 marked,
-                Searchable::Source(self.source.clone()),
+                searchable,
                 // What Ctrl+F seeds the box with is what a copy would take: the columns
                 // are columns of the line as drawn.
                 move |index| source_line(&seeded, index),
@@ -1057,6 +1060,9 @@ fn source_bar(
 ) -> Element {
     let file = side.file().clone();
     let opens = matches!(side, SourceSide::Companion { .. });
+    // The file as a document: what the glyph is drawn from, and what a press opens where
+    // the name is a door.
+    let document = Document::Source(file.clone());
 
     rect()
         .width(Size::fill())
@@ -1086,12 +1092,12 @@ fn source_bar(
                         .height(Size::px(list_row_height()))
                         .spacing(6.0)
                         .maybe(opens, |bar| {
-                            let document = Document::Source(file.clone());
+                            let document = document.clone();
                             bar.on_press(move |_| {
                                 open_document(open, visits, document.clone(), Reach::inside(ctrl));
                             })
                         })
-                        .child(entry_icon(&Document::Source(file.clone())))
+                        .child(entry_icon(&document))
                         .child(
                             label()
                                 .text(source::name_of(Path::new(&*file)))

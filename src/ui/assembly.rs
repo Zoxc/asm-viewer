@@ -256,6 +256,17 @@ impl AsmData {
         &self.studied.lanes
     }
 
+    /// This listing as the find bar searches it. Built here and not at each of its two
+    /// callers -- what the bar claims, and what a chord hands it -- so the two cannot
+    /// name different listings: an answer is judged by `Searchable::id`, the assembly's
+    /// pointer, and one about another listing is dropped.
+    pub(crate) fn searchable(&self) -> Searchable {
+        Searchable::Symbol {
+            assembly: self.assembly().clone(),
+            lanes: self.lanes().clone(),
+        }
+    }
+
     /// `address`, one of this listing's own, in the object's one address space: the
     /// section's place in the layout added (`SymbolData::placed`), which is what a door
     /// into the object's code takes. Not [`bias`](Self::bias), which is what this listing
@@ -1076,11 +1087,12 @@ fn instruction_menu(
     // The source-driven tab this listing is the assembly side of, if it is one: a
     // location found from it is chosen for it.
     let subject = data.subject.clone();
-    // The symbol this row is code of, in either listing: what the menu bookmarks.
-    let symbol_document = Document::Assembly(Selection::Symbol(Symbol {
+    // The symbol this row is code of, in either listing: what the door back opens, and
+    // what the menu bookmarks. One symbol, so one value.
+    let symbol = Symbol {
         object: data.object().clone(),
         data: data.symbol().clone(),
-    }));
+    };
     // The row's door into the object's code, unless this listing is that already -- and
     // from there, the door back to the symbol read alone. The door takes the placed
     // address, which in a symbol's own listing is not the one drawn.
@@ -1091,15 +1103,10 @@ fn instruction_menu(
     // assembly side of a source-driven tab: in the second the symbol has no other door,
     // the Symbols list aside, since the tab is a file. An assembly-driven tab is the
     // symbol already and gets none.
-    let alone = (data.code_tab || data.subject.is_some()).then(|| {
-        (
-            Symbol {
-                object: data.object().clone(),
-                data: data.symbol().clone(),
-            },
-            instruction.address,
-        )
-    });
+    let alone =
+        (data.code_tab || data.subject.is_some()).then(|| (symbol.clone(), instruction.address));
+    // The same symbol as a document, which is what the bookmark item takes.
+    let symbol_document = Document::Assembly(Selection::Symbol(symbol));
 
     // The column is the source pane's business: nothing in an instruction row is a name a
     // server could be asked about.
@@ -1280,13 +1287,7 @@ impl Component for InstructionList {
         // what it searches, claimed for as long as these rows are drawn.
         let at = (Placing::Tab(self.tab), Pane::Assembly);
         let marking = use_marking(at);
-        use_searching(
-            at,
-            Searchable::Symbol {
-                assembly: self.data.assembly().clone(),
-                lanes: self.data.lanes().clone(),
-            },
-        );
+        use_searching(at, self.data.searchable());
         let (controller, viewport) = (list.controller, list.viewport);
 
         let data = self.data.clone();
@@ -1412,10 +1413,7 @@ impl Component for InstructionList {
             find_chord(
                 at,
                 marked,
-                Searchable::Symbol {
-                    assembly: assembly.clone(),
-                    lanes: lanes.clone(),
-                },
+                data.searchable(),
                 move |row| {
                     seed_lanes
                         .instruction_at(row)
