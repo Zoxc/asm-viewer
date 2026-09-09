@@ -303,8 +303,11 @@ fn a_manifest_that_says_nothing_gets_cargos_answer() {
     .expect("a manifest");
 
     assert!(manifest(&directory).is_some());
-    assert!(debug_lines(&directory, Profile::Debug));
-    assert!(!debug_lines(&directory, Profile::Release));
+    assert!(debug_lines(&profile_manifest(&directory), Profile::Debug));
+    assert!(!debug_lines(
+        &profile_manifest(&directory),
+        Profile::Release
+    ));
 }
 
 /// The three spellings cargo takes, each in the two directions.
@@ -315,7 +318,7 @@ fn debug_information_is_read_however_it_is_spelled() {
     let says = |text: &str| {
         fs::write(&manifest_at, format!("[profile.release]\ndebug = {text}\n"))
             .expect("a manifest");
-        debug_lines(&directory, Profile::Release)
+        debug_lines(&profile_manifest(&directory), Profile::Release)
     };
 
     assert!(says("true"));
@@ -340,7 +343,7 @@ fn adding_debug_lines_keeps_the_rest_of_the_manifest() {
                   serde = \"1\"    # pinned by hand\n";
     fs::write(&manifest_at, before).expect("a manifest");
 
-    add_debug_lines(&directory, Profile::Release).expect("the write");
+    add_debug_lines(&profile_manifest(&directory), Profile::Release).expect("the write");
 
     let after = fs::read_to_string(&manifest_at).expect("the file");
     assert!(after.starts_with(before), "{after}");
@@ -348,7 +351,7 @@ fn adding_debug_lines_keeps_the_rest_of_the_manifest() {
     assert!(after.contains("debug = \"line-tables-only\""), "{after}");
     // Made implicit, so the file gains the one header it needs and no empty `[profile]`.
     assert!(!after.contains("\n[profile]\n"), "{after}");
-    assert!(debug_lines(&directory, Profile::Release));
+    assert!(debug_lines(&profile_manifest(&directory), Profile::Release));
 }
 
 /// A profile the manifest already has keeps everything else it said.
@@ -362,7 +365,7 @@ fn adding_debug_lines_to_a_profile_that_is_there_keeps_its_other_keys() {
     )
     .expect("a manifest");
 
-    add_debug_lines(&directory, Profile::Release).expect("the write");
+    add_debug_lines(&profile_manifest(&directory), Profile::Release).expect("the write");
 
     let after = fs::read_to_string(&manifest_at).expect("the file");
     assert!(after.contains("lto = true"), "{after}");
@@ -392,11 +395,11 @@ fn a_members_profiles_are_the_workspace_roots() {
 
     assert_eq!(profile_manifest(&member), root_manifest);
     // The root asks for debug information; the member's own file says nothing at all.
-    assert!(debug_lines(&member, Profile::Release));
+    assert!(debug_lines(&profile_manifest(&member), Profile::Release));
 
     // And the edit goes where the build reads, leaving the member's manifest as it was.
     let before = fs::read_to_string(&own).expect("the file");
-    add_debug_lines(&member, Profile::Debug).expect("the write");
+    add_debug_lines(&profile_manifest(&member), Profile::Debug).expect("the write");
 
     assert_eq!(fs::read_to_string(&own).expect("the file"), before);
     let after = fs::read_to_string(&root_manifest).expect("the file");
@@ -430,7 +433,7 @@ fn a_package_that_is_its_own_workspace_stops_the_walk() {
     .expect("a manifest");
 
     assert_eq!(profile_manifest(&inner), inner.join("Cargo.toml"));
-    assert!(!debug_lines(&inner, Profile::Release));
+    assert!(!debug_lines(&profile_manifest(&inner), Profile::Release));
 
     // Named outright: the root the walk would have found says nothing, and this one does.
     let named = root.join("named");
@@ -441,7 +444,7 @@ fn a_package_that_is_its_own_workspace_stops_the_walk() {
     )
     .expect("a manifest");
 
-    assert!(debug_lines(&named, Profile::Release));
+    assert!(debug_lines(&profile_manifest(&named), Profile::Release));
 }
 
 /// A directory with no manifest in it is a placeholder and not an error: nothing to build,
@@ -451,8 +454,11 @@ fn a_directory_with_no_manifest_is_not_a_workspace() {
     let directory = directory(line!());
 
     assert_eq!(manifest(&directory), None);
-    assert!(!debug_lines(&directory, Profile::Release));
-    assert!(add_debug_lines(&directory, Profile::Release).is_err());
+    assert!(!debug_lines(
+        &profile_manifest(&directory),
+        Profile::Release
+    ));
+    assert!(add_debug_lines(&profile_manifest(&directory), Profile::Release).is_err());
 }
 
 /// One thing the compiler said, at the level a test is about.

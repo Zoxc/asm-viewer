@@ -23629,6 +23629,37 @@ fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
     );
 }
 
+/// **One job, one walk up to the profile manifest.** Which file cargo takes `[profile.*]`
+/// from is an ancestor walk with a read and a parse per directory, and a manifest job asks
+/// about it twice over -- the answer names the file, and whether the profile carries lines
+/// is read out of it -- while an edit writes to it first. It is resolved once and handed to
+/// each, so a press costs one walk and not three.
+///
+/// The real worker half, over a real directory: what it costs is filesystem work, which no
+/// canned answer would show.
+#[test]
+fn a_manifest_job_walks_to_the_profile_manifest_once() {
+    let root = Temporary::directory(std::env::temp_dir().join(format!(
+        "assembly-viewer-profile-manifest-{}",
+        std::process::id()
+    )));
+    std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("a manifest");
+    let job = |what| BuildJob {
+        directory: root.to_path_buf(),
+        profile: Profile::Release,
+        what,
+    };
+
+    let before = cargo::resolutions();
+    build_work(job(BuildWhat::Read));
+    assert_eq!(cargo::resolutions() - before, 1, "the read walked twice");
+
+    // The edit and the read back of what it wrote, which is one press.
+    let before = cargo::resolutions();
+    build_work(job(BuildWhat::AddDebugLines));
+    assert_eq!(cargo::resolutions() - before, 1, "the edit walked again");
+}
+
 /// A diagnostic's place is a target when this pane can reach it: cargo spells the file
 /// relative to where it ran, so the project's directory joined with it is the file, and
 /// pressing it opens that file as source on the line the compiler named. A place in a

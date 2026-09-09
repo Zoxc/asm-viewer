@@ -353,15 +353,6 @@ fn tab_icon(tab: Tab, docs: &Docs) -> Element {
     }
 }
 
-/// What hovering that chip says: the whole of a name the chip had to cut, and the whole
-/// path of a file.
-fn tab_tooltip(tab: Tab, docs: &Docs) -> String {
-    match tab {
-        Tab::Page(page) => page.title().to_owned(),
-        Tab::Document(id) => docs.get(id).map(entry_tooltip).unwrap_or_default(),
-    }
-}
-
 /// The glyph a page's tab is drawn with.
 fn page_icon(page: Page) -> Element {
     match page {
@@ -743,10 +734,14 @@ impl Component for TabHeader {
             ),
             Tab::Document(id) => {
                 let docs = open.docs.read();
+                // What it draws and what hovering it says out of one name: on a
+                // symbol's tab the first is the short spelling of the second
+                // (`entry_labels`).
+                let (text, tooltip) = docs.get(id).map(entry_labels).unwrap_or_default();
                 (
                     tab_icon(tab, &docs),
-                    tab_title(tab, &docs),
-                    tab_tooltip(tab, &docs),
+                    text,
+                    tooltip,
                     docs.temporal() == Some(id),
                 )
             }

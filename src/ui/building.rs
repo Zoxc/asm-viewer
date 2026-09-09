@@ -204,7 +204,12 @@ pub(crate) fn build_work(job: BuildJob) -> BuildAnswer {
         what,
     } = job;
     match what {
-        BuildWhat::Read => read(&directory, profile, None),
+        BuildWhat::Read => read(
+            &directory,
+            cargo::profile_manifest(&directory),
+            profile,
+            None,
+        ),
         BuildWhat::Build => {
             let run = cargo::run(&directory, profile);
             BuildAnswer::Done {
@@ -217,8 +222,9 @@ pub(crate) fn build_work(job: BuildJob) -> BuildAnswer {
             // that failed must not leave the view saying the lines are there. What
             // refused it goes back with the read, since the row it leaves standing says
             // nothing about the press.
-            let refused = cargo::add_debug_lines(&directory, profile).err();
-            read(&directory, profile, refused)
+            let profiles = cargo::profile_manifest(&directory);
+            let refused = cargo::add_debug_lines(&profiles, profile).err();
+            read(&directory, profiles, profile, refused)
         }
     }
 }
@@ -243,14 +249,23 @@ fn openable(directory: &Path, diagnostics: &[Diagnostic]) -> HashSet<PathBuf> {
     named
 }
 
-fn read(directory: &Path, profile: Profile, refused: Option<String>) -> BuildAnswer {
+/// What the manifest says, and which file said it.
+///
+/// `profiles` is the manifest cargo takes the profile from, resolved by the caller: the
+/// walk up to it is a read and a parse per directory, and the edit that asks for a read
+/// has already made it to know where to write.
+fn read(
+    directory: &Path,
+    profiles: PathBuf,
+    profile: Profile,
+    refused: Option<String>,
+) -> BuildAnswer {
     let manifest = cargo::manifest(directory);
-    // Named only when it is not the file cargo is run over: a member's profiles are the
-    // workspace root's, and the reader is being offered an edit to that file and not to
-    // the one the row above names.
-    let profiles = cargo::profile_manifest(directory);
     BuildAnswer::Read {
-        debug_lines: cargo::debug_lines(directory, profile),
+        debug_lines: cargo::debug_lines(&profiles, profile),
+        // Named only when it is not the file cargo is run over: a member's profiles are
+        // the workspace root's, and the reader is being offered an edit to that file and
+        // not to the one the row above names.
         profiles: (manifest.as_ref() != Some(&profiles)).then_some(profiles),
         manifest,
         refused,

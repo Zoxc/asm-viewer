@@ -337,7 +337,12 @@ pub fn manifest(directory: &Path) -> Option<PathBuf> {
 /// What is **not** checked is whether that root's `members` really cover this directory:
 /// cargo refuses to build a package its ancestor workspace does not claim, so there is no
 /// build there to ask about.
+///
+/// A read and a parse per directory, so the answer is resolved **once** per job and handed
+/// to [`debug_lines`] and [`add_debug_lines`] rather than worked out again by each.
 pub fn profile_manifest(directory: &Path) -> PathBuf {
+    #[cfg(test)]
+    RESOLUTIONS.with(|resolutions| resolutions.set(resolutions.get() + 1));
     let own = directory.join(MANIFEST);
     if let Some(manifest) = read_manifest(&own) {
         if manifest.contains_key("workspace") {
@@ -366,11 +371,13 @@ pub fn profile_manifest(directory: &Path) -> PathBuf {
 /// Whether a binary built with `profile` would carry the line information the source side
 /// is drawn from.
 ///
-/// The workspace root's manifest, since that is the only one cargo takes a profile from
-/// ([`profile_manifest`]). One that says nothing gets cargo's own default, which is *no*
-/// debug information under `release` — the reason the view offers to add it.
-pub fn debug_lines(directory: &Path, profile: Profile) -> bool {
-    let Some(value) = read_manifest(&profile_manifest(directory))
+/// `profiles` is the manifest cargo takes the profile from, which [`profile_manifest`] says
+/// and this does not: finding it is a read and a parse per directory, and the caller makes
+/// that walk once for this and for the write. A manifest that says nothing gets cargo's own
+/// default, which is *no* debug information under `release` — the reason the view offers to
+/// add it.
+pub fn debug_lines(profiles: &Path, profile: Profile) -> bool {
+    let Some(value) = read_manifest(profiles)
         .as_ref()
         .and_then(|manifest| manifest.get("profile"))
         .and_then(|profiles| profiles.get(profile.name()))
@@ -390,23 +397,22 @@ pub fn debug_lines(directory: &Path, profile: Profile) -> bool {
     }
 }
 
-/// Ask `profile` for line tables, in the manifest cargo would read them from.
+/// Ask `profile` for line tables, in `profiles` -- the manifest cargo would read them from.
 ///
-/// The workspace root's and not the directory's own, or the edit would go into a file the
-/// build ignores ([`profile_manifest`]).
+/// That is the workspace root's and not the directory's own, or the edit would go into a
+/// file the build ignores; which file that is, is [`profile_manifest`]'s to say.
 ///
 /// `line-tables-only` and not `true`: the source side wants the line table and nothing
 /// else, and it is the cheapest debug information to build.
-pub fn add_debug_lines(directory: &Path, profile: Profile) -> Result<(), String> {
-    let path = profile_manifest(directory);
-    let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> {
+    let text = fs::read_to_string(profiles).map_err(|error| error.to_string())?;
     let mut document = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| error.to_string())?;
 
     // Made if it is not there, and made *implicit* in that case so the file gains a
     // `[profile.release]` header and no empty `[profile]` above it.
-    let profiles = document
+    let table = document
         .as_table_mut()
         .entry("profile")
         .or_insert_with(|| {
@@ -415,16 +421,16 @@ pub fn add_debug_lines(directory: &Path, profile: Profile) -> Result<(), String>
             toml_edit::Item::Table(table)
         })
         .as_table_mut()
-        .ok_or_else(|| format!("`profile` in {} is not a table", path.display()))?;
+        .ok_or_else(|| format!("`profile` in {} is not a table", profiles.display()))?;
 
-    let one = profiles
+    let one = table
         .entry(profile.name())
         .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
         .as_table_mut()
         .ok_or_else(|| format!("`profile.{}` is not a table", profile.name()))?;
     one["debug"] = toml_edit::value("line-tables-only");
 
-    write_atomically(&path, document.to_string().as_bytes()).map_err(|error| error.to_string())
+    write_atomically(profiles, document.to_string().as_bytes()).map_err(|error| error.to_string())
 }
 
 /// The manifest at `path` as a value, or `None` when there is none or it does not parse.
@@ -435,6 +441,22 @@ fn read_manifest(path: &Path) -> Option<toml::Table> {
     // a manifest is a whole document.
     let text = fs::read_to_string(path).ok()?;
     toml::from_str::<toml::Table>(&text).ok()
+}
+
+/// Test-only: how many times this thread has resolved a profile manifest.
+///
+/// Every resolution goes through [`profile_manifest`], which is an ancestor walk with a
+/// read and a parse per directory, so counting there counts what a press costs. A
+/// thread-local, as `files::reads` is: a test takes the count before and after the job it
+/// is about.
+#[cfg(test)]
+pub fn resolutions() -> usize {
+    RESOLUTIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static RESOLUTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The messages cargo emits, as much of each as this module reads. `#[serde(other)]` is

@@ -4,6 +4,7 @@
 //! Nothing here opens or closes anything. [`entry_text`] is the short spelling a chip and
 //! a row draw and [`entry_name`] the whole one, which is what a tooltip says and what a
 //! filter reads -- so a generic argument no tab draws is still something to search for.
+//! [`entry_labels`] is both at once, for a chip or a row that draws one and says the other.
 //! [`entry_key`] is the identity a row or a chip is keyed by.
 
 use super::*;
@@ -46,6 +47,22 @@ pub(crate) fn entry_name(entry: &Document) -> String {
         }
         Document::Assembly(Selection::Symbol(symbol)) => symbol.data.display().to_owned(),
         Document::Source(file) => source::name_of(Path::new(&**file)),
+    }
+}
+
+/// Both spellings at once, for a chip or a row that draws one and says the other:
+/// [`entry_text`] and [`entry_tooltip`].
+///
+/// A symbol's tab is where the two are one name cut two ways, and a demangled name runs to
+/// a hundred and fifty characters, so it is built once here and the short spelling cut from
+/// it. Every other kind asks the two functions, which stay the rules.
+pub(crate) fn entry_labels(entry: &Document) -> (String, String) {
+    match entry {
+        Document::Assembly(Selection::Symbol(symbol)) => {
+            let whole = symbol.data.display().to_owned();
+            (short_name(&whole), whole)
+        }
+        entry => (entry_text(entry), entry_tooltip(entry)),
     }
 }
 

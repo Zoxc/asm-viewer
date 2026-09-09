@@ -431,7 +431,9 @@ impl Component for HistoryRow {
         let objects = use_consume::<Objects>().0;
         let picking = use_picking(Panel::History);
         let at = self.at;
-        let text = entry_text(&self.entry);
+        // One build of the name for both spellings: the row draws the short one and its
+        // tooltip says the whole one (`entry_labels`).
+        let (text, tooltip) = entry_labels(&self.entry);
         let entry = self.entry.clone();
         let target = self.entry.clone();
         let pick = Pick::Visit(self.entry.clone());
@@ -441,7 +443,7 @@ impl Component for HistoryRow {
         name_tooltip(
             fitted.cut(),
             &drawn,
-            entry_tooltip(&self.entry),
+            tooltip,
             list_row(hovering, picking.drawn(&pick, self.current))
                 .on_press(move |_| {
                     picking.press(pick.clone(), at, || {

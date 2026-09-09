@@ -438,7 +438,9 @@ for ever, and taking that offer writes a table cargo ignores while the view says
 there. `profile_manifest` is that rule -- a manifest with a `[workspace]` table is a root, a package
 may name its root outright, and failing both it is the nearest ancestor with one -- and it is a walk
 up the directories rather than `cargo locate-project`, so it costs no process and is a unit test
-over some files rather than over a toolchain. Whether the root's `members` really cover the
+over some files rather than over a toolchain. The walk is a read and a parse per directory, so a
+job makes it **once**: `build_work` resolves the file and hands it to the read and to the edit,
+rather than each working it out for itself. Whether the root's `members` really cover the
 directory is not checked: cargo refuses to build a package its ancestor workspace does not claim, so
 there is no build there to ask about. When that file is not the project's own, the view **names**
 it, beside the manifest cargo is run over: the offer edits a file outside the project, and a write

@@ -338,9 +338,10 @@ while a tab is dragged included: what varies is a `Mark` -- a chip like any othe
 with whether the keyboard is inside it, or that copy -- so `dragged` wraps `chip` rather than
 spelling the frame a second time, as `dock.rs` draws a panel's from `panel_label`. Where a drop
 would land is not one of the marks but a flag beside it: that rule is on another edge and is worn
-with any of them, the tab on screen being the one a reader most often drags. What a tab is called,
-the glyph before it and what hovering it says are `tab_title`, `tab_icon` and `tab_tooltip`, which
-the tab list and the drag copy read too. **The chip activates its own tab**, freya's docking having
+with any of them, the tab on screen being the one a reader most often drags. What a tab is called and
+the glyph before it are `tab_title` and `tab_icon`, which the tab list and the drag copy read too;
+a chip asks `entry_labels` instead, since it draws the one and says the other, and for a symbol's
+tab those are one name cut two ways. **The chip activates its own tab**, freya's docking having
 been what did that before -- it wraps a header in a `DropZone` around a
 `rect().on_press(set_active)` around a `DragZone` -- so the press handler calls `raise_tab` and then
 asks whether it was a **double press**
@@ -546,7 +547,9 @@ question only a view has.
 `entry_text` is where it is applied and is the one spelling a document tab and a History row
 share; `entry_name` beside it is the whole name, which is what a tooltip says where the two differ
 and what the History filter matches, so a generic argument no tab draws is still something a reader
-can search for.
+can search for. `entry_labels` answers both at once, for a chip and a History row, which draw the
+one and say the other: a demangled name averages a hundred and fifty characters, and building it
+once and cutting the short spelling from it is one such string per row per render rather than two.
 
 **Nothing in that scanner recurses.** A name is file input, and reading a `<Type as Trait>`
 qualifier used to be one call per group: a symbol of a hundred thousand `<` -- which a string table
