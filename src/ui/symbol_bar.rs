@@ -266,7 +266,7 @@ impl Component for SymbolBar {
             // sits beside.
             .maybe(self.leading, |bar| {
                 bar.child(PaneToggle {
-                    of: Toggling::Tab(self.tab),
+                    of: Placing::Tab(self.tab),
                 })
             })
     }

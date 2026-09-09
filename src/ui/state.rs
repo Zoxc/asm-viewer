@@ -16,6 +16,11 @@
 //!
 //! Two of the names are **derivations and not states**: `Active` is a `Memo` over the strip
 //! and the document table, and `Symbols` a `Memo` over `Objects`.
+//!
+//! One name here is **no context at all**: [`Placing`], the plain key saying which of the
+//! two places a code pane is drawn in. The find bars, the section listings and the pane
+//! toggle are each told it and none of them owns it, so it is written down once, beside
+//! the maps it keys.
 
 use super::*;
 
@@ -119,6 +124,22 @@ impl Open {
     pub(crate) fn ids(&self) -> Vec<DocId> {
         open_ids(&self.strip.peek())
     }
+}
+
+/// Which of the two places a code pane is drawn in: a document tab, or the Scratchpad's.
+/// What every pane, bar and toggle that either can have is told apart by, and so what
+/// says whether the pane's place, its runs and its find bar are filed under anything.
+///
+/// **A tab's are filed under its id** -- in [`Places`] here and in [`Finds`] -- and are
+/// forgotten with the tab by the three closers. The Scratchpad's pane is no tab and has
+/// no [`DocId`] to file them under; an entry under a made-up one would hold whatever its
+/// document points into with nothing that would ever forget it, so it keeps what it keeps
+/// beside the pad itself and closes with the app.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Placing {
+    Tab(DocId),
+    /// The Scratchpad's own pane, over the program its pad built.
+    Pad,
 }
 
 /// Everything kept per **place** -- a tab and one of the stops on its trail, an [`Entry`]

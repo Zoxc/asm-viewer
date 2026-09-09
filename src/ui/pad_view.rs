@@ -975,7 +975,7 @@ impl Component for PadHeader {
                     // the leading pane's bar: this heading row is the pad's own strip of
                     // controls and the one thing here that is always up, the editor having
                     // no bar.
-                    .child(PaneToggle { of: Toggling::Pad })
+                    .child(PaneToggle { of: Placing::Pad })
                     .into_element(),
             ),
         )

@@ -227,7 +227,9 @@ command.
 - `src/ui/state.rs` — what the root provides and no one mechanism owns, and the bundles the
   whole app is passed around in. A context lives with the mechanism it belongs to (`Marked` in
   `marks.rs`, `Doors` in `focus.rs`, `Loading` in `loading.rs`, the `Pad*` family in `pad.rs`),
-  and so does the bundle that groups it; the rest is here.
+  and so does the bundle that groups it; the rest is here, `Placing` among them -- whether a
+  code pane is a tab's or the Scratchpad's, which is what its place, its runs and its find
+  bar are filed under.
 - `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
 - `src/ui/finder.rs` — the file finder: the box Ctrl+P opens over the app, the files of the
   project's directory under it, and the one worker that walks them and picks them out. The

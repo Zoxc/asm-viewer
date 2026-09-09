@@ -523,26 +523,12 @@ enum RowKey {
     Gap(u64),
 }
 
-/// Where a listing of an object's code keeps its place, its runs and its caret -- and
-/// whether that place is one anything is filed under at all.
-///
-/// **A tab's is an entry on its trail**, and [`Places`] is forgotten with the tab by the
-/// three closers. A listing that is **no tab** has no `DocId` to be filed under,
-/// and an entry under a made-up one would hold the `Arc<Object>` its document points into
-/// with nothing that would ever forget it -- so it names an entry nothing is ever written
-/// under, and what keeps the reader's place across a recount is the place derived from the
-/// offset, which is the hook's own and not the map's.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Placing {
-    Tab(DocId),
-    /// The Scratchpad's listing of the program its pad built.
-    Pad,
-}
-
 /// The listing of one object's code.
 #[derive(Clone)]
 pub(crate) struct SectionList {
-    /// Where this listing is drawn, which is what its place is kept under -- or not kept.
+    /// Where this listing is drawn, and so what its place is kept under -- or not kept:
+    /// the Scratchpad's is carried across a recount by the place derived from the
+    /// offset, which is the hook's own and not the map's.
     pub(crate) place: Placing,
     pub(crate) object: Arc<Object>,
 }

@@ -191,9 +191,12 @@ that is always up and the half it hides carries none of its own. A second copy o
 bar would be the same button on screen twice, and a press on it would take its own door away.
 It takes the tab's id and reads the document out of `Docs` rather than being handed
 one -- what it writes is filed under the tab anyway, and a `Document` prop would hold an `Arc<Object>`
-in a control every open tab draws. The toggle rides on a bar, so a pane drawn without one has none:
-an assembly side the worker has not answered for yet draws no bar, and the control arrives with the
-listing.
+in a control every open tab draws. The id reaches it as a `Placing`, the same key the find bars and
+the section listings are told where they are by (`src/ui/state.rs`): the Scratchpad's pane carries
+this control too and has no `DocId`, and one control for both is one icon, one tooltip and one rule
+about where it sits, with only the flag it writes differing. The toggle rides on a bar, so a pane
+drawn without one has none: an assembly side the worker has not answered for yet draws no bar, and
+the control arrives with the listing.
 
 **Open or shut is the tab's and not the pane's**, which is `Expanded` at the root: both panes are
 mounted afresh for every document, so a `use_state` here would shut the section every time the
