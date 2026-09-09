@@ -792,12 +792,22 @@ impl Component for RecentsSection {
     fn render(&self) -> impl IntoElement {
         let states = use_project_states();
 
-        // Read on mount and again when the open project changes, never per render:
-        // each row is a small read of another project's own file.
+        // Read here at the first render rather than by the effect below, which runs a beat
+        // later and would draw "No other projects" for one frame.
         let store = states.store;
-        let mut recents = use_state(move || recents_of(store));
         let file = states.proj.read().file.clone();
-        use_side_effect_with_deps(&file, move |_: &Option<PathBuf>| {
+        let read_for = file.clone();
+        let mut recents = use_state(move || recents_of(store));
+        // Which project that list was read for. The effect runs on the mount as well as on
+        // a change, and without something to compare against it would read the file, and a
+        // small read of every project named in it, a second time at the first render.
+        let mut over = use_state(move || read_for);
+        use_side_effect_with_deps(&file, move |file: &Option<PathBuf>| {
+            let changed = *over.peek() != *file;
+            if !changed {
+                return;
+            }
+            over.set(file.clone());
             recents.set(recents_of(store));
         });
 

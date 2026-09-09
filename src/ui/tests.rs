@@ -24169,6 +24169,79 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
     );
 }
 
+/// **The recent list is read once for the project on screen.** The effect that re-reads it
+/// runs on mount as well as on a change, so without its guard the file, and a small read of
+/// every project named in it, would be done twice before anything was drawn.
+///
+/// The list is taken off disk in the gap between the mount, which `TestingRunner::new`
+/// renders, and the first pass after it, which is the earliest an effect can run
+/// (`agents/Headless.md`). So a row still drawn is a row nothing read a second time.
+#[test]
+fn the_recent_projects_are_read_once_for_the_project_on_screen() {
+    let base = Temporary::directory(std::env::temp_dir().join(format!(
+        "assembly-viewer-recents-once-{}",
+        std::process::id()
+    )));
+    // A real store, since what this is about is how often a file is read: one project to
+    // list, and the list naming it.
+    let other = base.join("other.avproj");
+    std::fs::write(&other, "").expect("writing the project file");
+    let listing = base.join(store::RECENTS_FILE);
+    let entry = other.to_string_lossy().into_owned();
+    std::fs::write(&listing, format!("order = [{entry:?}]\n")).expect("writing the recent list");
+
+    let opened = base.to_path_buf();
+    let (mut test, states) = TestingRunner::new(
+        project_view_harness,
+        (600., 700.).into(),
+        move |runner: &mut _| {
+            let states = project_states!(runner);
+            // The store the sections read through, in place of the one that is never made.
+            let mut store = states.store;
+            store.set(Some(Store::at(&opened)));
+            runner.provide_root_context(|| {
+                BuildWorking(Arc::new(|_: BuildJob| BuildAnswer::Read {
+                    manifest: None,
+                    profiles: None,
+                    debug_lines: false,
+                    refused: None,
+                }))
+            });
+            runner.provide_root_context(|| Talking(State::create(Language::default())));
+            runner.provide_root_context(|| BuildAsking(State::create(None)));
+            states
+        },
+        1.,
+    );
+
+    // The mount's own read found it.
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "other.avproj"),
+        "the mount read no recent list: {drawn:?}"
+    );
+
+    // Now there is nothing to read, and the row is drawn out of what was read before.
+    std::fs::remove_file(&listing).expect("removing the recent list");
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "other.avproj"),
+        "the recent list was read a second time for the same project: {drawn:?}"
+    );
+
+    // And the guard has not frozen the list: another project open is another read, which
+    // is the one that finds the file gone.
+    let mut proj = states.proj;
+    proj.write().file = Some(base.join("open.avproj"));
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        !drawn.iter().any(|text| text == "other.avproj"),
+        "a change of project read nothing: {drawn:?}"
+    );
+}
+
 /// The window over a rescue: it names every path it was given, and its button empties the
 /// list -- which is the same list it is drawn from, so the window goes with it.
 #[test]

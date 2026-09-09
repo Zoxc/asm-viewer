@@ -354,7 +354,12 @@ recent-projects view separately. They are one question, which project am I in an
 there: the recent list is how a reader *leaves* the project the rest of the pane describes, and a
 tab of its own would be empty in every session where a project was reopened, which is all of them
 after the first. The list leaves the open project *out*, since the pane above it is a better and
-fresher description of that one than a row read off a file could be.
+fresher description of that one than a row read off a file could be. It is read as the section
+mounts and again only when the open project changes -- `recents.toml` and a small read of every
+project named in it, on the UI thread -- so the section **keeps the project it read for**, the
+Files view's bargain above and for the same reason: `use_side_effect_with_deps` runs on the mount
+as well as on a change, and with nothing to compare against it would do the whole read twice
+before anything was drawn.
 
 `OpenProject` is the value `Proj` holds, and its two editable fields are `String`s where `Details`
 has `Option`s: they are what is in two text boxes, and a text box has no third state. An empty box
