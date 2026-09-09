@@ -184,7 +184,11 @@ pub static SECTIONS: &[Section] = &[
             ),
             gesture("Click a link", "Open what it names, in this tab."),
             gesture("Ctrl+click a link", "Open it in a new tab."),
-            gesture("Ctrl+click an address", "Open the object's code there."),
+            gesture(
+                "Click an address",
+                "Open the object's code there, in this tab.",
+            ),
+            gesture("Ctrl+click an address", "Open it in a new tab."),
             gesture(
                 "Alt+click a link",
                 "Select over it instead of following it.",
