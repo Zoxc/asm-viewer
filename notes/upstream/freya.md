@@ -327,6 +327,26 @@ for that reason, and the find bar's two step buttons (`src/ui/find_bar.rs`) are 
 `NoArgCallback` is used nowhere and should stay that way. Not reported yet; the `false` at
 least has the TODO over it, and the `true` has nothing.
 
+## An `Input` takes its focus back after the press that moved it
+
+`Input` unfocuses itself from `on_global_pointer_press` whenever it holds the focus and the
+press was not its own (`freya-components-0.4.3/src/input.rs:559`). That handler runs on the
+global press a press derives, which is emitted *after* the press the node under the pointer
+answered -- so a node that asks for the focus in its own handler is focused and then
+unfocused inside the one gesture, and the keyboard ends up nowhere at all. It is not the
+press being stolen: the caret still lands where the pointer was. Only the focus goes.
+
+**Cost:** every first press into a code pane made with the caret in a find bar or a filter
+box did nothing but move the caret -- the arrows, Ctrl+C and F3 all went to no one until the
+reader pressed a second time. Two ways out, and the app uses the second. `prevent_default`
+on the press cancels the derived global press, which is what a filter bar's toggle does
+(`src/ui/filter_bar.rs`) and what a code pane must **not** do: `Menu` closes on that same
+global press (`menu.rs:170`), so a pane that cancelled it would leave an open context menu
+up. What the pane does instead is ask for the focus in a task (`src/ui/list_box.rs`), which
+is polled after the batch of events the press made, so its request is the last word. Not
+reported. An `Input` that unfocused only for a press it can see was not answered, or a focus
+request that outranked it, would remove the workaround.
+
 ## Wanted
 
 **A `SubMenu` that says it is one.** It renders a `MenuItem` around `rect().horizontal()`

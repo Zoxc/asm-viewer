@@ -110,7 +110,17 @@ impl ListBox {
             .expanded()
             .a11y_id(a11y)
             .a11y_focusable(true)
-            .on_pointer_down(move |_| a11y.request_focus())
+            // **Asked for in a task, not in the handler.** freya's `Input` gives its
+            // focus up from `on_global_pointer_press`, which is emitted after this and
+            // would undo a focus asked for here: the caret in a find bar or a filter box
+            // left every first press in the code with the keyboard nowhere, and the
+            // second press was what took it back. A task is polled after the batch of
+            // events the press made, so this is the last word on where the keyboard is.
+            .on_pointer_down(move |_| {
+                spawn(async move {
+                    a11y.request_focus();
+                });
+            })
             .on_key_down(on_key_down)
             .on_sized({
                 let listing = listing.clone();

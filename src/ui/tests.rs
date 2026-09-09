@@ -22411,6 +22411,59 @@ fn ctrl_f_opens_the_find_bar_over_the_pane_the_keyboard_is_in() {
     );
 }
 
+/// **One press in the code takes the keyboard back from a text box.** freya's `Input`
+/// gives its focus up from `on_global_pointer_press`, which is emitted after the press
+/// the row itself answered, so the focus the box asked for was undone the instant it was
+/// asked: a reader with the caret in the find bar who pressed into the code was left with
+/// the keyboard nowhere, and the arrows, Ctrl+C and F3 all did nothing until they pressed
+/// a second time. Fails on a box that takes the focus back.
+#[test]
+fn one_press_in_the_code_takes_the_keyboard_back_from_a_text_box() {
+    let shown = shown_sum_to();
+    let (mut test, (_states, marked, _landing, _doors)) = TestingRunner::new(
+        find_harness,
+        (600., 400.).into(),
+        |runner| listing_states!(runner, shown),
+        1.,
+    );
+    settle(&mut test);
+    // The caret is in the find bar's box, which is where Ctrl+F leaves it.
+    open_find_bar(&mut test);
+
+    // One press in the code, and one only.
+    let drawn = paragraphs(&test);
+    let at = left_of(&drawn[0].0);
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    mark_release(marked);
+    settle(&mut test);
+
+    // A key the pane answers only while it holds the keyboard. The press put the caret
+    // where the pointer was whether or not the focus stayed, so it is the *motion* that
+    // says where the keys are going.
+    let lead = || {
+        marked
+            .peek()
+            .assembly
+            .clone()
+            .expect("the press left a run")
+            .chars
+            .lead()
+    };
+    let before = lead();
+    test.press_key(Key::Named(NamedKey::ArrowRight));
+    settle(&mut test);
+    assert_eq!(
+        lead(),
+        Caret {
+            row: before.row,
+            col: before.col + 1
+        },
+        "the press left the keyboard nowhere: the pane did not answer the arrow"
+    );
+}
+
 /// **The bar takes its room from the code and does not cover it.** It is the last child of
 /// the pane's own flex column, so the listing above is given what is left -- which is also
 /// what keeps a page of rows and every reveal measured in the height the reader can see.
