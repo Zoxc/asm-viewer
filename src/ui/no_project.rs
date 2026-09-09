@@ -254,14 +254,6 @@ impl Component for UnopenedPopup {
     }
 }
 
-/// Whether the reader is being asked to confirm deleting the open project, and what it is
-/// called while they answer.
-///
-/// The label and not the path: it is what the question names, and reading it once when the
-/// question is asked is what keeps the popup from having to be told the project again.
-#[derive(Clone, Copy)]
-pub(crate) struct Deleting(pub(crate) State<Option<String>>);
-
 /// The window the app asks before deleting a project.
 ///
 /// Nothing is deleted until it is answered: the control in the bar sets [`Deleting`] and
