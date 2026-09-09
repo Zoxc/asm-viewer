@@ -244,7 +244,7 @@ impl Shown {
     /// nothing here needed asking before a source question could name a symbol. A
     /// source-driven tab survives a binary close by doctrine, so its answer would go on
     /// being drawn, and a [`Studied`] holds a [`Symbol`] holds the `Arc<Object>` holds
-    /// the whole file's bytes: `Positions::forget`'s leak in a second place.
+    /// the whole file's bytes: [`Positions::forgetting`]'s leak in a second place.
     ///
     /// Asked in the two places an answer is judged: by the effect, so a closed binary is
     /// a question asked again out of what is left, and by the task taking answers, so the

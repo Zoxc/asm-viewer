@@ -218,7 +218,7 @@ is where a reader says which instance they meant.
 **An answer can now outlive the document that named it, and one rule stops it.** A symbol question
 is a tab into one object and closes with its file. A source-driven tab survives `close_binary` by
 doctrine, so its answer would go on being drawn. A `Studied` holds a `Symbol`, which holds the
-`Arc<Object>`, which holds the whole file's bytes: `Positions::forget`'s leak in a second place.
+`Arc<Object>`, which holds the whole file's bytes: `Positions::forgetting`'s leak in a second place.
 `Shown::still_open` is asked in the two places an answer is judged, and both are `Analyzed`'s own:
 `Analyzed::asked`, so a closed binary means the question is asked again of what is left, and
 `Analyzed::take`, so an answer already in flight when the file closed is not taken either. Both are
