@@ -21805,6 +21805,84 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
     );
 }
 
+/// [`use_land`] and nothing else, over the project's states and a [`CodeRows`] the test
+/// writes: what is under test is the runs the hook gives an arriving place, which is a
+/// state and needs no pane to say what it is.
+fn land_harness() -> impl IntoElement {
+    let active = use_consume::<Active>().0;
+    let code_rows = use_consume::<CodeRows>().0;
+    use_land(use_doors(), use_places(), active, code_rows);
+
+    rect().expanded()
+}
+
+/// The one context [`land_harness`] reads beside the project's, and the doors, which is
+/// where the runs are.
+macro_rules! land_states {
+    ($runner:expr) => {{
+        let (states, doors) = project_wiring!($runner);
+        let code_rows = $runner
+            .provide_root_context(|| CodeRows(State::create(None)))
+            .0;
+        (states, doors, code_rows)
+    }};
+}
+
+/// The run standing in the source pane as a switch wakes the effect belongs to the place
+/// being left, and is the arriving place's own **only where it is a run of the very row
+/// that place is driven from**: a door onto the file already on top marks its line itself
+/// and leaves no landing, and the column it marked is what puts the caret on the name
+/// (`a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too`). A run of any other
+/// row is another place's, and the arriving place gets its driven line plain.
+///
+/// Headless because the standing run is what the effect finds in `Marks` as the switch
+/// wakes it, and only the runner can put one there and then switch.
+#[test]
+fn a_standing_run_of_another_line_is_not_kept_over_the_driven_one() {
+    let symbols = fixture_symbols();
+    let file: Arc<str> = Arc::from("/p/src/main.rs");
+    let (mut test, (mut states, doors, _code_rows)) = TestingRunner::new(
+        land_harness,
+        (200., 200.).into(),
+        |runner| land_states!(runner),
+        1.,
+    );
+    let mut marked = doors.marked;
+
+    // The file's own tab, and a symbol's tab over it, which is the one the reader is on:
+    // its source side is showing that same file.
+    let source = Document::Source(file.clone());
+    open_document(states.open, states.visits, source.clone(), Reach::NewTab);
+    settle(&mut test);
+    let symbol = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    open_document(states.open, states.visits, symbol, Reach::NewTab);
+    settle(&mut test);
+
+    // The line the file's tab is driven from, and a run of another line of that file
+    // standing in the pane: the symbol's tab is the one on screen, and its source side is
+    // showing that file.
+    let entry = entry_of(&states, &source);
+    states.places.driven.write().remember(entry, 12);
+    marked.set(Marks {
+        assembly: None,
+        source: Some(line_pick(file.clone(), 5, Some(4..9), Owed::default())),
+    });
+    test.sync_and_update();
+
+    raise_document(&states, &source);
+    settle(&mut test);
+
+    let picked = marked.peek().source.clone().expect("no run at all");
+    assert!(
+        source_line(marked) == Some(LinePos { file, line: 12 }),
+        "the run standing from the place left came back as this place's"
+    );
+    assert!(
+        picked.chars.is_empty(),
+        "the other line's selection came with it"
+    );
+}
+
 /// The kept runs go with the entry they are kept under, as the rows do: a closing tab's
 /// by id, and a closing binary's by id and by every entry it takes off a surviving trail
 /// -- not tidiness, since an entry holds the `Arc<Object>` its document points into.
@@ -22013,6 +22091,102 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
     assert_eq!(picked.chars.lead(), Caret { row: now, col: 0 });
     assert_eq!(picked.chars.rows(), now..=now);
     assert!(picked.owed == Owed::default());
+}
+
+/// The other half of that rule, and the branch `use_land` keeps for it. A kept run in an
+/// object's code is carried by the places its rows stood for whenever the rows on screen
+/// were counted at **another generation** -- a second tab on the same code, where the
+/// listing the arriving place is put back into is the one the other tab left, grown since.
+/// The rows kept with the run are rows of the reading it was picked out of and name other
+/// instructions in this one; only the addresses carry across.
+///
+/// Above, the reading was reset with the tab and there were no rows at all on arrival, so
+/// the section view carried the run when it built rows again. Here the rows are already
+/// there and `use_land` has to carry it itself, before the view sees the switch.
+///
+/// Headless because the carry is the effect's answer to a switch, and only the runner can
+/// make the switch with rows of another generation already in `CodeRows`.
+#[test]
+fn a_kept_run_is_carried_when_the_rows_on_screen_are_of_another_generation() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+
+    // The reading the run was picked out of, and the one the other tab has left on
+    // screen: `add` decoded, which moves every row below it. The generation is bumped by
+    // hand, both readings having been built from nothing and counted their answers alike.
+    let guessed = reading_of(&object, &[]);
+    let guessed_rows = rows_of(&guessed);
+    let mut decoded = reading_of(&object, &[0]);
+    decoded.generation = guessed.generation + 1;
+    let rows = Rows::new(
+        decoded.code.clone().expect("the reading has a skeleton"),
+        |flat| decoded.body(flat),
+    );
+    let built = Arc::new(Built {
+        rows,
+        reading: decoded,
+    });
+    // `twice`'s label, which is at 0x14 in either reading and on another row in each.
+    let label_row = |rows: &Rows| {
+        (0..rows.len())
+            .find(|&row| {
+                rows.address_of(row) == Some(0x14)
+                    && matches!(kind_at(rows, row), Some(Kind::Label(_)))
+            })
+            .expect("twice has a label row")
+    };
+    let (was, now) = (label_row(&guessed_rows), label_row(&built.rows));
+    assert_ne!(now, was, "the guess for add was exact, proving nothing");
+
+    let (mut test, (mut states, doors, code_rows)) = TestingRunner::new(
+        land_harness,
+        (200., 200.).into(),
+        |runner| land_states!(runner),
+        1.,
+    );
+    let (marked, mut code_rows) = (doors.marked, code_rows);
+
+    // The code tab, left for another: the caret on the label, and the place that row
+    // stood for kept beside it under the generation it was taken at, as the section view
+    // keeps them.
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code.clone(), Reach::NewTab);
+    settle(&mut test);
+    let elsewhere = Document::Source(Arc::from("/p/src/main.rs"));
+    open_document(states.open, states.visits, elsewhere, Reach::NewTab);
+    settle(&mut test);
+
+    let picked = picked_row(was, "/fixture/line_fixture.c", Owed::default());
+    states.places.marks_at.write().remember(
+        entry_of(&states, &code),
+        Kept {
+            marks: Marks {
+                assembly: Some(picked.clone()),
+                source: None,
+            },
+            spots: Kept::spots_of(Some(&picked), |row| spot_at(&guessed_rows, row)),
+            generation: Some(guessed.generation),
+        },
+    );
+    // The rows the second tab on this code left on screen: the same object, one answer on.
+    code_rows.set(Some(built));
+    test.sync_and_update();
+
+    raise_document(&states, &code);
+    settle(&mut test);
+
+    let back = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the kept run did not come back");
+    assert_eq!(
+        back.chars.lead(),
+        Caret { row: now, col: 0 },
+        "the kept run came back at the row it was picked out at, which is another \
+         instruction's under these rows"
+    );
+    assert_eq!(back.chars.rows(), now..=now);
 }
 
 /// The slant of the label reading `text`, or `None` for an upright one.
