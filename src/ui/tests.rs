@@ -3238,6 +3238,56 @@ fn the_panel_and_the_table_hold_the_same_documents() {
     assert!(agree(&states).is_empty());
 }
 
+/// The same where tabs go in bulk, which is where the two halves were easiest to pair
+/// wrongly: `close_others` closes by tab and `close_binary` by file, both through
+/// `Open::close_tabs`, which takes the chip and the trail behind it in one step. A trail
+/// left behind would hold the binary its entries point into for the life of the app.
+#[test]
+fn a_bulk_close_takes_the_trails_with_the_chips() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let path = object.path.clone();
+    let source = Document::Source(Arc::from("/src/main.rs"));
+    let documents = [
+        Document::Assembly(Selection::Symbol(symbols[0].clone())),
+        Document::Assembly(Selection::Symbol(symbols[1].clone())),
+    ];
+
+    let (mut test, states) =
+        TestingRunner::new(project_harness, (200., 200.).into(), project_states!(), 1.);
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+
+    // A page among them, which has no trail at all: what is counted below is the
+    // document tabs.
+    {
+        let mut strip = states.open.strip;
+        strip.write().show(Tab::Page(Page::Settings));
+    }
+    let mut went = |target: &Document| {
+        open_document(states.open, states.visits, target.clone(), Reach::NewTab);
+    };
+    went(&source);
+    documents.iter().for_each(&mut went);
+    test.sync_and_update();
+
+    let trails = || states.open.docs.peek().len();
+    assert_eq!(trails(), 3);
+
+    // Closed by file: the two tabs into the binary go and the file tab stands.
+    close_binary(states, &path);
+    test.sync_and_update();
+    assert!(open_documents(states.open) == [source]);
+    assert_eq!(trails(), 1, "a closed binary's trails outlived its chips");
+
+    // And closed by tab, keeping the page: the last document's trail goes with it.
+    close_others(states.open, states.places, Tab::Page(Page::Settings));
+    test.sync_and_update();
+    assert!(open_documents(states.open).is_empty());
+    assert_eq!(trails(), 0, "\"Close other tabs\" left a trail behind");
+}
+
 /// Closing a tab lands on the one to its right, where freya would land on the leftmost:
 /// `DockNode::remove_tab_except` sets the active tab to `tabs.first()`, so the removal is
 /// done by hand and the landing chosen with [`tabs::landing`].

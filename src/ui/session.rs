@@ -277,7 +277,6 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         // The record first, so the opening below finds the active place already at its
         // top and records nothing over it.
         visits.set(restored.visits);
-        let (mut strip, mut docs) = (open.strip, open.docs);
         // Where in the bar the next tab goes. Counted over what survived rather than read
         // off the saved list, so the tabs that resolved keep their order around the pages
         // already put back.
@@ -294,16 +293,15 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
                 position += 1;
                 continue;
             };
-            // The trail whole, in a statement of its own so the guard is gone before
-            // the maps are written.
-            let id = docs.write().open_trail(trail, temporal);
-            let Some(id) = id else {
-                continue;
-            };
-            place_entries(places, id, entries);
+            // The trail whole, with the maps filled before the chip goes in the bar.
             // Reopening a tab is not visiting it. Put at the place it had rather than
             // beside the tab on screen: the saved order is stated outright.
-            strip.write().insert(Tab::Document(id), position);
+            let opened = open.insert_tab(trail, temporal, position, |id| {
+                place_entries(places, id, entries)
+            });
+            if opened.is_none() {
+                continue;
+            }
             position += 1;
         }
         // The document the app lands on is a place it went: the tab showing it is
@@ -318,11 +316,11 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
 /// the maps a pane reads them back out of.
 ///
 /// **Those maps are the one thing a restore writes directly**, everything else it does
-/// going through `open_document`, so the writes have a name rather than sitting four
-/// levels deep in the loop above. They go in before the tab is put in the bar: a pane
-/// puts its view back when it notices the place it is showing has changed, so a row
-/// arriving after the tab is on screen arrives after the only moment anything looks at
-/// it.
+/// going through `Open` and `open_document`, so the writes have a name rather than
+/// sitting four levels deep in the loop above. This is what `Open::insert_tab` is handed:
+/// it runs before the tab is put in the bar, since a pane puts its view back when it
+/// notices the place it is showing has changed, so a row arriving after the tab is on
+/// screen arrives after the only moment anything looks at it.
 fn place_entries(places: Places, id: DocId, entries: Vec<RestoredEntry>) {
     let Places {
         mut asm_at,

@@ -1,8 +1,10 @@
 //! Opening a document, closing a tab, and moving between them.
 //!
-//! One invariant is held here and nowhere else: a tab and its trail are made together and
-//! closed together. (The other, that the tab on screen is one of the open ones, is
-//! [`Strip`]'s own and cannot be broken from here.) [`open_document`], [`raise`],
+//! Neither invariant is held here. A tab and its trail are made together and closed
+//! together by [`Open`]'s own methods, which every opening and every close below writes
+//! through, and the tab on screen being one of the open ones is [`Strip`]'s. What is here
+//! is the rest: which door a click is, and what a close has to let go of.
+//! [`open_document`], [`raise`],
 //! [`raise_tab`], [`navigate`], [`close_tab`], [`close_others`] and [`close_binary`] are
 //! what open or close a **document** tab or change what one shows, and every path that
 //! opens a document -- [`land`] included -- goes through [`open_document`]. A page is the
@@ -113,10 +115,7 @@ pub(crate) fn open_stop(
     stop: Stop,
     reach: Reach,
 ) -> Option<DocId> {
-    let Open {
-        mut strip,
-        mut docs,
-    } = open;
+    let mut docs = open.docs;
     let target = stop.document.clone();
 
     // Recorded whatever else happens, and only when it changes the record: `State::write`
@@ -168,27 +167,14 @@ pub(crate) fn open_stop(
             }
             Some(id)
         }
-        Reach::InPlace | Reach::NewTab => {
-            let id = docs.write().open(stop);
-            strip.write().show(Tab::Document(id));
-            Some(id)
-        }
+        Reach::InPlace | Reach::NewTab => Some(open.open_tab(stop, false)),
         Reach::Preview => match temporal {
             Some(id) => {
                 docs.write().push(id, stop);
                 raise(open, id);
                 Some(id)
             }
-            None => {
-                let id = {
-                    let mut docs = docs.write();
-                    let id = docs.open(stop);
-                    docs.mark_temporal(id);
-                    id
-                };
-                strip.write().show(Tab::Document(id));
-                Some(id)
-            }
+            None => Some(open.open_tab(stop, true)),
         },
     }
 }
@@ -223,21 +209,17 @@ pub(crate) fn raise_tab(open: Open, tab: Tab) {
 /// consistency and **not** for that reason: a [`Document::Source`] key holds no object,
 /// so it holds nothing up.
 pub(crate) fn close_tab(open: Open, places: Places, id: DocId) {
-    let Open {
-        mut strip,
-        mut docs,
-    } = open;
     let tab = Tab::Document(id);
 
-    // The close and the landing in one write, `Strip` holding that rule; nothing else is
-    // owed here but letting go of what the tab kept. Nothing removed is a tab that was
-    // not open -- a menu left open while its tab closed -- and the trail and the
-    // positions below belong to whatever holds the id now.
-    let closed = strip.write().close(|open| *open == tab);
+    // The close and the landing in one write, `Strip` holding that rule, and the trail
+    // with the chip, `Open` holding that one; nothing else is owed here but letting go of
+    // what the tab kept. Nothing removed is a tab that was not open -- a menu left open
+    // while its tab closed -- and the trail and the positions below belong to whatever
+    // holds the id now.
+    let closed = open.close_tabs(|open| *open == tab);
     if !closed {
         return;
     }
-    docs.write().close(id);
     places.forgetting(|(tab, _): &Entry| *tab != id, |tab| *tab != id);
 }
 
@@ -258,11 +240,6 @@ pub(crate) fn close_page(open: Open, page: Page) {
 /// than by calling [`close_tab`] in a loop: each of those would work out a landing of its
 /// own and walk the bar through every intermediate state.
 pub(crate) fn close_others(open: Open, places: Places, keep: Tab) {
-    let Open {
-        mut strip,
-        mut docs,
-    } = open;
-
     // Which documents go, worked out before anything is removed and in a scope of its own,
     // so no read guard is alive when the writes below start. A tab that is not in the bar
     // any more keeps its neighbours: this is the menu of a tab that was closed while the
@@ -270,7 +247,7 @@ pub(crate) fn close_others(open: Open, places: Places, keep: Tab) {
     // else -- so the predicate below says "every tab but the kept one" and this says what
     // has to be let go of.
     let closing: Vec<DocId> = {
-        let strip = strip.peek();
+        let strip = open.strip.peek();
         if !strip.contains(keep) {
             return;
         }
@@ -280,15 +257,9 @@ pub(crate) fn close_others(open: Open, places: Places, keep: Tab) {
             .collect()
     };
 
-    let closed = strip.write().close(|tab| *tab != keep);
+    let closed = open.close_tabs(|tab| *tab != keep);
     if !closed {
         return;
-    }
-    {
-        let mut docs = docs.write();
-        for id in &closing {
-            docs.close(*id);
-        }
     }
 
     places.forgetting(
@@ -319,10 +290,7 @@ pub(crate) fn close_binary(states: ProjectStates, path: &Path) {
         mut visits,
         ..
     } = states;
-    let Open {
-        mut strip,
-        mut docs,
-    } = open;
+    let mut docs = open.docs;
     // Every guard below is taken out of its own statement or its own scope, so none of
     // them is still alive when the next write is reached.
 
@@ -330,7 +298,7 @@ pub(crate) fn close_binary(states: ProjectStates, path: &Path) {
     // this walk leaves them alone -- and a page on screen when a binary closes keeps the
     // screen, nothing it is showing having gone anywhere.
     let closing: Vec<DocId> = {
-        let (strip_ref, docs_ref) = (strip.peek(), docs.peek());
+        let (strip_ref, docs_ref) = (open.strip.peek(), docs.peek());
         strip_ref
             .documents()
             .filter(|id| {
@@ -343,18 +311,11 @@ pub(crate) fn close_binary(states: ProjectStates, path: &Path) {
 
     // Every tab into the file, and only then everything the file was holding up: the
     // strip may have none of it, and the objects still go.
-    strip
-        .write()
-        .close(|tab| matches!(tab, Tab::Document(id) if closing.contains(id)));
-    {
-        let mut docs = docs.write();
-        for id in &closing {
-            docs.close(*id);
-        }
-        // The surviving tabs' trails, thinned: every tab whose current entry is in the
-        // file has just been closed, so no trail is left with nothing on it.
-        docs.retain_entries(|document| !document.in_file(path));
-    }
+    open.close_tabs(|tab| matches!(tab, Tab::Document(id) if closing.contains(id)));
+    // The surviving tabs' trails, thinned: every tab whose current entry is in the file
+    // has just been closed, so no trail is left with nothing on it.
+    docs.write()
+        .retain_entries(|document| !document.in_file(path));
 
     // Nothing kept by an entry can outlive the entry: not the closed tabs', and not the
     // ones a surviving trail just lost, which hold the file's bytes just the same.

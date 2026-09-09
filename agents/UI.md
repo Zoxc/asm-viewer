@@ -213,8 +213,15 @@ trail and not a document: a link followed inside it pushes onto the trail, Back 
 cursor, and what the tab shows is `Docs::get`, the entry under the cursor. There is no second list.
 The active tab is the strip's own, read through the table, which is the whole of `active_tab`, and
 `open_ids` is the strip's documents in order. `Docs` holds no order at all; membership is the one
-thing the two share, and it is an invariant the closers keep and a test asserts: a tab and its trail
-are made together and closed together. One tab may be the **temporal** one (`Docs::temporal`), the
+thing the two share, and it is **`Open`'s own invariant** rather than a convention its callers keep:
+its three methods are the only way a document tab joins the bar or leaves it, and each does both
+halves, so a tab and its trail are made together and closed together whatever the caller does. A
+page is written on the strip alone, having no trail to keep in step. `Open::open_tab` makes a
+trail from one stop, temporal or not, and shows its chip beside the tab on screen; `Open::insert_tab`
+puts a saved trail back with its chip at the place it had, handing the new id to the caller before
+the chip goes in so the restore's own maps are filled by the time a pane looks at them; and
+`Open::close_tabs` takes the chips a predicate names and the trails behind them, landing where
+`tabs::landing` says. A test asserts it over both bulk closers. One tab may be the **temporal** one (`Docs::temporal`), the
 preview a sidebar row opens its place in and the next row reuses. It is a tab like any other with
 one flag on it, told apart by its name being italic.
 
@@ -241,8 +248,12 @@ active: memory rather than a reading of the strip, and the second source of trut
 
 The first invariant -- the tab on screen is one of the open ones, or `None` -- is `Strip`'s own and
 cannot be broken from the UI, every change to what is open going through one of its methods. The
-second -- a tab and its trail are made and closed together -- is held by `open_document`, `raise`,
-`raise_tab`, `navigate`, `close_tab`, `close_others` and `close_binary`, and nothing else. **Every** site that would *open* a document calls
+second -- a tab and its trail are made and closed together -- is `Open`'s, held by the three methods
+above. What `open_document`, `raise`, `raise_tab`, `navigate`, `close_tab`, `close_others` and
+`close_binary` hold is the rest: they are the only functions that open or close a document tab or
+change what one shows, and the methods are what they write through rather than a door of their own
+-- the restore is the one other caller, and it puts back tabs the reader already
+had. **Every** site that would *open* a document calls
 `open_document` with a `Reach`, which is what the click that opened it says and nothing about the
 state can. **`InPlace`** is from inside the tab on screen (a link in either pane, the companion
 header), pushed onto that tab's trail so the place left is one Back away. **`NewTab`** is beside the tab on

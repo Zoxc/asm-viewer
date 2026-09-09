@@ -70,8 +70,16 @@ pub(crate) struct Active(pub(crate) Memo<Option<Entry>>);
 ///
 /// The strip's tabs *are* the list of open tabs, in the reader's own order; [`Docs`] holds
 /// no order, only the trail behind each document tab's id. Membership is the one thing the
-/// two share, and `open_document`/`close_tab`/`close_binary` keep it true: a tab and its
-/// trail are made together and closed together.
+/// two share, and the three methods below are the only way a **document** tab joins it or
+/// leaves it: each does both halves, so a chip and its trail are made together and closed
+/// together whatever the caller does, and no trail can outlive its chip. A page is written
+/// on the strip alone, having no trail to keep in step.
+///
+/// They are the **mechanism and not a door**: what opens a document is `open_document`
+/// and what closes one is `close_tab`, `close_others` or `close_binary`
+/// (`src/ui/documents.rs`), where every rule about reaching or letting go of a place
+/// lives. These say only what a tab is made of, and the restore calls them for the same
+/// reason a closer does.
 #[derive(Clone, Copy)]
 pub(crate) struct Open {
     pub(crate) strip: State<Strip>,
@@ -123,6 +131,82 @@ impl Open {
     /// Every open document tab's id as of now, in tab order.
     pub(crate) fn ids(&self) -> Vec<DocId> {
         open_ids(&self.strip.peek())
+    }
+
+    /// Make a tab showing `stop` alone, temporal or not, and show it beside the tab on
+    /// screen: the trail and the chip in one step. The id the tab is known by.
+    ///
+    /// For `open_stop` and nothing else -- see the type.
+    pub(crate) fn open_tab(&self, stop: Stop, temporal: bool) -> DocId {
+        let (mut strip, mut docs) = (self.strip, self.docs);
+        // In a scope of its own, so the write guard is gone before the strip is written.
+        let id = {
+            let mut docs = docs.write();
+            let id = docs.open(stop);
+            if temporal {
+                docs.mark_temporal(id);
+            }
+            id
+        };
+        strip.write().show(Tab::Document(id));
+        id
+    }
+
+    /// Put a saved tab back: the whole of `trail` behind it, and its chip at `position`
+    /// rather than beside the tab on screen, a restore stating the saved order outright.
+    /// `None` for a trail with nothing on it, which is no tab at all and takes no chip.
+    ///
+    /// `filling` is handed the new id **before** the chip goes in the bar, for the maps a
+    /// restore writes directly: a pane looks at them when it notices that what it shows
+    /// has changed, so a row arriving after the tab is on screen arrives too late.
+    ///
+    /// For the session restore and nothing else -- see the type.
+    pub(crate) fn insert_tab(
+        &self,
+        trail: History,
+        temporal: bool,
+        position: usize,
+        filling: impl FnOnce(DocId),
+    ) -> Option<DocId> {
+        let (mut strip, mut docs) = (self.strip, self.docs);
+        // A statement of its own, so the guard is gone before `filling` writes anything.
+        let id = docs.write().open_trail(trail, temporal)?;
+        filling(id);
+        strip.write().insert(Tab::Document(id), position);
+        Some(id)
+    }
+
+    /// Close every tab `closing` answers true for -- the chips and the trails behind them
+    /// -- landing on the neighbour when the tab on screen was one of them. Whether the
+    /// bar lost anything.
+    ///
+    /// Whether and not what, as [`Strip::close`] answers: a caller that has to let go of
+    /// what the closed tabs kept works out which documents are going before the close,
+    /// the bar being what it asks.
+    ///
+    /// For the three closers and nothing else -- see the type.
+    pub(crate) fn close_tabs(&self, closing: impl Fn(&Tab) -> bool) -> bool {
+        let (mut strip, mut docs) = (self.strip, self.docs);
+        // Which trails go, read before anything is removed and in a scope of its own, so
+        // no read guard is alive when the writes start. Only the documents among them: a
+        // page has no trail, and the predicate goes to the strip whole.
+        let going: Vec<DocId> = {
+            let strip = strip.peek();
+            strip
+                .documents()
+                .filter(|id| closing(&Tab::Document(*id)))
+                .collect()
+        };
+        let closed = strip.write().close(closing);
+        if closed {
+            // One guard for however many tabs went: a write notifies whether or not it
+            // changed anything.
+            let mut docs = docs.write();
+            for id in going {
+                docs.close(id);
+            }
+        }
+        closed
     }
 }
 
