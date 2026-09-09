@@ -122,6 +122,44 @@ enum BodyRows {
     Decoded(Body),
 }
 
+impl BodyRows {
+    /// What a stretch's body is made of: what was decoded for it, or a guess at how many
+    /// rows it will take where nothing has been.
+    ///
+    /// A decode that found **no instructions** -- an architecture no backend reads --
+    /// leaves no byte of the stretch an instruction's, so the gap is widened to the whole
+    /// stretch and the body is those bytes. Without that the body would be no rows at
+    /// all.
+    fn of(stretch: &Stretch, decoded: Option<Body>) -> Self {
+        let Some(mut body) = decoded else {
+            let rows = Self::estimate(stretch_bytes(stretch), !stretch.symbols.is_empty());
+            return BodyRows::Estimated(rows);
+        };
+        if body.instructions() == 0 {
+            let end = body.gap.as_ref().map_or(stretch.range.end, |gap| gap.end);
+            body.gap = Some(stretch.range.start..end);
+        }
+        BodyRows::Decoded(body)
+    }
+
+    /// How many rows to guess for a body nobody has decoded: never none, so every label
+    /// has something under it and an address inside the stretch has a row.
+    fn estimate(bytes: u64, labelled: bool) -> usize {
+        let per_row = if labelled {
+            ESTIMATED_BYTES_PER_ROW
+        } else {
+            // No symbol, so no instructions either: the whole stretch is a gap and will
+            // be drawn as one.
+            GAP_BYTES_PER_ROW
+        };
+        bytes
+            .div_ceil(per_row)
+            .max(1)
+            .try_into()
+            .unwrap_or(usize::MAX)
+    }
+}
+
 impl StretchRows {
     fn body_rows(&self) -> usize {
         match &self.body {
@@ -178,23 +216,27 @@ impl StretchRows {
             }
         })
     }
+}
 
-    /// How many rows to guess for a body nobody has decoded: never none, so every label
-    /// has something under it and an address inside the stretch has a row.
-    fn estimate(bytes: u64, labelled: bool) -> usize {
-        let per_row = if labelled {
-            ESTIMATED_BYTES_PER_ROW
-        } else {
-            // No symbol, so no instructions either: the whole stretch is a gap and will
-            // be drawn as one.
-            GAP_BYTES_PER_ROW
-        };
-        bytes
-            .div_ceil(per_row)
-            .max(1)
-            .try_into()
-            .unwrap_or(usize::MAX)
+/// How many bytes a stretch covers. Saturating: a range stated backwards is no bytes,
+/// not a panic.
+fn stretch_bytes(stretch: &Stretch) -> u64 {
+    stretch.range.end.saturating_sub(stretch.range.start)
+}
+
+/// Where each of `counts` starts once they are laid end to end, with one more entry
+/// holding the total. A count of nought shares the start of whatever follows it, which is
+/// what the `partition_point` over the result has to step over ([`Flat::place`],
+/// [`Rows::stretch_of`]).
+fn starts(counts: impl ExactSizeIterator<Item = usize>) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(counts.len() + 1);
+    let mut total = 0;
+    for count in counts {
+        starts.push(total);
+        total += count;
     }
+    starts.push(total);
+    starts
 }
 
 /// A listing's stretches numbered end to end: every section's, in placed order. One
@@ -211,13 +253,11 @@ pub struct Flat {
 
 impl Flat {
     pub fn new(code: Arc<CodeListing>) -> Self {
-        let mut sections = Vec::with_capacity(code.sections().len() + 1);
-        let mut total = 0;
-        for placed in code.sections() {
-            sections.push(total);
-            total += placed.listing.stretches().len();
-        }
-        sections.push(total);
+        let sections = starts(
+            code.sections()
+                .iter()
+                .map(|placed| placed.listing.stretches().len()),
+        );
         Self { code, sections }
     }
 
@@ -269,6 +309,28 @@ impl Flat {
     }
 }
 
+/// One [`StretchRows`] per stretch of the listing, in flat order; `decoded` answers for
+/// the stretches -- by that index -- that have been.
+fn stretch_rows(flat_index: &Flat, decoded: impl Fn(usize) -> Option<Body>) -> Vec<StretchRows> {
+    let mut stretches = Vec::with_capacity(flat_index.count());
+    for placed in flat_index.code().sections() {
+        let bias = placed.bias();
+        for (index, stretch) in placed.listing.stretches().iter().enumerate() {
+            let flat = stretches.len();
+            stretches.push(StretchRows {
+                start: placed.place(stretch.range.start),
+                bytes: stretch_bytes(stretch),
+                bias,
+                space: flat > 0,
+                header: index == 0,
+                labels: stretch.symbols.len(),
+                body: BodyRows::of(stretch, decoded(flat)),
+            });
+        }
+    }
+    stretches
+}
+
 /// Every row of one object's code listing, worked out from the skeleton and whichever
 /// stretches have been decoded.
 pub struct Rows {
@@ -283,49 +345,11 @@ impl Rows {
     /// The rows for `code`, with `decoded` answering for the stretches -- by flat index --
     /// that have been.
     pub fn new(code: Arc<CodeListing>, decoded: impl Fn(usize) -> Option<Body>) -> Self {
-        let flat_index = Flat::new(code);
-        let mut stretches = Vec::new();
-        for placed in flat_index.code().sections() {
-            let bias = placed.bias();
-            for (index, stretch) in placed.listing.stretches().iter().enumerate() {
-                let flat = stretches.len();
-                let bytes = stretch.range.end.saturating_sub(stretch.range.start);
-                let labels = stretch.symbols.len();
-                let body = match decoded(flat) {
-                    Some(mut body) => {
-                        // No instructions -- an architecture no backend decodes -- so no
-                        // byte of the stretch is an instruction's: draw the whole of it
-                        // as bytes. Otherwise the body is no rows at all.
-                        if body.instructions() == 0 {
-                            let end = body.gap.as_ref().map_or(stretch.range.end, |gap| gap.end);
-                            body.gap = Some(stretch.range.start..end);
-                        }
-                        BodyRows::Decoded(body)
-                    }
-                    None => BodyRows::Estimated(StretchRows::estimate(bytes, labels > 0)),
-                };
-                stretches.push(StretchRows {
-                    start: placed.place(stretch.range.start),
-                    bytes,
-                    bias,
-                    space: flat > 0,
-                    header: index == 0,
-                    labels,
-                    body,
-                });
-            }
-        }
-
-        let mut starts = Vec::with_capacity(stretches.len() + 1);
-        let mut total = 0;
-        for stretch in &stretches {
-            starts.push(total);
-            total += stretch.rows();
-        }
-        starts.push(total);
-
+        let flat = Flat::new(code);
+        let stretches = stretch_rows(&flat, decoded);
+        let starts = starts(stretches.iter().map(StretchRows::rows));
         Self {
-            flat: flat_index,
+            flat,
             stretches,
             starts,
         }

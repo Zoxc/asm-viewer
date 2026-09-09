@@ -389,6 +389,22 @@ pub fn binaries(objects: &[Arc<Object>]) -> Vec<PathBuf> {
     binaries
 }
 
+/// The digest of every binary those objects came out of, keyed by the same path
+/// [`binaries`] keys them by: what [`Session::digests`] is written from.
+///
+/// Read off the object rather than computed here: the hash was taken once, on the parse
+/// worker thread, and every object out of one file answers the same thing — so an
+/// archive's members cost one pass rather than one each.
+fn digests(objects: &[Arc<Object>]) -> BTreeMap<PathBuf, String> {
+    let mut digests: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for object in objects {
+        digests
+            .entry(object.path.clone())
+            .or_insert_with(|| object.data.digest().to_string());
+    }
+    digests
+}
+
 /// How the window was arranged, in the session's `[ui]`.
 ///
 /// Every field is an `Option` and absent means "as it comes": a window nobody has dragged
@@ -1101,12 +1117,146 @@ impl SavedDocument {
     }
 }
 
+impl SavedTab {
+    /// This tab against the objects that are now loaded, or [`None`] where nothing of it
+    /// is left: a page this build does not have, or a document whose every place has
+    /// gone.
+    ///
+    /// A place that no longer resolves is **dropped** from the trail rather than
+    /// degraded, the cursor carried the way [`History::rebuilt`] carries it -- the same
+    /// walk closing a file goes through, so the two cannot drift.
+    fn restore(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<RestoredTab> {
+        // A page resolves against nothing, and one this build does not have is dropped as
+        // a place that no longer resolves is.
+        if let Some(page) = &self.page {
+            return Some(RestoredTab::Page(Page::from_stored(page)?));
+        }
+        let resolved: Vec<Option<RestoredEntry>> = self
+            .entries
+            .iter()
+            .map(|entry| entry.restore(objects, rebuilt))
+            .collect();
+        let trail = History::rebuilt(
+            resolved
+                .iter()
+                .map(|entry| entry.as_ref().map(RestoredEntry::stop)),
+            self.cursor,
+        );
+        // A tab with nothing left on its trail is dropped: a strip whose tabs all
+        // degraded onto the same object would collapse into one.
+        trail.current()?;
+        // The rows of what survived, in the trail's order; `rebuilt` keeps the survivors
+        // in the order they were given, so the two agree.
+        let entries = resolved.into_iter().flatten().collect();
+        Some(RestoredTab::Document {
+            temporal: self.temporal,
+            trail,
+            entries,
+        })
+    }
+}
+
+impl SavedEntry {
+    /// This place against the objects that are now loaded, or [`None`] where it no longer
+    /// names one.
+    ///
+    /// A row is a claim about a listing, so a **rebuilt** listing takes both its rows with
+    /// it, and an address is one too: the scroll and the place's own address both go, so a
+    /// place in an object's code comes back as the whole listing. A file has no binary
+    /// path and so is never rebuilt. The two lines are claims about a *file* rather than
+    /// about a listing, so they survive a rebuild and are simply asked again.
+    fn restore(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<RestoredEntry> {
+        let document = self.document.resolve(objects, rebuilt)?;
+        let changed = self
+            .document
+            .binary_path()
+            .is_some_and(|path| rebuilt.changed(path));
+        let (asm_row, src_row, address, code_address) = match changed {
+            true => (0, 0, None, None),
+            false => (
+                self.asm_row,
+                self.src_row,
+                self.asm_address,
+                self.code_address,
+            ),
+        };
+        Some(RestoredEntry {
+            document,
+            asm_row,
+            src_row,
+            line: self.line,
+            address,
+            code_address,
+            src_line: self.src_line,
+        })
+    }
+}
+
+/// Where every open place was left, as [`Session::from_state`] is handed it: the four
+/// maps a saved entry's two rows, driven line and scrolled address come out of, each
+/// keyed by the tab and the place it belongs to.
+///
+/// One bundle rather than four arguments handed down, since a saved place wants all
+/// four and wants them keyed the same way.
+struct LeftAt<'a> {
+    asm_rows: &'a Positions<Entry>,
+    src_rows: &'a Positions<Entry>,
+    places: &'a Positions<Entry, Spot>,
+    driven: &'a Driven,
+}
+
+impl LeftAt<'_> {
+    /// One open tab as it is saved: a page is its name and nothing else; a document is
+    /// its whole trail, with the cursor on the place it showed and whether it was the
+    /// temporal tab.
+    fn tab(&self, tab: &SavingTab<'_>) -> SavedTab {
+        match tab {
+            SavingTab::Page(page) => SavedTab {
+                page: Some(page.stored().to_owned()),
+                temporal: false,
+                cursor: 0,
+                entries: Vec::new(),
+            },
+            SavingTab::Document {
+                id,
+                trail,
+                temporal,
+            } => SavedTab {
+                page: None,
+                temporal: *temporal,
+                cursor: trail.cursor().unwrap_or(0),
+                entries: trail
+                    .entries()
+                    .iter()
+                    .map(|stop| self.entry(*id, stop))
+                    .collect(),
+            },
+        }
+    }
+
+    /// One place on a tab's trail as it is saved: the place itself, and where each of its
+    /// two sides was left. A side that was never scrolled has no entry in its
+    /// [`Positions`] at all and is written out as row `0`.
+    fn entry(&self, id: DocId, stop: &Stop) -> SavedEntry {
+        let entry = (id, stop.clone());
+        SavedEntry {
+            asm_row: self.asm_rows.at(&entry).unwrap_or(0),
+            src_row: self.src_rows.at(&entry).unwrap_or(0),
+            line: self.driven.line(&entry),
+            asm_address: self.places.at(&entry).map(|spot| spot.address),
+            code_address: stop.address(),
+            src_line: stop.line(),
+            document: SavedDocument::from_document(&stop.document),
+        }
+    }
+}
+
 impl Session {
     /// The session described by the state the app is currently in — the one place the
     /// app's state is turned into what would be saved, [`binaries`] being the other half
     /// of it for the other file. `tabs` is each open tab in strip order: its id, its
-    /// trail, and whether it is the temporal one. A side that was never scrolled has no
-    /// entry in its [`Positions`] at all and is written out as row `0`.
+    /// trail, and whether it is the temporal one; the four maps under it are where each
+    /// place was left ([`LeftAt`]).
     #[allow(clippy::too_many_arguments)]
     pub fn from_state(
         objects: &[Arc<Object>],
@@ -1121,15 +1271,12 @@ impl Session {
         trusted: bool,
         ui: SavedUi,
     ) -> Session {
-        let mut digests: BTreeMap<PathBuf, String> = BTreeMap::new();
-        for object in objects {
-            // Read off the object rather than computed here: the hash was taken once, on
-            // the parse worker thread, and every object out of one file answers the same
-            // thing — so an archive's members cost one pass rather than one each.
-            digests
-                .entry(object.path.clone())
-                .or_insert_with(|| object.data.digest().to_string());
-        }
+        let left = LeftAt {
+            asm_rows,
+            src_rows,
+            places,
+            driven,
+        };
         Session {
             // Absent here and stamped by [`Saves::record`]: which project this is belongs
             // to the save policy, not to the state the app is in.
@@ -1146,47 +1293,12 @@ impl Session {
             cargo: (!artifacts.is_empty()).then(|| SessionCargo {
                 artifacts: artifacts.to_vec(),
             }),
-            digests,
+            digests: digests(objects),
             active: match shown {
                 OnScreen::Document(document) => Some(SavedDocument::from_document(document)),
                 OnScreen::Page(_) | OnScreen::Nothing => None,
             },
-            tabs: tabs
-                .iter()
-                .map(|tab| match tab {
-                    SavingTab::Page(page) => SavedTab {
-                        page: Some(page.stored().to_owned()),
-                        temporal: false,
-                        cursor: 0,
-                        entries: Vec::new(),
-                    },
-                    SavingTab::Document {
-                        id,
-                        trail,
-                        temporal,
-                    } => SavedTab {
-                        page: None,
-                        temporal: *temporal,
-                        cursor: trail.cursor().unwrap_or(0),
-                        entries: trail
-                            .entries()
-                            .iter()
-                            .map(|stop| {
-                                let entry = (*id, stop.clone());
-                                SavedEntry {
-                                    asm_row: asm_rows.at(&entry).unwrap_or(0),
-                                    src_row: src_rows.at(&entry).unwrap_or(0),
-                                    line: driven.line(&entry),
-                                    asm_address: places.at(&entry).map(|spot| spot.address),
-                                    code_address: stop.address(),
-                                    src_line: stop.line(),
-                                    document: SavedDocument::from_document(&stop.document),
-                                }
-                            })
-                            .collect(),
-                    },
-                })
-                .collect(),
+            tabs: tabs.iter().map(|tab| left.tab(tab)).collect(),
             history: SavedHistory::from_visits(visits),
         }
     }
@@ -1232,72 +1344,12 @@ impl Session {
     }
 
     /// The saved tabs as live trails, in strip order, each place with the rows its two
-    /// sides were left at. A place that no longer resolves is **dropped** from its trail
-    /// rather than degraded, the cursor carried the way [`History::rebuilt`] carries it
-    /// -- the same walk closing a file goes through, so the two cannot drift -- and a tab
-    /// with nothing left on its trail is dropped: a strip whose tabs all degraded onto
-    /// the same object would collapse into one.
+    /// sides were left at. A tab with nothing left of it ([`SavedTab::restore`]) is
+    /// dropped, and the tabs that survive keep their order.
     fn resolve_tabs(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Vec<RestoredTab> {
         self.tabs
             .iter()
-            .filter_map(|saved| {
-                // A page resolves against nothing, and one this build does not have is
-                // dropped as a place that no longer resolves is.
-                if let Some(page) = &saved.page {
-                    return Some(RestoredTab::Page(Page::from_stored(page)?));
-                }
-                let resolved: Vec<Option<RestoredEntry>> = saved
-                    .entries
-                    .iter()
-                    .map(|entry| {
-                        let document = entry.document.resolve(objects, rebuilt)?;
-                        // A row is a claim about a listing, so a rebuilt listing takes
-                        // both its rows with it, and an address is one too: the scroll
-                        // and the place's own address both go, so a place in an object's
-                        // code comes back as the whole listing. A file has no binary
-                        // path and so is never rebuilt. The two lines are claims about a
-                        // *file* rather than about a listing, so they survive a rebuild
-                        // and are simply asked again.
-                        let changed = entry
-                            .document
-                            .binary_path()
-                            .is_some_and(|path| rebuilt.changed(path));
-                        let (asm_row, src_row, address, code_address) = match changed {
-                            true => (0, 0, None, None),
-                            false => (
-                                entry.asm_row,
-                                entry.src_row,
-                                entry.asm_address,
-                                entry.code_address,
-                            ),
-                        };
-                        Some(RestoredEntry {
-                            document,
-                            asm_row,
-                            src_row,
-                            line: entry.line,
-                            address,
-                            code_address,
-                            src_line: entry.src_line,
-                        })
-                    })
-                    .collect();
-                let trail = History::rebuilt(
-                    resolved
-                        .iter()
-                        .map(|entry| entry.as_ref().map(RestoredEntry::stop)),
-                    saved.cursor,
-                );
-                trail.current()?;
-                // The rows of what survived, in the trail's order; `rebuilt` keeps the
-                // survivors in the order they were given, so the two agree.
-                let entries = resolved.into_iter().flatten().collect();
-                Some(RestoredTab::Document {
-                    temporal: saved.temporal,
-                    trail,
-                    entries,
-                })
-            })
+            .filter_map(|saved| saved.restore(objects, rebuilt))
             .collect()
     }
 

@@ -596,3 +596,22 @@ fn a_stretch_that_decoded_to_no_instructions_draws_its_bytes() {
         assert_eq!(rows.row_for(address), Some(expected), "{address:#x}");
     }
 }
+
+/// [`starts`] is where each of a run of counts begins once they are laid end to end,
+/// with the total on the end. A count of nought -- a section with no stretches -- shares
+/// the start of the one after it, and both readers of a run of starts find that one and
+/// not the empty one: their `partition_point` steps over it.
+#[test]
+fn a_count_of_nought_shares_the_start_of_the_one_after_it() {
+    assert_eq!(
+        starts([].into_iter()),
+        vec![0],
+        "no counts, a total of nought"
+    );
+    let run = starts([2, 0, 3].into_iter());
+    assert_eq!(run, vec![0, 2, 2, 5]);
+    for (index, holder) in [(0, 0), (1, 0), (2, 2), (3, 2), (4, 2)] {
+        let after = run.partition_point(|&start| start <= index);
+        assert_eq!(after - 1, holder, "index {index}");
+    }
+}
