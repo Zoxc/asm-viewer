@@ -757,7 +757,12 @@ same build, derefing to its slice, so a view reads the rows as a slice and passe
 pointer. The Files, Search, Locations and Objects lists, the flattened symbol list, the
 finder's rows and a file's links are all one, and `Filtered` (`src/filter.rs`) is two of
 them: the list it filters and the indices it kept. An `Arc` a field may not have compares by
-`same_arc` beside it, so no `PartialEq` writes that truth table out again.
+`same_arc` beside it, so no `PartialEq` writes that truth table out again. A **required** `Arc`
+gets no helper of its own: `same_arc` earns its name from the four-arm match, whose `_ => false`
+is the easy arm to mistype, while a bare `Arc::ptr_eq` has nothing to get wrong. Nor do the
+three structs that are one `Arc` and nothing else -- `SourceText`, `OutputRows` and
+`process::Handle` -- which keep their own `PartialEq`: a newtype over one value would cost each
+of them its name and the reason it states for comparing by pointer.
 
 
 **The crash box is the desktop's own, and it has to be**, which is why the box lives in
