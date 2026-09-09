@@ -107,7 +107,7 @@ enum Sought {
     Nothing,
     /// A listing searched whole: which listing and pattern the hits are about, and the
     /// hits in order.
-    Hits(usize, Filter, Arc<Vec<Hit>>),
+    Hits(usize, Filter, Shared<Hit>),
     /// The walk a step through an object's code asked for ([`Hunt`]).
     Walk(Hunt),
 }
@@ -138,7 +138,7 @@ pub(crate) struct Find {
 impl Find {
     /// The hits, where the answer is about the listing and pattern being asked about now.
     /// A stale answer draws nothing rather than the last file's marks.
-    pub(crate) fn hits(&self) -> Option<&Arc<Vec<Hit>>> {
+    pub(crate) fn hits(&self) -> Option<&Shared<Hit>> {
         let listing = self.listing.as_ref()?.id();
         match &self.sought {
             Sought::Hits(about, filter, hits) if *about == listing && *filter == self.filter => {
@@ -193,7 +193,7 @@ impl Find {
     /// Take `hits` as the answer about `listing` and `filter`, and say whether anything
     /// changed. Refused where the pane has moved on, which is the whole of the
     /// supersession rule: a comparison and not a generation count.
-    fn take(&mut self, listing: usize, filter: Filter, hits: Arc<Vec<Hit>>) -> bool {
+    fn take(&mut self, listing: usize, filter: Filter, hits: Shared<Hit>) -> bool {
         if self.listing.as_ref().map(Searchable::id) != Some(listing) || self.filter != filter {
             return false;
         }
@@ -377,7 +377,7 @@ pub(crate) struct FindAnswer {
     pub(crate) at: Where,
     pub(crate) listing: usize,
     pub(crate) filter: Filter,
-    pub(crate) hits: Arc<Vec<Hit>>,
+    pub(crate) hits: Shared<Hit>,
 }
 
 /// The whole of the work, so the hook below is the wiring and nothing else.
@@ -386,7 +386,7 @@ pub(crate) fn find_work(ask: FindAsk) -> FindAnswer {
         at: ask.at,
         listing: ask.listed.id(),
         filter: ask.filter.clone(),
-        hits: Arc::new(look(&ask.listed, &ask.filter)),
+        hits: look(&ask.listed, &ask.filter).into(),
     }
 }
 
