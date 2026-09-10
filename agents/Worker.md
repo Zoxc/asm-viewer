@@ -269,9 +269,9 @@ resize costs nothing where the old shape re-decoded in `render`. A second, keyed
 unbounded pile of `Assembly`s for listings the reader has left, to save a few milliseconds on a
 symbol they have already been shown. `Reading::held` is not that cache: it is the section view's one
 answer, a listing read in windows rather than whole, bounded by `KEEP` and dropped with the tab.
-What *is* kept is the cheap shape a drawn row wants of an answer already in hand -- one line of a
-parse cut into pieces (`Highlighted::text`, `agents/Panes.md`) -- which is derived and not
-computed, and keyed by the line so a tab switch throws none of it away.
+What a drawn row wants of an answer is made *with* the answer and on the same thread: every line of
+a parse cut into the pieces a row draws (`Highlighted::text`, `agents/Panes.md`). Derived and not
+analysed, and made where the parse is, so no render works it out and none of it is memoized.
 
 **A find over a code pane is a worker of its own, and the sixth of this shape.** The reason is the
 source reader's: a pattern supersedes on every keystroke, and a question queued behind the seconds of

@@ -82,10 +82,9 @@ pub(crate) fn look(listed: &Searchable, filter: &Filter) -> Vec<Hit> {
     match listed {
         Searchable::Source(source) => {
             for row in 0..source.0.lines {
-                // Cut and not kept: a pass over a long file would otherwise leave every
-                // line of it held, where the rows' own cut is paid for the lines the
-                // reader is looking at (`Highlighted::text`).
-                push(row, &Line::text(&*source.0.cut_line(row).whole));
+                // The file's own cut, which every keystroke here would otherwise make
+                // again for every line of it (`Highlighted::text`).
+                push(row, &source_line(source, row));
             }
         }
         Searchable::Symbol { assembly, lanes } => {

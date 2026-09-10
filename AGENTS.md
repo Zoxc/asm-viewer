@@ -256,8 +256,8 @@ command.
 - `src/ui/marks.rs` — the run picked out in each pane, the pair it lights on the other
   side, the scroll it owes, the keyboard's moves over it, and what Ctrl+C copies.
 - `src/ui/highlight.rs` — a source file read and parsed off the UI thread: the reader's worker
-  thread, the cache its answers land in, what the pane draws until one does, and one line of
-  a parse cut into what a row draws, kept per line.
+  thread, the cache its answers land in, what the pane draws until one does, and every line of
+  a parse cut into what a row draws.
 - `src/ui/hovering.rs` — the name the pointer is on in the source, the question the server is
   put about it, and what came back.
 - `src/ui/hover_view.rs` — the box that draws the answer: where it goes, and when it goes.
@@ -415,11 +415,12 @@ feature there with the substitute, so a release that brings it is noticed.
   the guard is for a dependency's bug, never for ours. A stack overflow aborts and cannot be
   caught, so anything recursing over file-controlled input is bounded before the call.
 - **Nothing is analysed on the UI thread**: a parse, a decode or a search is a worker's, and
-  its answer is held rather than worked out again in a render. Cheap values *derived* from an
-  answer already in hand may be cached where they are drawn -- one line of a parse cut into
-  the pieces a row draws (`Highlighted::text`, `src/ui/highlight.rs`). Every cache is **keyed
-  by what it answers for**, never a single slot: `HIGHLIGHTED` by path and the cut by line,
-  where a state field holding one file would blank every file already read on a tab switch.
+  its answer is held rather than worked out again in a render. The shape a drawn row wants of
+  an answer is made *with* the answer, on the same thread -- every line of a parse cut into the
+  pieces a row draws (`Highlighted::text`, `src/ui/highlight.rs`) -- so a render is a lookup and
+  memoizes nothing. What is held is **keyed by what it answers for**, never a single slot:
+  `HIGHLIGHTED` by path, where a state field holding one file would blank every file already
+  read on a tab switch.
 - **A document is a place in a binary or a file; everything else is a view.** `open_document`,
   `raise`, `navigate`, `close_tab`, `close_others` and `close_binary` are the only six functions
   that open or close a **document** tab, or change what one shows. A page's chip goes in and

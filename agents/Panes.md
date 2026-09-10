@@ -308,24 +308,37 @@ which draws nothing for as long as the read takes and then the file from its top
 moves it, both of them passes the door into a file already in hand does not have (`notes/Goals.md`,
 under Navigation).
 
-**A line is cut once and kept beside the parse.** What a row draws is that line's spans pulled out
-of the rope, and they used to be pulled out in the row's `render`: a rope slice and a `String` per
+**Every line is cut where the file is parsed.** What a row draws is that line's spans pulled out of
+the rope, and they used to be pulled out in the row's `render`: a rope slice and a `String` per
 span, sixty rows a pane, paid again for every scroll, every modifier and every keystroke in the find
-bar. `Highlighted::text` cuts a line once and holds it -- the row's text as one string, and each
-span's colour with the bytes of it that span covers -- so a row already drawn is a lookup and a
-pointer copy. Nothing analysed is memoized by it: the parse is the reader thread's and this only
-cuts its answer into rows, which is what `AGENTS.md` lets a render keep. It is keyed by the line and
-lives on the `Highlighted` the line belongs to, so no file's cuts are dropped for another's and a
-file pays only for the lines someone has looked at. Two short locks a line, never one a span, and
-neither held over the cutting: a miss drops the lock, cuts, and takes it again to file what it made.
-A pass over the whole file does *not* keep what it cuts (`cut_line`, `find_bar::look`), or a find in
-a long file would hold a second copy of it for the life of the process. Measured over a 1350-line
-Rust file, 60 rows in a debug build: 13.5 allocations a row and 0.77 ms a render before, 6.5 and
-0.10 ms after. What is left is freya's floor -- a `Span` holds a `Cow<'static, str>`, so no span can
-borrow the cut it came from.
+bar. The cut cannot change -- a `Highlighted` is never written to after it is built, and a theme
+switch parses a new one -- so `Highlighted::new` cuts every line on the reader's thread and
+`Highlighted::text` is an index into what it made: the row's text as one string, and the coloured
+pieces it is drawn in. Nothing analysed is memoized: the parse is the reader thread's and this only
+cuts its answer into rows. A find over the file is the same lookup, where it used to re-cut every
+line of it on every keystroke (`find_bar::look`).
 
-**A parse holds the theme's colours**, `SyntaxBlocks` keeping a `Color` per span rather than a name
-for one, so an entry parsed in the other appearance is not stale but wrong. Each says which
+**The pieces are the file's and not the line's.** A line keeps its text and a run of two lists the
+whole file holds: where each piece ends in that line, and its colour as an index into the dozen or
+so the theme resolved this file's captures to. Five bytes a piece, and a piece begins where the one
+before it ended, where a `Vec<(Color, Range<usize>)>` a line was 24 bytes a piece in an allocation
+of its own. `Highlighted::pieces` is what puts a row back together from them, and the `u8` cannot
+run out on a theme: past 256 colours a piece keeps the last one taken (`Cutting::colour`).
+
+Measured over `source_view.rs`, 1350 lines and 60 KB, in a debug build: 13.5 allocations a row and
+0.77 ms a render when a row cut its own line, 6.5 and 0.10 ms once it did not. Cutting the file
+costs 30 ms on top of a 180 ms parse. What it holds is 127 KB -- 59 KB of text, the indentation as
+the spaces a row draws; 36 KB for the file's 7221 pieces; and 24 bytes a line for the rest -- where
+a `Vec` of spans a line came to some 290 KB, 370 KB of it allocated, a `Vec` growing in powers of
+two. That is the price of cutting it all up front: a file the reader never scrolls holds its cut
+too, for as long as the parse is in `HIGHLIGHTED`. What it does not hold any more is the parse
+itself -- once every line is cut, `SyntaxBlocks` has nothing left to answer, and it was 32 bytes a
+span in a `Vec` a line, 263 KB of this file. So a parsed file holds less than it did before any of
+its lines were kept. What is left in a row is freya's floor -- a `Span` holds a
+`Cow<'static, str>`, so no piece can borrow the cut it came from.
+
+**A parse holds the theme's colours**, the cut keeping a `Color` per piece rather than a name for
+one, so an entry parsed in the other appearance is not stale but wrong. Each says which
 appearance it was made in and `set_appearance` empties nothing: the pane goes on drawing the entry
 it has, in colours half a theme old, until the reader answers with the other -- where a clear would
 blank every source pane on a switch. That is also what makes a theme switch a file to read again

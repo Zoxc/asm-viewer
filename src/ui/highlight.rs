@@ -20,11 +20,13 @@
 //! keeps a file the reader has already seen instant: the pane finds it in the cache as it
 //! renders, with no question asked and no frame lost.
 //!
-//! **A line is cut once and kept beside the parse** ([`Highlighted::text`]). Cutting one up
-//! for the row that draws it is a rope slice and a `String` per span, and a row is drawn
-//! afresh for a scroll, a modifier and every keystroke in the find bar. Nothing here is
-//! analysis -- the parse is the worker's and this only cuts its answer into rows -- so it
-//! is kept where it is drawn, keyed by the line (`AGENTS.md`).
+//! **Every line is cut where it is parsed** ([`Highlighted::text`]). Cutting one up for
+//! the row that draws it is a rope slice and a `String` per span, and a row is drawn
+//! afresh for a scroll, a modifier and every keystroke in the find bar. The cut never
+//! changes, so it is made on this thread with the parse and a row is a lookup. Nothing
+//! here is analysis -- the parse is the worker's and this only cuts its answer into rows
+//! (`AGENTS.md`). What a file holds of it is the lines' text and, five bytes apiece, the
+//! coloured pieces every row is put back together from ([`Highlighted::pieces`]).
 
 use super::*;
 
@@ -38,25 +40,29 @@ impl PartialEq for SourceText {
     }
 }
 
-/// One line of the file as a row draws it: the text, and where in it each of the parse's
-/// coloured spans falls.
+/// One line of the file as a row draws it: the text, and which of the file's coloured
+/// pieces it is drawn in.
 ///
-/// The spans are ranges into `whole` and not strings of their own, so a line held here is
-/// one copy of its text however many colours it is drawn in.
+/// A piece is no string of its own, so a line here is one copy of its text however many
+/// colours it wears -- and the pieces are the file's rather than this line's
+/// ([`Highlighted::pieces`]).
 pub(crate) struct LineText {
-    /// The row's text as it is drawn: the spans in order, with the leading indentation as
-    /// spaces. What the row's columns are counted through and what a copy takes.
+    /// The row's text as it is drawn: the pieces in order, with the leading indentation
+    /// as spaces. What the row's columns are counted through and what a copy takes.
     pub(crate) whole: Arc<str>,
-    /// Each span's colour and the bytes of `whole` it covers, in order.
-    pub(crate) spans: Vec<(Color, Range<usize>)>,
+    /// This line's run of the file's pieces.
+    pieces: Range<u32>,
 }
 
-/// A source file ready to be drawn: its text as a rope, the coloured spans tree-sitter
-/// produced for each of its lines, and the functions it defines by the lines they span.
+/// A source file ready to be drawn: its text as a rope, every line cut into the coloured
+/// pieces tree-sitter's spans made of it, and the functions it defines by the lines they
+/// span.
 ///
-/// `SyntaxBlocks` has two traps: `get_line` unwraps rather than answering `None`, and it
-/// holds one block per `Rope::len_lines()` -- which counts a phantom line after a trailing
-/// newline. Hence `lines`.
+/// **The parse itself is not held**: `SyntaxBlocks` is cut up here and dropped, having
+/// nothing left to answer that the cut cannot. It has two traps on the way out --
+/// `get_line` unwraps rather than answering `None`, and it holds one block per
+/// `Rope::len_lines()`, which counts a phantom line after a trailing newline. Hence
+/// `lines`.
 ///
 /// All of it crosses from the worker thread, which the cache below has always proved it
 /// can: a `static Mutex<HashMap<_, Arc<Highlighted>>>` is `Sync` only if this is `Send`
@@ -65,20 +71,28 @@ pub(crate) struct Highlighted {
     /// The file as it was read: what the stale-source check compares its digests against,
     /// held here so that nothing in a render asks [`source::load`] for it.
     pub(crate) file: Arc<SourceFile>,
-    /// The appearance the spans below were resolved in. A `SyntaxBlocks` holds a `Color`
-    /// per span and not a name for one, so an entry parsed in the other theme is not
-    /// stale but *wrong*, and this is what says so.
+    /// The appearance the pieces below were resolved in. The cut holds a `Color` per
+    /// piece and not a name for one, so an entry parsed in the other theme is not stale
+    /// but *wrong*, and this is what says so.
     appearance: Appearance,
     pub(crate) rope: Rope,
-    pub(crate) blocks: SyntaxBlocks,
-    /// How many rows the pane draws, which is *not* `blocks.len()`.
+    /// How many rows the pane draws, which is *not* the parse's count of lines.
     pub(crate) lines: usize,
     /// Every function in the file, outer before inner, for a row to say which one it is
     /// a line of. Empty for a file no grammar parses.
     pub(crate) functions: Vec<Function>,
-    /// The cut of every line drawn so far. See [`Highlighted::text`]. A `Mutex` so that
-    /// this stays `Sync` while a row fills it, not because two threads want one line.
-    cuts: Mutex<HashMap<usize, Arc<LineText>>>,
+    /// Every line cut into what its row draws, one per `lines`. See
+    /// [`Highlighted::text`].
+    cuts: Vec<LineText>,
+    /// Where each piece of every line ends in that line's own text, the file's lines in
+    /// order and a piece beginning where the one before it ended. See
+    /// [`Highlighted::pieces`].
+    ends: Vec<u32>,
+    /// The colour of each of those pieces, as an index into `palette`.
+    colours: Vec<u8>,
+    /// The colours the pieces are drawn in, first seen first: the theme's syntax colours
+    /// as far as this file uses them, which is a dozen or so of them.
+    palette: Vec<Color>,
 }
 
 impl Highlighted {
@@ -109,78 +123,142 @@ impl Highlighted {
         let functions = source::Language::of(file.path())
             .map_or_else(Vec::new, |language| language.functions(file.text()));
 
+        let mut cutting = Cutting::default();
+        for line in 0..lines {
+            cutting.cut(&rope, &blocks, line);
+        }
+
         Highlighted {
             file,
             appearance,
             rope,
-            blocks,
             lines,
             functions,
-            cuts: Mutex::default(),
+            cuts: cutting.cuts,
+            ends: cutting.ends,
+            colours: cutting.colours,
+            palette: cutting.palette,
         }
     }
 
-    /// What row `index` draws, cut once and then kept.
+    /// What row `index` draws.
     ///
     /// **The cut used to be the row's own, made afresh on every render**: a rope slice
     /// and a `String` per span, sixty rows a pane, paid over again for every scroll,
-    /// every modifier and every keystroke in the find bar. None of it is analysis -- the
-    /// parse is the worker's and this only cuts its answer into rows -- so it is kept
-    /// where it is drawn, keyed by the line so no file's cuts are dropped for another's.
+    /// every modifier and every keystroke in the find bar. It is the same cut every
+    /// time -- nothing here is ever written again -- so every line is cut with the parse
+    /// on the reader's thread and this is a lookup.
     ///
-    /// **The lock is never held over the cutting**, and it is taken once a line and never
-    /// once a span: a miss drops it, cuts, and takes it again to file what it made. Two
-    /// threads that cut one line at the same moment cut the same text, and the first
-    /// filed is the one both get.
-    pub(crate) fn text(&self, index: usize) -> Arc<LineText> {
-        if let Some(text) = self.cuts().get(&index) {
-            return text.clone();
-        }
-        let text = Arc::new(self.cut_line(index));
-        self.cuts().entry(index).or_insert(text).clone()
+    /// Empty past the last line, the list holding one cut per [`lines`](Self::lines).
+    pub(crate) fn text(&self, index: usize) -> &LineText {
+        static EMPTY: LazyLock<LineText> = LazyLock::new(|| LineText {
+            whole: "".into(),
+            pieces: 0..0,
+        });
+        self.cuts.get(index).unwrap_or(&EMPTY)
     }
 
-    /// The same cut, and not kept: what a pass over the whole file uses, where keeping
-    /// every line would hold a second copy of a file nobody is reading
-    /// (`find_bar::look`).
+    /// What `line` is drawn as: its text in order, each piece with the colour it wears.
     ///
-    /// In range because the list's length is the file's own `lines`, which is at most
-    /// `blocks.len()` -- and `SyntaxBlocks::get_line` unwraps rather than answering
-    /// `None`, so being in range is checked here.
-    pub(crate) fn cut_line(&self, index: usize) -> LineText {
+    /// **The pieces are the file's and not the line's**, five bytes apiece in two lists
+    /// of the file's own rather than a `Vec` per line holding a `Color` and a pair of
+    /// offsets. A piece begins where the one before it ended, so only the end is kept,
+    /// and the colour is an index into the handful the theme gave this file.
+    pub(crate) fn pieces<'a>(&'a self, line: &'a LineText) -> impl Iterator<Item = Piece<'a>> {
+        let run = line.pieces.start as usize..line.pieces.end as usize;
+        let ends = self.ends.get(run.clone()).unwrap_or_default();
+        let colours = self.colours.get(run).unwrap_or_default();
+        let mut start = 0;
+        ends.iter().zip(colours).map(move |(end, colour)| {
+            let end = *end as usize;
+            // Cut where the cutting cut, so the bounds are the line's own and land on
+            // characters. `get` all the same, a slice being the one thing here that
+            // could panic.
+            let text = line.whole.get(start..end).unwrap_or_default();
+            start = end;
+            Piece {
+                colour: self
+                    .palette
+                    .get(*colour as usize)
+                    .copied()
+                    .unwrap_or_default(),
+                text,
+            }
+        })
+    }
+}
+
+/// One coloured run of a row's text.
+pub(crate) struct Piece<'a> {
+    pub(crate) colour: Color,
+    pub(crate) text: &'a str,
+}
+
+/// A file's lines cut into what their rows draw, as the cutting builds them: the lines,
+/// their pieces flattened, and the colours those name.
+#[derive(Default)]
+struct Cutting {
+    cuts: Vec<LineText>,
+    ends: Vec<u32>,
+    colours: Vec<u8>,
+    palette: Vec<Color>,
+}
+
+impl Cutting {
+    /// Cut line `index` of `rope` by the spans `blocks` coloured it with, and keep it.
+    ///
+    /// `index` is in range for every call, the cutting being over `0..lines` and `lines`
+    /// being at most `blocks.len()` -- which matters because `SyntaxBlocks::get_line`
+    /// unwraps rather than answering `None`.
+    fn cut(&mut self, rope: &Rope, blocks: &SyntaxBlocks, index: usize) {
+        let first = self.ends.len();
         let mut whole = String::new();
-        let mut spans = Vec::new();
-        if index < self.lines {
-            for (color, node) in self.blocks.get_line(index) {
-                let start = whole.len();
-                match node {
-                    // Pushed chunk by chunk rather than through a `String` of its own:
-                    // the row's text is one allocation whatever it is cut into.
-                    TextNode::Range(range) => {
-                        for chunk in self.rope.slice(range.clone()).chunks() {
-                            whole.push_str(chunk);
-                        }
-                    }
-                    // Leading indentation, handed over as a length so an editor can draw
-                    // it as dots. Plain spaces here, this pane showing a file and not
-                    // editing one.
-                    TextNode::LineOfChars { len, .. } => {
-                        for _ in 0..*len {
-                            whole.push(' ');
-                        }
+        for (colour, node) in blocks.get_line(index) {
+            match node {
+                // Pushed chunk by chunk rather than through a `String` of its own: the
+                // row's text is one allocation whatever it is cut into.
+                TextNode::Range(range) => {
+                    for chunk in rope.slice(range.clone()).chunks() {
+                        whole.push_str(chunk);
                     }
                 }
-                spans.push((*color, start..whole.len()));
+                // Leading indentation, handed over as a length so an editor can draw it
+                // as dots. Plain spaces here, this pane showing a file and not editing
+                // one.
+                TextNode::LineOfChars { len, .. } => {
+                    for _ in 0..*len {
+                        whole.push(' ');
+                    }
+                }
             }
+            // A `u32` because the file is one `source::MAX_SIZE` bounds and the
+            // indentation is a space a character, so neither a cut nor the count of the
+            // file's pieces is longer than the file.
+            self.ends.push(whole.len() as u32);
+            let colour = self.colour(*colour);
+            self.colours.push(colour);
         }
-        LineText {
+        self.cuts.push(LineText {
             whole: whole.into(),
-            spans,
-        }
+            pieces: first as u32..self.ends.len() as u32,
+        });
     }
 
-    fn cuts(&self) -> MutexGuard<'_, HashMap<usize, Arc<LineText>>> {
-        self.cuts.lock().unwrap_or_else(|error| error.into_inner())
+    /// Where `colour` is in the palette, put there if this is the first piece to wear it.
+    ///
+    /// A walk and not a map: what a theme resolves its captures to is a dozen colours
+    /// (`palette.rs`), so the list this searches is shorter than a hash of one would take
+    /// to compute. Past 256 of them a piece wears the last colour the palette took,
+    /// rather than the index growing for a case no theme reaches.
+    fn colour(&mut self, colour: Color) -> u8 {
+        if let Some(at) = self.palette.iter().position(|held| *held == colour) {
+            return at as u8;
+        }
+        if let Ok(at) = u8::try_from(self.palette.len()) {
+            self.palette.push(colour);
+            return at;
+        }
+        u8::MAX
     }
 }
 

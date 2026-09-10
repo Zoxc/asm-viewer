@@ -11722,14 +11722,14 @@ fn a_theme_switch_has_the_file_read_again() {
     let file = directory.named("themed.rs", "fn main() {}\n");
     let path = PathBuf::from(&*file);
 
-    // A keyword, which is the one span whose colour is a palette entry rather than the
+    // A keyword, which is the one piece whose colour is a palette entry rather than the
     // text colour -- and the reason this is a `.rs` file and not any file at all.
     let keyword = |path: &Path| {
         let cache = highlighted();
         let text = cache.get(path).expect("the file was read").clone();
         let text = text.expect("the file is there");
-        let line = text.blocks.get_line(0);
-        line.first().expect("a first span").0
+        let piece = text.pieces(text.text(0)).next();
+        piece.expect("a first piece").colour
     };
 
     let (mut test, _states, _showing, _marked) = source_file_harness(&file, (400., 300.));
@@ -11752,13 +11752,13 @@ fn a_theme_switch_has_the_file_read_again() {
     forget_source_under(&directory);
 }
 
-/// **A line is cut once and then kept.** A row is drawn afresh for a scroll, a modifier
-/// and every keystroke in the find bar, and cutting the parse up for it each time was a
-/// rope slice and a `String` per span on every one. The cut is held per line, so a file
-/// pays only for the lines the reader has looked at and no file's lines are dropped for
-/// another's.
+/// **A line is cut with the parse and never again.** A row is drawn afresh for a scroll, a
+/// modifier and every keystroke in the find bar, and cutting the parse up for it each time
+/// was a rope slice and a `String` per span on every one. The cut cannot change, so it is
+/// made on the reader's thread and a row is a lookup -- and asking past the last line
+/// answers empty, `SyntaxBlocks::get_line` unwrapping where the cutting is out of range.
 #[test]
-fn a_source_line_is_cut_once_and_kept() {
+fn a_source_line_is_cut_with_the_parse() {
     let seeded = Seeded::directory("cut-once");
     let path = seeded.file("main.rs", "fn one() -> u32 {\n    1\n}\n");
     let source = source_text(&path).expect("the file");
@@ -11766,13 +11766,53 @@ fn a_source_line_is_cut_once_and_kept() {
     let cut = source.0.text(1);
     assert_eq!(&*cut.whole, "    1");
     assert!(
-        Arc::ptr_eq(&cut, &source.0.text(1)),
-        "the same line was cut twice"
+        std::ptr::eq(cut, source.0.text(1)),
+        "the line was cut again rather than looked up"
     );
     assert!(
-        !Arc::ptr_eq(&cut, &source.0.text(2)),
-        "two lines came back as one cut"
+        source.0.text(source.0.lines).whole.is_empty(),
+        "a row past the last line was cut from something"
     );
+
+    forget_source_under(path.parent().expect("the seeded directory"));
+}
+
+/// **A row's pieces are the file's and not the line's**: an end apiece and a colour named
+/// by an index into the few the theme gave the file, so what a row draws has to be put
+/// back together from three lists of the whole file's. This is that it comes back the
+/// parse's: the same text in the same order, in the colours the spans were resolved in.
+#[test]
+fn a_row_is_drawn_in_the_pieces_the_parse_coloured() {
+    let seeded = Seeded::directory("cut-pieces");
+    let path = seeded.file("main.rs", "fn one() -> u32 {\n    1\n}\n");
+    let source = source_text(&path).expect("the file");
+
+    let drawn = |line: usize| {
+        let cut = source.0.text(line);
+        source
+            .0
+            .pieces(cut)
+            .map(|piece| (piece.colour, piece.text.to_owned()))
+            .collect::<Vec<_>>()
+    };
+
+    for line in 0..source.0.lines {
+        let text: String = drawn(line).into_iter().map(|(_, text)| text).collect();
+        assert_eq!(
+            text,
+            *source.0.text(line).whole,
+            "the pieces of line {line} are not the line"
+        );
+    }
+
+    let first = drawn(0);
+    assert_eq!(
+        first.first().expect("a first piece"),
+        &(Palette::LIGHT.keyword_fg, "fn".to_owned()),
+        "the keyword is drawn in another span's colour"
+    );
+    // The indentation, which is spaces here and a length in the parse.
+    assert_eq!(drawn(1).first().expect("a first piece").1, "    ");
 
     forget_source_under(path.parent().expect("the seeded directory"));
 }
@@ -20032,11 +20072,11 @@ fn toml_and_json_files_are_highlighted() {
     let toml = directory.file("Cargo.toml", "name = \"viewer\"\n");
     let json = directory.file("package.json", "{\"name\": 1}\n");
 
-    // The span at `at` on the first line.
+    // The piece at `at` on the first line.
     let colour = |path: &Path, at: usize| {
         let text = source_text(path).expect("the file");
-        let line = text.0.blocks.get_line(0);
-        line.get(at).expect("a span there").0
+        let piece = text.0.pieces(text.0.text(0)).nth(at);
+        piece.expect("a piece there").colour
     };
     let theme = Palette::LIGHT.syntax();
 

@@ -158,6 +158,9 @@ impl Docs {
 
     /// How many trails are held: one per open document tab. A tab and its trail are made
     /// together and closed together, so this is the number of document tabs open.
+    ///
+    /// Only the tests ask: the app counts tabs where it draws them, off `Strip`.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.open.len()
     }

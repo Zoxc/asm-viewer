@@ -490,12 +490,13 @@ impl Component for SourceRow {
             line,
             // The one allocation a drawn row still owes: freya's `Span` holds a
             // `Cow<'static, str>`, so a span cannot borrow the cut it was taken from.
-            head: cut
-                .spans
-                .iter()
-                .map(|(color, range)| {
-                    Span::new(cut.whole[range.clone()].to_string())
-                        .color(*color)
+            head: self
+                .source
+                .0
+                .pieces(cut)
+                .map(|piece| {
+                    Span::new(piece.text.to_string())
+                        .color(piece.colour)
                         .assembly_font()
                 })
                 .collect(),
