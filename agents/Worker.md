@@ -273,8 +273,20 @@ outlives the click that asked for it: the reader has read on, and "this line" wo
 nothing on screen points at. That is what `Showing::Message` carries a `String` for.
 `answered` is the last question answered *whatever it answered with*, the one
 thing a listing cannot say for itself. A source line no object holds code from leaves the listing
-that is up and lights no pair in it, which is what says the click landed nowhere; it is kept only
-while that listing is `asked_of` the same tab. Two things follow from `shown` being the drawn symbol
+that is up and lights no pair in it, which is what says the click landed nowhere.
+
+**Which listing may be left up is asked about the file, not the tag** (`keeps_listing`). The tag is
+the question the listing answers *now*, and it moves: opening the symbol a file's line resolved to
+retags that listing onto the symbol's own tab rather than decoding it again (`Shown::answers`).
+Coming back to the file, a comparison of tags then read the listing as another tab's -- and the
+first line of the file holding no code, which is most of them, took it down, leaving "No code
+compiled from …" where the function had been. So a source question keeps a listing its own **file**
+compiled into, however that listing is tagged: `SymbolLines::names`, the file the symbol opens at or
+any its rows name, since code inlined from a header is the symbol's own too. What that leaves out is
+the case the rule was written for -- a function of a file this tab is not reading, left on screen
+under a tab that never asked for it.
+
+Two things follow from `shown` being the drawn symbol
 rather than the selected one. `InstructionList` is mounted only for a listing that exists, so
 `use_kept_position` cannot write a pending tab down at row 0 before a row of it has been seen. And
 the Source pane's companion file comes out of `Analysis` rather than out of `Active`, so it cannot

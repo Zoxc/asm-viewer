@@ -35,12 +35,36 @@ pub(crate) enum Ask {
 }
 
 /// The tab an answer to `ask` belongs to. One definition, used by the pane that keeps its
-/// row, by the run of rows a listing change drops, and by the rule that decides whether a
-/// question naming no symbol may leave the listing that is up.
+/// row, by the run of rows a listing change drops, and by [`keeps_listing`] below.
 pub(crate) fn asked_of(ask: &Ask) -> Document {
     match ask {
         Ask::Symbol(symbol) => Document::Assembly(Selection::Symbol(symbol.clone())),
         Ask::Source { at, .. } => Document::Source(at.file.clone()),
+    }
+}
+
+/// Whether the listing that is up is one the tab asking `ask` may be left showing: what
+/// says a question has something of the reader's own on screen already.
+///
+/// Two ways it can be, and the second is not a widening but a repair. A listing is tagged
+/// with the question it answers *now*, and a retag moves that tag onto another tab: the
+/// symbol tab a file's line resolved to draws the same listing, and opening it retags
+/// rather than decodes again ([`Shown::answers`]). Coming back to the file, a comparison
+/// of tags then reads the listing as another tab's, and the first line of the file
+/// holding no code -- most of them -- takes it down. So a source question keeps a listing
+/// its own **file** compiled into, however that listing is tagged. What that leaves out
+/// is the case the rule is for: a function of a file this tab is not reading, left on
+/// screen under a tab that never asked for it.
+fn keeps_listing(shown: Option<&Shown>, ask: &Ask) -> bool {
+    let Some(shown) = shown else {
+        return false;
+    };
+    if asked_of(&shown.ask) == asked_of(ask) {
+        return true;
+    }
+    match ask {
+        Ask::Source { at, .. } => shown.studied.lines.names(&at.file),
+        Ask::Symbol(_) => false,
     }
 }
 
@@ -405,14 +429,11 @@ impl Analyzed {
             Some(shown) => self.shown = Some(shown),
             // A question that named no symbol leaves the listing that is up -- the click
             // lights no pair in it and nothing else, which is what says it landed nowhere
-            // -- but **only when that listing is this tab's own**, or a source line
-            // holding no code would leave another tab's function on screen for good.
+            // -- but **only one this line may be left looking at** ([`keeps_listing`]),
+            // or a line holding no code would leave a function of another file on screen
+            // for good.
             None => {
-                let mine = self
-                    .shown
-                    .as_ref()
-                    .is_some_and(|shown| asked_of(&shown.ask) == asked_of(&ask));
-                if !mine {
+                if !keeps_listing(self.shown.as_ref(), &ask) {
                     self.shown = None;
                 }
             }
@@ -660,6 +681,18 @@ impl SymbolLines {
         let line = opening.and_then(|row| row.line);
 
         SymbolLines { info, file, line }
+    }
+
+    /// Whether the symbol these are of has code from `file`: the file it opens at, or
+    /// any of the files its rows name -- code inlined into it from a header is the
+    /// symbol's own as much as the body is. Compared by text, as every file the UI
+    /// passes around is.
+    pub(crate) fn names(&self, file: &str) -> bool {
+        self.file.as_deref() == Some(file)
+            || self
+                .info
+                .as_ref()
+                .is_some_and(|info| info.files().iter().any(|named| **named == *file))
     }
 
     /// The checksum the debug info recorded for `file`, one of the files these rows name, or

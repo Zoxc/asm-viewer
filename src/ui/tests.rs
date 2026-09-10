@@ -4292,7 +4292,15 @@ fn a_line_of_the_symbol_on_screen_is_answered_with_the_listing_on_screen() {
 }
 
 /// A line no open object holds code from leaves the listing that is up — the click loses
-/// the pin's highlight and nothing else — but only while that listing is this tab's own.
+/// the pin's highlight and nothing else — but only while that listing is one the file
+/// being read compiled into. A function of another file is taken down: it would
+/// otherwise stay on screen under a tab that never asked for it.
+///
+/// **The file and not the tag**, because the tag moves. A listing worked out for a file
+/// tab is retagged onto the symbol's own tab when the reader opens it -- the same
+/// listing, not decoded twice -- and coming back to the file it would then be read as
+/// another tab's and taken down by the first line of the file holding no code, which is
+/// most of them. That is the third case below.
 #[test]
 fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
     let symbols = fixture_symbols();
@@ -4352,26 +4360,47 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
     );
     assert!(state.pending.is_none());
 
-    // The same barren question against another tab's listing takes it down instead:
-    // leaving it up would put a function the reader never asked for on screen for good.
+    // The symbol's own tab, opened and left: the listing is not worked out again, it is
+    // retagged, and the file tab's question then reads as another tab's.
     asking.set(Some(Ask::Symbol(wanted.clone())));
     pump(&mut test, || {
         analysis.peek().answered == Some(Ask::Symbol(wanted.clone()))
     });
-    asking.set(Some(Ask::Source {
-        at: barren.clone(),
+    let retagged = analysis.peek().shown.clone().expect("the listing was kept");
+    assert!(
+        retagged.ask == Ask::Symbol(wanted.clone()),
+        "the listing was not retagged onto the symbol's tab"
+    );
+
+    // Back on the file, on another line of it holding no code: the listing is a function
+    // of the file being read, so it stays. It is the one the reader was shown here.
+    let ask_for = |at: &LinePos| Ask::Source {
+        at: at.clone(),
         chosen: None,
-    }));
+    };
+    asking.set(Some(ask_for(&barren)));
     pump(&mut test, || {
-        analysis.peek().answered
-            == Some(Ask::Source {
-                at: barren.clone(),
-                chosen: None,
-            })
+        analysis.peek().answered == Some(ask_for(&barren))
+    });
+    let kept = analysis.peek().shown.clone();
+    assert!(
+        kept.is_some_and(|shown| shown.studied.symbol == wanted),
+        "the file's own listing was taken down by a line of that file holding no code"
+    );
+
+    // A line of another file altogether takes it down: this function is nothing that
+    // tab is reading, and leaving it up would put it on screen for good.
+    let elsewhere = LinePos {
+        file: Arc::from("elsewhere.c"),
+        line: 1,
+    };
+    asking.set(Some(ask_for(&elsewhere)));
+    pump(&mut test, || {
+        analysis.peek().answered == Some(ask_for(&elsewhere))
     });
     assert!(
         analysis.peek().shown.is_none(),
-        "a listing belonging to another tab was left up"
+        "a function of another file was left up"
     );
 }
 
