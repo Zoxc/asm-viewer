@@ -19,6 +19,14 @@ pub(crate) struct LinePos {
     pub(crate) line: u32,
 }
 
+impl LinePos {
+    /// How a line is named wherever one is said out loud: the file's own name and the
+    /// line, the full path being a tooltip's.
+    pub(crate) fn spell(&self) -> String {
+        format!("{}:{}", source::name_of(Path::new(&*self.file)), self.line)
+    }
+}
+
 /// A place to pick out the moment `tab` becomes the active document: a line, an
 /// instruction, or both.
 ///

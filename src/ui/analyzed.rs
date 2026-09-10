@@ -309,8 +309,9 @@ pub(crate) enum Showing<'a> {
     /// The listing and the question it answers: a pane needs both, the question being
     /// what says which tab the listing belongs to.
     Listing(&'a Shown),
-    /// Nothing to draw and a word for why.
-    Message(&'static str),
+    /// Nothing to draw and a word for why. Owned and not `&'static`: a line that came
+    /// to nothing is named in the words.
+    Message(String),
     /// A wait too short to name, with no previous listing to leave up.
     Nothing,
 }
@@ -327,20 +328,26 @@ impl Analyzed {
     /// and a stale *sentence* is not.
     pub(crate) fn showing(&self, document: &Document) -> Showing<'_> {
         match (&self.shown, &self.pending) {
-            (_, Some(pending)) if pending.slow => Showing::Message("Analysing..."),
+            (_, Some(pending)) if pending.slow => Showing::Message("Analysing...".to_owned()),
             (Some(shown), _) => Showing::Listing(shown),
             (None, Some(_)) => Showing::Nothing,
-            // Asked, and answered with no symbol at all. Only a source line can.
-            (None, None) if self.answered.is_some() => {
-                Showing::Message("No code compiled from this line")
-            }
-            (None, None) => Showing::Message(match document {
-                Document::Assembly(_) => "No symbol selected",
-                Document::Source(_) => "Click a source line",
-                // The listing beside this asks nothing; its source side follows the
-                // instruction picked out in it.
-                Document::Code(_) => "Click an instruction",
+            // Asked, and answered with no symbol at all. Only a source line can, and
+            // the message names it: the answer outlives the click, so which line came
+            // to nothing is not otherwise on screen.
+            (None, None) if self.answered.is_some() => Showing::Message(match &self.answered {
+                Some(Ask::Source { at, .. }) => format!("No code compiled from {}", at.spell()),
+                _ => "No code compiled from this line".to_owned(),
             }),
+            (None, None) => Showing::Message(
+                match document {
+                    Document::Assembly(_) => "No symbol selected",
+                    Document::Source(_) => "Click a source line",
+                    // The listing beside this asks nothing; its source side follows the
+                    // instruction picked out in it.
+                    Document::Code(_) => "Click an instruction",
+                }
+                .to_owned(),
+            ),
         }
     }
 

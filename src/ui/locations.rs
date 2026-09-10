@@ -154,7 +154,7 @@ impl Query {
     /// What the panel calls the question: `file:line`, or the function's name.
     fn spell(&self) -> String {
         match &self.scope {
-            Scope::Line => spell(&self.at),
+            Scope::Line => self.at.spell(),
             Scope::Function { name, .. } | Scope::Listed { name, .. } => name.clone(),
         }
     }
@@ -503,12 +503,6 @@ pub(crate) fn locate_menu(
                 .child(menu_label("Find all locations", key)),
         )
         .maybe_child(instances)
-}
-
-/// A line as the panel names it: the file's own name and the line, the full path being
-/// the tooltip's.
-fn spell(at: &LinePos) -> String {
-    format!("{}:{}", source::name_of(Path::new(&*at.file)), at.line)
 }
 
 /// The shell both of the panel's lists are drawn in: the question over the rows, with

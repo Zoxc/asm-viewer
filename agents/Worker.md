@@ -251,7 +251,11 @@ displace it -- which is a field of the `Pending` and not a flag beside it, there
 be slow about while nothing is being waited for. That is the order of the arms in `Analyzed::showing`, the one place either pane decides
 what it is drawing, so the two cannot disagree. `showing` takes the **document** and not a word from
 its caller, which is what keeps that true: it says "Click a source line" where a symbol tab says "No
-symbol selected". `answered` is the last question answered *whatever it answered with*, the one
+symbol selected". A line that came to nothing is **named** in what it says -- "No code compiled
+from lexer.rs:42", the Locations panel's spelling of a line (`LinePos::spell`) -- because the answer
+outlives the click that asked for it: the reader has read on, and "this line" would be about a line
+nothing on screen points at. That is what `Showing::Message` carries a `String` for.
+`answered` is the last question answered *whatever it answered with*, the one
 thing a listing cannot say for itself. A source line no object holds code from leaves the listing
 that is up and lights no pair in it, which is what says the click landed nowhere; it is kept only
 while that listing is `asked_of` the same tab. Two things follow from `shown` being the drawn symbol

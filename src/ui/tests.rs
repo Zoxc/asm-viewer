@@ -10717,6 +10717,50 @@ fn an_object_tab_is_named_by_its_object() {
     );
 }
 
+/// The Assembly pane of a source-driven tab whose line was answered with no symbol at
+/// all: the one answer that leaves the pane with nothing to draw and a sentence in place
+/// of a listing.
+fn nothing_compiled(at: LinePos) -> TestingRunner {
+    let tab = Document::Source(at.file.clone());
+
+    let (mut test, ()) = TestingRunner::new(
+        tab_pane_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context(|| PaneTab(State::create(tab.clone())));
+            let roots = runner.provide_root_context(test_roots);
+            let mut analysis = roots.analysis;
+            analysis.set(Analyzed {
+                answered: Some(Ask::Source {
+                    at: at.clone(),
+                    chosen: None,
+                }),
+                ..Analyzed::default()
+            });
+        },
+        1.,
+    );
+    settle(&mut test);
+    test
+}
+
+/// The sentence names the line it looked for. The answer outlives the click that asked
+/// for it -- the reader reads on, and the source side is showing wherever they are now --
+/// so a sentence about "this line" is about a line nothing on screen points at.
+#[test]
+fn nothing_compiled_from_a_line_says_which_line() {
+    let test = nothing_compiled(LinePos {
+        file: Arc::from("/src/parser/lexer.rs"),
+        line: 42,
+    });
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"No code compiled from lexer.rs:42".to_owned()),
+        "{drawn:?}"
+    );
+}
+
 /// The bar's disclosure triangle, wherever it was laid out, as a point to press.
 fn triangle_of(test: &TestingRunner) -> (f64, f64) {
     let area = disclosure_column(test)
