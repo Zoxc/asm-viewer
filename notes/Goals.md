@@ -227,7 +227,8 @@ leaves this list when it is. That is a move made on request, like everything els
   the placeholder the linker will overwrite, with nothing to click. The section-plus-addend
   case is an address the object could compute, but the parse keeps no section symbols and
   reads no relocation kind, both of which the sum depends on (`S + A` against a PC-relative
-  `P`); with those read it would be one more `target` and the door above would serve it. An
+  `P`); with those read it would be one more `Operand` naming an address and the door above would
+  serve it. An
   undefined import has no address at all and stays plain text whatever is read.
 - [ ] Print the addend beside a resolved relocation's name, on whatever operand it covers. A
   name replaces the *whole* number the operand held, so `[rip+g]` is drawn for what is really

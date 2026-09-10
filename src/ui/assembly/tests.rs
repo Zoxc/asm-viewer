@@ -26,12 +26,7 @@ fn instruction(address: u64, format: Vec<(String, SpanKind)>) -> Instruction {
         address,
         bytes: Vec::new(),
         format,
-        relocation: None,
-        relocation_span: None,
-        branch_span: None,
-        branch: None,
-        target: None,
-        target_span: None,
+        operand: None,
     }
 }
 
@@ -125,19 +120,30 @@ fn listing(target: Arc<SymbolData>) -> Assembly {
     ];
 
     // The relocation's name, in the operand it applies to.
-    instructions[1].relocation = Some(target.clone());
-    instructions[1].relocation_span = Some(2);
+    instructions[1].operand = Some(Operand::SymbolName {
+        symbol: target.clone(),
+        span: Some(2),
+    });
     // The same name with no operand to go in: appended, as `asm_line` appends it.
-    instructions[2].relocation = Some(target.clone());
+    instructions[2].operand = Some(Operand::SymbolName {
+        symbol: target.clone(),
+        span: None,
+    });
     // A branch back to the first row, which this listing has.
-    instructions[3].branch_span = Some(2);
-    instructions[3].branch = Some(0x00);
+    instructions[3].operand = Some(Operand::Branch {
+        address: 0x00,
+        span: 2,
+    });
     // A target with no name and no row here.
-    instructions[4].target = Some(0x2000);
-    instructions[4].target_span = Some(2);
+    instructions[4].operand = Some(Operand::Call {
+        address: 0x2000,
+        span: 2,
+    });
     // The name inside a memory operand, so the row has a tail.
-    instructions[5].relocation = Some(target);
-    instructions[5].relocation_span = Some(4);
+    instructions[5].operand = Some(Operand::SymbolName {
+        symbol: target,
+        span: Some(4),
+    });
 
     // The bytes the six rows above cover, eight apiece.
     Assembly {

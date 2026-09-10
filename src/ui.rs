@@ -29,8 +29,8 @@ pub(crate) use freya::text_edit::TextEditor;
 pub(crate) use rfd::AsyncFileDialog;
 
 pub(crate) use analysis::{
-    open_files_streaming, Assembly, CodeListing, Instruction, LineInfo, Object, Progress, SpanKind,
-    Symbol, SymbolData,
+    open_files_streaming, Assembly, CodeListing, Instruction, LineInfo, Object, Operand, Progress,
+    SpanKind, Symbol, SymbolData,
 };
 
 pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};

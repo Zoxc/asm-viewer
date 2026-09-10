@@ -520,8 +520,9 @@ release
 (`ModifierKeys`' doc, `notes/upstream/freya.md`). **The third door is the address an instruction
 goes to when nothing names it**: a call into the middle of a function, a call to a function a
 stripped image has no symbol for, a jump out of the symbol in a listing with no row for it
-(`Instruction::target`, `agents/Analysis.md`). The number is drawn onto `Door::Address`
-(`Link::Target`, the third of `split`'s links), inline in the row's paragraph as the other two are,
+(`Operand::Call` and an `Operand::Branch` with no edge, `agents/Analysis.md`). The number is drawn
+onto `Door::Address` (`Link::Target`, the third of `split`'s links), inline in the row's paragraph
+as the other two are,
 and a press on it is `show_in_code` with the **placed** address and no line. A link on its own, as
 every operand link is: a plain press opens that code in place, Ctrl opens it in a tab of its own.
 Either lands on the row **at or below** the address, the view and the caret both. That rounding is
@@ -960,8 +961,8 @@ in a colour. Nothing for an empty row or a separator -- no address either, a row
 copying nothing.
 
 **A branch's displacement is the other way to follow it**, drawn by the same label that draws a
-call's resolved target, onto `Door::Row` and not `Door::Symbol`: `Instruction::branch_span` says
-which span to lift out, and the row is the same three children either way. It is drawn only where
+call's resolved target, onto `Door::Row` and not `Door::Symbol`: `Operand::Branch` says which span
+to lift out, and the row is the same three children either way. It is drawn only where
 `Assembly::edge_from` finds an edge, which is the set the gutter has an arrow for: a tail call keeps
 its plain operand, having no row here to be pointed at. Pressing it is `reveal_row` on the edge's
 target **and the run a press on that row would have made**: `mark_row`, the row landed on alone, of
@@ -1035,7 +1036,12 @@ each, as a plain space is, and one more for the space `asm_line` puts before a n
 append. That appended name is a link like any other and not a `None` each side has to spot for
 itself: `split` hands back what the link says beside which of the four kinds it is (`Lifted`), and
 the name the formatter offered no operand for is the fourth, `Link::Appended`, after every span and
-with an empty tail. The two halves are built side by side there for that reason, and the module's
+with an empty tail. `split` decides nothing beyond that: the four kinds are a projection of the
+crate's own `Operand` (`agents/Analysis.md`) plus `linked`, which is whether this listing has the
+row a branch lands on, and it re-checks none of what the crate already promised. The two sets of
+four do not line up, and need not: the crate's split by how an address was arrived at, `split`'s by
+how the row draws it, which is why an `Operand::Branch` comes back as `Link::Branch` or
+`Link::Target` depending on the listing. The two halves are built side by side there for that reason, and the module's
 own tests hold every column of the drawn text to the same column of the copy, over an instruction of
 each kind a row draws differently. freya supplies
 exactly the two primitives a paragraph has anyway: the hit-test behind its `ParagraphHolder`

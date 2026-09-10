@@ -521,13 +521,15 @@ loop. The trade is that a new architecture is a new arm rather than a new impl b
 which is what a set closed at compile time wants anyway. `Code` is the bytes, the address they sit
 at, the object they belong to, and two questions asked per instruction: `Code::relocation`, because
 a relocation names a byte range and never an operand number, and `Code::symbol_at`, for the address
-an unrelocated call names. A row carries the *address* its own branch names (`Instruction::branch`);
+an unrelocated call names. A row carries the *address* its own branch names (`Operand::Branch`);
 turning those into row indices is `Assembly::decoded`'s binary search, so `edges`' drop rules hold
 for every backend rather than once per backend. What stays *behind* the seam is everything x86
 spells its own way: the `SymbolResolver` substitution, the per-instruction `rip_relative_addresses`
 flip, `branch_target`'s flow-control judgement and `FormatterTextKind -> SpanKind`. Each instruction
-is formatted into an `Instruction` implementing `iced_x86::FormatterOutput`, capturing
-`(String, SpanKind)` spans for the UI to colour. `SpanKind` is the backend-independent stand-in for
+is formatted into a `Formatted`, the backend's own scratch struct implementing
+`iced_x86::FormatterOutput`, capturing `(String, SpanKind)` spans for the UI to colour and the one
+span a link could be made of; the crate's `Instruction` holds no scratch state and implements no
+`iced-x86` trait. `SpanKind` is the backend-independent stand-in for
 `FormatterTextKind`; the app has no `iced-x86` or `object` dependency (`BinaryFormat`,
 `Architecture` and `SectionIndex` are re-exported from `analysis` for that reason). The decode
 loop's own arithmetic is checked: the instruction pointer is the symbol's address plus what has been
@@ -554,31 +556,30 @@ number, whichever operand takes it -- a displacement, an immediate, a branch's o
 addend a format stores in the operand rather than in the relocation entry (COFF, Mach-O) is not
 printed beside the name. A near branch has no rip-like form to fall back on either: iced prints its
 target as the address the displacement works out to, so a relocated one reads as an address it does
-not go to. `Instruction::relocation_span` is the index of the span the name landed in, recorded by
-an override of `write_symbol`. That is what lets `InstructionRow` render
-the run before it as one `paragraph()`, the span as a `DoorLabel`, and the run after it as a
-second `paragraph()`. `branch_span` is its **twin** and is recorded by an override of
-`write_number`, which is how a branch target reaches the output: it is the span an instruction's
-*own* displacement was printed into. The two are exclusive by construction, since a branch covered
-by a relocation is not one that named an address, so a row has at most one link and the same
-three-child split serves both.
+not go to. Where the name landed is the span `write_symbol` records, which becomes
+`Operand::SymbolName`'s own. That is what lets `InstructionRow` render the run before it as one
+`paragraph()`, the span as a `DoorLabel`, and the run after it as a second `paragraph()`. The other
+override, `write_number`, is how a branch target reaches the output: the span an instruction's
+*own* displacement was printed into. One field holds either, because the two never both matter --
+the resolver is armed exactly when the instruction names a symbol, and an operand a name went into
+printed no address of its own -- and the loop decides which operand it belongs to afterwards.
 
 **A linked image's calls resolve by address**, since the linker consumed the relocations that named
 their targets and left the displacement as the answer. Where no relocation covers an instruction and
 it is a direct near `call`, the backend asks `Code::symbol_at` for the text symbol that **starts
-exactly** at the address the encoding names, and hands it out through the same
-`relocation`/`relocation_span` pair a relocated call uses: the resolver substitutes the name for the
-operand, `write_symbol` records the span, and the UI's `DoorLabel` draws it with no change of
-its own. Three limits, each deliberate. *Exact start only*: a call into the middle of a function
+exactly** at the address the encoding names, and hands it out as the same `Operand::SymbolName` a
+relocated call gets: the resolver substitutes the name for the operand, `write_symbol` records the
+span, and the UI's `DoorLabel` draws it with no change of its own. Three limits, each deliberate.
+*Exact start only*: a call into the middle of a function
 stays the number it is, and a target no symbol starts at (a PLT stub, a stripped static) stays plain
 text. *Same section*: the index is by placed address (`Section::bias` added), which makes a
 relocatable object's all-at-0 code sections distinct places, but a displacement past a section's end
 still lands in the placed space on some other section's function, so the hit has to be in the
 instruction's own section; `tests/linked_call.rs` pins a two-section object whose call would
 otherwise name the other's. *Calls only*: an unconditional `jmp` out of the symbol is a tail call
-and could be named the same way, but its displacement is `branch_span`'s and the two spans are
-exclusive, so making it a link to a function is the item of its own that `notes/Goals.md` says it
-is. The relocation still wins where there is one: a relocated call whose target is a section symbol
+and could be named the same way, but its displacement is an `Operand::Branch`'s, so making it a link
+to a function is the item of its own that `notes/Goals.md` says it is. The relocation still wins
+where there is one: a relocated call whose target is a section symbol
 keeps `None`, since its displacement is a placeholder whatever address it happens to spell. The
 index is `Object::by_address`, a `Vec<(u64, Arc<SymbolData>)>` sorted by placed address with each
 address once (two names for one address keep the first by name, the order `symbols_sorted` has, so
@@ -590,22 +591,45 @@ object on the first disassembly; a lookup after that is a binary search, 5 µs. 
 would have been the same 67 ms on every symbol opened, which is why it is not rebuilt per
 disassembly.
 
-**Where an instruction goes is kept beside what it is named**: `Instruction::target` and
-`target_span`. `target` is the address a direct near `call` or branch names in its own encoding
-where no relocation covers its bytes and no symbol has named it: a call into the middle of a
-function, a call to a function a stripped image has no symbol for, a jump out of the symbol. It is
-in the section's own address space, as `address` is, and `Some` exactly when `target_span` is, the
-span the number was printed into, which is `write_number`'s mark. `branch_span` is now *derived*
-from it, the same span for exactly the rows whose `branch` is set, so the two twins became three
-spans that are still exclusive: a call the resolver named has `relocation_span` and no `target` (its
-address is the symbol's own), a branch has `branch_span` and the same index in `target_span`, an
-unnamed call has `target_span` alone, and a row still has at most one link. Nothing is judged here
-either; what the UI does with it is a **Ctrl** door into the object's code at that address
-(`agents/Panes.md`). What it does not cover is a relocation against a section symbol with an addend
-(`Relocated { target: None }`, a call into `.text+0x40` in a relocatable object), whose target would
-be the section's address plus the addend, adjusted by the relocation's kind. The parse keeps no
-section symbols and the relocation's kind is not read, so that operand stays the placeholder it is
-and the item stays in `notes/Goals.md`.
+**What an operand names is one enum**, `Operand`, and a row carries one `Option` of it. It used to
+be six fields and sixty lines of doc saying which was `Some` exactly when which other was, with the
+backend establishing the pairings after the fact and the UI reconstructing the enum by hand. **The
+four cases split by how the address was arrived at and not by what the instruction is**, which is
+the thing the old fields were easiest to misread about. Any operand a relocation covers is
+`SymbolName` or `Placeholder`, whatever the opcode and whichever operand it is -- an immediate, a
+memory displacement and a branch's own rel32 are one question, whether the relocation named a text
+symbol this object kept. `lea rdi, [rip+0x0]` relocated against a function is a `SymbolName` exactly
+as a `call` is, and the same `lea` against a data symbol is a `Placeholder`; `Branch` and `Call` are
+the unrelocated cases alone. The decision is one `match` in the decode loop and everything else
+matches on the answer.
+
+`SymbolName { symbol, span }` is a text symbol: the relocation's, or a linked image's call resolved
+by address (above). It is spelt out rather than called `Symbol`, which the crate already exports for
+the object-and-`SymbolData` pair, and named after what it holds rather than after what happened to
+the operand. Its `span` is where the name was substituted -- an index into `format`, as every `span`
+here is, and never an offset into the symbol -- and `None` there is the fifth state the old fields
+left unnamed: the formatter offered no operand to put the name in, so it goes *beside* the row
+(`Link::Appended`, `agents/Panes.md`). `Placeholder` is a relocation that named nothing this object
+kept: what is printed is a linker's fill and the row has no link, which is worth telling apart from
+having no operand at all. `Branch { address, span }` is the instruction's own displacement, real --
+a `jmp`, a `jcc`, a `loop`, an `xbegin`, never a `call`, since control comes straight back.
+`Call { address, span }` is a direct near `call` whose displacement is real and whose target no
+symbol starts at: into the middle of a function, or into a function a stripped image has no symbol
+for. Both addresses are in the section's own space, as `address` is. `symbol()`, `branch()` and
+`target()` are one-line projections for a caller that wants one number, `Assembly::decoded`'s edges
+and the section listing among them.
+
+The exclusions the old doc comments spelled out are the enum's shape now. A relocated operand is a
+placeholder, so a row naming a symbol names no address of its own; a call the resolver named goes to
+that symbol's address rather than to one of its own; and a row has at most one link because an
+operand has at most one span. Nothing is judged here either: a branch out of the symbol, into the
+middle of an instruction, or `jmp $` all keep their address, and what the UI does with one is a
+**Ctrl** door into the object's code there (`agents/Panes.md`). What none of it covers is a
+relocation against a section symbol with an addend (`Relocated { target: None }`, so `Placeholder`;
+a call into `.text+0x40` in a relocatable object), whose target would be the section's address plus
+the addend, adjusted by the relocation's kind. The parse keeps no section symbols and the
+relocation's kind is not read, so that operand stays the placeholder it is and the item stays in
+`notes/Goals.md`.
 
 **Branch edges** (`Assembly::edges`) are the branches staying inside one symbol, for the arrow
 gutter. Both ends are **indices into `instructions`**, not addresses, because that is what a row can
@@ -621,8 +645,9 @@ back. Four things are dropped rather than drawn, each of which would be a line t
 not point at: a branch out of the symbol, one landing mid-instruction, one whose displacement is a
 relocation placeholder (tested on the *raw* relocation lookup, since a branch relocated against a
 section carries no text symbol while its displacement is just as meaningless), and `jmp $`. Those
-four keep their `branch_span` all the same, the number being where the number is, so **the span and
-the edge are separate answers** and a caller that wants to *follow* a branch needs both.
+four keep their `Operand::Branch` and its span all the same, the number being where the number is,
+so **the span and the edge are separate answers** and a caller that wants to *follow* a branch needs
+both.
 `Assembly::edge_from` is the pairing, and it is a binary search rather than a scan: an instruction
 names at most one target and a backend decodes from the front, so `from` ascends strictly across
 `edges`.
@@ -677,9 +702,9 @@ layout, so the biases the tests pin skip a grain for it) and a section whose pla
 the one before it, which a header can claim and nothing can draw. It is built in one pass over the
 object's symbols, bucketed by section, rather than one scan per section, since a large crate's CGU
 has thousands of both. Branches compose with it for free: in a linked image a branch's address is
-unique across sections, so `Instruction::branch` is already the placed key; in a relocatable object
-a jump to another function is a relocation, `branch` is `None`, and the relocation target is a
-symbol, which its section's listing places. The unit stays the object, since an archive's members
+unique across sections, so `Instruction::branch()` is already the placed key; in a relocatable
+object a jump to another function is a relocation, it answers `None`, and the relocation target is
+a symbol, which its section's listing places. The unit stays the object, since an archive's members
 share no addresses, so "all the code" of an archive is a list of objects' code listings, and that is
 the sidebar's question.
 

@@ -23,7 +23,7 @@ use disasm::Code;
 use line::{DebugInfo, Procedure, Public};
 use unwind::UnwindEntry;
 
-pub use disasm::{Assembly, BranchEdge, Instruction, SpanKind};
+pub use disasm::{Assembly, BranchEdge, Instruction, Operand, SpanKind};
 pub use line::{DebugInfoCache, LineInfo, LineRow, Location, SourceDigests, SourceHash};
 pub use listing::{CodeListing, DecodedStretch, Gap, GapKind, Listing, Place, Placed, Stretch};
 pub use made_up::MadeUp;

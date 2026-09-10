@@ -155,66 +155,131 @@ pub enum SpanKind {
     Other,
 }
 
+/// What an instruction's operand names, where it names anything: the one link a row of it
+/// can draw, and the whole of what a backend decided about it.
+///
+/// **The four cases split by how the address was arrived at, not by what the instruction
+/// is.** Any operand a relocation covers is [`SymbolName`](Self::SymbolName) or
+/// [`Placeholder`](Self::Placeholder), whatever the opcode and whichever operand it is: an
+/// immediate, a memory displacement and a branch's own rel32 are all one question, which is
+/// whether the relocation named a text symbol this object kept. A `lea rdi, [rip+0x0]`
+/// relocated against a function is a [`SymbolName`](Self::SymbolName) exactly as a `call`
+/// is; the same `lea` against a data symbol is a [`Placeholder`](Self::Placeholder).
+/// [`Branch`](Self::Branch) and [`Call`](Self::Call) are the *unrelocated* cases alone,
+/// where the encoding's own displacement is the answer.
+///
+/// So the cases are exclusive by construction and not by convention. A relocated operand
+/// carries a placeholder a linker will overwrite, so a row that names a symbol names no
+/// address of its own and a row that names an address was not relocated; and a call the
+/// backend found a symbol for goes to that symbol's address rather than to one of its own.
+/// A caller matches on this; nothing outside a backend works out which case a row is in.
 #[derive(Clone)]
-pub struct Instruction {
-    pub address: u64,
-    pub bytes: Vec<u8>,
-    pub format: Vec<(String, SpanKind)>,
-    /// The symbol this instruction's operand names: the target of a relocation covering its
-    /// bytes, or, with none, the function a direct `call` reaches ([`Code::symbol_at`]) —
-    /// which is what a linked image's calls are, the linker having applied theirs.
-    pub relocation: Option<Arc<SymbolData>>,
-
-    /// Where in [`format`](Self::format) the relocation target's name was substituted for
-    /// the operand's placeholder value, when it was — one whole span, so a renderer can lift
-    /// it out and draw it as a link.
+pub enum Operand {
+    /// A text symbol the operand names, whatever kind of operand it is: the target of a
+    /// relocation covering the instruction's bytes, or, with no relocation, the function a
+    /// direct `call` reaches ([`Code::symbol_at`]) — which is what a linked image's calls
+    /// are, the linker having applied theirs.
     ///
-    /// [`None`] with a `relocation` present means the formatter never offered an operand to
-    /// substitute into, and the target can only be named beside the instruction.
-    pub relocation_span: Option<usize>,
+    /// Spelt out rather than called `Symbol`, which the crate already exports for the
+    /// object-and-[`SymbolData`] pair, and named after what it holds rather than after what
+    /// happened to the operand.
+    SymbolName {
+        symbol: Arc<SymbolData>,
 
-    /// Where in [`format`](Self::format) this instruction's own branch displacement was
-    /// printed — [`relocation_span`](Self::relocation_span)'s twin, and exclusive with it:
-    /// a branch whose displacement is a relocation placeholder names no address of its
-    /// own, so a backend records a span for exactly the rows whose [`branch`](Self::branch)
-    /// is set.
+        /// Where in [`format`](Instruction::format) the name was substituted for the
+        /// operand's placeholder value — one whole span, so a renderer can lift it out and
+        /// draw it as a link. An index into `format` and never an offset into the symbol.
+        ///
+        /// [`None`] means the formatter offered no operand to substitute into, and the
+        /// symbol can only be named *beside* the instruction.
+        span: Option<usize>,
+    },
+
+    /// A relocation covered the bytes and named nothing this object kept — a section, a
+    /// data symbol, an undefined import. What is printed is the placeholder itself, so the
+    /// row names neither a symbol nor an address and has no link. Kept apart from having no
+    /// operand at all because it is the one case where the number means nothing.
     ///
-    /// It says where the number is and not that there is anywhere to go: the four kinds of
-    /// branch [`Assembly::edges`] drops keep their span. A caller that wants to *follow*
-    /// one pairs this with [`Assembly::edge_from`], which is what says the target has a
-    /// row.
-    pub branch_span: Option<usize>,
+    /// [`SymbolName`](Self::SymbolName)'s other half, and reached on the same rule: a
+    /// relocation covers these bytes. Nothing about the opcode enters into it.
+    Placeholder,
 
-    /// The address this instruction's own encoding branches to — a `jmp`, a `jcc`, a
-    /// `loop`, an `xbegin`; never a `call`, since control comes straight back. [`Some`]
-    /// exactly when [`branch_span`](Self::branch_span) is: a displacement that is a
-    /// relocation placeholder names nothing.
+    /// The address this instruction's own encoding branches to, no relocation covering it —
+    /// a `jmp`, a `jcc`, a `loop`, an `xbegin`; never a `call`, since control comes straight
+    /// back.
     ///
     /// The **address-keyed** answer, kept beside the index-keyed [`Assembly::edges`]: a
     /// listing that is not one symbol's — a whole section's — cannot say up front whether
     /// the target has a row, only where it is, and finds the row when it decodes there.
     /// Nothing is judged here: a branch out of the symbol, into the middle of an
-    /// instruction, or `jmp $` all keep their address.
-    pub branch: Option<u64>,
+    /// instruction, or `jmp $` all keep their address, and the four kinds
+    /// [`Assembly::edges`] drops keep their span. A caller that wants to *follow* one pairs
+    /// this with [`Assembly::edge_from`], which is what says the target has a row.
+    Branch {
+        address: u64,
 
-    /// The address this instruction's own encoding names and nothing here has named for
-    /// it: a direct near `call` or branch whose displacement is real -- no relocation
-    /// covers its bytes -- and whose target no text symbol starts at, since a call one
-    /// does is [`relocation`](Self::relocation)'s and its address is the symbol's. In the
-    /// same address space as [`address`](Self::address), the section's own. [`Some`]
-    /// exactly when [`target_span`](Self::target_span) is.
+        /// Where in [`format`](Instruction::format) the displacement was printed — an index
+        /// into `format`, as every `span` here is. It says where the number is and not that
+        /// there is anywhere to go.
+        span: usize,
+    },
+
+    /// The address a direct near `call` goes to, its displacement real — no relocation
+    /// covers its bytes — and no text symbol starting there, since a call one does is a
+    /// [`SymbolName`](Self::SymbolName) and its address is the symbol's.
     ///
-    /// [`branch`](Self::branch) plus the calls, kept apart because they answer different
-    /// questions: a branch is a line the gutter draws and a row this listing may have,
-    /// while this is only *where the instruction goes* -- into the middle of a function,
-    /// a function no symbol names, a stretch of a linked image nothing claims -- for a
-    /// reader to be taken there in a listing of the whole object. Nothing is judged.
-    pub target: Option<u64>,
+    /// [`Branch`](Self::Branch)'s counterpart for the one kind of branch it leaves out, and
+    /// kept apart from it because the two answer different questions: a branch is a line
+    /// the gutter draws and a row this listing may have, while this is only *where the
+    /// instruction goes* — into the middle of a function, a function no symbol names, a
+    /// stretch of a linked image nothing claims — for a reader to be taken there in a
+    /// listing of the whole object. Nothing is judged here either.
+    Call {
+        address: u64,
 
-    /// Where in [`format`](Self::format) that number was printed, as
-    /// [`branch_span`](Self::branch_span) says where a branch's is -- the same span for a
-    /// branch, and a call's own for a call, which has no `branch_span`.
-    pub target_span: Option<usize>,
+        /// Where in [`format`](Instruction::format) the address was printed.
+        span: usize,
+    },
+}
+
+#[derive(Clone)]
+pub struct Instruction {
+    pub address: u64,
+    pub bytes: Vec<u8>,
+    pub format: Vec<(String, SpanKind)>,
+
+    /// What this instruction's operand names, where it names anything. [`None`] for a row
+    /// with nothing to point at: a `ret`, a register move, a number that is only a number.
+    pub operand: Option<Operand>,
+}
+
+impl Instruction {
+    /// The text symbol this instruction's operand names, where it names one. See
+    /// [`Operand::SymbolName`].
+    pub fn symbol(&self) -> Option<&Arc<SymbolData>> {
+        match &self.operand {
+            Some(Operand::SymbolName { symbol, .. }) => Some(symbol),
+            _ => None,
+        }
+    }
+
+    /// The address this instruction's own encoding branches to. See [`Operand::Branch`],
+    /// which is the only case this is [`Some`] for.
+    pub fn branch(&self) -> Option<u64> {
+        match self.operand {
+            Some(Operand::Branch { address, .. }) => Some(address),
+            _ => None,
+        }
+    }
+
+    /// The address this instruction goes to and nothing here has named: a branch's own, or
+    /// an unnamed call's. See [`Operand::Branch`] and [`Operand::Call`].
+    pub fn target(&self) -> Option<u64> {
+        match self.operand {
+            Some(Operand::Branch { address, .. } | Operand::Call { address, .. }) => Some(address),
+            _ => None,
+        }
+    }
 }
 
 pub struct Assembly {
@@ -300,7 +365,7 @@ impl Assembly {
             .iter()
             .enumerate()
             .filter_map(|(from, instruction)| {
-                let to = addresses.binary_search(&instruction.branch?).ok()?;
+                let to = addresses.binary_search(&instruction.branch()?).ok()?;
                 (to != from).then_some(BranchEdge { from, to })
             })
             .collect();

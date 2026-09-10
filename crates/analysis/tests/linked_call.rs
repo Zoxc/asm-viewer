@@ -4,7 +4,7 @@
 
 mod common;
 
-use analysis::SpanKind;
+use analysis::{Operand, SpanKind};
 use common::{
     elf_shared_object, parse, pe_dll, symbol, text, ExportedSymbol, SharedObject, TEXT_ADDRESS,
 };
@@ -33,17 +33,24 @@ const FUNCTIONS: &[ExportedSymbol] = &[
     },
 ];
 
-/// The span [`analysis::Instruction::relocation_span`] points at, with its kind.
-fn relocation_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
-    let index = instruction.relocation_span?;
-    let (text, kind) = instruction.format.get(index)?;
+/// The span an [`Operand::SymbolName`]'s name was substituted into, with its kind.
+fn symbol_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
+    let Some(Operand::SymbolName { span, .. }) = instruction.operand else {
+        return None;
+    };
+    let (text, kind) = instruction.format.get(span?)?;
     Some((text.as_str(), *kind))
 }
 
-/// The span [`analysis::Instruction::target_span`] points at, with its kind.
+/// The span the address `instruction` goes to was printed into, with its kind: a branch's
+/// own, or an unnamed call's.
 fn target_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
-    let index = instruction.target_span?;
-    let (text, kind) = instruction.format.get(index)?;
+    let (Some(Operand::Branch { span, .. }) | Some(Operand::Call { span, .. })) =
+        instruction.operand
+    else {
+        return None;
+    };
+    let (text, kind) = instruction.format.get(span)?;
     Some((text.as_str(), *kind))
 }
 
@@ -58,19 +65,16 @@ fn the_call_names_g(object: &analysis::Object) {
     assert_eq!(assembly.instructions.len(), 2);
     let call = &assembly.instructions[0];
 
-    let resolved = call
-        .relocation
-        .as_ref()
-        .expect("the call resolves to a symbol");
+    let resolved = call.symbol().expect("the call resolves to a symbol");
     assert!(Arc::ptr_eq(resolved, &g));
     assert_eq!(text(call).trim_end(), "call      g");
-    assert_eq!(relocation_span(call), Some(("g", SpanKind::Address)));
-    // The name is the door, so the address is not one as well: the two are exclusive,
-    // and where the call goes is the symbol's own address.
-    assert_eq!(call.target, None);
-    assert_eq!(call.target_span, None);
+    assert_eq!(symbol_span(call), Some(("g", SpanKind::Address)));
+    // The name is the door, and the operand is one case: naming the symbol is not also
+    // naming an address, and where the call goes is the symbol's own address.
+    assert_eq!(call.target(), None);
+    assert_eq!(target_span(call), None);
 
-    assert!(assembly.instructions[1].relocation.is_none());
+    assert!(assembly.instructions[1].operand.is_none());
 }
 
 #[test]
@@ -107,14 +111,15 @@ fn a_call_landing_inside_a_function_keeps_its_number() {
 
     let assembly = f.assembly(&object).expect("f disassembles");
     let call = &assembly.instructions[0];
-    assert!(call.relocation.is_none());
-    assert!(call.relocation_span.is_none());
+    // Unnamed, the number is where the call goes, for a reader to be taken there.
+    assert!(matches!(
+        call.operand,
+        Some(Operand::Call { address, .. }) if address == TEXT_ADDRESS + 5
+    ));
     assert_eq!(
         text(call).trim_end(),
         format!("call      {:X}h", TEXT_ADDRESS + 5)
     );
-    // Unnamed, the number is where the call goes, for a reader to be taken there.
-    assert_eq!(call.target, Some(TEXT_ADDRESS + 5));
 }
 
 #[test]
@@ -155,11 +160,9 @@ fn a_call_into_the_middle_of_a_function_keeps_its_address() {
 
         let assembly = f.assembly(&object).expect("f disassembles");
         let call = &assembly.instructions[0];
-        assert!(call.relocation.is_none());
-        assert!(call.relocation_span.is_none());
-        assert_eq!(call.branch, None);
-        assert_eq!(call.branch_span, None);
-        assert_eq!(call.target, Some(inside));
+        assert!(call.symbol().is_none());
+        assert_eq!(call.branch(), None);
+        assert_eq!(call.target(), Some(inside));
         let number = format!("{inside:X}h");
         assert_eq!(
             target_span(call),
@@ -189,10 +192,14 @@ fn a_branch_keeps_its_target_beside_its_branch() {
     let f = symbol(&object, "f");
     let assembly = f.assembly(&object).expect("f disassembles");
     let jump = &assembly.instructions[0];
-    assert_eq!(jump.branch, Some(TEXT_ADDRESS + 3));
-    assert_eq!(jump.target, jump.branch);
-    assert!(jump.branch_span.is_some());
-    assert_eq!(jump.target_span, jump.branch_span);
+    // One `Operand::Branch`, so the address and the span are the same answer given once:
+    // `target` is `branch` and the span the door uses is the branch's own.
+    assert!(matches!(
+        jump.operand,
+        Some(Operand::Branch { address, .. }) if address == TEXT_ADDRESS + 3
+    ));
+    assert_eq!(jump.target(), jump.branch());
+    assert!(target_span(jump).is_some());
 }
 
 #[test]
@@ -227,12 +234,12 @@ fn an_unrelocated_call_never_reaches_across_sections() {
     let assembly = f.assembly(&object).expect("f disassembles");
     let call = &assembly.instructions[0];
     assert!(
-        call.relocation.is_none(),
+        call.symbol().is_none(),
         "resolved across sections to {:?}",
-        call.relocation.as_ref().map(|symbol| &symbol.name)
+        call.symbol().map(|symbol| &symbol.name)
     );
     assert_eq!(text(call).trim_end(), "call      6");
     // And the number is still where the call goes, in the section's own addresses:
     // nothing is judged about a target past the section's end.
-    assert_eq!(call.target, Some(6));
+    assert_eq!(call.target(), Some(6));
 }

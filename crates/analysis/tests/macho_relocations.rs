@@ -107,13 +107,13 @@ fn a_call_in_a_section_that_is_not_at_zero_resolves_through_its_relocation() {
     // Miss the relocation and that placeholder stands as a real target, so the reader is
     // shown a call to `other`.
     assert!(Arc::ptr_eq(
-        call.relocation.as_ref().expect("the call is relocated"),
+        call.symbol().expect("the call is relocated"),
         &target
     ));
     assert_eq!(text(call).trim_end(), "call      target");
     // A placeholder names nowhere, so the row is no door and the gutter draws no arrow.
-    assert_eq!(call.target, None);
-    assert_eq!(call.branch, None);
+    assert_eq!(call.target(), None);
+    assert_eq!(call.branch(), None);
 }
 
 /// A code section that is not `__TEXT,__text`. `object` decided a section's kind from its

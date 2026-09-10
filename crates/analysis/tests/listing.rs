@@ -501,7 +501,7 @@ fn a_tail_jump_names_the_next_symbols_stretch() {
     // and the listing has a stretch there.
     assert!(code.edges.is_empty());
     let target = code.instructions[0]
-        .branch
+        .branch()
         .expect("the jump names an address");
     assert_eq!(target, 3);
     assert_eq!(listing.stretch_at(target), Some(1));

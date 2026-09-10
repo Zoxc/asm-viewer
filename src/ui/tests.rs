@@ -17991,12 +17991,13 @@ fn calling_into_the_middle() -> (Arc<Object>, u64) {
 }
 
 /// The operand of `f`'s call as the disassembler printed it, which is the text of the
-/// door: the span `target_span` names.
+/// door: the span the `Operand::Call` names.
 fn call_operand(f: &Symbol) -> String {
     let assembly = f.data.assembly(&f.object).expect("f decodes");
     let call = &assembly.instructions[0];
-    assert!(call.relocation.is_none(), "the call was named");
-    let span = call.target_span.expect("the call keeps its address");
+    let Some(Operand::Call { span, .. }) = call.operand else {
+        panic!("the call keeps its address");
+    };
     call.format[span].0.clone()
 }
 
@@ -20874,9 +20875,9 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
         .instructions
         .iter()
         .enumerate()
-        .find(|(_, instruction)| instruction.relocation.is_some())
+        .find(|(_, instruction)| instruction.symbol().is_some())
         .expect("sum_to calls add");
-    let target = instruction.relocation.clone().expect("a target");
+    let target = instruction.symbol().cloned().expect("a target");
     let row = lanes.row_of(index);
     let line = instruction_line(&assembly, index);
     let before = Line {
@@ -20965,9 +20966,9 @@ fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
         .instructions
         .iter()
         .enumerate()
-        .find(|(_, instruction)| instruction.relocation.is_some())
+        .find(|(_, instruction)| instruction.symbol().is_some())
         .expect("sum_to calls add");
-    let target = instruction.relocation.clone().expect("a target");
+    let target = instruction.symbol().cloned().expect("a target");
     let row = lanes.row_of(index);
 
     let (mut test, (states, marked, _landing, alt)) = TestingRunner::new(

@@ -57,11 +57,12 @@ pub(crate) struct Lifted<'a> {
 }
 
 /// How an instruction's text is drawn after its address: the formatter's spans up to the
-/// link, the link with what it says, and the spans after it. `linked` says whether its
-/// branch, if it has one, is drawn as a link -- which is the listing's to know, being
-/// whether it has the row the branch lands on. The spans are exclusive -- a branch whose
-/// displacement is a relocation placeholder names no address of its own, and a target's
-/// span is a branch's own where the row is a branch -- so there is at most one link.
+/// link, the link with what it says, and the spans after it. There is at most one link
+/// because the crate says so: an [`Operand`] is one case and carries the one span it has,
+/// and this is that projected onto the four kinds a row draws. The crate's cases split by
+/// how the address was arrived at and these by how the row draws it, which is why an
+/// [`Operand::Branch`] can come back as either of two. `linked` is the only thing added,
+/// and it is the listing's to know: whether it has the row a branch lands on.
 ///
 /// A relocation the formatter offered no operand for is a link all the same: it comes
 /// back as [`Link::Appended`] after every span, with an empty tail.
@@ -73,20 +74,21 @@ pub(crate) fn split(
     Option<Lifted<'_>>,
     &[(String, SpanKind)],
 ) {
-    let name = instruction
-        .relocation
-        .as_deref()
-        .map(|target| target.display());
-    let span = match instruction.relocation_span {
-        Some(i) if name.is_some() => Some((i, Link::Relocation)),
-        _ => match instruction.branch_span.filter(|_| linked) {
-            Some(i) => Some((i, Link::Branch)),
-            None => instruction
-                .target_span
-                .filter(|_| instruction.target.is_some())
-                .map(|i| (i, Link::Target)),
-        },
+    let name = instruction.symbol().map(|symbol| symbol.display());
+    let span = match &instruction.operand {
+        // The name goes in the operand it was substituted into, or, where the formatter
+        // offered none, after every span; the `None` arm below is where that lands.
+        Some(Operand::SymbolName { span, .. }) => span.map(|i| (i, Link::Relocation)),
+        // A branch's own displacement is a link to its row where this listing has one,
+        // and the address it goes to where it has not.
+        Some(Operand::Branch { span, .. }) => {
+            Some((*span, if linked { Link::Branch } else { Link::Target }))
+        }
+        Some(Operand::Call { span, .. }) => Some((*span, Link::Target)),
+        Some(Operand::Placeholder) | None => None,
     }
+    // The crate records a span into `format`'s own length, so this only guards a listing
+    // built by hand.
     .filter(|&(i, _)| i < instruction.format.len());
 
     match span {
@@ -119,9 +121,11 @@ pub(crate) fn split(
 }
 
 /// Whether instruction `index`'s branch is drawn as a link: where the listing has the row
-/// it lands on, which is the same set the gutter draws an arrow for.
+/// it lands on, which is the same set the gutter draws an arrow for. An edge is only ever
+/// built for an [`Operand::Branch`], and one of those always has a span, so the edge is the
+/// whole question.
 pub(crate) fn linked(assembly: &Assembly, index: usize) -> bool {
-    assembly.instructions[index].branch_span.is_some() && assembly.edge_from(index).is_some()
+    assembly.edge_from(index).is_some()
 }
 
 /// The text instruction `index`'s row draws after its address, as the clipboard sees it:
@@ -970,13 +974,11 @@ fn instruction_text(
         let door = match link.kind {
             // The relocation target's name -- in the operand the relocation applies to,
             // or after them all where the formatter offered none to put it in.
-            Link::Relocation | Link::Appended => {
-                instruction.relocation.as_ref().map(|target| Door::Symbol {
-                    object: data.object().clone(),
-                    target: target.clone(),
-                    code_tab: data.code_tab,
-                })
-            }
+            Link::Relocation | Link::Appended => instruction.symbol().map(|symbol| Door::Symbol {
+                object: data.object().clone(),
+                target: symbol.clone(),
+                code_tab: data.code_tab,
+            }),
             // A branch's displacement is the other way to follow it: the row it lands
             // on, and the run a press on that row would have made.
             Link::Branch => data.assembly().edge_from(index).map(|edge| Door::Row {
@@ -986,7 +988,7 @@ fn instruction_text(
             // Where the instruction goes, with no name and no row here: the door into
             // the object's code at that address, in either listing -- the unified view's
             // own rows included, where the target may be screens away.
-            Link::Target => instruction.target.map(|target| Door::Address {
+            Link::Target => instruction.target().map(|target| Door::Address {
                 object: data.object().clone(),
                 address: data.placed(target),
             }),

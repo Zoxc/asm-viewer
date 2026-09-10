@@ -1,6 +1,6 @@
 //! The x86 backend: the only module in the crate that mentions `iced-x86`.
 
-use super::{Code, Disassembler, Instruction, SpanKind};
+use super::{Code, Disassembler, Instruction, Operand, SpanKind};
 use iced_x86::Formatter;
 use std::{cell::RefCell, rc::Rc};
 
@@ -67,46 +67,17 @@ impl Disassembler for X86 {
             // resolves to `None` and its displacement is a placeholder all the same. Only
             // this question says whether the encoded branch target means anything.
             let relocated = relocation.is_some();
-            let relocation = match relocation {
+            let symbol = match relocation {
                 Some(relocation) => relocation.target,
                 // No relocation, so the displacement is real: in a linked image it is the
                 // function a call reaches, and a symbol starting exactly there is its name.
                 None => call_target(&instruction).and_then(|target| code.symbol_at(target)),
             };
 
-            let branch = if relocated {
-                None
-            } else {
-                branch_target(&instruction)
-            };
-            // Where the instruction goes, for the operand to be a door there: a branch's
-            // own address, or a call's where no symbol has named it -- a name is the
-            // door, and a relocation placeholder names nowhere.
-            let target = if relocated {
-                None
-            } else {
-                branch.or_else(|| call_target(&instruction).filter(|_| relocation.is_none()))
-            };
-
-            let mut inst = Instruction {
-                address: instruction.ip(),
-                bytes: encoded.to_vec(),
-                format: Vec::new(),
-                relocation,
-                relocation_span: None,
-                branch_span: None,
-                branch,
-                target,
-                target_span: None,
-            };
-
             // The resolver takes the name, so at most one operand is substituted however
             // many the formatter asks about, and anything left over is cleared here before
             // the next instruction.
-            *pending.borrow_mut() = inst
-                .relocation
-                .as_ref()
-                .map(|target| target.display().to_owned());
+            *pending.borrow_mut() = symbol.as_ref().map(|symbol| symbol.display().to_owned());
 
             // `rip_relative_addresses` is global to the formatter (`format_memory` reads
             // it), so it is flipped per instruction: the `rip+` is kept wherever a
@@ -123,19 +94,39 @@ impl Disassembler for X86 {
                     ),
             );
 
-            formatter.format(&instruction, &mut inst);
+            let mut formatted = Formatted::default();
+            formatter.format(&instruction, &mut formatted);
 
-            // `write_number` marks every branch-target operand the formatter writes, and a
-            // far branch's selector-and-offset are written the same way. Only the
-            // instructions that named an address of their own above keep the mark, and a
-            // branch's is its `branch_span` too: those are the ones a row can be pointed
-            // at.
-            if target.is_none() {
-                inst.target_span = None;
-            }
-            inst.branch_span = inst.target_span.filter(|_| branch.is_some());
+            // The four kinds of operand, decided once and only here, and by how the
+            // address was arrived at rather than by what the instruction is. A relocation
+            // settles it whichever operand it covers: a name where it named a text symbol
+            // this object kept, and the placeholder itself where it named nothing, since a
+            // relocated number is a linker's fill whatever it happens to spell. Only what
+            // no relocation covers names an address of its own, and only for the rows the
+            // formatter printed one for — the mark `write_number` left.
+            let operand = match symbol {
+                Some(symbol) => Some(Operand::SymbolName {
+                    symbol,
+                    span: formatted.span,
+                }),
+                None if relocated => Some(Operand::Placeholder),
+                None => match (
+                    branch_target(&instruction),
+                    call_target(&instruction),
+                    formatted.span,
+                ) {
+                    (Some(address), _, Some(span)) => Some(Operand::Branch { address, span }),
+                    (None, Some(address), Some(span)) => Some(Operand::Call { address, span }),
+                    _ => None,
+                },
+            };
 
-            instructions.push(inst);
+            instructions.push(Instruction {
+                address: instruction.ip(),
+                bytes: encoded.to_vec(),
+                format: formatted.format,
+                operand,
+            });
         }
 
         instructions
@@ -158,7 +149,27 @@ impl From<iced_x86::FormatterTextKind> for SpanKind {
     }
 }
 
-impl iced_x86::FormatterOutput for Instruction {
+/// What the formatter writes one instruction as: its spans, and where the one span a link
+/// could be made of landed.
+///
+/// The formatter's output rather than [`Instruction`] itself, so the crate's own type holds
+/// no scratch state and implements no `iced-x86` trait. Which [`Operand`] the span belongs
+/// to is the decode loop's decision, made once formatting is done.
+#[derive(Default)]
+struct Formatted {
+    format: Vec<(String, SpanKind)>,
+
+    /// The span a name was substituted into ([`write_symbol`](Self::write_symbol)), or, with
+    /// no name, the first branch target the formatter printed
+    /// ([`write_number`](Self::write_number)).
+    ///
+    /// One span and not two, because the two cases never both matter: the resolver is armed
+    /// exactly when the instruction names a symbol, and an operand a name went into printed
+    /// no address of its own. `write_symbol` therefore has the last word.
+    span: Option<usize>,
+}
+
+impl iced_x86::FormatterOutput for Formatted {
     fn write(&mut self, text: &str, kind: iced_x86::FormatterTextKind) {
         self.format.push((text.to_owned(), kind.into()));
     }
@@ -169,8 +180,8 @@ impl iced_x86::FormatterOutput for Instruction {
     /// records a substituted name: it is the span the UI makes clickable.
     ///
     /// The *first* such span, since a far branch writes its selector and its offset both
-    /// this way; the decode loop discards the mark for anything that is not a near branch
-    /// or call naming an address of its own, and copies it to `branch_span` for a branch.
+    /// this way; the decode loop keeps the mark only for a row whose operand names an
+    /// address of its own.
     fn write_number(
         &mut self,
         _instruction: &iced_x86::Instruction,
@@ -181,8 +192,8 @@ impl iced_x86::FormatterOutput for Instruction {
         _number_kind: iced_x86::NumberKind,
         kind: iced_x86::FormatterTextKind,
     ) {
-        if SpanKind::from(kind) == SpanKind::Address && self.target_span.is_none() {
-            self.target_span = Some(self.format.len());
+        if SpanKind::from(kind) == SpanKind::Address && self.span.is_none() {
+            self.span = Some(self.format.len());
         }
         self.write(text, kind);
     }
@@ -190,6 +201,11 @@ impl iced_x86::FormatterOutput for Instruction {
     /// The formatter got a name back from [`RelocationResolver`], so this is the
     /// placeholder's replacement. Record where it lands: it is the span the UI makes
     /// clickable.
+    ///
+    /// Only a name that is a single span can be pointed at; anything else falls back to
+    /// being named beside the instruction, which is `Operand::SymbolName`'s `span: None`.
+    /// Either way the answer replaces whatever a number left, the resolver being armed only
+    /// for an instruction that names a symbol and taken by the first operand asked about.
     fn write_symbol(
         &mut self,
         _instruction: &iced_x86::Instruction,
@@ -223,11 +239,7 @@ impl iced_x86::FormatterOutput for Instruction {
             }
         }
 
-        // Only point at a name that is a single span; anything else falls back to being
-        // named beside the instruction.
-        if self.format.len() == start + 1 {
-            self.relocation_span = Some(start);
-        }
+        self.span = (self.format.len() == start + 1).then_some(start);
     }
 }
 
@@ -282,8 +294,8 @@ fn branch_target(instruction: &iced_x86::Instruction) -> Option<u64> {
 /// The address `instruction` calls, when it is a direct near `call`: [`branch_target`]'s
 /// counterpart for the one kind of branch it leaves out, asked so the function there can be
 /// named — never so the gutter draws it. A `jmp` out of the symbol is a tail call and could
-/// be named the same way, but its displacement is a branch's own span (`branch_span`) and
-/// making it a link to a function is a decision of its own.
+/// be named the same way, but it is an [`Operand::Branch`] and making that a link to a
+/// function is a decision of its own.
 fn call_target(instruction: &iced_x86::Instruction) -> Option<u64> {
     (instruction.flow_control() == iced_x86::FlowControl::Call)
         .then(|| near_target(instruction))

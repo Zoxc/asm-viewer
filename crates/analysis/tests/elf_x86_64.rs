@@ -3,7 +3,7 @@
 
 mod common;
 
-use analysis::SpanKind;
+use analysis::{Operand, SpanKind};
 use common::{
     branch_to_data, caller_and_target, elf_x86_64, elf_x86_64_absolute, indirect_caller_and_target,
     names, parse, rip_relative_store_to_data, symbol, text, TextRelocation, TextSymbol,
@@ -88,11 +88,11 @@ fn the_call_resolves_to_the_target_symbol() {
     let assembly = caller.assembly(&object).expect("caller disassembles");
     let call = &assembly.instructions[0];
 
-    let resolved = call.relocation.as_ref().expect("the call has a relocation");
+    let resolved = call.symbol().expect("the call has a relocation");
     assert!(Arc::ptr_eq(resolved, &target));
 
-    // The relocation covers only the call; the trailing `ret` has none.
-    assert!(assembly.instructions[1].relocation.is_none());
+    // The relocation covers only the call; the trailing `ret` has no operand at all.
+    assert!(assembly.instructions[1].operand.is_none());
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn the_placeholder_operand_is_replaced_when_a_relocation_applies() {
         call.format
     );
     assert_eq!(text(call).trim_end(), "call      target");
-    assert_eq!(relocation_span(call), Some(("target", SpanKind::Address)));
+    assert_eq!(symbol_span(call), Some(("target", SpanKind::Address)));
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn an_unrelocated_branch_keeps_its_target() {
     let assembly = caller.assembly(&object).expect("caller disassembles");
     let call = &assembly.instructions[0];
 
-    assert!(call.relocation.is_none());
+    assert!(call.symbol().is_none());
     // A branch target is `SpanKind::Address`, not a number span, so the text is what has
     // to be asserted on above.
     assert_eq!(text(call).trim_end(), "call      5");
@@ -243,14 +243,14 @@ fn a_relocation_drops_an_immediate_number_span() {
         .expect("disassembles")
         .instructions[0]
         .clone();
-    assert!(mov.relocation.is_some());
+    assert!(mov.symbol().is_some());
     assert!(
         !mov.format.iter().any(|(_, kind)| *kind == SpanKind::Number),
         "the relocated immediate kept a number span: {:?}",
         mov.format
     );
     assert_eq!(text(&mov).trim_end(), "mov       eax, target");
-    assert_eq!(relocation_span(&mov), Some(("target", SpanKind::Address)));
+    assert_eq!(symbol_span(&mov), Some(("target", SpanKind::Address)));
 }
 
 #[test]
@@ -279,8 +279,7 @@ fn a_relocation_anywhere_in_the_instruction_counts() {
 
     let assembly = caller.assembly(&object).expect("caller disassembles");
     let resolved = assembly.instructions[0]
-        .relocation
-        .as_ref()
+        .symbol()
         .expect("the call has a relocation");
     assert!(Arc::ptr_eq(resolved, &target));
 }
@@ -295,8 +294,8 @@ fn an_unrelocated_indirect_call_keeps_its_displacement() {
     let assembly = caller.assembly(&object).expect("caller disassembles");
     let call = &assembly.instructions[0];
 
-    assert!(call.relocation.is_none());
-    assert_eq!(call.relocation_span, None);
+    // An indirect call names nothing in its own encoding, so there is no operand at all.
+    assert!(call.operand.is_none());
     assert_eq!(text(call).trim_end(), "call      qword ptr [6]");
     assert_eq!(spans_of(call, SpanKind::Number), ["6"]);
 }
@@ -314,7 +313,7 @@ fn a_relocated_indirect_call_names_its_target_inside_the_brackets() {
     let assembly = caller.assembly(&object).expect("caller disassembles");
     let call = &assembly.instructions[0];
 
-    let resolved = call.relocation.as_ref().expect("the call has a relocation");
+    let resolved = call.symbol().expect("the call has a relocation");
     assert!(Arc::ptr_eq(resolved, &target));
 
     assert_eq!(text(call).trim_end(), "call      qword ptr [rip+target]");
@@ -324,7 +323,7 @@ fn a_relocated_indirect_call_names_its_target_inside_the_brackets() {
         call.format
     );
     // The name is one span of its own, which is what the UI turns into the link.
-    assert_eq!(relocation_span(call), Some(("target", SpanKind::Address)));
+    assert_eq!(symbol_span(call), Some(("target", SpanKind::Address)));
 }
 
 #[test]
@@ -358,10 +357,13 @@ fn the_relocation_span_is_the_only_one_replaced() {
 
     assert_eq!(text(mov).trim_end(), "mov       dword ptr [rip+target], 7");
     assert_eq!(spans_of(mov, SpanKind::Number), ["7"]);
-    // The `rip+` is *not* part of the link: `relocation_span` still isolates the name.
-    assert_eq!(relocation_span(mov), Some(("target", SpanKind::Address)));
+    // A store's memory operand, not a call's displacement: what the relocation named is
+    // what decides the case, and the opcode has nothing to do with it.
+    assert!(matches!(mov.operand, Some(Operand::SymbolName { .. })));
+    // The `rip+` is *not* part of the link: the operand's span still isolates the name.
+    assert_eq!(symbol_span(mov), Some(("target", SpanKind::Address)));
     assert_eq!(
-        mov.format[mov.relocation_span.unwrap() - 1].0,
+        mov.format[span_index(mov).unwrap() - 1].0,
         "+",
         "the name should follow the rip and its operator: {:?}",
         mov.format
@@ -381,12 +383,29 @@ fn an_unresolvable_relocation_keeps_the_rip_form() {
     let assembly = storer.assembly(&object).expect("storer disassembles");
     let mov = &assembly.instructions[0];
 
-    assert!(mov.relocation.is_none());
-    assert_eq!(mov.relocation_span, None);
+    // A relocation covered the bytes and named nothing this object kept, which is the
+    // operand's own case: no name, no address, and what is printed means nothing.
+    assert!(matches!(mov.operand, Some(Operand::Placeholder)));
     // No offset, because an ELF RELA keeps its addend out of the operand: the four
     // placeholder bytes are zero, and a zero displacement is not printed.
     assert_eq!(text(mov).trim_end(), "mov       dword ptr [rip], 7");
     assert_eq!(spans_of(mov, SpanKind::Number), ["7"]);
+}
+
+#[test]
+fn a_placeholder_operand_is_told_apart_from_having_none() {
+    // Two rows a listing draws the same way and which mean opposite things. The relocated
+    // store's displacement is a fill the linker will overwrite, so the number on it stands
+    // for nothing; the `ret` under it holds nothing that stands for anything else. Both
+    // draw no link, and only the first is a placeholder.
+    let object = parse(&rip_relative_store_to_data(0));
+    let assembly = assemble(&object, "storer");
+
+    assert!(matches!(
+        assembly.instructions[0].operand,
+        Some(Operand::Placeholder)
+    ));
+    assert!(assembly.instructions[1].operand.is_none());
 }
 
 #[test]
@@ -478,10 +497,7 @@ fn a_name_replaces_the_whole_number_on_any_operand() {
         let assembly = probe.assembly(&object).expect("probe disassembles");
         let first = &assembly.instructions[0];
 
-        assert_eq!(
-            first.relocation.as_ref().map(|g| g.name.as_str()),
-            Some("g")
-        );
+        assert_eq!(first.symbol().map(|g| g.name.as_str()), Some("g"));
         assert_eq!(text(first).trim_end(), printed);
     }
 }
@@ -512,7 +528,7 @@ fn a_name_replaces_a_branch_displacement_too() {
     let call = &assemble(&object, "caller").instructions[0];
 
     assert_eq!(text(call).trim_end(), "call      target");
-    assert_eq!(call.branch_span, None);
+    assert_eq!(branch_span(call), None);
 }
 
 #[test]
@@ -690,7 +706,7 @@ fn a_branch_out_of_the_symbol_is_not_an_edge() {
         assembly.edges
     );
     // The row still says where it goes: a listing of the whole section has a row there.
-    assert_eq!(assembly.instructions[0].branch, Some(3));
+    assert_eq!(assembly.instructions[0].branch(), Some(3));
 }
 
 #[test]
@@ -713,7 +729,7 @@ fn a_relocated_branch_is_not_an_edge() {
     let assembly = assemble(&plain, "jumper");
     assert_eq!(text(&assembly.instructions[0]).trim_end(), "jmp       5");
     assert_eq!(edges(&assembly), [(0, 1)]);
-    assert_eq!(assembly.instructions[0].branch, Some(5));
+    assert_eq!(assembly.instructions[0].branch(), Some(5));
 
     let relocated = parse(&elf_x86_64(
         &symbols,
@@ -734,7 +750,7 @@ fn a_relocated_branch_is_not_an_edge() {
         assembly.edges
     );
     // Nor does the row name an address: the placeholder is not one.
-    assert_eq!(assembly.instructions[0].branch, None);
+    assert_eq!(assembly.instructions[0].branch(), None);
 }
 
 #[test]
@@ -745,7 +761,7 @@ fn a_relocation_that_resolves_to_nothing_still_suppresses_the_edge() {
     let object = parse(&branch_to_data());
     let assembly = assemble(&object, "jumper");
 
-    assert!(assembly.instructions[0].relocation.is_none());
+    assert!(assembly.instructions[0].symbol().is_none());
     assert_eq!(assembly.instructions[1].address, 5);
     assert!(
         edges(&assembly).is_empty(),
@@ -886,10 +902,10 @@ fn a_branch_marks_the_span_its_displacement_landed_in() {
     let forward = &assembly.instructions[1];
     assert_eq!(branch_span(forward), Some(("7", SpanKind::Address)));
     assert_eq!(
-        before_span(forward, forward.branch_span.unwrap()),
+        before_span(forward, span_index(forward).unwrap()),
         "jmp       short "
     );
-    assert_eq!(after_span(forward, forward.branch_span.unwrap()), "");
+    assert_eq!(after_span(forward, span_index(forward).unwrap()), "");
 
     let backward = &assembly.instructions[4];
     assert_eq!(branch_span(backward), Some(("4", SpanKind::Address)));
@@ -936,18 +952,18 @@ fn a_call_and_a_relocated_branch_have_no_branch_span() {
     ));
     let assembly = assemble(&object, "caller");
     assert_eq!(text(&assembly.instructions[0]).trim_end(), "call      5");
-    assert_eq!(assembly.instructions[0].branch_span, None);
-    assert_eq!(assembly.instructions[0].branch, None);
+    assert_eq!(branch_span(&assembly.instructions[0]), None);
+    assert_eq!(assembly.instructions[0].branch(), None);
     // It still says where it goes, in the span the number was printed into: the door
     // into a listing of the whole object, which a branch's span is too.
-    assert_eq!(assembly.instructions[0].target, Some(5));
+    assert_eq!(assembly.instructions[0].target(), Some(5));
     assert_eq!(
         target_span(&assembly.instructions[0]),
         Some(("5", SpanKind::Address))
     );
 
     // A relocated `jmp target`: the displacement is a placeholder the name stands in for,
-    // and the name is `relocation_span`'s. The two spans are exclusive.
+    // so the operand is the name's and carries the one span there is.
     let relocated = parse(&elf_x86_64(
         &[
             TextSymbol {
@@ -967,20 +983,21 @@ fn a_call_and_a_relocated_branch_have_no_branch_span() {
     ));
     let assembly = assemble(&relocated, "jumper");
     let jump = &assembly.instructions[0];
-    assert_eq!(relocation_span(jump), Some(("target", SpanKind::Address)));
-    assert_eq!(jump.branch_span, None);
-    assert_eq!(jump.target, None);
-    assert_eq!(jump.target_span, None);
+    assert_eq!(symbol_span(jump), Some(("target", SpanKind::Address)));
+    assert_eq!(branch_span(jump), None);
+    assert_eq!(jump.target(), None);
+    assert_eq!(target_span(jump), None);
 
     // And the same jump relocated against a data symbol, where nothing was substituted and
-    // the placeholder is printed as it stands: still no span, on the same rule that drops
-    // the edge -- and no target either, a placeholder naming nowhere.
+    // the placeholder is printed as it stands: the operand is the placeholder itself, on
+    // the same rule that drops the edge -- no name, no span and no target.
     let assembly = assemble(&parse(&branch_to_data()), "jumper");
     let jump = &assembly.instructions[0];
     assert_eq!(spans_of(jump, SpanKind::Address), ["5"]);
-    assert_eq!(jump.branch_span, None);
-    assert_eq!(jump.target, None);
-    assert_eq!(jump.target_span, None);
+    assert!(matches!(jump.operand, Some(Operand::Placeholder)));
+    assert_eq!(branch_span(jump), None);
+    assert_eq!(jump.target(), None);
+    assert_eq!(target_span(jump), None);
 }
 
 #[test]
@@ -1001,7 +1018,7 @@ fn a_branch_with_no_row_to_land_on_keeps_its_span() {
         branch_span(&assembly.instructions[0]),
         Some(("0", SpanKind::Address))
     );
-    assert_eq!(assembly.instructions[0].branch, Some(0));
+    assert_eq!(assembly.instructions[0].branch(), Some(0));
     assert_eq!(assembly.edge_from(0), None);
 }
 
@@ -1020,25 +1037,46 @@ fn edges(assembly: &analysis::Assembly) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// The span [`analysis::Instruction::relocation_span`] points at, with its kind.
-fn relocation_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
-    let index = instruction.relocation_span?;
+/// The index of the one span `instruction`'s operand carries, whichever kind it is.
+fn span_index(instruction: &analysis::Instruction) -> Option<usize> {
+    match instruction.operand {
+        Some(Operand::SymbolName { span, .. }) => span,
+        Some(Operand::Branch { span, .. } | Operand::Call { span, .. }) => Some(span),
+        Some(Operand::Placeholder) | None => None,
+    }
+}
+
+/// The span at `index`, with its kind.
+fn span_at(instruction: &analysis::Instruction, index: usize) -> Option<(&str, SpanKind)> {
     let (text, kind) = instruction.format.get(index)?;
     Some((text.as_str(), *kind))
 }
 
-/// The span [`analysis::Instruction::branch_span`] points at, with its kind.
+/// The span an [`Operand::SymbolName`]'s name was substituted into, with its kind.
+fn symbol_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
+    let Some(Operand::SymbolName { span, .. }) = instruction.operand else {
+        return None;
+    };
+    span_at(instruction, span?)
+}
+
+/// The span an [`Operand::Branch`]'s own displacement was printed into, with its kind.
 fn branch_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
-    let index = instruction.branch_span?;
-    let (text, kind) = instruction.format.get(index)?;
-    Some((text.as_str(), *kind))
+    let Some(Operand::Branch { span, .. }) = instruction.operand else {
+        return None;
+    };
+    span_at(instruction, span)
 }
 
-/// The span [`analysis::Instruction::target_span`] points at, with its kind.
+/// The span the address `instruction` goes to was printed into, with its kind: a branch's
+/// own, or an unnamed call's.
 fn target_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
-    let index = instruction.target_span?;
-    let (text, kind) = instruction.format.get(index)?;
-    Some((text.as_str(), *kind))
+    let (Some(Operand::Branch { span, .. }) | Some(Operand::Call { span, .. })) =
+        instruction.operand
+    else {
+        return None;
+    };
+    span_at(instruction, span)
 }
 
 /// The formatted text before span `index`, which is what a row draws left of a link.
@@ -1063,7 +1101,7 @@ fn marked(assembly: &analysis::Assembly) -> Vec<usize> {
         .instructions
         .iter()
         .enumerate()
-        .filter(|(_, instruction)| instruction.branch_span.is_some())
+        .filter(|(_, instruction)| branch_span(instruction).is_some())
         .map(|(index, _)| index)
         .collect()
 }

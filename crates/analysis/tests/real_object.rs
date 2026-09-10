@@ -333,7 +333,7 @@ fn a_real_loop_is_two_edges_and_the_call_between_them_is_none() {
 
         // The one branch out of the function, which is also the one relocated instruction.
         assert_eq!(mnemonic(11), "call", "{name}");
-        assert!(assembly.instructions[11].relocation.is_some(), "{name}");
+        assert!(assembly.instructions[11].symbol().is_some(), "{name}");
     }
 }
 
