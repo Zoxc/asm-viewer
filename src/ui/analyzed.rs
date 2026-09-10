@@ -35,7 +35,8 @@ pub(crate) enum Ask {
 }
 
 /// The tab an answer to `ask` belongs to. One definition, used by the pane that keeps its
-/// row, by the run of rows a listing change drops, and by [`keeps_listing`] below.
+/// row, by the run of rows a listing change drops, and by the two rules below that ask
+/// whether the listing on screen is the reader's own.
 pub(crate) fn asked_of(ask: &Ask) -> Document {
     match ask {
         Ask::Symbol(symbol) => Document::Assembly(Selection::Symbol(symbol.clone())),
@@ -46,15 +47,14 @@ pub(crate) fn asked_of(ask: &Ask) -> Document {
 /// Whether the listing that is up is one the tab asking `ask` may be left showing: what
 /// says a question has something of the reader's own on screen already.
 ///
-/// Two ways it can be, and the second is not a widening but a repair. A listing is tagged
-/// with the question it answers *now*, and a retag moves that tag onto another tab: the
-/// symbol tab a file's line resolved to draws the same listing, and opening it retags
-/// rather than decodes again ([`Shown::answers`]). Coming back to the file, a comparison
-/// of tags then reads the listing as another tab's, and the first line of the file
-/// holding no code -- most of them -- takes it down. So a source question keeps a listing
-/// its own **file** compiled into, however that listing is tagged. What that leaves out
-/// is the case the rule is for: a function of a file this tab is not reading, left on
-/// screen under a tab that never asked for it.
+/// Two ways it can be, and the second is not a widening but a repair. The listing is
+/// tagged with the question it answers *now*, which a retag moves onto another tab --
+/// the symbol tab a file's line resolved to is the same listing, and opening it retags
+/// rather than decodes again. Coming back to the file, the tag then says the symbol's
+/// tab, and the listing the file tab worked out would be taken down by the first line of
+/// it holding no code. So a source line keeps a listing its own **file** compiled into,
+/// however the listing is tagged; what that leaves out is the case the rule is for, a
+/// function of another file left up under a tab that never asked for it.
 fn keeps_listing(shown: Option<&Shown>, ask: &Ask) -> bool {
     let Some(shown) = shown else {
         return false;
@@ -357,22 +357,35 @@ impl Analyzed {
     /// drawing.
     ///
     /// **The order of the arms is the mechanism**: a listing beats a short wait, so a
-    /// click never flashes the pane empty; a wait past [`SLOW_ANALYSIS`] beats the stale
-    /// listing, so the previous function is not left up under the next one's tab; and a
-    /// wait beats a question that named nothing, because a stale *listing* is doctrine
-    /// and a stale *sentence* is not.
+    /// click never flashes the pane empty; a wait past [`SLOW_ANALYSIS`] beats a listing
+    /// it may take down ([`keeps_listing`]), so a function of a file nobody here is
+    /// reading is not left up under the next tab, and loses to one it may not -- reading
+    /// down a file is a question per line, and a word that displaces the listing between
+    /// two of them is the pane blinking for a keypress, over a listing the bar above it
+    /// names honestly; and a **sentence** is left up over a wait exactly as a listing is,
+    /// for the same reason and no other -- clicking down a file's comments and braces is
+    /// one sentence after another, and a pane that blanks between two of them flashes on
+    /// every click. The line it names is the line before this one for as long as the
+    /// answer takes, which is what a listing left up is too.
     pub(crate) fn showing(&self, document: &Document) -> Showing<'_> {
         match (&self.shown, &self.pending) {
-            (_, Some(pending)) if pending.slow => Showing::Message("Analysing...".to_owned()),
+            (shown, Some(pending))
+                if pending.slow && !keeps_listing(shown.as_ref(), &pending.ask) =>
+            {
+                Showing::Message("Analysing...".to_owned())
+            }
             (Some(shown), _) => Showing::Listing(shown),
-            (None, Some(_)) => Showing::Nothing,
-            // Asked, and answered with no symbol at all. Only a source line can, and
-            // the message names it: the answer outlives the click, so which line came
-            // to nothing is not otherwise on screen.
-            (None, None) if self.answered.is_some() => Showing::Message(match &self.answered {
+            // Answered with no symbol at all, whether or not the next question is out
+            // yet. Only a source line can be, and the message names it: the answer
+            // outlives the click, so which line came to nothing is not otherwise on
+            // screen.
+            (None, _) if self.answered.is_some() => Showing::Message(match &self.answered {
                 Some(Ask::Source { at, .. }) => format!("No code compiled from {}", at.spell()),
                 _ => "No code compiled from this line".to_owned(),
             }),
+            // Asked with nothing behind it: the first question of a tab, which has no
+            // sentence to leave up either.
+            (None, Some(_)) => Showing::Nothing,
             (None, None) => Showing::Message(
                 match document {
                     Document::Assembly(_) => "No symbol selected",

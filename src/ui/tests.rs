@@ -4404,6 +4404,148 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
     );
 }
 
+/// The state the panes are left in while the worker is held inside `second`, `first`
+/// having been answered: a question outstanding for longer than `SLOW_ANALYSIS` over
+/// whatever that first answer left on screen.
+fn held_inside(open: Arc<Object>, first: Ask, second: Ask) -> Analyzed {
+    // One permit per question the test wants answered; the rest of them stop here.
+    let (permit, permits) = async_channel::unbounded::<()>();
+    let work = move |question: Question| {
+        let _ = permits.recv_blocking();
+        answer(question)
+    };
+    let (mut test, (roots, asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(work)),
+        1.,
+    );
+    let analysis = roots.analysis;
+    let (mut asking, mut objects) = (asking, roots.states.objects);
+    objects.set(vec![open]);
+    test.sync_and_update();
+
+    permit
+        .send_blocking(())
+        .expect("the first question's permit");
+    asking.set(Some(first));
+    pump(&mut test, || analysis.peek().shown.is_some());
+
+    // The second question, which the worker takes and stops inside. Waited out rather
+    // than watched for: what marks it slow is a timer the request started.
+    asking.set(Some(second));
+    let until = Instant::now() + SLOW_ANALYSIS + Duration::from_millis(120);
+    while Instant::now() < until {
+        test.sync_and_update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // Bound, and the runner let go of under it: a `peek` hands back a guard, and a
+    // temporary of the tail expression outlives the local it would be read beside --
+    // which is the runner whose runtime the state is in, and dropping that under a live
+    // borrow panics inside `generational-box`.
+    let held = analysis.peek().clone();
+    drop(test);
+    held
+}
+
+/// **A wait says so only where it has nothing of the reader's own to take down.**
+/// Reading down a file is a question per line and every one that lands on another
+/// function is a decode; a word displacing the listing for as long as that takes, and
+/// the listing coming back behind it, is the pane blinking for a keypress. So a listing
+/// the reader may be left looking at is left up -- the bar over it names what is drawn,
+/// so nothing on screen is untrue -- and one they may not is taken down, the word being
+/// better than a function of a file nobody here is reading. Which is which is
+/// `keeps_listing`, the one rule an answer that named nothing is judged by as well.
+#[test]
+fn a_wait_says_so_only_where_it_may_take_the_listing_down() {
+    let symbols = fixture_symbols();
+    let sum_to = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let (first, next) = two_lines_of(&sum_to);
+    let source = |at: &LinePos| Ask::Source {
+        at: at.clone(),
+        chosen: None,
+    };
+    let file = Document::Source(first.file.clone());
+
+    // One tab, two of its lines: the listing the first line resolved to stays up.
+    let waiting = held_inside(sum_to.object.clone(), source(&first), source(&next));
+    assert!(
+        matches!(waiting.showing(&file), crate::ui::Showing::Listing(shown) if shown.studied.symbol == sum_to),
+        "the pane blanked its own listing while the next line was worked out"
+    );
+
+    // A question about another file under the same wait: this listing is nothing that
+    // tab is reading, so the reader is owed the word instead.
+    let other = LinePos {
+        file: Arc::from("elsewhere.c"),
+        line: 1,
+    };
+    let waiting = held_inside(sum_to.object.clone(), source(&first), source(&other));
+    assert!(
+        matches!(waiting.showing(&Document::Source(other.file.clone())), crate::ui::Showing::Message(text) if text == "Analysing..."),
+        "a function of another file was left up, and nothing said the app was working"
+    );
+}
+
+/// **A sentence is left up over a wait exactly as a listing is.** Clicking down a file
+/// is one question per click, and most lines of one -- a comment, a brace, a declaration
+/// -- were compiled into nothing at all, so the pane says so, again, on click after
+/// click. Blanking between two of those sentences is the pane flashing for every click,
+/// which is what the reader sees rather than the rule that a stale sentence is not
+/// doctrine. Driven through the state and not the runner: what is under test is the arm
+/// a pending question with nothing behind it falls into, and a timer would decide it.
+#[test]
+fn a_wait_with_no_listing_keeps_the_sentence_that_is_up() {
+    let wanted = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let at = a_line_of(&wanted);
+    let open = vec![wanted.object.clone()];
+    // Two lines of the file holding no code, clicked one after the other.
+    let barren = |line: u32| Ask::Source {
+        at: LinePos {
+            file: at.file.clone(),
+            line,
+        },
+        chosen: None,
+    };
+    let file = Document::Source(at.file.clone());
+
+    let mut held = Analyzed::default();
+    // The first click, answered with no symbol at all.
+    held.take(barren(999_990), None, Some(&barren(999_990)), &open);
+    let said = format!(
+        "No code compiled from {}:999990",
+        source::name_of(Path::new(&*at.file))
+    );
+    assert!(
+        matches!(held.showing(&file), crate::ui::Showing::Message(text) if text == said),
+        "the answer named no line"
+    );
+
+    // The second, still with the worker. The pane goes on saying what it said.
+    let asked = barren(999_991);
+    held.asked(Some(&asked), &open, &Visits::default());
+    assert!(
+        held.waiting() == Some(&asked),
+        "the second line was not asked"
+    );
+    assert!(
+        matches!(held.showing(&file), crate::ui::Showing::Message(text) if text == said),
+        "the pane blanked between two sentences"
+    );
+
+    // And a tab that has asked nothing yet has no sentence to leave up.
+    let mut fresh = Analyzed::default();
+    fresh.asked(Some(&asked), &open, &Visits::default());
+    assert!(matches!(fresh.showing(&file), crate::ui::Showing::Nothing));
+}
+
 /// The queue is drained to the newest question of each kind and not to the newest
 /// overall: a locate behind a listing question cancels neither, and the listing is
 /// worked first.

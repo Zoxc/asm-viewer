@@ -264,8 +264,23 @@ this one for as long as the worker takes), `answered` and `pending`. A listing i
 by the next listing and never by a blank, or every click would flash the pane empty for a frame.
 Only after `SLOW_ANALYSIS` (180 ms, started by the request and never polled) does the message
 displace it -- which is a field of the `Pending` and not a flag beside it, there being nothing to
-be slow about while nothing is being waited for. That is the order of the arms in `Analyzed::showing`, the one place either pane decides
-what it is drawing, so the two cannot disagree. `showing` takes the **document** and not a word from
+be slow about while nothing is being waited for -- and only where it may take that listing down
+(`keeps_listing`, below). A source-driven tab's every line is a question of its own, so a word that
+took the listing away for as long as a decode and gave it back after would be the pane blinking for
+a keypress; the bar over that listing names what is drawn, so nothing on screen is untrue while the
+reader waits. With nothing up to displace, which is the first ask of a tab and the 2.2 s one, the
+message is what the pane draws.
+
+**A sentence is left up over a wait the same way**, which the order of the arms used to say the
+opposite of ("a stale listing is doctrine and a stale sentence is not"). Clicking down a file is a
+question per click and most of its lines -- a comment, a brace, a declaration -- were compiled into
+nothing, so the pane says so on click after click, and blanking between two of those sentences is
+the pane flashing every time. The line it names is the line before this one for as long as the
+answer takes, which is what a listing left up is too; a tab that has asked nothing yet has no
+sentence to leave up and draws its own ground.
+
+That is the order of the arms in `Analyzed::showing`, the one place either pane decides what it is
+drawing, so the two cannot disagree. `showing` takes the **document** and not a word from
 its caller, which is what keeps that true: it says "Click a source line" where a symbol tab says "No
 symbol selected". A line that came to nothing is **named** in what it says -- "No code compiled
 from lexer.rs:42", the Locations panel's spelling of a line (`LinePos::spell`) -- because the answer
@@ -275,8 +290,9 @@ nothing on screen points at. That is what `Showing::Message` carries a `String` 
 thing a listing cannot say for itself. A source line no object holds code from leaves the listing
 that is up and lights no pair in it, which is what says the click landed nowhere.
 
-**Which listing may be left up is asked about the file, not the tag** (`keeps_listing`). The tag is
-the question the listing answers *now*, and it moves: opening the symbol a file's line resolved to
+**Which listing may be left up is asked about the file, not the tag** (`keeps_listing`, which the
+wait above and the answer that named nothing are both judged by). The tag is the question the
+listing answers *now*, and it moves: opening the symbol a file's line resolved to
 retags that listing onto the symbol's own tab rather than decoding it again (`Shown::answers`).
 Coming back to the file, a comparison of tags then read the listing as another tab's -- and the
 first line of the file holding no code, which is most of them, took it down, leaving "No code
