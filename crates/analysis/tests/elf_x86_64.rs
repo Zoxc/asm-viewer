@@ -41,14 +41,14 @@ fn estimate_size_is_derived_from_the_next_symbol() {
     assert_eq!(target.size, 0);
 
     // `caller` ends where `target` begins ...
-    assert_eq!(caller.estimate_size(), Some(6));
+    assert_eq!(caller.estimate_size().map(|extent| extent.bytes), Some(6));
     assert_eq!(
         caller.data(),
         Some(&[0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3][..])
     );
 
     // ... and the last symbol in the section ends at the section end.
-    assert_eq!(target.estimate_size(), Some(1));
+    assert_eq!(target.estimate_size().map(|extent| extent.bytes), Some(1));
     assert_eq!(target.data(), Some(&[0xC3][..]));
 }
 
@@ -1108,8 +1108,8 @@ fn an_alias_at_the_same_address_decodes_the_whole_run() {
     assert_eq!(section.symbols, vec![0, 3]);
 
     for symbol in [&alias, &function] {
-        assert_eq!(symbol.estimate_size(), Some(3));
-        assert_eq!(symbol.extent(&object), Some(3));
+        assert_eq!(symbol.estimate_size().map(|extent| extent.bytes), Some(3));
+        assert_eq!(symbol.extent(&object).map(|extent| extent.bytes), Some(3));
         let assembly = symbol.assembly(&object).expect("the run disassembles");
         assert_eq!(assembly.instructions.len(), 3);
     }

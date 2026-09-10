@@ -5,12 +5,13 @@
 mod common;
 
 use analysis::{
-    parse_object, Architecture, CodeListing, GapKind, Listing, Object, Place, Section, SymbolData,
+    parse_object, Architecture, CodeListing, Extent, GapKind, Listing, Object, Place, Section,
+    SymbolData,
 };
 use common::{
     caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
-    elf_x86_64_with_dwarf, named, parse, pe_dll, text, DwarfFixture, DwarfRow, DwarfSection,
-    ExportedSymbol, TextSymbol, UnitRanges, TEXT_ADDRESS,
+    elf_x86_64_with_dwarf, elf_x86_64_with_dwarf_declaring, named, parse, pe_dll, text,
+    DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, TextSymbol, UnitRanges, TEXT_ADDRESS,
 };
 use std::{path::PathBuf, sync::Arc};
 
@@ -63,29 +64,37 @@ fn padded() -> Vec<u8> {
 
 /// One symbol whose derivation runs past `MAX_DERIVED_SIZE`, from `tests/extent.rs`.
 fn huge() -> Vec<u8> {
+    huge_declaring(0)
+}
+
+/// [`huge`] with the symbol table declaring `size` bytes for it — 0 being ELF's "no size".
+fn huge_declaring(size: u64) -> Vec<u8> {
     let mut text = vec![0x90u8; (2 << 20) + 16];
     *text.last_mut().unwrap() = 0xC3;
-    elf_x86_64_with_dwarf(DwarfFixture {
-        comp_dir: "/src",
-        files: &["main.c"],
-        sections: &[DwarfSection {
-            name: None,
-            symbols: &[TextSymbol {
-                name: "huge",
-                bytes: &text,
+    elf_x86_64_with_dwarf_declaring(
+        DwarfFixture {
+            comp_dir: "/src",
+            files: &["main.c"],
+            sections: &[DwarfSection {
+                name: None,
+                symbols: &[TextSymbol {
+                    name: "huge",
+                    bytes: &text,
+                }],
+                rows: &[DwarfRow {
+                    address: 0,
+                    file: 0,
+                    line: 1,
+                    column: 0,
+                }],
+                length: text.len() as u64,
+                subprograms: &[],
+                base_symbol: Some(0),
             }],
-            rows: &[DwarfRow {
-                address: 0,
-                file: 0,
-                line: 1,
-                column: 0,
-            }],
-            length: text.len() as u64,
-            subprograms: &[],
-            base_symbol: Some(0),
-        }],
-        unit_ranges: UnitRanges::Relocated,
-    })
+            unit_ranges: UnitRanges::Relocated,
+        },
+        &[size],
+    )
 }
 
 /// `jumper` ends in a `jmp` to `target`, the next symbol: a tail call.
@@ -323,7 +332,8 @@ fn every_listing_partitions_its_section_and_agrees_with_the_symbols() {
                     assert_eq!(rows(&own), rows(&code), "{context}: {}", symbol.name);
                 }
 
-                let claimed = stretch.range.start + symbol.extent(&object).unwrap_or(0);
+                let claimed =
+                    stretch.range.start + symbol.extent(&object).map_or(0, |extent| extent.bytes);
                 match decoded.gap {
                     Some(gap) => {
                         assert_eq!(gap.range.start, claimed, "{context}: {}", symbol.name);
@@ -386,6 +396,27 @@ fn the_rest_of_a_stretch_cut_at_a_megabyte_is_said_to_be_cut() {
     let gap = decoded.gap.expect("the rest is a gap");
     assert_eq!(gap.range, (1 << 20)..length);
     assert_eq!(gap.kind, GapKind::Cut);
+}
+
+/// The same number, stated rather than derived, is where the symbol ends: the bytes after it
+/// are an ordinary gap. The two are told apart by what the extent says of itself and not by
+/// its value, since a file is free to state exactly the length the cap would have left.
+#[test]
+fn a_stated_extent_the_size_of_the_cap_is_not_a_cut() {
+    let object = parse(&huge_declaring(1 << 20));
+    assert_eq!(
+        named(&object, "huge").extent(&object),
+        Some(Extent {
+            bytes: 1 << 20,
+            capped: false,
+        })
+    );
+
+    let listing = listing_of(&object, ".text");
+    let decoded = listing.decode(&object, 0).expect("huge decodes");
+    let gap = decoded.gap.expect("the rest is a gap");
+    assert_eq!(gap.range, (1 << 20)..(2 << 20) + 16);
+    assert_eq!(gap.kind, GapKind::Bytes);
 }
 
 #[test]

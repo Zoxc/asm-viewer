@@ -202,9 +202,9 @@ fn a_stated_end_beats_the_next_symbols_address() {
         fragments: &[],
     }));
     let first = named(&object, "first");
-    assert_eq!(first.estimate_size(), Some(10));
+    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
     assert_eq!(first.debug_extent(&object), None, "no debug info at all");
-    assert_eq!(first.extent(&object), Some(6));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
     assert_eq!(first.data(), Some(&TEXT[..10]), "the derivation, by name");
     assert_eq!(first.data_in(&object), Some(&TEXT[..6]));
     let assembly = first.assembly(&object).expect("first decodes");
@@ -236,8 +236,14 @@ fn a_stated_end_beats_the_cap() {
         fragments: &[],
     }));
     let first = named(&object, "first");
-    assert_eq!(first.estimate_size(), Some(1 << 20));
-    assert_eq!(first.extent(&object), Some((1 << 20) + 16));
+    assert_eq!(
+        first.estimate_size().map(|extent| extent.bytes),
+        Some(1 << 20)
+    );
+    assert_eq!(
+        first.extent(&object).map(|extent| extent.bytes),
+        Some((1 << 20) + 16)
+    );
     assert_eq!(
         first.data_in(&object).map(<[u8]>::len),
         Some((1 << 20) + 16)
@@ -265,10 +271,23 @@ fn an_entry_covering_a_label_inside_it_is_clamped_to_the_next_symbol() {
         unwind: &[(0, 4)],
         fragments: &[],
     }));
-    assert_eq!(named(&object, "first").extent(&object), Some(2));
+    assert_eq!(
+        named(&object, "first")
+            .extent(&object)
+            .map(|extent| extent.bytes),
+        Some(2)
+    );
     let label = named(&object, "label");
-    assert_eq!(label.estimate_size(), Some(8), "to the section's end");
-    assert_eq!(label.extent(&object), Some(2), "to the entry's end");
+    assert_eq!(
+        label.estimate_size().map(|extent| extent.bytes),
+        Some(8),
+        "to the section's end"
+    );
+    assert_eq!(
+        label.extent(&object).map(|extent| extent.bytes),
+        Some(2),
+        "to the entry's end"
+    );
 }
 
 /// An end the table states past the section's bytes is clamped to them as it is read in,
@@ -291,7 +310,7 @@ fn an_entry_reaching_past_the_section_is_clamped_to_its_bytes() {
     let last = named(&object, "last");
     let section = last.section.clone().unwrap();
     assert_eq!(section.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
-    assert_eq!(last.extent(&object), Some(3));
+    assert_eq!(last.extent(&object).map(|extent| extent.bytes), Some(3));
     assert!(last.assembly(&object).is_some());
 }
 
@@ -320,9 +339,14 @@ fn a_chained_entry_is_a_fragment() {
     );
     let fragment = named(&object, &format!("<fragment {:#x}>", TEXT_ADDRESS + 4));
     assert_eq!(fragment.size, 2);
-    assert_eq!(fragment.extent(&object), Some(2));
+    assert_eq!(fragment.extent(&object).map(|extent| extent.bytes), Some(2));
     assert_eq!(fragment.demangled, None);
-    assert_eq!(named(&object, "first").extent(&object), Some(4));
+    assert_eq!(
+        named(&object, "first")
+            .extent(&object)
+            .map(|extent| extent.bytes),
+        Some(4)
+    );
 }
 
 /// A chained entry at an address something names adds nothing, as any entry: the name is
@@ -338,7 +362,12 @@ fn a_chained_entry_at_a_named_address_keeps_the_name() {
         fragments: &[(4, 6)],
     }));
     assert_eq!(names(&object), ["first", "second"]);
-    assert_eq!(named(&object, "second").extent(&object), Some(2));
+    assert_eq!(
+        named(&object, "second")
+            .extent(&object)
+            .map(|extent| extent.bytes),
+        Some(2)
+    );
 }
 
 /// The in-memory ELF writer's `.eh_frame` reads back through `gimli` as `gcc`'s does: a
@@ -436,9 +465,9 @@ fn an_fdes_end_beats_the_next_symbols_address() {
         eh_frame: &[(0, 6), (10, 12)],
     }));
     let first = named(&object, "first");
-    assert_eq!(first.estimate_size(), Some(10));
+    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
     assert_eq!(first.debug_extent(&object), None, "no debug info at all");
-    assert_eq!(first.extent(&object), Some(6));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
     assert_eq!(first.assembly(&object).unwrap().instructions.len(), 6);
 
     let listing = Listing::new(&object, first.section.clone().unwrap());
@@ -466,8 +495,14 @@ fn an_fdes_end_beats_the_cap() {
         eh_frame: &[(0, text.len() as u64)],
     }));
     let first = named(&object, "first");
-    assert_eq!(first.estimate_size(), Some(1 << 20));
-    assert_eq!(first.extent(&object), Some((1 << 20) + 16));
+    assert_eq!(
+        first.estimate_size().map(|extent| extent.bytes),
+        Some(1 << 20)
+    );
+    assert_eq!(
+        first.extent(&object).map(|extent| extent.bytes),
+        Some((1 << 20) + 16)
+    );
 }
 
 /// A `.dynsym` function inside an FDE's range is given the rest of it, and the function the
@@ -487,10 +522,23 @@ fn an_fde_covering_a_label_inside_it_is_clamped_to_the_next_symbol() {
         None,
         &[(0, 4)],
     ));
-    assert_eq!(named(&object, "first").extent(&object), Some(2));
+    assert_eq!(
+        named(&object, "first")
+            .extent(&object)
+            .map(|extent| extent.bytes),
+        Some(2)
+    );
     let label = named(&object, "label");
-    assert_eq!(label.estimate_size(), Some(8), "to the section's end");
-    assert_eq!(label.extent(&object), Some(2), "to the FDE's end");
+    assert_eq!(
+        label.estimate_size().map(|extent| extent.bytes),
+        Some(8),
+        "to the section's end"
+    );
+    assert_eq!(
+        label.extent(&object).map(|extent| extent.bytes),
+        Some(2),
+        "to the FDE's end"
+    );
 }
 
 /// An FDE's end past the section's bytes is clamped to them as it is placed.
@@ -509,7 +557,7 @@ fn an_fde_reaching_past_the_section_is_clamped_to_its_bytes() {
     let last = named(&object, "last");
     let section = last.section.clone().unwrap();
     assert_eq!(section.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
-    assert_eq!(last.extent(&object), Some(3));
+    assert_eq!(last.extent(&object).map(|extent| extent.bytes), Some(3));
     assert!(last.assembly(&object).is_some());
 }
 
@@ -638,7 +686,11 @@ fn the_hidden_shared_objects_functions_are_its_fdes() {
             named(&flat, name).size,
             "{name}: the .o's st_size"
         );
-        assert_eq!(function.extent(&object), Some(len), "{name}");
+        assert_eq!(
+            function.extent(&object).map(|extent| extent.bytes),
+            Some(len),
+            "{name}"
+        );
         let assembly = function.assembly(&object).expect("it decodes");
         let last = assembly.instructions.last().expect("at least one");
         assert_eq!(

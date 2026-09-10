@@ -322,11 +322,15 @@ fn a_procedures_length_is_the_declared_extent() {
     for (name, len) in [("add", 0x11), ("twice", 0x1b), ("sum_to", 0x49)] {
         let symbol = symbol(&object, name);
         assert_eq!(symbol.debug_extent(&object), Some(len), "{name}");
-        assert_eq!(symbol.extent(&object), Some(len), "{name}");
+        assert_eq!(
+            symbol.extent(&object).map(|extent| extent.bytes),
+            Some(len),
+            "{name}"
+        );
         // The estimate reaches to the next export, or for `sum_to` to the end of `.text`,
         // which is exactly where its last instruction is: the PDB trims the first two and
         // agrees about the third.
-        let estimate = symbol.estimate_size().unwrap();
+        let estimate = symbol.estimate_size().unwrap().bytes;
         assert!(estimate >= len, "{name}: the estimate under-reaches");
         assert_eq!(estimate > len, name != "sum_to", "{name}");
     }
@@ -348,7 +352,7 @@ fn the_rows_hold_the_invariants() {
     for name in ["add", "twice", "sum_to"] {
         let symbol = symbol(&object, name);
         let info = line_info(&object, name);
-        let end = symbol.address + symbol.extent(&object).unwrap();
+        let end = symbol.address + symbol.extent(&object).unwrap().bytes;
         let mut previous = symbol.address;
         for row in info.rows() {
             assert!(
@@ -590,7 +594,11 @@ fn a_stated_end_beats_the_procedures_length() {
         "the procedure's length"
     );
     assert_eq!(add.size, 0, "an export declares no size");
-    assert_eq!(add.extent(&object), Some(0x18), "the unwind entry's end");
+    assert_eq!(
+        add.extent(&object).map(|extent| extent.bytes),
+        Some(0x18),
+        "the unwind entry's end"
+    );
     // Not `rows`, which is written for the linker's image base; this image is at the
     // writer's.
     assert_eq!(
@@ -633,7 +641,11 @@ fn procedures_are_symbols_where_the_image_names_none() {
         assert_eq!(function.address, TEXT + offset);
         assert_eq!(function.size, len, "the entry's stated length");
         assert_eq!(function.debug_extent(&alone), None, "no PDB");
-        assert_eq!(function.extent(&alone), Some(len), "the stated end");
+        assert_eq!(
+            function.extent(&alone).map(|extent| extent.bytes),
+            Some(len),
+            "the stated end"
+        );
         assert!(function.line_info(&alone).is_none(), "no PDB, no lines");
     }
 
@@ -655,7 +667,11 @@ fn procedures_are_symbols_where_the_image_names_none() {
             "{name}: a display name demangles to nothing"
         );
         assert_eq!(symbol.debug_extent(&object), Some(len), "{name}");
-        assert_eq!(symbol.extent(&object), Some(len), "{name}");
+        assert_eq!(
+            symbol.extent(&object).map(|extent| extent.bytes),
+            Some(len),
+            "{name}"
+        );
         assert!(symbol.assembly(&object).is_some(), "{name} decodes");
     }
     assert_eq!(rows(&line_info(&object, "add")).len(), 4);
@@ -728,7 +744,7 @@ fn a_public_names_the_function_no_module_describes() {
     );
     assert_eq!(helper.debug_extent(&object), None, "no module knows it");
     assert_eq!(
-        helper.extent(&object),
+        helper.extent(&object).map(|extent| extent.bytes),
         Some(6),
         "a leaf with no unwind entry: the estimate, to the section's end"
     );
@@ -747,7 +763,11 @@ fn a_public_names_the_function_no_module_describes() {
         let symbol = symbol(&object, name);
         assert_eq!(symbol.address, TEXT + offset, "{name}");
         assert_eq!(symbol.size, len, "{name}: still the procedure's length");
-        assert_eq!(symbol.extent(&object), Some(len), "{name}");
+        assert_eq!(
+            symbol.extent(&object).map(|extent| extent.bytes),
+            Some(len),
+            "{name}"
+        );
         assert_eq!(symbol.demangled, None, "{name}");
     }
     assert_eq!(rows(&line_info(&object, "add")).len(), 4);

@@ -140,17 +140,40 @@ fn a_declaration_carries_no_size_so_the_extent_comes_from_the_next_one() {
     // A PE export table carries no size at all, so the extent is the next declaration's
     // address, exactly as it is for a symbol-table entry declaring 0.
     assert_eq!(named(&object, "first").size, 0);
-    assert_eq!(named(&object, "first").estimate_size(), Some(4));
-    assert_eq!(named(&object, "second").estimate_size(), Some(3));
+    assert_eq!(
+        named(&object, "first")
+            .estimate_size()
+            .map(|extent| extent.bytes),
+        Some(4)
+    );
+    assert_eq!(
+        named(&object, "second")
+            .estimate_size()
+            .map(|extent| extent.bytes),
+        Some(3)
+    );
     // The last one runs to the end of the section's bytes.
-    assert_eq!(named(&object, "<entry point>").estimate_size(), Some(3));
+    assert_eq!(
+        named(&object, "<entry point>")
+            .estimate_size()
+            .map(|extent| extent.bytes),
+        Some(3)
+    );
 
     // An ELF `.dynsym` does carry one, and there it is a size to trust: the extent is the
     // declaration rather than the derivation, which here agree.
     let elf = parse(&elf_shared_object(stripped(Some(7))));
     assert_eq!(named(&elf, "first").size, 4);
-    assert_eq!(named(&elf, "first").estimate_size(), Some(4));
-    assert_eq!(named(&elf, "first").extent(&elf), Some(4));
+    assert_eq!(
+        named(&elf, "first")
+            .estimate_size()
+            .map(|extent| extent.bytes),
+        Some(4)
+    );
+    assert_eq!(
+        named(&elf, "first").extent(&elf).map(|extent| extent.bytes),
+        Some(4)
+    );
 }
 
 #[test]

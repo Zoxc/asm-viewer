@@ -469,7 +469,7 @@ impl SymbolData {
     /// [`assembly`](Self::assembly) decodes.
     pub fn line_info(&self, object: &Object) -> Option<Arc<LineInfo>> {
         let section = self.section.as_ref()?;
-        let end = self.address.checked_add(self.extent(object)?)?;
+        let end = self.address.checked_add(self.extent(object)?.bytes)?;
         object.line_info(section, self.address..end)
     }
 

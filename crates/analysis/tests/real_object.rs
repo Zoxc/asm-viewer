@@ -118,7 +118,11 @@ fn declared_sizes_agree_with_the_estimate() {
         let symbol = symbol(&object, name);
         assert_eq!(symbol.address, address, "{name} address");
         assert_eq!(symbol.size, size, "{name} declared size");
-        assert_eq!(symbol.estimate_size(), Some(size), "{name} estimated size");
+        assert_eq!(
+            symbol.estimate_size().map(|extent| extent.bytes),
+            Some(size),
+            "{name} estimated size"
+        );
     }
 }
 
@@ -224,7 +228,7 @@ fn rows_are_ascending_and_do_not_overlap() {
         let object = parse(name);
         for function in ["add", "twice", "sum_to"] {
             let symbol = symbol(&object, function);
-            let end = symbol.address + symbol.estimate_size().expect("a size");
+            let end = symbol.address + symbol.estimate_size().expect("a size").bytes;
             let info = line_info(&object, function);
 
             let mut previous = symbol.address;
@@ -479,5 +483,5 @@ fn a_relocatable_objects_eh_frame_is_not_read() {
     let object = parse(FLAT);
     let sum_to = symbol(&object, "sum_to");
     assert!(sum_to.section.as_ref().unwrap().unwind.is_empty());
-    assert_eq!(sum_to.extent(&object), Some(62));
+    assert_eq!(sum_to.extent(&object).map(|extent| extent.bytes), Some(62));
 }

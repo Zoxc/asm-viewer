@@ -343,6 +343,19 @@ const SECTION_ALIGNMENT: u64 = 16;
 /// `.eh_frame` — the cap reaches only a symbol no entry covers; it stays for the rest.
 const MAX_DERIVED_SIZE: u64 = 1 << 20;
 
+/// How many bytes of code a symbol is, and whether that number is where the derivation was
+/// capped rather than where the symbol ends. An extent the file states — an unwind entry's
+/// end, an ELF `st_size`, the debug info's — is never capped, whatever its value.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Extent {
+    pub bytes: u64,
+
+    /// The next-symbol derivation ran past [`MAX_DERIVED_SIZE`] and stops there, so the
+    /// bytes past it are very likely the same symbol's code: not where the symbol ends but
+    /// where the derivation stopped saying.
+    pub capped: bool,
+}
+
 #[derive(Debug)]
 pub struct SymbolData {
     pub name: String,
@@ -377,10 +390,15 @@ impl SymbolData {
     /// Object files frequently report a size of 0, so derive the extent from the next symbol
     /// in the section (or the section end). An *upper* bound rather than a measurement: it
     /// includes alignment padding, and a declaration the symbol table never mentioned (an
-    /// export, an entry point) has no size of its own. Capped at [`MAX_DERIVED_SIZE`]. See
-    /// [`extent`](Self::extent).
-    pub fn estimate_size(&self) -> Option<u64> {
-        Some(self.derived()?.min(MAX_DERIVED_SIZE))
+    /// export, an entry point) has no size of its own. A derivation running past
+    /// [`MAX_DERIVED_SIZE`] stops there and says so ([`Extent::capped`]), which is the only
+    /// place the cap is applied. See [`extent`](Self::extent).
+    pub fn estimate_size(&self) -> Option<Extent> {
+        let derived = self.derived()?;
+        Some(Extent {
+            bytes: derived.min(MAX_DERIVED_SIZE),
+            capped: derived > MAX_DERIVED_SIZE,
+        })
     }
 
     /// [`estimate_size`](Self::estimate_size) before its cap: the bytes from this symbol to
@@ -492,22 +510,30 @@ impl SymbolData {
     /// Whichever answers, an extent running off the end of the address space is no extent:
     /// a table stating one describes a range that does not exist, and every caller here
     /// reads `address..address + extent`.
-    pub fn extent(&self, object: &Object) -> Option<u64> {
+    ///
+    /// The answer carries [`Extent::capped`], so that a caller can tell an end the file
+    /// states from the cap without comparing the number to it — a stated end of exactly a
+    /// megabyte is an end.
+    pub fn extent(&self, object: &Object) -> Option<Extent> {
         let extent = self.stated_extent(object)?;
-        self.address.checked_add(extent).map(|_| extent)
+        self.address.checked_add(extent.bytes).map(|_| extent)
     }
 
     /// The three answers [`extent`](Self::extent) chooses among, before it bounds them.
-    fn stated_extent(&self, object: &Object) -> Option<u64> {
-        if let Some(stated) = self.unwind_extent() {
-            return Some(stated);
+    fn stated_extent(&self, object: &Object) -> Option<Extent> {
+        let stated = |bytes| Extent {
+            bytes,
+            capped: false,
+        };
+        if let Some(bytes) = self.unwind_extent() {
+            return Some(stated(bytes));
         }
-        if let Some(declared) = self.declared_extent(object) {
-            return Some(declared);
+        if let Some(bytes) = self.declared_extent(object) {
+            return Some(stated(bytes));
         }
-        let estimate = self.estimate_size().filter(|&size| size != 0);
-        match (self.debug_extent(object), estimate) {
-            (Some(declared), Some(estimate)) => Some(declared.min(estimate)),
+        let estimate = self.estimate_size().filter(|estimate| estimate.bytes != 0);
+        match (self.debug_extent(object).map(stated), estimate) {
+            (Some(declared), Some(estimate)) if estimate.bytes < declared.bytes => Some(estimate),
             (declared, estimate) => declared.or(estimate),
         }
     }
@@ -516,13 +542,13 @@ impl SymbolData {
     /// Deliberately *not* the debug-info extent: a symbol does not own the file it came from.
     /// Anything with an [`Object`] in hand wants [`data_in`](Self::data_in).
     pub fn data(&self) -> Option<&[u8]> {
-        self.bytes(self.estimate_size()?)
+        self.bytes(self.estimate_size()?.bytes)
     }
 
     /// This symbol's bytes over [`extent`](Self::extent) — the same range
     /// [`assembly`](Self::assembly) decodes and [`line_info`](Self::line_info) asks about.
     pub fn data_in(&self, object: &Object) -> Option<&[u8]> {
-        self.bytes(self.extent(object)?)
+        self.bytes(self.extent(object)?.bytes)
     }
 
     /// `size` bytes of the section starting at this symbol, or [`None`] when that runs off

@@ -193,7 +193,7 @@ fn symbol_ranges(object: &Object, debug: &DebugInfo) -> Vec<SymbolRange> {
         .filter_map(|(&symbol, data)| {
             let section = data.section.as_ref()?;
             let start = data.address.checked_add(debug.bias(section.index))?;
-            let end = start.checked_add(data.extent(object)?)?;
+            let end = start.checked_add(data.extent(object)?.bytes)?;
             (start < end).then_some(SymbolRange {
                 start,
                 end,

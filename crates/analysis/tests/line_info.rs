@@ -1,7 +1,6 @@
 //! Line info read back out of DWARF written by `gimli::write`.
 
 mod common;
-
 use common::{
     elf_x86_64_with_dwarf, parse, symbol, DwarfFixture, DwarfRow, DwarfSection, TextSymbol,
     UnitRanges,
@@ -138,7 +137,7 @@ fn rows_do_not_leak_past_the_symbol() {
 
     for name in ["first", "second"] {
         let symbol = symbol(&object, name);
-        let end = symbol.address + symbol.estimate_size().expect("a size");
+        let end = symbol.address + symbol.estimate_size().expect("a size").bytes;
         let info = symbol.line_info(&object).expect("line info");
         for row in info.rows() {
             assert!(
@@ -235,8 +234,8 @@ fn a_symbol_does_not_pick_up_another_sections_rows() {
     let second = symbol(&object, "second");
     // The premise: the two genuinely share an address.
     assert_eq!((first.address, second.address), (0, 0));
-    assert_eq!(first.estimate_size(), Some(6));
-    assert_eq!(second.estimate_size(), Some(2));
+    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(6));
+    assert_eq!(second.estimate_size().map(|extent| extent.bytes), Some(2));
 
     let info = first.line_info(&object).expect("first has line info");
     assert_eq!(info.files(), [Arc::from("/src/main.c")]);
@@ -476,7 +475,13 @@ fn a_symbol_beginning_in_a_gap_between_two_sequences_is_answered_from_the_later_
     // The premise: `middle` begins in the gap after the first sequence and runs to the end
     // of the second, whose one row is inside it and names it.
     let middle = symbol(&object, "middle");
-    assert_eq!((middle.address, middle.extent(&object)), (6, Some(0x10)));
+    assert_eq!(
+        (
+            middle.address,
+            middle.extent(&object).map(|extent| extent.bytes)
+        ),
+        (6, Some(0x10))
+    );
     let named: Vec<String> = object
         .symbols_at_line("/src/other.c", 42)
         .iter()

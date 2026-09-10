@@ -19,7 +19,7 @@
 //! Nothing here is cached: the listing is a pure function of the object, and whoever asks
 //! holds the answer.
 
-use crate::{Assembly, Object, Section, SymbolData, MAX_DERIVED_SIZE};
+use crate::{Assembly, Object, Section, SymbolData};
 use std::{ops::Range, sync::Arc};
 
 /// One section's listing: its stretches, contiguous and in address order, partitioning the
@@ -78,9 +78,10 @@ pub enum GapKind {
     /// them is decoded.
     Bytes,
 
-    /// The rest of a stretch whose symbol's derived extent hit [`MAX_DERIVED_SIZE`]: very
-    /// likely the symbol's own code going on past the cap rather than anything between two
-    /// functions, and starting wherever the cap fell rather than at an instruction. Said
+    /// The rest of a stretch whose symbol's extent was capped
+    /// ([`Extent::capped`](crate::Extent::capped)): very likely the symbol's own code going
+    /// on past the cap rather than anything between two functions, and starting wherever the
+    /// cap fell rather than at an instruction. Said
     /// apart so a reader is not told the function ends there. Where the file has an unwind
     /// table only a symbol no entry covers can get here; the rest have their ends stated.
     Cut,
@@ -191,18 +192,20 @@ impl Listing {
         };
 
         let code = symbol.assembly(object);
-        let extent = symbol.extent(object).unwrap_or(0);
+        let extent = symbol.extent(object);
         // Saturating, then clipped: the extent is bounded by the next symbol already, but
         // with no next symbol and a section reaching the end of the address space it is the
         // file's number and the sum can wrap.
         let claimed = stretch
             .range
             .start
-            .saturating_add(extent)
+            .saturating_add(extent.map_or(0, |extent| extent.bytes))
             .min(stretch.range.end);
+        // The extent says whether it was capped, so an end the file states as exactly the
+        // cap is not mistaken for one.
         let gap = (claimed < stretch.range.end).then(|| Gap {
             range: claimed..stretch.range.end,
-            kind: if extent == MAX_DERIVED_SIZE {
+            kind: if extent.is_some_and(|extent| extent.capped) {
                 GapKind::Cut
             } else {
                 GapKind::Bytes

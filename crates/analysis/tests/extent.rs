@@ -4,7 +4,6 @@
 //! which is what these fixtures put there on purpose.
 
 mod common;
-
 use common::{
     coff_x86_64, elf_shared_object, elf_x86_64_with_dwarf, elf_x86_64_with_dwarf_declaring, named,
     parse, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, SharedObject, TextSymbol,
@@ -69,9 +68,9 @@ fn a_subprogram_extent_is_preferred_to_the_next_symbols_address() {
     let object = parse(&fixture(&[(0, 6), (1, 2)], Some(0)));
     let first = named(&object, "first");
 
-    assert_eq!(first.estimate_size(), Some(10));
+    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
     assert_eq!(first.debug_extent(&object), Some(6));
-    assert_eq!(first.extent(&object), Some(6));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
 
     // And the disassembly stops at the `ret` rather than running into four `int3`s.
     let assembly = first.assembly(&object).expect("a listing");
@@ -88,8 +87,11 @@ fn a_symbol_no_subprogram_describes_keeps_the_estimate() {
     let first = named(&object, "first");
 
     assert_eq!(first.debug_extent(&object), None);
-    assert_eq!(first.extent(&object), first.estimate_size());
-    assert_eq!(first.extent(&object), Some(10));
+    assert_eq!(
+        first.extent(&object).map(|extent| extent.bytes),
+        first.estimate_size().map(|extent| extent.bytes)
+    );
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(10));
 }
 
 #[test]
@@ -98,7 +100,7 @@ fn an_object_with_no_debug_info_at_all_keeps_the_estimate() {
     let caller = named(&object, "caller");
 
     assert_eq!(caller.debug_extent(&object), None);
-    assert_eq!(caller.extent(&object), Some(6));
+    assert_eq!(caller.extent(&object).map(|extent| extent.bytes), Some(6));
 }
 
 #[test]
@@ -110,8 +112,8 @@ fn a_subprogram_reaching_past_the_next_symbol_is_clipped_to_it() {
     let first = named(&object, "first");
 
     assert_eq!(first.debug_extent(&object), Some(12));
-    assert_eq!(first.estimate_size(), Some(10));
-    assert_eq!(first.extent(&object), Some(10));
+    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(10));
 }
 
 #[test]
@@ -141,7 +143,7 @@ fn a_linked_image_is_asked_in_its_own_addresses() {
 
     assert_eq!(first.address, 0);
     assert_eq!(object.function_extent(text, 0), Some(6));
-    assert_eq!(first.extent(&object), Some(6));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
 }
 
 /// The rustc shape: one `.text.<name>` per function, both at address 0, each subprogram
@@ -204,8 +206,8 @@ fn two_functions_at_address_zero_get_their_own_extents() {
 
     // `first` is alone in its section, so the estimate runs to the section's end —
     // padding included — and DWARF is what trims it back to the function.
-    assert_eq!(first.estimate_size(), Some(10));
-    assert_eq!(first.extent(&object), Some(6));
+    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
 }
 
 /// A derived extent past `MAX_DERIVED_SIZE` is the derivation saying nothing rather than
@@ -238,8 +240,14 @@ fn a_derivation_reaching_a_megabyte_is_cut_off() {
     }));
 
     let huge = named(&object, "huge");
-    assert_eq!(huge.estimate_size(), Some(1 << 20));
-    assert_eq!(huge.extent(&object), Some(1 << 20));
+    assert_eq!(
+        huge.estimate_size().map(|extent| extent.bytes),
+        Some(1 << 20)
+    );
+    assert_eq!(
+        huge.extent(&object).map(|extent| extent.bytes),
+        Some(1 << 20)
+    );
     assert_eq!(huge.data().map(<[u8]>::len), Some(1 << 20));
 }
 
@@ -252,9 +260,9 @@ fn a_declared_size_is_taken_before_the_debug_info() {
     let first = named(&object, "first");
 
     assert_eq!(first.size, 6);
-    assert_eq!(first.estimate_size(), Some(10));
+    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
     assert_eq!(first.debug_extent(&object), Some(12));
-    assert_eq!(first.extent(&object), Some(6));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
 
     // And the disassembly stops at the `ret` rather than running into four `int3`s.
     let assembly = first.assembly(&object).expect("a listing");
@@ -269,8 +277,13 @@ fn a_declared_zero_still_falls_through_to_the_debug_info() {
     let first = named(&object, "first");
 
     assert_eq!(first.size, 0);
-    assert_eq!(first.extent(&object), Some(6));
-    assert_eq!(named(&object, "second").extent(&object), Some(2));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
+    assert_eq!(
+        named(&object, "second")
+            .extent(&object)
+            .map(|extent| extent.bytes),
+        Some(2)
+    );
 }
 
 /// A declaration reaching past the next symbol is clipped to it, as an unwind entry's
@@ -282,7 +295,7 @@ fn a_declared_size_past_the_next_symbol_is_clipped_to_it() {
     let first = named(&object, "first");
 
     assert_eq!(first.size, 100);
-    assert_eq!(first.extent(&object), Some(10));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(10));
 }
 
 /// The unwind table is still asked first. `first` declares eight bytes and its FDE covers
@@ -305,7 +318,7 @@ fn an_unwind_entry_outranks_a_declared_size() {
 
     assert_eq!(first.address, TEXT_ADDRESS);
     assert_eq!(first.size, 8);
-    assert_eq!(first.extent(&object), Some(4));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(4));
 }
 
 /// A COFF function symbol's size is the `TotalSize` of its auxiliary function-definition
@@ -334,7 +347,7 @@ fn a_coff_total_size_is_not_a_functions_length() {
 
     assert_eq!(object.format, analysis::BinaryFormat::Coff);
     assert_eq!(first.size, 2);
-    assert_eq!(first.extent(&object), Some(6));
+    assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
     assert_eq!(
         first
             .assembly(&object)

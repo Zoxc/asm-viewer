@@ -306,7 +306,7 @@ fn assembly_of_data_ending_mid_instruction_is_partial_not_a_panic() {
         .expect("caller parses")
         .clone();
 
-    assert_eq!(caller.estimate_size(), Some(3));
+    assert_eq!(caller.estimate_size().map(|extent| extent.bytes), Some(3));
     assert_eq!(caller.data(), Some(&[0xE8, 0x00, 0x00][..]));
 
     let assembly = caller
@@ -382,7 +382,7 @@ fn a_symbol_outside_any_section_yields_no_data() {
         .clone();
 
     assert!(symbol.section.is_none());
-    assert_eq!(symbol.estimate_size(), None);
+    assert_eq!(symbol.estimate_size().map(|extent| extent.bytes), None);
     assert_eq!(symbol.data(), None);
     assert!(symbol.assembly(&object).is_none());
 }
@@ -772,8 +772,8 @@ fn a_function_at_the_end_of_the_address_space_does_not_panic() {
         .clone();
 
     assert_eq!(symbol.address, BASE);
-    assert_eq!(symbol.estimate_size(), None);
-    assert_eq!(symbol.extent(&object), None);
+    assert_eq!(symbol.estimate_size().map(|extent| extent.bytes), None);
+    assert_eq!(symbol.extent(&object).map(|extent| extent.bytes), None);
     assert_eq!(symbol.data_in(&object), None);
     assert!(symbol.assembly(&object).is_none());
     assert!(symbol.line_info(&object).is_none());
@@ -1123,7 +1123,7 @@ fn a_symbol_whose_name_will_not_read_is_listed_by_its_address() {
 
     // Its address bounds `a`, and it is the symbol standing at that bound.
     let a = named(&object, "a");
-    assert_eq!(a.extent(&object), Some(16));
+    assert_eq!(a.extent(&object).map(|extent| extent.bytes), Some(16));
     assert_eq!(named(&object, "<function 0x10>").address, 16);
 
     // The listing's labels say the same: three stretches, each claiming its whole span.
