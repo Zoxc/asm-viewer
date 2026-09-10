@@ -155,9 +155,14 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
     for section in &object.sections {
         let listing = Listing::new(&object, section.clone());
         let stretches = listing.stretches();
-        let end = section
-            .address
-            .saturating_add(section.data.len().try_into().unwrap_or(u64::MAX));
+        let end = section.address.saturating_add(
+            section
+                .data
+                .as_ref()
+                .map_or(0, Vec::len)
+                .try_into()
+                .unwrap_or(u64::MAX),
+        );
         // No bytes, or none with room in the address space: nothing to list.
         if section.address >= end {
             assert!(stretches.is_empty());

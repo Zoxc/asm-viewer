@@ -4,7 +4,7 @@
 mod common;
 
 use analysis::{open_data_streaming, parse_object, FileDigest, ObjectData, Progress};
-use common::{archive, caller_and_target};
+use common::{archive, caller_and_target, dwarf_fixture, parse, symbol};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -123,4 +123,42 @@ fn every_object_out_of_one_archive_shares_one_digest() {
         assert_eq!(object.path, path);
         assert_eq!(object.data.digest(), FileDigest::of(&bytes));
     }
+}
+
+/// What parsing keeps and what it leaves in the file. A debug section's bytes are read on
+/// the first line question and not before, so holding a decompressed copy of every section
+/// would hold the DWARF twice for as long as the object lives.
+#[test]
+fn only_a_code_section_keeps_its_bytes() {
+    let object = parse(&dwarf_fixture(&[]));
+
+    let mut code = 0;
+    for section in &object.sections {
+        if section.code {
+            assert!(
+                section.data.as_ref().is_some_and(|data| !data.is_empty()),
+                "{} lost its bytes",
+                section.name
+            );
+            code += 1;
+        } else {
+            assert!(
+                section.data.is_none(),
+                "{} holds bytes nothing reads",
+                section.name
+            );
+        }
+    }
+    assert_eq!(code, 1, "the fixture has one code section");
+
+    // The fixture's `.debug_*` are there, holding nothing, and the line info comes out of
+    // them all the same: the lazy pass reads the file, not the section.
+    let debug: Vec<&str> = object
+        .sections
+        .iter()
+        .filter(|section| section.name.starts_with(".debug_"))
+        .map(|section| section.name.as_str())
+        .collect();
+    assert!(debug.contains(&".debug_info"), "sections: {debug:?}");
+    assert!(symbol(&object, "second").line_info(&object).is_some());
 }

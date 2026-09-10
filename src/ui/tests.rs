@@ -17877,7 +17877,7 @@ fn calling_into_the_middle() -> (Arc<Object>, u64) {
     let section = Arc::new(Section {
         index: SectionIndex(1),
         name: ".text".into(),
-        data: text.clone(),
+        data: Some(text.clone()),
         address: 0,
         relocations: HashMap::new(),
         symbols: vec![0, 6],
@@ -18774,12 +18774,13 @@ fn a_gap_row_is_marked_as_data() {
             .rev()
             .fold(0u64, |value, &byte| (value << 8) | u64::from(byte))
     };
-    let section = object
+    let text = object
         .sections
         .iter()
         .find(|section| section.name == ".text")
-        .expect(".text is there");
-    let ascii: String = section.data[0..16]
+        .and_then(|section| section.data.as_deref())
+        .expect(".text is there, with its bytes");
+    let ascii: String = text[0..16]
         .iter()
         .map(|&b| {
             if b.is_ascii_graphic() || b == b' ' {
@@ -18793,8 +18794,8 @@ fn a_gap_row_is_marked_as_data() {
         copied,
         format!(
             "0000000000000000 dq {:016X}, {:016X}{} |{ascii}|",
-            value(&section.data[0..8]),
-            value(&section.data[8..16]),
+            value(&text[0..8]),
+            value(&text[8..16]),
             " ".repeat(47 - 34),
         )
     );

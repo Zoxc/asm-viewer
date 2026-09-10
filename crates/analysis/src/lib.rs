@@ -154,8 +154,8 @@ impl fmt::Debug for FileDigest {
 }
 
 /// The bytes an [`Object`] was parsed from, held for as long as the object lives: parsing
-/// keeps decompressed bytes only for the sections holding text symbols, and the lazy line
-/// info pass needs the rest.
+/// keeps decompressed bytes only for the code sections, and whatever reads another one --
+/// the line info, the unwind tables -- reads it out of this.
 ///
 /// The bytes are **shared, not copied** — every `Object` out of one file holds a clone of
 /// the same `Arc<[u8]>` and differs only in `range` — so an archive costs its bytes once,
@@ -242,12 +242,17 @@ pub struct Section {
     /// relocatable object where every section starts at 0.
     pub index: SectionIndex,
     pub name: String,
-    pub data: Vec<u8>,
+
+    /// The section's bytes, decompressed. [`None`] for every section that is not
+    /// [`code`](Self::code): a debug section is read out of the file when a line question
+    /// wants it, so a copy here would be a second one held for the object's life.
+    pub data: Option<Vec<u8>>,
     pub address: u64,
 
     /// The section's relocations by the address the bytes each patches sit at, which is
     /// what a disassembly has to ask by. Not always what the file states: see
-    /// [`parse_object`].
+    /// [`parse_object`]. Empty for a section that is not [`code`](Self::code), the
+    /// disassembler being the only reader.
     pub relocations: HashMap<u64, Relocation>,
 
     /// The addresses of this section's text symbols, sorted and **each once**: two symbols
@@ -260,9 +265,9 @@ pub struct Section {
     /// file with no table read. What [`SymbolData::extent`] answers from first.
     pub unwind: Vec<Range<u64>>,
 
-    /// Whether the file marks this section as holding code (`SectionKind::Text`). Every
-    /// section whose bytes read is kept, since the line info needs the debug ones; this is
-    /// what tells the code apart for a listing of all of it.
+    /// Whether the file marks this section as holding code (`SectionKind::Text`). This is
+    /// what a listing of all of it lists, and what decides whether the parse read the
+    /// section's [`data`](Self::data) and [`relocations`](Self::relocations) at all.
     pub code: bool,
 
     /// Where the object's layout puts this section: what is added to an address in it to
@@ -411,7 +416,8 @@ impl SymbolData {
         // of the address space that it does not fit in it.
         let end = section
             .data
-            .len()
+            .as_ref()
+            .map_or(0, Vec::len)
             .try_into()
             .ok()
             .and_then(|length: u64| section.address.checked_add(length));
@@ -558,7 +564,7 @@ impl SymbolData {
         let size: usize = size.try_into().ok()?;
         let offset: usize = self.address.checked_sub(section.address)?.try_into().ok()?;
         let end = offset.checked_add(size)?;
-        section.data.get(offset..end)
+        section.data.as_ref()?.get(offset..end)
     }
 
     /// This symbol's disassembly, or [`None`] when there are no bytes to decode. An
@@ -833,7 +839,7 @@ fn code_sections(
         .filter(|section| section.kind() == SectionKind::Text)
         .filter_map(|section| {
             let kept = sections.get(&section.index())?;
-            let length: u64 = kept.data.len().try_into().ok()?;
+            let length: u64 = kept.data.as_ref()?.len().try_into().ok()?;
             let end = kept.address.checked_add(length)?;
             (length > 0).then_some((kept.address..end, section.index()))
         })
@@ -854,7 +860,19 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                 .sections()
                 .filter_map(|section| {
                     let name = String::from_utf8_lossy(section.name_bytes().ok()?).into_owned();
-                    let data = section_data(&section)?;
+
+                    // Only a code section's bytes are read here. Whatever reads another
+                    // -- the line info, the unwind tables -- reads it out of the file
+                    // again, so a copy here would be a second one held for the object's
+                    // life. A code section whose bytes will not decompress is dropped
+                    // outright: there is nothing to disassemble in it and nothing else to
+                    // keep it for.
+                    let code = section.kind() == SectionKind::Text;
+                    let data = if code {
+                        Some(section_data(&section)?)
+                    } else {
+                        None
+                    };
 
                     // Mach-O states a relocation's place as an offset from the start of
                     // its section, and lays its sections out one after another, so that
@@ -862,17 +880,23 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                     // lookup here is by address, so the conversion is done once, where
                     // the map is built. ELF and COFF need none: a relocatable object's
                     // sections are all at 0, and a linked ELF's `r_offset` is already an
-                    // address.
+                    // address. Only a code section's are collected, because the only
+                    // reader is the disassembler's operand lookup; the DWARF backend
+                    // takes a debug section's from the file.
                     let base = match format {
                         BinaryFormat::MachO => section.address(),
                         _ => 0,
                     };
-                    let relocations = section
-                        .relocations()
-                        .filter_map(|(offset, relocation)| {
-                            Some((base.checked_add(offset)?, relocation))
-                        })
-                        .collect();
+                    let relocations = if code {
+                        section
+                            .relocations()
+                            .filter_map(|(offset, relocation)| {
+                                Some((base.checked_add(offset)?, relocation))
+                            })
+                            .collect()
+                    } else {
+                        HashMap::new()
+                    };
                     Some((
                         section.index(),
                         Section {
@@ -883,7 +907,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                             symbols: Vec::new(),
                             unwind: Vec::new(),
                             relocations,
-                            code: section.kind() == SectionKind::Text,
+                            code,
                             bias: biases.get(&section.index()).copied().unwrap_or(0),
                         },
                     ))

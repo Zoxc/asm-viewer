@@ -11,7 +11,7 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
     let section = Arc::new(Section {
         index: SectionIndex(0),
         name: ".text".into(),
-        data: vec![0xC3; symbols.len()],
+        data: Some(vec![0xC3; symbols.len()]),
         address: 0,
         relocations: HashMap::new(),
         symbols: (0..symbols.len() as u64).collect(),
@@ -137,7 +137,7 @@ fn placed(name: &str, address: u64, bias: u64) -> Arc<SymbolData> {
         section: Some(Arc::new(Section {
             index: SectionIndex(0),
             name: ".text".into(),
-            data: Vec::new(),
+            data: Some(Vec::new()),
             address: 0,
             relocations: HashMap::new(),
             symbols: Vec::new(),

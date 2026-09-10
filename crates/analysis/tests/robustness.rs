@@ -10,6 +10,7 @@ use common::{
     parse_and_walk, survivors, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, SharedObject,
     TextRelocation, TextSymbol, UnitRanges, TEXT_ADDRESS,
 };
+use object::SectionKind;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
@@ -62,13 +63,23 @@ fn truncated_objects_do_not_panic() {
     assert!(parse_and_walk(&valid).is_some());
 }
 
-/// Byte 9 of an ELF64 section header is the second byte of `sh_flags`, which holds
-/// `SHF_COMPRESSED` (0x800).
-fn section_flag_bytes(elf: &[u8]) -> Vec<usize> {
+/// Byte 9 of `name`'s ELF64 section header: the second byte of `sh_flags`, which holds
+/// `SHF_COMPRESSED` (0x800). The section is found by name rather than by a header index, so
+/// the byte the test flips is the byte the test names.
+fn section_flag_byte(elf: &[u8], name: &str) -> usize {
+    use object::{Object as _, ObjectSection as _};
+
+    let parsed = object::File::parse(elf).expect("the fixture parses");
+    let index = parsed
+        .sections()
+        .find(|section| section.name() == Ok(name))
+        .unwrap_or_else(|| panic!("the fixture has a {name}"))
+        .index()
+        .0;
+
     let shoff = u64::from_le_bytes(elf[0x28..0x30].try_into().unwrap()) as usize;
     let shentsize = u16::from_le_bytes(elf[0x3A..0x3C].try_into().unwrap()) as usize;
-    let shnum = u16::from_le_bytes(elf[0x3C..0x3E].try_into().unwrap()) as usize;
-    (0..shnum).map(|i| shoff + i * shentsize + 9).collect()
+    shoff + index * shentsize + 9
 }
 
 #[test]
@@ -91,39 +102,45 @@ fn corrupted_objects_do_not_panic() {
 /// Defect: one flipped bit turning on `SHF_COMPRESSED` in `.rela.text`'s header made the
 /// bytes after it read as an `Elf64_Chdr` announcing 8.6 GB of output, and
 /// `uncompressed_data()` reserved all of it before reading a compressed byte — never a
-/// panic, so the sweep above stayed green, but an OOM abort. The declared size is now
-/// weighed against the compressed bytes and the section is dropped instead.
+/// panic, so the sweep above stayed green, but an OOM abort.
+///
+/// `.rela.text` holds no code, so the parse now reads no bytes of it at all and the header
+/// lies to nobody. What is pinned here is that rule: the section is kept, holding nothing,
+/// and the rest of the object is as it was. The bound itself is pinned below, on the two
+/// paths that do read a section's bytes.
 #[test]
 fn a_lying_compressed_size_in_a_section_header_costs_nothing() {
     let valid = caller_and_target();
     let baseline = parse_and_walk(&valid).expect("the fixture parses");
     assert!(section_names(&baseline).contains(&".rela.text".to_owned()));
 
-    let offset = section_flag_bytes(&valid)[2];
+    let offset = section_flag_byte(&valid, ".rela.text");
     let mut data = valid.clone();
     data[offset] ^= 0xFF;
 
     let object = parse_and_walk(&data).expect("the object still parses");
 
-    // The section that claimed 8.6 GB is gone, not decompressed.
-    assert!(!section_names(&object).contains(&".rela.text".to_owned()));
+    // The section that claimed 8.6 GB is still there, with no bytes: nothing decompressed it.
+    let rela = object
+        .sections
+        .iter()
+        .find(|section| section.name == ".rela.text")
+        .expect("a section that holds no code is kept, bytes or no bytes");
+    assert!(rela.data.is_none());
 
-    // Nothing else grew: no section holds more bytes than the whole file has.
+    // Nothing grew: no section holds more bytes than the whole file has.
     for section in &object.sections {
+        let held = section.data.as_ref().map_or(0, Vec::len);
         assert!(
-            section.data.len() <= data.len(),
-            "section {} holds {} bytes of a {}-byte file",
+            held <= data.len(),
+            "section {} holds {held} bytes of a {}-byte file",
             section.name,
-            section.data.len(),
             data.len()
         );
     }
 
     // And the rest of the object is untouched: `.text` and its symbols still decode.
-    assert_eq!(
-        section_names(&object).len(),
-        section_names(&baseline).len() - 1
-    );
+    assert_eq!(section_names(&object).len(), section_names(&baseline).len());
     for symbol in &object.symbols_sorted {
         assert!(symbol.data().is_some(), "{} lost its data", symbol.name);
     }
@@ -132,27 +149,36 @@ fn a_lying_compressed_size_in_a_section_header_costs_nothing() {
 /// The same guard, on a *valid* zlib stream whose header lies about its output size: it
 /// has to fire on the declared size alone, before decompressing. Both bounds are exercised
 /// — past the 1 GiB cap, and past what DEFLATE could produce from these bytes.
+///
+/// The section is a `.text`, since a code section is what the parse decompresses: the
+/// honest one is kept whole and each liar takes its section with it. The same guard on the
+/// debug sections' own path is
+/// [`a_lying_compressed_debug_section_costs_nothing`](a_lying_compressed_debug_section_costs_nothing).
 #[test]
 fn a_valid_zlib_stream_is_only_decompressed_when_its_declared_size_is_believable() {
     let payload = b"decompressed section contents";
 
-    let honest = parse_and_walk(&elf_with_compressed_section(payload, payload.len() as u64))
-        .expect("parses");
+    let honest = parse_and_walk(&elf_with_compressed_section(
+        CODE,
+        payload,
+        payload.len() as u64,
+    ))
+    .expect("parses");
     let section = honest
         .sections
         .iter()
-        .find(|section| section.name == ".debug_info")
+        .find(|section| section.name == ".text")
         .expect("an honestly sized compressed section is kept");
-    assert_eq!(section.data, payload);
+    assert_eq!(section.data.as_deref(), Some(&payload[..]));
 
     for declared in [
         1u64 << 33, // past the absolute cap.
         1 << 20,    // under the cap, but ~36000:1 from 29 bytes: past what DEFLATE can do.
     ] {
-        let data = elf_with_compressed_section(payload, declared);
+        let data = elf_with_compressed_section(CODE, payload, declared);
         let object = parse_and_walk(&data).expect("the object still parses");
         assert!(
-            !section_names(&object).contains(&".debug_info".to_owned()),
+            !section_names(&object).contains(&".text".to_owned()),
             "a section declaring {declared} bytes was decompressed anyway"
         );
     }
@@ -177,23 +203,23 @@ fn a_zstd_frame_producing_more_than_its_header_declares_is_dropped() {
     let size = 4 << 20;
     let frame = zstd_rle(b'A', size);
 
-    let data = elf_with_compression(object::elf::ELFCOMPRESS_ZSTD, &frame, 1);
+    let data = elf_with_compression(CODE, object::elf::ELFCOMPRESS_ZSTD, &frame, 1);
     let object = parse_and_walk(&data).expect("the object still parses");
     assert!(
-        !section_names(&object).contains(&".debug_info".to_owned()),
+        !section_names(&object).contains(&".text".to_owned()),
         "a section declaring 1 byte was inflated to {size} anyway"
     );
 
     // The same frame under an honest header is still read, so it is the bound and not the
     // frame that the first half turns on.
-    let data = elf_with_compression(object::elf::ELFCOMPRESS_ZSTD, &frame, size as u64);
+    let data = elf_with_compression(CODE, object::elf::ELFCOMPRESS_ZSTD, &frame, size as u64);
     let honest = parse_and_walk(&data).expect("parses");
     let section = honest
         .sections
         .iter()
-        .find(|section| section.name == ".debug_info")
+        .find(|section| section.name == ".text")
         .expect("an honestly sized zstd section is kept");
-    assert_eq!(section.data, vec![b'A'; size]);
+    assert_eq!(section.data, Some(vec![b'A'; size]));
 }
 
 /// `byte` repeated `len` times as a valid zstd frame: RLE blocks, so no compressor is needed
@@ -218,10 +244,22 @@ fn zstd_rle(byte: u8, len: usize) -> Vec<u8> {
     out
 }
 
-/// An ELF holding one `SHF_COMPRESSED` `.debug_info` whose zlib stream really does decode
-/// to `payload`, but whose compression header declares `declared_size` bytes of output.
-fn elf_with_compressed_section(payload: &[u8], declared_size: u64) -> Vec<u8> {
+/// Where [`elf_with_compression`] puts its compressed bytes: a section that holds code, and
+/// so is one the parse decompresses.
+const CODE: (&str, SectionKind) = (".text", SectionKind::Text);
+
+/// And one that does not: a debug section, which only the DWARF loader ever reads.
+const DEBUG: (&str, SectionKind) = (".debug_info", SectionKind::Debug);
+
+/// An ELF holding one `SHF_COMPRESSED` section whose zlib stream really does decode to
+/// `payload`, but whose compression header declares `declared_size` bytes of output.
+fn elf_with_compressed_section(
+    section: (&str, SectionKind),
+    payload: &[u8],
+    declared_size: u64,
+) -> Vec<u8> {
     elf_with_compression(
+        section,
         object::elf::ELFCOMPRESS_ZLIB,
         &zlib_stored(payload),
         declared_size,
@@ -231,11 +269,12 @@ fn elf_with_compressed_section(payload: &[u8], declared_size: u64) -> Vec<u8> {
 /// The same, over any compression format: `stream` as it sits in the section, under a header
 /// naming `ch_type` and declaring `declared_size` bytes of output.
 fn elf_with_compression(
+    (name, kind): (&str, SectionKind),
     ch_type: object::elf::CompressionType,
     stream: &[u8],
     declared_size: u64,
 ) -> Vec<u8> {
-    use object::{write, Architecture, BinaryFormat, Endianness, SectionFlags, SectionKind};
+    use object::{elf, write, Architecture, BinaryFormat, Endianness, SectionFlags};
 
     let mut contents = Vec::new();
     // Elf64_Chdr: ch_type, ch_reserved, ch_size, ch_addralign.
@@ -245,12 +284,19 @@ fn elf_with_compression(
     contents.extend_from_slice(&1u64.to_le_bytes());
     contents.extend_from_slice(stream);
 
+    // The flags are written by hand, since `SHF_COMPRESSED` is the point and it is
+    // `SHF_EXECINSTR` that makes a section read back as code.
+    let sh_flags = match kind {
+        SectionKind::Text => elf::SHF_ALLOC | elf::SHF_EXECINSTR | elf::SHF_COMPRESSED,
+        _ => elf::SHF_COMPRESSED,
+    };
+
     let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
-    let id = obj.add_section(Vec::new(), b".debug_info".to_vec(), SectionKind::Debug);
+    let id = obj.add_section(Vec::new(), name.as_bytes().to_vec(), kind);
     obj.append_section_data(id, &contents, 1);
     obj.section_mut(id).flags = SectionFlags::Elf {
-        sh_type: object::elf::SHT_PROGBITS,
-        sh_flags: object::elf::SHF_COMPRESSED.into(),
+        sh_type: elf::SHT_PROGBITS,
+        sh_flags: sh_flags.into(),
     };
     obj.write().expect("writing the fixture object")
 }
@@ -469,17 +515,24 @@ fn debug_sections_full_of_garbage_do_not_panic() {
 
 /// The compressed-section defect again on the DWARF loader's path — the one that is
 /// *expected* to meet compressed sections, `.debug_*` being what compilers compress. The
-/// loader goes through the same `section_data` guard, so the section reads as absent.
+/// parse holds no bytes of a debug section, so the header is read by the loader alone, and
+/// the loader goes through the same `section_data` guard: the section reads as absent and
+/// there is no line info to be had from it.
 #[test]
 fn a_lying_compressed_debug_section_costs_nothing() {
     let payload = b"not really DWARF, but it is not read either";
 
     for declared in [1u64 << 33, 1 << 20] {
-        let data = elf_with_compressed_section(payload, declared);
+        let data = elf_with_compressed_section(DEBUG, payload, declared);
         let object = parse_and_walk(&data).expect("the object still parses");
+        let section = object
+            .sections
+            .iter()
+            .find(|section| section.name == ".debug_info")
+            .expect("the section is kept");
         assert!(
-            !section_names(&object).contains(&".debug_info".to_owned()),
-            "a .debug_info declaring {declared} bytes was decompressed anyway"
+            section.data.is_none(),
+            "a .debug_info declaring {declared} bytes was decompressed at parse"
         );
         for section in &object.sections {
             assert!(object.line_info(section, 0..u64::MAX).is_none());

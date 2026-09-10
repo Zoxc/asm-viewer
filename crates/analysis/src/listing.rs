@@ -220,7 +220,8 @@ impl Listing {
 /// a listing has to end somewhere, and a section placed so near the end of the address space
 /// that it does not fit ends at the end of it.
 fn section_end(section: &Section) -> u64 {
-    let length: u64 = section.data.len().try_into().unwrap_or(u64::MAX);
+    let length = section.data.as_ref().map_or(0, Vec::len);
+    let length: u64 = length.try_into().unwrap_or(u64::MAX);
     section.address.saturating_add(length)
 }
 
@@ -300,7 +301,8 @@ impl CodeListing {
             .zip(buckets)
             .filter_map(|(section, symbols)| {
                 let start = section.address.wrapping_add(section.bias);
-                let length: u64 = section.data.len().try_into().unwrap_or(u64::MAX);
+                let length = section.data.as_ref().map_or(0, Vec::len);
+                let length: u64 = length.try_into().unwrap_or(u64::MAX);
                 let end = start.saturating_add(length);
                 (start < end).then(|| Placed {
                     listing: Listing::from_symbols(section.clone(), symbols),

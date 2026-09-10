@@ -11,7 +11,7 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
     let section = Arc::new(Section {
         index: SectionIndex(0),
         name: ".text".into(),
-        data: vec![0xC3; symbols.len()],
+        data: Some(vec![0xC3; symbols.len()]),
         address: 0,
         relocations: HashMap::new(),
         symbols: symbols.iter().map(|(_, address)| *address).collect(),

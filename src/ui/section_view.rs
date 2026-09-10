@@ -278,7 +278,7 @@ pub(crate) fn gap_row_bytes(
     let offset = start.checked_sub(section.address)?;
     let offset: usize = offset.try_into().ok()?;
     let len: usize = (end - start).try_into().ok()?;
-    let bytes = section.data.get(offset..offset + len)?.to_vec();
+    let bytes = section.data.as_ref()?.get(offset..offset + len)?.to_vec();
     Some((placed.place(start), bytes))
 }
 

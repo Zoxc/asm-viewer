@@ -111,8 +111,8 @@ demangler is ever offered one.
 (for relocation-target lookup), `symbols_sorted` (name-sorted, for the UI list) and `by_address`
 (placed-address-sorted, built on the first disassembly, for a call target's name; below).
 `Object::data` is an `ObjectData`, an `Arc<[u8]>` of the whole file plus a `Range`, kept for the
-object's lifetime, because parsing keeps decompressed bytes only for sections holding text symbols
-and the lazy line-info pass needs the rest. Every object from one file shares that one allocation,
+object's lifetime, because parsing keeps decompressed bytes only for the code sections and the lazy
+passes read the file again for the rest. Every object from one file shares that one allocation,
 so an archive costs its bytes once. It also carries the file's `FileDigest`: xxHash64 of the *whole
 file*, taken once in `ObjectData::whole_file` because the bytes are in hand there, and an archive
 member is cut from that same value, so 196 members cost one pass (32 ms against the 1.6 s the open
@@ -120,8 +120,15 @@ takes on the 331 MB binary). Nothing in the crate reads it: it exists so a resto
 it saved from one rebuilt underneath it. `Section` owns decompressed bytes, relocations keyed by the
 address the bytes they patch sit at, a sorted list of its text symbols' addresses, and the ranges
 the file's unwind table states for its functions (`unwind`, sorted by start, each start once, ends
-clamped to the section's bytes; empty for a file with no table read). That key is the parse's own
-doing: `object` hands back what the format states, an address in ELF and COFF but an offset from the
+clamped to the section's bytes; empty for a file with no table read). The bytes and the relocations
+are a **code** section's only, and `SectionKind::Text` decides both, so the flag a listing reads
+(`Section::code`) is the flag that decided what was kept; a section holding no code keeps its index,
+name and address, and its `data` is `None`. Nothing else reads a section's bytes -- the DWARF backend and
+`unwind.rs` take theirs from the file they re-parse -- so a copy for the debug sections would be a
+second one held for as long as the object lives, and the DWARF alone is 267 MB of the 331 MB binary.
+(Every resident figure below predates that rule: each was measured while the parse copied every
+section, and none has been taken again since.) That key is the parse's own doing: `object` hands
+back what the format states, an address in ELF and COFF but an offset from the
 start of the section in Mach-O, which lays its sections out one after another. So `parse_object`
 adds a Mach-O section's address as it builds the map, and `Code::relocation` can ask by address
 whatever the file is. The debug sections are relocated straight from `object`'s iterator

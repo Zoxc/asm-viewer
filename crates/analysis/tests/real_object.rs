@@ -440,7 +440,7 @@ fn split_sections_are_each_given_a_place_of_their_own() {
         code.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
         [".text", ".text.add", ".text.twice", ".text.sum_to"]
     );
-    assert!(code[0].data.is_empty());
+    assert!(code[0].data.as_ref().is_some_and(Vec::is_empty));
     let mut placed_end = 0;
     for section in &code {
         assert_eq!(section.address, 0);
@@ -450,7 +450,7 @@ fn split_sections_are_each_given_a_place_of_their_own() {
             section.name
         );
         assert_eq!(section.bias % 16, 0);
-        placed_end = section.bias + section.data.len() as u64;
+        placed_end = section.bias + section.data.as_ref().map_or(0, Vec::len) as u64;
     }
     assert_eq!(code[0].bias, 0);
     assert_eq!(code[1].bias, 0x10, "an empty section still takes one grain");
