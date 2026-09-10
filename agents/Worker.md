@@ -5,9 +5,13 @@ another, how an answer is judged when it lands, and what is drawn meanwhile. The
 second one, for the file beside the binary, and a section below says why it is not this one.
 
 **Nothing is analysed on the UI thread.** `SymbolData::assembly` decodes and formats the whole
-symbol. `SymbolData::line_info` builds the object's entire DWARF context on the first query against
-it. Together they take 1.4 s for the first symbol clicked in the 331 MB binary (debug build; 0.6 s
-in release), and both used to run in `render`. `use_analysis` moves them off together, because one
+symbol. The line info builds the object's entire DWARF context on the first query against it.
+Together they take 1.4 s for the first symbol clicked in the 331 MB binary (debug build; 0.6 s
+in release), and both used to run in `render`. `SymbolLines::new` is asked over
+`Assembly::range` -- the very bytes the symbol was decoded over -- rather than over
+`SymbolData::line_info`, which would work the extent out a second time; the last thing on the UI
+thread that still asked the crate anything was the extent the symbol bar prints, and it now reads
+the number off the `Studied` the pane is drawing (`Studied::extent`). `use_analysis` moves them off together, because one
 click asks for both and the pane needs both. There is **one worker thread** for the app's lifetime.
 It is fed an `async_channel` of `Question`s and answers each with a `Studied`: the `Assembly`, its
 `Lanes`, and the `SymbolLines`. It is one worker and not a thread per request or a pool because
@@ -311,7 +315,9 @@ name a file the previous symbol was compiled from; that is what `Studied` carryi
 
 **No analysis is cached in the UI, deliberately.** `SymbolData::assembly` does not memoize: it decodes
 afresh and hands back a new `Arc<Assembly>`. `Object::line_info` caches the DWARF context and the
-subprogram extents but re-walks the covering units' line programs per call. The `Analysis` state
+subprogram extents but re-walks the covering units' line programs per call. A symbol's extent is
+kept on the symbol (`ExtentCache`), which is the crate's own memo of a decision with a mutex behind
+it and not a listing the UI held on to. The `Analysis` state
 gives the one thing a re-render needed: the answer is *held*, so a selection, a theme change or a
 resize costs nothing where the old shape re-decoded in `render`. A second, keyed cache would be an
 unbounded pile of `Assembly`s for listings the reader has left, to save a few milliseconds on a

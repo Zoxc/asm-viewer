@@ -93,11 +93,45 @@ fn fact(name: &str, value: String) -> impl IntoElement {
     )
 }
 
+/// What the bar names: the drawn symbol together with the bytes its listing was decoded
+/// over, or the object a tab that is a whole binary shows.
+///
+/// A [`Selection`] with the number added rather than a [`Selection`], because the number
+/// is [`SymbolData::extent`] -- the crate's most expensive answer, taken under the debug
+/// backend's mutex -- and a bar drawn in a render may not ask for it. The worker has paid
+/// for it once already ([`Studied::extent`]), so the bar is handed what it has.
+#[derive(Clone)]
+pub(crate) enum Named {
+    Symbol {
+        symbol: Symbol,
+        /// How many bytes the pane below is drawing, from the listing it is drawing.
+        extent: u64,
+    },
+    Object(Arc<Object>),
+}
+
+/// The identity rule the rest of the UI keeps: pointers, never names.
+impl PartialEq for Named {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Named::Symbol { symbol, extent },
+                Named::Symbol {
+                    symbol: other,
+                    extent: bytes,
+                },
+            ) => symbol == other && extent == bytes,
+            (Named::Object(a), Named::Object(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
 /// The rest of what is known about what the bar names, which is what the Info pane
 /// answered before it. The two names are the bar's own rows and are not repeated here.
-fn facts(named: &Selection) -> Vec<Element> {
+fn facts(named: &Named) -> Vec<Element> {
     match named {
-        Selection::Symbol(symbol) => {
+        Named::Symbol { symbol, extent } => {
             let data = &symbol.data;
             vec![
                 fact(
@@ -109,23 +143,14 @@ fn facts(named: &Selection) -> Vec<Element> {
                 )
                 .into_element(),
                 fact("Address", format!("{:016X}", data.address)).into_element(),
-                // The declared size is frequently 0 and is only ever displayed; `data_in`
-                // is the range `assembly` decodes and `line_info` is asked about.
+                // The declared size is frequently 0 and is only ever displayed; the extent
+                // below is the range the listing was decoded over.
                 fact("Declared", format!("{} bytes", data.size)).into_element(),
-                fact(
-                    "Extent",
-                    format!(
-                        "{} bytes",
-                        data.data_in(&symbol.object)
-                            .map(|bytes| bytes.len())
-                            .unwrap_or_default()
-                    ),
-                )
-                .into_element(),
+                fact("Extent", format!("{extent} bytes")).into_element(),
                 fact("Object", symbol.object.name.clone()).into_element(),
             ]
         }
-        Selection::Object(object) => vec![
+        Named::Object(object) => vec![
             fact("Format", format!("{:?}", object.format)).into_element(),
             fact("Symbols", object.symbols.len().to_string()).into_element(),
             fact("Path", object.path.display().to_string()).into_element(),
@@ -136,18 +161,19 @@ fn facts(named: &Selection) -> Vec<Element> {
 /// The bar over the Assembly pane, naming what that pane is drawing, and the section it
 /// expands into.
 ///
-/// **The drawn symbol and never the selected one.** It is handed a [`Selection`] worked out
+/// **The drawn symbol and never the selected one.** It is handed a [`Named`] worked out
 /// from the same [`Analyzed::showing`] the listing under it is built from, rather than
 /// reading `Active` the way the Info pane it replaces did: the two disagree for as long as
 /// the worker takes, and a bar naming a function the rows below it are not of is worse than
-/// no bar.
+/// no bar. The extent it prints comes from there too, for the same reason and one more:
+/// nothing in a render asks the crate.
 ///
 /// Open or shut is kept per tab in [`Expanded`] rather than in a `use_state` here, because
 /// both panes are mounted afresh for every document: a flag of this component's own would
 /// be gone the moment the reader looked at another tab.
 #[derive(Clone, PartialEq)]
 pub(crate) struct SymbolBar {
-    pub(crate) named: Selection,
+    pub(crate) named: Named,
     /// The tab this bar is in, which is what its open-or-shut is filed under -- the tab
     /// and not the place on its trail, so the section stays open along the trail.
     pub(crate) tab: DocId,
@@ -164,7 +190,7 @@ impl Component for SymbolBar {
         // The mangled row only where there is a demangling: `display()` falls back to the
         // mangled name, so a symbol that was never mangled would otherwise be named twice.
         let names: Vec<Element> = match &self.named {
-            Selection::Symbol(symbol) => {
+            Named::Symbol { symbol, .. } => {
                 let data = &symbol.data;
                 std::iter::once(
                     NameRow {
@@ -182,7 +208,7 @@ impl Component for SymbolBar {
                 }))
                 .collect()
             }
-            Selection::Object(object) => vec![NameRow {
+            Named::Object(object) => vec![NameRow {
                 text: object.name.clone(),
                 dim: false,
             }

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolData};
+use analysis::{
+    Architecture, BinaryFormat, ExtentCache, ObjectData, Section, SectionIndex, SymbolData,
+};
 
 use super::*;
 
@@ -30,6 +32,7 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
                 address: address as u64,
                 section: Some(section.clone()),
                 size: 0,
+                extent: ExtentCache::default(),
             })
         })
         .collect();
@@ -146,6 +149,7 @@ fn placed(name: &str, address: u64, bias: u64) -> Arc<SymbolData> {
             bias,
         })),
         size: 0,
+        extent: ExtentCache::default(),
     })
 }
 
@@ -172,6 +176,7 @@ fn a_symbol_with_no_section_is_nowhere_to_open() {
         address: 0x10,
         section: None,
         size: 0,
+        extent: ExtentCache::default(),
     });
     assert_eq!(lowest_placed(&[loose.clone()]), None);
     // And it is stepped over rather than taken as the lowest.

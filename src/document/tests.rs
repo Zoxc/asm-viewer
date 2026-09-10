@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use analysis::{Architecture, BinaryFormat, ObjectData, SymbolData};
+use analysis::{Architecture, BinaryFormat, ExtentCache, ObjectData, SymbolData};
 
 use super::*;
 
@@ -19,6 +19,7 @@ fn object(path: &str, name: &str) -> Arc<Object> {
             address: 0,
             section: None,
             size: 0,
+            extent: ExtentCache::default(),
         })],
         sections: Vec::new(),
         data: ObjectData::from(&b"the first build"[..]),

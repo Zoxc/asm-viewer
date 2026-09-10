@@ -177,8 +177,10 @@ impl Listing {
     /// the listing has no stretch at.
     ///
     /// The code is [`SymbolData::assembly`]'s answer, literally, so the section listing and
-    /// the symbol's own cannot disagree; the extent is [`SymbolData::extent`], DWARF-trimmed
-    /// where the object has DWARF.
+    /// the symbol's own cannot disagree; where the gap starts is read off that answer
+    /// ([`Assembly::range`]) rather than decided again, [`SymbolData::extent`] being the
+    /// most expensive answer in the crate. A symbol whose bytes would not read has no
+    /// assembly and no range either, so its whole stretch is a gap.
     pub fn decode(&self, object: &Object, index: usize) -> Option<DecodedStretch> {
         let stretch = self.stretches.get(index)?;
         let Some(symbol) = stretch.symbol() else {
@@ -192,23 +194,18 @@ impl Listing {
         };
 
         let code = symbol.assembly(object);
-        let extent = symbol.extent(object);
-        // Saturating, then clipped: the extent is bounded by the next symbol already, but
-        // with no next symbol and a section reaching the end of the address space it is the
-        // file's number and the sum can wrap.
-        let claimed = stretch
-            .range
-            .start
-            .saturating_add(extent.map_or(0, |extent| extent.bytes))
-            .min(stretch.range.end);
+        // Clipped: the extent is bounded by the next symbol already, but with no next symbol
+        // and a section reaching the end of the address space it is the file's number.
+        let claimed = code.as_ref().map_or(stretch.range.start, |code| {
+            code.range.end.min(stretch.range.end)
+        });
         // The extent says whether it was capped, so an end the file states as exactly the
         // cap is not mistaken for one.
         let gap = (claimed < stretch.range.end).then(|| Gap {
             range: claimed..stretch.range.end,
-            kind: if extent.is_some_and(|extent| extent.capped) {
-                GapKind::Cut
-            } else {
-                GapKind::Bytes
+            kind: match code.as_ref().is_some_and(|code| code.extent.capped) {
+                true => GapKind::Cut,
+                false => GapKind::Bytes,
             },
         });
 

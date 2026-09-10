@@ -164,7 +164,7 @@ answered, an extent whose end runs off the top of the address space is dropped: 
 subprogram's declared length back as it was written, and every caller here reads
 `address..address + extent`. The answer is an `Extent`: the number, and whether the number is the
 cap rather than an end. Whoever wants the second question — `Listing::decode`, which draws the rest
-of a capped stretch differently — asks it, rather than comparing the number to the constant, since a
+of a capped stretch differently — reads it rather than comparing the number to the constant, since a
 file is free to state exactly a megabyte and used to be told it had been cut off there. The
 derivation is capped at `MAX_DERIVED_SIZE` (1 MiB) in `estimate_size` and nowhere else, so the
 constant is private to `lib.rs`. That is not a claim about how long a function can be, but the point
@@ -177,6 +177,28 @@ assembly, a mutated table) and, on an image without one, everything that declare
 an ARM64 PE or a Mach-O, where it stays. Measured, release: none of the LLVM DLL's 73 793 extents
 reaches the cap now; the extent pass over all of them is 4.6 ms, where `rustc_driver.dll`'s 234 070
 take 756 ms because the 15 636 no entry covers each go to the PDB.
+
+**It is decided once per symbol drawn, and the disassembly is where the answer is kept.**
+`SymbolData::assembly` asks for the extent, and the `Assembly` it hands back carries the range it
+decoded (`Assembly::range`) and the `Extent` behind it. So the line info is asked over that range,
+`Listing::decode` reads the stretch's gap off it, and the bar over the pane prints its length —
+four askings for one answer, in three files, down to one. The bar is why the fields are on the
+`Assembly` rather than beside it in the UI: `symbol_bar::facts` runs in a render, and an unwind
+lookup or a DIE walk under the debug backend's mutex is not something the UI thread may do
+(`AGENTS.md`). A symbol whose bytes will not read has no `Assembly` and so no range, which is a
+listing of nothing and a gap over the whole stretch.
+
+**And it is kept once it has been asked** (`ExtentCache`, a `OnceLock<Option<Extent>>` on the
+symbol: +24 bytes each, 2.8 MB over the 331 MB binary's 115 577). Not for the first draw, which
+asks once either way now, but for the section view: `Reading::held` lets a decoded stretch go once
+the reader is `KEEP` (512) stretches past it and lets the lot go when they leave the tab —
+deliberately, it being the view's answer rather than a cache — so scrolling back re-decodes, and
+every re-decode used to walk the debug info again for a symbol no unwind entry covers. The
+*absence* is kept too, that symbol being exactly the one whose answer cost the walk. `extent` takes
+the object as an argument while the memo sits on the symbol, so a `debug_assert!` holds the pair
+together: the object asked must own the symbol's section, by pointer. Nothing else is kept —
+`estimate_size` is a binary search sitting on `extent`'s own path, and `data`/`data_in` are slices
+of a section rather than answers.
 
 **Names are demangled in one batch per object, on stacks sized for them** (`demangle.rs`). A mangled
 name is bytes out of a string table, and it is the *file* that chooses how deep the demangler
@@ -618,7 +640,8 @@ free, a scan of the object's symbols and a sort of the section's own, and it is 
 stable structure to scroll while instructions arrive. **A stretch is decoded on demand**
 (`Listing::decode`), and that is when its symbol's extent is asked for: the code is literally
 `SymbolData::assembly`'s answer, so the section and the symbol view cannot disagree, and the bytes
-from `SymbolData::extent` to the next label are the stretch's `Gap`. The gaps are deliberately not
+from where that answer says it stopped (`Assembly::range`) to the next label are the stretch's
+`Gap`. The gaps are deliberately not
 known up front: the extent is a DWARF walk that cost 2.0 s over the 331 MB binary before its
 `.eh_frame` was read (the reverse index's measurement), and the skeleton has to cost nothing. **A
 gap is never decoded.** Bytes no symbol claims are not known to be code (alignment padding, a jump

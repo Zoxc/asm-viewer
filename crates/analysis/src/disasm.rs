@@ -10,9 +10,9 @@
 //! and no signature here says `dyn`, so a backend's formatting and span-mapping can inline
 //! into the per-instruction decode loop.
 
-use crate::{Object, Section, SymbolData};
+use crate::{Extent, Object, Section, SymbolData};
 use object::{Architecture, RelocationTarget};
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 mod x86;
 
@@ -235,10 +235,22 @@ pub struct Assembly {
     /// names that architecture. Distinct from an empty listing, which means a symbol holding
     /// no instructions.
     pub undecodable: Option<&'static str>,
+
+    /// The bytes these rows were decoded from: the symbol's address to its extent, in the
+    /// section's own addresses. Carried so that nobody has to ask for the extent a second
+    /// time — [`SymbolData::extent`] is the most expensive answer in the crate, and this is
+    /// what it came to.
+    pub range: Range<u64>,
+
+    /// The extent [`range`](Self::range) is, so that a caller can tell an end the file
+    /// states from the derivation's cap without asking again.
+    pub extent: Extent,
 }
 
 impl Assembly {
-    /// The listing for `code`, decoded by whichever backend claims `architecture`.
+    /// The listing for `code`, decoded by whichever backend claims `architecture`, over
+    /// `range` — the bytes `code` holds — and the `extent` that range came from. Both are
+    /// the caller's, [`SymbolData::assembly`] having them in hand already.
     ///
     /// The only place an architecture is dispatched on. The set is closed at compile time,
     /// so each arm names its backend concretely and `decoded` is compiled once per backend
@@ -248,13 +260,18 @@ impl Assembly {
     /// **Bitness comes from the architecture and not from `is_64()`.** `X86_64_X32` — the
     /// x32 ABI — is 64-bit *code* with 32-bit pointers, so a file whose class says 32 still
     /// decodes as 64 there.
-    pub(crate) fn decode(architecture: Architecture, code: &Code<'_>) -> Self {
+    pub(crate) fn decode(
+        architecture: Architecture,
+        code: &Code<'_>,
+        range: Range<u64>,
+        extent: Extent,
+    ) -> Self {
         match architecture {
             Architecture::X86_64 | Architecture::X86_64_X32 => {
-                Self::decoded(x86::X86 { bitness: 64 }, code)
+                Self::decoded(x86::X86 { bitness: 64 }, code, range, extent)
             }
-            Architecture::I386 => Self::decoded(x86::X86 { bitness: 32 }, code),
-            _ => Self::unsupported(architecture),
+            Architecture::I386 => Self::decoded(x86::X86 { bitness: 32 }, code, range, extent),
+            _ => Self::unsupported(architecture, range, extent),
         }
     }
 
@@ -264,7 +281,12 @@ impl Assembly {
     /// Generic over the backend rather than taking one behind a pointer: this is the whole
     /// decode path, so monomorphising it is what lets a backend's per-instruction work
     /// inline into it.
-    fn decoded<D: Disassembler>(backend: D, code: &Code<'_>) -> Self {
+    fn decoded<D: Disassembler>(
+        backend: D,
+        code: &Code<'_>,
+        range: Range<u64>,
+        extent: Extent,
+    ) -> Self {
         let instructions = backend.disassemble(code);
 
         // A backend decodes from the front, so these ascend and a target is one binary search
@@ -287,6 +309,8 @@ impl Assembly {
             instructions,
             edges,
             undecodable: None,
+            range,
+            extent,
         }
     }
 
@@ -304,15 +328,18 @@ impl Assembly {
         self.edges.get(at).copied()
     }
 
-    /// The answer for an architecture no arm of `decode` claims: no rows, and the
-    /// architecture's name to say why.
-    fn unsupported(architecture: Architecture) -> Self {
+    /// The answer for an architecture no arm of `decode` claims: no rows, the architecture's
+    /// name to say why, and the bytes that would have been decoded — an undecodable symbol
+    /// still states its extent.
+    fn unsupported(architecture: Architecture, range: Range<u64>, extent: Extent) -> Self {
         Self {
             instructions: Vec::new(),
             edges: Vec::new(),
             undecodable: Some(
                 architecture_name(architecture).unwrap_or("an unsupported architecture"),
             ),
+            range,
+            extent,
         }
     }
 }

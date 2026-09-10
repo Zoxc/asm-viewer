@@ -361,6 +361,18 @@ pub struct Extent {
     pub capped: bool,
 }
 
+/// [`SymbolData::extent`]'s answer, worked out at most once. The *absence* is kept too,
+/// the way [`DebugInfoCache`] keeps its own: a symbol nothing states an extent for is
+/// exactly the one whose answer cost a walk of the debug info.
+///
+/// It is kept for the **section view**, which drops a decoded stretch once the reader has
+/// scrolled well past it and decodes it again on the way back (`src/ui/reading.rs`); the
+/// first draw of a symbol asks once either way. Sound because the answer is a function of
+/// the file's own tables, and because a `SymbolData` belongs to one object — see the
+/// `debug_assert!` in [`SymbolData::extent`].
+#[derive(Debug, Default)]
+pub struct ExtentCache(OnceLock<Option<Extent>>);
+
 #[derive(Debug)]
 pub struct SymbolData {
     pub name: String,
@@ -368,6 +380,10 @@ pub struct SymbolData {
     pub address: u64,
     pub section: Option<Arc<Section>>,
     pub size: u64,
+
+    /// What [`extent`](Self::extent) answered, once it has been asked. Anything building a
+    /// `SymbolData` by hand writes `ExtentCache::default()`.
+    pub extent: ExtentCache,
 }
 
 impl SymbolData {
@@ -520,9 +536,26 @@ impl SymbolData {
     /// The answer carries [`Extent::capped`], so that a caller can tell an end the file
     /// states from the cap without comparing the number to it — a stated end of exactly a
     /// megabyte is an end.
+    ///
+    /// **Asked at most once per symbol** ([`ExtentCache`]), which is what a section view
+    /// scrolled away from and back does not pay for twice.
     pub fn extent(&self, object: &Object) -> Option<Extent> {
-        let extent = self.stated_extent(object)?;
-        self.address.checked_add(extent.bytes).map(|_| extent)
+        // A kept answer is only right for the object it was worked out from, and nothing
+        // in the type ties a `SymbolData` to one — its section is that tie, and only in
+        // the one place both are built. Debug-only, and about a bug here rather than about
+        // anything a file can say: a mismatched pair used to be a slow answer and would
+        // now be a wrong one.
+        debug_assert!(
+            self.section.as_ref().is_none_or(|section| object
+                .sections
+                .iter()
+                .any(|owned| Arc::ptr_eq(owned, section))),
+            "a symbol's extent asked of an object that is not the one it came from"
+        );
+        *self.extent.0.get_or_init(|| {
+            let extent = self.stated_extent(object)?;
+            self.address.checked_add(extent.bytes).map(|_| extent)
+        })
     }
 
     /// The three answers [`extent`](Self::extent) chooses among, before it bounds them.
@@ -570,10 +603,24 @@ impl SymbolData {
     /// This symbol's disassembly, or [`None`] when there are no bytes to decode. An
     /// architecture no backend claims comes back as an [`Assembly`] whose
     /// [`undecodable`](Assembly::undecodable) names it.
+    ///
+    /// The answer **carries the range it was decoded over** and the [`Extent`] behind it
+    /// ([`Assembly::range`]), which is the one place that decision is made for a symbol the
+    /// reader is looking at: the line info is asked over that range and the bar prints its
+    /// length, neither of them asking [`extent`](Self::extent) again.
     pub fn assembly(&self, object: &Object) -> Option<Arc<Assembly>> {
-        let bytes = self.data_in(object)?;
+        let extent = self.extent(object)?;
+        let bytes = self.bytes(extent.bytes)?;
+        // The sum `extent` has already checked. Checked again rather than assumed: every
+        // number here came out of a file.
+        let end = self.address.checked_add(extent.bytes)?;
         let code = Code::new(bytes, self.address, self.section.as_deref(), object);
-        Some(Arc::new(Assembly::decode(object.architecture, &code)))
+        Some(Arc::new(Assembly::decode(
+            object.architecture,
+            &code,
+            self.address..end,
+            extent,
+        )))
     }
 }
 
@@ -1089,6 +1136,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
                             section: symbol.section,
                             address: symbol.address,
                             size: symbol.size,
+                            extent: ExtentCache::default(),
                         }),
                     )
                 })

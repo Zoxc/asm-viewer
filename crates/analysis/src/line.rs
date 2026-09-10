@@ -467,6 +467,10 @@ impl Object {
 impl SymbolData {
     /// The line info for this symbol's instructions, over the same extent
     /// [`assembly`](Self::assembly) decodes.
+    ///
+    /// It works that extent out itself, so anything with the assembly in hand asks
+    /// [`Object::line_info`] over [`Assembly::range`](crate::Assembly::range) instead, and
+    /// pays for the extent once.
     pub fn line_info(&self, object: &Object) -> Option<Arc<LineInfo>> {
         let section = self.section.as_ref()?;
         let end = self.address.checked_add(self.extent(object)?.bytes)?;

@@ -580,7 +580,7 @@ impl Studied {
             Some(assembly) => Arc::new(Lanes::new(&assembly.edges, assembly.instructions.len())),
             None => Lanes::none(),
         };
-        let lines = SymbolLines::new(&symbol);
+        let lines = SymbolLines::new(&symbol, assembly.as_deref());
 
         Studied {
             symbol,
@@ -592,6 +592,18 @@ impl Studied {
 }
 
 impl Studied {
+    /// How many bytes of code this listing was decoded over: the extent the crate worked
+    /// out for the symbol, and 0 for a symbol with nothing to decode.
+    ///
+    /// **Read off the answer and never asked again.** `SymbolData::extent` is the crate's
+    /// most expensive decision -- an unwind lookup, or a DWARF DIE walk under the debug
+    /// backend's mutex -- and the bar over the pane prints this number in a render.
+    pub(crate) fn extent(&self) -> u64 {
+        self.assembly.as_ref().map_or(0, |assembly| {
+            assembly.range.end.saturating_sub(assembly.range.start)
+        })
+    }
+
     /// The source position the instruction at `index` was compiled from, or `None` where
     /// the debug info gives it none: no line info at all, an address no row covers, or a
     /// row naming no file or sitting on DWARF's line 0.
@@ -673,8 +685,19 @@ impl PartialEq for SymbolLines {
 }
 
 impl SymbolLines {
-    fn new(symbol: &Symbol) -> SymbolLines {
-        let info = symbol.data.line_info(&symbol.object);
+    /// The lines of the rows `assembly` holds, asked over the very range it was decoded
+    /// over: the extent behind that range is the most expensive answer in the crate, and it
+    /// has been paid for once already. A symbol with nothing to decode has no range and so
+    /// no lines -- there are no rows to pair them with.
+    fn new(symbol: &Symbol, assembly: Option<&Assembly>) -> SymbolLines {
+        let info = symbol
+            .data
+            .section
+            .as_ref()
+            .zip(assembly)
+            .and_then(|(section, assembly)| {
+                symbol.object.line_info(section, assembly.range.clone())
+            });
         // The row the symbol's first instruction was compiled from, falling back to the
         // first row that names a file at all: a prologue DWARF places on no line leaves
         // `row_at` with nothing to say. **One row for both answers**, so the line the

@@ -1552,12 +1552,17 @@ impl AssemblyPane {
     /// worker ([`ask`] answers `None` for both, and the hook then resets [`Analyzed`]), so
     /// there is never an analysis of either and the bar has to fall back to the document
     /// to name the object. Everything else is the symbol the pane is drawing.
-    fn named(&self, analysis: &Analyzed) -> Option<Selection> {
+    fn named(&self, analysis: &Analyzed) -> Option<Named> {
         match analysis.showing(&self.document) {
-            Showing::Listing(shown) => Some(Selection::Symbol(shown.studied.symbol.clone())),
+            // The extent comes from the listing being drawn and not from the crate: the bar
+            // prints it in a render, and nothing analyses anything there.
+            Showing::Listing(shown) => Some(Named::Symbol {
+                symbol: shown.studied.symbol.clone(),
+                extent: shown.studied.extent(),
+            }),
             _ => match &self.document {
                 Document::Assembly(Selection::Object(object)) | Document::Code(object) => {
-                    Some(Selection::Object(object.clone()))
+                    Some(Named::Object(object.clone()))
                 }
                 _ => None,
             },

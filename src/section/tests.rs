@@ -1,5 +1,5 @@
 use super::*;
-use analysis::{CodeListing, Object};
+use analysis::{CodeListing, Extent, Object};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -290,6 +290,11 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
         instructions: assembly.instructions[..2].to_vec(),
         edges: Vec::new(),
         undecodable: None,
+        range: assembly.range.start..cut_at,
+        extent: Extent {
+            bytes: cut_at - assembly.range.start,
+            capped: false,
+        },
     }));
     cut.lanes = Arc::new(Lanes::new(&[], 2));
     let with_gap = Rows::new(code.clone(), |flat| (flat == 0).then(|| cut.clone()));
@@ -570,6 +575,11 @@ fn a_stretch_that_decoded_to_no_instructions_draws_its_bytes() {
             instructions: Vec::new(),
             edges: Vec::new(),
             undecodable: Some("aarch64"),
+            range: stretch.range.clone(),
+            extent: Extent {
+                bytes,
+                capped: false,
+            },
         })),
         lanes: Lanes::none(),
         gap: None,

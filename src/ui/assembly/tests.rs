@@ -1,7 +1,7 @@
 //! What an instruction row draws, held against what the same row copies.
 
 use super::*;
-use analysis::BranchEdge;
+use analysis::{BranchEdge, Extent, ExtentCache};
 use freya_testing::TestingRunner;
 use std::path::Path;
 
@@ -139,10 +139,16 @@ fn listing(target: Arc<SymbolData>) -> Assembly {
     instructions[5].relocation = Some(target);
     instructions[5].relocation_span = Some(4);
 
+    // The bytes the six rows above cover, eight apiece.
     Assembly {
         instructions,
         edges: vec![BranchEdge { from: 3, to: 0 }],
         undecodable: None,
+        range: 0..0x30,
+        extent: Extent {
+            bytes: 0x30,
+            capped: false,
+        },
     }
 }
 
@@ -211,6 +217,7 @@ fn every_kind_of_link_is_one_inline_piece() {
         address: 0x100,
         section: None,
         size: 0,
+        extent: ExtentCache::default(),
     });
     let assembly = listing(target);
     let kinds = (0..assembly.instructions.len())
@@ -339,6 +346,7 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
         address: 0x100,
         section: None,
         size: 0,
+        extent: ExtentCache::default(),
     });
     let in_code = Door::Symbol {
         object: object.clone(),

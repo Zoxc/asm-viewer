@@ -11,6 +11,7 @@ use crate::search::{Hit, SearchEvent, SearchQuery};
 use crate::source::Seeded;
 use crate::temporary::Temporary;
 use crate::walk::WalkEvent;
+use analysis::{Extent, ExtentCache};
 use freya_testing::{TestingNode, TestingRunner};
 
 /// Every open tab's document, in the reader's tab order. Pages are skipped: they are tabs
@@ -1188,6 +1189,7 @@ fn a_history_row_names_the_function_and_not_the_whole_symbol() {
             address: 0x1000,
             section: None,
             size: 0,
+            extent: ExtentCache::default(),
         }),
     };
 
@@ -10882,6 +10884,7 @@ fn mangled_symbol() -> Symbol {
             address: 0x1000,
             section: None,
             size: 0,
+            extent: ExtentCache::default(),
         }),
     }
 }
@@ -11113,6 +11116,75 @@ fn the_expanded_section_says_what_the_info_pane_said() {
     assert!(
         drawn.contains(&format!("{:016X}", sum_to.data.address)),
         "{drawn:?}"
+    );
+}
+
+/// **The bar prints the extent of the listing it is drawing, and asks the crate for
+/// nothing.** `SymbolData::extent` is the most expensive answer in the crate -- an unwind
+/// lookup, an ELF size, or a DWARF DIE walk under the debug backend's mutex -- and `facts`
+/// runs inside a render, where nothing may analyse anything. The worker has paid for the
+/// number once and the `Assembly` carries it, so the bar reads what it draws.
+///
+/// Held by handing the pane a listing decoded over a range that is deliberately *not* the
+/// symbol's extent: a bar asking the crate prints the symbol's own number, and a bar
+/// reading what it draws prints this one. The `Extent` row and not the whole screen,
+/// because `Declared` prints a number of bytes too and for this symbol it is the same one.
+#[test]
+fn the_bar_says_how_many_bytes_the_listing_under_it_holds() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let mut studied = Studied::new(sum_to.clone());
+    let decoded = studied.assembly.clone().expect("sum_to decodes");
+    let whole = decoded.range.end - decoded.range.start;
+    // Half the function, which is a number the crate answers for no symbol here.
+    let half = whole / 2;
+    assert!(half != 0 && half != whole, "sum_to is too short to halve");
+    studied.assembly = Some(Arc::new(Assembly {
+        instructions: decoded.instructions.clone(),
+        edges: decoded.edges.clone(),
+        undecodable: None,
+        range: decoded.range.start..decoded.range.start + half,
+        extent: Extent {
+            bytes: half,
+            capped: false,
+        },
+    }));
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+
+    let (mut test, roots) = TestingRunner::new(
+        listing_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Assembly(Selection::Symbol(sum_to.clone())),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    let triangle = triangle_of(&test);
+    test.move_cursor(triangle);
+    test.press_cursor(triangle);
+    test.release_cursor(triangle);
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    let at = drawn
+        .iter()
+        .position(|text| text == "Extent")
+        .expect("the section names the extent");
+    assert_eq!(
+        drawn.get(at + 1),
+        Some(&format!("{half} bytes")),
+        "the bar worked the extent out again rather than reading the listing: {drawn:?}"
     );
 }
 
@@ -17894,6 +17966,7 @@ fn calling_into_the_middle() -> (Arc<Object>, u64) {
                 address,
                 section: Some(section.clone()),
                 size,
+                extent: ExtentCache::default(),
             })
         })
         .collect();
@@ -18829,10 +18902,21 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
     let held = reading.held.get(&0).expect("stretch 0 is held").clone();
     let mut studied = held.code.clone().expect("stretch 0 has a symbol");
     // What the worker answers for a symbol whose architecture no backend decodes.
+    let range = studied
+        .assembly
+        .as_ref()
+        .expect("stretch 0 decoded")
+        .range
+        .clone();
     studied.assembly = Some(Arc::new(Assembly {
         instructions: Vec::new(),
         edges: Vec::new(),
         undecodable: Some("aarch64"),
+        extent: Extent {
+            bytes: range.end - range.start,
+            capped: false,
+        },
+        range,
     }));
     studied.lanes = Lanes::none();
     reading.held.insert(

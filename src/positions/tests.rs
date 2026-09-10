@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use analysis::{Architecture, BinaryFormat, Object, ObjectData, SymbolData};
+use analysis::{Architecture, BinaryFormat, ExtentCache, Object, ObjectData, SymbolData};
 
 use super::*;
 use crate::docs::Docs;
@@ -172,6 +172,7 @@ fn symbol(path: &str, name: &str) -> Symbol {
         address: 0,
         section: None,
         size: 0,
+        extent: ExtentCache::default(),
     });
     let object = Arc::new(Object {
         path: PathBuf::from(path),

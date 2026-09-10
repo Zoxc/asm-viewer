@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, Symbol, SymbolData};
+use analysis::{
+    Architecture, BinaryFormat, ExtentCache, ObjectData, Section, SectionIndex, Symbol, SymbolData,
+};
 
 use super::*;
 use crate::document::Selection;
@@ -28,6 +30,7 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
                 address: *address,
                 section: Some(section.clone()),
                 size: 0,
+                extent: ExtentCache::default(),
             })
         })
         .collect();

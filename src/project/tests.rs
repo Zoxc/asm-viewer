@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolData};
+use analysis::{
+    Architecture, BinaryFormat, ExtentCache, ObjectData, Section, SectionIndex, SymbolData,
+};
 
 use super::*;
 use crate::bookmarks::Bookmark;
@@ -45,6 +47,7 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
                 address: *address,
                 section: Some(section.clone()),
                 size: 0,
+                extent: ExtentCache::default(),
             })
         })
         .collect();
