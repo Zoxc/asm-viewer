@@ -87,11 +87,19 @@ pub(crate) fn right_hairline() -> Border {
 
 /// The body of a tab that has nothing to show.
 pub(crate) fn placeholder(text: impl Into<String>) -> Element {
+    placeholder_on(palette().pane_bg, text)
+}
+
+/// [`placeholder`] on the ground the caller says, as [`blank_pane`] is. The assembly
+/// side has one of its own (`asm_pane_bg`), and a message drawn on `pane_bg` there is
+/// the pane changing colour under the reader every time a line resolves to nothing or
+/// takes long enough to say so.
+pub(crate) fn placeholder_on(background: Color, text: impl Into<String>) -> Element {
     let text: String = text.into();
     rect()
         .expanded()
         .padding(5.0)
-        .background(palette().pane_bg)
+        .background(background)
         .child(label().text(text))
         .into()
 }

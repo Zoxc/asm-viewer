@@ -308,6 +308,14 @@ which draws nothing for as long as the read takes and then the file from its top
 moves it, both of them passes the door into a file already in hand does not have (`notes/Goals.md`,
 under Navigation).
 
+**A pane with nothing to draw says so on its own ground.** The two are painted in two colours --
+`pane_bg` on the source side, `asm_pane_bg` on the assembly side and in the split around them -- and
+a message fills the body of whichever has nothing. `placeholder` grounds itself in `pane_bg`, which
+is the source side's own, and on the assembly side was the pane changing colour under the reader:
+once as a line resolves to nothing or takes `SLOW_ANALYSIS` to say so, and back as the next line
+resolves to a symbol. `placeholder_on` is that box on the caller's ground, as `blank_pane` already
+was, and every word the assembly pane draws in place of a listing is on `asm_pane_bg`.
+
 **Every line is cut where the file is parsed.** What a row draws is that line's spans pulled out of
 the rope, and they used to be pulled out in the row's `render`: a rope slice and a `String` per
 span, sixty rows a pane, paid again for every scroll, every modifier and every keystroke in the find

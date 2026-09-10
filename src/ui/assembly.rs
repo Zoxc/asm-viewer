@@ -1583,7 +1583,7 @@ impl AssemblyPane {
         }
         let shown = match analysis.showing(&self.document) {
             Showing::Listing(shown) => shown,
-            Showing::Message(text) => return placeholder(text),
+            Showing::Message(text) => return placeholder_on(palette().asm_pane_bg, text),
             Showing::Nothing => return blank_pane(palette().asm_pane_bg),
         };
         let studied = shown.studied.clone();
@@ -1603,16 +1603,16 @@ impl AssemblyPane {
             false,
         );
         let Some(data) = data else {
-            return rect()
-                .padding(5.0)
-                .child(label().text("Assembly unavailable"))
-                .into();
+            return placeholder_on(palette().asm_pane_bg, "Assembly unavailable");
         };
         // An architecture no backend claims is a *third* answer -- the one above is only
         // "this symbol has no bytes" -- and it has to be said, an empty listing being
         // indistinguishable from a function that holds no code.
         if let Some(architecture) = data.assembly().undecodable {
-            return placeholder(format!("No disassembler for {architecture}"));
+            return placeholder_on(
+                palette().asm_pane_bg,
+                format!("No disassembler for {architecture}"),
+            );
         }
 
         rect()

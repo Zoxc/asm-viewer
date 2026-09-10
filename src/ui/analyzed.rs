@@ -85,6 +85,10 @@ pub(crate) enum Question {
         at: LinePos,
         /// The reader's own choice among the many, which outranks everything below.
         chosen: Option<Symbol>,
+        /// The listing the panes are drawing, which travels with the question so that
+        /// it can be the answer: a reader moving down a function asks a question per
+        /// line and every one of them resolves to the symbol already decoded.
+        standing: Option<Studied>,
         objects: Vec<Arc<Object>>,
         /// Where the reader has been, newest first, with the symbol on screen at its
         /// head. See [`compiled::pick`].
@@ -196,6 +200,7 @@ pub(crate) fn answer(question: Question) -> Answer {
         Question::Resolve {
             at,
             chosen,
+            standing,
             objects,
             recent,
         } => {
@@ -203,7 +208,13 @@ pub(crate) fn answer(question: Question) -> Answer {
             // The choice at the head of the ranking: it wins where the line compiled
             // into it, and where it did not the pick falls back as if none were made.
             let ranked: Vec<Symbol> = chosen.iter().cloned().chain(recent).collect();
-            let studied = compiled::pick(&candidates, &ranked).map(Studied::new);
+            let studied = compiled::pick(&candidates, &ranked).map(|symbol| match standing {
+                // The listing that is up is this symbol's already. It is handed back
+                // untouched -- the same `Arc<Assembly>`, which is what says to the pane
+                // that nothing changed -- rather than decoded a second time.
+                Some(standing) if standing.symbol == symbol => standing,
+                _ => Studied::new(symbol),
+            });
             Answer::Listing {
                 ask: Ask::Source { at, chosen },
                 studied,
@@ -470,6 +481,7 @@ impl Analyzed {
             Ask::Source { at, chosen } => Question::Resolve {
                 at: at.clone(),
                 chosen: chosen.clone(),
+                standing: self.shown.as_ref().map(|shown| shown.studied.clone()),
                 objects: open.to_vec(),
                 recent: recent_symbols(self.shown.as_ref(), visits),
             },

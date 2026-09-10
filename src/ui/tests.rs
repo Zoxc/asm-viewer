@@ -4202,6 +4202,95 @@ fn a_source_line_answers_with_the_symbol_it_was_compiled_into() {
     assert!(asked_of(&shown.ask) == Document::Source(at.file.clone()));
 }
 
+/// Two lines of one symbol, the pair a reader moving down a function asks in turn.
+fn two_lines_of(symbol: &Symbol) -> (LinePos, LinePos) {
+    let info = symbol
+        .data
+        .line_info(&symbol.object)
+        .expect("the fixture has DWARF");
+    let mut named = info.rows().iter().filter_map(|row| {
+        Some(LinePos {
+            file: info.files()[row.file?].clone(),
+            line: row.line?,
+        })
+    });
+    let first = named.next().expect("the symbol's rows name a place");
+    let next = named
+        .find(|at| *at != first)
+        .expect("the symbol covers more than one line");
+    (first, next)
+}
+
+/// **A line of the function already on screen is answered with the listing already on
+/// screen.** Every line of one function asks a question of its own, and each used to be
+/// answered by decoding that function again: the pane was handed a new `Studied`, so
+/// every row was rebuilt, the run picked out in it was dropped as a listing change, and
+/// a decode long enough to pass `SLOW_ANALYSIS` put "Analysing..." over the listing and
+/// took it away again -- a flicker for arrowing down a function. The listing travels
+/// with the question and comes back untouched where the line resolved to its symbol.
+#[test]
+fn a_line_of_the_symbol_on_screen_is_answered_with_the_listing_on_screen() {
+    let wanted = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let (first, next) = two_lines_of(&wanted);
+
+    let (mut test, (roots, asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(answer)),
+        1.,
+    );
+    let analysis = roots.analysis;
+    let (mut asking, mut objects) = (asking, roots.states.objects);
+    objects.set(vec![wanted.object.clone()]);
+    test.sync_and_update();
+
+    let source = |at: &LinePos| Ask::Source {
+        at: at.clone(),
+        chosen: None,
+    };
+    asking.set(Some(source(&first)));
+    pump(&mut test, || analysis.peek().shown.is_some());
+    let before = analysis
+        .peek()
+        .shown
+        .clone()
+        .expect("the first line was resolved")
+        .studied;
+
+    asking.set(Some(source(&next)));
+    pump(&mut test, || {
+        analysis.peek().answered == Some(source(&next))
+    });
+
+    let after = analysis
+        .peek()
+        .shown
+        .clone()
+        .expect("the second line was resolved")
+        .studied;
+    assert!(
+        after.symbol == wanted,
+        "the second line picked another symbol"
+    );
+    assert!(
+        before == after,
+        "the same symbol was decoded again, which rebuilds every row"
+    );
+    // The question is retagged all the same: the listing answers for the line the reader
+    // is on now, or the next move would ask it afresh.
+    assert!(
+        analysis
+            .peek()
+            .shown
+            .as_ref()
+            .map(|shown| shown.ask.clone())
+            == Some(source(&next))
+    );
+}
+
 /// A line no open object holds code from leaves the listing that is up — the click loses
 /// the pin's highlight and nothing else — but only while that listing is this tab's own.
 #[test]
@@ -10758,6 +10847,29 @@ fn nothing_compiled_from_a_line_says_which_line() {
     assert!(
         drawn.contains(&"No code compiled from lexer.rs:42".to_owned()),
         "{drawn:?}"
+    );
+}
+
+/// **The pane keeps its own ground while it says so.** The two panes are drawn in two
+/// colours, and a message that brings the source side's ground onto the assembly side is
+/// the pane changing colour under the reader -- once as the line resolves to nothing, and
+/// back as the next line resolves to a symbol.
+#[test]
+fn a_message_is_drawn_on_the_assembly_ground() {
+    let test = nothing_compiled(LinePos {
+        file: Arc::from("/src/parser/lexer.rs"),
+        line: 42,
+    });
+
+    assert!(
+        rects_with(&test, palette().pane_bg).is_empty(),
+        "the assembly side drew the source side's ground"
+    );
+    assert!(
+        rects_with(&test, palette().asm_pane_bg)
+            .iter()
+            .any(|area| area.height() > 200.0),
+        "nothing is drawn in the pane's own ground"
     );
 }
 

@@ -121,6 +121,22 @@ So one click on a source row can cost more than any click before it, it is not s
 started, and every symbol click behind it waits. That is what `Analysing…` past `SLOW_ANALYSIS` is
 for.
 
+**The listing travels with the question, so a line of the function on screen is answered with the
+function on screen.** Every line is a question of its own -- `Ask::Source` compares by `LinePos`, so
+line 43 is not line 42 -- and a reader arrowing down one function asks a dozen of them that all
+resolve to the one symbol. Each used to be a `Studied::new`: the same function decoded again, handed
+to the pane as a new `Arc<Assembly>`, which is what `Studied`'s `PartialEq` reads, so every row was
+rebuilt, the run picked out in the listing was dropped as a listing change, and a decode past
+`SLOW_ANALYSIS` put `Analysing…` over the listing and took it away again -- the assembly side
+flickering for a keypress that moved the reader one line. So `Question::Resolve` carries `standing`,
+the `Studied` the panes are drawing, and where `pick` lands on its symbol the worker hands it
+straight back. The listing is then the same value it was, `AsmData` compares equal, nothing
+re-renders, and what is left of the question is the two binary searches the resolve already was. It
+is `Shown::answers`'s widening on the other side of the worker: that one recognises a question the
+listing in hand already answers, this one an *answer* the listing in hand already is. Carrying the
+`Studied` and not just the `Symbol` is what makes it safe -- the answer needs no listing to still be
+up when it lands, and `Analyzed::take` judges it by the rules every other answer is judged by.
+
 **A locate is the same query kept whole, answered into a state of its own** (`ui/locations.rs`).
 "Find all locations" on a source row or an instruction row asks `Question::Locate` of the same
 worker. The answer is `compiled_from`'s `Vec<Symbol>`, every symbol the line was compiled into over
