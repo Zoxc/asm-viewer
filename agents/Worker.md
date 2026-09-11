@@ -231,7 +231,7 @@ state it is asked through, is what keeps a file already read instant; the rest i
 **`compiled::pick` ranks by where the reader has been, newest first, with the symbol on screen at
 its head.** The head is the load-bearing part: nothing is recorded between two clicks in one
 function, so without it reading down the lines of a generic function would walk across its
-instantiations. Below the tie-break the order is the crate's own, the lowest-addressed symbol of the
+instantiations. Below the tie-break the order is the crate's own, the lowest-placed symbol of the
 first object that answered. That is arbitrary and is said to be arbitrary; the instance picker above
 is where a reader says which instance they meant.
 

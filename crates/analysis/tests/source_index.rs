@@ -86,7 +86,7 @@ fn shared_line() -> Vec<u8> {
 fn one_line_compiles_into_every_symbol_that_holds_it() {
     let object = parse(&shared_line());
 
-    // In address order, which is the order the listings they name are in.
+    // In placed order, which is the order the listing draws them in.
     assert_eq!(at(&object, MAIN, 10), ["first", "second"]);
     assert_eq!(at(&object, MAIN, 11), ["first"]);
     assert_eq!(at(&object, OTHER, 42), ["second"]);
@@ -231,6 +231,81 @@ fn two_functions_at_address_zero_answer_for_their_own_lines_only() {
 
     assert_eq!(at(&object, MAIN, 10), ["first"]);
     assert_eq!(at(&object, OTHER, 42), ["second"]);
+}
+
+/// One line in two `.text.*` sections, where the order of the addresses within each section
+/// is the reverse of the order the listing draws them in: `drawn_first` is 2 bytes into the
+/// first section and `drawn_second` starts the second. The answer is in the listing's order.
+#[test]
+fn one_line_in_two_sections_answers_in_placed_order() {
+    let object = parse(&elf_x86_64_with_dwarf(DwarfFixture {
+        comp_dir: COMP_DIR,
+        files: &["main.c"],
+        sections: &[
+            DwarfSection {
+                name: Some(".text.one"),
+                symbols: &[
+                    TextSymbol {
+                        name: "before",
+                        bytes: &[0x90, 0xC3],
+                    },
+                    TextSymbol {
+                        name: "drawn_first",
+                        bytes: &[0x90, 0xC3],
+                    },
+                ],
+                rows: &[
+                    DwarfRow {
+                        address: 0,
+                        file: 0,
+                        line: 9,
+                        column: 0,
+                    },
+                    DwarfRow {
+                        address: 2,
+                        file: 0,
+                        line: 10,
+                        column: 0,
+                    },
+                ],
+                length: 4,
+                subprograms: &[],
+                base_symbol: Some(0),
+            },
+            DwarfSection {
+                name: Some(".text.two"),
+                symbols: &[TextSymbol {
+                    name: "drawn_second",
+                    bytes: &[0x90, 0xC3],
+                }],
+                rows: &[DwarfRow {
+                    address: 0,
+                    file: 0,
+                    line: 10,
+                    column: 0,
+                }],
+                length: 2,
+                subprograms: &[],
+                base_symbol: Some(0),
+            },
+        ],
+        unit_ranges: UnitRanges::Relocated,
+    }));
+
+    // The premise: by the sections' own addresses the order is the other way round.
+    let symbol = |name: &str| {
+        object
+            .symbols_sorted
+            .iter()
+            .find(|symbol| symbol.name == name)
+            .cloned()
+            .expect("the fixture names it")
+    };
+    let (first, second) = (symbol("drawn_first"), symbol("drawn_second"));
+    assert!(first.address > second.address);
+    assert!(first.placed(first.address) < second.placed(second.address));
+
+    assert_eq!(at(&object, MAIN, 10), ["drawn_first", "drawn_second"]);
 }
 
 /// The invariant everything built on this depends on: whatever the forward direction says a

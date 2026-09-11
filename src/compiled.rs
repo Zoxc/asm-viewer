@@ -19,7 +19,7 @@ use std::sync::Arc;
 use analysis::{Object, Symbol, SymbolData};
 
 /// Every symbol in `objects` holding code compiled from `file` over `lines`, object by
-/// object and, within one, in the crate's own address-then-name order. A symbol holding
+/// object and, within one, in the crate's own order: by placed address. A symbol holding
 /// code from several of the lines is one hit; one line is `line..=line`.
 ///
 /// `file` is matched exactly, on the string the debug info said: two objects whose
@@ -52,7 +52,7 @@ pub fn compiled_from(
 /// one function, so without that head the answer would fall through to the order below,
 /// which differs line by line.
 ///
-/// And that order is arbitrary: the first candidate is the lowest-addressed symbol of the
+/// And that order is arbitrary: the first candidate is the lowest-placed symbol of the
 /// first object that answered. It is a tie-break and not a judgement; the Locations panel
 /// is where a reader says which instance they meant.
 pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
@@ -79,8 +79,10 @@ pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
 /// the listing of a whole object's code draws in and the space `symbol_at` answers in, so a
 /// place worked out here names the row a reader would land on.
 ///
-/// The **lowest** and not the first: the crate answers in raw address order, so with two
-/// code sections its first entry need not be the one the listing draws first.
+/// For an answer of [`Object::symbols_from_lines`] this is its first symbol's place, since
+/// the crate answers in placed order and every symbol it names is in a section. It is still
+/// the lowest and not the first because it takes any slice, and one built some other way
+/// carries neither guarantee.
 pub fn lowest_placed(symbols: &[Arc<SymbolData>]) -> Option<u64> {
     symbols
         .iter()

@@ -142,8 +142,8 @@ fn placed(name: &str, address: u64, bias: u64) -> Arc<SymbolData> {
 }
 
 /// The place a listing opens at is the lowest **placed** address, which is not the lowest
-/// raw one: the crate answers in raw address order, so with two code sections the first
-/// symbol it names need not be the one the listing draws first.
+/// raw one: with two code sections, the symbol at the lower raw address can be drawn later.
+/// Nor is it the first of a slice that is not in placed order.
 #[test]
 fn the_lowest_placed_address_is_not_the_first() {
     // Raw order: `early` at 0x10 comes first, but its section sits above the other's.

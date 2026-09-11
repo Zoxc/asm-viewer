@@ -221,9 +221,8 @@ having no bar. There is no `SymbolBar` over it, whose section and toggle are bot
 `DocId` the pad has not got.
 
 **It opens on the pad's own code**, the lowest *placed* address the pad's `src/main.rs` produced
-(`compiled::lowest_placed`) -- lowest and not first, since the crate answers in raw address order
-and two code sections would put the wrong one first. Without it the pane would open at the top of a
-linked Rust program, which is the runtime's code and not the reader's, and the pair the cursor
+(`compiled::lowest_placed`): the first symbol's, since the crate answers in placed order. Without
+it the pane would open at the top of a linked Rust program, which is the runtime's code and not the reader's, and the pair the cursor
 lights only reaches stretches that have decoded. It is written as a `Planting` and not as a place
 in `Places::code_at`: the listing keeps no place of its own, and an entry there would hold that program's
 bytes with nothing that would ever forget them, where a planting is taken once by the pane and put

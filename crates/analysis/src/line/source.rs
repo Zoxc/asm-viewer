@@ -237,9 +237,11 @@ impl Object {
     /// no debug info, debug info in a format this does not read, a range running backwards, a
     /// file this object does not name, or a line no code came from.
     ///
-    /// The answer is deduplicated and in address order; **which of several is wanted is the
-    /// caller's** — one line compiles into as many symbols as there are instantiations of it,
-    /// times as many objects as hold one.
+    /// The answer is deduplicated and in [`Object::placed`]'s order: by placed address
+    /// ([`SymbolData::placed`]), then by symbol index. That is the order the listing of the
+    /// object's code draws them in, so the first is the one it draws first. **Which of several
+    /// is wanted is the caller's** — one line compiles into as many symbols as there are
+    /// instantiations of it, times as many objects as hold one.
     ///
     /// Inclusive because that is the shape the index answers in ([`SourceIndex::lookup`]) and
     /// the one a caller holding a function's first and last line has, `u32::MAX` included.
@@ -270,14 +272,19 @@ impl Object {
         found.sort_unstable_by_key(|symbol| symbol.0);
         found.dedup();
 
-        let mut symbols: Vec<Arc<SymbolData>> = found
+        // In the order of `Object::placed`, which is the order the listing draws them in.
+        // Not by `address`: that is the section's own, and in a relocatable object every
+        // `.text.<name>` starts at 0. Every symbol here came out of that index, so each has a
+        // code place.
+        let mut symbols: Vec<(u64, SymbolIndex, Arc<SymbolData>)> = found
             .into_iter()
-            .filter_map(|symbol| self.symbols.get(&symbol).cloned())
+            .filter_map(|symbol| {
+                let data = self.symbols.get(&symbol)?;
+                Some((data.code_place()?, symbol, data.clone()))
+            })
             .collect();
-        // Address order, since that is the order the listing they name is in. The sort is
-        // stable and the input was in index order, so a tie is broken by the file's own.
-        symbols.sort_by(|a, b| a.address.cmp(&b.address).then_with(|| a.name.cmp(&b.name)));
-        symbols
+        symbols.sort_unstable_by_key(|&(placed, symbol, _)| (placed, symbol.0));
+        symbols.into_iter().map(|(_, _, data)| data).collect()
     }
 
     /// [`symbols_from_lines`](Self::symbols_from_lines) for one line.
