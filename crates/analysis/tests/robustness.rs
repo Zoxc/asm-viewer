@@ -3,7 +3,7 @@
 
 mod common;
 
-use analysis::{parse_object, Listing, Object};
+use analysis::{parse_object, CodeListing, Listing, Object};
 use common::{
     caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, elf_shared_object,
     elf_with_unreadable_name, elf_x86_64, elf_x86_64_with_dwarf, garbage, named, names, parse,
@@ -226,6 +226,28 @@ fn a_zstd_frame_producing_more_than_its_header_declares_is_dropped() {
     assert_eq!(section.data, Some(vec![b'A'; size]));
 }
 
+/// Defect: a relocatable object's code sections were laid end to end by the size each takes
+/// in the file, which for a compressed one can be fewer than the bytes the parse keeps. The
+/// next section was placed over its tail, and the code listing dropped it for overlapping. ELF
+/// forbids compressing a loadable section, so only a malformed file does this.
+#[test]
+fn a_compressed_code_section_is_placed_by_the_size_it_decompresses_to() {
+    let size = 200;
+    let frame = zstd_rle(0x90, size);
+    let mut obj = object_with_compression(CODE, object::elf::ELFCOMPRESS_ZSTD, &frame, size as u64);
+    let second = obj.add_section(Vec::new(), b".text.second".to_vec(), SectionKind::Text);
+    obj.append_section_data(second, &[0x90, 0xC3], 1);
+    let object = parse(&obj.write().expect("writing the fixture object"));
+
+    let code = CodeListing::new(&object);
+    let ranges: Vec<_> = code
+        .sections()
+        .iter()
+        .map(|placed| placed.range())
+        .collect();
+    assert_eq!(ranges, [0..200, 208..210]);
+}
+
 /// `byte` repeated `len` times as a valid zstd frame: RLE blocks, so no compressor is needed
 /// to build the fixture. The frame declares no content size and asks for the smallest window
 /// there is, so nothing in it says how much it will produce.
@@ -273,11 +295,23 @@ fn elf_with_compressed_section(
 /// The same, over any compression format: `stream` as it sits in the section, under a header
 /// naming `ch_type` and declaring `declared_size` bytes of output.
 fn elf_with_compression(
-    (name, kind): (&str, SectionKind),
+    section: (&str, SectionKind),
     ch_type: object::elf::CompressionType,
     stream: &[u8],
     declared_size: u64,
 ) -> Vec<u8> {
+    object_with_compression(section, ch_type, stream, declared_size)
+        .write()
+        .expect("writing the fixture object")
+}
+
+/// [`elf_with_compression`] before it is written, for a test to add sections to.
+fn object_with_compression(
+    (name, kind): (&str, SectionKind),
+    ch_type: object::elf::CompressionType,
+    stream: &[u8],
+    declared_size: u64,
+) -> object::write::Object<'static> {
     use object::{elf, write, Architecture, BinaryFormat, Endianness, SectionFlags};
 
     let mut contents = Vec::new();
@@ -302,7 +336,7 @@ fn elf_with_compression(
         sh_type: elf::SHT_PROGBITS,
         sh_flags: sh_flags.into(),
     };
-    obj.write().expect("writing the fixture object")
+    obj
 }
 
 /// `payload` as a valid zlib stream: one final DEFLATE block, stored rather than

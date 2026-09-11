@@ -22,8 +22,9 @@ use std::{
 /// **An address alone is not a key in a relocatable object.** Sections there have no address
 /// until linked and rustc emits one `.text.<name>` per function, so every function lands on 0
 /// and the line programs pile up. This does what a linker does and gives each code section a
-/// place of its own: a bias, added to every address relocated against that section
-/// (`line::relocate`) and subtracted again from every row a query returns.
+/// place of its own, as long as the bytes it decompresses to: a bias, added to every address
+/// relocated against that section (`line::relocate`) and subtracted again from every row a
+/// query returns.
 ///
 /// **A bias is never a wrapped value.** The layout starts above the highest address the file
 /// states, so a section is placed at or above where the file put it: a query can add a bias
@@ -59,10 +60,18 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u
         // difference. `wrapping_sub` and not `-` so that a proof going wrong is not a panic.
         biases.insert(section.index(), next.wrapping_sub(section.address()));
 
-        // Somewhere for the next section to go. A zero-length section still takes an address
-        // of its own, so that two of them are two places. An object whose sections do not fit
-        // in the address space simply stops being biased past that point.
-        let Some(end) = next.checked_add(section.size().max(1)) else {
+        // Somewhere for the next section to go, past the bytes `section_data` keeps: for a
+        // compressed section the size its header says it decompresses to, not the `size()` it
+        // takes in the file. A zero-length section still takes an address of its own, so that
+        // two of them are two places. An object whose sections do not fit in the address space
+        // simply stops being biased past that point.
+        // FIXME: warn the reader where the two sizes disagree -- a compressed loadable section,
+        // which the ELF spec forbids.
+        let length = match section.compressed_file_range() {
+            Ok(range) if range.format != CompressionFormat::None => range.uncompressed_size,
+            _ => section.size(),
+        };
+        let Some(end) = next.checked_add(length.max(1)) else {
             break;
         };
         let Some(aligned) = end.checked_next_multiple_of(SECTION_ALIGNMENT) else {
