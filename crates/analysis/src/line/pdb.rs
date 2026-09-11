@@ -32,7 +32,8 @@
 //! again — the simpler of the two shapes, and the re-read is exactly the first-question cost
 //! the lazy path had before: holding every module's procedure table from the walk would
 //! duplicate what the symbols now carry as their declared size, and the stream would still
-//! have to be read again for its lines.
+//! have to be read again for its lines. Both reads take a module's procedures from the one
+//! walk, [`Pdb::procedures_in`].
 //!
 //! Behind the procedures come the **publics** ([`Pdb::publics`]): the linker's own table of
 //! every externally visible symbol, `S_PUB32` records in the symbol records stream, each a
@@ -162,22 +163,13 @@ impl Pdb {
             let Some(end) = start.0.checked_add(contribution.size) else {
                 continue;
             };
-            for range in address_map.rva_ranges(start..PdbInternalRva(end)) {
-                let (Some(start), Some(end)) = (
-                    image_base.checked_add(u64::from(range.start.0)),
-                    image_base.checked_add(u64::from(range.end.0)),
-                ) else {
-                    continue;
-                };
-                if start < end {
-                    contributions.push(Contribution {
-                        start,
-                        end,
-                        max_end: end,
-                        module: contribution.module,
-                    });
-                }
-            }
+            let ranges = placed(&address_map, image_base, start..PdbInternalRva(end));
+            contributions.extend(ranges.map(|range| Contribution {
+                start: range.start,
+                end: range.end,
+                max_end: range.end,
+                module: contribution.module,
+            }));
         }
         contributions.sort_unstable_by_key(|c| (c.start, c.end, c.module));
         let mut max_end = 0;
@@ -213,9 +205,29 @@ impl Pdb {
             let Ok(Some(info)) = pdb.module_info(&module) else {
                 continue;
             };
-            let Ok(mut symbols) = info.symbols() else {
-                continue;
-            };
+            procedures.extend(
+                self.procedures_in(&info)
+                    .map(|(address, procedure)| Procedure {
+                        name: procedure.name.to_string().into_owned(),
+                        address,
+                        len: u64::from(procedure.len),
+                    }),
+            );
+        }
+        procedures
+    }
+
+    /// Every procedure with a length in one module, with its address, in the order the
+    /// module's symbols are in: what both reads of a module stream take of its symbols. A
+    /// stream that will not read has none, a record that will not parse or whose address
+    /// will not map is skipped, and a malformed tail stops the walk where it goes wrong.
+    fn procedures_in<'a>(
+        &'a self,
+        info: &'a pdb2::ModuleInfo<'_>,
+    ) -> impl Iterator<Item = (u64, pdb2::ProcedureSymbol<'a>)> + 'a {
+        let mut symbols = info.symbols().ok();
+        std::iter::from_fn(move || {
+            let symbols = symbols.as_mut()?;
             while let Ok(Some(symbol)) = symbols.next() {
                 let Ok(pdb2::SymbolData::Procedure(procedure)) = symbol.parse() else {
                     continue;
@@ -226,14 +238,11 @@ impl Pdb {
                 let Some(address) = self.address(procedure.offset) else {
                     continue;
                 };
-                procedures.push(Procedure {
-                    name: procedure.name.to_string().into_owned(),
-                    address,
-                    len: u64::from(procedure.len),
-                });
+                return Some((address, procedure));
             }
-        }
-        procedures
+            None
+        })
+        .fuse()
     }
 
     /// Every public flagged as code or a function, in the order the symbol records stream
@@ -471,34 +480,20 @@ impl Pdb {
                 // takes as none.
                 let line_number = (line.line_start != 0).then_some(line.line_start);
                 let column = line.column_start;
-                for range in self.address_map.rva_ranges(start..PdbInternalRva(end)) {
-                    let (Some(start), Some(end)) = (
-                        self.image_base.checked_add(u64::from(range.start.0)),
-                        self.image_base.checked_add(u64::from(range.end.0)),
-                    ) else {
-                        continue;
-                    };
-                    rows.push(start..end, file, line_number, column);
+                let range = start..PdbInternalRva(end);
+                for range in placed(&self.address_map, self.image_base, range) {
+                    rows.push(range, file, line_number, column);
                 }
             }
         }
 
         let mut procedures = HashMap::new();
-        if let Ok(mut symbols) = info.symbols() {
-            while let Ok(Some(symbol)) = symbols.next() {
-                let Ok(pdb2::SymbolData::Procedure(procedure)) = symbol.parse() else {
-                    continue;
-                };
-                if procedure.len == 0 {
-                    continue;
-                }
-                let Some(start) = self.address(procedure.offset) else {
-                    continue;
-                };
-                // Two procedures at one address is a function and its alias; the first one
-                // read keeps the address.
-                procedures.entry(start).or_insert(u64::from(procedure.len));
-            }
+        for (address, procedure) in self.procedures_in(&info) {
+            // Two procedures at one address is a function and its alias; the first one read
+            // keeps the address.
+            procedures
+                .entry(address)
+                .or_insert(u64::from(procedure.len));
         }
 
         let lines = rows.finish();
@@ -539,6 +534,21 @@ fn find(
             return None;
         }
         Some((pdb, dbi))
+    })
+}
+
+/// An internal RVA range the PDB states, as the ranges of the image's own address space it
+/// lies over: through the address map, which can split it, and onto the image base. A piece
+/// that would overflow the address space, or that is empty, is dropped.
+fn placed<'a>(
+    address_map: &'a AddressMap<'_>,
+    image_base: u64,
+    range: Range<PdbInternalRva>,
+) -> impl Iterator<Item = Range<u64>> + 'a {
+    address_map.rva_ranges(range).filter_map(move |range| {
+        let start = image_base.checked_add(u64::from(range.start.0))?;
+        let end = image_base.checked_add(u64::from(range.end.0))?;
+        (start < end).then_some(start..end)
     })
 }
 
