@@ -204,8 +204,8 @@ every re-decode used to walk the debug info again for a symbol no unwind entry c
 *absence* is kept too, that symbol being exactly the one whose answer cost the walk. `extent` takes
 the object as an argument while the memo sits on the symbol, so a `debug_assert!` holds the pair
 together: the object asked must own the symbol's section, by pointer. Nothing else is kept —
-`estimate_size` is a binary search sitting on `extent`'s own path, and `data`/`data_in` are slices
-of a section rather than answers.
+`estimate_size` is a binary search sitting on `extent`'s own path, and `data_in` is a slice of a
+section rather than an answer.
 
 **Names are demangled in one batch per object, on stacks sized for them** (`demangle.rs`). A mangled
 name is bytes out of a string table, and it is the *file* that chooses how deep the demangler

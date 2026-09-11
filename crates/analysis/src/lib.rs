@@ -1,5 +1,5 @@
 mod demangle;
-pub mod disasm;
+mod disasm;
 mod extent;
 pub mod guard;
 mod line;

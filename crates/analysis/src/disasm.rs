@@ -44,7 +44,7 @@ fn architecture_name(architecture: Architecture) -> &'static str {
 /// placeholder a linker will overwrite. Asking is a method rather than a field so a backend
 /// gets the answer *per instruction*, which is the only granularity a relocation has — it
 /// records a byte range, never an operand number.
-pub struct Code<'a> {
+pub(crate) struct Code<'a> {
     /// The symbol's own bytes, from its first to its last.
     pub bytes: &'a [u8],
 
@@ -123,7 +123,7 @@ impl<'a> Code<'a> {
 }
 
 /// A relocation covering an instruction's bytes. See [`Code::relocation`].
-pub struct Relocated {
+pub(crate) struct Relocated {
     /// The text symbol the relocation names, where it names one this object kept.
     pub target: Option<Arc<SymbolData>>,
 }
@@ -138,7 +138,7 @@ pub struct Relocated {
 ///
 /// Implementors are named concretely by `Assembly::decode` and never made into an object, so
 /// the trait is the shape a backend is written to and not a way to hold one.
-pub trait Disassembler {
+pub(crate) trait Disassembler {
     fn disassemble(&self, code: &Code<'_>) -> Vec<Instruction>;
 }
 
@@ -177,7 +177,7 @@ pub enum SpanKind {
 pub enum Operand {
     /// A text symbol the operand names, whatever kind of operand it is: the target of a
     /// relocation covering the instruction's bytes, or, with no relocation, the function a
-    /// direct `call` reaches ([`Code::symbol_at`]) — which is what a linked image's calls
+    /// direct `call` reaches, by the address it names — which is what a linked image's calls
     /// are, the linker having applied theirs.
     ///
     /// Spelt out rather than called `Symbol`, which the crate already exports for the

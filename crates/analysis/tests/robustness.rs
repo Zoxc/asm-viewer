@@ -143,7 +143,7 @@ fn a_lying_compressed_size_in_a_section_header_costs_nothing() {
     assert_eq!(section_names(&object).len(), section_names(&baseline).len());
     for symbol in &object.symbols_sorted {
         assert!(
-            symbol.data(&object).is_some(),
+            symbol.data_in(&object).is_some(),
             "{} lost its data",
             symbol.name
         );
@@ -360,7 +360,7 @@ fn assembly_of_data_ending_mid_instruction_is_partial_not_a_panic() {
         caller.estimate_size(&object).map(|extent| extent.bytes),
         Some(3)
     );
-    assert_eq!(caller.data(&object), Some(&[0xE8, 0x00, 0x00][..]));
+    assert_eq!(caller.data_in(&object), Some(&[0xE8, 0x00, 0x00][..]));
 
     let assembly = caller
         .assembly(&object)
@@ -439,7 +439,7 @@ fn a_symbol_outside_any_section_yields_no_data() {
         symbol.estimate_size(&object).map(|extent| extent.bytes),
         None
     );
-    assert_eq!(symbol.data(&object), None);
+    assert_eq!(symbol.data_in(&object), None);
     assert!(symbol.assembly(&object).is_none());
 }
 

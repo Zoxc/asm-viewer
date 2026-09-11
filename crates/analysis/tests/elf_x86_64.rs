@@ -45,7 +45,7 @@ fn estimate_size_is_derived_from_the_next_symbol() {
         Some(6)
     );
     assert_eq!(
-        caller.data(&object),
+        caller.data_in(&object),
         Some(&[0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3][..])
     );
 
@@ -54,7 +54,7 @@ fn estimate_size_is_derived_from_the_next_symbol() {
         target.estimate_size(&object).map(|extent| extent.bytes),
         Some(1)
     );
-    assert_eq!(target.data(&object), Some(&[0xC3][..]));
+    assert_eq!(target.data_in(&object), Some(&[0xC3][..]));
 }
 
 #[test]

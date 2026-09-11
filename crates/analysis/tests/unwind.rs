@@ -204,11 +204,6 @@ fn a_stated_end_beats_the_next_symbols_address() {
     );
     assert_eq!(first.debug_extent(&object), None, "no debug info at all");
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
-    assert_eq!(
-        first.data(&object),
-        Some(&TEXT[..10]),
-        "the derivation, by name"
-    );
     assert_eq!(first.data_in(&object), Some(&TEXT[..6]));
     let assembly = first.assembly(&object).expect("first decodes");
     assert_eq!(assembly.instructions.len(), 6);

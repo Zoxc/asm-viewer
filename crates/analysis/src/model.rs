@@ -425,13 +425,6 @@ impl SymbolData {
         range.contains(&placed).then_some(placed)
     }
 
-    /// This symbol's bytes, as far as [`estimate_size`](Self::estimate_size) reaches.
-    /// Deliberately *not* the debug-info extent: a symbol does not own the file it came from.
-    /// Anything wanting the bytes a listing decodes wants [`data_in`](Self::data_in).
-    pub fn data<'a>(&'a self, object: &Object) -> Option<&'a [u8]> {
-        self.bytes(self.estimate_size(object)?.bytes)
-    }
-
     /// This symbol's bytes over [`extent`](Self::extent) — the same range
     /// [`assembly`](Self::assembly) decodes and [`line_info`](Self::line_info) asks about.
     pub fn data_in(&self, object: &Object) -> Option<&[u8]> {

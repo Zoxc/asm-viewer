@@ -79,8 +79,6 @@ fn a_subprogram_extent_is_preferred_to_the_next_symbols_address() {
     let assembly = first.assembly(&object).expect("a listing");
     assert_eq!(assembly.instructions.len(), 6);
     assert_eq!(first.data_in(&object), Some(&FIRST[..6]));
-    // `data()` is the answer without an object in hand, and is unchanged.
-    assert_eq!(first.data(&object), Some(FIRST));
 }
 
 #[test]
@@ -257,7 +255,7 @@ fn a_derivation_reaching_a_megabyte_is_cut_off() {
         huge.extent(&object).map(|extent| extent.bytes),
         Some(1 << 20)
     );
-    assert_eq!(huge.data(&object).map(<[u8]>::len), Some(1 << 20));
+    assert_eq!(huge.data_in(&object).map(<[u8]>::len), Some(1 << 20));
 }
 
 /// The symbol table's own answer, taken before the debug info is opened. `first` declares
