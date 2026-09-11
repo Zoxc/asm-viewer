@@ -17,8 +17,8 @@ fn a_thread_is_guarded_only_inside_a_guarded_call() {
     assert!(!guarded());
 }
 
-/// Nested, as the demangle pool's per-job guard holds the per-name one: the inner call
-/// leaving does not say the thread is unguarded while the outer one is still running.
+/// Nested: the inner call leaving does not say the thread is unguarded while the outer one is
+/// still running.
 #[test]
 fn a_guard_inside_a_guard_stays_guarded_until_the_outer_one_leaves() {
     let inside = guard(|| {

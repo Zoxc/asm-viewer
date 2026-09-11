@@ -17,8 +17,8 @@ use std::{
 };
 
 thread_local! {
-    /// How many guarded calls this thread is inside. A count and not a flag: the demangle
-    /// pool's per-job guard has the per-name one inside it.
+    /// How many guarded calls this thread is inside. A count and not a flag, so a guarded call
+    /// made inside another does not leave the thread unguarded when it returns.
     static GUARDS: Cell<usize> = const { Cell::new(0) };
 }
 

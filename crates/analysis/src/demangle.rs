@@ -150,21 +150,15 @@ fn parallel(pool: &Pool, names: &Names) -> Vec<Option<String>> {
         let names = names.clone();
         let cursor = cursor.clone();
         let done = done.clone();
-        let job: Job = Box::new(move || {
-            loop {
-                let start = cursor.fetch_add(GRAIN, Ordering::Relaxed);
-                if start >= len {
-                    break;
-                }
-                let end = start.saturating_add(GRAIN).min(len);
-                // A panic here is a job that hands back nothing rather than a pool thread
-                // that dies; `demangle_one` already guards each name, so this is for the
-                // allocation around them.
-                let values = crate::guard::guard(|| demangle_range(&names, start..end))
-                    .unwrap_or_else(|| vec![None; end - start]);
-                if done.send((start, values)).is_err() {
-                    break;
-                }
+        let job: Job = Box::new(move || loop {
+            let start = cursor.fetch_add(GRAIN, Ordering::Relaxed);
+            if start >= len {
+                break;
+            }
+            let end = start.saturating_add(GRAIN).min(len);
+            let values = demangle_range(&names, start..end);
+            if done.send((start, values)).is_err() {
+                break;
             }
         });
         if pool.jobs.send(job).is_err() {
@@ -187,8 +181,10 @@ fn parallel(pool: &Pool, names: &Names) -> Vec<Option<String>> {
         }
     }
     // The outer `Option` is "a job answered for this name". A grain that never came back —
-    // only possible if a pool thread died under it — leaves its names as the file wrote
-    // them, which is the same answer an unrecognised name gets.
+    // only possible if a pool thread died under it, which only a bug in this crate's own code
+    // can do — leaves its names as the file wrote them, which is the same answer an
+    // unrecognised name gets. The loop above still ends: the dead job's sender is dropped as
+    // it unwinds.
     demangled.into_iter().map(Option::flatten).collect()
 }
 
