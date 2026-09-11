@@ -106,7 +106,21 @@ command.
 
 ## Layout
 
-- `crates/analysis/src/lib.rs` — object parsing, disassembly, relocation resolution.
+- `crates/analysis/src/lib.rs` — the crate's root: its modules, what it exports, and the
+  assertion that what crosses threads is `Send + Sync`.
+- `crates/analysis/src/model.rs` — the data model: `Object`, `Section`, `SymbolData`, `Symbol`,
+  and `ObjectData`, the bytes an object was parsed from.
+- `crates/analysis/src/extent.rs` — how many bytes of code a symbol is: the end its unwind
+  entry states, an ELF's declared size, or the smaller of the debug info's and the estimate.
+- `crates/analysis/src/parse.rs` — one object file read into an `Object`: its sections and
+  where each is placed, its symbols, and the code it declares outside its symbol table.
+- `crates/analysis/src/open.rs` — the entry point: each file tried as an archive and as an
+  object, and every object handed over as it is parsed.
+- `crates/analysis/src/demangle.rs` — an object's symbol names demangled in one batch, on a
+  pool of threads with stacks big enough for the deepest name a file can ask for.
+- `crates/analysis/src/made_up.rs` — the names given to code the file names nothing (an entry
+  point, a function only an unwind entry declares, a fragment of one), and the one place each
+  is spelled.
 - `crates/analysis/src/line.rs` — line info, lazy: an address range in, source rows out. The
   seam: the two questions every backend answers, dispatched by `match`, and the one collector
   that makes every answer's rows hold `LineInfo`'s invariants. Names no debug format.
@@ -122,6 +136,8 @@ command.
   bounds in (an x86-64 PE's `.pdata`, an ELF's `.eh_frame`), read for the ranges they declare;
   the only part that reads call-frame information.
 - `crates/analysis/src/disasm.rs` — the disassembler seam; `disasm/x86.rs` is the only `iced-x86`.
+- `crates/analysis/src/listing.rs` — an object's code as one listing keyed by address: a
+  stretch per symbol, decoded on demand, and the bytes between them shown but never decoded.
 - `crates/analysis/src/guard.rs` — the calls whose panics are caught on purpose, and the flag
   that lets a panic hook tell one of those from a panic that has broken the app.
 - `src/cargo.rs` — running cargo and reading what it said: the artifacts it names, the

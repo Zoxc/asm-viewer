@@ -28,7 +28,7 @@ returns nothing for `u64::MAX` outright.
 comes out below the start, so nothing panics; but a subprogram's own `DW_AT_high_pc` is handed
 back as it was written. A function at the top of the address space claiming a length that runs
 off the end is therefore a range that does not exist, which `Symbol::extent`
-(`crates/analysis/src/lib.rs`) declines. Pinned by `robustness.rs`'
+(`crates/analysis/src/extent.rs`) declines. Pinned by `robustness.rs`'
 `a_function_at_the_end_of_the_address_space_does_not_panic`.
 
 Nothing here is reported: the two unchecked sums are in the class the crate has been fixing

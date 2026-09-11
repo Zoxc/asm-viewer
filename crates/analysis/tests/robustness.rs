@@ -736,7 +736,7 @@ fn corrupted_images_do_not_panic() {
 /// reading it recurses — one level per byte for `msvc-demangler` 0.11, which has no limit
 /// at all — so a long name was a **stack overflow**, an abort no `catch_unwind` catches.
 /// Before the fix this did not fail, it killed the test binary. Headed off before the call
-/// by `MAX_MANGLED_NAME` and a stack sized for the rest (`demangled` in `src/lib.rs`).
+/// by `MAX_MANGLED_NAME` and a stack sized for the rest (`demangle::batch` in `src/demangle.rs`).
 #[test]
 fn a_deeply_nested_name_does_not_overflow_the_stack() {
     // 1000 levels overflows the 8 MiB this test's own thread has, let alone the 2 MiB the

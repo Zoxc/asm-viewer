@@ -5,9 +5,9 @@
 //! a debugger's — which is what makes it worth reading past the export table, and why
 //! reading it keeps the "nothing is scanned for" rule. What the entries become — a symbol
 //! where nothing else names the address, and the stated end as the extent — is
-//! `declared_code`'s and `SymbolData::extent`'s business in `lib.rs`; this module only
-//! reads. It is the one part of the crate that reads call-frame information; `line/dwarf.rs`
-//! is still the only one that knows DWARF's debug sections and `addr2line`.
+//! `declared_code`'s business in `parse.rs` and `SymbolData::extent`'s in `extent.rs`; this
+//! module only reads. It is the one part of the crate that reads call-frame information;
+//! `line/dwarf.rs` is still the only one that knows DWARF's debug sections and `addr2line`.
 
 use gimli::{BaseAddresses, CieOrFde, EhFrame, EhFrameOffset, RunTimeEndian, UnwindSection as _};
 use object::{read::pe::PeFile64, Architecture, Object as _, ObjectKind, ObjectSection as _};

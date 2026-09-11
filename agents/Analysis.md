@@ -167,7 +167,7 @@ cap rather than an end. Whoever wants the second question — `Listing::decode`,
 of a capped stretch differently — reads it rather than comparing the number to the constant, since a
 file is free to state exactly a megabyte and used to be told it had been cut off there. The
 derivation is capped at `MAX_DERIVED_SIZE` (1 MiB) in `estimate_size` and nowhere else, so the
-constant is private to `lib.rs`. That is not a claim about how long a function can be, but the point
+constant is private to `extent.rs`. That is not a claim about how long a function can be, but the point
 past which it is certainly describing something else: a stripped PE's export table is sparse, so
 nine of the LLVM DLL's exports derived megabytes and one derived 3.7 MB, which was 772 302 instructions
 decoded *per render*. The unwind table is the fix for that. Where there is one (an x86-64 PE, an ELF
@@ -291,7 +291,7 @@ or debug info that says nothing about the range asked about. Four design points 
 - **An address alone is not a key in a relocatable object.** Sections there have no address until
   linked and rustc emits one `.text.<name>` per function, so every function lands on 0 and the line
   programs pile up (52 229 of 54 109 rows overlapped, measured on the 196-member rlib). The parse
-  does what a linker does: `section_biases` (`lib.rs`) gives each **text** section of a
+  does what a linker does: `section_biases` (`parse.rs`) gives each **text** section of a
   **relocatable** object a place of its own, recorded on the section as `Section::bias` beside
   `Section::code`; `relocate` adds the bias, and the query adds it and subtracts it from every row
   returned. `line/dwarf.rs` asks `section_biases` again rather than reading the biases back off

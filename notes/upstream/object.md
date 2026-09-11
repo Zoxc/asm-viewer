@@ -11,7 +11,7 @@ still allocates about 2 GiB before being turned down. The zlib path of the same 
 bound it: `flate2`'s `decompress_vec` never grows the vector it is given. Never a panic, so no
 guard catches it; an allocation failure is an abort.
 
-**What it cost**: `zstd_data` in `crates/analysis/src/lib.rs`, ten lines that inflate the
+**What it cost**: `zstd_data` in `crates/analysis/src/parse.rs`, ten lines that inflate the
 frame with `ruzstd` directly and read it through a `take` one byte past the declared size, so
 a frame producing any other number of bytes is dropped like a declared size the ratio bound
 rejects. `ruzstd` is named in `Cargo.toml` for it and compiles nothing new, `object` already
