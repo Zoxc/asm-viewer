@@ -50,7 +50,7 @@ use super::DebugInfo;
 use crate::{Object, SymbolData};
 use object::SymbolIndex;
 use std::collections::HashMap;
-use std::ops::{Range, RangeInclusive};
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 /// Every source file one object's debug info names, and per file the `(line, symbol)` pairs
@@ -230,38 +230,24 @@ fn intersecting(
 }
 
 impl Object {
-    /// The symbols holding code compiled from `file`, over `lines`.
+    /// The symbols holding code compiled from `file`, over the **inclusive** range `lines`.
     ///
     /// `file` is matched exactly against the string the debug info renders, which is what
     /// [`LineInfo::files`](super::LineInfo::files) hands out. Empty for every reason at once:
-    /// no debug info, debug info in a format this does not read, an empty range, a file this
-    /// object does not name, or a line no code came from.
+    /// no debug info, debug info in a format this does not read, a range running backwards, a
+    /// file this object does not name, or a line no code came from.
     ///
     /// The answer is deduplicated and in address order; **which of several is wanted is the
     /// caller's** — one line compiles into as many symbols as there are instantiations of it,
     /// times as many objects as hold one.
     ///
+    /// Inclusive because that is the shape the index answers in ([`SourceIndex::lookup`]) and
+    /// the one a caller holding a function's first and last line has, `u32::MAX` included.
+    /// [`symbols_at_line`](Self::symbols_at_line) asks about one line.
+    ///
     /// Worker-thread work by construction: the first call against an object walks every unit's
     /// line program and takes every symbol's extent, and every call afterwards is two binary
     /// searches.
-    pub fn symbols_from_source(&self, file: &str, lines: Range<u32>) -> Vec<Arc<SymbolData>> {
-        let Some(last) = lines.end.checked_sub(1) else {
-            return Vec::new();
-        };
-        self.symbols_from_lines(file, lines.start..=last)
-    }
-
-    /// [`symbols_from_source`](Self::symbols_from_source) for one line, which is the common
-    /// question and the one spelling of it that stays right at `u32::MAX`.
-    pub fn symbols_at_line(&self, file: &str, line: u32) -> Vec<Arc<SymbolData>> {
-        self.symbols_from_lines(file, line..=line)
-    }
-
-    /// [`symbols_from_source`](Self::symbols_from_source) over an **inclusive** range, which
-    /// is the shape the index answers in ([`SourceIndex::lookup`]) and the one a caller
-    /// holding a function's first and last line has: a function ending on `u32::MAX` is a
-    /// range the half-open form cannot spell, and one line is `line..=line` without the
-    /// arithmetic. The other two are thin forms of this.
     pub fn symbols_from_lines(
         &self,
         file: &str,
@@ -292,6 +278,11 @@ impl Object {
         // stable and the input was in index order, so a tie is broken by the file's own.
         symbols.sort_by(|a, b| a.address.cmp(&b.address).then_with(|| a.name.cmp(&b.name)));
         symbols
+    }
+
+    /// [`symbols_from_lines`](Self::symbols_from_lines) for one line.
+    pub fn symbols_at_line(&self, file: &str, line: u32) -> Vec<Arc<SymbolData>> {
+        self.symbols_from_lines(file, line..=line)
     }
 
     /// Every line of `file` this object has code compiled from, ascending and without

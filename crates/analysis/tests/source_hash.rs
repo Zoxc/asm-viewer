@@ -71,7 +71,7 @@ fn line_info_built_by_hand_holds_the_invariants() {
     assert_eq!(info.hash_for("a.c"), Some(md5));
     assert_eq!(info.hash_for("b.c"), None);
     assert_eq!(info.hash_for("c.c"), None);
-    assert_eq!(info.file_of(&info.rows()[1]), Some("b.c"));
+    assert_eq!(common::file_of(&info, &info.rows()[1]), Some("b.c"));
 
     assert!(LineInfo::new(vec![row(5, 5, 0, 1)], Vec::new()).is_none());
 }

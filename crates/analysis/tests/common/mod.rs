@@ -3,7 +3,9 @@
 
 #![allow(dead_code)]
 
-use analysis::{parse_object, CodeListing, Instruction, Listing, Object, Place, SymbolData};
+use analysis::{
+    parse_object, CodeListing, Instruction, LineInfo, LineRow, Listing, Object, Place, SymbolData,
+};
 use object::write;
 use object::{
     Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags, RelocationKind,
@@ -19,6 +21,11 @@ use std::sync::Arc;
 pub fn parse(data: &[u8]) -> Arc<Object> {
     parse_object(data.into(), "fixture.o".into(), PathBuf::from("/fixture.o"))
         .expect("the fixture parses")
+}
+
+/// The file a row of `info` names, as a string to compare against.
+pub fn file_of<'a>(info: &'a LineInfo, row: &LineRow) -> Option<&'a str> {
+    info.file(row.file?).map(|name| &**name)
 }
 
 /// Every text symbol's name, in the sorted order the object lists them.
@@ -136,10 +143,9 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
                         .map(|found| found.range.clone()),
                     Some(row.range.clone())
                 );
-                let _ = info.file_of(row);
-                let _ = info.location(row.range.start);
+                let _ = row.file.and_then(|file| info.file(file));
             }
-            let _ = info.location(u64::MAX);
+            let _ = info.row_at(u64::MAX).and_then(|row| info.file(row.file?));
         }
     }
     // Build the DWARF context even for an object whose symbols were all dropped.
@@ -228,8 +234,8 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
             continue;
         };
         let Some((file, line)) = info.rows().iter().find_map(|row| {
-            let file = info.file_of(row)?;
-            Some((file.to_owned(), row.line?))
+            let file = info.file(row.file?)?;
+            Some((file.clone(), row.line?))
         }) else {
             continue;
         };
@@ -243,13 +249,11 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
                 "{file}:{line} answered with a symbol this object does not have"
             );
         }
-        // A range and the line inside it ask the same thing.
-        assert_eq!(
-            object
-                .symbols_from_source(&file, line..line.saturating_add(1))
-                .len(),
-            object.symbols_at_line(&file, line).len()
-        );
+        // A range holding the line answers with everything the line does.
+        let range = object.symbols_from_lines(&file, line..=line.saturating_add(1));
+        for found in object.symbols_at_line(&file, line) {
+            assert!(range.iter().any(|known| Arc::ptr_eq(known, &found)));
+        }
     }
     assert!(object.symbols_at_line("\u{0}no such file", 1).is_empty());
 

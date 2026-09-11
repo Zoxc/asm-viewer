@@ -215,7 +215,7 @@ impl SourceHash {
 /// non-overlapping and coalesced. Every backend feeds this, so the invariants are made in one
 /// place rather than promised by each.
 #[derive(Default)]
-pub(super) struct RowCollector {
+struct RowCollector {
     rows: Vec<LineRow>,
     files: Vec<FileEntry>,
     indices: HashMap<Arc<str>, usize>,
@@ -231,7 +231,7 @@ struct FileEntry {
 impl RowCollector {
     /// The index a file name will have in [`LineInfo::files`], interning it on first sight
     /// along with the hash recorded for it — the first hash seen for a name is the one kept.
-    pub(super) fn file(&mut self, name: &str, hash: Option<SourceHash>) -> usize {
+    fn file(&mut self, name: &str, hash: Option<SourceHash>) -> usize {
         match self.indices.get(name) {
             Some(index) => *index,
             None => {
@@ -250,7 +250,7 @@ impl RowCollector {
     /// One row, in the address space the caller's answer is in. A row covering nothing is
     /// dropped here, and a column of 0 — which both formats write for "no column" — is taken
     /// as none, so no backend has to check either.
-    pub(super) fn push(
+    fn push(
         &mut self,
         range: Range<u64>,
         file: Option<usize>,
@@ -271,7 +271,7 @@ impl RowCollector {
     /// The rows made to hold [`LineInfo`]'s invariants, or [`None`] when there are none:
     /// "there is debug info but it says nothing about this range" and "there is no debug
     /// info" are the same answer to a caller.
-    pub(super) fn finish(self) -> Option<LineInfo> {
+    fn finish(self) -> Option<LineInfo> {
         let RowCollector {
             mut rows, files, ..
         } = self;
@@ -325,14 +325,6 @@ pub struct LineRow {
     pub line: Option<u32>,
     /// The column number, [`None`] both when the producer emitted no column at all and when
     /// it emitted 0, the "left edge of the line" marker.
-    pub column: Option<u32>,
-}
-
-/// A source position, for callers that want one address answered rather than a row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Location<'a> {
-    pub file: Option<&'a str>,
-    pub line: Option<u32>,
     pub column: Option<u32>,
 }
 
@@ -428,21 +420,6 @@ impl LineInfo {
         };
         let row = &self.rows[index];
         (address < row.range.end).then_some(row)
-    }
-
-    /// The file a row names.
-    pub fn file_of(&self, row: &LineRow) -> Option<&str> {
-        self.file(row.file?).map(|name| &**name)
-    }
-
-    /// `(file, line, column)` for a single instruction address.
-    pub fn location(&self, address: u64) -> Option<Location<'_>> {
-        let row = self.row_at(address)?;
-        Some(Location {
-            file: self.file_of(row),
-            line: row.line,
-            column: row.column,
-        })
     }
 }
 

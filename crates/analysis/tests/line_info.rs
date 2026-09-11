@@ -69,6 +69,12 @@ fn two_files(base_symbol: Option<usize>) -> Vec<u8> {
     })
 }
 
+/// The file, line and column of the row covering one address.
+fn position(info: &LineInfo, address: u64) -> Option<(Option<&str>, Option<u32>, Option<u32>)> {
+    let row = info.row_at(address)?;
+    Some((common::file_of(info, row), row.line, row.column))
+}
+
 #[test]
 fn a_symbols_instructions_map_to_source_positions() {
     let data = two_files(None);
@@ -86,10 +92,7 @@ fn a_symbols_instructions_map_to_source_positions() {
         .instructions
         .iter()
         .map(|instruction| {
-            let location = info
-                .location(instruction.address)
-                .expect("every instruction of first has a position");
-            (location.file, location.line, location.column)
+            position(&info, instruction.address).expect("every instruction of first has a position")
         })
         .collect();
     assert_eq!(
@@ -133,7 +136,7 @@ fn line_and_column_are_absent_rather_than_zero() {
     // Address 7 is DWARF line 0, which is "no line" rather than line 0 or line 1.
     let without = info.row_at(7).expect("a row at 7");
     assert_eq!((without.line, without.column), (None, None));
-    assert_eq!(info.file_of(without), Some("/src/other.c"));
+    assert_eq!(common::file_of(&info, without), Some("/src/other.c"));
 }
 
 #[test]
@@ -255,12 +258,8 @@ fn a_symbol_does_not_pick_up_another_sections_rows() {
     assert_eq!(info.rows()[0].range, 0..3);
     assert_eq!(info.rows()[1].range, 3..6);
     assert_eq!(
-        info.location(5),
-        Some(analysis::Location {
-            file: Some("/src/main.c"),
-            line: Some(11),
-            column: None,
-        })
+        position(&info, 5),
+        Some((Some("/src/main.c"), Some(11), None))
     );
 
     let info = second.line_info(&object).expect("second has line info");
@@ -268,12 +267,8 @@ fn a_symbol_does_not_pick_up_another_sections_rows() {
     assert_eq!(info.rows().len(), 1);
     assert_eq!(info.rows()[0].range, 0..2);
     assert_eq!(
-        info.location(1),
-        Some(analysis::Location {
-            file: Some("/src/other.c"),
-            line: Some(42),
-            column: Some(7),
-        })
+        position(&info, 1),
+        Some((Some("/src/other.c"), Some(42), Some(7)))
     );
 }
 
@@ -385,12 +380,8 @@ fn a_unit_whose_ranges_did_not_move_with_its_code_still_answers() {
     assert_eq!(info.rows().len(), 1);
     assert_eq!(info.rows()[0].range, 0..2);
     assert_eq!(
-        info.location(1),
-        Some(analysis::Location {
-            file: Some("/src/other.c"),
-            line: Some(42),
-            column: Some(7),
-        })
+        position(&info, 1),
+        Some((Some("/src/other.c"), Some(42), Some(7)))
     );
 }
 
@@ -412,12 +403,8 @@ fn a_linked_images_retained_relocations_are_not_applied_again() {
     assert_eq!(info.rows().len(), 1);
     assert_eq!(info.rows()[0].range, 0x100..0x110);
     assert_eq!(
-        info.location(0x100),
-        Some(analysis::Location {
-            file: Some("/src/main.c"),
-            line: Some(7),
-            column: None,
-        })
+        position(&info, 0x100),
+        Some((Some("/src/main.c"), Some(7), None))
     );
 }
 

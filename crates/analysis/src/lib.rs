@@ -12,7 +12,7 @@ mod unwind;
 
 pub use disasm::{Assembly, BranchEdge, Instruction, Operand, SpanKind};
 pub use extent::{Extent, ExtentCache};
-pub use line::{DebugInfoCache, LineInfo, LineRow, Location, SourceDigests, SourceHash};
+pub use line::{DebugInfoCache, LineInfo, LineRow, SourceDigests, SourceHash};
 pub use listing::{CodeListing, DecodedStretch, Gap, GapKind, Listing, Place, Placed, Stretch};
 pub use made_up::MadeUp;
 pub use model::{FileDigest, Object, ObjectData, PlacedSymbols, Section, Symbol, SymbolData};

@@ -98,42 +98,30 @@ fn a_range_answers_for_every_line_in_it_and_says_each_symbol_once() {
 
     // 10 gives both and 11 gives `first` again: `first` is one hit, not two.
     assert_eq!(
-        named(object.symbols_from_source(MAIN, 10..12)),
-        ["first", "second"]
-    );
-    assert_eq!(named(object.symbols_from_source(MAIN, 11..12)), ["first"]);
-    // A range and the single line inside it are the same question.
-    assert_eq!(
-        named(object.symbols_from_source(MAIN, 10..11)),
-        at(&object, MAIN, 10)
-    );
-    // An empty range asks about nothing rather than about everything.
-    assert!(object.symbols_from_source(MAIN, 10..10).is_empty());
-}
-
-/// The inclusive spelling is the same question -- a function's first and last line, as a
-/// caller holds them -- and the one that reaches the last line a `u32` can name.
-#[test]
-fn an_inclusive_range_asks_the_same_question_as_the_half_open_one() {
-    let object = parse(&shared_line());
-
-    assert_eq!(
         named(object.symbols_from_lines(MAIN, 10..=11)),
-        named(object.symbols_from_source(MAIN, 10..12))
+        ["first", "second"]
     );
     assert_eq!(named(object.symbols_from_lines(MAIN, 11..=11)), ["first"]);
-    // `first` holds both 10 and 11 and is still one hit.
+    // A range and the single line inside it are the same question.
     assert_eq!(
-        named(object.symbols_from_lines(MAIN, 10..=11)),
-        ["first", "second"]
+        named(object.symbols_from_lines(MAIN, 10..=10)),
+        at(&object, MAIN, 10)
     );
+}
+
+/// The range is inclusive, so it reaches the last line a `u32` can name, and the only empty
+/// one runs backwards.
+#[test]
+fn a_range_reaches_the_last_line_and_one_running_backwards_asks_about_nothing() {
+    let object = parse(&shared_line());
+
     // Reaching the end of the line space is expressible, and answers out of what is there.
     assert_eq!(
         named(object.symbols_from_lines(MAIN, 11..=u32::MAX)),
         ["first"]
     );
-    // A range running backwards asks about nothing. Backwards on purpose, so the lint
-    // against one written by mistake is off for the call.
+    // A range running backwards asks about nothing rather than about everything. Backwards
+    // on purpose, so the lint against one written by mistake is off for the call.
     #[allow(clippy::reversed_empty_ranges)]
     let backwards = object.symbols_from_lines(MAIN, 11..=10);
     assert!(backwards.is_empty());
@@ -256,7 +244,7 @@ fn round_trips(object: &Object) {
             continue;
         };
         for row in info.rows() {
-            let (Some(file), Some(line)) = (info.file_of(row), row.line) else {
+            let (Some(file), Some(line)) = (common::file_of(&info, row), row.line) else {
                 continue;
             };
             let back = object.symbols_at_line(file, line);

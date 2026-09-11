@@ -184,7 +184,11 @@ fn the_file_set_is_the_one_source_file() {
                 "{name}: {function}'s files"
             );
             for row in info.rows() {
-                assert_eq!(info.file_of(row), Some(SOURCE), "{name}: {function}");
+                assert_eq!(
+                    common::file_of(&info, row),
+                    Some(SOURCE),
+                    "{name}: {function}"
+                );
             }
         }
     }
@@ -205,7 +209,7 @@ fn every_instruction_of_a_function_has_a_source_line() {
         .instructions
         .iter()
         .map(|instruction| {
-            info.location(instruction.address)
+            info.row_at(instruction.address)
                 .unwrap_or_else(|| panic!("no position for {:#x}", instruction.address))
                 .line
         })
@@ -382,7 +386,7 @@ fn every_line_a_function_names_finds_that_function_again() {
             let symbol = symbol(&object, function);
             let info = line_info(&object, function);
             for row in info.rows() {
-                let (Some(file), Some(line)) = (info.file_of(row), row.line) else {
+                let (Some(file), Some(line)) = (common::file_of(&info, row), row.line) else {
                     continue;
                 };
                 let back = object.symbols_at_line(file, line);

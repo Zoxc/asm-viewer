@@ -298,7 +298,7 @@ fn the_file_is_named_verbatim_and_carries_the_compilers_md5() {
     let info = line_info(&object, "add");
     let files: Vec<&str> = info.files().map(|file| &**file).collect();
     assert_eq!(files, [SOURCE]);
-    assert_eq!(info.file_of(&info.rows()[0]), Some(SOURCE));
+    assert_eq!(common::file_of(&info, &info.rows()[0]), Some(SOURCE));
 
     let recorded = info.hash_for(SOURCE).expect("the PDB records a checksum");
     assert!(matches!(recorded, SourceHash::Md5(_)));
@@ -395,7 +395,7 @@ fn a_line_maps_back_to_the_symbol_compiled_from_it() {
     assert_eq!(names_at(23).len(), 1);
 
     let all: Vec<String> = object
-        .symbols_from_source(SOURCE, 1..100)
+        .symbols_from_lines(SOURCE, 1..=99)
         .iter()
         .map(|symbol| symbol.name.clone())
         .collect();
