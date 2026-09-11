@@ -27,7 +27,6 @@ fn both_text_symbols_parse() {
     assert_eq!(section.address, 0);
     assert_eq!(caller.address, 0);
     assert_eq!(target.address, 6);
-    assert_eq!(section.symbols, vec![0, 6]);
 }
 
 #[test]
@@ -41,15 +40,21 @@ fn estimate_size_is_derived_from_the_next_symbol() {
     assert_eq!(target.size, 0);
 
     // `caller` ends where `target` begins ...
-    assert_eq!(caller.estimate_size().map(|extent| extent.bytes), Some(6));
     assert_eq!(
-        caller.data(),
+        caller.estimate_size(&object).map(|extent| extent.bytes),
+        Some(6)
+    );
+    assert_eq!(
+        caller.data(&object),
         Some(&[0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3][..])
     );
 
     // ... and the last symbol in the section ends at the section end.
-    assert_eq!(target.estimate_size().map(|extent| extent.bytes), Some(1));
-    assert_eq!(target.data(), Some(&[0xC3][..]));
+    assert_eq!(
+        target.estimate_size(&object).map(|extent| extent.bytes),
+        Some(1)
+    );
+    assert_eq!(target.data(&object), Some(&[0xC3][..]));
 }
 
 #[test]
@@ -1142,11 +1147,12 @@ fn an_alias_at_the_same_address_decodes_the_whole_run() {
     let alias = symbol(&object, "alias");
     let function = symbol(&object, "function");
     assert_eq!(alias.address, function.address);
-    let section = alias.section.as_ref().expect("alias has a section");
-    assert_eq!(section.symbols, vec![0, 3]);
 
     for symbol in [&alias, &function] {
-        assert_eq!(symbol.estimate_size().map(|extent| extent.bytes), Some(3));
+        assert_eq!(
+            symbol.estimate_size(&object).map(|extent| extent.bytes),
+            Some(3)
+        );
         assert_eq!(symbol.extent(&object).map(|extent| extent.bytes), Some(3));
         let assembly = symbol.assembly(&object).expect("the run disassembles");
         assert_eq!(assembly.instructions.len(), 3);

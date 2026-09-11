@@ -24,7 +24,7 @@ fn object(path: &str, name: &str) -> Arc<Object> {
         sections: Vec::new(),
         data: ObjectData::from(&b"the first build"[..]),
         debug_info: Default::default(),
-        by_address: Default::default(),
+        placed: Default::default(),
     })
 }
 

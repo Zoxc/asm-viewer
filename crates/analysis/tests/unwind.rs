@@ -148,10 +148,6 @@ fn an_entry_at_a_named_address_adds_no_symbol_and_a_malformed_one_nothing() {
     assert_eq!(object.symbols.len(), 3);
     let section = named(&object, "first").section.clone().unwrap();
     assert_eq!(
-        section.symbols,
-        [TEXT_ADDRESS, TEXT_ADDRESS + 4, TEXT_ADDRESS + 6]
-    );
-    assert_eq!(
         section.unwind,
         [
             TEXT_ADDRESS..TEXT_ADDRESS + 4,
@@ -202,10 +198,17 @@ fn a_stated_end_beats_the_next_symbols_address() {
         fragments: &[],
     }));
     let first = named(&object, "first");
-    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
+    assert_eq!(
+        first.estimate_size(&object).map(|extent| extent.bytes),
+        Some(10)
+    );
     assert_eq!(first.debug_extent(&object), None, "no debug info at all");
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
-    assert_eq!(first.data(), Some(&TEXT[..10]), "the derivation, by name");
+    assert_eq!(
+        first.data(&object),
+        Some(&TEXT[..10]),
+        "the derivation, by name"
+    );
     assert_eq!(first.data_in(&object), Some(&TEXT[..6]));
     let assembly = first.assembly(&object).expect("first decodes");
     assert_eq!(assembly.instructions.len(), 6);
@@ -237,7 +240,7 @@ fn a_stated_end_beats_the_cap() {
     }));
     let first = named(&object, "first");
     assert_eq!(
-        first.estimate_size().map(|extent| extent.bytes),
+        first.estimate_size(&object).map(|extent| extent.bytes),
         Some(1 << 20)
     );
     assert_eq!(
@@ -279,7 +282,7 @@ fn an_entry_covering_a_label_inside_it_is_clamped_to_the_next_symbol() {
     );
     let label = named(&object, "label");
     assert_eq!(
-        label.estimate_size().map(|extent| extent.bytes),
+        label.estimate_size(&object).map(|extent| extent.bytes),
         Some(8),
         "to the section's end"
     );
@@ -465,7 +468,10 @@ fn an_fdes_end_beats_the_next_symbols_address() {
         eh_frame: &[(0, 6), (10, 12)],
     }));
     let first = named(&object, "first");
-    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
+    assert_eq!(
+        first.estimate_size(&object).map(|extent| extent.bytes),
+        Some(10)
+    );
     assert_eq!(first.debug_extent(&object), None, "no debug info at all");
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
     assert_eq!(first.assembly(&object).unwrap().instructions.len(), 6);
@@ -496,7 +502,7 @@ fn an_fdes_end_beats_the_cap() {
     }));
     let first = named(&object, "first");
     assert_eq!(
-        first.estimate_size().map(|extent| extent.bytes),
+        first.estimate_size(&object).map(|extent| extent.bytes),
         Some(1 << 20)
     );
     assert_eq!(
@@ -530,7 +536,7 @@ fn an_fde_covering_a_label_inside_it_is_clamped_to_the_next_symbol() {
     );
     let label = named(&object, "label");
     assert_eq!(
-        label.estimate_size().map(|extent| extent.bytes),
+        label.estimate_size(&object).map(|extent| extent.bytes),
         Some(8),
         "to the section's end"
     );

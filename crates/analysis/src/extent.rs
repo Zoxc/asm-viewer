@@ -59,8 +59,8 @@ impl SymbolData {
     /// export, an entry point) has no size of its own. A derivation running past
     /// [`MAX_DERIVED_SIZE`] stops there and says so ([`Extent::capped`]), which is the only
     /// place the cap is applied. See [`extent`](Self::extent).
-    pub fn estimate_size(&self) -> Option<Extent> {
-        let derived = self.derived()?;
+    pub fn estimate_size(&self, object: &Object) -> Option<Extent> {
+        let derived = self.derived(object)?;
         Some(Extent {
             bytes: derived.min(MAX_DERIVED_SIZE),
             capped: derived > MAX_DERIVED_SIZE,
@@ -68,10 +68,12 @@ impl SymbolData {
     }
 
     /// [`estimate_size`](Self::estimate_size) before its cap: the bytes from this symbol to
-    /// the next in the section, or to the section's end.
-    fn derived(&self) -> Option<u64> {
+    /// the next in the section, or to the section's end. [`None`] for a symbol outside every
+    /// code section's bytes ([`SymbolData::code_place`]).
+    fn derived(&self, object: &Object) -> Option<u64> {
         let section = self.section.as_ref()?;
-        let i = section.symbols.binary_search(&self.address).ok()?;
+        let placed = self.code_place()?;
+        let range = section.placed_range()?;
 
         // Where the section's bytes stop. [`None`] only for a section placed so near the end
         // of the address space that it does not fit in it.
@@ -83,12 +85,19 @@ impl SymbolData {
             .ok()
             .and_then(|length: u64| section.address.checked_add(length));
 
-        // The next symbol bounds this one; the section bounds them both. One wild address in
-        // the symbol table would otherwise be the *previous* symbol's problem: its extent
-        // would run past the bytes that were read and `bytes` would answer `None` for a
-        // function that is perfectly readable.
-        let next = match section.symbols.get(i + 1) {
-            Some(&next) => end.map_or(next, |end| next.min(end)),
+        // The next symbol is the first entry at a greater address, so a second name at this
+        // one bounds nothing, and it counts only inside this section's bytes: past them, the
+        // section's end is the bound. A wild address in the symbol table is in no entry, so it
+        // cannot cut short the symbol before it.
+        let all = object.placed_symbols();
+        let after = all.partition_point(|&(address, ..)| address <= placed);
+        let next = all
+            .get(after)
+            .map(|&(next, ..)| next)
+            .filter(|next| range.contains(next))
+            .and_then(|next| next.checked_sub(section.bias));
+        let next = match next {
+            Some(next) => next,
             None => end?,
         };
 
@@ -99,8 +108,8 @@ impl SymbolData {
     /// symbol and decodes each as its symbol's extent, so a length reaching past the next
     /// label would draw those rows twice. A zero derivation is no derivation: a symbol
     /// placed exactly at the section's end has nothing to bound it with.
-    fn clamped(&self, stated: u64) -> u64 {
-        match self.derived().filter(|&size| size != 0) {
+    fn clamped(&self, object: &Object, stated: u64) -> u64 {
+        match self.derived(object).filter(|&size| size != 0) {
             Some(derived) => stated.min(derived),
             None => stated,
         }
@@ -111,7 +120,7 @@ impl SymbolData {
     /// [`None`] where no entry covers it. Clamped to the next symbol
     /// ([`clamped`](Self::clamped)) — and every entry's own begin is a symbol, which is what
     /// stops a parent at the chained entry of its cold part.
-    fn unwind_extent(&self) -> Option<u64> {
+    fn unwind_extent(&self, object: &Object) -> Option<u64> {
         let section = self.section.as_ref()?;
         // The last range starting at or before the address: with the starts sorted and
         // each once, the innermost of any that nest.
@@ -123,7 +132,7 @@ impl SymbolData {
         if !range.contains(&self.address) {
             return None;
         }
-        Some(self.clamped(range.end - self.address))
+        Some(self.clamped(object, range.end - self.address))
     }
 
     /// The size the file declares for this symbol ([`size`](Self::size)) where that
@@ -148,7 +157,7 @@ impl SymbolData {
         if object.format != BinaryFormat::Elf || self.size == 0 {
             return None;
         }
-        Some(self.clamped(self.size))
+        Some(self.clamped(object, self.size))
     }
 
     /// How many bytes of code this symbol is. Three answers, in order.
@@ -209,13 +218,15 @@ impl SymbolData {
             bytes,
             capped: false,
         };
-        if let Some(bytes) = self.unwind_extent() {
+        if let Some(bytes) = self.unwind_extent(object) {
             return Some(stated(bytes));
         }
         if let Some(bytes) = self.declared_extent(object) {
             return Some(stated(bytes));
         }
-        let estimate = self.estimate_size().filter(|estimate| estimate.bytes != 0);
+        let estimate = self
+            .estimate_size(object)
+            .filter(|estimate| estimate.bytes != 0);
         match (self.debug_extent(object).map(stated), estimate) {
             (Some(declared), Some(estimate)) if estimate.bytes < declared.bytes => Some(estimate),
             (declared, estimate) => declared.or(estimate),

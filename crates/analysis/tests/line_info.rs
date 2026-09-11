@@ -137,7 +137,7 @@ fn rows_do_not_leak_past_the_symbol() {
 
     for name in ["first", "second"] {
         let symbol = symbol(&object, name);
-        let end = symbol.address + symbol.estimate_size().expect("a size").bytes;
+        let end = symbol.address + symbol.estimate_size(&object).expect("a size").bytes;
         let info = symbol.line_info(&object).expect("line info");
         for row in info.rows() {
             assert!(
@@ -234,8 +234,14 @@ fn a_symbol_does_not_pick_up_another_sections_rows() {
     let second = symbol(&object, "second");
     // The premise: the two genuinely share an address.
     assert_eq!((first.address, second.address), (0, 0));
-    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(6));
-    assert_eq!(second.estimate_size().map(|extent| extent.bytes), Some(2));
+    assert_eq!(
+        first.estimate_size(&object).map(|extent| extent.bytes),
+        Some(6)
+    );
+    assert_eq!(
+        second.estimate_size(&object).map(|extent| extent.bytes),
+        Some(2)
+    );
 
     let info = first.line_info(&object).expect("first has line info");
     assert_eq!(info.files(), [Arc::from("/src/main.c")]);

@@ -17952,7 +17952,6 @@ fn calling_into_the_middle() -> (Arc<Object>, u64) {
         data: Some(text.clone()),
         address: 0,
         relocations: HashMap::new(),
-        symbols: vec![0, 6],
         unwind: Vec::new(),
         code: true,
         bias: 0,
@@ -17985,7 +17984,7 @@ fn calling_into_the_middle() -> (Arc<Object>, u64) {
         sections: vec![section],
         data: ObjectData::from(text),
         debug_info: Default::default(),
-        by_address: Default::default(),
+        placed: Default::default(),
     });
     (object, target)
 }

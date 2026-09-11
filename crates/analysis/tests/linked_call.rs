@@ -6,7 +6,8 @@ mod common;
 
 use analysis::{Operand, SpanKind};
 use common::{
-    elf_shared_object, parse, pe_dll, symbol, text, ExportedSymbol, SharedObject, TEXT_ADDRESS,
+    elf_shared_object, elf_x86_64, parse, pe_dll, symbol, text, ExportedSymbol, SharedObject,
+    TextSymbol, TEXT_ADDRESS,
 };
 use object::{
     write, Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind,
@@ -93,6 +94,38 @@ fn a_linked_elf_calls_its_target_by_name() {
 fn a_linked_pe_calls_its_target_by_name() {
     let object = parse(&pe_dll(TEXT, FUNCTIONS, None));
     the_call_names_g(&object);
+}
+
+/// Two names where a call lands answer the first by name, whichever the symbol table lists
+/// first: the index keeps both in the file's order, and that order is not the rule.
+#[test]
+fn a_call_to_two_names_takes_the_first_by_name() {
+    // `f` = `call rel32; ret` reaching the byte after itself, where `zeta` and then `alpha`
+    // start. Nothing relocates the call, so the address is the answer.
+    let object = parse(&elf_x86_64(
+        &[
+            TextSymbol {
+                name: "f",
+                bytes: &[0xE8, 0x01, 0x00, 0x00, 0x00, 0xC3],
+            },
+            TextSymbol {
+                name: "zeta",
+                bytes: &[],
+            },
+            TextSymbol {
+                name: "alpha",
+                bytes: &[0xC3],
+            },
+        ],
+        &[],
+    ));
+    let f = symbol(&object, "f");
+    let assembly = f.assembly(&object).expect("f disassembles");
+    let call = &assembly.instructions[0];
+    assert_eq!(
+        call.symbol().map(|symbol| symbol.name.as_str()),
+        Some("alpha")
+    );
 }
 
 #[test]

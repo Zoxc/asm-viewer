@@ -330,7 +330,7 @@ fn a_procedures_length_is_the_declared_extent() {
         // The estimate reaches to the next export, or for `sum_to` to the end of `.text`,
         // which is exactly where its last instruction is: the PDB trims the first two and
         // agrees about the third.
-        let estimate = symbol.estimate_size().unwrap().bytes;
+        let estimate = symbol.estimate_size(&object).unwrap().bytes;
         assert!(estimate >= len, "{name}: the estimate under-reaches");
         assert_eq!(estimate > len, name != "sum_to", "{name}");
     }

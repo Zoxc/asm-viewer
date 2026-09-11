@@ -32,7 +32,6 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         data: Some(vec![0xC3; symbols.len()]),
         address: 0,
         relocations: HashMap::new(),
-        symbols: symbols.iter().map(|(_, address)| *address).collect(),
         unwind: Vec::new(),
         code: true,
         bias: 0,
@@ -65,7 +64,7 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         sections: vec![section],
         data: ObjectData::from(bytes),
         debug_info: Default::default(),
-        by_address: Default::default(),
+        placed: Default::default(),
     })
 }
 

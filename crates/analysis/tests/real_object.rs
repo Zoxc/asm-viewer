@@ -119,7 +119,7 @@ fn declared_sizes_agree_with_the_estimate() {
         assert_eq!(symbol.address, address, "{name} address");
         assert_eq!(symbol.size, size, "{name} declared size");
         assert_eq!(
-            symbol.estimate_size().map(|extent| extent.bytes),
+            symbol.estimate_size(&object).map(|extent| extent.bytes),
             Some(size),
             "{name} estimated size"
         );
@@ -228,7 +228,7 @@ fn rows_are_ascending_and_do_not_overlap() {
         let object = parse(name);
         for function in ["add", "twice", "sum_to"] {
             let symbol = symbol(&object, function);
-            let end = symbol.address + symbol.estimate_size().expect("a size").bytes;
+            let end = symbol.address + symbol.estimate_size(&object).expect("a size").bytes;
             let info = line_info(&object, function);
 
             let mut previous = symbol.address;

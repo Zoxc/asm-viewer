@@ -5,7 +5,7 @@ use crate::demangle;
 use crate::line::{DebugInfo, Procedure, Public};
 use crate::unwind::{self, UnwindEntry};
 use crate::{
-    AddressIndex, DebugInfoCache, ExtentCache, MadeUp, Object, ObjectData, Section, SymbolData,
+    DebugInfoCache, ExtentCache, MadeUp, Object, ObjectData, PlacedSymbols, Section, SymbolData,
 };
 use object::{
     BinaryFormat, CompressionFormat, ExportTarget, Object as _, ObjectKind, ObjectSection,
@@ -344,14 +344,13 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         named: mut symbols,
         unnamed,
         next,
-    } = symbol_table(&file, &mut sections);
+    } = symbol_table(&file);
     let mut known: HashSet<u64> = symbols.iter().map(|symbol| symbol.address).collect();
 
     let (debug_info, procedures, publics) = open_pdb(&file, &path);
     let unwind = unwind::entries(&file);
     let code = code_sections(&file, &sections);
     let declared = declared_code(&file, &code, &mut known, next, procedures, publics, &unwind);
-    place_declared(&mut sections, &declared);
     place_unwind(&mut sections, &code, &unwind);
 
     // After `declared_code`, so `known` holds every address anything named.
@@ -379,7 +378,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         sections: sections.into_values().collect(),
         data,
         debug_info,
-        by_address: AddressIndex::default(),
+        placed: PlacedSymbols::default(),
     }))
 }
 
@@ -433,7 +432,6 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
                     name,
                     address: section.address(),
                     data,
-                    symbols: Vec::new(),
                     unwind: Vec::new(),
                     relocations,
                     code,
@@ -444,16 +442,11 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
         .collect()
 }
 
-/// The file's text symbols, each address pushed into its section's [`Section::symbols`] as it
-/// goes.
+/// The file's text symbols.
 ///
-/// A symbol whose name will not read is a place in the file all the same, so its address
-/// goes into the section and the symbol below it keeps its extent. It is set aside rather
-/// than listed ([`SymbolTable::unnamed`]).
-fn symbol_table(
-    file: &object::File<'_>,
-    sections: &mut HashMap<SectionIndex, Section>,
-) -> SymbolTable {
+/// A symbol whose name will not read is a place in the file all the same. It is set aside
+/// until the rest have claimed their addresses ([`SymbolTable::unnamed`]).
+fn symbol_table(file: &object::File<'_>) -> SymbolTable {
     let mut table = SymbolTable {
         named: Vec::new(),
         unnamed: Vec::new(),
@@ -467,9 +460,6 @@ fn symbol_table(
 
         let address = symbol.address();
         let section = symbol.section().index();
-        if let Some(section) = section.and_then(|index| sections.get_mut(&index)) {
-            section.symbols.push(address);
-        }
 
         let pending = |(name, mangled)| Pending {
             index: symbol.index(),
@@ -502,16 +492,6 @@ fn open_pdb(file: &object::File<'_>, path: &Path) -> (DebugInfoCache, Vec<Proced
     }
 }
 
-/// Declared code into the same sorted lists as the symbol table's, because that list is what
-/// `estimate_size` derives an extent from and a declaration carries none.
-fn place_declared(sections: &mut HashMap<SectionIndex, Section>, declared: &[Pending]) {
-    for code in declared {
-        if let Some(section) = code.section.and_then(|index| sections.get_mut(&index)) {
-            section.symbols.push(code.address);
-        }
-    }
-}
-
 /// Every unwind entry's range into its section, whether or not its begin became a symbol: an
 /// export or a procedure at that address takes its extent from the end the entry states.
 /// Clamped to the section's bytes, so that end can never reach past what `bytes` can read.
@@ -533,20 +513,14 @@ fn place_unwind(
     }
 }
 
-/// The sections, done with: each list sorted and deduplicated, then shared.
+/// The sections, done with: each one's unwind ranges sorted and deduplicated, then shared.
 fn freeze_sections(
     sections: HashMap<SectionIndex, Section>,
 ) -> HashMap<SectionIndex, Arc<Section>> {
     sections
         .into_iter()
         .map(|(index, mut section)| {
-            // Sorted for the binary searches over it, and each address once: two symbols at
-            // one address (an alias, an assembler label) are one place in the section, and a
-            // repeated entry would make `estimate_size` answer 0 for whichever of the two the
-            // search landed on.
-            section.symbols.sort_unstable();
-            section.symbols.dedup();
-            // The unwind ranges likewise, by start: a table stating one function twice is one
+            // By start, and each start once: a table stating one function twice is one
             // function, and the search over them assumes it.
             section.unwind.sort_unstable_by_key(|range| range.start);
             section.unwind.dedup_by_key(|range| range.start);

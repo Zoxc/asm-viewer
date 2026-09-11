@@ -15,7 +15,7 @@ pub use extent::{Extent, ExtentCache};
 pub use line::{DebugInfoCache, LineInfo, LineRow, Location, SourceDigests, SourceHash};
 pub use listing::{CodeListing, DecodedStretch, Gap, GapKind, Listing, Place, Placed, Stretch};
 pub use made_up::MadeUp;
-pub use model::{AddressIndex, FileDigest, Object, ObjectData, Section, Symbol, SymbolData};
+pub use model::{FileDigest, Object, ObjectData, PlacedSymbols, Section, Symbol, SymbolData};
 pub use open::{open_data_streaming, open_files, open_files_streaming, Progress};
 pub use parse::parse_object;
 // Re-exported so the viewer needs no `object` dependency of its own.

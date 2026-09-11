@@ -105,8 +105,8 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
     let object = parse_object(data.into(), "fuzz".into(), path)?;
 
     for symbol in &object.symbols_sorted {
-        let _ = symbol.estimate_size();
-        let _ = symbol.data();
+        let _ = symbol.estimate_size(&object);
+        let _ = symbol.data(&object);
         let _ = symbol.extent(&object);
         let _ = symbol.data_in(&object);
         if let Some(assembly) = symbol.assembly(&object) {

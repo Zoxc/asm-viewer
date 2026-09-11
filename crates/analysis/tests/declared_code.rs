@@ -126,11 +126,6 @@ fn an_entry_point_on_an_exported_function_is_one_symbol_not_two() {
         .collect();
     assert_eq!(names.len(), 2, "{names:?}");
     assert!(!names.contains(&"<entry point>"), "{names:?}");
-
-    // The section's address list is still strictly ascending, which is what
-    // `estimate_size` binary-searches.
-    let section = named(&object, "second").section.clone().unwrap();
-    assert_eq!(section.symbols, [TEXT_ADDRESS, TEXT_ADDRESS + 4]);
 }
 
 #[test]
@@ -142,20 +137,20 @@ fn a_declaration_carries_no_size_so_the_extent_comes_from_the_next_one() {
     assert_eq!(named(&object, "first").size, 0);
     assert_eq!(
         named(&object, "first")
-            .estimate_size()
+            .estimate_size(&object)
             .map(|extent| extent.bytes),
         Some(4)
     );
     assert_eq!(
         named(&object, "second")
-            .estimate_size()
+            .estimate_size(&object)
             .map(|extent| extent.bytes),
         Some(3)
     );
     // The last one runs to the end of the section's bytes.
     assert_eq!(
         named(&object, "<entry point>")
-            .estimate_size()
+            .estimate_size(&object)
             .map(|extent| extent.bytes),
         Some(3)
     );
@@ -166,7 +161,7 @@ fn a_declaration_carries_no_size_so_the_extent_comes_from_the_next_one() {
     assert_eq!(named(&elf, "first").size, 4);
     assert_eq!(
         named(&elf, "first")
-            .estimate_size()
+            .estimate_size(&elf)
             .map(|extent| extent.bytes),
         Some(4)
     );
@@ -248,8 +243,4 @@ fn an_export_that_is_already_a_symbol_table_entry_is_not_listed_twice() {
         .collect();
     names.sort_unstable();
     assert_eq!(names, ["first_internal", "second"]);
-
-    // A repeated address would make `estimate_size`'s binary search answer 0.
-    let section = named(&object, "second").section.clone().unwrap();
-    assert_eq!(section.symbols, [TEXT_ADDRESS, TEXT_ADDRESS + 4]);
 }

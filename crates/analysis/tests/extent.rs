@@ -68,7 +68,10 @@ fn a_subprogram_extent_is_preferred_to_the_next_symbols_address() {
     let object = parse(&fixture(&[(0, 6), (1, 2)], Some(0)));
     let first = named(&object, "first");
 
-    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
+    assert_eq!(
+        first.estimate_size(&object).map(|extent| extent.bytes),
+        Some(10)
+    );
     assert_eq!(first.debug_extent(&object), Some(6));
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
 
@@ -77,7 +80,7 @@ fn a_subprogram_extent_is_preferred_to_the_next_symbols_address() {
     assert_eq!(assembly.instructions.len(), 6);
     assert_eq!(first.data_in(&object), Some(&FIRST[..6]));
     // `data()` is the answer without an object in hand, and is unchanged.
-    assert_eq!(first.data(), Some(FIRST));
+    assert_eq!(first.data(&object), Some(FIRST));
 }
 
 #[test]
@@ -89,7 +92,7 @@ fn a_symbol_no_subprogram_describes_keeps_the_estimate() {
     assert_eq!(first.debug_extent(&object), None);
     assert_eq!(
         first.extent(&object).map(|extent| extent.bytes),
-        first.estimate_size().map(|extent| extent.bytes)
+        first.estimate_size(&object).map(|extent| extent.bytes)
     );
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(10));
 }
@@ -112,7 +115,10 @@ fn a_subprogram_reaching_past_the_next_symbol_is_clipped_to_it() {
     let first = named(&object, "first");
 
     assert_eq!(first.debug_extent(&object), Some(12));
-    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
+    assert_eq!(
+        first.estimate_size(&object).map(|extent| extent.bytes),
+        Some(10)
+    );
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(10));
 }
 
@@ -206,7 +212,10 @@ fn two_functions_at_address_zero_get_their_own_extents() {
 
     // `first` is alone in its section, so the estimate runs to the section's end —
     // padding included — and DWARF is what trims it back to the function.
-    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
+    assert_eq!(
+        first.estimate_size(&object).map(|extent| extent.bytes),
+        Some(10)
+    );
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
 }
 
@@ -241,14 +250,14 @@ fn a_derivation_reaching_a_megabyte_is_cut_off() {
 
     let huge = named(&object, "huge");
     assert_eq!(
-        huge.estimate_size().map(|extent| extent.bytes),
+        huge.estimate_size(&object).map(|extent| extent.bytes),
         Some(1 << 20)
     );
     assert_eq!(
         huge.extent(&object).map(|extent| extent.bytes),
         Some(1 << 20)
     );
-    assert_eq!(huge.data().map(<[u8]>::len), Some(1 << 20));
+    assert_eq!(huge.data(&object).map(<[u8]>::len), Some(1 << 20));
 }
 
 /// The symbol table's own answer, taken before the debug info is opened. `first` declares
@@ -260,7 +269,10 @@ fn a_declared_size_is_taken_before_the_debug_info() {
     let first = named(&object, "first");
 
     assert_eq!(first.size, 6);
-    assert_eq!(first.estimate_size().map(|extent| extent.bytes), Some(10));
+    assert_eq!(
+        first.estimate_size(&object).map(|extent| extent.bytes),
+        Some(10)
+    );
     assert_eq!(first.debug_extent(&object), Some(12));
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
 
@@ -356,4 +368,53 @@ fn a_coff_total_size_is_not_a_functions_length() {
             .len(),
         6
     );
+}
+
+/// Only a symbol inside a code section's bytes bounds another's estimate. `in_data` is a
+/// function symbol in `.data`, which has no place of its own and so shares `.text.a`'s
+/// addresses; `wild` is `.text.a`'s, pointed past its end to where `.text.b` is placed. Either
+/// one counted would cut `f` or `g` short.
+#[test]
+fn a_symbol_outside_the_code_bounds_nothing() {
+    use object::{
+        write, Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind,
+        SymbolScope,
+    };
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let a = obj.add_section(Vec::new(), b".text.a".to_vec(), SectionKind::Text);
+    let b = obj.add_section(Vec::new(), b".text.b".to_vec(), SectionKind::Text);
+    let data = obj.add_section(Vec::new(), b".data".to_vec(), SectionKind::Data);
+    obj.append_section_data(a, &[0x90, 0x90, 0x90, 0xC3], 1);
+    obj.append_section_data(b, &[0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0xC3], 1);
+    obj.append_section_data(data, &[0; 8], 1);
+    for (name, section, value) in [
+        ("f", a, 0),
+        ("wild", a, 19),
+        ("g", b, 0),
+        ("in_data", data, 2),
+    ] {
+        obj.add_symbol(write::Symbol {
+            name: name.as_bytes().to_vec(),
+            value,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(section),
+            flags: SymbolFlags::None,
+        });
+    }
+    let object = parse(&obj.write().expect("writing the fixture object"));
+
+    // The premise: `.text.b` is placed at 16, so `wild` at 19 is inside it, and `in_data`
+    // at 2 is inside `.text.a`, which stays at 0.
+    let g = named(&object, "g");
+    assert_eq!(g.section.as_ref().map(|section| section.bias), Some(16));
+    assert_eq!(named(&object, "wild").address, 19);
+    assert_eq!(named(&object, "in_data").address, 2);
+
+    let f = named(&object, "f");
+    assert_eq!(f.estimate_size(&object).map(|extent| extent.bytes), Some(4));
+    assert_eq!(g.estimate_size(&object).map(|extent| extent.bytes), Some(8));
 }

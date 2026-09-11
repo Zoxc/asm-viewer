@@ -86,15 +86,17 @@ linker saw it (`?add@@YAHHH@Z`, `_ZN4core3ptr…`, a plain `add` for C), and goe
 batch to come out demangled, the raw spelling kept as `name`. A procedure's length and an unwind
 entry's stated length are the symbol's *declared* size where an export's and a public's is 0; the
 extent used is still `SymbolData::extent`. The symbol table itself may hold two names for one
-address (an alias, an assembler label) and both are kept, but `Section::symbols`, the sorted list
-`estimate_size` binary-searches, holds each address **once**: a repeated entry made the search land
-on either twin and answer 0 for an aliased symbol, which in an object without DWARF was a function
-with no listing at all. A symbol whose name will not read out of the string table is a place in the
-file all the same and is kept: its address goes into `Section::symbols`, so the symbol below it is
-bounded by it, but **not** into `known`, so an export, a PDB procedure or public, or an unwind entry
-can still claim that address and give it a real name. Only where none does is the symbol listed at
-all, under `<function 0x…>`, which is why the symbol-table walk sets such a symbol aside until after
-`declared_code`. The section comes from looking the address up in the kept **text** sections, which
+address (an alias, an assembler label) and both are kept. `estimate_size` stops at the next symbol
+at a **greater** address, so a twin bounds nothing: a search that once landed on either twin
+answered 0 for an aliased symbol, which in an object without DWARF was a function with no listing at
+all. A symbol whose name will not read out of the string table is a place in the file all the same,
+but it does **not** go into `known`, so an export, a PDB procedure or public, or an unwind entry can
+still claim that address and give it a real name. Only where none does is the symbol listed at all,
+under `<function 0x…>`, which is why the symbol-table walk sets such a symbol aside until after
+`declared_code`. Where one does, the claimant stands at that address and bounds the symbol below
+it. Not quite always: `known` holds raw addresses, so a claimant outside every code section's bytes,
+or in another section of a relocatable object, drops the symbol without taking its place, and the
+symbol below then runs on to the next one listed. It takes an unreadable name to get there. The section comes from looking the address up in the kept **text** sections, which
 doubles as the filter keeping exported *data* out. A relocatable object is skipped entirely:
 `entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. The two nameless
 declarations, the entry point and an unwind entry, are called `<entry point>` and `<function 0x…>`
@@ -108,8 +110,8 @@ outlives a change of spelling (`agents/Persistence.md`); `made_up/tests.rs` pins
 the same. And it carries the one thing every made-up name shares: it is not the file's own, so no
 demangler is ever offered one.
 `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>`
-(for relocation-target lookup), `symbols_sorted` (name-sorted, for the UI list) and `by_address`
-(placed-address-sorted, built on the first disassembly, for a call target's name; below).
+(for relocation-target lookup), `symbols_sorted` (name-sorted, for the UI list) and `placed` (the
+code sections' symbols by placed address, built on first use; below).
 `Object::data` is an `ObjectData`, an `Arc<[u8]>` of the whole file plus a `Range`, kept for the
 object's lifetime, because parsing keeps decompressed bytes only for the code sections and the lazy
 passes read the file again for the rest. Every object from one file shares that one allocation,
@@ -118,8 +120,7 @@ file*, taken once in `ObjectData::whole_file` because the bytes are in hand ther
 member is cut from that same value, so 196 members cost one pass (32 ms against the 1.6 s the open
 takes on the 331 MB binary). Nothing in the crate reads it: it exists so a restore can tell the file
 it saved from one rebuilt underneath it. `Section` owns decompressed bytes, relocations keyed by the
-address the bytes they patch sit at, a sorted list of its text symbols' addresses, and the ranges
-the file's unwind table states for its functions (`unwind`, sorted by start, each start once, ends
+address the bytes they patch sit at, and the ranges the file's unwind table states for its functions (`unwind`, sorted by start, each start once, ends
 clamped to the section's bytes; empty for a file with no table read). The bytes and the relocations
 are a **code** section's only, and `SectionKind::Text` decides both, so the flag a listing reads
 (`Section::code`) is the flag that decided what was kept; a section holding no code keeps its index,
@@ -133,10 +134,10 @@ start of the section in Mach-O, which lays its sections out one after another. S
 adds a Mach-O section's address as it builds the map, and `Code::relocation` can ask by address
 whatever the file is. The debug sections are relocated straight from `object`'s iterator
 (`line/dwarf.rs`'s `relocate`) and want the offset as it comes, since it indexes the bytes being
-patched. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in the symbol
-list, **clipped to the section's own bytes**, since that list is numbers out of the file and one
-wild `st_value` in it would otherwise cost the symbol *above* it its listing rather than only
-itself. Declared sizes are frequently 0 in ELF/COFF, which is why the derivation exists at all.
+patched. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in `Object::placed`,
+**clipped to the section's own bytes**. The index holds only symbols inside a code section's bytes,
+since an address is a number out of the file and one wild `st_value` would otherwise cost the symbol
+*above* it its listing rather than only itself. Declared sizes are frequently 0 in ELF/COFF, which is why the derivation exists at all.
 `SymbolData::extent` is the answer that is actually used, and has three
 answers in order. First, **the end the unwind table states**, where an entry covers the address,
 whatever named the symbol. That is the image's own statement, to its loader, of the very bytes the
@@ -580,16 +581,25 @@ otherwise name the other's. *Calls only*: an unconditional `jmp` out of the symb
 and could be named the same way, but its displacement is an `Operand::Branch`'s, so making it a link
 to a function is the item of its own that `notes/Goals.md` says it is. The relocation still wins
 where there is one: a relocated call whose target is a section symbol
-keeps `None`, since its displacement is a placeholder whatever address it happens to spell. The
-index is `Object::by_address`, a `Vec<(u64, Arc<SymbolData>)>` sorted by placed address with each
-address once (two names for one address keep the first by name, the order `symbols_sorted` has, so
-the answer is stable), behind a `OnceLock` like the debug info and derived from `symbols_sorted`, so
-an `Object` built by hand writes `Default::default()` and cannot disagree with it. It is lazy rather
-than built at parse because an archive's members are parsed all at once and read one at a time.
-Building it for the sample's 115,577 symbols measured 67 ms in an unoptimized test build, once per
-object on the first disassembly; a lookup after that is a binary search, 5 µs. A sort per click
-would have been the same 67 ms on every symbol opened, which is why it is not rebuilt per
-disassembly.
+keeps `None`, since its displacement is a placeholder whatever address it happens to spell. Two
+names for one address answer the first by name, the order `symbols_sorted` has.
+
+**One index of an object's code symbols by place** (`Object::placed`, a `PlacedSymbols`) answers
+four questions: a call's name (`symbol_at`), where an estimate stops, a listing's labels and the
+source index's ranges. Each used to keep or rebuild its own copy, sorted with its own rule for two
+symbols at one address. It is `(placed address, SymbolIndex, Arc<SymbolData>)` sorted by address and
+then index, both names at one address kept, side by side in the file's order. It holds a symbol only
+where its section is `Section::code` and its address is inside the section's bytes
+(`SymbolData::code_place`). The placed layout is what lets one index serve the whole object: a
+linked image's addresses are real, and a relocatable object's code sections each have a place of
+their own. A section that is not code has no place, so its symbols would land on some code section's
+addresses; it keeps no bytes either, so they never had an extent to read. Where a header makes two
+places overlap, each of the two listings also labels the other's symbols; nothing breaks, and
+`CodeListing` draws only the first. The index is built from `symbols` behind a `OnceLock` like the
+debug info, so an `Object` built by hand writes `Default::default()` and cannot disagree with it. It
+is lazy rather than built at parse because an archive's members are parsed all at once and read one
+at a time. The build sorts every symbol, once per object; every question after it is a binary
+search.
 
 **What an operand names is one enum**, `Operand`, and a row carries one `Option` of it. It used to
 be six fields and sixty lines of doc saying which was `Some` exactly when which other was, with the
@@ -657,12 +667,12 @@ section as one address-keyed listing, beside the symbol view and not instead of 
 index-keyed changed for it. `Listing::new` is the **skeleton**, and it decodes nothing: one
 `Stretch` per distinct symbol address inside the section's bytes, its range running to the next
 address or the section's end, plus a leading stretch with no label when the first symbol is not at
-the start (or there is no symbol at all). It is built from `Object::symbols` by pointer identity on
-the section (two sections of a relocatable object share address 0) and ordered by
-`(address, SymbolIndex)`, so two names at one address are one stretch with two labels in the file's
-order rather than the hash seed's. A symbol placed outside the section's bytes is left out. That is
-free, a scan of the object's symbols and a sort of the section's own, and it is what gives a view a
-stable structure to scroll while instructions arrive. **A stretch is decoded on demand**
+the start (or there is no symbol at all). Its symbols are the run of `Object::placed` over the
+section's placed range, two binary searches away (two sections of a relocatable object share address
+0; their places do not), and already ordered by `(address, SymbolIndex)`, so two names at one
+address are one stretch with two labels in the file's order. A symbol placed outside the section's
+bytes is not in the index. That is free, and it is what gives a view a stable structure to scroll
+while instructions arrive. **A stretch is decoded on demand**
 (`Listing::decode`), and that is when its symbol's extent is asked for: the code is literally
 `SymbolData::assembly`'s answer, so the section and the symbol view cannot disagree, and the bytes
 from where that answer says it stopped (`Assembly::range`) to the next label are the stretch's
@@ -699,9 +709,9 @@ layout leaves between two sections is nobody's bytes (`at` answers `None` there)
 boundary is a label for the view to draw, not a gap. Two things are left out rather than listed: a
 code section with no bytes (gcc leaves an empty `.text` beside the split ones; it has a place in the
 layout, so the biases the tests pin skip a grain for it) and a section whose placed range overlaps
-the one before it, which a header can claim and nothing can draw. It is built in one pass over the
-object's symbols, bucketed by section, rather than one scan per section, since a large crate's CGU
-has thousands of both. Branches compose with it for free: in a linked image a branch's address is
+the one before it, which a header can claim and nothing can draw. Each section's symbols are its own run of the
+index, so building it is two binary searches per section and one walk of the symbols, however many
+of both a large crate's CGU has. Branches compose with it for free: in a linked image a branch's address is
 unique across sections, so `Instruction::branch()` is already the placed key; in a relocatable
 object a jump to another function is a relocation, it answers `None`, and the relocation target is
 a symbol, which its section's listing places. The unit stays the object, since an archive's members

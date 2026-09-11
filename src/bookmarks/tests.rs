@@ -16,7 +16,6 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
         data: Some(vec![0xC3; symbols.len()]),
         address: 0,
         relocations: HashMap::new(),
-        symbols: symbols.iter().map(|(_, address)| *address).collect(),
         unwind: Vec::new(),
         code: true,
         bias: 0,
@@ -45,7 +44,7 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
         sections: vec![section],
         data: ObjectData::from(&b"a build"[..]),
         debug_info: Default::default(),
-        by_address: Default::default(),
+        placed: Default::default(),
     })
 }
 

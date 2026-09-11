@@ -37,24 +37,51 @@ pub struct Object {
     /// `DebugInfoCache::default()`. See [`Object::line_info`].
     pub debug_info: DebugInfoCache,
 
-    /// The same symbols by the address they are **placed** at, built on the first
-    /// disassembly and derived from `symbols_sorted`, so anything building an `Object` by
-    /// hand writes `AddressIndex::default()` and cannot disagree with it. See
-    /// [`Object::symbol_at`].
-    pub by_address: AddressIndex,
+    /// The code sections' symbols by the address they are **placed** at, built on first use
+    /// from `symbols`, so anything building an `Object` by hand writes
+    /// `PlacedSymbols::default()` and cannot disagree with it. A symbol left out of `symbols`
+    /// has no estimate and no label, and no call is named after it. See [`PlacedSymbols`].
+    pub placed: PlacedSymbols,
 }
 
-/// [`Object::by_address`]: every text symbol with a section, keyed by its placed address
-/// ([`Section::bias`] added to its own) and sorted by it, each address once.
+/// [`Object::placed`]: every symbol inside a code section's bytes
+/// ([`SymbolData::code_place`]), as `(placed address, index, symbol)`, sorted by address and
+/// then by index. Two names at one address are both kept, side by side in the file's order.
 ///
-/// Built once per object and not per disassembly, behind a `OnceLock` like the debug info:
-/// 67 ms for the 115k-symbol sample in an unoptimized build, which is nothing once and
-/// everything at every click. Lazy rather than built at parse because an archive's members
-/// are parsed all at once and read one at a time.
+/// One index serves the whole object because of the placed layout: a linked image's
+/// addresses are real, and each code section of a relocatable object has a place of its own.
+/// A section that is not code has no place and would collide, so its symbols are left out.
+///
+/// What a symbol's extent estimate, a listing's labels, a call's name and the source index
+/// all read. Built once per object behind a `OnceLock`, like the debug info, because it
+/// sorts every symbol; lazy rather than built at parse because an archive's members are
+/// parsed all at once and read one at a time.
 #[derive(Default)]
-pub struct AddressIndex(OnceLock<Vec<(u64, Arc<SymbolData>)>>);
+pub struct PlacedSymbols(OnceLock<Vec<(u64, SymbolIndex, Arc<SymbolData>)>>);
 
 impl Object {
+    /// [`placed`](Self::placed), built on the first ask.
+    pub(crate) fn placed_symbols(&self) -> &[(u64, SymbolIndex, Arc<SymbolData>)] {
+        self.placed.0.get_or_init(|| {
+            let mut placed: Vec<_> = self
+                .symbols
+                .iter()
+                .filter_map(|(&index, symbol)| Some((symbol.code_place()?, index, symbol.clone())))
+                .collect();
+            // The map's order is the hash seed's; the file's is the symbol index.
+            placed.sort_unstable_by_key(|&(address, index, _)| (address, index.0));
+            placed
+        })
+    }
+
+    /// The entries of [`placed`](Self::placed) whose address is inside `range`.
+    pub(crate) fn placed_in(&self, range: Range<u64>) -> &[(u64, SymbolIndex, Arc<SymbolData>)] {
+        let all = self.placed_symbols();
+        let start = all.partition_point(|&(address, ..)| address < range.start);
+        let end = all.partition_point(|&(address, ..)| address < range.end);
+        &all[start..end.max(start)]
+    }
+
     /// The text symbol that **starts** at `placed`, in the one address space every section
     /// of this object shares ([`Section::bias`]); [`None`] where no symbol does. Two names
     /// for one address answer the first by name — the order `symbols_sorted` holds — so the
@@ -66,25 +93,13 @@ impl Object {
     /// the answer is in it too — the bias makes two sections two places, but a number past
     /// one section's end is still just a number.
     pub fn symbol_at(&self, placed: u64) -> Option<&Arc<SymbolData>> {
-        let index = self.by_address.0.get_or_init(|| {
-            let mut placed: Vec<(u64, Arc<SymbolData>)> = self
-                .symbols_sorted
-                .iter()
-                .filter_map(|symbol| {
-                    let section = symbol.section.as_ref()?;
-                    Some((symbol.address.wrapping_add(section.bias), symbol.clone()))
-                })
-                .collect();
-            // Stable, so that of two symbols at one address the first by name is the one
-            // `dedup` keeps.
-            placed.sort_by_key(|(address, _)| *address);
-            placed.dedup_by_key(|(address, _)| *address);
-            placed
-        });
-        let at = index
-            .binary_search_by_key(&placed, |(address, _)| *address)
-            .ok()?;
-        index.get(at).map(|(_, symbol)| symbol)
+        let all = self.placed_symbols();
+        let start = all.partition_point(|&(address, ..)| address < placed);
+        let end = all.partition_point(|&(address, ..)| address <= placed);
+        all[start..end.max(start)]
+            .iter()
+            .map(|(_, _, symbol)| symbol)
+            .min_by(|a, b| a.name.cmp(&b.name))
     }
 }
 
@@ -224,10 +239,6 @@ pub struct Section {
     /// [`code`](Self::code), the disassembler being the only reader.
     pub relocations: HashMap<u64, Relocation>,
 
-    /// The addresses of this section's text symbols, sorted and **each once**: two symbols
-    /// at one address are one entry here. The sync points a listing decodes from.
-    pub symbols: Vec<u64>,
-
     /// The address ranges the file's own unwind table states for the functions in this
     /// section — an x86-64 PE's `.pdata`, an ELF's `.eh_frame`, out of
     /// [`unwind::entries`](crate::unwind::entries) — sorted by start, each start once, ends
@@ -246,6 +257,21 @@ pub struct Section {
     /// code; in a relocatable object, where every code section starts at 0, an address of
     /// its own for each. See [`section_biases`](crate::parse::section_biases).
     pub bias: u64,
+}
+
+impl Section {
+    /// The placed addresses this section's bytes take up, cut short where the address space
+    /// ends. [`None`] for a section that is not [`code`](Self::code), which has no place, and
+    /// for one whose place would be past the end of the address space.
+    pub(crate) fn placed_range(&self) -> Option<Range<u64>> {
+        if !self.code {
+            return None;
+        }
+        let start = self.address.checked_add(self.bias)?;
+        let length = self.data.as_ref().map_or(0, Vec::len);
+        let length: u64 = length.try_into().unwrap_or(u64::MAX);
+        Some(start..start.saturating_add(length))
+    }
 }
 
 #[derive(Debug)]
@@ -283,11 +309,20 @@ impl SymbolData {
         address.wrapping_add(bias)
     }
 
+    /// Where this symbol is in [`Object::placed`]: its placed address, where its section is
+    /// code and the address is inside the section's bytes. [`None`] for every other symbol,
+    /// which no listing labels and no estimate is made for.
+    pub(crate) fn code_place(&self) -> Option<u64> {
+        let range = self.section.as_ref()?.placed_range()?;
+        let placed = self.placed(self.address);
+        range.contains(&placed).then_some(placed)
+    }
+
     /// This symbol's bytes, as far as [`estimate_size`](Self::estimate_size) reaches.
     /// Deliberately *not* the debug-info extent: a symbol does not own the file it came from.
-    /// Anything with an [`Object`] in hand wants [`data_in`](Self::data_in).
-    pub fn data(&self) -> Option<&[u8]> {
-        self.bytes(self.estimate_size()?.bytes)
+    /// Anything wanting the bytes a listing decodes wants [`data_in`](Self::data_in).
+    pub fn data<'a>(&'a self, object: &Object) -> Option<&'a [u8]> {
+        self.bytes(self.estimate_size(object)?.bytes)
     }
 
     /// This symbol's bytes over [`extent`](Self::extent) — the same range

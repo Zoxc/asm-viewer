@@ -186,11 +186,16 @@ fn budget(rows: usize) -> usize {
 /// The extent is [`SymbolData::extent`] and not the next-symbol estimate, because that is the
 /// extent everything else uses: it is what [`SymbolData::line_info`] asks about, so the index
 /// and the forward direction cannot disagree about what a symbol covers.
+///
+/// In the order of [`Object::placed`], which is the `(start, symbol index)` wanted: a start
+/// here is the symbol's placed address. The DWARF backend's bias is
+/// [`Section::bias`](crate::Section::bias), the same function over the same file, and a `.pdb`
+/// describes a linked image, where both are 0.
 fn symbol_ranges(object: &Object, debug: &DebugInfo) -> Vec<SymbolRange> {
     let mut ranges: Vec<SymbolRange> = object
-        .symbols
+        .placed_symbols()
         .iter()
-        .filter_map(|(&symbol, data)| {
+        .filter_map(|(_, symbol, data)| {
             let section = data.section.as_ref()?;
             let start = data.address.checked_add(debug.bias(section.index))?;
             let end = start.checked_add(data.extent(object)?.bytes)?;
@@ -198,15 +203,10 @@ fn symbol_ranges(object: &Object, debug: &DebugInfo) -> Vec<SymbolRange> {
                 start,
                 end,
                 max_end: end,
-                symbol,
+                symbol: *symbol,
             })
         })
         .collect();
-
-    // `symbols` is a `HashMap`, so the order it iterates in is not the file's. Sorting by the
-    // symbol index under the address is what keeps the built index a property of the file
-    // rather than of a hash seed.
-    ranges.sort_unstable_by_key(|range| (range.start, range.symbol.0));
 
     let mut max_end = 0;
     for range in &mut ranges {
