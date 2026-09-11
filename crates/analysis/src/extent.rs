@@ -41,8 +41,8 @@ pub struct Extent {
 }
 
 /// [`SymbolData::extent`]'s answer, worked out at most once. The *absence* is kept too,
-/// the way [`DebugInfoCache`](crate::DebugInfoCache) keeps its own: a symbol nothing states
-/// an extent for is exactly the one whose answer cost a walk of the debug info.
+/// the way [`DebugInfoCache`](crate::line::DebugInfoCache) keeps its own: a symbol nothing
+/// states an extent for is exactly the one whose answer cost a walk of the debug info.
 ///
 /// It is kept for the **section view**, which drops a decoded stretch once the reader has
 /// scrolled well past it and decodes it again on the way back (`src/ui/reading.rs`); the
@@ -191,7 +191,7 @@ impl SymbolData {
     /// states from the cap without comparing the number to it — a stated end of exactly a
     /// megabyte is an end.
     ///
-    /// **Asked at most once per symbol** ([`ExtentCache`]), which is what a section view
+    /// **Asked at most once per symbol** (`ExtentCache`), which is what a section view
     /// scrolled away from and back does not pay for twice.
     pub fn extent(&self, object: &Object) -> Option<Extent> {
         *self.extent.0.get_or_init(|| {

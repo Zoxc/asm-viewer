@@ -2,9 +2,9 @@
 //! symbols, the code it declares outside its symbol table, and the names demangled.
 
 use crate::demangle;
-use crate::line::{DebugInfo, Procedure, Public};
+use crate::line::{DebugInfo, DebugInfoCache, Procedure, Public};
 use crate::unwind::{self, UnwindEntry};
-use crate::{DebugInfoCache, MadeUp, Object, ObjectData, Section, SymbolData};
+use crate::{MadeUp, Object, ObjectData, Section, SymbolData};
 use object::{
     BinaryFormat, CompressionFormat, ExportTarget, Object as _, ObjectKind, ObjectSection,
     ObjectSymbol, SectionIndex, SectionKind, SymbolIndex, SymbolKind,

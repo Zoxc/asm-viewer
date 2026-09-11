@@ -2,7 +2,9 @@
 //! parsed from. Built by [`parse_object`](crate::parse_object) and read by everything else.
 
 use crate::disasm::Code;
-use crate::{Assembly, DebugInfoCache, ExtentCache};
+use crate::extent::ExtentCache;
+use crate::line::DebugInfoCache;
+use crate::Assembly;
 use object::{Architecture, BinaryFormat, Relocation, SectionIndex, SymbolIndex};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -39,7 +41,7 @@ pub struct Object {
     /// The code sections' symbols by the address they are **placed** at, built from
     /// `symbols` on first use, so it cannot disagree with them. A symbol left out of
     /// `symbols` has no estimate and no label, and no call is named after it. See
-    /// [`PlacedSymbols`].
+    /// `PlacedSymbols`.
     pub placed: PlacedSymbols,
 }
 

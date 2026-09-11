@@ -11,11 +11,11 @@ mod parse;
 mod unwind;
 
 pub use disasm::{Assembly, BranchEdge, Instruction, Operand, SpanKind};
-pub use extent::{Extent, ExtentCache};
-pub use line::{DebugInfoCache, LineInfo, LineRow, SourceDigests, SourceHash};
-pub use listing::{CodeListing, DecodedStretch, Gap, GapKind, Listing, Place, Placed, Stretch};
+pub use extent::Extent;
+pub use line::{LineInfo, LineRow, SourceDigests, SourceHash};
+pub use listing::{CodeListing, Gap, GapKind, Listing, Place, Placed, Stretch};
 pub use made_up::MadeUp;
-pub use model::{FileDigest, Object, ObjectData, PlacedSymbols, Section, Symbol, SymbolData};
+pub use model::{FileDigest, Object, ObjectData, Section, Symbol, SymbolData};
 pub use open::{open_data_streaming, open_files, open_files_streaming, Progress};
 pub use parse::parse_object;
 // Re-exported so the viewer needs no `object` dependency of its own.
@@ -32,5 +32,5 @@ const _: fn() = || {
     assert_send_sync::<LineInfo>();
     assert_send_sync::<Listing>();
     assert_send_sync::<CodeListing>();
-    assert_send_sync::<DecodedStretch>();
+    assert_send_sync::<listing::DecodedStretch>();
 };
