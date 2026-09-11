@@ -23,8 +23,9 @@ pub struct Object {
     /// symbol's bytes say nothing about how to read themselves.
     pub architecture: Architecture,
     pub symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
-    /// The same symbols **sorted by name**, byte order. The Symbols list draws them in this
-    /// order and a saved place is found in it by binary search. [`Object::new`] sorts them.
+    /// The same symbols **sorted by name**, byte order, and one name's by index, the file's
+    /// order. The Symbols list draws them in this order and a saved place is found in it by
+    /// binary search. [`Object::new`] sorts them.
     pub symbols_sorted: Vec<Arc<SymbolData>>,
     pub sections: Vec<Arc<Section>>,
     /// The bytes this object was parsed from. See [`ObjectData`].
@@ -70,8 +71,15 @@ impl Object {
         sections: Vec<Arc<Section>>,
         data: ObjectData,
     ) -> Object {
-        let mut symbols_sorted: Vec<_> = symbols.values().cloned().collect();
-        symbols_sorted.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        let mut sorted: Vec<_> = symbols.iter().collect();
+        // The map's order is the hash seed's; the file's is the symbol index.
+        sorted.sort_unstable_by(|(a_index, a), (b_index, b)| {
+            a.name.cmp(&b.name).then(a_index.0.cmp(&b_index.0))
+        });
+        let symbols_sorted = sorted
+            .into_iter()
+            .map(|(_, symbol)| symbol.clone())
+            .collect();
         Object {
             path,
             name,

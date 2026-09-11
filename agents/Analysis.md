@@ -109,8 +109,8 @@ write which name it is and the symbol's address rather than the spelling, so a b
 outlives a change of spelling (`agents/Persistence.md`); `made_up/tests.rs` pins today's three all
 the same. And it carries the one thing every made-up name shares: it is not the file's own, so no
 demangler is ever offered one.
-`Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>`
-(for relocation-target lookup), `symbols_sorted` (name-sorted, for the UI list) and `placed` (the
+`Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target lookup),
+`symbols_sorted` (by name, then by index, for the UI list) and `placed` (the
 code sections' symbols by placed address, built on first use; below). **The constructors make what
 the fields say**, for the parse and the tests alike. `Object::new` sorts `symbols_sorted` and starts
 `placed` and the debug info empty; `SymbolData::new` starts the extent empty; and a section is one of

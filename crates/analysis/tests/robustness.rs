@@ -787,6 +787,31 @@ fn a_deeply_nested_name_does_not_overflow_the_stack() {
     );
 }
 
+/// Defect: `symbols_sorted` was sorted by name alone, over a map's values, so symbols of one
+/// name were listed in the order of the map's hash seed, which changes from run to run.
+/// They are listed in the file's order: by symbol index.
+#[test]
+fn symbols_of_one_name_are_listed_in_the_files_order() {
+    // Twelve: a random order would match the file's once in 12! runs.
+    let names = vec![b"f".to_vec(); 12];
+    let data = elf_with_names(&names);
+    let object = parse_object(data[..].into(), "same.o".into(), PathBuf::from("/same.o"))
+        .expect("the object parses");
+
+    // Each is at an address of its own, so the address says which symbol it is.
+    let mut by_index: Vec<_> = object.symbols.iter().collect();
+    by_index.sort_by_key(|(index, _)| index.0);
+    let by_index: Vec<u64> = by_index.iter().map(|(_, symbol)| symbol.address).collect();
+    let listed: Vec<u64> = object
+        .symbols_sorted
+        .iter()
+        .map(|symbol| symbol.address)
+        .collect();
+
+    assert_eq!(by_index.len(), names.len());
+    assert_eq!(listed, by_index);
+}
+
 /// An ELF whose `.text` holds one one-byte function per name.
 fn elf_with_names(names: &[Vec<u8>]) -> Vec<u8> {
     use object::{
