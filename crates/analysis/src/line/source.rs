@@ -46,7 +46,7 @@
 //! That one line maps into many symbols is not theoretical: `core/src/ptr/mod.rs:848` —
 //! `drop_in_place` — answers with **9 374** of `viewer-sample`'s symbols.
 
-use super::{without_panicking, DebugInfo};
+use super::DebugInfo;
 use crate::{Object, SymbolData};
 use object::SymbolIndex;
 use std::collections::HashMap;
@@ -79,13 +79,9 @@ struct SymbolRange {
 }
 
 impl SourceIndex {
-    /// Walk every line program once and invert it. A build that panics is an **empty** index,
-    /// which is the same "says nothing" answer everything else in this module gives.
+    /// Walk every line program once and invert it. No net of its own: the calls that reach a
+    /// dependency, the extents and the walk, are each guarded at the seam.
     pub(super) fn build(object: &Object, debug: &DebugInfo) -> SourceIndex {
-        without_panicking(|| SourceIndex::build_inner(object, debug)).unwrap_or_default()
-    }
-
-    fn build_inner(object: &Object, debug: &DebugInfo) -> SourceIndex {
         // **Before the row walk, and this is load-bearing.** `SymbolData::extent` reaches
         // `DebugInfo::extent`, which takes the backend's own lock, and `each_row` holds that
         // same lock for the whole walk — a `Mutex` is not reentrant, so computing an extent

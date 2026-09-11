@@ -423,7 +423,9 @@ would be the saving if it is ever worth it. Rust's legacy-mangled publics run up
 this line compiled into" is not a question about one symbol, so it is not a query but a table. It is
 built on the **first source question against an object** and never before one, behind a `OnceLock`
 on `DebugInfo` beside the backend, not inside one, because it is built from what every backend
-answers and not from any one's internals; and it is empty rather than absent if building it panics.
+answers and not from any one's internals. It has no net of its own: a dependency's panic inside the
+build is caught where the build calls it (`each_row`, `extent`), and any other panic is a bug here
+and shows.
 It is what the source-driven tab, find-all and the instance picker each need, and it is the whole of
 what the crate owes them. *Where inside* a symbol the line's code sits is the forward direction's
 question and is already answered, so a caller walks index → symbol → `line_info` → rows and there is
@@ -465,11 +467,10 @@ own line info does not name the line back. One line into many symbols is not the
 holds one pair per row per symbol covering that row, a symbol table may name one address any number
 of times, and nothing folds those — `SymbolData::extent` answers each alias its own declared size.
 100 000 symbols at one address under a line program of 100 000 rows is a few megabytes of file
-asking for 10^10 pairs, and Rust aborts on an allocation failure, the one failure the
-`catch_unwind` around the build does not see. So the walk counts the pairs it pushes against 64 a
-row, never fewer than 64 Ki and never more than 64 Mi, and past that hands back an **empty** index
-— the "says nothing" answer a panicking build already gives, and empty rather than partial because
-an index missing the rows the walk skipped would be wrong, where an empty one only says nothing. The rate is what a
+asking for 10^10 pairs, and Rust aborts on an allocation failure, which no `catch_unwind` sees. So
+the walk counts the pairs it pushes against 64 a row, never fewer than 64 Ki and never more than
+64 Mi, and past that hands back an **empty** index: empty rather than partial, because an index
+missing the rows the walk skipped would be wrong, where an empty one only says nothing. The rate is what a
 crafted file inflates; the ceiling is what a file with rows enough would get around the rate with.
 Measured, a 451 MB build of the app's own binary pushes 1 964 064 pairs over 2 112 859 rows: 0.93 a
 row against the 64 allowed.
