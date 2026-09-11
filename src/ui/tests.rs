@@ -12415,9 +12415,11 @@ fn every_foreground_is_legible_on_its_own_surface() {
             assert!(ratio >= 3.0, "{theme} {name} on server_bg: {ratio:.2}");
         }
 
-        // The chrome, on the two plain surfaces it is written over. `address_fg` is here
+        // The chrome, on the three plain surfaces it is written over. `address_fg` is here
         // as well as over the code panes above: it is the app's dim text everywhere, and
         // the Assembly pane's bar draws a symbol's mangled spelling in it on `header_bg`.
+        // `prompt_bg` is the trust prompt's band, which writes in `text_fg` and
+        // `address_fg`.
         let chrome = [
             ("text_fg", palette.text_fg),
             ("icon_fg", palette.icon_fg),
@@ -12428,6 +12430,7 @@ fn every_foreground_is_legible_on_its_own_surface() {
             for (surface, background) in [
                 ("pane_bg", palette.pane_bg),
                 ("header_bg", palette.header_bg),
+                ("prompt_bg", palette.prompt_bg),
             ] {
                 let ratio = contrast(color, background);
                 assert!(ratio >= 3.0, "{theme} {name} on {surface}: {ratio:.2}");
@@ -26793,6 +26796,33 @@ fn a_press_over_a_directory_nobody_agreed_to_asks_before_it_starts() {
     assert!(says("build scripts"), "{drawn:?}");
     assert!(says("/p"), "{drawn:?}");
     assert!(says("Start it") && says("Not now"), "{drawn:?}");
+}
+
+/// The question stands on a ground of its own. The window and the bar above it are drawn
+/// on `pane_bg`, so a band on that colour reads as having no background at all.
+#[test]
+fn the_trust_prompt_stands_on_a_ground_of_its_own() {
+    assert_ne!(palette().prompt_bg, palette().pane_bg);
+    let (mut test, roots, _asking, _asks) = mount_server(|_: LspJob| None);
+    let mut proj = roots.states.proj;
+    proj.write().workspace_text = "/p".to_owned();
+    settle(&mut test);
+    assert!(rects_with(&test, palette().prompt_bg).is_empty());
+
+    press_at(&mut test, the_control());
+    settle(&mut test);
+
+    // One rect in that colour, and it is the band holding the answers.
+    let bands = rects_with(&test, palette().prompt_bg);
+    let [band] = bands[..] else {
+        panic!("the band's ground: {bands:?}");
+    };
+    let (x, y) = centre_of(&test, "Start it");
+    let (x, y) = (x as f32, y as f32);
+    assert!(
+        band.min_x() <= x && x <= band.max_x() && band.min_y() <= y && y <= band.max_y(),
+        "{band:?} does not hold the answer at {x}, {y}"
+    );
 }
 
 /// Agreeing starts it, once, and the project keeps the answer: it is written where the

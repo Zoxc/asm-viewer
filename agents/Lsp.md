@@ -68,9 +68,9 @@ that press -- and a stop clears an unanswered question along with the server.
 `TrustPrompt` draws it **at the root, under the top bar**, and not in the Project view's own
 section beside the other Start button. The control is pressed from wherever the reader is,
 and a question drawn in a tab that is not on screen is a press that did nothing. It is a
-band in the bar's own style rather than a window over the app, it names the directory
-because that is what is being agreed to, and it lays out as nothing while there is nothing
-to ask. Drawn by the app and not by `rfd`, whose dialogs the headless runner cannot press:
+band in the bar's own style rather than a window over the app, on a ground of its own
+(`prompt_bg`), it names the directory because that is what is being agreed to, and it lays
+out as nothing while there is nothing to ask. Drawn by the app and not by `rfd`, whose dialogs the headless runner cannot press:
 the app answers questions about its UI with tests.
 
 ## The protocol, hand-rolled

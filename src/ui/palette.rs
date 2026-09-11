@@ -62,6 +62,11 @@ pub(crate) struct Palette {
     /// colour**: enough purple to be told from the grey of a hover wash, and no more, since
     /// it sits in a bar the reader looks past all day.
     pub(crate) server_bg: Color,
+    /// The ground of a question standing in front of the app: the band under the top bar
+    /// asking whether a language server may read the project's directory. A step off the
+    /// `pane_bg` the bar is drawn on, so the band reads as a surface of its own and not
+    /// as more of the bar.
+    pub(crate) prompt_bg: Color,
     /// The wash under the × on a tab while the pointer is on the × *itself* rather
     /// than merely on the tab. Translucent, because it sits on either of two grounds --
     /// the active tab's `pane_bg` and a hovered tab's `toggle_hover_bg` -- and has to say
@@ -184,6 +189,7 @@ impl Palette {
         toggle_on_bg: Color::from_rgb(196, 196, 196),
         toggle_hover_bg: Color::from_rgb(225, 225, 225),
         server_bg: Color::from_rgb(233, 229, 243),
+        prompt_bg: Color::from_rgb(243, 243, 228),
         close_hover_bg: Color::from_argb(70, 90, 90, 96),
         link_hover_bg: Color::from_af32rgb(0.6, 255, 255, 255),
         branch_fg: Color::from_rgb(176, 188, 202),
@@ -234,6 +240,7 @@ impl Palette {
         toggle_on_bg: Color::from_rgb(88, 88, 92),
         toggle_hover_bg: Color::from_rgb(60, 60, 64),
         server_bg: Color::from_rgb(64, 60, 76),
+        prompt_bg: Color::from_rgb(38, 38, 33),
         // Translucent, and stated the same way as the three above: what it comes out as
         // over a tab, which here means lifting the surface rather than darkening it.
         close_hover_bg: Color::from_argb(75, 200, 200, 210),

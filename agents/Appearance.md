@@ -20,7 +20,10 @@ where a disabled control is one they are told not to press. It is held to WCAG's
 required to be quieter than the name of the tab that is on screen. It also includes a picked-out
 list row, whose surface is the selection composited over the pane, held to the floor the code takes
 through that same wash rather than to the 3.0: a list's dim second column recedes on the pane and
-recedes through the selection too. The second is a visible-step floor for every wash over the row
+recedes through the selection too. And it includes the band under the top bar that asks whether a
+language server may read the project's directory. Its ground is `prompt_bg`, a step off the
+`pane_bg` the window and the bar are drawn on, so the question is a surface of its own and not more
+of the bar. The second is a visible-step floor for every wash over the row
 under it. A code row's four washes are the pair's green (`pair_bg`, the other pane's selection
 mapped here); the selection's blue-grey (`text_select_bg`: the characters a sweep selected, drawn by
 the row under its text, and the row picked out in the list holding the keyboard, held to the floor
