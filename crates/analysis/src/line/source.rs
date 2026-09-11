@@ -271,11 +271,9 @@ impl Object {
         if first > last {
             return Vec::new();
         }
-        let Some(debug) = self.debug_info() else {
+        let Some(index) = self.source_index() else {
             return Vec::new();
         };
-
-        let index = debug.index.get_or_init(|| SourceIndex::build(self, debug));
 
         // One symbol answering for several of the lines asked about is one hit, not several.
         let mut found: Vec<SymbolIndex> = index
@@ -308,10 +306,9 @@ impl Object {
     /// Empty for [`symbols_from_lines`]'s reasons, and worker-thread work for its reason
     /// too: the first call against an object builds the index.
     pub fn lines_from_source(&self, file: &str) -> Vec<u32> {
-        let Some(debug) = self.debug_info() else {
+        let Some(index) = self.source_index() else {
             return Vec::new();
         };
-        let index = debug.index.get_or_init(|| SourceIndex::build(self, debug));
 
         // The entries are sorted by line, so the repeats a line with several symbols
         // makes are adjacent and `dedup` is the whole of it.
@@ -338,13 +335,19 @@ impl Object {
     /// Empty for [`symbols_from_lines`](Self::symbols_from_lines)'s reasons, and worker-thread
     /// work for its reason too: the first call against an object builds the index.
     pub fn source_files(&self) -> Vec<Arc<str>> {
-        let Some(debug) = self.debug_info() else {
+        let Some(index) = self.source_index() else {
             return Vec::new();
         };
-        let index = debug.index.get_or_init(|| SourceIndex::build(self, debug));
 
         let mut files: Vec<Arc<str>> = index.files.keys().cloned().collect();
         files.sort_unstable();
         files
+    }
+
+    /// The index the questions above are asked of, built on the first call against this
+    /// object, or [`None`] when it has no debug info this reads.
+    fn source_index(&self) -> Option<&SourceIndex> {
+        let debug = self.debug_info()?;
+        Some(debug.index.get_or_init(|| SourceIndex::build(self, debug)))
     }
 }
