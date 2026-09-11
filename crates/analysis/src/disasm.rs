@@ -16,10 +16,10 @@ use std::{ops::Range, sync::Arc};
 
 mod x86;
 
-/// What to call `architecture` in a sentence explaining that nothing decoded it. [`None`]
-/// for one with no spelling here, which falls back to the `Debug` name through the caller.
-fn architecture_name(architecture: Architecture) -> Option<&'static str> {
-    Some(match architecture {
+/// What to call `architecture` in a sentence explaining that nothing decoded it: "an
+/// unsupported architecture" for one with no spelling here.
+fn architecture_name(architecture: Architecture) -> &'static str {
+    match architecture {
         Architecture::Unknown => "an unknown architecture",
         Architecture::Aarch64 | Architecture::Aarch64_Ilp32 => "aarch64",
         Architecture::Arm => "32-bit ARM",
@@ -34,8 +34,8 @@ fn architecture_name(architecture: Architecture) -> Option<&'static str> {
         Architecture::LoongArch64 => "LoongArch64",
         Architecture::S390x => "s390x",
         Architecture::Wasm32 | Architecture::Wasm64 => "WebAssembly",
-        _ => return None,
-    })
+        _ => "an unsupported architecture",
+    }
 }
 
 /// The bytes of one symbol, handed to a backend to decode.
@@ -354,18 +354,16 @@ impl Assembly {
     ) -> Self {
         let instructions = backend.disassemble(code);
 
-        // A backend decodes from the front, so these ascend and a target is one binary search
-        // away. An address that is not in the list is a branch this symbol has no row for and
-        // is dropped; see `edges`.
-        let addresses: Vec<u64> = instructions
-            .iter()
-            .map(|instruction| instruction.address)
-            .collect();
+        // A backend decodes from the front, so the rows ascend by address and a target is one
+        // binary search away. A target with no row is dropped; see `edges`.
         let edges = instructions
             .iter()
             .enumerate()
             .filter_map(|(from, instruction)| {
-                let to = addresses.binary_search(&instruction.branch()?).ok()?;
+                let target = instruction.branch()?;
+                let to = instructions
+                    .binary_search_by_key(&target, |instruction| instruction.address)
+                    .ok()?;
                 (to != from).then_some(BranchEdge { from, to })
             })
             .collect();
@@ -400,9 +398,7 @@ impl Assembly {
         Self {
             instructions: Vec::new(),
             edges: Vec::new(),
-            undecodable: Some(
-                architecture_name(architecture).unwrap_or("an unsupported architecture"),
-            ),
+            undecodable: Some(architecture_name(architecture)),
             range,
             extent,
         }
