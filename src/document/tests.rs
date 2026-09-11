@@ -1,31 +1,22 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use analysis::{Architecture, BinaryFormat, ExtentCache, ObjectData, SymbolData};
+use analysis::{Architecture, BinaryFormat, ObjectData, SymbolData, SymbolIndex};
 
 use super::*;
 
 /// A bare `Object` with one text symbol — only the fields these tests read.
 fn object(path: &str, name: &str) -> Arc<Object> {
-    Arc::new(Object {
-        path: PathBuf::from(path),
-        name: name.to_owned(),
-        format: BinaryFormat::Elf,
-        architecture: Architecture::X86_64,
-        symbols: HashMap::new(),
-        symbols_sorted: vec![Arc::new(SymbolData {
-            name: "caller".to_owned(),
-            demangled: None,
-            address: 0,
-            section: None,
-            size: 0,
-            extent: ExtentCache::default(),
-        })],
-        sections: Vec::new(),
-        data: ObjectData::from(&b"the first build"[..]),
-        debug_info: Default::default(),
-        placed: Default::default(),
-    })
+    let caller = SymbolData::new("caller".to_owned(), None, 0, None, 0);
+    Arc::new(Object::new(
+        PathBuf::from(path),
+        name.to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        HashMap::from([(SymbolIndex(0), Arc::new(caller))]),
+        Vec::new(),
+        ObjectData::from(&b"the first build"[..]),
+    ))
 }
 
 /// The two members of one archive, which `path` alone cannot tell apart.

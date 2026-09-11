@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use analysis::{Architecture, BinaryFormat, ExtentCache, Object, ObjectData, SymbolData};
+use analysis::{Architecture, BinaryFormat, Object, ObjectData, SymbolData, SymbolIndex};
 
 use super::*;
 use crate::docs::Docs;
@@ -166,26 +166,16 @@ fn a_closing_binary_forgets_the_lines_of_the_entries_it_takes() {
 
 /// A bare symbol in a bare object at `path`: only what [`Driven::release`] looks at.
 fn symbol(path: &str, name: &str) -> Symbol {
-    let data = Arc::new(SymbolData {
-        name: name.to_owned(),
-        demangled: None,
-        address: 0,
-        section: None,
-        size: 0,
-        extent: ExtentCache::default(),
-    });
-    let object = Arc::new(Object {
-        path: PathBuf::from(path),
-        name: path.to_owned(),
-        format: BinaryFormat::Elf,
-        architecture: Architecture::X86_64,
-        symbols: HashMap::new(),
-        symbols_sorted: vec![data.clone()],
-        sections: Vec::new(),
-        data: ObjectData::from(b"bytes".as_slice()),
-        debug_info: Default::default(),
-        placed: Default::default(),
-    });
+    let data = Arc::new(SymbolData::new(name.to_owned(), None, 0, None, 0));
+    let object = Arc::new(Object::new(
+        PathBuf::from(path),
+        path.to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        HashMap::from([(SymbolIndex(0), data.clone())]),
+        Vec::new(),
+        ObjectData::from(b"bytes".as_slice()),
+    ));
     Symbol { object, data }
 }
 

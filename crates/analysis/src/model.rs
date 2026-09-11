@@ -23,9 +23,8 @@ pub struct Object {
     /// symbol's bytes say nothing about how to read themselves.
     pub architecture: Architecture,
     pub symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
-    /// The same symbols **sorted by name**, byte order. The Symbols list draws it in that
-    /// order and a saved place is found in it by binary search, so anything building an
-    /// `Object` by hand has to sort it the same way.
+    /// The same symbols **sorted by name**, byte order. The Symbols list draws them in this
+    /// order and a saved place is found in it by binary search. [`Object::new`] sorts them.
     pub symbols_sorted: Vec<Arc<SymbolData>>,
     pub sections: Vec<Arc<Section>>,
     /// The bytes this object was parsed from. See [`ObjectData`].
@@ -33,14 +32,13 @@ pub struct Object {
 
     /// This object's debug info, built on the first query — except for a PE whose matching
     /// `.pdb` was opened at parse time for the symbols it names, whose backend is seeded
-    /// here so it is not opened twice. Anything building an `Object` by hand writes
-    /// `DebugInfoCache::default()`. See [`Object::line_info`].
+    /// here so it is not opened twice. See [`Object::line_info`].
     pub debug_info: DebugInfoCache,
 
-    /// The code sections' symbols by the address they are **placed** at, built on first use
-    /// from `symbols`, so anything building an `Object` by hand writes
-    /// `PlacedSymbols::default()` and cannot disagree with it. A symbol left out of `symbols`
-    /// has no estimate and no label, and no call is named after it. See [`PlacedSymbols`].
+    /// The code sections' symbols by the address they are **placed** at, built from
+    /// `symbols` on first use, so it cannot disagree with them. A symbol left out of
+    /// `symbols` has no estimate and no label, and no call is named after it. See
+    /// [`PlacedSymbols`].
     pub placed: PlacedSymbols,
 }
 
@@ -60,6 +58,34 @@ pub struct Object {
 pub struct PlacedSymbols(OnceLock<Vec<(u64, SymbolIndex, Arc<SymbolData>)>>);
 
 impl Object {
+    /// An object holding `symbols`, which may come in any order. This is where
+    /// [`symbols_sorted`](Self::symbols_sorted) is sorted, and it starts
+    /// [`placed`](Self::placed) and `debug_info` empty, each to be built on its first use.
+    pub fn new(
+        path: PathBuf,
+        name: String,
+        format: BinaryFormat,
+        architecture: Architecture,
+        symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
+        sections: Vec<Arc<Section>>,
+        data: ObjectData,
+    ) -> Object {
+        let mut symbols_sorted: Vec<_> = symbols.values().cloned().collect();
+        symbols_sorted.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        Object {
+            path,
+            name,
+            format,
+            architecture,
+            symbols,
+            symbols_sorted,
+            sections,
+            data,
+            debug_info: DebugInfoCache::default(),
+            placed: PlacedSymbols::default(),
+        }
+    }
+
     /// [`placed`](Self::placed), built on the first ask.
     pub(crate) fn placed_symbols(&self) -> &[(u64, SymbolIndex, Arc<SymbolData>)] {
         self.placed.0.get_or_init(|| {
@@ -241,14 +267,16 @@ pub struct Section {
 
     /// The address ranges the file's own unwind table states for the functions in this
     /// section — an x86-64 PE's `.pdata`, an ELF's `.eh_frame`, out of
-    /// [`unwind::entries`](crate::unwind::entries) — sorted by start, each start once, ends
-    /// clamped to the section's bytes. Empty for a file with no table read. What
-    /// [`SymbolData::extent`] answers from first.
+    /// [`unwind::entries`](crate::unwind::entries) — each starting in the section's bytes,
+    /// sorted by start, each start once, ends clamped to the bytes. Empty for a file with no
+    /// table read. What [`SymbolData::extent`] answers from first.
     pub unwind: Vec<Range<u64>>,
 
     /// Whether the file marks this section as holding code (`SectionKind::Text`). This is
     /// what a listing of all of it lists, and what decides whether the parse read the
     /// section's [`data`](Self::data) and [`relocations`](Self::relocations) at all.
+    /// [`text`](Self::text) makes a section that does, and [`other`](Self::other) one that
+    /// does not.
     pub code: bool,
 
     /// Where the object's layout puts this section: what is added to an address in it to
@@ -260,6 +288,67 @@ pub struct Section {
 }
 
 impl Section {
+    /// A section holding code: its bytes, decompressed, the address they start at, the
+    /// relocations in them by address, and its [`bias`](Self::bias). No unwind ranges.
+    pub fn text(
+        index: SectionIndex,
+        name: String,
+        data: Vec<u8>,
+        address: u64,
+        relocations: HashMap<u64, Relocation>,
+        bias: u64,
+    ) -> Section {
+        Section {
+            index,
+            name,
+            data: Some(data),
+            address,
+            relocations,
+            unwind: Vec::new(),
+            code: true,
+            bias,
+        }
+    }
+
+    /// A section holding no code: no bytes, no relocations, no unwind ranges and no bias.
+    pub fn other(index: SectionIndex, name: String, address: u64) -> Section {
+        Section {
+            index,
+            name,
+            data: None,
+            address,
+            relocations: HashMap::new(),
+            unwind: Vec::new(),
+            code: false,
+            bias: 0,
+        }
+    }
+
+    /// This section with `unwind` as its [`unwind`](Self::unwind) ranges, made to hold what
+    /// that field says: a range not starting in the bytes is dropped, the rest have their
+    /// ends clamped to the bytes, and they are sorted by start with each start kept once.
+    pub(crate) fn with_unwind(mut self, mut unwind: Vec<Range<u64>>) -> Section {
+        let bytes = self.data.as_ref().and_then(|data| {
+            let length: u64 = data.len().try_into().ok()?;
+            Some(self.address..self.address.checked_add(length)?)
+        });
+        match bytes {
+            Some(bytes) => {
+                unwind.retain(|range| bytes.contains(&range.start));
+                for range in &mut unwind {
+                    range.end = range.end.min(bytes.end);
+                }
+            }
+            None => unwind.clear(),
+        }
+        // By start, and each start once: a table stating one function twice is one
+        // function, and the search over them assumes it.
+        unwind.sort_unstable_by_key(|range| range.start);
+        unwind.dedup_by_key(|range| range.start);
+        self.unwind = unwind;
+        self
+    }
+
     /// The placed addresses this section's bytes take up, cut short where the address space
     /// ends. [`None`] for a section that is not [`code`](Self::code), which has no place, and
     /// for one whose place would be past the end of the address space.
@@ -282,12 +371,30 @@ pub struct SymbolData {
     pub section: Option<Arc<Section>>,
     pub size: u64,
 
-    /// What [`extent`](Self::extent) answered, once it has been asked. Anything building a
-    /// `SymbolData` by hand writes `ExtentCache::default()`.
+    /// What [`extent`](Self::extent) answered, once it has been asked; empty until then.
     pub extent: ExtentCache,
 }
 
 impl SymbolData {
+    /// A symbol as the file states it. Its [`extent`](Self::extent) is worked out on the
+    /// first ask.
+    pub fn new(
+        name: String,
+        demangled: Option<String>,
+        address: u64,
+        section: Option<Arc<Section>>,
+        size: u64,
+    ) -> SymbolData {
+        SymbolData {
+            name,
+            demangled,
+            address,
+            section,
+            size,
+            extent: ExtentCache::default(),
+        }
+    }
+
     /// What to call this symbol on screen. The disassembler substitutes this for a relocated
     /// operand, so anything rendering a relocation target has to use the same rule.
     pub fn display(&self) -> &str {

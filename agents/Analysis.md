@@ -111,7 +111,13 @@ the same. And it carries the one thing every made-up name shares: it is not the 
 demangler is ever offered one.
 `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>`
 (for relocation-target lookup), `symbols_sorted` (name-sorted, for the UI list) and `placed` (the
-code sections' symbols by placed address, built on first use; below).
+code sections' symbols by placed address, built on first use; below). **The constructors make what
+the fields say**, for the parse and the tests alike. `Object::new` sorts `symbols_sorted` and starts
+`placed` and the debug info empty; `SymbolData::new` starts the extent empty; and a section is one of
+two kinds, `Section::text` or `Section::other`, so one holding no code has no bytes, relocations or
+bias. The parse gives each section its unwind ranges through `Section::with_unwind`, which drops,
+clamps, sorts and dedups them. The fields stay `pub` to be read. No test fixture sorts by hand any
+more, so none can break the binary search a saved place is found by.
 `Object::data` is an `ObjectData`, an `Arc<[u8]>` of the whole file plus a `Range`, kept for the
 object's lifetime, because parsing keeps decompressed bytes only for the code sections and the lazy
 passes read the file again for the rest. Every object from one file shares that one allocation,
@@ -596,10 +602,9 @@ their own. A section that is not code has no place, so its symbols would land on
 addresses; it keeps no bytes either, so they never had an extent to read. Where a header makes two
 places overlap, each of the two listings also labels the other's symbols; nothing breaks, and
 `CodeListing` draws only the first. The index is built from `symbols` behind a `OnceLock` like the
-debug info, so an `Object` built by hand writes `Default::default()` and cannot disagree with it. It
-is lazy rather than built at parse because an archive's members are parsed all at once and read one
-at a time. The build sorts every symbol, once per object; every question after it is a binary
-search.
+debug info, so it cannot disagree with them. It is lazy rather than built at parse because an
+archive's members are parsed all at once and read one at a time. The build sorts every symbol, once
+per object; every question after it is a binary search.
 
 **What an operand names is one enum**, `Operand`, and a row carries one `Option` of it. It used to
 be six fields and sixty lines of doc saying which was `Some` exactly when which other was, with the

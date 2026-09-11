@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use analysis::{Architecture, DebugInfoCache, ObjectData};
+use analysis::{Architecture, ObjectData};
 
 use crate::filter::Filter;
 
@@ -8,18 +8,15 @@ use super::*;
 
 /// An `Object` with nothing in it but the two fields the tree reads.
 fn object(path: &str, name: &str) -> Arc<Object> {
-    Arc::new(Object {
-        path: PathBuf::from(path),
-        name: name.to_owned(),
-        format: BinaryFormat::Elf,
-        architecture: Architecture::X86_64,
-        symbols: HashMap::new(),
-        symbols_sorted: Vec::new(),
-        sections: Vec::new(),
-        data: ObjectData::from(&[][..]),
-        debug_info: DebugInfoCache::default(),
-        placed: Default::default(),
-    })
+    Arc::new(Object::new(
+        PathBuf::from(path),
+        name.to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        HashMap::new(),
+        Vec::new(),
+        ObjectData::from(&[][..]),
+    ))
 }
 
 fn plain(pattern: &str) -> Filter {

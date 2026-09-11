@@ -18,18 +18,15 @@ fn document(name: &str) -> Document {
 
 /// A distinct object: two calls with the same `name` still produce different `Arc`s.
 fn object(name: &str) -> Arc<Object> {
-    Arc::new(Object {
-        path: PathBuf::from("/tmp/lib.a"),
-        name: name.to_owned(),
-        format: BinaryFormat::Elf,
-        architecture: Architecture::X86_64,
-        symbols: HashMap::new(),
-        symbols_sorted: Vec::new(),
-        sections: Vec::new(),
-        data: ObjectData::from(&b""[..]),
-        debug_info: Default::default(),
-        placed: Default::default(),
-    })
+    Arc::new(Object::new(
+        PathBuf::from("/tmp/lib.a"),
+        name.to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        HashMap::new(),
+        Vec::new(),
+        ObjectData::from(&b""[..]),
+    ))
 }
 
 #[test]

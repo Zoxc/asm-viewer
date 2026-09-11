@@ -4,9 +4,7 @@
 use crate::demangle;
 use crate::line::{DebugInfo, Procedure, Public};
 use crate::unwind::{self, UnwindEntry};
-use crate::{
-    DebugInfoCache, ExtentCache, MadeUp, Object, ObjectData, PlacedSymbols, Section, SymbolData,
-};
+use crate::{DebugInfoCache, MadeUp, Object, ObjectData, Section, SymbolData};
 use object::{
     BinaryFormat, CompressionFormat, ExportTarget, Object as _, ObjectKind, ObjectSection,
     ObjectSymbol, SectionIndex, SectionKind, SymbolIndex, SymbolKind,
@@ -339,7 +337,7 @@ fn code_sections(
 pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc<Object>> {
     let file = object::File::parse(data.bytes()).ok()?;
 
-    let mut sections = read_sections(&file);
+    let sections = read_sections(&file);
     let SymbolTable {
         named: mut symbols,
         unnamed,
@@ -351,7 +349,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     let unwind = unwind::entries(&file);
     let code = code_sections(&file, &sections);
     let declared = declared_code(&file, &code, &mut known, next, procedures, publics, &unwind);
-    place_unwind(&mut sections, &code, &unwind);
+    let ranges = place_unwind(&code, &unwind);
 
     // After `declared_code`, so `known` holds every address anything named.
     symbols.extend(
@@ -361,25 +359,22 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     );
     symbols.extend(declared);
 
-    let sections = freeze_sections(sections);
+    let sections = freeze_sections(sections, ranges);
     let symbols = symbol_data(symbols, &sections);
-    let mut symbols_sorted: Vec<_> = symbols.values().cloned().collect();
-    symbols_sorted.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
     let format = file.format();
     let architecture = file.architecture();
-    Some(Arc::new(Object {
-        name,
+    let mut object = Object::new(
         path,
+        name,
         format,
         architecture,
         symbols,
-        symbols_sorted,
-        sections: sections.into_values().collect(),
+        sections.into_values().collect(),
         data,
-        debug_info,
-        placed: PlacedSymbols::default(),
-    }))
+    );
+    object.debug_info = debug_info;
+    Some(Arc::new(object))
 }
 
 /// Every section the file states, by index. Each code section's place is decided here, once,
@@ -389,6 +384,7 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
     let format = file.format();
     file.sections()
         .filter_map(|section| {
+            let index = section.index();
             let name = String::from_utf8_lossy(section.name_bytes().ok()?).into_owned();
 
             // Only a code section's bytes are read here. Whatever reads another -- the line
@@ -396,12 +392,10 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
             // be a second one held for the object's life. A code section whose bytes will not
             // decompress is dropped outright: there is nothing to disassemble in it and
             // nothing else to keep it for.
-            let code = section.kind() == SectionKind::Text;
-            let data = if code {
-                Some(section_data(&section)?)
-            } else {
-                None
-            };
+            if section.kind() != SectionKind::Text {
+                return Some((index, Section::other(index, name, section.address())));
+            }
+            let data = section_data(&section)?;
 
             // Mach-O states a relocation's place as an offset from the start of its section,
             // and lays its sections out one after another, so that offset is not the address
@@ -415,28 +409,14 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
                 BinaryFormat::MachO => section.address(),
                 _ => 0,
             };
-            let relocations = if code {
-                section
-                    .relocations()
-                    .filter_map(|(offset, relocation)| {
-                        Some((base.checked_add(offset)?, relocation))
-                    })
-                    .collect()
-            } else {
-                HashMap::new()
-            };
+            let relocations = section
+                .relocations()
+                .filter_map(|(offset, relocation)| Some((base.checked_add(offset)?, relocation)))
+                .collect();
+            let bias = biases.get(&index).copied().unwrap_or(0);
             Some((
-                section.index(),
-                Section {
-                    index: section.index(),
-                    name,
-                    address: section.address(),
-                    data,
-                    unwind: Vec::new(),
-                    relocations,
-                    code,
-                    bias: biases.get(&section.index()).copied().unwrap_or(0),
-                },
+                index,
+                Section::text(index, name, data, section.address(), relocations, bias),
             ))
         })
         .collect()
@@ -492,39 +472,38 @@ fn open_pdb(file: &object::File<'_>, path: &Path) -> (DebugInfoCache, Vec<Proced
     }
 }
 
-/// Every unwind entry's range into its section, whether or not its begin became a symbol: an
-/// export or a procedure at that address takes its extent from the end the entry states.
-/// Clamped to the section's bytes, so that end can never reach past what `bytes` can read.
+/// Every unwind entry's range, by the section it starts in, whether or not its begin became a
+/// symbol: an export or a procedure at that address takes its extent from the end the entry
+/// states. The first section holding the start takes it.
 fn place_unwind(
-    sections: &mut HashMap<SectionIndex, Section>,
     code: &[(Range<u64>, SectionIndex)],
     unwind: &[UnwindEntry],
-) {
+) -> HashMap<SectionIndex, Vec<Range<u64>>> {
+    let mut ranges: HashMap<SectionIndex, Vec<Range<u64>>> = HashMap::new();
     for UnwindEntry { range, .. } in unwind {
-        let Some((bounds, index)) = code
+        let Some((_, index)) = code
             .iter()
             .find(|(bounds, _)| bounds.contains(&range.start))
         else {
             continue;
         };
-        if let Some(section) = sections.get_mut(index) {
-            section.unwind.push(range.start..range.end.min(bounds.end));
-        }
+        ranges.entry(*index).or_default().push(range.clone());
     }
+    ranges
 }
 
-/// The sections, done with: each one's unwind ranges sorted and deduplicated, then shared.
+/// The sections, done with: each given the unwind ranges that start in it, then shared.
+/// [`Section::with_unwind`] clamps each range's end to the section's bytes, so that end can
+/// never reach past what `bytes` can read.
 fn freeze_sections(
     sections: HashMap<SectionIndex, Section>,
+    mut ranges: HashMap<SectionIndex, Vec<Range<u64>>>,
 ) -> HashMap<SectionIndex, Arc<Section>> {
     sections
         .into_iter()
-        .map(|(index, mut section)| {
-            // By start, and each start once: a table stating one function twice is one
-            // function, and the search over them assumes it.
-            section.unwind.sort_unstable_by_key(|range| range.start);
-            section.unwind.dedup_by_key(|range| range.start);
-            (index, Arc::new(section))
+        .map(|(index, section)| {
+            let unwind = ranges.remove(&index).unwrap_or_default();
+            (index, Arc::new(section.with_unwind(unwind)))
         })
         .collect()
 }
@@ -552,17 +531,16 @@ fn symbol_data(
         .map(|((symbol, name), demangled)| {
             (
                 symbol.index,
-                Arc::new(SymbolData {
+                Arc::new(SymbolData::new(
                     // `None` for a name that was not offered, and so is still the symbol's.
-                    name: name.unwrap_or(symbol.name),
+                    name.unwrap_or(symbol.name),
                     demangled,
-                    section: symbol
+                    symbol.address,
+                    symbol
                         .section
                         .and_then(|index| sections.get(&index).cloned()),
-                    address: symbol.address,
-                    size: symbol.size,
-                    extent: ExtentCache::default(),
-                }),
+                    symbol.size,
+                )),
             )
         })
         .collect()

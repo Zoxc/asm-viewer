@@ -1,7 +1,7 @@
 //! What an instruction row draws, held against what the same row copies.
 
 use super::*;
-use analysis::{BranchEdge, Extent, ExtentCache};
+use analysis::{BranchEdge, Extent};
 use freya_testing::TestingRunner;
 use std::path::Path;
 
@@ -217,14 +217,13 @@ fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
 /// as well.
 #[test]
 fn every_kind_of_link_is_one_inline_piece() {
-    let target = Arc::new(SymbolData {
-        name: "_ZN3add3addE".to_owned(),
-        demangled: Some("add".to_owned()),
-        address: 0x100,
-        section: None,
-        size: 0,
-        extent: ExtentCache::default(),
-    });
+    let target = Arc::new(SymbolData::new(
+        "_ZN3add3addE".to_owned(),
+        Some("add".to_owned()),
+        0x100,
+        None,
+        0,
+    ));
     let assembly = listing(target);
     let kinds = (0..assembly.instructions.len())
         .map(|index| {
@@ -346,14 +345,13 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");
     let objects = analysis::open_files(vec![path]);
     let object = objects.first().expect("the fixture parses").clone();
-    let target = Arc::new(SymbolData {
-        name: "_ZN3add3addE".to_owned(),
-        demangled: Some("add".to_owned()),
-        address: 0x100,
-        section: None,
-        size: 0,
-        extent: ExtentCache::default(),
-    });
+    let target = Arc::new(SymbolData::new(
+        "_ZN3add3addE".to_owned(),
+        Some("add".to_owned()),
+        0x100,
+        None,
+        0,
+    ));
     let in_code = Door::Symbol {
         object: object.clone(),
         target: target.clone(),

@@ -2,50 +2,47 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use analysis::{
-    Architecture, BinaryFormat, ExtentCache, ObjectData, Section, SectionIndex, Symbol, SymbolData,
+    Architecture, BinaryFormat, ObjectData, Section, SectionIndex, Symbol, SymbolData, SymbolIndex,
 };
 
 use super::*;
 use crate::document::Selection;
 
-/// A bare `Object` with the given text symbols, sorted by name as the parser leaves them.
+/// A bare `Object` with the given text symbols, which `symbols_sorted` holds by name.
 fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
-    let section = Arc::new(Section {
-        index: SectionIndex(0),
-        name: ".text".into(),
-        data: Some(vec![0xC3; symbols.len()]),
-        address: 0,
-        relocations: HashMap::new(),
-        unwind: Vec::new(),
-        code: true,
-        bias: 0,
-    });
-    let mut symbols_sorted: Vec<Arc<SymbolData>> = symbols
+    let bytes = vec![0xC3; symbols.len()];
+    let section = Arc::new(Section::text(
+        SectionIndex(0),
+        ".text".into(),
+        bytes,
+        0,
+        HashMap::new(),
+        0,
+    ));
+    let symbols = symbols
         .iter()
-        .map(|(name, address)| {
-            Arc::new(SymbolData {
-                name: (*name).to_owned(),
-                demangled: Some(format!("demangled::{name}")),
-                address: *address,
-                section: Some(section.clone()),
-                size: 0,
-                extent: ExtentCache::default(),
-            })
+        .enumerate()
+        .map(|(index, (name, address))| {
+            let demangled = Some(format!("demangled::{name}"));
+            let symbol = SymbolData::new(
+                (*name).to_owned(),
+                demangled,
+                *address,
+                Some(section.clone()),
+                0,
+            );
+            (SymbolIndex(index), Arc::new(symbol))
         })
         .collect();
-    symbols_sorted.sort_by(|a, b| a.name.cmp(&b.name));
-    Arc::new(Object {
-        path: PathBuf::from("/tmp/lib.a"),
-        name: name.to_owned(),
-        format: BinaryFormat::Elf,
-        architecture: Architecture::X86_64,
-        symbols: HashMap::new(),
-        symbols_sorted,
-        sections: vec![section],
-        data: ObjectData::from(&b"a build"[..]),
-        debug_info: Default::default(),
-        placed: Default::default(),
-    })
+    Arc::new(Object::new(
+        PathBuf::from("/tmp/lib.a"),
+        name.to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        symbols,
+        vec![section],
+        ObjectData::from(&b"a build"[..]),
+    ))
 }
 
 fn symbol(object: &Arc<Object>, index: usize) -> Document {

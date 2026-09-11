@@ -5,8 +5,8 @@
 mod common;
 
 use analysis::{
-    parse_object, Architecture, CodeListing, Extent, ExtentCache, GapKind, Listing, Object, Place,
-    Section, SymbolData,
+    parse_object, Architecture, CodeListing, Extent, GapKind, Listing, Object, Place, Section,
+    SymbolData,
 };
 use common::{
     caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
@@ -850,14 +850,7 @@ fn a_symbols_address_is_placed_by_its_sections_bias() {
     assert_eq!(second.placed(second.address), 16);
     assert_eq!(second.placed(1), 17);
 
-    let loose = SymbolData {
-        name: "absolute".to_owned(),
-        demangled: None,
-        address: 0x10,
-        section: None,
-        size: 0,
-        extent: ExtentCache::default(),
-    };
+    let loose = SymbolData::new("absolute".to_owned(), None, 0x10, None, 0);
     assert_eq!(loose.placed(loose.address), 0x10);
 }
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use analysis::{
-    Architecture, BinaryFormat, ExtentCache, ObjectData, Section, SectionIndex, SymbolData,
+    Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolData, SymbolIndex,
 };
 
 use super::*;
@@ -10,47 +10,39 @@ use super::*;
 /// A bare `Object` with the given text symbols — only the fields [`pick`] compares, which
 /// is the `Arc`s themselves.
 fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
-    let section = Arc::new(Section {
-        index: SectionIndex(0),
-        name: ".text".into(),
-        data: Some(vec![0xC3; symbols.len()]),
-        address: 0,
-        relocations: HashMap::new(),
-        unwind: Vec::new(),
-        code: true,
-        bias: 0,
-    });
+    let bytes = vec![0xC3; symbols.len()];
+    let section = Arc::new(Section::text(
+        SectionIndex(0),
+        ".text".into(),
+        bytes,
+        0,
+        HashMap::new(),
+        0,
+    ));
 
-    let symbols_sorted: Vec<Arc<SymbolData>> = symbols
+    let symbols = symbols
         .iter()
         .enumerate()
-        .map(|(address, name)| {
-            Arc::new(SymbolData {
-                name: (*name).to_owned(),
-                demangled: None,
-                address: address as u64,
-                section: Some(section.clone()),
-                size: 0,
-                extent: ExtentCache::default(),
-            })
+        .map(|(index, name)| {
+            let address = index as u64;
+            let symbol =
+                SymbolData::new((*name).to_owned(), None, address, Some(section.clone()), 0);
+            (SymbolIndex(index), Arc::new(symbol))
         })
         .collect();
 
-    Arc::new(Object {
-        path: PathBuf::from("/tmp/lib.a"),
-        name: name.to_owned(),
-        format: BinaryFormat::Elf,
-        architecture: Architecture::X86_64,
-        symbols: HashMap::new(),
-        symbols_sorted,
-        sections: vec![section],
-        data: ObjectData::from(b"bytes".as_slice()),
-        debug_info: Default::default(),
-        placed: Default::default(),
-    })
+    Arc::new(Object::new(
+        PathBuf::from("/tmp/lib.a"),
+        name.to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        symbols,
+        vec![section],
+        ObjectData::from(b"bytes".as_slice()),
+    ))
 }
 
-/// Every symbol of `object`, in its own order — what a query would answer with if the
+/// Every symbol of `object`, in its name order — what a query would answer with if the
 /// whole object held the line.
 fn all(object: &Arc<Object>) -> Vec<Symbol> {
     object
@@ -82,7 +74,7 @@ fn the_most_recently_visited_candidate_wins() {
     let object = object("a.o", &["one", "two", "three"]);
     let candidates = all(&object);
 
-    // Newest first, so `three` is where the reader has just been and `two` is older.
+    // Newest first, so the third is where the reader has just been and the second is older.
     let recent = vec![candidates[2].clone(), candidates[1].clone()];
 
     let picked = pick(&candidates, &recent).expect("three candidates");
@@ -132,23 +124,21 @@ fn one_name_in_two_objects_stays_two_candidates() {
 
 /// A symbol in a section that was placed somewhere: what the section view draws it at.
 fn placed(name: &str, address: u64, bias: u64) -> Arc<SymbolData> {
-    Arc::new(SymbolData {
-        name: name.to_owned(),
-        demangled: None,
+    let section = Section::text(
+        SectionIndex(0),
+        ".text".into(),
+        Vec::new(),
+        0,
+        HashMap::new(),
+        bias,
+    );
+    Arc::new(SymbolData::new(
+        name.to_owned(),
+        None,
         address,
-        section: Some(Arc::new(Section {
-            index: SectionIndex(0),
-            name: ".text".into(),
-            data: Some(Vec::new()),
-            address: 0,
-            relocations: HashMap::new(),
-            unwind: Vec::new(),
-            code: true,
-            bias,
-        })),
-        size: 0,
-        extent: ExtentCache::default(),
-    })
+        Some(Arc::new(section)),
+        0,
+    ))
 }
 
 /// The place a listing opens at is the lowest **placed** address, which is not the lowest
@@ -168,14 +158,7 @@ fn the_lowest_placed_address_is_not_the_first() {
 /// A symbol in no section is in no listing either, and nothing at all is no answer.
 #[test]
 fn a_symbol_with_no_section_is_nowhere_to_open() {
-    let loose = Arc::new(SymbolData {
-        name: "absolute".to_owned(),
-        demangled: None,
-        address: 0x10,
-        section: None,
-        size: 0,
-        extent: ExtentCache::default(),
-    });
+    let loose = Arc::new(SymbolData::new("absolute".to_owned(), None, 0x10, None, 0));
     assert_eq!(lowest_placed(&[loose.clone()]), None);
     // And it is stepped over rather than taken as the lowest.
     assert_eq!(lowest_placed(&[loose, placed("a", 0x40, 0)]), Some(0x40));

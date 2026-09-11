@@ -11,7 +11,7 @@ use crate::search::{Hit, SearchEvent, SearchQuery};
 use crate::source::Seeded;
 use crate::temporary::Temporary;
 use crate::walk::WalkEvent;
-use analysis::{Extent, ExtentCache};
+use analysis::Extent;
 use freya_testing::{TestingNode, TestingRunner};
 
 /// Every open tab's document, in the reader's tab order. Pages are skipped: they are tabs
@@ -1183,14 +1183,13 @@ fn a_history_row_names_the_function_and_not_the_whole_symbol() {
         "<viewer::ui::pad_view::ScratchpadTab as freya_core::element::Component>::render";
     let symbol = Symbol {
         object,
-        data: Arc::new(SymbolData {
-            name: "_RNvXsa_".to_owned(),
-            demangled: Some(demangled.to_owned()),
-            address: 0x1000,
-            section: None,
-            size: 0,
-            extent: ExtentCache::default(),
-        }),
+        data: Arc::new(SymbolData::new(
+            "_RNvXsa_".to_owned(),
+            Some(demangled.to_owned()),
+            0x1000,
+            None,
+            0,
+        )),
     };
 
     let (mut test, states) = TestingRunner::new(
@@ -10878,14 +10877,13 @@ fn tab_pane_harness() -> impl IntoElement {
 fn mangled_symbol() -> Symbol {
     Symbol {
         object: fixture_symbols()[0].object.clone(),
-        data: Arc::new(SymbolData {
-            name: "_ZN6viewer2ui8assembly12AssemblyPane6render17h0123456789abcdefE".to_owned(),
-            demangled: Some("viewer::ui::assembly::AssemblyPane::render".to_owned()),
-            address: 0x1000,
-            section: None,
-            size: 0,
-            extent: ExtentCache::default(),
-        }),
+        data: Arc::new(SymbolData::new(
+            "_ZN6viewer2ui8assembly12AssemblyPane6render17h0123456789abcdefE".to_owned(),
+            Some("viewer::ui::assembly::AssemblyPane::render".to_owned()),
+            0x1000,
+            None,
+            0,
+        )),
     }
 }
 
@@ -17946,46 +17944,32 @@ fn calling_into_the_middle() -> (Arc<Object>, u64) {
         text.extend_from_slice(&[0xB8, value, 0x00, 0x00, 0x00]);
     }
     text.push(0xC3);
-    let section = Arc::new(Section {
-        index: SectionIndex(1),
-        name: ".text".into(),
-        data: Some(text.clone()),
-        address: 0,
-        relocations: HashMap::new(),
-        unwind: Vec::new(),
-        code: true,
-        bias: 0,
-    });
-    let symbols_sorted: Vec<Arc<SymbolData>> = [("f", 0, 6), ("g", 6, text.len() as u64 - 6)]
+    let section = Arc::new(Section::text(
+        SectionIndex(1),
+        ".text".into(),
+        text.clone(),
+        0,
+        HashMap::new(),
+        0,
+    ));
+    let symbols = [("f", 0, 6), ("g", 6, text.len() as u64 - 6)]
         .into_iter()
-        .map(|(name, address, size)| {
-            Arc::new(SymbolData {
-                name: name.to_owned(),
-                demangled: None,
-                address,
-                section: Some(section.clone()),
-                size,
-                extent: ExtentCache::default(),
-            })
+        .enumerate()
+        .map(|(index, (name, address, size))| {
+            let symbol =
+                SymbolData::new(name.to_owned(), None, address, Some(section.clone()), size);
+            (SymbolIndex(index), Arc::new(symbol))
         })
         .collect();
-    let symbols = symbols_sorted
-        .iter()
-        .enumerate()
-        .map(|(index, symbol)| (SymbolIndex(index), symbol.clone()))
-        .collect();
-    let object = Arc::new(Object {
-        path: PathBuf::from("/linked/image"),
-        name: "image".to_owned(),
-        format: BinaryFormat::Elf,
-        architecture: Architecture::X86_64,
+    let object = Arc::new(Object::new(
+        PathBuf::from("/linked/image"),
+        "image".to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
         symbols,
-        symbols_sorted,
-        sections: vec![section],
-        data: ObjectData::from(text),
-        debug_info: Default::default(),
-        placed: Default::default(),
-    });
+        vec![section],
+        ObjectData::from(text),
+    ));
     (object, target)
 }
 

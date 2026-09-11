@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use analysis::{
-    Architecture, BinaryFormat, ExtentCache, ObjectData, Section, SectionIndex, SymbolData,
+    Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolData, SymbolIndex,
 };
 
 use super::*;
@@ -26,46 +26,36 @@ fn object(path: &str, name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
 /// The same, out of a named build of the file. `bytes` is only ever hashed, so "the file
 /// was rebuilt" is spelt as two calls with different bytes.
 fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<Object> {
-    let section = Arc::new(Section {
-        index: SectionIndex(0),
-        name: ".text".into(),
-        data: Some(vec![0xC3; symbols.len()]),
-        address: 0,
-        relocations: HashMap::new(),
-        unwind: Vec::new(),
-        code: true,
-        bias: 0,
-    });
+    let code = vec![0xC3; symbols.len()];
+    let section = Arc::new(Section::text(
+        SectionIndex(0),
+        ".text".into(),
+        code,
+        0,
+        HashMap::new(),
+        0,
+    ));
 
-    let mut symbols_sorted: Vec<Arc<SymbolData>> = symbols
+    // In any order: `Object::new` sorts them by name, which is what `find_symbol` searches by.
+    let symbols = symbols
         .iter()
-        .map(|(name, address)| {
-            Arc::new(SymbolData {
-                name: (*name).to_owned(),
-                demangled: None,
-                address: *address,
-                section: Some(section.clone()),
-                size: 0,
-                extent: ExtentCache::default(),
-            })
+        .enumerate()
+        .map(|(index, (name, address))| {
+            let symbol =
+                SymbolData::new((*name).to_owned(), None, *address, Some(section.clone()), 0);
+            (SymbolIndex(index), Arc::new(symbol))
         })
         .collect();
-    // The order the parser leaves them in, and what `find_symbol` searches by; a fixture
-    // may give them in any order.
-    symbols_sorted.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Arc::new(Object {
-        path: PathBuf::from(path),
-        name: name.to_owned(),
-        format: BinaryFormat::Elf,
-        architecture: Architecture::X86_64,
-        symbols: HashMap::new(),
-        symbols_sorted,
-        sections: vec![section],
-        data: ObjectData::from(bytes),
-        debug_info: Default::default(),
-        placed: Default::default(),
-    })
+    Arc::new(Object::new(
+        PathBuf::from(path),
+        name.to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        symbols,
+        vec![section],
+        ObjectData::from(bytes),
+    ))
 }
 
 /// [`Session::from_state`] over a session whose only open tab is the active document and
@@ -189,6 +179,19 @@ fn objects() -> Vec<Arc<Object>> {
         // Same path, different member: `path` alone cannot tell these apart.
         object("/tmp/lib.a", "b.o", &[("caller", 0)]),
     ]
+}
+
+/// `find_symbol` searches `symbols_sorted` by name, and an object sorts it itself: symbols
+/// given out of order are all still found.
+#[test]
+fn symbols_given_out_of_order_are_all_found() {
+    let objects = vec![object("/tmp/lib.a", "a.o", &[("target", 6), ("caller", 0)])];
+    assert!(saved_symbol("a.o", "caller", 0)
+        .resolve_by_name(&objects)
+        .is_some());
+    assert!(saved_symbol("a.o", "target", 6)
+        .resolve_by_name(&objects)
+        .is_some());
 }
 
 #[test]

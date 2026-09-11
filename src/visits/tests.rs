@@ -8,18 +8,15 @@ use crate::document::Selection;
 /// A distinct document: two calls with the same `name` still produce different `Arc`s, and
 /// so entries that do not compare equal.
 fn place(name: &str) -> Document {
-    Document::Assembly(Selection::Object(Arc::new(Object {
-        path: PathBuf::from("/tmp/lib.a"),
-        name: name.to_owned(),
-        format: BinaryFormat::Elf,
-        architecture: Architecture::X86_64,
-        symbols: HashMap::new(),
-        symbols_sorted: Vec::new(),
-        sections: Vec::new(),
-        data: ObjectData::from(&b""[..]),
-        debug_info: Default::default(),
-        placed: Default::default(),
-    })))
+    Document::Assembly(Selection::Object(Arc::new(Object::new(
+        PathBuf::from("/tmp/lib.a"),
+        name.to_owned(),
+        BinaryFormat::Elf,
+        Architecture::X86_64,
+        HashMap::new(),
+        Vec::new(),
+        ObjectData::from(&b""[..]),
+    ))))
 }
 
 /// The panel draws the record newest first, and a place visited again moves to the top
