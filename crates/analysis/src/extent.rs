@@ -17,7 +17,7 @@
 
 use crate::{Object, SymbolData};
 use object::BinaryFormat;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 /// How far [`SymbolData::estimate_size`]'s next-symbol derivation may reach (1 MiB) before
 /// it is treated as having said nothing. Not a claim about how long a function can be — five
@@ -47,8 +47,8 @@ pub struct Extent {
 /// It is kept for the **section view**, which drops a decoded stretch once the reader has
 /// scrolled well past it and decodes it again on the way back (`src/ui/reading.rs`); the
 /// first draw of a symbol asks once either way. Sound because the answer is a function of
-/// the file's own tables, and because a `SymbolData` belongs to one object — see the
-/// `debug_assert!` in [`SymbolData::extent`].
+/// the file's own tables, and because a `SymbolData` belongs to one object. Asking with
+/// another object is a caller's bug, and the memo does not catch it.
 #[derive(Debug, Default)]
 pub struct ExtentCache(OnceLock<Option<Extent>>);
 
@@ -194,18 +194,6 @@ impl SymbolData {
     /// **Asked at most once per symbol** ([`ExtentCache`]), which is what a section view
     /// scrolled away from and back does not pay for twice.
     pub fn extent(&self, object: &Object) -> Option<Extent> {
-        // A kept answer is only right for the object it was worked out from, and nothing
-        // in the type ties a `SymbolData` to one — its section is that tie, and only in
-        // the one place both are built. Debug-only, and about a bug here rather than about
-        // anything a file can say: a mismatched pair used to be a slow answer and would
-        // now be a wrong one.
-        debug_assert!(
-            self.section.as_ref().is_none_or(|section| object
-                .sections
-                .iter()
-                .any(|owned| Arc::ptr_eq(owned, section))),
-            "a symbol's extent asked of an object that is not the one it came from"
-        );
         *self.extent.0.get_or_init(|| {
             let extent = self.stated_extent(object)?;
             self.address.checked_add(extent.bytes).map(|_| extent)

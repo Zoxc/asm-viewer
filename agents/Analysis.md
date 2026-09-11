@@ -203,8 +203,10 @@ the reader is `KEEP` (512) stretches past it and lets the lot go when they leave
 deliberately, it being the view's answer rather than a cache — so scrolling back re-decodes, and
 every re-decode used to walk the debug info again for a symbol no unwind entry covers. The
 *absence* is kept too, that symbol being exactly the one whose answer cost the walk. `extent` takes
-the object as an argument while the memo sits on the symbol, so a `debug_assert!` holds the pair
-together: the object asked must own the symbol's section, by pointer. Nothing else is kept —
+the object as an argument while the memo sits on the symbol, so asking with another object is a
+caller's bug the memo does not catch. It is not checked: a check that the object owns the symbol's
+section walks every section on every call, and the source index (`symbol_ranges`) asks every
+symbol's extent, so in a debug build it cost symbols × sections. Nothing else is kept —
 `estimate_size` is a binary search sitting on `extent`'s own path, and `data_in` is a slice of a
 section rather than an answer.
 
