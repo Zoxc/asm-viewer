@@ -795,9 +795,9 @@ leaves this list when it is. That is a move made on request, like everything els
 - [ ] Map a PDB's source paths onto this machine: the names come out verbatim (`C:\...` from
   MSVC, `/rustc/<hash>\library\...` from rustc), so the Source pane cannot open them where the
   build was elsewhere. A root-to-root mapping saved with the project, with the recorded
-  checksum (`LineInfo::hash_of`) deciding among candidates rather than the name alone.
+  checksum (`LineInfo::hash_for`) deciding among candidates rather than the name alone.
 - [ ] Check the source hash for DWARF too: carry DWARF 5's `DW_LNCT_MD5` the way the PDB's
-  checksum is carried (`LineInfo::hash_of`), so the Source pane's "this file differs from the
+  checksum is carried (`LineInfo::hash_for`), so the Source pane's "this file differs from the
   one the binary was built from" applies to an ELF or Mach-O as it does to a PE. clang records
   the MD5, gcc does not; `addr2line` renders a file name and keeps nothing of the entry behind
   it, so this means rendering the name from `gimli`'s own `FileEntry` the way `addr2line` does.

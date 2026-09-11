@@ -296,13 +296,13 @@ fn every_row_of_the_three_functions_verbatim() {
 fn the_file_is_named_verbatim_and_carries_the_compilers_md5() {
     let object = parse();
     let info = line_info(&object, "add");
-    let files: Vec<&str> = info.files().iter().map(|file| &**file).collect();
+    let files: Vec<&str> = info.files().map(|file| &**file).collect();
     assert_eq!(files, [SOURCE]);
     assert_eq!(info.file_of(&info.rows()[0]), Some(SOURCE));
 
-    let recorded = info.hash_of(0).expect("the PDB records a checksum");
+    let recorded = info.hash_for(SOURCE).expect("the PDB records a checksum");
     assert!(matches!(recorded, SourceHash::Md5(_)));
-    assert_eq!(info.hash_of(1), None, "there is no second file");
+    assert_eq!(info.hash_for("other.c"), None, "there is no second file");
 
     let source = SourceDigests::of(&committed_fixture("line_fixture.c"));
     assert!(

@@ -1,6 +1,7 @@
 //! Line info read back out of DWARF written by `gimli::write`.
 
 mod common;
+use analysis::LineInfo;
 use common::{
     elf_x86_64_with_dwarf, parse, symbol, DwarfFixture, DwarfRow, DwarfSection, TextSymbol,
     UnitRanges,
@@ -8,6 +9,11 @@ use common::{
 use std::sync::Arc;
 
 const COMP_DIR: &str = "/src";
+
+/// The files the rows name, as plain strings.
+fn files(info: &LineInfo) -> Vec<&str> {
+    info.files().map(|file| &**file).collect()
+}
 
 /// `first` at 0 with two lines from `main.c`, `second` at 6 with one from `other.c`.
 fn two_files(base_symbol: Option<usize>) -> Vec<u8> {
@@ -105,12 +111,12 @@ fn a_symbol_touches_only_its_own_files() {
     let object = parse(&data);
 
     let first = symbol(&object, "first").line_info(&object).expect("first");
-    assert_eq!(first.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(files(&first), ["/src/main.c"]);
 
     let second = symbol(&object, "second")
         .line_info(&object)
         .expect("second");
-    assert_eq!(second.files(), [Arc::from("/src/other.c")]);
+    assert_eq!(files(&second), ["/src/other.c"]);
 }
 
 #[test]
@@ -244,7 +250,7 @@ fn a_symbol_does_not_pick_up_another_sections_rows() {
     );
 
     let info = first.line_info(&object).expect("first has line info");
-    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 2);
     assert_eq!(info.rows()[0].range, 0..3);
     assert_eq!(info.rows()[1].range, 3..6);
@@ -258,7 +264,7 @@ fn a_symbol_does_not_pick_up_another_sections_rows() {
     );
 
     let info = second.line_info(&object).expect("second has line info");
-    assert_eq!(info.files(), [Arc::from("/src/other.c")]);
+    assert_eq!(files(&info), ["/src/other.c"]);
     assert_eq!(info.rows().len(), 1);
     assert_eq!(info.rows()[0].range, 0..2);
     assert_eq!(
@@ -342,7 +348,7 @@ fn line_info_is_usable_from_several_threads_at_once() {
                 let info = symbol(&object, "first")
                     .line_info(&object)
                     .expect("line info");
-                (info.rows().len(), info.files().to_vec())
+                (info.rows().len(), info.files().cloned().collect::<Vec<_>>())
             })
         })
         .collect();
@@ -368,14 +374,14 @@ fn a_unit_whose_ranges_did_not_move_with_its_code_still_answers() {
     let second = symbol(&object, "second");
 
     let info = first.line_info(&object).expect("first has line info");
-    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 2);
     assert_eq!(info.rows()[0].range, 0..3);
     assert_eq!(info.rows()[1].range, 3..6);
 
     // The one the unit's stale range does not reach.
     let info = second.line_info(&object).expect("second has line info");
-    assert_eq!(info.files(), [Arc::from("/src/other.c")]);
+    assert_eq!(files(&info), ["/src/other.c"]);
     assert_eq!(info.rows().len(), 1);
     assert_eq!(info.rows()[0].range, 0..2);
     assert_eq!(
@@ -402,7 +408,7 @@ fn a_linked_images_retained_relocations_are_not_applied_again() {
     let only = symbol(&object, "only");
     let info = only.line_info(&object).expect("only has line info");
 
-    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 1);
     assert_eq!(info.rows()[0].range, 0x100..0x110);
     assert_eq!(
@@ -431,13 +437,13 @@ fn a_section_stating_an_address_of_its_own_still_answers() {
     assert_eq!((first.address, second.address), (0x1000, 0));
 
     let info = first.line_info(&object).expect("first has line info");
-    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 2);
     assert_eq!(info.rows()[0].range, 0x1000..0x1003);
     assert_eq!(info.rows()[1].range, 0x1003..0x1006);
 
     let info = second.line_info(&object).expect("second has line info");
-    assert_eq!(info.files(), [Arc::from("/src/other.c")]);
+    assert_eq!(files(&info), ["/src/other.c"]);
     assert_eq!(info.rows()[0].range, 0..2);
 }
 
@@ -462,7 +468,7 @@ fn a_section_that_would_not_read_keeps_its_rows_off_another() {
     let info = symbol(&object, "first")
         .line_info(&object)
         .expect("first has line info");
-    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 2);
     assert_eq!(info.rows()[0].range, 0..3);
     assert_eq!(info.rows()[1].range, 3..6);
@@ -499,7 +505,7 @@ fn a_symbol_beginning_in_a_gap_between_two_sequences_is_answered_from_the_later_
     let info = symbol(&object, "before")
         .line_info(&object)
         .expect("before has line info");
-    assert_eq!(info.files(), [Arc::from("/src/main.c")]);
+    assert_eq!(files(&info), ["/src/main.c"]);
 
     // And a query from the start of the section is answered with both sequences, so the
     // unit's range covers the gap and the second sequence is there to be found.
@@ -507,15 +513,12 @@ fn a_symbol_beginning_in_a_gap_between_two_sequences_is_answered_from_the_later_
     let whole = object
         .line_info(&section, 0..0x16)
         .expect("the section's own range has line info");
-    assert_eq!(
-        whole.files(),
-        [Arc::from("/src/main.c"), Arc::from("/src/other.c")]
-    );
+    assert_eq!(files(&whole), ["/src/main.c", "/src/other.c"]);
 
     // The point: `middle` starts in the gap, and is answered with the second sequence's
     // one row rather than with nothing.
     let info = middle.line_info(&object).expect("middle has line info");
-    assert_eq!(info.files(), [Arc::from("/src/other.c")]);
+    assert_eq!(files(&info), ["/src/other.c"]);
     assert_eq!(info.rows().len(), 1);
     assert_eq!(info.rows()[0].range, 0x10..0x16);
     assert_eq!(info.rows()[0].line, Some(42));

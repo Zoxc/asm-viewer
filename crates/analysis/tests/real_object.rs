@@ -179,8 +179,8 @@ fn the_file_set_is_the_one_source_file() {
         for function in ["add", "twice", "sum_to"] {
             let info = line_info(&object, function);
             assert_eq!(
-                info.files(),
-                [Arc::from(SOURCE)],
+                info.files().map(|file| &**file).collect::<Vec<_>>(),
+                [SOURCE],
                 "{name}: {function}'s files"
             );
             for row in info.rows() {

@@ -365,7 +365,7 @@ address space a linked image's symbols already are, and a linked image has no se
 module, on demand**: line info in a PDB is per module (one object the linker took in), found from an
 address through the DBI's section contributions, a sorted table with a running `max_end`,
 `source.rs`'s `SymbolRange` shape, built at load. A module is decoded whole the first time an
-address in it is asked about (its rows through `RowCollector::finish` into one `LineInfo`, its
+address in it is asked about (its rows through `RowCollector::finish` into a `LineInfo` if any, its
 `S_GPROC32`/`S_LPROC32` lengths into an extent table) and kept, the way the DWARF backend keeps a
 unit's subprogram extents. A row with no length, one whose successor sits below it, which only
 assemblers emit, is dropped rather than given an end. Line 0 and column 0 are `None` as in DWARF.

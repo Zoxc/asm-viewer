@@ -228,9 +228,15 @@ impl SourceHash {
 #[derive(Default)]
 pub(super) struct RowCollector {
     rows: Vec<LineRow>,
-    files: Vec<Arc<str>>,
-    hashes: Vec<Option<SourceHash>>,
+    files: Vec<FileEntry>,
     indices: HashMap<Arc<str>, usize>,
+}
+
+/// One source file that rows name: its name as the debug info spells it, and the checksum
+/// the debug info recorded for it, where it did.
+struct FileEntry {
+    name: Arc<str>,
+    hash: Option<SourceHash>,
 }
 
 impl RowCollector {
@@ -241,10 +247,13 @@ impl RowCollector {
             Some(index) => *index,
             None => {
                 let name: Arc<str> = Arc::from(name);
-                self.files.push(name.clone());
-                self.hashes.push(hash);
-                self.indices.insert(name, self.files.len() - 1);
-                self.files.len() - 1
+                let index = self.files.len();
+                self.files.push(FileEntry {
+                    name: name.clone(),
+                    hash,
+                });
+                self.indices.insert(name, index);
+                index
             }
         }
     }
@@ -275,10 +284,7 @@ impl RowCollector {
     /// info" are the same answer to a caller.
     pub(super) fn finish(self) -> Option<LineInfo> {
         let RowCollector {
-            mut rows,
-            files,
-            hashes,
-            ..
+            mut rows, files, ..
         } = self;
 
         // Units are visited in range order and rows within a unit ascend, but two units may
@@ -312,11 +318,7 @@ impl RowCollector {
             same
         });
 
-        (!rows.is_empty()).then(|| LineInfo {
-            rows,
-            files,
-            hashes,
-        })
+        (!rows.is_empty()).then(|| LineInfo { rows, files })
     }
 }
 
@@ -326,7 +328,8 @@ pub struct LineRow {
     /// The instruction addresses this row covers, clipped to the range that was asked about
     /// and in the same address space as [`SymbolData::address`].
     pub range: Range<u64>,
-    /// An index into [`LineInfo::files`], or [`None`] when the row names no file.
+    /// An index into [`LineInfo::files`], read with [`LineInfo::file`], or [`None`] when the
+    /// row names no file.
     pub file: Option<usize>,
     /// The line number. Genuinely optional: DWARF's line 0 means "these instructions belong
     /// to no source line", which is neither line 0 nor line 1.
@@ -356,9 +359,8 @@ pub struct Location<'a> {
 /// where two rows genuinely covered one address, the one that starts first keeps it.
 pub struct LineInfo {
     rows: Vec<LineRow>,
-    files: Vec<Arc<str>>,
-    /// Parallel to `files`: the checksum the debug info recorded for each, where it did.
-    hashes: Vec<Option<SourceHash>>,
+    /// The files the rows name, each with its checksum. [`LineRow::file`] indexes this.
+    files: Vec<FileEntry>,
 }
 
 impl LineInfo {
@@ -384,17 +386,44 @@ impl LineInfo {
         &self.rows
     }
 
-    /// The source files these rows touch, deduplicated, in the order they were first seen.
-    /// [`LineRow::file`] indexes into this.
-    pub fn files(&self) -> &[Arc<str>] {
-        &self.files
+    /// The rows that overlap `range`, not clipped to it. The rows ascend and do not overlap,
+    /// so two binary searches find them. For a backend that keeps line info it decoded
+    /// earlier and answers a smaller range out of it.
+    fn rows_over(&self, range: Range<u64>) -> &[LineRow] {
+        let first = self
+            .rows
+            .partition_point(|row| row.range.end <= range.start);
+        let last = self.rows.partition_point(|row| row.range.start < range.end);
+        // `get`: a backwards range puts `first` past `last`.
+        self.rows.get(first..last).unwrap_or(&[])
     }
 
-    /// The checksum the debug info recorded for the file at this index of
-    /// [`files`](Self::files), or [`None`] where it recorded none (DWARF, as read here) or
-    /// the index is not a file's.
-    pub fn hash_of(&self, file: usize) -> Option<SourceHash> {
-        self.hashes.get(file).copied().flatten()
+    /// The source files these rows touch, deduplicated, in the order they were first seen.
+    /// [`LineRow::file`] is a position in this order, read with [`file`](Self::file).
+    pub fn files(&self) -> impl Iterator<Item = &Arc<str>> {
+        self.files.iter().map(|entry| &entry.name)
+    }
+
+    /// The file at this index of [`files`](Self::files), or [`None`] when the index is not a
+    /// file's.
+    pub fn file(&self, index: usize) -> Option<&Arc<str>> {
+        self.files.get(index).map(|entry| &entry.name)
+    }
+
+    /// The checksum the debug info recorded for the file of this name, or [`None`] where it
+    /// recorded none (DWARF, as read here) or these rows name no such file.
+    pub fn hash_for(&self, file: &str) -> Option<SourceHash> {
+        self.files
+            .iter()
+            .find(|entry| *entry.name == *file)
+            .and_then(|entry| entry.hash)
+    }
+
+    /// The file at this index and its checksum, for a backend that passes these rows on
+    /// through a [`RowCollector`] of its own.
+    fn file_with_hash(&self, index: usize) -> Option<(&str, Option<SourceHash>)> {
+        let entry = self.files.get(index)?;
+        Some((&entry.name, entry.hash))
     }
 
     /// The row covering `address`, or [`None`] when no row does. The last row starting at or
@@ -414,7 +443,7 @@ impl LineInfo {
 
     /// The file a row names.
     pub fn file_of(&self, row: &LineRow) -> Option<&str> {
-        Some(&*self.files[row.file?])
+        self.file(row.file?).map(|name| &**name)
     }
 
     /// `(file, line, column)` for a single instruction address.

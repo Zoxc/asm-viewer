@@ -613,7 +613,7 @@ impl Studied {
         let address = self.assembly.as_ref()?.instructions.get(index)?.address;
         let row = lines.row_at(address)?;
         Some(LinePos {
-            file: lines.files().get(row.file?)?.clone(),
+            file: lines.file(row.file?)?.clone(),
             line: row.line?,
         })
     }
@@ -710,8 +710,8 @@ impl SymbolLines {
         let file = info.as_ref().and_then(|info| {
             opening
                 .and_then(|row| row.file)
-                .and_then(|file| info.files().get(file))
-                .or_else(|| info.files().first())
+                .and_then(|file| info.file(file))
+                .or_else(|| info.files().next())
                 .cloned()
         });
         let line = opening.and_then(|row| row.line);
@@ -728,7 +728,7 @@ impl SymbolLines {
             || self
                 .info
                 .as_ref()
-                .is_some_and(|info| info.files().iter().any(|named| **named == *file))
+                .is_some_and(|info| info.files().any(|named| **named == *file))
     }
 
     /// The checksum the debug info recorded for `file`, one of the files these rows name, or
@@ -736,9 +736,7 @@ impl SymbolLines {
     /// the pane is showing rather than carried per file, so a landed run's file and the
     /// symbol's own are answered the same way.
     pub(crate) fn hash_for(&self, file: &str) -> Option<analysis::SourceHash> {
-        let info = self.info.as_ref()?;
-        let index = info.files().iter().position(|named| **named == *file)?;
-        info.hash_of(index)
+        self.info.as_ref()?.hash_for(file)
     }
 }
 

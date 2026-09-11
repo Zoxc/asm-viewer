@@ -963,7 +963,7 @@ pub(crate) fn source_side(
                     lines
                         .info
                         .as_ref()
-                        .is_some_and(|info| info.files().iter().any(|named| named == *file))
+                        .is_some_and(|info| info.files().any(|named| named == *file))
                 });
             let file = picked.cloned().or_else(|| lines.file.clone())?;
             // The symbol's line only where the file it is a line of is the one drawn.

@@ -4084,7 +4084,7 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
     let assembly = studied.assembly.expect("sum_to holds code");
     assert!(!assembly.instructions.is_empty());
     let lines = studied.lines.info.expect("the fixture has DWARF");
-    assert!(!lines.files().is_empty());
+    assert!(lines.files().next().is_some());
     assert!(studied
         .lines
         .file
@@ -4114,7 +4114,10 @@ fn a_line_of(symbol: &Symbol) -> LinePos {
         .expect("sum_to's rows name a place");
 
     LinePos {
-        file: info.files()[row.file.expect("filtered")].clone(),
+        file: info
+            .file(row.file.expect("filtered"))
+            .expect("a row names a file of its own")
+            .clone(),
         line: row.line.expect("filtered"),
     }
 }
@@ -4211,7 +4214,7 @@ fn two_lines_of(symbol: &Symbol) -> (LinePos, LinePos) {
         .expect("the fixture has DWARF");
     let mut named = info.rows().iter().filter_map(|row| {
         Some(LinePos {
-            file: info.files()[row.file?].clone(),
+            file: info.file(row.file?)?.clone(),
             line: row.line?,
         })
     });
@@ -6125,7 +6128,8 @@ fn a_run_in_a_file_the_listing_names_is_the_companion() {
         .as_ref()
         .expect("the fixture has DWARF")
         .files()
-        .to_vec();
+        .cloned()
+        .collect::<Vec<_>>();
     // The symbol's own file made distinct from every file the info names, so that the
     // switch is observable whether or not the fixture's one function inlines anything.
     let own: Arc<str> = "own.c".into();

@@ -129,9 +129,10 @@ pub(crate) struct Public {
 
 /// One module's line info, decoded whole on first touch.
 struct ModuleLines {
-    /// The module's rows in virtual addresses, already through [`RowCollector::finish`]:
-    /// ascending and non-overlapping, so the rows over a range are two `partition_point`s.
-    lines: LineInfo,
+    /// The module's rows in virtual addresses, already through [`RowCollector::finish`], so
+    /// the rows over a range are [`LineInfo::rows_over`]. [`None`] for a module with
+    /// procedures and no rows.
+    lines: Option<LineInfo>,
     /// The start address of every `S_GPROC32`/`S_LPROC32` with a length, to that length. The
     /// first procedure read at an address keeps it.
     procedures: HashMap<u64, u64>,
@@ -288,17 +289,14 @@ impl Pdb {
             let Some(module) = self.module(module) else {
                 continue;
             };
-            let lines = &module.lines;
-            let first = lines
-                .rows
-                .partition_point(|row| row.range.end <= range.start);
-            let last = lines
-                .rows
-                .partition_point(|row| row.range.start < range.end);
-            for row in &lines.rows[first..last] {
+            let Some(lines) = &module.lines else {
+                continue;
+            };
+            for row in lines.rows_over(range.clone()) {
                 let file = row
                     .file
-                    .map(|file| rows.file(&lines.files[file], lines.hashes[file]));
+                    .and_then(|file| lines.file_with_hash(file))
+                    .map(|(name, hash)| rows.file(name, hash));
                 rows.push(
                     row.range.start.max(range.start)..row.range.end.min(range.end),
                     file,
@@ -330,12 +328,15 @@ impl Pdb {
             let Some(module) = self.module(index) else {
                 continue;
             };
-            let lines = &module.lines;
-            for row in &lines.rows {
-                let (Some(file), Some(line)) = (row.file, row.line) else {
+            let Some(lines) = &module.lines else {
+                continue;
+            };
+            for row in lines.rows() {
+                let file = row.file.and_then(|file| lines.file(file));
+                let (Some(file), Some(line)) = (file, row.line) else {
                     continue;
                 };
-                visit(row.range.clone(), &lines.files[file], line);
+                visit(row.range.clone(), file, line);
             }
         }
     }
@@ -504,14 +505,7 @@ impl Pdb {
         if lines.is_none() && procedures.is_empty() {
             return None;
         }
-        Some(ModuleLines {
-            lines: lines.unwrap_or_else(|| LineInfo {
-                rows: Vec::new(),
-                files: Vec::new(),
-                hashes: Vec::new(),
-            }),
-            procedures,
-        })
+        Some(ModuleLines { lines, procedures })
     }
 }
 

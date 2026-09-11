@@ -98,7 +98,7 @@ in it there is no question, so it says so.
 
 **The Source pane checks the file it opened against the checksum the debug info recorded**, where it
 recorded one. A PDB carries a hash per source file (MD5 unless the producer was told otherwise;
-`LineInfo::hash_of`, `SourceHash`), and `source::load` takes all three digests of a file's bytes as
+`LineInfo::hash_for`, `SourceHash`), and `source::load` takes all three digests of a file's bytes as
 it reads them (`SourceDigests`, once per file, cached with it). So the pane compares two arrays per
 render and says, in one row over the source rows, that *this file differs from the one the binary
 was built from* when they disagree. The file is still shown, being the best thing there is to show;
