@@ -258,6 +258,19 @@ leaves this list when it is. That is a move made on request, like everything els
   goes. `Lit` would have to say which lane its outermost corner is in, and the run be drawn as
   two pieces. The arrowhead reads the same flag and has the same gap: a branch that *starts* on
   a row another branch lands on lights the arrowhead, though nothing picked out lands there.
+- [ ] One `Operand` case for a direct near branch, calls included, and a jump line for a call
+  that lands inside its own symbol. `Operand::Branch` and `Operand::Call` hold the same thing --
+  an unrelocated displacement's address and the span it was printed in -- and are two cases
+  only because `branch_target` leaves calls out, so the gutter never draws one
+  (`crates/analysis/src/disasm/x86.rs`). A call to a label in its own function, such as the
+  `call 1f; 1: pop %ebx` older 32-bit PIC code finds its address with, gets no arrow and no link
+  to its row; its target is the address door into the object's code (`Link::Target`). Merged,
+  `Assembly::edges` asks the same question of both, and a call inside the symbol is drawn and
+  followed as a branch is. Open: whether a call's line looks different from a jump's, since
+  control comes back to the next row, and whether its target gets a block separator, which
+  today marks only where a branch lands. A call to the symbol's own start is a `SymbolName` and
+  not a `Call`, so recursion is not covered. Also update `notes/specs/Assembly View.md`, whose
+  Operands, Blocks and Branch arrows sections speak of branches only.
 
 ## UI
 
