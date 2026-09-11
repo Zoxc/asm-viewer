@@ -337,8 +337,8 @@ pub(crate) enum Door {
     /// everywhere. In a symbol's own listing there is nowhere to move to and a plain
     /// press follows the link in place, the way a browser follows one.
     Symbol {
-        object: Arc<Object>,
-        target: Arc<SymbolData>,
+        /// The target, in the object this listing is of.
+        symbol: Symbol,
         /// Whether the listing this row is in is the object's code and not one symbol's.
         code_tab: bool,
     },
@@ -392,21 +392,12 @@ impl PartialEq for Door {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
+                Door::Symbol { symbol, code_tab },
                 Door::Symbol {
-                    object,
-                    target,
-                    code_tab,
-                },
-                Door::Symbol {
-                    object: other_object,
-                    target: other_target,
+                    symbol: other_symbol,
                     code_tab: other_code_tab,
                 },
-            ) => {
-                Arc::ptr_eq(object, other_object)
-                    && Arc::ptr_eq(target, other_target)
-                    && code_tab == other_code_tab
-            }
+            ) => symbol == other_symbol && code_tab == other_code_tab,
             (
                 Door::Address { object, address },
                 Door::Address {
@@ -419,10 +410,7 @@ impl PartialEq for Door {
                 Door::Label {
                     symbol: other_symbol,
                 },
-            ) => {
-                Arc::ptr_eq(&symbol.object, &other_symbol.object)
-                    && Arc::ptr_eq(&symbol.data, &other_symbol.data)
-            }
+            ) => symbol == other_symbol,
             (
                 Door::Row { to, at },
                 Door::Row {
@@ -445,10 +433,7 @@ enum Opens {
     InCode { object: Arc<Object>, placed: u64 },
     /// The target as a listing of its own: followed in place, the way a browser follows a
     /// link, so the function left is one Back away -- or, with Ctrl, in a tab of its own.
-    Symbol {
-        object: Arc<Object>,
-        target: Arc<SymbolData>,
-    },
+    Symbol(Symbol),
     /// The object's code at an address: moved to where this listing is that code already,
     /// opened in place from a symbol's own listing, and in a tab of its own with Ctrl.
     Code { object: Arc<Object>, address: u64 },
@@ -469,14 +454,11 @@ impl Opens {
             Opens::InCode { object, placed } => {
                 show_in_code(doors, places, object, placed, None, Reach::InPlace);
             }
-            Opens::Symbol { object, target } => {
+            Opens::Symbol(symbol) => {
                 open_document(
                     doors.open,
                     doors.visits,
-                    Document::Assembly(Selection::Symbol(Symbol {
-                        object,
-                        data: target,
-                    })),
+                    Document::Assembly(Selection::Symbol(symbol)),
                     Reach::inside(ctrl),
                 );
             }
@@ -542,18 +524,11 @@ impl Door {
         Some(match self {
             // In the unified view the target is further down this same listing: moved to,
             // at the address that listing draws it at, which is the placed one.
-            Door::Symbol {
-                object,
-                target,
-                code_tab,
-            } if *code_tab && !ctrl => Opens::InCode {
-                object: object.clone(),
-                placed: target.placed(target.address),
+            Door::Symbol { symbol, code_tab } if *code_tab && !ctrl => Opens::InCode {
+                object: symbol.object.clone(),
+                placed: symbol.data.placed(symbol.data.address),
             },
-            Door::Symbol { object, target, .. } => Opens::Symbol {
-                object: object.clone(),
-                target: target.clone(),
-            },
+            Door::Symbol { symbol, .. } => Opens::Symbol(symbol.clone()),
             Door::Address { object, address } => Opens::Code {
                 object: object.clone(),
                 address: *address,
@@ -975,8 +950,10 @@ fn instruction_text(
             // The relocation target's name -- in the operand the relocation applies to,
             // or after them all where the formatter offered none to put it in.
             Link::Relocation | Link::Appended => instruction.symbol().map(|symbol| Door::Symbol {
-                object: data.object().clone(),
-                target: symbol.clone(),
+                symbol: Symbol {
+                    object: data.object().clone(),
+                    data: symbol.clone(),
+                },
                 code_tab: data.code_tab,
             }),
             // A branch's displacement is the other way to follow it: the row it lands

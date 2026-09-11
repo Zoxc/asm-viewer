@@ -352,26 +352,23 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
         None,
         0,
     ));
-    let in_code = Door::Symbol {
+    let symbol = Symbol {
         object: object.clone(),
-        target: target.clone(),
+        data: target.clone(),
+    };
+    let in_code = Door::Symbol {
+        symbol: symbol.clone(),
         code_tab: true,
     };
     let alone = Door::Symbol {
-        object: object.clone(),
-        target: target.clone(),
+        symbol: symbol.clone(),
         code_tab: false,
     };
     let address = Door::Address {
-        object: object.clone(),
+        object,
         address: 0x2000,
     };
-    let label = Door::Label {
-        symbol: Symbol {
-            object,
-            data: target.clone(),
-        },
-    };
+    let label = Door::Label { symbol };
     let row = Door::Row {
         to: 12,
         at: Some(LinePos {
@@ -400,19 +397,10 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
         in_code.opens(false, false),
         Some(Opens::InCode { placed, .. }) if placed == target.placed(target.address)
     ));
-    assert!(matches!(
-        in_code.opens(false, true),
-        Some(Opens::Symbol { .. })
-    ));
+    assert!(matches!(in_code.opens(false, true), Some(Opens::Symbol(_))));
     // In a symbol's own listing there is nowhere to move to, with Ctrl or without.
-    assert!(matches!(
-        alone.opens(false, false),
-        Some(Opens::Symbol { .. })
-    ));
-    assert!(matches!(
-        alone.opens(false, true),
-        Some(Opens::Symbol { .. })
-    ));
+    assert!(matches!(alone.opens(false, false), Some(Opens::Symbol(_))));
+    assert!(matches!(alone.opens(false, true), Some(Opens::Symbol(_))));
 
     assert!(matches!(
         address.opens(false, false),
