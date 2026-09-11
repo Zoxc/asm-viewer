@@ -17949,7 +17949,7 @@ fn calling_into_the_middle() -> (Arc<Object>, u64) {
         ".text".into(),
         text.clone(),
         0,
-        HashMap::new(),
+        std::collections::BTreeMap::new(),
         0,
     ));
     let symbols = [("f", 0, 6), ("g", 6, text.len() as u64 - 6)]

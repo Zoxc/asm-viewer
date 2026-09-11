@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use analysis::{
@@ -16,7 +16,7 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
         ".text".into(),
         bytes,
         0,
-        HashMap::new(),
+        BTreeMap::new(),
         0,
     ));
 
@@ -129,7 +129,7 @@ fn placed(name: &str, address: u64, bias: u64) -> Arc<SymbolData> {
         ".text".into(),
         Vec::new(),
         0,
-        HashMap::new(),
+        BTreeMap::new(),
         bias,
     );
     Arc::new(SymbolData::new(

@@ -138,7 +138,8 @@ section, and none has been taken again since.) That key is the parse's own doing
 back what the format states, an address in ELF and COFF but an offset from the
 start of the section in Mach-O, which lays its sections out one after another. So `read_sections`
 adds a Mach-O section's address as it builds the map, and `Code::relocation` can ask by address
-whatever the file is. The debug sections are relocated straight from `object`'s iterator
+whatever the file is. The map is a `BTreeMap`, so that question is one range over an instruction's
+bytes, whose last entry is the answer. The debug sections are relocated straight from `object`'s iterator
 (`line/dwarf.rs`'s `relocate`) and want the offset as it comes, since it indexes the bytes being
 patched. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in `Object::placed`,
 **clipped to the section's own bytes**. The index holds only symbols inside a code section's bytes,

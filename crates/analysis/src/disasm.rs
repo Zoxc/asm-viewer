@@ -77,8 +77,8 @@ impl<'a> Code<'a> {
         }
     }
 
-    /// The relocation covering any of the `len` bytes at `address`, if there is one; the
-    /// *last* hit wins.
+    /// The relocation at any of the `len` bytes at `address`, if there is one; where there
+    /// are several, the one at the *last* address wins.
     ///
     /// Both halves of the answer are different questions: [`Some`] means the encoded operand
     /// is a placeholder, while [`target`](Relocated::target) is [`None`] whenever the
@@ -86,19 +86,18 @@ impl<'a> Code<'a> {
     /// symbol, an undefined import).
     pub fn relocation(&self, address: u64, len: usize) -> Option<Relocated> {
         let section = self.section?;
-        let mut found = None;
-        for offset in 0..len as u64 {
-            // Checked because the address is the file's number plus a byte offset, and a
-            // section placed at the very end of the address space wraps it.
-            if let Some(relocation) = address
-                .checked_add(offset)
-                .and_then(|address| section.relocations.get(&address))
-            {
-                found = Some(relocation);
-            }
-        }
+        // Checked because the address is the file's number, and a section placed at the very
+        // end of the address space would wrap it: there the bytes that have an address run to
+        // the top of it.
+        let end = u64::try_from(len)
+            .ok()
+            .and_then(|len| address.checked_add(len));
+        let (_, found) = match end {
+            Some(end) => section.relocations.range(address..end).next_back(),
+            None => section.relocations.range(address..).next_back(),
+        }?;
 
-        let target = match found?.target() {
+        let target = match found.target() {
             RelocationTarget::Symbol(index) => self.object.symbols.get(&index).cloned(),
             _ => None,
         };

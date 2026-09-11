@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use analysis::{
     Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolData, SymbolIndex,
@@ -32,7 +32,7 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         ".text".into(),
         code,
         0,
-        HashMap::new(),
+        BTreeMap::new(),
         0,
     ));
 

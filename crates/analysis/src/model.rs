@@ -5,7 +5,7 @@ use crate::disasm::Code;
 use crate::{Assembly, DebugInfoCache, ExtentCache};
 use object::{Architecture, BinaryFormat, Relocation, SectionIndex, SymbolIndex};
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fmt,
     hash::{Hash, Hasher},
     ops::Range,
@@ -261,9 +261,10 @@ pub struct Section {
 
     /// The section's relocations by the address the bytes each patches sit at, which is
     /// what a disassembly has to ask by. Not always what the file states: see
-    /// [`parse_object`](crate::parse_object). Empty for a section that is not
-    /// [`code`](Self::code), the disassembler being the only reader.
-    pub relocations: HashMap<u64, Relocation>,
+    /// [`parse_object`](crate::parse_object). Ordered, because the disassembler, the only
+    /// reader, asks for the last one in an instruction's bytes. Empty for a section that is
+    /// not [`code`](Self::code).
+    pub relocations: BTreeMap<u64, Relocation>,
 
     /// The address ranges the file's own unwind table states for the functions in this
     /// section — an x86-64 PE's `.pdata`, an ELF's `.eh_frame`, out of
@@ -295,7 +296,7 @@ impl Section {
         name: String,
         data: Vec<u8>,
         address: u64,
-        relocations: HashMap<u64, Relocation>,
+        relocations: BTreeMap<u64, Relocation>,
         bias: u64,
     ) -> Section {
         Section {
@@ -317,7 +318,7 @@ impl Section {
             name,
             data: None,
             address,
-            relocations: HashMap::new(),
+            relocations: BTreeMap::new(),
             unwind: Vec::new(),
             code: false,
             bias: 0,

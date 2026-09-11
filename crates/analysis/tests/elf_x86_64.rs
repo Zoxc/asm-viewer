@@ -290,6 +290,43 @@ fn a_relocation_anywhere_in_the_instruction_counts() {
 }
 
 #[test]
+fn the_last_relocation_in_the_instruction_wins() {
+    // Two in the call, at its second byte and its last, and one on the `ret` after it.
+    let relocation = |offset, target| TextRelocation {
+        in_symbol: 0,
+        offset,
+        target,
+    };
+    let data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "caller",
+                bytes: &[0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3],
+            },
+            TextSymbol {
+                name: "other",
+                bytes: &[0xC3],
+            },
+            TextSymbol {
+                name: "target",
+                bytes: &[0xC3],
+            },
+        ],
+        &[relocation(1, 1), relocation(4, 2), relocation(5, 1)],
+    );
+    let object = parse(&data);
+    let caller = symbol(&object, "caller");
+    let target = symbol(&object, "target");
+
+    let assembly = caller.assembly(&object).expect("caller disassembles");
+    let resolved = assembly.instructions[0]
+        .symbol()
+        .expect("the call has a relocation");
+    assert_eq!(resolved.name, "target");
+    assert!(Arc::ptr_eq(resolved, &target));
+}
+
+#[test]
 fn an_unrelocated_indirect_call_keeps_its_displacement() {
     // Control for the test below: with nothing relocating it, iced-x86 prints the absolute
     // address the displacement resolves to (the instruction is 6 bytes and starts at 0).
