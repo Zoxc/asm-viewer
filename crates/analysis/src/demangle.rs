@@ -57,34 +57,44 @@ const MAX_THREADS: usize = 8;
 /// (the entry point's, which is this crate's own).
 ///
 /// Shared rather than borrowed, because the pool's threads outlive any one batch and a job
-/// handed to them cannot borrow the caller's frame. Nothing is copied to make it: the caller
-/// moves its names in here and takes them back out afterwards.
-pub(crate) type Names = Arc<Vec<Option<String>>>;
+/// handed to them cannot borrow the caller's frame. Nothing is copied to make it: [`batch`]
+/// moves the caller's names in here and hands them back out afterwards.
+type Names = Arc<Vec<Option<String>>>;
 
-/// Demangle a whole object's names. The answer is one entry per name, in the same order,
-/// whatever it was demangled by and wherever it was demangled.
+/// Demangle a whole object's names, and hand them back. The answer is the names as they came
+/// in and what each demangled to, one entry per name in the same order, whatever it was
+/// demangled by and wherever it was demangled.
 ///
 /// [`None`] out means no demangler recognised the name, it was longer than
 /// [`MAX_MANGLED_NAME`], or the demangler panicked — all of which display as the file wrote
 /// it, which is what an unrecognised name already did.
-pub(crate) fn batch(names: &Names) -> Vec<Option<String>> {
+pub(crate) fn batch(names: Vec<Option<String>>) -> (Vec<Option<String>>, Vec<Option<String>>) {
     // The deepest any of them can recurse is the longest of them.
     let deepest = names.iter().flatten().map(|name| name.len()).max();
     match deepest {
-        None | Some(0) => return vec![None; names.len()],
+        None | Some(0) => {
+            let demangled = vec![None; names.len()];
+            return (names, demangled);
+        }
         // Short names and few of them: the caller's own stack, and no hand-off at all.
         // Every fixture in the test suite is this.
         Some(deepest) if deepest <= SHORT_MANGLED_NAME && names.len() <= GRAIN => {
-            return demangle_range(names, 0..names.len())
+            let demangled = demangle_range(&names, 0..names.len());
+            return (names, demangled);
         }
         Some(_) => {}
     }
 
-    match pool() {
-        Some(pool) => parallel(pool, names),
+    let names: Names = Arc::new(names);
+    let demangled = match pool() {
+        Some(pool) => parallel(pool, &names),
         // A pool that would not start is one more reason for this to stay what it was.
-        None => sequential(names),
-    }
+        None => sequential(&names),
+    };
+    // Every job is done, so this is the only reference; the clone is unreachable and is there
+    // so that a job that somehow outlived its batch costs a copy rather than the names.
+    let names = Arc::try_unwrap(names).unwrap_or_else(|names| (*names).clone());
+    (names, demangled)
 }
 
 /// One name, or [`None`] where nothing is to be made of it.

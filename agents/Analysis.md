@@ -93,7 +93,7 @@ with no listing at all. A symbol whose name will not read out of the string tabl
 file all the same and is kept: its address goes into `Section::symbols`, so the symbol below it is
 bounded by it, but **not** into `known`, so an export, a PDB procedure or public, or an unwind entry
 can still claim that address and give it a real name. Only where none does is the symbol listed at
-all, under `<function 0x…>`, which is why the walk that builds the symbols runs after
+all, under `<function 0x…>`, which is why the symbol-table walk sets such a symbol aside until after
 `declared_code`. The section comes from looking the address up in the kept **text** sections, which
 doubles as the filter keeping exported *data* out. A relocatable object is skipped entirely:
 `entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. The two nameless
@@ -129,7 +129,7 @@ second one held for as long as the object lives, and the DWARF alone is 267 MB o
 (Every resident figure below predates that rule: each was measured while the parse copied every
 section, and none has been taken again since.) That key is the parse's own doing: `object` hands
 back what the format states, an address in ELF and COFF but an offset from the
-start of the section in Mach-O, which lays its sections out one after another. So `parse_object`
+start of the section in Mach-O, which lays its sections out one after another. So `read_sections`
 adds a Mach-O section's address as it builds the map, and `Code::relocation` can ask by address
 whatever the file is. The debug sections are relocated straight from `object`'s iterator
 (`line/dwarf.rs`'s `relocate`) and want the offset as it comes, since it indexes the bytes being
@@ -230,9 +230,9 @@ than being dealt equal shares, since a name's cost is superlinear in its length 
 ones sit is the file's business; an even split hands one thread the object's whole C++ section.
 **The answer does not depend on the scheduling**: a grain is handed back over a channel with the
 index it started at and written there, so the vector is the batch's own order and two runs over one
-file agree. The names are *moved* into the shared batch (`demangle::Names`, an
-`Arc<Vec<Option<String>>>`) and moved back out of it in `parse_object`, because a job outlives the
-frame that submitted it and cannot borrow one; 115k names is not a copy worth making for that. A job
+file agree. `batch` takes the names by value and hands them back beside what they demangled to. In
+between they are *moved* into an `Arc` the jobs share, because a job outlives the frame that
+submitted it and cannot borrow one; 115k names is not a copy worth making for that. A job
 never submits a job, which is why a bounded pool cannot deadlock itself however many opens are in
 flight, and a batch whose grain never comes back (a pool thread killed under it) leaves those names
 as the file wrote them rather than waiting. A pool that would not start at all falls back to the one

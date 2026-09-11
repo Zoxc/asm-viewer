@@ -5,22 +5,20 @@ use super::*;
 
 /// A batch big enough to be split, of names that are all safe on the caller's own stack, so
 /// a test can compute the same answer sequentially to compare against.
-fn mixed_batch(len: usize) -> Names {
-    Arc::new(
-        (0..len)
-            .map(|index| match index % 4 {
-                // Nothing to demangle: the entry point's kind of name.
-                0 => None,
-                // A real one, and a different one each time round.
-                1 => Some(format!(
-                    "_ZN4core3fmt9Formatter12pad_integral17h{index:016x}E"
-                )),
-                // A C name no demangler has anything to say about.
-                2 => Some(format!("plain_c_function_{index}")),
-                _ => Some(format!("_ZN3std2io5Write5write17h{index:016x}E")),
-            })
-            .collect(),
-    )
+fn mixed_batch(len: usize) -> Vec<Option<String>> {
+    (0..len)
+        .map(|index| match index % 4 {
+            // Nothing to demangle: the entry point's kind of name.
+            0 => None,
+            // A real one, and a different one each time round.
+            1 => Some(format!(
+                "_ZN4core3fmt9Formatter12pad_integral17h{index:016x}E"
+            )),
+            // A C name no demangler has anything to say about.
+            2 => Some(format!("plain_c_function_{index}")),
+            _ => Some(format!("_ZN3std2io5Write5write17h{index:016x}E")),
+        })
+        .collect()
 }
 
 #[test]
@@ -46,8 +44,8 @@ fn the_answer_is_the_batch_s_own_order_however_it_was_split() {
     assert!(names.len() > GRAIN);
 
     let sequential = demangle_range(&names, 0..names.len());
-    assert_eq!(batch(&names), sequential);
-    assert_eq!(batch(&names), sequential);
+    assert_eq!(batch(names.clone()), (names.clone(), sequential.clone()));
+    assert_eq!(batch(names.clone()), (names, sequential.clone()));
 
     // And it is an answer and not a row of `None`s: the Rust names came back demangled and
     // the C ones came back as the file wrote them.
@@ -74,9 +72,8 @@ fn a_deep_name_in_a_split_batch_is_demangled_on_a_pool_thread() {
     // In the last grain, so it is not the first thing the first job does.
     names[GRAIN * 2 - 1] = Some(deep);
     names[GRAIN + 1] = Some(over_cap);
-    let names: Names = Arc::new(names);
 
-    let demangled = batch(&names);
+    let (_, demangled) = batch(names);
     assert_eq!(
         demangled[0].as_deref(),
         Some("core::fmt::Formatter::pad_integral")
@@ -89,11 +86,14 @@ fn a_deep_name_in_a_split_batch_is_demangled_on_a_pool_thread() {
 
 #[test]
 fn a_batch_with_nothing_in_it_answers_one_none_per_name() {
-    assert_eq!(batch(&Arc::new(Vec::new())), Vec::<Option<String>>::new());
-    assert_eq!(batch(&Arc::new(vec![None, None, None])), vec![None; 3]);
-    // An empty name is not a name either.
+    assert_eq!(batch(Vec::new()), (Vec::new(), Vec::new()));
     assert_eq!(
-        batch(&Arc::new(vec![Some(String::new()), None])),
-        vec![None; 2]
+        batch(vec![None, None, None]),
+        (vec![None; 3], vec![None; 3])
+    );
+    // An empty name is not a name either, and it comes back as it went in.
+    assert_eq!(
+        batch(vec![Some(String::new()), None]),
+        (vec![Some(String::new()), None], vec![None; 2])
     );
 }
