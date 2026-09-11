@@ -87,7 +87,7 @@ impl SourceIndex {
         // same lock for the whole walk — a `Mutex` is not reentrant, so computing an extent
         // inside the visitor below would deadlock the first object anyone asked a source
         // question of.
-        let ranges = symbol_ranges(object, debug);
+        let ranges = symbol_ranges(object);
 
         // Keyed by the name each row spells, allocated once per distinct file: the visitor is
         // handed a borrow that ends with the call, so the key cannot be the borrow itself.
@@ -184,22 +184,20 @@ fn budget(rows: usize) -> usize {
 /// and the forward direction cannot disagree about what a symbol covers.
 ///
 /// In the order of [`Object::placed`], which is the `(start, symbol index)` wanted: a start
-/// here is the symbol's placed address. The DWARF backend's bias is
-/// [`Section::bias`](crate::Section::bias), the same function over the same file, and a `.pdb`
-/// describes a linked image, where both are 0.
-fn symbol_ranges(object: &Object, debug: &DebugInfo) -> Vec<SymbolRange> {
+/// is the placed address that index holds. The rows come back in the same space: the DWARF
+/// backend is read at [`Section::bias`](crate::Section::bias), and a `.pdb` describes a
+/// linked image, where every bias is 0.
+fn symbol_ranges(object: &Object) -> Vec<SymbolRange> {
     let mut ranges: Vec<SymbolRange> = object
         .placed_symbols()
         .iter()
-        .filter_map(|(_, symbol, data)| {
-            let section = data.section.as_ref()?;
-            let start = data.address.checked_add(debug.bias(section.index))?;
+        .filter_map(|&(start, symbol, ref data)| {
             let end = start.checked_add(data.extent(object)?.bytes)?;
             (start < end).then_some(SymbolRange {
                 start,
                 end,
                 max_end: end,
-                symbol: *symbol,
+                symbol,
             })
         })
         .collect();

@@ -21,7 +21,6 @@
 //! because it is a whole-object index rather than a query, built on the same seam.
 
 use crate::{Object, Section, SymbolData};
-use object::SectionIndex;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
@@ -116,20 +115,10 @@ impl DebugInfo {
         .flatten()
     }
 
-    /// How far the section with this index was moved by [`crate::parse::section_biases`]; 0
-    /// for a section that was not moved, and for every section of a linked image — which is
-    /// the only kind of object a `.pdb` describes.
-    fn bias(&self, section: SectionIndex) -> u64 {
-        match &self.backend {
-            Backend::Dwarf(dwarf) => dwarf.bias(section),
-            Backend::Pdb(_) => 0,
-        }
-    }
-
     /// The rows covering `range` **within one section**, resolved in one pass.
     fn line_info(&self, section: &Section, range: Range<u64>) -> Option<Arc<LineInfo>> {
         without_panicking(|| match &self.backend {
-            Backend::Dwarf(dwarf) => dwarf.line_info(dwarf.bias(section.index), range),
+            Backend::Dwarf(dwarf) => dwarf.line_info(section.bias, range),
             Backend::Pdb(pdb) => pdb.line_info(range),
         })
         .flatten()
@@ -140,7 +129,7 @@ impl DebugInfo {
     /// [`None`] when the debug info does not say.
     fn extent(&self, section: &Section, address: u64) -> Option<u64> {
         without_panicking(|| match &self.backend {
-            Backend::Dwarf(dwarf) => dwarf.extent(dwarf.bias(section.index), address),
+            Backend::Dwarf(dwarf) => dwarf.extent(section.bias, address),
             Backend::Pdb(pdb) => pdb.extent(address),
         })
         .flatten()

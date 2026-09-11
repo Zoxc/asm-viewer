@@ -30,11 +30,6 @@ pub(super) struct Dwarf {
     /// `Sync`, and [`Object`](crate::Object) is shared across threads as an `Arc`.
     context: Mutex<addr2line::Context<Reader>>,
 
-    /// Where each code section was placed in the address space the context reads in: the
-    /// parse's own layout, [`crate::parse::section_biases`]. Empty for a linked image, which
-    /// needs none.
-    biases: HashMap<SectionIndex, u64>,
-
     /// Every compilation unit that has been asked about, and the extent of each
     /// `DW_TAG_subprogram` in it, keyed by the unit's `.debug_info` offset and then by the
     /// subprogram's `DW_AT_low_pc`. Both keys are in the biased address space.
@@ -91,7 +86,6 @@ impl Dwarf {
 
         Some(Dwarf {
             context: Mutex::new(addr2line::Context::from_dwarf(dwarf).ok()?),
-            biases,
             extents: Mutex::default(),
         })
     }
@@ -105,15 +99,11 @@ impl Dwarf {
             .is_some()
     }
 
-    /// How far the section with this index was moved by [`crate::parse::section_biases`]; 0
-    /// for a section that was not moved, and for every section of a linked image.
-    pub(super) fn bias(&self, section: SectionIndex) -> u64 {
-        self.biases.get(&section).copied().unwrap_or(0)
-    }
-
-    /// Resolve a whole address range in one pass. `bias` is what the range's section was
-    /// moved by, so the query and the rows it produces are translated in and out of the
-    /// address space the context was built in.
+    /// Resolve a whole address range in one pass. `bias` is the [`Section::bias`] of the
+    /// range's section, the same layout the context was loaded with, so the query and the
+    /// rows it produces are translated in and out of the address space the context reads in.
+    ///
+    /// [`Section::bias`]: crate::Section::bias
     pub(super) fn line_info(&self, bias: u64, range: Range<u64>) -> Option<LineInfo> {
         // A poisoned lock means a previous query panicked. Nothing here is left half-written
         // by one (the context is only ever read), so recover rather than propagate.
@@ -150,7 +140,8 @@ impl Dwarf {
     }
 
     /// The extent of the `DW_TAG_subprogram` beginning at `address`, or [`None`] when no unit
-    /// covers the address or the subprogram that does begins elsewhere.
+    /// covers the address or the subprogram that does begins elsewhere. `bias` is as for
+    /// [`line_info`](Self::line_info).
     pub(super) fn extent(&self, bias: u64, address: u64) -> Option<u64> {
         let probe = address.checked_add(bias)?;
         // `addr2line`'s `Context::find_units` asks its range index about `probe + 1` with a
@@ -211,7 +202,7 @@ impl Dwarf {
 /// One row `addr2line` handed back, clipped to the query and moved back out of the biased
 /// space, or [`None`] when nothing of it is left inside the query.
 ///
-/// **Both ends are clipped before the bias comes off.** `addr2line` 0.21 hands back the row
+/// **Both ends are clipped before the bias comes off.** `addr2line` 0.27 hands back the row
 /// containing the query's start, which may begin before it, clips nothing at the top, and
 /// checks nowhere that a row ends past the start at all: a line program that moves its
 /// address backwards — a second `DW_LNE_set_address` in one sequence, relocated differently

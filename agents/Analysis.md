@@ -301,11 +301,11 @@ or debug info that says nothing about the range asked about. Four design points 
   programs pile up (52 229 of 54 109 rows overlapped, measured on the 196-member rlib). The parse
   does what a linker does: `section_biases` (`parse.rs`) gives each **text** section of a
   **relocatable** object a place of its own, recorded on the section as `Section::bias` beside
-  `Section::code`; `relocate` adds the bias, and the query adds it and subtracts it from every row
-  returned. `line/dwarf.rs` asks `section_biases` again rather than reading the biases back off
-  the sections the parse kept: the rule is the layout, and a text section whose bytes would not
-  read is dropped from the parse but still has to be placed, or the rows relocated against it land
-  on 0 where the first section already sits. The layout starts above the highest address the file
+  `Section::code`; `relocate` adds the bias, and a query adds its section's `Section::bias` and
+  subtracts it from every row returned. Loading the DWARF asks `section_biases` again rather than
+  reading the biases back off the sections the parse kept: the rule is the layout, and a text
+  section whose bytes would not read is dropped from the parse but still has to be placed, or the
+  rows relocated against it land on 0 where the first section already sits. The layout starts above the highest address the file
   states — a Mach-O `.o` states one per section — so nothing is moved *down* and a bias is never a
   wrapped value: `relocate`'s wrapping add and a query's checked one mean the same thing. It is
   decided at parse and not in `line.rs` because the listing of an object's whole code is laid out
