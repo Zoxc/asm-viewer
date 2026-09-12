@@ -809,7 +809,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         active,
         driven: places.driven,
     };
-    use_analysis_with(
+    let asks = use_analysis_with(
         asked,
         objects,
         beside,
@@ -819,9 +819,14 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         coded,
         showing,
         reading,
-        window,
         answer,
     );
+    // The other three questions that worker answers, each asked beside the state it is
+    // about and handed the way to ask: the window the section view wants next, the
+    // Locations panel's query, and which lines of the file on screen have code.
+    use_code_asks(reading, window, asks.clone());
+    use_locate_asks(located, objects, asks.clone());
+    use_mark_asks(coded, showing, objects, asks);
     // After the analysis: the file the Source pane draws is what the analysis says it is.
     use_clear_marks(active, asked, analysis, marked);
 

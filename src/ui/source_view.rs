@@ -1104,6 +1104,45 @@ impl Coded {
     }
 }
 
+/// The gutter marks' question, asked for whichever file the Source pane last said it was
+/// showing. The objects are part of the question here and not only of the answer, unlike
+/// the locate's: an answer is a set of bare line numbers with nothing in it to sweep for a
+/// closed binary, so the way it stays true is to ask again whenever the open objects
+/// change -- which a load finishing also is, and which is what puts marks in a gutter that
+/// was drawn before its binary had been read. They are in it by their ids, an
+/// `Arc<Object>` having no equality for the memo to compare and the ids being what
+/// [`Coded`] judges the answer against anyway.
+///
+/// Called at the root beside [`use_analysis_with`], which starts the worker and hands back
+/// `requests`, the way to ask it.
+pub(crate) fn use_mark_asks(
+    coded: State<Coded>,
+    showing: State<Option<Arc<str>>>,
+    objects: State<Vec<Arc<Object>>>,
+    requests: Requests<Question>,
+) {
+    use_asking(
+        // All three read and none peeked, and read in the memo, which is what subscribes
+        // it to them: the pane moving to another file, an answer landing and a load
+        // finishing are what wake this.
+        move || {
+            let open = objects.read().clone();
+            let file = showing.read().clone()?;
+            coded
+                .read()
+                .pending(&file, &open)
+                .then(|| (file, object_ids(&open)))
+        },
+        unmarked,
+        move |(file, _)| {
+            requests.send(Question::Marks {
+                file,
+                objects: objects.peek().clone(),
+            });
+        },
+    );
+}
+
 /// The row the Source pane opens a tab it has never shown at: the line
 /// [`SourceSide::Companion`] named, as a row, which is what selecting a symbol or pressing
 /// an instruction asked to see. The row itself, the margin [`reveal_row`] keeps above the

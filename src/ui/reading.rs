@@ -308,3 +308,22 @@ pub(crate) fn use_reading_of(
         }
     });
 }
+
+/// The window question: what the section view wants next, asked once ([`use_asking`]).
+/// The mark it leaves is the reading's ([`Reading::asking`]).
+///
+/// Called at the root beside [`use_analysis_with`], which starts the worker and hands
+/// back `requests`, the way to ask it.
+pub(crate) fn use_code_asks(
+    reading: State<Reading>,
+    window: State<Option<CodeAsk>>,
+    requests: Requests<Question>,
+) {
+    use_asking(
+        move || window.read().clone(),
+        move |ask| {
+            write_if(reading, |next| next.asking(ask));
+        },
+        move |ask| requests.send(Question::Code(ask)),
+    );
+}

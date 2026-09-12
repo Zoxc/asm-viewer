@@ -350,15 +350,61 @@ impl Found {
     }
 }
 
+/// The locate question. A fold of the panel's rows and a binary closed under an older
+/// answer are writes to this state too, and what keeps the question from going out again
+/// for each of them, while the worker is still on it, is [`use_asking`]'s memo: it would
+/// be a second run of seconds of work, under the lock every listing question waits on.
+///
+/// A question about a name's uses is the language server's, asked where it was pressed
+/// and answered into the same panel; nothing here can answer it.
+///
+/// Called at the root beside [`use_analysis_with`], which starts the worker and hands
+/// back `requests`, the way to ask it.
+pub(crate) fn use_locate_asks(
+    located: State<Located>,
+    objects: State<Vec<Arc<Object>>>,
+    requests: Requests<Question>,
+) {
+    // The objects are **peeked** where the listing reads them: an answer stands until
+    // replaced, so a file opened afterwards is not searched until the line is asked again
+    // -- the panel says which objects it answered for by saying when. A file closed
+    // afterwards is the effect below.
+    use_asking(
+        move || {
+            located
+                .read()
+                .pending()
+                .filter(|query| query.symbols_wanted().is_some())
+                .cloned()
+        },
+        unmarked,
+        move |query| {
+            requests.send(Question::Locate {
+                query,
+                objects: objects.peek().clone(),
+            });
+        },
+    );
+
+    // A closed binary takes its locations with it, at once and whatever the panel is
+    // doing: `Found::retain_open` answers whether anything went, so a load that added an
+    // object writes nothing.
+    use_side_effect(move || {
+        let open = objects.read().clone();
+        write_if(located, |next| next.retain_open(&open));
+    });
+}
+
 /// Ask `query`, and bring the panel that will answer to the front. The one writer of
 /// [`Located::asked`].
 ///
 /// Asking the question already answered asks again: the objects may have changed since,
 /// and the answer is about the objects that were open when it was asked. Dropping the
-/// stale answer is what makes the effect send the question, there being no `pending` to
-/// set. The panel is brought to the top of whichever group of the sidebar holds it, since
-/// it may have been dragged into any of them -- and only when the question is asked, never
-/// when the answer lands, so a reader who moved on meanwhile is not pulled back.
+/// stale answer is what makes [`use_locate_asks`] send the question, there being no
+/// `pending` to set. The panel is brought to the top of whichever group of the sidebar
+/// holds it, since it may have been dragged into any of them -- and only when the question
+/// is asked, never when the answer lands, so a reader who moved on meanwhile is not
+/// pulled back.
 pub(crate) fn find_locations(
     mut located: State<Located>,
     dock: State<DockArea>,

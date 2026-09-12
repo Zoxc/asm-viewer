@@ -66,6 +66,16 @@ and what marks it (`asking`), both already the state's own methods. Whether ther
 all is `pending`'s too, so a gate -- the language server being `ready()` before a whole file's names
 are asked about -- is read there, which is what subscribes the memo to it.
 
+**And that effect lives beside the state it asks for**: `use_code_asks` in `reading.rs`,
+`use_locate_asks` in `locations.rs`, which keeps the retain-open sweep beside it over the same
+`Objects`, and `use_mark_asks` in `source_view.rs` beside `Coded`. `use_analysis_with` starts the
+one thread and hands back the way to ask it; the root calls each of the three with that. What is
+left in `analyzed.rs` is the listing question, whose state is that module's own. The *taking* is
+not split the same way and should not be: one worker answers over one channel with one `Answer`, so
+one closure judges what lands, each arm through the owning state's own method. The asking used to
+sit there too, which put a state's read-or-peek decisions eight hundred lines from the state they
+are about and cost the hook a parameter per foreign state.
+
 **Two questions keep an effect of their own, and both say why.** The listing's: what is pending and
 the mark for it are one call (`Analyzed::asked` answers with the question and records it in the same
 pass), the objects it is asked of have no equality for a memo to compare, and the send is followed
@@ -200,7 +210,7 @@ the state whose memo matters most: a fold of the rows on screen and `retain_open
 for each of them -- a second run of seconds of work, under the lock every listing question waits on,
 answering what the first was about to. And **a closed
 binary takes its locations with it** (`Located::retain_open` over `Found::retain_open`, asked by the
-effect reading `Objects` and by `Located::take` as the answer lands). This is
+effect reading `Objects` in `use_locate_asks` and by `Located::take` as the answer lands). This is
 `Shown::still_open`'s rule in a second place: a `Symbol` holds the file's bytes and this list can
 hold thousands of them. Its one stated limit is the other direction. The answer is about the objects
 that were open when it was asked, so a file opened afterwards is not searched until the line is
@@ -234,8 +244,9 @@ code from — `Object::lines_from_source`, which reads the same `SourceIndex` a 
 back bare line numbers rather than symbols. It is a whole file at a time and not a query per row,
 and the Source pane asks it by writing the file it is drawing into `ShowingFile`, the way the
 section view asks for a window by writing it into `Window`: a view cannot reach the request channel,
-so a state it writes and an effect here reads is how a pane asks. Worked **last** of the four, being
-the answer whose absence costs the reader least while they wait. It is judged on landing by the
+so a state it writes and an effect at the root reads (`use_mark_asks`, beside `Coded`) is how a pane
+asks. Worked **last** of the four, being the answer whose absence costs the reader least while they
+wait. It is judged on landing by the
 file the pane is showing *now*, handed to `Coded::take` from `ShowingFile`, the listing's comparison
 rule once more. What keeps it true is different from the locate's, though: a set of line numbers
 has nothing in it to sweep for a binary that has closed, and a state holding the objects to notice

@@ -4087,7 +4087,8 @@ fn analysis_harness() -> impl IntoElement {
     let reading = use_consume::<Sections>().0;
     let window = use_consume::<Window>().0;
 
-    use_analysis_with(
+    let showing = use_consume::<ShowingFile>().0;
+    let asks = use_analysis_with(
         asking,
         objects,
         use_consume::<Beside>().0,
@@ -4095,11 +4096,15 @@ fn analysis_harness() -> impl IntoElement {
         analysis,
         located,
         coded,
-        use_consume::<ShowingFile>().0,
+        showing,
         reading,
-        window,
         move |question| work(question),
     );
+    // The three questions asked beside their own states, as `app()` asks them: the one
+    // worker above answers all four, which is what the supersession tests are about.
+    use_code_asks(reading, window, asks.clone());
+    use_locate_asks(located, objects, asks.clone());
+    use_mark_asks(coded, showing, objects, asks);
 
     use_side_effect(move || {
         let shown = analysis.read().shown.clone();
@@ -5435,6 +5440,82 @@ fn closing_a_binary_takes_its_locations_with_it() {
         .symbols()
         .expect("symbols")
         .is_empty());
+}
+
+/// The gutter's question goes out for the file the Source pane says it is showing, and
+/// **again when the open objects change**. An answer is bare line numbers, with nothing in
+/// it to sweep for a binary that has come or gone, so being asked again is the whole of how
+/// it stays true -- and it is what puts marks in a gutter that was drawn before its binary
+/// had been read. Neither does an answer landing ask again, the memo behind the question
+/// being what stops that.
+#[test]
+fn the_marks_question_is_asked_per_file_and_again_when_a_binary_arrives() {
+    let symbol = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let file = a_line_of(&symbol).file;
+
+    // Every marks question the worker was handed: the file, and how many objects it was
+    // asked over.
+    let (started, starts) = async_channel::unbounded::<(Arc<str>, usize)>();
+    let work = move |question: Question| {
+        let Question::Marks { file, objects } = question else {
+            panic!("this test asks only about marks");
+        };
+        let _ = started.send_blocking((file.clone(), objects.len()));
+        answer(Question::Marks { file, objects })
+    };
+
+    let (mut test, (roots, _asking, _seen)) = TestingRunner::new(
+        analysis_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || analysis_states(work)),
+        1.,
+    );
+    let (mut showing, mut objects, coded) = (roots.showing, roots.states.objects, roots.coded);
+    settle(&mut test);
+    assert!(
+        starts.is_empty(),
+        "a question went out for a pane that is showing no file"
+    );
+
+    // The pane says what it is showing, which is the whole of how it asks.
+    showing.set(Some(file.clone()));
+    pump(&mut test, || coded.peek().found.is_some());
+    assert_eq!(
+        starts.recv_blocking().expect("the worker was asked"),
+        (file.clone(), 0),
+        "the question was not asked for the file the pane is showing"
+    );
+    let landed = coded.peek().clone();
+    assert!(
+        landed.found.expect("answered").1.is_empty() && landed.over.is_empty(),
+        "lines were marked with no binary open to have code for them"
+    );
+    settle(&mut test);
+    assert!(
+        starts.is_empty(),
+        "the answer landing asked the question again"
+    );
+
+    // The binary arrives, which the answer in hand can say nothing about.
+    objects.set(vec![symbol.object.clone()]);
+    pump(&mut test, || coded.peek().over.len() == 1);
+    assert_eq!(
+        starts.recv_blocking().expect("the worker was asked again"),
+        (file, 1),
+        "a binary that arrived left the gutter answered over none"
+    );
+    assert!(
+        !coded.peek().found.as_ref().expect("answered").1.is_empty(),
+        "the file the fixture was compiled from marked no line of it"
+    );
+    settle(&mut test);
+    assert!(
+        starts.is_empty(),
+        "the second answer asked the question again"
+    );
 }
 
 /// The Locations view and nothing else, over the project's states and a `Located` the
@@ -13758,7 +13839,7 @@ fn scratchpad_listing_harness() -> impl IntoElement {
     // the editor is a whole program's code, which is read in windows and asks nothing --
     // so the question is a state that stays `None`.
     let asking = use_hook(|| State::create(None::<Ask>));
-    use_analysis_with(
+    let asks = use_analysis_with(
         asking,
         objects,
         beside,
@@ -13768,9 +13849,11 @@ fn scratchpad_listing_harness() -> impl IntoElement {
         use_consume::<Coding>().0,
         use_consume::<ShowingFile>().0,
         reading,
-        window,
         answer,
     );
+    // The window the pane asks for is the whole of what this page asks, so it is the one
+    // asking hook mounted here.
+    use_code_asks(reading, window, asks);
 
     rect()
         .expanded()
