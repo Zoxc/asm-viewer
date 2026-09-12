@@ -186,23 +186,23 @@ in `ui/metrics.rs` reads a thread-local `State<Arc<Fonts>>` exactly as `palette(
 appearance, so *asking for a font is what subscribes a scope to it*. `set_fonts` is the one writer,
 and unlike `set_appearance` it has nothing to invalidate beside it, since a cached `SyntaxBlocks`
 carries colours and no font. The readers are the two row heights, `icon_size`, `chevron_size` and
-the column it decides, `FontExt::assembly_font`, the root rect's own `.font(&fonts().ui)` and the
-tooltip's `font_size` in the root's `Theme`. That last one is the only place a change has to be
-*carried* rather than picked up, freya's theme sheet being a value, so the root rebuilds the sheet in
-an effect. Two things wake that effect and each carries what the other does not: its deps, which hold
-the appearance and the interface size, and the `palette()` and `fonts()` reads `interface_theme`
-makes *inside* it, which is how a fixed-width size change gets there -- a read inside an effect
-subscribes it. `ROW_HEIGHT` went the same way and became a function: one font's size plus
-`ROW_LEADING` (12, which is exactly what the old constant's 26 was over the 14px fixed-width
-default). The alternative, a page offering a 20pt assembly font and drawing it clipped inside a 26px
-row, was worse than the work. It is safe because the scroll view's `item_size` and its rows' own
-height are read in the **same render pass**, so they cannot see different numbers, and because the
-per-tab positions saved are *rows* rather than pixel offsets. The floor (`MIN_ROW_HEIGHT`) is
-against a hand-edited `settings.toml`, where a size of 0.1 is positive enough to pass
-`FontSetting::size` and would make `item_size` a fraction of a pixel. `link_box_height` is that
-rule once more: the box a code row draws round a lit run of its own text is the row less
-`LINK_BOX_INSET` at each edge, so it is a function beside the height it comes from and never a
-number kept anywhere.
+the column it decides, `FontExt::assembly_font`, the root rect's own `.font(&fonts().ui)`, the line
+of sample text each half of the settings page ends with, and the tooltip's `font_size` in the root's
+`Theme`. That last one is the only place a change has to be *carried* rather than picked up, freya's
+theme sheet being a value, so the root rebuilds the sheet in an effect. Two things wake that effect
+and each carries what the other does not: its deps, which hold the appearance and the interface
+size, and the `palette()` and `fonts()` reads `interface_theme` makes *inside* it, which is how a
+fixed-width size change gets there -- a read inside an effect subscribes it. `ROW_HEIGHT` went the
+same way and became a function: one font's size plus `ROW_LEADING` (12, which is exactly what the
+old constant's 26 was over the 14px fixed-width default). The alternative, a page offering a 20pt
+assembly font and drawing it clipped inside a 26px row, was worse than the work. It is safe because
+the scroll view's `item_size` and its rows' own height are read in the **same render pass**, so they
+cannot see different numbers, and because the per-tab positions saved are *rows* rather than pixel
+offsets. The floor (`MIN_ROW_HEIGHT`) is against a hand-edited `settings.toml`, where a size of 0.1
+is positive enough to pass `FontSetting::size` and would make `item_size` a fraction of a pixel.
+`link_box_height` is that rule once more: the box a code row draws round a lit run of its own text
+is the row less `LINK_BOX_INSET` at each edge, so it is a function beside the height it comes from
+and never a number kept anywhere.
 
 **`FONTS` starts at the app's own fonts, and `app` writes the real pair before anything draws.**
 The thread-local initialises from `fonts::defaults()` -- the platform families at 9pt and 10.5pt,
@@ -268,14 +268,23 @@ setting and changes it back, and comparing at all is what stops a run that never
 from creating `settings.toml`. `use_settings_with` takes the write as an argument, since the real
 one edits the settings of whoever runs the tests.
 
+Each of the two font sections is drawn from one `FontHalf`, built by `half(prefs, which)` off a
+selector naming which font it is about. It was six arguments, five of which named the same half of
+`EditedSettings` or of `Fonts` again, so a section could have come to draw one font's size and step
+the other's; the pairing is made once now and the two call sites differ in one word. Its
+**resolved** font is `fonts()` and not a second `resolve` of what the page is editing: the root has
+already resolved that pair out of this same state, so resolving again was one answer computed twice
+-- and asking for it is what repaints the line, the way every other glyph in the app repaints. It
+lands a pass after the keystroke, which is what the window itself does with the interface font.
+
 **An override is drawn differently from the value it would replace**, which is the goal's own words
 and the reason `settings.rs` keeps `None` as a real third state. There are three cues, deliberately
 more than one. The field's *name* is interface text when the reader set it and `address_fg` when
 they did not. The *value* is real text in the box, against a placeholder showing what is being
-inherited (`fonts::inherited`, so what is shown is by construction what would be used, the
-platform's own family and the app's own size included). And the **Clear** button is there only when
-there is something to clear, which is also the only way back to unspecified: a family box can be
-emptied, a stepper cannot.
+inherited (`resolve` of the default settings, so what is shown is by construction what would be
+used, the platform's own family and the app's own size included). And the **Clear** button is there
+only when there is something to clear, which is also the only way back to unspecified: a family box
+can be emptied, a stepper cannot.
 
 The row itself is `parts::field_row_in` -- `field_row` with the name's colour handed in -- so the
 theme row above and the font rows below line up in one column and move together when it changes.

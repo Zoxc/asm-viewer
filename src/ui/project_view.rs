@@ -667,18 +667,11 @@ impl Component for LanguageSection {
                         // Nothing to run one over is the one state neither press has an
                         // answer to.
                         .enabled(directory.is_some())
-                        .on_press(move |_| {
-                            // Asked again at the press, and bound before the write: the
-                            // state may have moved since the render, and a guard held
-                            // over a write panics.
-                            let started = language.peek().started();
-                            match started {
-                                true => stop_server(language, &lsp),
-                                // Which asks first where the reader has not agreed to
-                                // the directory yet.
-                                false => start_server(language, proj, &lsp),
-                            }
-                        })
+                        // The toggle the top bar's control and the window's chord press,
+                        // which is what asks the state again at the press and puts the
+                        // question first where the reader has not agreed to the directory
+                        // yet. The `started` above is the caption and nothing else.
+                        .on_press(move |_| toggle_server(language, proj, &lsp))
                         .child(match started {
                             true => "Stop",
                             false => "Start",

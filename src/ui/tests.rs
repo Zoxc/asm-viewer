@@ -13904,6 +13904,177 @@ fn the_settings_reach_the_theme_the_fonts_and_the_file() {
     set_appearance(Appearance::Light);
 }
 
+/// The line of sample text each font section ends with: the one thing on the page drawn in
+/// the font it is about.
+const FONT_SAMPLE: &str = "Disassembly 0123 l1I O0 {}";
+
+/// Every label reading `text`, top to bottom. The two font sections draw the same stepper
+/// buttons, the same **Clear** and the same sample line, so which section one of them
+/// belongs to is which of the two rows it is in.
+fn down_the_page(test: &TestingRunner, text: &str) -> Vec<Area> {
+    let mut areas: Vec<Area> = labels_with_areas(test)
+        .into_iter()
+        .filter(|(drawn, _)| drawn == text)
+        .map(|(_, area)| area)
+        .collect();
+    areas.sort_by(|one, two| one.origin.y.total_cmp(&two.origin.y));
+    areas
+}
+
+/// The middle of an area, to press.
+fn middle(area: Area) -> (f64, f64) {
+    (
+        (area.origin.x + area.width() / 2.0) as f64,
+        (area.origin.y + area.height() / 2.0) as f64,
+    )
+}
+
+/// What the two size steppers say, top to bottom.
+fn readouts(test: &TestingRunner) -> Vec<String> {
+    let mut rows: Vec<(f32, String)> = labels_with_areas(test)
+        .into_iter()
+        .filter(|(drawn, _)| drawn.ends_with(" pt"))
+        .map(|(drawn, area)| (area.origin.y, drawn))
+        .collect();
+    rows.sort_by(|one, two| one.0.total_cmp(&two.0));
+    rows.into_iter().map(|(_, drawn)| drawn).collect()
+}
+
+/// The size every label reading `text` was drawn at, top to bottom.
+fn font_sizes(test: &TestingRunner, text: &str) -> Vec<f32> {
+    use freya::elements::label::LabelElement;
+    use std::any::Any;
+
+    let mut rows: Vec<(f32, f32)> = test.find_many(|node, _element| {
+        let element = node.element();
+        (element.as_ref() as &dyn Any)
+            .downcast_ref::<LabelElement>()
+            .filter(|label| label.text == text)
+            .and_then(|label| {
+                let size = label.text_style_data.font_size?;
+                Some((node.layout().area.origin.y, f32::from(size)))
+            })
+    });
+    rows.sort_by(|one, two| one.0.total_cmp(&two.0));
+    rows.into_iter().map(|(_, size)| size).collect()
+}
+
+/// **Each font section is about one font, top to bottom.** Its three rows were paired with
+/// the half of the settings they write at the call site, once per section, so a section
+/// could have come to draw one font's size and step the other's. They are one `FontHalf`
+/// now, built off the selector that also gives the section its heading.
+#[test]
+fn a_font_sections_rows_are_all_about_the_one_font() {
+    let (mut test, prefs) = TestingRunner::new(
+        || page_body(Page::Settings),
+        (500., 700.).into(),
+        |runner| {
+            runner
+                .provide_root_context(|| Prefs(State::create(fixed_edited(9.0, 10.5))))
+                .0
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // The interface font is the upper section and the fixed-width one the lower, which is
+    // what tells the pairs of controls below apart.
+    assert_eq!(readouts(&test), ["9 pt", "10.5 pt"]);
+
+    // A step up in the upper section puts half a point on the interface font and nothing
+    // at all on the other.
+    let up = middle(down_the_page(&test, "+")[0]);
+    press_at(&mut test, up);
+    settle(&mut test);
+    assert_eq!(
+        (prefs.read().interface.size, prefs.read().fixed.size),
+        (Some(9.5), Some(10.5))
+    );
+
+    // And a step down in the lower section, the other way about.
+    let down = middle(down_the_page(&test, "-")[1]);
+    press_at(&mut test, down);
+    settle(&mut test);
+    assert_eq!(
+        (prefs.read().interface.size, prefs.read().fixed.size),
+        (Some(9.5), Some(10.0))
+    );
+
+    // The family box is paired the same way: four **Clear** buttons, one per overridden
+    // field, and the first of them is the upper section's family.
+    let clear = middle(down_the_page(&test, "Clear")[0]);
+    press_at(&mut test, clear);
+    settle(&mut test);
+    assert_eq!(
+        (
+            prefs.read().interface.family.clone(),
+            prefs.read().fixed.family.clone()
+        ),
+        (String::new(), "Fixed".to_owned())
+    );
+}
+
+/// The settings page under the wiring the root gives it, which is the only thing that
+/// writes the fonts.
+fn settings_page_harness() -> Element {
+    let prefs = use_consume::<Prefs>().0;
+    use_settings_with(prefs, |_: &Settings| {});
+    page_body(Page::Settings)
+}
+
+/// **The sample line is drawn in the font the window is drawn in**: `fonts()`, the pair
+/// `set_fonts` holds, and not a second `resolve` of the state the page is editing. One
+/// answer for what a font comes to, and the same subscription every other glyph in the app
+/// repaints through.
+///
+/// The two agree in the app -- the root resolves that pair from this very state -- so they
+/// are set apart here on purpose, which is the only way to see which of them the page
+/// draws. The second half is the one that matters: under the root's own wiring, a size the
+/// reader steps reaches the line.
+#[test]
+fn the_sample_line_is_drawn_in_the_font_the_window_is() {
+    set_fonts(fixed_fonts(9.0, 18.0));
+
+    let (mut test, ()) = TestingRunner::new(
+        || page_body(Page::Settings),
+        (500., 700.).into(),
+        |runner| {
+            runner.provide_root_context(|| Prefs(State::create(fixed_edited(21.0, 21.0))));
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // 9pt and 18pt are 12 and 24 logical pixels. The state's own 21pt is 28, which is what
+    // both lines would be at had the page resolved it for itself.
+    assert_eq!(font_sizes(&test, FONT_SAMPLE), [12.0, 24.0]);
+
+    // Wired as the root wires it, and starting from fonts the state disagrees with, so
+    // arriving at the state's own is a real write rather than a value already there.
+    set_fonts(fixed_fonts(21.0, 21.0));
+    let (mut test, prefs) = TestingRunner::new(
+        settings_page_harness,
+        (500., 700.).into(),
+        |runner| {
+            runner
+                .provide_root_context(|| Prefs(State::create(fixed_edited(9.0, 10.5))))
+                .0
+        },
+        1.,
+    );
+    settle(&mut test);
+    assert_eq!(font_sizes(&test, FONT_SAMPLE), [12.0, 14.0]);
+
+    // And a size stepped reaches the line, through the fonts and not around them.
+    let mut prefs = prefs;
+    prefs.write().fixed.size = Some(18.0);
+    settle(&mut test);
+    assert_eq!(font_sizes(&test, FONT_SAMPLE), [12.0, 24.0]);
+
+    // The thread is left as it was found.
+    set_fonts(fonts::defaults());
+}
+
 #[test]
 fn a_swept_run_survives_the_button_coming_up() {
     let (mut test, marked) = TestingRunner::new(
@@ -28499,8 +28670,9 @@ fn the_project_names_the_language_server_it_is_read_with() {
     );
 }
 
-/// The view's own button starts the server and then stops it, the same two presses the
-/// top bar's control is, so a reader who is in the Project view need not go looking.
+/// The view's own button starts the server and then stops it, through the same
+/// `toggle_server` the top bar's control and the window's chord press, so a reader who is
+/// in the Project view need not go looking.
 #[test]
 fn the_project_views_button_starts_and_stops_the_language_server() {
     let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {

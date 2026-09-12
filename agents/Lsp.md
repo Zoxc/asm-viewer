@@ -560,10 +560,12 @@ half a second of real time away under the runner (`agents/Headless.md`), so what
 assert is the words it would be given.
 
 The Project view says the same thing where it stays: one line under a heading of its own,
-in `invalid_fg` when it is a failure, with a Start/Stop button beside the heading -- the
-same two presses, so a reader already in that view need not go looking for the bar, and the
-same question first where the directory has not been agreed to. A tooltip is gone the moment
-the pointer moves, and a reason worth reading is worth reading twice.
+in `invalid_fg` when it is a failure, with a Start/Stop button beside the heading. It
+presses `toggle_server`, the one the bar's control and the chord press, so a reader
+already in that view need not go looking for the bar, the same question comes first where
+the directory has not been agreed to, and a rule added to the toggle reaches all three. A
+tooltip is gone the moment the pointer moves, and a reason worth reading is worth reading
+twice.
 
 Under that line is what the project's own settings gave the server, one row per setting with
 the name and the value as it will be sent, under the name of the file they came out of; and

@@ -126,36 +126,122 @@ fn setting_row(
     )
 }
 
+/// Which of the two fonts a section of the page is about. Every difference between the
+/// two sections is under it, so a section's boxes cannot come to be about two fonts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Which {
+    Interface,
+    Fixed,
+}
+
+impl Which {
+    /// The heading over the section.
+    fn title(self) -> &'static str {
+        match self {
+            Which::Interface => "Interface font",
+            Which::Fixed => "Fixed-width font",
+        }
+    }
+
+    /// This font's half of what the reader has edited.
+    fn edited(self, edited: &EditedSettings) -> &EditedFont {
+        match self {
+            Which::Interface => &edited.interface,
+            Which::Fixed => &edited.fixed,
+        }
+    }
+
+    /// The same half written: what the family box and the size stepper both go through.
+    fn edited_mut(self, edited: &mut EditedSettings) -> &mut EditedFont {
+        match self {
+            Which::Interface => &mut edited.interface,
+            Which::Fixed => &mut edited.fixed,
+        }
+    }
+
+    /// This font's half of a resolved pair.
+    fn font(self, fonts: &Fonts) -> &Font {
+        match self {
+            Which::Interface => &fonts.ui,
+            Which::Fixed => &fonts.mono,
+        }
+    }
+}
+
+/// One of the two fonts as its section needs it: which one it is, the state its boxes
+/// write, what the reader has said about it, what an unset field falls through to, what it
+/// comes to on screen, and the box the family is typed in.
+///
+/// One struct built in one place ([`half`]) rather than six arguments, because every field
+/// here has to be about the *same* font. Spelled out at the call site, that was the
+/// caller's to get right once per section.
+struct FontHalf {
+    which: Which,
+    prefs: State<EditedSettings>,
+    edited: EditedFont,
+    inherited: Font,
+    resolved: Font,
+    family: Writable<String>,
+}
+
+/// One section's worth of that, out of the one selector.
+fn half(prefs: State<EditedSettings>, which: Which) -> FontHalf {
+    // What the reader would get with nothing set: `resolve` of the default settings and
+    // not a lookup of its own, so the value shown in an empty box is by construction the
+    // value that would be used.
+    let inherited = fonts::resolve(&Settings::default());
+    // And what they are getting -- the pair the window is drawn in, which the root has
+    // already resolved from this same state. Asking for it is also what repaints the
+    // section when it changes, as everything else that draws a glyph repaints.
+    let resolved = fonts();
+
+    FontHalf {
+        which,
+        prefs,
+        edited: which.edited(&prefs.read()).clone(),
+        inherited: which.font(&inherited).clone(),
+        resolved: which.font(&resolved).clone(),
+        family: prefs.into_writable().map(
+            move |edited: &EditedSettings| &which.edited(edited).family,
+            move |edited: &mut EditedSettings| &mut which.edited_mut(edited).family,
+        ),
+    }
+}
+
 /// One of the two fonts, as three rows: the family, the size, and a line of the font
 /// itself.
-fn font_section(
-    title: &str,
-    edited: EditedFont,
-    inherited: &Font,
-    resolved: &Font,
-    family: Writable<String>,
-    size: impl FnMut(Option<f32>) + Clone + 'static,
-) -> Element {
+fn font_section(half: FontHalf) -> Element {
+    let FontHalf {
+        which,
+        prefs,
+        edited,
+        inherited,
+        resolved,
+        family,
+    } = half;
     let inherited_family = inherited.family();
     // What the stepper moves from: the reader's size where there is one, otherwise the
     // one being inherited.
     let points = edited.size.unwrap_or(inherited.points);
-    let step = |by: f32| {
-        let mut size = size.clone();
+    // The one write the stepper and its **Clear** button both make.
+    let set_size = move |size: Option<f32>| {
+        let mut prefs = prefs;
+        which.edited_mut(&mut prefs.write()).size = size;
+    };
+    let step = move |by: f32| {
         move |_: Event<PressEventData>| {
             // The bounds are on the *stepper* only: a hand-edited `settings.toml` may
             // still say anything.
             let moved = (points + by).clamp(5.0, 32.0);
             // Back onto the half-point grid, so stepping away from a desktop's 13.75 and
             // back lands on its neighbours rather than on a drift of its own.
-            size(Some((moved / SIZE_STEP).round() * SIZE_STEP));
+            set_size(Some((moved / SIZE_STEP).round() * SIZE_STEP));
         }
     };
-    let mut clear_size = size.clone();
 
     rect()
         .width(Size::fill())
-        .child(section_heading(title, None))
+        .child(section_heading(which.title(), None))
         .child(setting_row(
             "Family",
             given(&edited.family).is_some(),
@@ -191,7 +277,7 @@ fn font_section(
                         .max_lines(1),
                 )
                 .child(Button::new().compact().on_press(step(SIZE_STEP)).child("+")),
-            move |_| clear_size(None),
+            move |_| set_size(None),
         ))
         .child(
             rect()
@@ -201,7 +287,7 @@ fn font_section(
                 .child(
                     label()
                         .text("Disassembly 0123 l1I O0 {}")
-                        .font(resolved)
+                        .font(&resolved)
                         .color(palette().text_fg)
                         .max_lines(1),
                 ),
@@ -220,12 +306,6 @@ impl Component for SettingsTab {
     fn render(&self) -> impl IntoElement {
         let mut prefs = use_consume::<Prefs>().0;
         let edited = prefs.read().clone();
-        // What the reader would get with nothing set, and what they are getting now.
-        // What every unspecified field is falling through to, which is what the page
-        // draws in an empty box: `resolve` of the default settings and not a lookup of
-        // its own, so the value shown is by construction the value that would be used.
-        let inherited = fonts::resolve(&Settings::default());
-        let resolved = fonts::resolve(&edited.settings());
 
         // Only a question at all under `Desktop`. Reading it here also subscribes this
         // pane, so the line follows a desktop that changes its mind.
@@ -272,36 +352,18 @@ impl Component for SettingsTab {
                             })),
                         ))
                         .maybe_child(following)
-                        .child(font_section(
-                            "Interface font",
-                            edited.interface.clone(),
-                            &inherited.ui,
-                            &resolved.ui,
-                            prefs.into_writable().map(
-                                |edited| &edited.interface.family,
-                                |edited| &mut edited.interface.family,
-                            ),
-                            move |size| prefs.write().interface.size = size,
-                        ))
-                        .child(font_section(
-                            "Fixed-width font",
-                            edited.fixed.clone(),
-                            &inherited.mono,
-                            &resolved.mono,
-                            prefs.into_writable().map(
-                                |edited| &edited.fixed.family,
-                                |edited| &mut edited.fixed.family,
-                            ),
-                            move |size| prefs.write().fixed.size = size,
-                        ))
+                        .child(font_section(half(prefs, Which::Interface)))
+                        .child(font_section(half(prefs, Which::Fixed)))
                         // The one consequence of a font change that is not a font, and two
                         // numbers rather than one because each half of the page above
-                        // moves exactly one of them.
+                        // moves exactly one of them. Whole numbers, so nothing is lost
+                        // rounding them: a row is its font's size plus its leading,
+                        // itself rounded (`row_height_for`).
                         .child(info_line(format!(
-                            "Rows follow the font they are drawn in: {} pixels in the \
-                             lists, {} in the code panes.",
-                            points_text(list_row_height()),
-                            points_text(code_row_height())
+                            "Rows follow the font they are drawn in: {:.0} pixels in the \
+                             lists, {:.0} in the code panes.",
+                            list_row_height(),
+                            code_row_height()
                         ))),
                 ),
             )
