@@ -19,10 +19,15 @@
 //! in this module -- the derived ones included -- is of what a path says (`AGENTS.md`).
 //! [`Grouped::push`] tries `Arc::ptr_eq` before the paths, but only as a shortcut past a
 //! comparison whose answer is already known.
+//!
+//! The text a row draws is cut here too ([`drawn`]). Both panels draw a line of a file
+//! with part of it marked, so how much of that line a row keeps is one rule for both.
 
+use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::chars;
 use crate::filter::Matcher;
 use crate::shared::Shared;
 
@@ -206,6 +211,32 @@ pub enum Row<T> {
 
 /// The rows a panel draws, in order.
 pub type Rows<T> = Shared<Row<T>>;
+
+/// The most characters of a line kept for the row that draws it. A generated file can hold
+/// a line of megabytes, and a row can draw a sidebar's width of it.
+pub const MAX_LINE: usize = 300;
+
+/// A line as a list row draws it: its leading whitespace gone and cut to [`MAX_LINE`]
+/// characters, since a row has one line's height and a sidebar's width; and `spans` --
+/// byte ranges into the whole line -- moved to what is left of it.
+///
+/// A span is clamped to what is drawn rather than dropped for reaching past it: a pattern
+/// that takes in the indentation -- `^\s*needle` -- matches from before the text the row
+/// shows, and the part of it in view is still what was found. One left with nothing in
+/// view goes.
+///
+/// Here and not in either panel: a search's hits and a name's references are drawn by one
+/// row, so where a line is cut for it is one rule.
+pub fn drawn(line: &str, spans: Vec<Range<usize>>) -> (String, Vec<Range<usize>>) {
+    let start = line.len() - line.trim_start().len();
+    let end = chars::byte_of_char(&line[start..], MAX_LINE) + start;
+    let spans = spans
+        .into_iter()
+        .map(|span| span.start.max(start) - start..span.end.clamp(start, end) - start)
+        .filter(|span| span.start < span.end)
+        .collect();
+    (line[start..end].to_owned(), spans)
+}
 
 #[cfg(test)]
 mod tests;

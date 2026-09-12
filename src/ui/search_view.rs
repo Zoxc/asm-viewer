@@ -274,27 +274,24 @@ impl Component for SearchPanel {
             }
             (Some(_), Some(_)) => {
                 let length = rows.len();
-                rect()
-                    .expanded()
-                    .content(Content::Flex)
-                    .child(section_heading(&heading(summary), None))
-                    .child(rect().width(Size::fill()).height(Size::flex(1.0)).child(
-                        pane.virtual_rows(
-                            length,
-                            (rows, searched),
-                            |index, (rows, searched): &(SearchRows, State<Searched>)| {
-                                PlaceRow {
-                                    row: rows[index].clone(),
-                                    folding: Folding::Hits(*searched),
-                                    at: index,
-                                    key: DiffKey::None,
-                                }
-                                .key(&index)
-                                .into()
-                            },
-                        ),
-                    ))
-                    .into_element()
+                headed(
+                    section_heading(&heading(summary), None).into_element(),
+                    pane.virtual_rows(
+                        length,
+                        (rows, searched),
+                        |index, (rows, searched): &(SearchRows, State<Searched>)| {
+                            PlaceRow {
+                                row: rows[index].clone(),
+                                folding: Folding::Hits(*searched),
+                                at: index,
+                                key: DiffKey::None,
+                            }
+                            .key(&index)
+                            .into()
+                        },
+                    ),
+                )
+                .into_element()
             }
         };
 

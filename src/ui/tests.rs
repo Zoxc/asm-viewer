@@ -6942,6 +6942,78 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
     assert!(states.open.active() == Some(Document::Assembly(Selection::Symbol(wanted))));
 }
 
+/// **A location row's press and Enter on it are one door.** The row and the panel's keys
+/// are handed the same two facts -- the line the question was asked from, and the tab it
+/// was asked in -- so a symbol chosen with the keyboard is chosen for the place a click on
+/// it would choose it for. A row reading those for itself is a second answer to the
+/// question the panel has already answered.
+#[test]
+fn enter_on_a_location_row_opens_what_a_press_on_it_opens() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    let tab = Document::Source(at.file.clone());
+    // Choosing the one row, by a press on it or by Enter on the pick: what the tab is
+    // driven by afterwards, and where the source pane landed. The fixture is parsed above
+    // and not here, a symbol being compared by the object and the name behind it: a second
+    // parse would answer with a second set of those.
+    let chosen = |by_key: bool| -> (Option<Symbol>, Option<u32>, Option<LinePos>) {
+        let (mut test, roots) = TestingRunner::new(
+            locations_harness,
+            (300., 300.).into(),
+            |runner: &mut _| runner.provide_root_context(test_roots),
+            1.,
+        );
+        let states = roots.states;
+        let (mut located, mut alt) = (roots.located, roots.alt);
+        open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
+        let entry = entry_of(&states, &tab);
+        located.write().asked = Some(Query::line(at.clone()));
+        located.write().subject = Some(Subject {
+            tab: entry.0,
+            file: at.file.clone(),
+        });
+        located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
+        settle(&mut test);
+
+        let row = centre_of(&test, "sum_to");
+        if by_key {
+            // Alt+press picks the row out and opens nothing, which is what leaves the
+            // keyboard on the rows for Enter to be answered there.
+            alt.set(true);
+            settle(&mut test);
+            press_at(&mut test, row);
+            alt.set(false);
+            settle(&mut test);
+            key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+        } else {
+            press_at(&mut test, row);
+            settle(&mut test);
+        }
+
+        let driven = states.places.driven.peek();
+        (
+            driven.choice(&entry),
+            driven.line(&entry),
+            source_line(roots.doors.marked),
+        )
+    };
+
+    let pressed = chosen(false);
+    assert!(
+        pressed == (Some(wanted.clone()), Some(at.line), Some(at.clone())),
+        "the press did not choose the symbol for the tab it was asked from"
+    );
+    assert!(
+        pressed == chosen(true),
+        "Enter on the row and a press on it chose for different places"
+    );
+}
+
 /// A landing is for the next arrival only: whichever document arrives spends it, and
 /// one for another document picks nothing out.
 #[test]

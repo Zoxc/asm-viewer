@@ -593,17 +593,9 @@ impl Component for ObjectsPanel {
             ),
         );
 
-        rect()
-            .expanded()
-            .content(Content::Flex)
-            .background(palette().pane_bg)
-            .child(AddBinaries)
-            .child(
-                rect()
-                    .width(Size::fill())
-                    .height(Size::flex(1.0))
-                    .child(pane),
-            )
+        // The Search and Locations panels' frame with a button where their heading is.
+        // The ground is named here, the button having none of its own.
+        headed(AddBinaries.into_element(), pane).background(palette().pane_bg)
     }
 }
 

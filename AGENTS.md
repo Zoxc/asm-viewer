@@ -183,7 +183,8 @@ command.
 - `src/search.rs` — the project's directory searched for a pattern: the walk, the match,
   and the cap.
 - `src/grouped.rs` — items under the file each is in, with a fold per file, flattened into
-  the rows a list draws: what a search's hits and a name's references are both held in.
+  the rows a list draws: what a search's hits and a name's references are both held in, and
+  the cut that makes a line of a file into the text one of those rows draws.
 - `src/tree.rs` — the Objects list's tree shape, and which files are still being read into it.
 - `src/files.rs` — the project's directory as a tree: read one level per unfold, forgotten on
   the fold, and flattened into the rows the Files view draws.

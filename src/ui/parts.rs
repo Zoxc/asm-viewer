@@ -601,6 +601,27 @@ pub(crate) fn section_heading(text: &str, action: Option<Element>) -> impl IntoE
         .maybe_child(action)
 }
 
+/// A list under the line that says what it is: the heading, and the rows taking the rest
+/// of the pane.
+///
+/// The frame both grouped panels draw their answer in. The top is any element and not a
+/// heading's text, so the Objects panel's "Add binaries..." button over its tree is the
+/// same drawing rather than a third copy of these three rects. A `Rect` and not an
+/// `Element`, so a caller that wants a ground under the whole of it says so on the frame
+/// itself.
+pub(crate) fn headed(heading: Element, list: Element) -> Rect {
+    rect()
+        .expanded()
+        .content(Content::Flex)
+        .child(heading)
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .child(list),
+        )
+}
+
 /// One labelled field: what it is on the left in a fixed column, what it says on the right
 /// taking the rest. A `flex` row, so a text box in the value position takes the width that
 /// is left rather than the width of its contents.

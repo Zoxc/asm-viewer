@@ -232,9 +232,12 @@ tab, or once the asking tab has closed, a row opens the symbol as a tab of its o
 `documents::land`, which takes the target document, so the selected line and the landing are one
 rule for either. An instance row is chosen the same way, from the row the menu was opened on, so the
 tab is driven from that line; where the instance holds no code from it, `pick` falls back as it does
-for any choice. **The row lit in the panel is the symbol drawn** (`Analysis`), not the active
-document. For a source-driven tab the active document is a file, and the lit row is the one thing on
-screen that says which instance its assembly side is on.
+for any choice. The panel takes the answer's line and the subject out of `Located` **once** and
+hands both to the rows as props and to the list's keys, so a row's press and Enter on the pick are
+one decision, and no row reads a state nothing redraws it for. **The row lit in the panel is the
+symbol drawn** (`Analysis`), not the active document. For a source-driven tab the active document
+is a file, and the lit row is the one thing on screen that says which instance its assembly side is
+on.
 
 **The panel's third question is not the worker's at all.** Where a name is *used* only a language
 server can say (`agents/Lsp.md`), so a `Scope::Listed` query is sent at the right-click that

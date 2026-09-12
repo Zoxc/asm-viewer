@@ -310,14 +310,14 @@ fn a_hit_knows_where_its_match_is_in_the_files_line() {
 #[test]
 fn a_long_line_is_cut_on_a_character_boundary() {
     let root = temp_dir("cut");
-    let long = format!("needle{}needle\n", "\u{e9}".repeat(MAX_LINE));
+    let long = format!("needle{}needle\n", "\u{e9}".repeat(grouped::MAX_LINE));
     write(&root.join("x.rs"), &long);
 
     let hits = found(&root, "needle");
 
     assert!(hits.len() == 1);
     let hit = &hits[0].1;
-    assert!(hit.text.chars().count() == MAX_LINE);
+    assert!(hit.text.chars().count() == grouped::MAX_LINE);
     assert!(hit.spans == vec![0..6], "{:?}", hit.spans);
 }
 

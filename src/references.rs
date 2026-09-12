@@ -8,8 +8,8 @@
 //! to be able to find a file in the list. The grouping itself is [`crate::grouped`],
 //! which the Search panel's hits are held in too.
 //!
-//! A row draws its line's text, as a search hit's does and cut the same way
-//! ([`search::drawn`]) -- a list of line numbers says where a name is used and not how.
+//! A row draws its line's text, cut as any list row's is ([`grouped::drawn`]) -- a list of
+//! line numbers says where a name is used and not how.
 //! The server says nothing about the text, so the lines are **read off the disk**, each
 //! file once and through the same reader the answer's columns came back through
 //! ([`lsp::Lines`]); the read blocks, which is why it happens with the ask on the language
@@ -23,7 +23,6 @@ use std::path::Path;
 use crate::chars;
 use crate::grouped::{self, Grouped};
 use crate::lsp;
-use crate::search;
 
 /// One reference: the line it is on, 1-based as every line in the app is, the columns of
 /// the name on it, and that line as a row draws it.
@@ -78,7 +77,8 @@ pub fn of(places: &[lsp::Place], lines: &mut lsp::Lines) -> References {
 }
 
 /// One place as a row of it: its line, and that line's text where the file gave one, cut
-/// as a search hit's is with the name's own columns turned into spans over what is left.
+/// as a list row's is ([`grouped::drawn`]) with the name's own columns turned into spans
+/// over what is left.
 ///
 /// A line the file does not have is a line the file has changed since the server read it;
 /// the row is then the number alone, which is what it would be for a file that would not
@@ -88,7 +88,7 @@ fn reference(place: &lsp::Place, line: Option<&str>) -> Reference {
     let (columns, text, spans) = match line {
         Some(line) => {
             let name = span_of(line, bytes.clone());
-            let (text, spans) = search::drawn(line, name.into_iter().collect());
+            let (text, spans) = grouped::drawn(line, name.into_iter().collect());
             (chars::columns_of(line, bytes), text, spans)
         }
         // No line to count in, so the bytes stand: the right answer for a line of ASCII

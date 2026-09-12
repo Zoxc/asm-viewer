@@ -320,8 +320,14 @@ off the disk there, since the server says nothing about the text: each file once
 language worker with the ask -- a read blocks, and that is the thread that may block; a file
 that will not read leaves its references the number they already have. The panels draw one
 row too (`ui::place_row`), down to the line's text with the name marked in it
-(`search::drawn` cuts a long line for both, `found_line` washes what matched in both): a
-list of line numbers says where a name is used and not how. `Folding` is what is left of the
+(`grouped::drawn` cuts a long line for both -- it sits with the model both answers are held
+in, so neither panel reaches into the other for it -- and `found_line` washes what matched
+in both): a list of line numbers says where a name is used and not how. One frame around
+those rows as well (`headed`, `ui/parts.rs`): a heading, and the rows taking the rest of the
+pane. Search wrote those three rects out by hand and had already drifted from Locations by
+the tooltip over the heading, which is a difference in what a heading says and not in how a
+list is laid out. The top is any element, so the Objects panel's "Add binaries..." button
+over its tree is the same frame and not a third copy of it. `Folding` is what is left of the
 difference -- which state a press on a file row writes its fold to, and which panel's pick
 the row is drawn against. The filter matches the file's path, applied where the rows are
 built rather than through `Filtered`'s memo -- that is for the thousands a line's symbols

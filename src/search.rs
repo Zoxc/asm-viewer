@@ -30,10 +30,6 @@ use std::{
 /// the walk stops here and the panel says that there are more.
 pub const MAX_HITS: usize = 10_000;
 
-/// The most characters of a matched line kept for the row that draws it. A generated file
-/// can hold a line of megabytes, and a row can draw a sidebar's width of it.
-const MAX_LINE: usize = 300;
-
 /// What a search is asked for: where to look, and what to look for.
 #[derive(Clone, PartialEq)]
 pub struct SearchQuery {
@@ -62,8 +58,9 @@ impl SearchQuery {
 pub struct Hit {
     /// Numbered from one, as an editor numbers them.
     pub line: u32,
-    /// The line as the row draws it: leading whitespace gone and cut to [`MAX_LINE`]
-    /// characters, since a row has one line's height and a sidebar's width.
+    /// The line as the row draws it: leading whitespace gone and cut to
+    /// [`grouped::MAX_LINE`] characters, since a row has one line's height and a
+    /// sidebar's width.
     pub text: String,
     /// Where the matches are in `text`, as byte ranges into it. Empty when the cut left
     /// none of them in view.
@@ -217,7 +214,7 @@ fn hit_from(matcher: &RegexMatcher, line: &[u8], number: u64) -> Hit {
     let first = spans.first().cloned();
 
     let columns = first.map(|found| chars::columns_of(&text, found));
-    let (text, spans) = drawn(&text, spans);
+    let (text, spans) = grouped::drawn(&text, spans);
 
     Hit {
         line: u32::try_from(number).unwrap_or(u32::MAX),
@@ -225,27 +222,6 @@ fn hit_from(matcher: &RegexMatcher, line: &[u8], number: u64) -> Hit {
         spans,
         columns,
     }
-}
-
-/// A line as a list row draws it: its leading whitespace gone and cut to [`MAX_LINE`]
-/// characters, since a row has one line's height and a sidebar's width; and `spans` --
-/// byte ranges into the whole line -- moved to what is left of it.
-///
-/// A span is clamped to what is drawn rather than dropped for reaching past it: a pattern
-/// that takes in the indentation -- `^\s*needle` -- matches from before the text the row
-/// shows, and the part of it in view is still what was found. One left with nothing in
-/// view goes.
-///
-/// Shared with the references list, whose rows are these rows (`src/references.rs`).
-pub fn drawn(line: &str, spans: Vec<Range<usize>>) -> (String, Vec<Range<usize>>) {
-    let start = line.len() - line.trim_start().len();
-    let end = chars::byte_of_char(&line[start..], MAX_LINE) + start;
-    let spans = spans
-        .into_iter()
-        .map(|span| span.start.max(start) - start..span.end.clamp(start, end) - start)
-        .filter(|span| span.start < span.end)
-        .collect();
-    (line[start..end].to_owned(), spans)
 }
 
 /// A line without the newline the searcher hands back with it, `\r\n` included.

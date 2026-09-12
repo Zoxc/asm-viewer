@@ -1,8 +1,8 @@
 use super::*;
 use crate::filter::Filter;
 
-/// The rows as they are drawn: a file row by its name and count, an item row by its item.
-fn drawn(rows: &Rows<u32>) -> Vec<String> {
+/// The rows as they are spelled: a file row by its name and count, an item row by its item.
+fn spelled(rows: &Rows<u32>) -> Vec<String> {
     rows.iter()
         .map(|row| match row {
             Row::File {
@@ -53,7 +53,7 @@ fn the_same_path_under_another_arc_is_the_same_file() {
     grouped.push(&path("/p/a.rs"), 7);
 
     assert_eq!(grouped.files(), 1);
-    assert_eq!(drawn(&all(&grouped)), ["a.rs 2", "1", "7"]);
+    assert_eq!(spelled(&all(&grouped)), ["a.rs 2", "1", "7"]);
 }
 
 /// Items are grouped under the file they came with, the files in the order they arrived,
@@ -68,7 +68,7 @@ fn items_are_grouped_under_their_file_in_the_order_they_arrived() {
 
     assert_eq!((grouped.count(), grouped.files()), (3, 2));
     let rows = all(&grouped);
-    assert_eq!(drawn(&rows), ["a.rs 2", "1", "7", "b.rs 1", "2"]);
+    assert_eq!(spelled(&rows), ["a.rs 2", "1", "7", "b.rs 1", "2"]);
     assert_eq!(
         rows[1],
         Row::Item {
@@ -90,7 +90,7 @@ fn a_file_that_comes_back_later_is_a_group_of_its_own() {
 
     assert_eq!(grouped.files(), 3);
     assert_eq!(
-        drawn(&all(&grouped)),
+        spelled(&all(&grouped)),
         ["a.rs 1", "1", "b.rs 1", "2", "a.rs 1", "3"]
     );
 }
@@ -105,12 +105,12 @@ fn a_folded_file_keeps_its_row_and_its_count() {
     ]);
 
     assert!(grouped.toggle(Path::new("/p/a.rs")));
-    assert_eq!(drawn(&all(&grouped)), ["a.rs 2 folded", "b.rs 1", "2"]);
+    assert_eq!(spelled(&all(&grouped)), ["a.rs 2 folded", "b.rs 1", "2"]);
     assert_eq!(grouped.count(), 3, "the fold hides rows and finds nothing");
 
     // And back, since the same press unfolds it.
     assert!(grouped.toggle(Path::new("/p/a.rs")));
-    assert_eq!(drawn(&all(&grouped)), ["a.rs 2", "1", "7", "b.rs 1", "2"]);
+    assert_eq!(spelled(&all(&grouped)), ["a.rs 2", "1", "7", "b.rs 1", "2"]);
 
     assert!(!grouped.toggle(Path::new("/p/gone.rs")));
 }
@@ -128,7 +128,7 @@ fn the_filter_keeps_files_by_their_path() {
         pattern: "tests".to_owned(),
         ..Filter::default()
     };
-    assert_eq!(drawn(&grouped.rows(&filter.matcher())), ["b.rs 1", "2"]);
+    assert_eq!(spelled(&grouped.rows(&filter.matcher())), ["b.rs 1", "2"]);
 }
 
 /// The rows are shared by an `Arc` and compared by it, so handing ten thousand of them to

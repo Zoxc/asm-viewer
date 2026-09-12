@@ -581,34 +581,26 @@ pub(crate) fn locate_menu(
         .maybe_child(instances)
 }
 
-/// The shell both of the panel's lists are drawn in: the question over the rows, with
-/// `count` of them in it.
+/// The heading over both of the panel's lists: the question, `count` rows of it, and the
+/// whole of it in a tooltip -- what [`headed`] draws the rows under.
 ///
 /// The count is said over the list rather than in the tab's title: the rows are not the
 /// answer to anything until the question is in view with them.
-fn headed(query: &Query, count: usize, list: Element) -> Element {
-    rect()
-        .expanded()
-        .content(Content::Flex)
-        .child(extra_tooltip(
-            query.tooltip(),
-            section_heading(&query.heading(count), None),
-        ))
-        .child(
-            rect()
-                .width(Size::fill())
-                .height(Size::flex(1.0))
-                .child(list),
-        )
-        .into()
+fn question(query: &Query, count: usize) -> Element {
+    extra_tooltip(
+        query.tooltip(),
+        section_heading(&query.heading(count), None),
+    )
 }
 
 /// The Locations view: what was asked about, over every symbol it answered with.
 ///
 /// `HistoryPanel`'s shape with `SymbolsPanel`'s list: a filter over a `VirtualScrollView`,
-/// ranked by the same [`Filtered`], because one line answers with thousands. What the
-/// pane says is decided in one `match` off [`Located`]'s two fields, so "nothing asked",
-/// "being looked for", "found nothing" and the rows cannot disagree about which they are.
+/// ranked by the same [`Filtered`], because one line answers with thousands. What the pane
+/// says is decided in one `match` off [`Located`]'s two fields, and that match answers
+/// with the keys over the rows as well as with the body: so "nothing asked", "being looked
+/// for", "found nothing" and the rows cannot disagree about which they are, and what Enter
+/// does is whatever the arm that drew them said.
 ///
 /// The row lit is the symbol the panes are **drawing** -- `Analysis`, not `Active` --
 /// because for a source-driven tab the active document is a file, and the whole point of
@@ -671,100 +663,115 @@ impl Component for LocationsPanel {
                 state.subject.clone(),
             )
         };
-        // What Enter on a row reaches through, and the two facts a location row opens
-        // with: the line the question was asked from, and the tab it was asked in.
+        // What a press reaches through, whichever kind of row it is on and whether it
+        // came from the pointer or from Enter: one set for the panel.
         let to = use_landings();
-        // What Enter on a reference row reaches through beside those: a place in a file
-        // is opened the way both grouped panels open one (`ui/place_row.rs`).
-        let places = use_places();
 
         let marking = marking.read().clone();
 
-        let mut keys = ListKeys::none();
-        let body: Element = match (&asked, pending, answer) {
+        // **Both out of one arm**: what the rows are and what Enter on one does are
+        // decided together, so neither can be read without the other. An empty answer is
+        // that arm too, its keys over the nothing it left.
+        let (keys, body): (ListKeys, Element) = match (&asked, pending, answer) {
             // Asked and not pending is found, by `pending`'s definition, so the second
             // of these never comes up.
-            (None, _, _) | (Some(_), false, None) => placeholder("Nothing looked for yet"),
-            (Some(query), true, _) => placeholder(format!(
-                "Finding {} {}\u{2026}",
-                query.words().1,
-                query.spell()
-            )),
-            (Some(query), false, Some(Answer::Places(0))) => {
-                placeholder(format!("No {} {}", query.words().1, query.spell()))
+            (None, _, _) | (Some(_), false, None) => {
+                (ListKeys::none(), placeholder("Nothing looked for yet"))
             }
+            (Some(query), true, _) => (
+                ListKeys::none(),
+                placeholder(format!(
+                    "Finding {} {}\u{2026}",
+                    query.words().1,
+                    query.spell()
+                )),
+            ),
             (Some(query), false, Some(Answer::Places(count))) => {
                 let length = used.len();
                 // The rows the arrows step and Enter presses: a `ReferenceRows` is the
                 // rows behind an `Arc`, so handing them over is a pointer.
-                keys = ListKeys::over(used.clone(), place_pick, move |row| {
-                    press_place(to.doors, places, to.ctrl, Folding::Places(located), row)
+                let keys = ListKeys::over(used.clone(), place_pick, move |row| {
+                    press_place(to.doors, to.places, to.ctrl, Folding::Places(located), row)
                 });
-                headed(
-                    query,
-                    count,
-                    pane.virtual_rows(
-                        length,
-                        (used, located),
-                        |row, (used, located): &(ReferenceRows, State<Located>)| {
-                            PlaceRow {
-                                row: used[row].clone(),
-                                folding: Folding::Places(*located),
-                                at: row,
-                                key: DiffKey::None,
-                            }
-                            .into()
-                        },
-                    ),
-                )
-            }
-            (Some(query), false, Some(Answer::Symbols(0))) => {
-                placeholder(format!("No code compiled from {}", query.spell()))
+                let body = match count {
+                    0 => placeholder(format!("No {} {}", query.words().1, query.spell())),
+                    count => headed(
+                        question(query, count),
+                        pane.virtual_rows(
+                            length,
+                            (used, located),
+                            |row, (used, located): &(ReferenceRows, State<Located>)| {
+                                PlaceRow {
+                                    row: used[row].clone(),
+                                    folding: Folding::Places(*located),
+                                    at: row,
+                                    key: DiffKey::None,
+                                }
+                                .into()
+                            },
+                        ),
+                    )
+                    .into(),
+                };
+                (keys, body)
             }
             (Some(query), false, Some(Answer::Symbols(count))) => {
                 let length = filtered.len();
                 // The rows the arrows step and Enter presses: a `Filtered` is the list
                 // behind an `Arc` and the indices the filter kept.
-                let (at_asked, subject) = (asked_at.clone(), subject.clone());
-                keys = ListKeys::over(
+                let keys = ListKeys::over(
                     filtered.clone(),
                     |symbol: &Symbol| Pick::Symbol(symbol.clone()),
-                    move |symbol: &Symbol| {
-                        press_location(to, at_asked.clone(), subject.clone(), symbol.clone())
+                    {
+                        let (at, subject) = (asked_at.clone(), subject.clone());
+                        move |symbol: &Symbol| {
+                            press_location(to, at.clone(), subject.clone(), symbol.clone())
+                        }
                     },
                 );
-                headed(
-                    query,
-                    count,
-                    pane.virtual_rows(
-                        length,
-                        (filtered, selected, marking.clone()),
-                        |row,
-                         (filtered, selected, marking): &(
-                            Filtered<Symbol>,
-                            Option<Symbol>,
-                            Marking,
-                        )| {
-                            let index = filtered.index(row);
-                            let symbol = &filtered.list()[index];
-                            LocationRow {
-                                symbols: filtered.list().clone(),
-                                index,
-                                selected: selected.as_ref() == Some(symbol),
-                                at: row,
-                                marks: marking.marks(symbol.data.display()),
-                                key: DiffKey::None,
-                            }
-                            // The symbol *and* its object: one file parsed
-                            // twice is two rows naming one `SymbolData`.
-                            .key((
-                                Arc::as_ptr(&symbol.object).addr(),
-                                Arc::as_ptr(&symbol.data).addr(),
-                            ))
-                            .into()
-                        },
-                    ),
-                )
+                // The answer's own line and the tab it was asked from reach the rows as
+                // data, so a row's press and Enter on it are one decision. A row reading
+                // them itself would be reading a state nothing redraws it for.
+                let body = match count {
+                    0 => placeholder(format!("No code compiled from {}", query.spell())),
+                    count => headed(
+                        question(query, count),
+                        pane.virtual_rows(
+                            length,
+                            (filtered, selected, marking.clone(), asked_at, subject),
+                            |row,
+                             (filtered, selected, marking, asked_at, subject): &(
+                                Filtered<Symbol>,
+                                Option<Symbol>,
+                                Marking,
+                                Option<LinePos>,
+                                Option<Subject>,
+                            )| {
+                                let index = filtered.index(row);
+                                let symbol = &filtered.list()[index];
+                                LocationRow {
+                                    symbols: filtered.list().clone(),
+                                    index,
+                                    selected: selected.as_ref() == Some(symbol),
+                                    at: row,
+                                    asked_at: asked_at.clone(),
+                                    subject: subject.clone(),
+                                    marks: marking.marks(symbol.data.display()),
+                                    key: DiffKey::None,
+                                }
+                                // The symbol *and* its object: one file parsed
+                                // twice is two rows naming one `SymbolData`.
+                                .key((
+                                    Arc::as_ptr(&symbol.object).addr(),
+                                    Arc::as_ptr(&symbol.data).addr(),
+                                ))
+                                .into()
+                            },
+                        ),
+                    )
+                    .into(),
+                };
+                (keys, body)
             }
         };
 
@@ -784,6 +791,13 @@ struct LocationRow {
     selected: bool,
     /// Where this row is in the list as it is drawn, which under a filter is not `index`.
     at: usize,
+    /// The answer's own line, and [`None`] where it named none: what a press opens the
+    /// symbol on. A prop and not a reading of [`Located`], so the row and the panel's
+    /// Enter open the same place.
+    asked_at: Option<LinePos>,
+    /// The source-driven tab the question was asked from, whose entry a press writes the
+    /// choice under. A prop for the same reason.
+    subject: Option<Subject>,
     /// Where the filter matched in the name, for the row to mark.
     marks: Vec<Range<usize>>,
     key: DiffKey,
@@ -791,13 +805,13 @@ struct LocationRow {
 
 keyed!(LocationRow);
 
-/// Everything a location row's press reaches through: what a door is given, and the two
-/// states beyond it a chosen symbol is written to. A struct because both the row and the
-/// panel's Enter hand over the same set.
+/// Everything a press in this panel reaches through: what a door is given, the places a
+/// chosen symbol is written to, and whether Ctrl is held. One set for the whole panel --
+/// both kinds of row, and Enter on either -- rather than a trio each caller lists again.
 #[derive(Clone, Copy)]
 struct Landings {
     doors: Doors,
-    driven: State<Driven>,
+    places: Places,
     ctrl: State<bool>,
 }
 
@@ -805,7 +819,7 @@ struct Landings {
 fn use_landings() -> Landings {
     Landings {
         doors: use_doors(),
-        driven: use_places().driven,
+        places: use_places(),
         ctrl: use_consume::<Ctrl>().0,
     }
 }
@@ -851,7 +865,7 @@ fn press_location(
 ) -> Pressed {
     let Landings {
         doors,
-        driven,
+        places,
         ctrl,
     } = to;
     let open = doors.open;
@@ -869,7 +883,7 @@ fn press_location(
         Chosen::Driving { entry, at } => {
             let id = entry.0;
             {
-                let mut driven = driven;
+                let mut driven = places.driven;
                 let mut driven = driven.write();
                 driven.remember(entry.clone(), at.line);
                 driven.choose(entry, symbol);
@@ -898,9 +912,7 @@ impl Component for LocationRow {
         // is in.
         let (named, about) = (use_fitted(), use_fitted());
         let to = use_landings();
-        let located = use_consume::<Locations>().0.peek().clone();
-        let at = located.found.as_ref().map(|found| found.of.at.clone());
-        let subject = located.subject.clone();
+        let (at, subject) = (self.asked_at.clone(), self.subject.clone());
         let picking = use_picking(Panel::Locations);
         let row = self.at;
         let symbol = self.symbols[self.index].clone();
