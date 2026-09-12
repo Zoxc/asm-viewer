@@ -91,6 +91,8 @@ struct SectionRows {
     /// What the find bar is looking for, compiled once for the list; `None` where no bar
     /// is open (`find_bar.rs`).
     marking: Option<Marking>,
+    /// What a row's menu writes, consumed once by the list: see [`RowStates`].
+    asking: RowStates,
 }
 
 impl PartialEq for SectionRows {
@@ -105,6 +107,8 @@ impl PartialEq for SectionRows {
             // view alone, as Left, Right, Home and End doing nothing.
             && self.chars == other.chars
             && self.marking == other.marking
+        // `asking` compares equal always -- handles the root never replaces -- so it is
+        // left out.
     }
 }
 
@@ -566,10 +570,11 @@ impl Component for SectionList {
         let marked = use_consume::<Marked>().0;
         let chars = chars_of(marked, Pane::Assembly);
         let pair = pair_of(marked, Pane::Assembly);
-        // The two bundles the place-keeping hook below is given, and the id table this
-        // listing's entry is read out of.
-        let doors = use_doors();
-        let places = use_places();
+        // What the rows' menus write, consumed here and carried to them: a handler may not
+        // run a hook. Two of its fields are the bundles the place-keeping hook below is
+        // given, and the id table this listing's entry is read out of comes with them.
+        let asking = use_row_states();
+        let (doors, places) = (asking.doors, asking.places);
         let docs = doors.open.docs;
         // The listing these rows are of, held under the object's identity and not the
         // rows': `Built` is made afresh as every stretch lands, and the listing is the
@@ -773,6 +778,7 @@ impl Component for SectionList {
                 touching,
                 chars,
                 marking,
+                asking,
             },
             build_row,
         )
@@ -868,6 +874,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                     lit: lanes::lit(touching(stretch), index),
                 },
                 data: asm,
+                asking: data.asking,
                 index,
                 row: i,
                 paired,

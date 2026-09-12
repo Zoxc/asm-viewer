@@ -297,6 +297,8 @@ impl AsmData {
 #[derive(Clone, PartialEq)]
 struct AsmRows {
     data: AsmData,
+    /// What a row's menu writes, consumed once by the list: see [`RowStates`].
+    asking: RowStates,
     /// The source pane's picked-out run, or `None` when there is none.
     pair: Option<Picked>,
     /// The edges starting or ending at a picked-out row, which every row the gutter
@@ -919,6 +921,10 @@ impl Component for SeparatorRow {
 #[derive(Clone, PartialEq)]
 pub(crate) struct InstructionRow {
     pub(crate) data: AsmData,
+    /// What this row's menu writes, told to it by the list: a handler may not run a hook,
+    /// and a row reaching for these itself paid six context walks a render for a
+    /// right-click. Compares equal always, so it costs the row no render ([`RowStates`]).
+    pub(crate) asking: RowStates,
     /// Which instruction this row draws.
     pub(crate) index: usize,
     /// Which row of the listing it is drawn in, which is `index` plus every separator
@@ -1079,20 +1085,22 @@ fn instruction_text(
 /// not already; and the symbol bookmarked, always. `at` is where the row points on the
 /// source side, worked out by the caller, which needs the same answer.
 ///
-/// Every state is handed in, because reaching for a context is a hook and the handler
-/// runs long after the render that built it.
-#[allow(clippy::too_many_arguments)]
+/// The states it writes are handed in whole ([`RowStates`]), because reaching for a
+/// context is a hook and this handler runs long after the render that built it.
 fn instruction_menu(
-    doors: Doors,
-    places: Places,
-    located: State<Located>,
-    dock: State<DockArea>,
-    bookmarked: State<Bookmarks>,
-    objects: State<Vec<Arc<Object>>>,
+    asking: RowStates,
     data: &AsmData,
     index: usize,
     at: Option<LinePos>,
-) -> Rc<dyn Fn(Event<PressEventData>, Option<usize>)> {
+) -> RowMenu {
+    let RowStates {
+        doors,
+        places,
+        located,
+        dock,
+        bookmarked,
+        objects,
+    } = asking;
     let instruction = &data.assembly().instructions[index];
     // The source-driven tab this listing is the assembly side of, if it is one: a
     // location found from it is chosen for it.
@@ -1171,13 +1179,6 @@ fn instruction_menu(
 
 impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
-        // Consumed here, in the render, because the menu handler may not run a hook.
-        let doors = use_doors();
-        let places = use_places();
-        let located = use_consume::<Locations>().0;
-        let dock = use_consume::<SidebarDock>().0;
-        let bookmarked = use_consume::<Bookmarked>().0;
-        let objects = use_consume::<Objects>().0;
         // Ctrl and Alt as a link's icon asks them: peeked from a handler, where the label
         // reads them and is drawn again as they change.
         let ctrl = use_consume::<Ctrl>().0;
@@ -1220,9 +1221,7 @@ impl Component for InstructionRow {
                 ctrl,
                 alt,
             )),
-            Some(instruction_menu(
-                doors, places, located, dock, bookmarked, objects, &self.data, self.index, at,
-            )),
+            Some(instruction_menu(self.asking, &self.data, self.index, at)),
         )
     }
 
@@ -1285,7 +1284,10 @@ fn planted_index(instructions: &[Instruction], address: u64) -> Option<usize> {
 
 impl Component for InstructionList {
     fn render(&self) -> impl IntoElement {
-        let doors = use_doors();
+        // What the rows' menus write, consumed here and carried to them: a handler may not
+        // run a hook.
+        let asking = use_row_states();
+        let doors = asking.doors;
         let marked = doors.marked;
         let chars = chars_of(marked, Pane::Assembly);
         // The source pane's run, whose pair these rows light.
@@ -1321,7 +1323,7 @@ impl Component for InstructionList {
             place_at(&docs.read(), self.tab, &asked_of(&self.asked)),
         );
         use_kept_position(
-            use_places().asm_at,
+            asking.places.asm_at,
             docs,
             Pane::Assembly,
             {
@@ -1424,6 +1426,7 @@ impl Component for InstructionList {
             on_key_down,
             AsmRows {
                 data,
+                asking,
                 pair,
                 touching,
                 chars,
@@ -1475,6 +1478,7 @@ fn asm_row(i: usize, rows: &AsmRows) -> Element {
     InstructionRow {
         paired,
         data: rows.data.clone(),
+        asking: rows.asking,
         index,
         row: i,
         wash,

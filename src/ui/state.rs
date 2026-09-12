@@ -14,6 +14,10 @@
 //! [`Doors`] and [`ProjectStates`] both carry [`Open`], and [`Doors`] carries the runs
 //! [`Marked`] hands the panes.
 //!
+//! [`RowStates`] is the one bundle that is **not** a context. It is gathered from six of
+//! them by [`use_row_states`], where a code listing renders, and carried to the rows as
+//! data: what it groups is what a row's menu writes, and a handler may not run a hook.
+//!
 //! Two of the names are **derivations and not states**: `Active` is a `Memo` over the strip
 //! and the document table, and `Symbols` a `Memo` over `Objects`.
 //!
@@ -482,6 +486,53 @@ pub(crate) struct Arrangement {
     pub(crate) dock: State<DockArea>,
     pub(crate) sidebar: State<f32>,
     pub(crate) split: State<f32>,
+}
+
+/// What a code row's menu writes, and what the Source pane's four caret questions are
+/// answered through, in one `Copy` bundle: where a door leads, where an answer lands, and
+/// what a bookmark is added to.
+///
+/// **Consumed where the list renders and carried to the rows as data.** Reaching for a
+/// context is a hook, and the handlers here are built by a render and run long after it,
+/// so a row that consumed them itself paid a context walk per state per render for a
+/// right-click that almost never comes.
+///
+/// The handles are the root's and are never replaced, so this **compares equal always**:
+/// a row holding one is not re-rendered for it, where a bundle compared field by field
+/// would trade the lookups for a render.
+///
+/// One bundle for both panes. The Source rows read the first four and the instruction
+/// rows all six, and the two menus therefore cannot come to reach for one state two ways.
+#[derive(Clone, Copy)]
+pub(crate) struct RowStates {
+    pub(crate) doors: Doors,
+    pub(crate) places: Places,
+    /// Where a question about a line, a name or a function is answered.
+    pub(crate) located: State<Located>,
+    /// The dock the Locations panel is brought to the front of.
+    pub(crate) dock: State<DockArea>,
+    /// What "Bookmark symbol" adds to.
+    pub(crate) bookmarked: State<Bookmarks>,
+    /// The objects a bookmark is judged live against.
+    pub(crate) objects: State<Vec<Arc<Object>>>,
+}
+
+impl PartialEq for RowStates {
+    fn eq(&self, _: &RowStates) -> bool {
+        true
+    }
+}
+
+/// What a code row's menu and keys reach for, as the list drawing the rows sees them.
+pub(crate) fn use_row_states() -> RowStates {
+    RowStates {
+        doors: use_doors(),
+        places: use_places(),
+        located: use_consume::<Locations>().0,
+        dock: use_consume::<SidebarDock>().0,
+        bookmarked: use_consume::<Bookmarked>().0,
+        objects: use_consume::<Objects>().0,
+    }
 }
 
 /// What is open, as a component sees it: the strip and the id table together.

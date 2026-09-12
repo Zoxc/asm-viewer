@@ -18057,6 +18057,136 @@ fn a_sweep_in_the_source_pane_does_not_work_its_pair_out_again() {
     );
 }
 
+/// Which of the code rows whose gutters read `numbers` come through `change` as the very
+/// scopes they were.
+///
+/// The element and not the area, because **the element is how this asks whether a row
+/// rendered again**: an element carrying event handlers never compares equal to the one
+/// before it, so a scope that renders is handed a new one.
+fn rows_kept(
+    test: &mut TestingRunner,
+    numbers: &[&str],
+    change: impl FnOnce(&mut TestingRunner),
+) -> Vec<bool> {
+    let row = |test: &TestingRunner, number: &str| {
+        let gutter = label_area(test, number).unwrap_or_else(|| panic!("row {number:?} is drawn"));
+        test.find(|node, _element| {
+            let area = node.layout().area;
+            let around = area.min_y() <= gutter.min_y() && gutter.max_y() <= area.max_y();
+            (around && area.height() == code_row_height()).then(|| node.element())
+        })
+        .unwrap_or_else(|| panic!("row {number:?} is a row of a listing"))
+    };
+    let before: Vec<_> = numbers.iter().map(|number| row(test, number)).collect();
+    change(test);
+    numbers
+        .iter()
+        .zip(before)
+        .map(|(number, was)| Rc::ptr_eq(&was, &row(test, number)))
+        .collect()
+}
+
+/// What a source row's menu, its links and the pointer on one of its names reach for is
+/// consumed where the *list* renders and carried to every row as one value -- a handler
+/// being no place to call a hook. The carrying costs the row nothing: a run picked out
+/// re-renders the list, and the rows the run misses keep their scopes.
+///
+/// Made to fail first by comparing what is carried by pointer: the list builds a fresh
+/// one every render, so every row on screen is then drawn again for every sweep, every
+/// keystroke in the find bar and every answer about the file.
+///
+/// Headless because nothing shows either way: the row draws the same thing, and only the
+/// element freya rebuilt says whether the scope rendered again.
+#[test]
+fn what_a_source_rows_menu_reaches_for_costs_the_row_no_render() {
+    let directory = Seeded::directory("row-bundle");
+    let text: String = (1..=10).map(|n| format!("int line_{n}(void);\n")).collect();
+    let file = directory.named("rows.c", &text);
+
+    let (mut test, (states, marked)) = TestingRunner::new(
+        source_menu_harness,
+        (500., 400.).into(),
+        {
+            let file = file.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || {
+                    provide(SubjectFile(file.clone()));
+                    let roots = test_roots();
+                    (roots.states, roots.doors.marked)
+                })
+            }
+        },
+        1.,
+    );
+    let mut marked = marked;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+
+    // A run on the fifth row and on nothing else.
+    let kept = rows_kept(&mut test, &["1\u{a0}", "5\u{a0}"], |test| {
+        marked.set(Marks {
+            source: Some(picked_row(4, &file, Owed::default())),
+            assembly: None,
+        });
+        settle(test);
+    });
+    assert!(
+        !kept[1],
+        "the run never reached the rows, so nothing here was measured"
+    );
+    assert!(kept[0], "a run on another row re-rendered this one");
+}
+
+/// The same on the assembly side: the states an instruction row's menu writes are the
+/// list's to consume ([`RowStates`]), and a row carrying them is not re-rendered for them.
+///
+/// A run picked out in the *source* pane over a file this listing has no code from
+/// re-renders the list -- the pane reads its pair out of that same state -- and changes
+/// nothing any row of it draws. Made to fail first with a [`RowStates`] that compares
+/// unequal, which is a render a row for handles that never change.
+#[test]
+fn what_an_instruction_rows_menu_reaches_for_costs_the_row_no_render() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+    let (mut test, marked) = TestingRunner::new(
+        listing_harness,
+        (500., 300.).into(),
+        move |runner: &mut _| {
+            runner
+                .provide_root_context(move || listing_states(shown))
+                .doors
+                .marked
+        },
+        1.,
+    );
+    let mut marked = marked;
+    settle(&mut test);
+
+    // `sum_to` is the fixture's third function, at 30h: its first row.
+    let kept = rows_kept(&mut test, &["0000000000000030 "], |test| {
+        marked.set(Marks {
+            source: Some(picked_row(0, "no-code-of-this-listing.c", Owed::default())),
+            assembly: None,
+        });
+        settle(test);
+    });
+    assert!(
+        kept[0],
+        "a run in the source pane re-rendered an instruction row it says nothing about"
+    );
+}
+
 /// The Source pane's gutter marks every line of the file that produced code, and nothing
 /// else: a reader scanning it can tell those from the lines that produced none without
 /// picking anything out. The set is the file's own, answered for the whole file, so it is

@@ -89,7 +89,7 @@ itself -- `code_tab`, or an `AsmData::subject`, which is set exactly when the as
 follows. A line's names the file and goes through `open_source_place`, the one arrival every door
 into a *place* in a source file makes -- a definition followed, a Locations row, a Search hit -- so
 the new tab's assembly side follows that line as it follows a clicked one. Both open beside the tab, on the row the menu was over, as a menu item does everywhere here,
-and the leading pane carries neither, being the tab already (`SourceRow::drives`). What a following
+and the leading pane carries neither, being the tab already (`Common::drives`). What a following
 pane with nothing in it should offer never had to be settled: a source-driven tab draws no listing
 until a line is clicked and an object's code no source until an instruction is pressed, so there is
 no row to press.
@@ -253,13 +253,17 @@ mean two things; all that differs is where the place comes from, the run's lead 
 instead of the pointer's column. That makes the units the thing to get right: a drawn column is in
 UTF-16 units and a server's is a byte offset (`src/chars.rs`). `name_at_column` is where the one is
 read as the other, and the pointer's `Named::at_column` goes through it too, so the two ways of
-pointing at a name cannot land a column apart. A caret **on no name** asks nothing about
+pointing at a name cannot land a column apart. It takes the place as **one value**, the file and
+the line together, so neither caller can say where the row is twice and have the two disagree. A caret **on no name** asks nothing about
 one, and with no server there is nobody to ask; the line's locations are about the row and not
 about a name, so they are asked wherever the caret is, exactly as the menu item is offered on
 every row. A pane with **no run at all** has no caret and answers none of the four. Only the
-Source pane offers them: the two assembly listings draw no names. The states they need are
-consumed in the list's render and handed down to the handler, a handler being no place to call a
-hook. The four wrap the listing's whole keyboard (`use_listing_keys`) from the outside rather than
+Source pane offers them: the two assembly listings draw no names. The states they need -- and the
+states a row's menu writes with them -- are consumed in the *list's* render and carried down as
+data, a handler being no place to call a hook: `RowStates` for the handles the root provides
+(`agents/UI.md`) and `Common` for the rest of what every row of the file shares, the text, the
+names the server placed and whom to ask about one. A row that reached for them itself paid nine
+context walks a render for a right-click that almost never comes. The four wrap the listing's whole keyboard (`use_listing_keys`) from the outside rather than
 sitting between the find bar's chords and the listing's own keys: the three sets of keys are
 disjoint, so which is asked first settles nothing.
 

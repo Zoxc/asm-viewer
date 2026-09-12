@@ -13,26 +13,17 @@
 
 use super::*;
 
-/// What the source rows are built from: the file's text and highlighting, which file it is
+/// Everything every row of the file shares: the text they are cut from, which file it is
 /// -- a row picked out is a line of a file, and a line number is not a place on its own --
-/// and which of its lines the assembly pane's picked-out run was compiled from.
+/// and everything a row's names and its menu reach for.
 ///
-/// Those are line numbers rather than positions because the file has already been
-/// matched here rather than per visible row.
-#[derive(Clone)]
-struct SourceData {
+/// Built once per render of the list and handed to every row as one `Rc`, so a row clones
+/// a refcount and not six values. **The states are consumed where the list renders**,
+/// since a handler may not run a hook and every one of these is read from a handler: the
+/// menu, the press that follows a link, the pointer moving onto a name.
+struct Common {
     source: SourceText,
     file: Arc<str>,
-    /// The lines of this file the assembly pane's run was compiled from: its pair here.
-    /// Out of a memo, so an unchanged set is the same `Arc` and the rows compare it by
-    /// pointer.
-    pairs: Arc<HashSet<u32>>,
-    /// The lines of this file the listing beside it has instructions for at all: what the
-    /// gutter marks.
-    compiled: Arc<HashSet<u32>>,
-    /// The run picked out here -- the caret, the characters, and so the rows -- for each
-    /// row to draw its part of, or `None` when there is none.
-    chars: Option<CharSelection>,
     /// The tab these rows *drive*, for a source-driven tab, where a click also says which
     /// assembly the other side shows -- and `None` for the companion file beside a
     /// symbol, where the click picks the line out and no more.
@@ -48,30 +39,82 @@ struct SourceData {
     /// What the find bar is looking for, compiled once for the list; `None` where no bar
     /// is open (`find_bar.rs`).
     marking: Option<Marking>,
+    /// Where a row's menu and the caret's four questions send their answers.
+    asking: RowStates,
+    /// Whether Ctrl is held, which is whether a link opens in a tab of its own.
+    ctrl: State<bool>,
+    /// Whom a press on a link or a name asks, and [`None`] where there is nobody: a pane
+    /// mounted without a server draws its text and no links (`links_in`).
+    server: Option<Server>,
+    /// Where the name under the pointer is written, and [`None`] where there is nobody to
+    /// write it: a pane mounted without it says nothing about a name.
+    hover: Option<State<Hover>>,
+}
+
+impl PartialEq for Common {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+            && Arc::ptr_eq(&self.file, &other.file)
+            && self.drives == other.drives
+            && self.links == other.links
+            && self.marking == other.marking
+        // `asking`, `ctrl`, `server` and `hover` are left out. They are handles the root
+        // provides and never replaces, and a row only reads them from a handler, so
+        // comparing them would cost it a render for nothing.
+    }
+}
+
+impl Common {
+    /// The tab this file's own line questions are answered for, which is the tab it
+    /// drives: a companion file beside a symbol drives none and is nobody's subject.
+    fn subject(&self) -> Option<Subject> {
+        self.drives.map(|tab| Subject {
+            tab,
+            file: self.file.clone(),
+        })
+    }
+}
+
+/// What the source rows are built from: what they all share, and which of the file's lines
+/// the assembly pane's picked-out run was compiled from.
+///
+/// Those are line numbers rather than positions because the file has already been
+/// matched here rather than per visible row.
+#[derive(Clone)]
+struct SourceData {
+    common: Rc<Common>,
+    /// The lines of this file the assembly pane's run was compiled from: its pair here.
+    /// Out of a memo, so an unchanged set is the same `Arc` and the rows compare it by
+    /// pointer.
+    pairs: Arc<HashSet<u32>>,
+    /// The lines of this file the listing beside it has instructions for at all: what the
+    /// gutter marks.
+    compiled: Arc<HashSet<u32>>,
+    /// The run picked out here -- the caret, the characters, and so the rows -- for each
+    /// row to draw its part of, or `None` when there is none.
+    chars: Option<CharSelection>,
 }
 
 impl PartialEq for SourceData {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source
-            && Arc::ptr_eq(&self.file, &other.file)
+        // By contents and not by pointer: the list builds a fresh one every render, so a
+        // pointer compare would rebuild every row for every render of the pane.
+        self.common == other.common
             && Arc::ptr_eq(&self.pairs, &other.pairs)
-            // By contents: the pane makes an empty set of its own for a file nothing has
-            // answered about yet, so there is no pointer to compare.
+            // By contents too: the pane makes an empty set of its own for a file nothing
+            // has answered about yet, so there is no pointer to compare.
             && self.compiled == other.compiled
             && self.chars == other.chars
-            && self.drives == other.drives
-            && self.links == other.links
-            && self.marking == other.marking
     }
 }
 
-/// One line of a source file: its number in a gutter, then its text. `file` is carried to
-/// be picked out rather than drawn: a line number without the file it is a line of is no
-/// place for the assembly pane to light up.
+/// One line of a source file: its number in a gutter, then its text. The file is in
+/// [`Common`] to be picked out rather than drawn: a line number without the file it is a
+/// line of is no place for the assembly pane to light up.
 #[derive(Clone)]
 struct SourceRow {
-    source: SourceText,
-    file: Arc<str>,
+    /// Everything this row shares with every other row of the file.
+    common: Rc<Common>,
     index: usize,
     /// Whether an instruction of the assembly pane's picked-out run was compiled from
     /// this line, and if so which of its edges end the run of such lines.
@@ -84,27 +127,17 @@ struct SourceRow {
     wash: Wash,
     /// The columns of this row inside the pane's character selection, likewise.
     chars: RowChars,
-    /// The tab a click here also drives the assembly side of, if any. See [`SourceData`].
-    drives: Option<DocId>,
-    /// Which of the file's names the server placed. See [`SourceData::links`].
-    links: links::Links,
-    /// What the find bar is looking for. See [`SourceData::marking`].
-    marking: Option<Marking>,
     key: DiffKey,
 }
 
 impl PartialEq for SourceRow {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source
-            && Arc::ptr_eq(&self.file, &other.file)
+        self.common == other.common
             && self.index == other.index
             && self.paired == other.paired
             && self.compiled == other.compiled
             && self.wash == other.wash
             && self.chars == other.chars
-            && self.drives == other.drives
-            && self.links == other.links
-            && self.marking == other.marking
     }
 }
 
@@ -116,7 +149,7 @@ keyed!(SourceRow);
 /// back into the units the row draws in and cut out of the row's own text -- which is
 /// what a menu built from a press calls the name, so what the reader right-clicked is
 /// what the menu says.
-pub(crate) fn name_at(source: &SourceText, index: usize, columns: &Range<u32>) -> Option<String> {
+fn name_at(source: &SourceText, index: usize, columns: &Range<u32>) -> Option<String> {
     let cut = source.0.text(index);
     let drawn = drawn_columns(&cut.whole, columns);
     let name = Line::text(&*cut.whole).slice(drawn.start, drawn.end);
@@ -143,12 +176,12 @@ pub(crate) fn source_line(source: &SourceText, index: usize) -> Line {
 }
 
 /// What a press, a right-click or the pointer on one of a row's names is answered from:
-/// where the row is, the text its columns are counted through, which of the file's names
-/// the language server placed, and whom to ask about one.
+/// where the row is, the text its columns are counted through, and the rest of the file
+/// -- the names the language server placed, and whom to ask about one.
 ///
-/// Cloned once into each closure a row's names need, rather than the same four values
-/// cloned one by one into every one. The rules those closures carry out are the methods
-/// below, so a closure is the call and nothing else.
+/// Cloned once into each closure a row's names need, rather than the same values cloned
+/// one by one into every one; the file itself is one refcount. The rules those closures
+/// carry out are the methods below, so a closure is the call and nothing else.
 #[derive(Clone)]
 struct Named {
     /// The position this row is, and so the one its questions are about. Lines are
@@ -160,11 +193,8 @@ struct Named {
     /// the two agree wherever a column can land: what the row draws differently is the
     /// indentation, one space per character of it.
     text: Arc<str>,
-    /// Which of the file's names the server placed. See [`SourceData::links`].
-    links: links::Links,
-    /// Whom a press on a link or a name asks, and [`None`] where there is nobody: a pane
-    /// mounted without a server draws its text and no links (`links_in`).
-    server: Option<Server>,
+    /// The file this row is a line of, and everything a question about it is put through.
+    common: Rc<Common>,
 }
 
 impl Named {
@@ -181,7 +211,7 @@ impl Named {
     /// Every name the server placed on this row, in the order they are drawn: the slice
     /// both rules below read, taken once because finding it is a pair of binary searches.
     fn on_line(&self) -> &[links::Link] {
-        self.links.on_line(self.at.line)
+        self.common.links.on_line(self.at.line)
     }
 
     /// The names in `on_line` a press can follow, and what a press on one does: ask the
@@ -190,8 +220,9 @@ impl Named {
     ///
     /// A press with Ctrl held opens what it names in a tab of its own, the rule every
     /// door inside a pane follows.
-    fn linked(&self, on_line: &[links::Link], open: Open, ctrl: State<bool>) -> Option<TextLinks> {
-        let server = self.server.clone()?;
+    fn linked(&self, on_line: &[links::Link]) -> Option<TextLinks> {
+        let server = self.common.server.clone()?;
+        let (open, ctrl) = (self.common.asking.doors.open, self.common.ctrl);
         let named = self.clone();
         Some(TextLinks {
             columns: links::followed(on_line)
@@ -204,7 +235,7 @@ impl Named {
                 let column = byte_column(&named.text, columns.start);
                 follow_link(
                     &server,
-                    &named.links,
+                    &named.common.links,
                     open,
                     &named.at,
                     column,
@@ -239,41 +270,34 @@ impl Named {
         }
     }
 
-    /// The name at `column` of row `index`, which the three questions a menu offers are
+    /// The name at `column` of this row, which the three questions a menu offers are
     /// about: [`None`] over no name, and over one this row draws nothing of.
-    fn at_column(&self, source: &SourceText, index: usize, column: usize) -> Option<NameAt> {
-        name_at_column(
-            source,
-            &self.at.file,
-            &self.links,
-            Caret {
-                row: index,
-                col: column,
-            },
-        )
+    fn at_column(&self, column: usize) -> Option<NameAt> {
+        name_at_column(&self.common.source, &self.at, &self.common.links, column)
     }
 }
 
-/// The name at a place in `source`: the row read as a line of `file`, and the column --
-/// UTF-16 units, as every drawn column is -- read as the byte offset a language server
-/// counts in (`src/chars.rs`). [`None`] over no name the server placed, which is what a
-/// place on whitespace, on a keyword or past the end of a row is.
+/// The name at a place in `source`: the line `at` names, and the column -- UTF-16 units,
+/// as every drawn column is -- read as the byte offset a language server counts in
+/// (`src/chars.rs`). [`None`] over no name the server placed, which is what a place on
+/// whitespace, on a keyword or past the end of a row is.
 ///
+/// **The place is one value**, so the file and the row cannot be said twice and disagree.
 /// One rule for both ways of pointing at a name: [`Named::at_column`] asks it about the
 /// pointer and [`caret_questions`] about the caret, so a key and the menu item beside it
 /// cannot come to ask about two different places.
 fn name_at_column(
     source: &SourceText,
-    file: &Arc<str>,
+    at: &LinePos,
     links: &links::Links,
-    place: Caret,
+    column: usize,
 ) -> Option<NameAt> {
-    let at = LinePos::of_row(file.clone(), place.row);
-    let cut = source.0.text(place.row);
-    let link = links.at(at.line, byte_column(&cut.whole, place.col))?;
+    let row = at.row()?;
+    let cut = source.0.text(row);
+    let link = links.at(at.line, byte_column(&cut.whole, column))?;
     Some(NameAt {
-        at,
-        name: name_at(source, place.row, &link.columns)?,
+        at: at.clone(),
+        name: name_at(source, row, &link.columns)?,
         column: link.columns.start,
     })
 }
@@ -294,17 +318,9 @@ fn name_at_column(
 ///
 /// Wrapped around the pane's own handler as the find chord is, and offered in this pane
 /// alone: the two assembly listings draw no names.
-#[allow(clippy::too_many_arguments)]
 fn caret_questions(
     marked: State<Marks>,
-    source: SourceText,
-    file: Arc<str>,
-    links: links::Links,
-    server: Option<Server>,
-    located: State<Located>,
-    dock: State<DockArea>,
-    open: Open,
-    subject: Option<Subject>,
+    common: Rc<Common>,
     mut keys: impl FnMut(Event<KeyboardEventData>) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     move |e: Event<KeyboardEventData>| {
@@ -326,19 +342,21 @@ fn caret_questions(
         let Some(caret) = caret else {
             return;
         };
+        let (located, dock) = (common.asking.located, common.asking.dock);
+        // Where the caret is, said once: every question below is about this place.
+        let at = LinePos::of_row(common.file.clone(), caret.row);
         if chord == Chord::AllLocations {
-            let at = LinePos::of_row(file.clone(), caret.row);
-            find_locations(located, dock, Query::line(at), subject.clone());
+            find_locations(located, dock, Query::line(at), common.subject());
             return;
         }
-        let named = name_at_column(&source, &file, &links, caret);
-        let (Some(named), Some(server)) = (named, server.as_ref()) else {
+        let named = name_at_column(&common.source, &at, &common.links, caret.col);
+        let (Some(named), Some(server)) = (named, common.server.as_ref()) else {
             return;
         };
         match chord {
             Chord::Definition => follow_name(
                 server,
-                open,
+                common.asking.doors.open,
                 Lookup::at(&named.at, named.column),
                 lsp::Followed::Definition,
                 Reach::InPlace,
@@ -349,8 +367,8 @@ fn caret_questions(
     }
 }
 
-/// What the right button offers on row `index`: the three questions for the server where
-/// the press was on a name, then the line's locations and, inside a function as the
+/// What the right button offers on the row `named` is: the three questions for the server
+/// where the press was on a name, then the line's locations and, inside a function as the
 /// file's parse says, the function's instances. A location found from the file a
 /// source-driven tab is about is chosen for that tab; from a companion it opens the
 /// symbol, and the menu offers the file itself as a tab of its own.
@@ -359,38 +377,41 @@ fn caret_questions(
 /// on the press and not per render -- the function being a walk of the file's own -- since
 /// a row is rendered far more often than it is right-clicked.
 ///
-/// Every state is handed in, because reaching for a context is a hook and the handler runs
-/// long after the render that built it.
-#[allow(clippy::too_many_arguments)]
-fn source_menu(
-    doors: Doors,
-    places: Places,
-    located: State<Located>,
-    dock: State<DockArea>,
-    named: Named,
-    source: SourceText,
-    index: usize,
-    drives: Option<DocId>,
-    file: Arc<str>,
-) -> Rc<dyn Fn(Event<PressEventData>, Option<usize>)> {
+/// **The row is one value.** Where it is and which file it is in are [`Named`]'s, so
+/// nothing here can name a second place and drift from the keys ([`caret_questions`]),
+/// and the states the menu writes come with it, reaching for a context being a hook the
+/// handler may not run.
+fn source_menu(named: Named) -> RowMenu {
+    let RowStates {
+        doors,
+        places,
+        located,
+        dock,
+        ..
+    } = named.common.asking;
     let open = doors.open;
     // The file this row is in, where the pane is showing it beside somebody else's tab. A
     // subject is that tab already and has nothing to open.
-    let opens = drives.is_none().then(|| file.clone());
-    let subject = drives.map(|tab| Subject { tab, file });
+    let opens = named
+        .common
+        .drives
+        .is_none()
+        .then(|| named.common.file.clone());
+    let subject = named.common.subject();
     // Whom to ask about a name, where this row's names are links at all. A row drawing
     // none is a row over no server, and a question nobody could answer is not offered.
-    let asking = (!named.links.is_empty())
-        .then(|| named.server.clone())
+    let server = (!named.common.links.is_empty())
+        .then(|| named.common.server.clone())
         .flatten();
 
     Rc::new(move |e: Event<PressEventData>, column| {
         let at = named.at.clone();
-        let function = functions::enclosing(&source.0.functions, at.line).cloned();
+        let spans = &named.common.source.0.functions;
+        let function = functions::enclosing(spans, at.line).cloned();
         // The name the press was on, which the three questions are about.
         let name = column
-            .and_then(|column| named.at_column(&source, index, column))
-            .zip(asking.clone())
+            .and_then(|column| named.at_column(column))
+            .zip(server.clone())
             .map(|(name, server)| name_menu(&server, located, dock, open, name))
             .unwrap_or_default();
         let menu = locate_menu(
@@ -434,39 +455,28 @@ fn drive(docs: State<Docs>, mut driven: State<Driven>, tab: DocId, at: &LinePos)
 
 impl Component for SourceRow {
     fn render(&self) -> impl IntoElement {
-        let places = use_places();
-        // Consumed here, in the render, because the menu handler may not run a hook.
-        let located = use_consume::<Locations>().0;
-        // Which tab a press on a link is made in: where its answer opens, and the two
-        // halves of the landing a companion's door leaves.
-        let doors = use_doors();
-        let docs = doors.open.docs;
-        let ctrl = use_consume::<Ctrl>().0;
-        let server = try_use_server();
-        // Where the name under the pointer is written, and `None` where there is nobody
-        // to write it: a pane mounted without it draws its text and says nothing about a
-        // name.
-        let hover = try_consume_context::<Hovering>().map(|hovering| hovering.0);
-        let dock = use_consume::<SidebarDock>().0;
+        // Nothing is reached for here. Every state a handler below needs was consumed
+        // where the list rendered and travels in `Common`, a handler being no place to
+        // call a hook -- and asking per row was nine context walks a render.
+        let common = &self.common;
         let index = self.index;
 
         // The line as it is drawn, taken from the file's own cut rather than made again:
         // a row is drawn afresh for a scroll, a modifier and every keystroke in the find
         // bar, and the cut is the same every time ([`Highlighted::text`]).
-        let cut = self.source.0.text(index);
+        let cut = common.source.0.text(index);
         let line = Line::text(&*cut.whole);
         let named = Named {
-            at: LinePos::of_row(self.file.clone(), index),
+            at: LinePos::of_row(common.file.clone(), index),
             text: cut.whole.clone(),
-            links: self.links.clone(),
-            server,
+            common: common.clone(),
         };
         // The names on this row, found once: what the row draws as links and what it
         // hover-tests are both cut from the same slice.
         let on_line = named.on_line();
 
         let text = Text {
-            finds: self
+            finds: common
                 .marking
                 .as_ref()
                 .map(|marking| marking.hits(&line))
@@ -474,7 +484,7 @@ impl Component for SourceRow {
             line,
             // The one allocation a drawn row still owes: freya's `Span` holds a
             // `Cow<'static, str>`, so a span cannot borrow the cut it was taken from.
-            head: self
+            head: common
                 .source
                 .0
                 .pieces(cut)
@@ -486,11 +496,10 @@ impl Component for SourceRow {
                 .collect(),
             tail: Vec::new(),
             chars: self.chars,
-            links: named.linked(on_line, doors.open, ctrl),
+            links: named.linked(on_line),
             names: named.names(on_line),
-            // What the pointer on one of them says. Consumed in the render, as everything
-            // a handler here reaches for is: a handler may not run a hook.
-            on_hover: hover.map(|hover| {
+            // What the pointer on one of them says.
+            on_hover: common.hover.map(|hover| {
                 let named = named.clone();
                 Rc::new(move |under: Under| {
                     write_if(hover, |waiting| named.pointed(waiting, under));
@@ -498,17 +507,8 @@ impl Component for SourceRow {
             }),
         };
 
-        let menu = source_menu(
-            doors,
-            places,
-            located,
-            dock,
-            named.clone(),
-            self.source.clone(),
-            index,
-            self.drives,
-            self.file.clone(),
-        );
+        let at = named.at.clone();
+        let menu = source_menu(named);
 
         // The line number, which is gutter: a press on it picks the row out and no
         // characters. A fixed width and not a minimum: skia lays a paragraph out to the
@@ -516,7 +516,7 @@ impl Component for SourceRow {
         // its number at the far right of the row, on top of the text. The gap is
         // non-breaking because skia trims trailing whitespace when it measures.
         let number = label()
-            .text(format!("{}\u{a0}", self.index + 1))
+            .text(format!("{}\u{a0}", index + 1))
             .width(Size::px(60.0))
             .text_align(TextAlign::Right)
             .color(palette().address_fg)
@@ -531,7 +531,7 @@ impl Component for SourceRow {
             Chrome {
                 pane: Pane::Source,
                 row: index,
-                file: Some(self.file.clone()),
+                file: Some(common.file.clone()),
                 paired: self.paired,
                 wash: self.wash,
                 measured: true,
@@ -542,11 +542,12 @@ impl Component for SourceRow {
         )
         // A press in a source-driven tab's own file also says which listing the
         // other side shows; the row is picked out by `pointer_down` either way.
-        .maybe(self.drives.is_some(), |el| {
-            let (drives, at) = (self.drives, named.at.clone());
+        .maybe(common.drives.is_some(), |el| {
+            let (drives, docs) = (common.drives, common.asking.doors.open.docs);
+            let driven = common.asking.places.driven;
             el.on_press(move |_| {
                 if let Some(tab) = drives {
-                    drive(docs, places.driven, tab, &at);
+                    drive(docs, driven, tab, &at);
                 }
             })
         })
@@ -692,23 +693,23 @@ impl Component for SourceList {
             .and_then(|held| held.0.read().links_in(&self.file).cloned())
             .unwrap_or_default();
 
-        // What the four questions the caret is asked about need: whom to ask, where the
-        // answers land, and the tab a definition opens in. Consumed in the render because
-        // the key handler runs long after it, where no hook may be called.
+        // What a row's names, its menu and the four questions about the caret reach for.
+        // Consumed here, in the render, and carried to the rows: the handlers run long
+        // after it, where no hook may be called.
+        let asking = use_row_states();
+        let ctrl = use_consume::<Ctrl>().0;
         let server = try_use_server();
-        let located = use_consume::<Locations>().0;
-        let dock = use_consume::<SidebarDock>().0;
+        let hover = try_consume_context::<Hovering>().map(|hovering| hovering.0);
 
         let length = self.source.0.lines;
         // The tab's entry and not the file: see `SourceList::document`.
-        let open = use_open();
-        let docs = open.docs;
+        let docs = asking.doors.open.docs;
         // The place the tab is at: two lines of one file reached along one trail are two
         // entries, each with its own scroll. Read and not peeked, so a step between them
         // re-renders this pane and the hook sees the switch.
         let entry = (self.tab, place_at(&docs.read(), self.tab, &self.document));
         use_kept_position(
-            use_places().src_at,
+            asking.places.src_at,
             docs,
             Pane::Source,
             {
@@ -784,24 +785,26 @@ impl Component for SourceList {
                 }),
             },
         );
+        // Everything every row of this file shares, built once and handed to them all: the
+        // text, what the server placed on it, and the states their names and their menus
+        // reach for.
+        let common = Rc::new(Common {
+            source: self.source.clone(),
+            file: self.file.clone(),
+            // A source-driven tab's subject is the file its own document names; a
+            // companion's tab is a symbol's.
+            drives,
+            links,
+            marking,
+            asking,
+            ctrl,
+            server,
+            hover,
+        });
         // The four questions about the name under the caret, around the whole of that: the
         // F12 family is neither the bar's chord nor the listing's key, and the three sets
         // of keys are disjoint, so which is asked first settles nothing.
-        let on_key_down = caret_questions(
-            marked,
-            self.source.clone(),
-            self.file.clone(),
-            links.clone(),
-            server,
-            located,
-            dock,
-            open,
-            drives.map(|tab| Subject {
-                tab,
-                file: self.file.clone(),
-            }),
-            keys,
-        );
+        let on_key_down = caret_questions(marked, common.clone(), keys);
 
         rect()
             .width(Size::fill())
@@ -811,30 +814,20 @@ impl Component for SourceList {
                 length,
                 on_key_down,
                 SourceData {
-                    source: self.source.clone(),
-                    file: self.file.clone(),
+                    common,
                     pairs,
                     compiled,
                     chars,
-                    // A source-driven tab's subject is the file its own document names;
-                    // a companion's tab is a symbol's.
-                    drives,
-                    links,
-                    marking,
                 },
                 |i, data: &SourceData| {
                     let paired_at = |row: usize| data.pairs.contains(&LinePos::line_of(row));
                     SourceRow {
-                        source: data.source.clone(),
-                        file: data.file.clone(),
+                        common: data.common.clone(),
                         index: i,
                         paired: paired_at(i).then(|| Edges::of(i, paired_at)),
                         compiled: data.compiled.contains(&LinePos::line_of(i)),
                         wash: wash_of(data.chars, i),
                         chars: RowChars::of(data.chars, i),
-                        drives: data.drives,
-                        links: data.links.clone(),
-                        marking: data.marking.clone(),
                         key: DiffKey::None,
                     }
                     .key(i)

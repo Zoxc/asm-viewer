@@ -699,17 +699,21 @@ impl Links {
     }
 }
 
+/// What the right button opens on a row, handed the press and the column the pointer was
+/// over. The column is what a question about the name under it needs and only the row
+/// knows: `None` in the gutter, and on a row with no text at all.
+///
+/// Named once, so a menu builder cannot copy the type without the rule about its second
+/// argument.
+pub(crate) type RowMenu = Rc<dyn Fn(Event<PressEventData>, Option<usize>)>;
+
 /// The row: its chrome, what comes `before` the text -- a gutter, an address, a line
 /// number -- the `text` where the row has any, and the `menu` the right button opens.
-///
-/// The menu is handed the column the pointer was over, which is what a question about the
-/// name under it needs and only this knows: `None` in the gutter, and on a row with no
-/// text at all.
 pub(crate) fn code_row<L: RowLinks>(
     chrome: Chrome,
     before: Vec<Element>,
     text: Option<Text<L>>,
-    menu: Option<Rc<dyn Fn(Event<PressEventData>, Option<usize>)>>,
+    menu: Option<RowMenu>,
 ) -> Rect {
     // The row kind's links asked what they are, and then the drawing, which is one
     // function whatever the kind: a drawing generic in the kind would be a whole copy of
@@ -722,7 +726,7 @@ fn row(
     chrome: Chrome,
     before: Vec<Element>,
     mut text: Option<Text<Drawn>>,
-    menu: Option<Rc<dyn Fn(Event<PressEventData>, Option<usize>)>>,
+    menu: Option<RowMenu>,
 ) -> Rect {
     let marked = use_consume::<Marked>().0;
     let shift = use_consume::<Shift>().0;
@@ -1143,7 +1147,7 @@ fn on_down(
     cells: &RowCells,
     chrome: &Chrome,
     links: &Links,
-    menu: Option<Rc<dyn Fn(Event<PressEventData>, Option<usize>)>>,
+    menu: Option<RowMenu>,
     marked: State<Marks>,
     shift: State<bool>,
     alt: State<bool>,

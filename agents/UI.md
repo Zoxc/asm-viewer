@@ -129,8 +129,8 @@ where one page is all that edits it: `Proj` and `Prefs` are provided at the root
 pages that fill them.
 
 **A group the code passes around is a context of its own**, so a state added to it is a field
-and not a parameter threaded through every function of the group. Beside `Open` there are four,
-`Copy` bundles of handles but for the last. `Places` (`state.rs`) is everything kept per place --
+and not a parameter threaded through every function of the group. Beside `Open` there are five,
+`Copy` bundles of handles but for `Server`. `Places` (`state.rs`) is everything kept per place --
 `asm_at`/`src_at` (where each *side* of each place on each trail was left), `code_at` (where
 each code tab's places were left, as addresses), `marks_at` (what each place had selected in
 each pane when it was last shown, put back with the place and never saved) and `driven` -- and
@@ -148,8 +148,16 @@ reopens all of it -- `marks_at` for the closing and not the reopening, being the
 the control's state, where a followed name's answer lands, and the way to the worker -- and is
 the one bundle taken with a `try_use_`: a pane may be mounted with no server, and one with any
 part of it missing draws no links at all. It is `Clone` and not `Copy`, `LspJobs` carrying
-channels. A handle may sit in more than one bundle: `Doors` and `ProjectStates`
-both carry `Open`, and `Doors` carries the runs `Marked` hands the panes.
+channels. `RowStates` (`state.rs`) is what a code row's menu writes and what the Source pane's
+caret questions are answered through: `doors`, `places`, where an answer lands (`located`, `dock`)
+and what a bookmark is added to (`bookmarked`, `objects`). It is the one that is **not provided**
+as a context of its own -- `use_row_states` gathers it from six of them, in the list's render, and
+it travels to the rows as data, a handler being no place to call a hook. It compares **equal
+always**, so a row holding one is not re-rendered for handles the root never replaces; that is what
+makes carrying it cheaper than reaching for it, which was six lookups a row a render on the
+assembly side and nine on the source one. A handle may sit in more than one bundle: `Doors` and
+`ProjectStates` both carry `Open`, `RowStates` carries `Doors` and `Places`, and `Doors` carries the
+runs `Marked` hands the panes.
 
 **The bar says which project is open, and the controls beside the name are not one control**
 (`ProjectChip`, `src/ui/no_project.rs`). A project the reader gave a place needs only to be
@@ -912,9 +920,10 @@ fields already, and an impl that only spells the derive out is one more place to
 field -- a prop that stops re-rendering for it. Most rows are that shape (`ArchiveRow`,
 `SymbolRow`, `HistoryRow`, `BookmarkRow`, `EntryRow`, `LocationRow`, `TabHeader`,
 `InstructionRow`, `AsmData`), and the derive compares two things the hand-written impls left
-out: the row's `key`, and any `State` it holds. Neither changes what is drawn. A key is a
-function of the row's other fields, and a `State` compares by the box it is -- its own `eq` and
-not `Writable`'s -- so two rows built by one list hold the same one.
+out: the row's `key`, and the states it holds -- one of its own, or a bundle of them. Neither
+changes what is drawn. A key is a function of the row's other fields, a `State` compares by the box
+it is -- its own `eq` and not `Writable`'s -- so two rows built by one list hold the same one, and
+`RowStates` compares equal always.
 `a_second_file_leaves_the_rows_already_drawn_alone` pins it: a second file landing on the
 Objects list leaves the rows already drawn un-rendered. **A list of rows is a `Shared`**
 (`src/shared.rs`), the rule written once rather than once per list: an `Arc<[T]>` equal only to the
