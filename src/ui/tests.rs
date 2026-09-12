@@ -26651,6 +26651,62 @@ fn a_question_asked_with_no_server_running_asks_nobody() {
     );
 }
 
+/// Both asks read one thing of the state: the run to put the question under, and nothing
+/// where there is nobody to ask (`current`). The hover is the one that pays for that
+/// read, being put again at every pointer stop.
+#[test]
+fn a_hover_question_is_asked_under_the_running_servers_run() {
+    let (mut test, roots, asking, asks) = mount_server(|job: LspJob| match job {
+        LspJob::Start { run, .. } => Some(LspAnswer::Started {
+            run,
+            server: Ok(process::Handle::to_nothing()),
+        }),
+        _ => None,
+    });
+    let states = roots.states;
+    let language = roots.language;
+    with_a_directory(&mut test, &states, "/p");
+
+    let jobs = asking.read().clone().expect("the worker");
+    let at = Lookup {
+        file: PathBuf::from("/p/src/main.rs"),
+        line: 12,
+        column: 4,
+    };
+    assert_eq!(
+        ask_hover(language, &jobs, at.clone()),
+        None,
+        "a hover was handed a run with no server behind it"
+    );
+    settle(&mut test);
+    assert!(
+        nothing_pressed(&asks),
+        "a hover was asked with nothing to ask"
+    );
+
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, running);
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+
+    // The run handed back is the running server's, and each question gets an id of its
+    // own: an answer names both, and the pair is what makes it the answer to this
+    // question rather than to the next one the pointer puts.
+    let run = language.read().run;
+    let first = ask_hover(language, &jobs, at.clone()).expect("a server to ask");
+    let second = ask_hover(language, &jobs, at.clone()).expect("a server to ask");
+    assert_eq!(
+        (first.0, second.0),
+        (run, run),
+        "the question went out under another run than the server's"
+    );
+    assert_ne!(first.1, second.1, "two questions went out under one id");
+    settle(&mut test);
+    assert_eq!(next_job(&asks), Some(AskedOfServer::Hover(at)));
+}
+
 /// The Project view says how the language server went, the failure that keeps it from
 /// running included: the control in the top bar is a tooltip, and a reason worth reading
 /// twice belongs somewhere it stays.

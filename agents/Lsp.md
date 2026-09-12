@@ -494,6 +494,12 @@ back, and `Follow` and `Located` each keep the id of the one they are waiting fo
 `worth_doing` drops the duplicates still queued; the id is what makes an answer to a
 question the worker had already taken land on nobody.
 
+Both asks take the run from `current`: one `peek` says whether there is a server and
+which, and a `u64` comes back. A function and not a line in each, because the state holds
+a process handle and the project's settings -- cloning it to read a `bool` and a `u64`
+copied all of that on the UI thread, and a hover is put again at every pointer stop.
+`is_run` is that read for the answers, which are dropped where the run has moved on.
+
 What the server says unasked comes back on a bounded channel the `Start` job carries, under
 the run it was started in, and the only thing said so far is whether it is working. Bounded
 so that a server reporting progress in a tight loop cannot outrun the app: the reader thread

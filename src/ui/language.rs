@@ -835,6 +835,15 @@ fn split<T>(reply: Result<T, lsp::Failure>) -> (Option<T>, Option<lsp::Failure>)
 #[derive(Clone, Copy)]
 pub(crate) struct Talking(pub(crate) State<Language>);
 
+/// Whether an answer naming `run` is about the server the app still has. One whose run
+/// has moved on answers a question nobody has any more, and is dropped.
+///
+/// A function so the read ends with it: every caller writes the state this was read from,
+/// and a guard held across that write panics.
+fn is_run(language: State<Language>, run: u64) -> bool {
+    language.peek().run == run
+}
+
 /// Start the worker and keep the state in step with it. Called once, at the root.
 pub(crate) fn use_language_with(
     language: State<Language>,
@@ -912,9 +921,7 @@ pub(crate) fn use_language_with(
                 write_if(language, |held| held.read_settings(settings));
             }
             LspAnswer::Linked { run, file, links } => {
-                // Bound to a `let` of its own, the writes below being of this state.
-                let mine = language.peek().run == run;
-                if !mine {
+                if !is_run(language, run) {
                     return;
                 }
                 // Nothing found and a server that refused both leave the pane with no
@@ -936,9 +943,7 @@ pub(crate) fn use_language_with(
                 write_if(language, |held| held.failed(run, why.to_string()));
             }
             LspAnswer::Reopened { run, file } => {
-                // Bound to a `let` of its own, the write below being of another state.
-                let mine = language.peek().run == run;
-                if !mine {
+                if !is_run(language, run) {
                     return;
                 }
                 // What was said about the file before the server had it is what it could
@@ -947,9 +952,7 @@ pub(crate) fn use_language_with(
                 write_if(linked, |waiting| waiting.forget_file(&file));
             }
             LspAnswer::Hovered { run, id, said } => {
-                // Bound to a `let` of its own, the writes below being of this state.
-                let mine = language.peek().run == run;
-                if !mine {
+                if !is_run(language, run) {
                     return;
                 }
                 // A refusal is already no answer by the time it is here
@@ -972,9 +975,7 @@ pub(crate) fn use_language_with(
             }
             LspAnswer::Answered { run, id, reply } => {
                 // An answer from a server that has been stopped is an answer to nobody.
-                // Bound to a `let` of its own, the writes below being of this state.
-                let mine = language.peek().run == run;
-                if !mine {
+                if !is_run(language, run) {
                     return;
                 }
                 // Whoever asked takes the answer, and gives up on it where there is none.
@@ -1085,16 +1086,21 @@ pub(crate) fn use_language_with(
 /// The project rather than a directory and a program: both presses that reach here are
 /// about the project that is open, and what is asked about has to be what would run.
 pub(crate) fn start_server(language: State<Language>, proj: State<OpenProject>, jobs: &LspJobs) {
-    let open = proj.peek().clone();
-    // Nothing to run one over.
-    let Some(directory) = open.workspace() else {
-        return;
+    // Three fields out of one read, and not a clone of the whole project. The read ends
+    // with the block, before either path below writes.
+    let (asking, trusted) = {
+        let open = proj.peek();
+        // Nothing to run one over.
+        let Some(directory) = open.workspace() else {
+            return;
+        };
+        let asking = Asking {
+            directory,
+            program: open.server(),
+        };
+        (asking, open.trusted)
     };
-    let asking = Asking {
-        directory,
-        program: open.server(),
-    };
-    if open.trusted {
+    if trusted {
         run_server(language, jobs, asking);
         return;
     }
@@ -1204,6 +1210,17 @@ pub(crate) fn stop_server(language: State<Language>, jobs: &LspJobs) {
     }
 }
 
+/// The run to put a question under, and `None` where there is nobody to ask.
+///
+/// Both asks read the state through this rather than cloning it. The clone copied the
+/// process handle and the project's settings to answer with a `bool` and a `u64`, and a
+/// hover is put again at every pointer stop. The read is over before the caller has the
+/// run, so the send below it is outside the guard.
+fn current(language: State<Language>) -> Option<u64> {
+    let held = language.peek();
+    held.started().then_some(held.run)
+}
+
 /// Ask `want` about the place `at`. The answer is the worker's, and arrives under the run
 /// it was asked in and the id minted here, which is what this hands back: a run tells one
 /// server from another, and the id tells this question from the next one the same caller
@@ -1219,18 +1236,10 @@ pub(crate) fn ask_where(
     at: Lookup,
     want: lsp::Question,
 ) -> Option<(u64, u64)> {
-    let held = language.peek().clone();
-    if !held.started() {
-        return None;
-    }
+    let run = current(language)?;
     let id = jobs.next_question();
-    jobs.send(LspJob::Ask {
-        run: held.run,
-        id,
-        at,
-        want,
-    });
-    Some((held.run, id))
+    jobs.send(LspJob::Ask { run, id, at, want });
+    Some((run, id))
 }
 
 /// Ask what the name at `at` is. [`ask_where`]'s rules, in every respect: the answer
@@ -1241,17 +1250,10 @@ pub(crate) fn ask_hover(
     jobs: &LspJobs,
     at: Lookup,
 ) -> Option<(u64, u64)> {
-    let held = language.peek().clone();
-    if !held.started() {
-        return None;
-    }
+    let run = current(language)?;
     let id = jobs.next_question();
-    jobs.send(LspJob::Hover {
-        run: held.run,
-        id,
-        at,
-    });
-    Some((held.run, id))
+    jobs.send(LspJob::Hover { run, id, at });
+    Some((run, id))
 }
 
 /// The control in the top bar: one press starts the language server, the next stops it.
