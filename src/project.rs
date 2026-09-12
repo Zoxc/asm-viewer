@@ -1767,9 +1767,9 @@ fn write_recents(store: &Store, mut recents: Recents) {
     let stored: Recents = recents
         .into_entries()
         .into_iter()
-        .map(|path| match path.strip_prefix(store.base()) {
-            Ok(relative) => relative.to_path_buf(),
-            Err(_) => path,
+        .map(|path| match store.relative(&path) {
+            Some(relative) => relative.to_path_buf(),
+            None => path,
         })
         .collect();
     if let Err(error) = store.write_toml(RECENTS_FILE, &stored) {

@@ -166,3 +166,21 @@ fn a_state_directory_can_be_given_and_an_empty_one_is_not_given() {
     assert_eq!(given_base(Some("".into())), None);
     assert_eq!(given_base(None), None);
 }
+
+/// The join and its inverse are one rule: what [`Store::path`] made absolute comes back as
+/// it was given, and a path the store does not hold is not made relative at all. Path work
+/// only, so nothing is written.
+#[test]
+fn a_path_is_relative_to_the_store_only_where_it_is_under_it() {
+    let store = Store::at("/state/assembly-viewer");
+
+    let under = store.path("projects/1.avproj");
+    assert_eq!(store.relative(&under), Some(Path::new("projects/1.avproj")));
+
+    // A prefix of the directory's name is not the directory.
+    assert_eq!(
+        store.relative(Path::new("/state/assembly-viewer-2/x")),
+        None
+    );
+    assert_eq!(store.relative(Path::new("/elsewhere/1.avproj")), None);
+}

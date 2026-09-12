@@ -80,11 +80,13 @@ set it and did not cannot put a reader's projects in the working directory.
 **One store is opened per run**, in `app()` where the settings are loaded, and handed down: no
 module looks the place up for itself, and a path given to the store is relative to it unless it is
 absolute, which is what lets a project file the reader gave a place go through the same writer as
-the app's own. `Saves` keeps the one it was pointed at when the project was opened, so the
-periodic flush and the close hook -- neither of them in the component tree -- have one without
-being handed one. `Store::at` is the other constructor and is the tests', declared with them in
-`store/tests.rs`: a store under a directory of a test's own, which is what the `x()`/`x_in(base)`
-twin of every stored operation used to be for.
+the app's own. `Store::relative` is the same rule the other way -- where an absolute path sits
+under the store, or `None` for one outside it -- so the directory stays a private field and
+nobody strips a prefix by hand. `Saves` keeps the one it was pointed at when the project was
+opened, so the periodic flush and the close hook -- neither of them in the component tree -- have
+one without being handed one. `Store::at` is the other constructor and is the tests', declared
+with them in `store/tests.rs`: a store under a directory of a test's own, which is what the
+`x()`/`x_in(base)` twin of every stored operation used to be for.
 
 Each file under it is written atomically via `.tmp` + rename (`Store::write`, over the one
 `write_atomically`; the free function is there because `cargo.rs` edits a manifest that is not the
@@ -242,7 +244,7 @@ opened first.
 would be a second answer the order already gives. It is an *order* and not an index of what exists
 (the files are that), which is why `MAX_ORDER` (50) is safe and why nothing prunes a path
 whose file has gone: repairing it on load would write a file on a startup where the reader did
-nothing. A path under `base` is written **relative to it** and every other path absolutely, so
+nothing. A path under the store is written **relative to it** and every other path absolutely, so
 moving the state directory does not lose every unsaved project at once; in memory they are all
 absolute, the relative spelling belonging to the file and nowhere else (`write_recents`).
 `Order::touch` answers whether anything moved, so reopening the project already at the front

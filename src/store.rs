@@ -83,15 +83,15 @@ impl Store {
         Some(Store { base })
     }
 
-    /// The directory itself, for the two questions that are about a path's shape rather
-    /// than about a file.
-    pub fn base(&self) -> &Path {
-        &self.base
-    }
-
     /// Where `relative` is under this store. An absolute path is left alone.
     pub fn path(&self, relative: impl AsRef<Path>) -> PathBuf {
         self.base.join(relative)
+    }
+
+    /// Where `path` sits under this store, or `None` for one outside it: the inverse of
+    /// [`Store::path`], and the one place a path is made relative to the store.
+    pub fn relative<'a>(&self, path: &'a Path) -> Option<&'a Path> {
+        path.strip_prefix(&self.base).ok()
     }
 
     /// Where the projects the reader has not given a place are kept.
@@ -209,7 +209,7 @@ impl Store {
     /// rather than copied, since nothing writes over `settings.toml` until a setting
     /// changes and a file left in place would be rescued again on every launch.
     fn move_aside(&self, path: &Path, data: &[u8]) -> Option<PathBuf> {
-        let relative = path.strip_prefix(&self.base).ok()?;
+        let relative = self.relative(path)?;
         let name = relative.file_name()?.to_string_lossy().into_owned();
         let directory = Path::new(INCOMPATIBLE_DIR).join(relative.parent()?);
 
