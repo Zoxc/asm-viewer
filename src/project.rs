@@ -23,7 +23,7 @@
 
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{hash_map, BTreeMap, HashMap, HashSet},
     fmt, fs,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, MutexGuard},
@@ -378,19 +378,40 @@ enum Spelling {
 }
 
 /// The first object out of each file the loaded objects came from, in the order the files
-/// were opened: one walk with a set of the paths already seen. [`binaries`] and
+/// were opened, each with how many objects came out of that file: one walk, where a path
+/// already seen names the row to count against. [`binaries`], [`binary_counts`] and
 /// [`digests`] each read their answer off it.
-fn by_file(objects: &[Arc<Object>]) -> impl Iterator<Item = &Arc<Object>> + '_ {
-    let mut seen: HashSet<&Path> = HashSet::new();
-    objects
-        .iter()
-        .filter(move |object| seen.insert(&object.path))
+fn by_file(objects: &[Arc<Object>]) -> Vec<(&Arc<Object>, usize)> {
+    let mut files: Vec<(&Arc<Object>, usize)> = Vec::new();
+    let mut at: HashMap<&Path, usize> = HashMap::new();
+    for object in objects {
+        match at.entry(&object.path) {
+            hash_map::Entry::Occupied(seen) => files[*seen.get()].1 += 1,
+            hash_map::Entry::Vacant(unseen) => {
+                unseen.insert(files.len());
+                files.push((object, 1));
+            }
+        }
+    }
+    files
 }
 
 /// Every binary the loaded objects came out of, deduplicated, in the order they were
 /// opened — which is [`Project::binaries`], derived rather than tracked.
 pub fn binaries(objects: &[Arc<Object>]) -> Vec<PathBuf> {
-    by_file(objects).map(|object| object.path.clone()).collect()
+    by_file(objects)
+        .into_iter()
+        .map(|(object, _)| object.path.clone())
+        .collect()
+}
+
+/// The same binaries, each with how many of the loaded objects came out of it: what the
+/// Project view lists. Counted on the one walk, a filter per binary being a walk each.
+pub fn binary_counts(objects: &[Arc<Object>]) -> Vec<(PathBuf, usize)> {
+    by_file(objects)
+        .into_iter()
+        .map(|(object, count)| (object.path.clone(), count))
+        .collect()
 }
 
 /// The digest of every binary those objects came out of, keyed by the same path
@@ -401,7 +422,8 @@ pub fn binaries(objects: &[Arc<Object>]) -> Vec<PathBuf> {
 /// archive's members cost one pass rather than one each.
 fn digests(objects: &[Arc<Object>]) -> BTreeMap<PathBuf, String> {
     by_file(objects)
-        .map(|object| (object.path.clone(), object.data.digest().to_string()))
+        .into_iter()
+        .map(|(object, _)| (object.path.clone(), object.data.digest().to_string()))
         .collect()
 }
 

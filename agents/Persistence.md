@@ -368,8 +368,9 @@ one list, and a scan per place is a component-wise `Path` compare against every 
 archive that can hold thousands. A place resolved **on its own** scans instead
 (`Loaded::scanning`, which is what `resolve_by_name` and so every bookmark uses): one index over
 the whole list costs more than the one scan it saves. `project::by_file` is the same thought at
-the other end -- the first object out of each file, in the order the files were opened, which is
-what `binaries` and `digests` are each one of. Where the list holds two objects a saved place
+the other end -- the first object out of each file, in the order the files were opened, with how
+many objects came out of it, which is what `binaries`, `binary_counts` and `digests` are each a
+reading of. Where the list holds two objects a saved place
 cannot tell apart, the first is the one that answers.
 
 Coming back, the **active document degrades** (symbol -> its object -> nothing, since there is one

@@ -194,6 +194,31 @@ fn symbols_given_out_of_order_are_all_found() {
         .is_some());
 }
 
+/// The binaries and their counts come off the one walk: a file is listed once, in the
+/// order the files were opened, carrying every object that came out of it.
+#[test]
+fn every_binary_is_counted_once_in_the_order_it_was_opened() {
+    let objects = vec![
+        object("/tmp/lib.a", "a.o", &[("caller", 0)]),
+        object("/tmp/one.o", "one.o", &[("one", 0)]),
+        // A second member of the archive above and not a third binary.
+        object("/tmp/lib.a", "b.o", &[("caller", 0)]),
+    ];
+
+    assert_eq!(
+        binary_counts(&objects),
+        vec![
+            (PathBuf::from("/tmp/lib.a"), 2),
+            (PathBuf::from("/tmp/one.o"), 1)
+        ]
+    );
+    // The same list without the counts, off the same walk.
+    assert_eq!(
+        binaries(&objects),
+        vec![PathBuf::from("/tmp/lib.a"), PathBuf::from("/tmp/one.o")]
+    );
+}
+
 #[test]
 fn saves_and_resolves_a_symbol() {
     let objects = objects();

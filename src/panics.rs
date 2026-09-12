@@ -376,9 +376,10 @@ const MAX_FRAMES: usize = 6;
 /// capture is runtime, or where none of it is: a backtrace this does not recognise is
 /// shown as it came.
 fn short(backtrace: &str, most: usize) -> String {
-    let frames = frames(backtrace);
+    let lines: Vec<&str> = backtrace.lines().collect();
+    let frames = frames(&lines);
     let start = frames.iter().take_while(|frame| is_runtime(frame)).count();
-    let wanted = &frames[start.min(frames.len())..];
+    let wanted = &frames[start..];
     let shown = wanted.len().min(most);
 
     let mut text = String::new();
@@ -436,9 +437,9 @@ fn first_lines(text: &str, most: usize) -> String {
 /// registry is named by its crate and one out of the standard library by the library,
 /// which is the whole of what a `/home/…/.cargo/registry/src/index.crates.io-1949cf…/`
 /// says that its next segment does not.
-fn drawn(frame: &str) -> String {
+fn drawn(frame: &[&str]) -> String {
     frame
-        .lines()
+        .iter()
         .map(|line| match line.trim_start().starts_with("at ") {
             true => shorten_path(line),
             false => cut(line, MAX_WIDTH),
@@ -489,27 +490,34 @@ fn trim_path(path: &str) -> &str {
     path
 }
 
-/// A capture cut into frames: a line beginning `<number>:` starts one and the lines under
-/// it -- the `at file:line` the capture puts there -- belong to it. Anything before the
-/// first numbered line is dropped, there being no frame for it to be part of.
-fn frames(backtrace: &str) -> Vec<String> {
-    let mut frames: Vec<String> = Vec::new();
-    for line in backtrace.lines() {
-        let numbered = line
-            .trim_start()
+/// The capture's lines cut into frames: a line beginning `<number>:` starts one and the
+/// lines under it -- the `at file:line` the capture puts there, and any function inlined
+/// into the frame -- belong to it. Anything before the first numbered line is dropped,
+/// there being no frame for it to be part of.
+///
+/// A frame is a run of the lines it was cut from and not a copy of them, so a capture of
+/// several hundred lines costs the one list. Nothing is copied until the frames the box
+/// is given are drawn.
+fn frames<'a>(lines: &'a [&'a str]) -> Vec<&'a [&'a str]> {
+    let numbered = |line: &str| {
+        line.trim_start()
             .split_once(':')
             .is_some_and(|(number, _)| {
                 !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
-            });
-        match numbered {
-            true => frames.push(line.to_owned()),
-            false => {
-                if let Some(frame) = frames.last_mut() {
-                    frame.push('\n');
-                    frame.push_str(line);
-                }
+            })
+    };
+
+    let mut frames: Vec<&[&str]> = Vec::new();
+    let mut open: Option<usize> = None;
+    for (at, line) in lines.iter().enumerate() {
+        if numbered(line) {
+            if let Some(from) = open.replace(at) {
+                frames.push(&lines[from..at]);
             }
         }
+    }
+    if let Some(from) = open {
+        frames.push(&lines[from..]);
     }
     frames
 }
@@ -518,11 +526,15 @@ fn frames(backtrace: &str) -> Vec<String> {
 /// than anything the app did. This module is on the list, being the innermost frame of
 /// every capture taken here, and so is the `Box<dyn Fn>` the hook is called through.
 ///
+/// The numbered line and not the whole frame: that line is what the frame is, and the
+/// lines under it are the file it is in and the callers it was inlined into. A closure of
+/// the app's inlined into `Fn::call` is the app's.
+///
 /// `Option` and `Result` are named whole rather than by their failure helpers: what raises
 /// the panic is `expect_failed`, but the frame under it is the `expect` itself and the
 /// caller of *that* is the code worth reading. Only ever asked about the opening run, so a
 /// name matching one of these deeper in a stack is not affected ([`short`]).
-fn is_runtime(frame: &str) -> bool {
+fn is_runtime(frame: &[&str]) -> bool {
     const RUNTIME: [&str; 10] = [
         "rust_begin_unwind",
         "core::panicking",
@@ -535,7 +547,8 @@ fn is_runtime(frame: &str) -> bool {
         "core::ops::function::Fn",
         "viewer::panics",
     ];
-    RUNTIME.iter().any(|name| frame.contains(name))
+    let named = frame.first().copied().unwrap_or_default();
+    RUNTIME.iter().any(|name| named.contains(name))
 }
 
 /// Bring the app down the way closing the window does -- [`shutdown::before_exit`] and

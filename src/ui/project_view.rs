@@ -421,16 +421,16 @@ impl Component for BinariesSection {
 
         let binaries: Vec<Element> = {
             let objects = objects.read();
-            project::binaries(&objects)
+            project::binary_counts(&objects)
                 .into_iter()
-                .map(|path| {
-                    let count = objects.iter().filter(|object| object.path == path).count();
+                .map(|(path, count)| {
+                    let key = path.to_string_lossy().into_owned();
                     BinaryRow {
                         key: DiffKey::None,
                         objects: count,
-                        path: path.clone(),
+                        path,
                     }
-                    .key(path.to_string_lossy().into_owned())
+                    .key(key)
                     .into()
                 })
                 .collect()

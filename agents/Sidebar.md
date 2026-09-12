@@ -443,8 +443,10 @@ meet, and it trims, so a box of spaces is a box of nothing rather than a project
 directory calls rather than trimming and converting again. Each box writes straight into `Proj`, so
 a keystroke is a state change the save observer sees like any other and `record` writes
 `project.toml` at once. That is a few hundred atomically-written bytes per keystroke of something
-typed once a project. The binaries it lists come from `Objects` through `project::binaries`, which
-is what the saved list is *derived from*, so what the pane draws is what the next write will say.
+typed once a project. The binaries it lists come from `Objects` through `project::binary_counts`:
+one walk that names each file once and counts the objects that came out of it, where a filter per
+binary was a walk each. `project::binaries` is that walk without the counts and is what the saved
+list is *derived from*, so what the pane draws is what the next write will say.
 
 **The pane is five sections and not one render.** The project's own fields, the binaries, the
 cargo build, the language server and the recent projects are each a component reading the contexts

@@ -287,6 +287,29 @@ fn the_runtime_under_main_is_not_what_the_backtrace_is_cut_at() {
     );
 }
 
+/// A frame is its numbered line. The lines under it are the file it is in and the callers
+/// it was inlined into -- Rust prints an inlined caller unnumbered under the frame -- so a
+/// closure of the app's under the `Fn::call` it went into is still the app's.
+#[test]
+fn an_inlined_runtime_caller_does_not_make_a_frame_the_runtime() {
+    let capture = "\
+   0: core::panicking::panic_fmt
+   1: viewer::ui::app::{closure#0}
+             at ./src/ui.rs:419:5
+      core::ops::function::FnOnce::call_once
+             at /rustc/17fd5b8a/library/core/src/ops/function.rs:250:5
+   2: main
+";
+    let short = short(capture, 24);
+
+    assert!(short.starts_with("   1: viewer::ui::app"), "{short}");
+    // The inlined line goes with its frame, drawn like any other.
+    assert!(
+        short.contains("      core::ops::function::FnOnce::call_once\n"),
+        "{short}"
+    );
+}
+
 /// The cap, and what says a frame was left out. A box the desktop will not scroll is one
 /// whose buttons go off the screen when the text is long enough.
 #[test]

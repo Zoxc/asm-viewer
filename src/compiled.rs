@@ -12,7 +12,7 @@
 //! Both halves are blocking: the first ask against an object builds its whole index, which
 //! is seconds on a large one. They belong on the analysis worker and nowhere else.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
@@ -58,16 +58,11 @@ pub fn compiled_from(
 pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
     // Indexed rather than scanned: one line can answer with thousands of symbols and the
     // record of visits holds two hundred, so the nested walk is a million pointer compares.
-    let where_at: HashMap<&Symbol, usize> = candidates
-        .iter()
-        .enumerate()
-        .map(|(index, symbol)| (symbol, index))
-        .collect();
+    let offered: HashSet<&Symbol> = candidates.iter().collect();
 
     recent
         .iter()
-        .find_map(|symbol| where_at.get(symbol))
-        .and_then(|index| candidates.get(*index))
+        .find(|symbol| offered.contains(symbol))
         .or_else(|| candidates.first())
         .cloned()
 }
