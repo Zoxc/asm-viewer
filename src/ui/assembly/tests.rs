@@ -10,10 +10,15 @@ fn nothing() -> impl IntoElement {
     rect()
 }
 
-/// Run `body` inside a freya runtime, which is what asking for a colour or a font needs:
-/// both are global states, and reading one outside a runtime panics.
+/// Run `body` inside a freya runtime, in the root scope: asking for a colour or a font
+/// needs the runtime, both being global states, and making a `State` needs the scope.
 fn in_runtime(body: impl FnOnce()) {
-    TestingRunner::new(nothing, (10., 10.).into(), |_| body(), 1.);
+    TestingRunner::new(
+        nothing,
+        (10., 10.).into(),
+        |runner| runner.provide_root_context(body),
+        1.,
+    );
 }
 
 fn span(text: &str, kind: SpanKind) -> (String, SpanKind) {
@@ -184,8 +189,12 @@ fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
     let data = AsmData::of(studied, None, 0, 0, width, false).expect("the fixture decodes");
 
     in_runtime(|| {
+        // The modifiers a row is drawn with, as the root provides them: nothing here
+        // holds one, and a link only peeks them when the pointer reaches it.
+        let held = provide_modifiers();
         for index in 0..data.assembly().instructions.len() {
-            let text = instruction_text(&data, index, RowChars::default(), None, None, None);
+            let text =
+                instruction_text(&data, index, RowChars::default(), None, held.ctrl, held.alt);
             let (drawn, copied) = (drawn(&text), &text.line);
 
             for col in 0..copied.units() {

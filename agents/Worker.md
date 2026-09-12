@@ -28,7 +28,10 @@ this one, the source reader, the build, the scratchpad and the language server, 
 answer sender back with it -- and `stream` the shape of the two one-shot ones, the search and the
 binary loader, worked once for one question and stopped by the receiver going. What differs stays with each
 worker: the drain policy (`newest` here), the work, and the state each answer lands in. The work is an argument on every one of them, which is the seam the headless tests
-substitute a worker of their own through. Naming the thread belongs to the mechanism now, and that
+substitute a worker of their own through. Four of them -- `use_source_reading`, `use_find`,
+`use_building`, `use_language` -- have a plain wrapper beside the `_with` form naming the app's one
+value, so `app()` reads as wiring there and the `_with` form is visibly the test entry; the search,
+the finder and the scratchpad are still called with the work at `app()`. Naming the thread belongs to the mechanism now, and that
 is what it is for: the scaffolding was written out seven times before it was written once, and by
 then two of the seven had drifted to a thread with no name, which `crate::panics` can only report
 anonymously.

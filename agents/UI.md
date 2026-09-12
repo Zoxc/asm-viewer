@@ -634,7 +634,9 @@ hold a place per tab the session ever opened. The tab on screen is never one of 
 reveal still finds what it looks for. The list is a `Positions<Tab, (f32, f32)>`
 (`src/positions.rs`), the same map the panes keep their places in, so the find, the upsert, the
 pruning and the ask before it are `at`, `remember`, `forgetting` and `would_forget`, and not a
-hand-rolled copy of them. The row's
+hand-rolled copy of them. It is provided at the root (`Chipped`) rather than kept in the bar: the
+bar is mounted at most once, so it is the same one state either way, and at the root a test can
+read what the bar still holds a place for, which a component's own state gives nobody. The row's
 own measurement puts a shorter bar back inside its end, `scroll_by` clamping only as it moves, so a
 closed tab no longer leaves empty ground past the last chip. And freya's `ScrollController` was
 tried first and given up: handed to a view from outside it only arrives when something else

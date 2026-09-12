@@ -773,22 +773,11 @@ impl SymbolLines {
     }
 }
 
-/// What [`use_analysis_with`] needs of the question: a **read**, which subscribes the
-/// effect to it, and a **peek**, which does not -- the effect must wake on a change of
-/// question and must not wake on its own writes, so the two cannot collapse into one.
-///
-/// A trait so the hook can be driven by [`Asked`] in the app and by a plain state in the
-/// tests.
-pub(crate) trait ReadsAsk: Copy + 'static {
-    fn read_ask(self) -> Option<Ask>;
-    fn peek_ask(self) -> Option<Ask>;
-}
-
 /// The question the app asks, out of the two states it is a function of.
 ///
 /// **Not a `Memo`**: [`Active`] is already one, recomputed by a task woken on a notify, so
 /// a memo over it would be two beats behind -- and the lag is not only a rendering matter,
-/// [`ReadsAsk::peek_ask`] being what decides whether an answer that has landed is still
+/// [`Asked::peek_ask`] being what decides whether an answer that has landed is still
 /// wanted.
 #[derive(Clone, Copy)]
 pub(crate) struct Asked {
@@ -796,25 +785,19 @@ pub(crate) struct Asked {
     pub(crate) driven: State<Driven>,
 }
 
-impl ReadsAsk for Asked {
-    fn read_ask(self) -> Option<Ask> {
+impl Asked {
+    /// The question, **read**, which subscribes whoever asks to it. What
+    /// [`use_analysis_with`]'s effect wakes on.
+    pub(crate) fn read_ask(self) -> Option<Ask> {
         let active = self.active.read();
         ask(active.as_ref(), &self.driven.read())
     }
 
-    fn peek_ask(self) -> Option<Ask> {
+    /// The question, **peeked**, which does not subscribe: the effect must not wake on
+    /// its own writes, so the two cannot collapse into one.
+    pub(crate) fn peek_ask(self) -> Option<Ask> {
         let active = self.active.peek();
         ask(active.as_ref(), &self.driven.peek())
-    }
-}
-
-impl ReadsAsk for State<Option<Ask>> {
-    fn read_ask(self) -> Option<Ask> {
-        self.read().clone()
-    }
-
-    fn peek_ask(self) -> Option<Ask> {
-        self.peek().clone()
     }
 }
 
@@ -855,7 +838,7 @@ fn recent_symbols(shown: Option<&Shown>, visits: &Visits) -> Vec<Symbol> {
 /// for. Every answer is taken here all the same, there being one worker and one
 /// [`Answer`].
 pub(crate) fn use_analysis_with(
-    asked: impl ReadsAsk,
+    asked: Asked,
     objects: State<Vec<Arc<Object>>>,
     beside: State<Option<Arc<Object>>>,
     visits: State<Visits>,

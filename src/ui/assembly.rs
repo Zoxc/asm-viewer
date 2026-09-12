@@ -623,16 +623,12 @@ impl DoorLabel {
     /// This label as the row draws it, inside its paragraph: the element, and the
     /// pointer's icon asking the label's own rule for whether a press is a door, so the
     /// hand is over exactly what is drawn as a link. Alt shuts it, as it shuts the light
-    /// and the press. The two modifiers are optional, a row being drawn without them in a
-    /// harness that has none.
-    fn inline(self, ctrl: Option<State<bool>>, alt: Option<State<bool>>) -> InlineLink {
+    /// and the press.
+    fn inline(self, ctrl: State<bool>, alt: State<bool>) -> InlineLink {
         let door = self.door.clone();
         InlineLink {
             element: self.into_element(),
-            is_link: Rc::new(move || {
-                !alt.is_some_and(|alt| *alt.peek())
-                    && door.open_now(|| ctrl.is_some_and(|ctrl| *ctrl.peek()))
-            }),
+            is_link: Rc::new(move || !*alt.peek() && door.open_now(|| *ctrl.peek())),
         }
     }
 }
@@ -967,15 +963,15 @@ keyed!(InstructionRow);
 /// the padding to the operand column, which is drawn in non-breaking spaces -- one unit
 /// each, as a plain space is. The tests hold the two to each other.
 ///
-/// `ctrl` and `alt` are handed in and not reached for: they are the row's, and a row
-/// drawn in a harness with no modifiers has neither.
+/// `ctrl` and `alt` are handed in and not reached for: they are the row's, consumed once
+/// in its render, and this is not a component.
 fn instruction_text(
     data: &AsmData,
     index: usize,
     chars: RowChars,
     marking: Option<&Marking>,
-    ctrl: Option<State<bool>>,
-    alt: Option<State<bool>>,
+    ctrl: State<bool>,
+    alt: State<bool>,
 ) -> Text<Option<InlineLink>> {
     let instruction = &data.assembly().instructions[index];
     let (head, link, tail) = split(instruction, linked(data.assembly(), index));
@@ -1183,10 +1179,9 @@ impl Component for InstructionRow {
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
         // Ctrl and Alt as a link's icon asks them: peeked from a handler, where the label
-        // reads them and is drawn again as they change. Optional, a row being drawn
-        // without them in a harness that has no modifiers.
-        let ctrl = try_consume_context::<Ctrl>().map(|ctrl| ctrl.0);
-        let alt = try_consume_context::<Alt>().map(|alt| alt.0);
+        // reads them and is drawn again as they change.
+        let ctrl = use_consume::<Ctrl>().0;
+        let alt = use_consume::<Alt>().0;
 
         // Where this row points on the source side. Worked out once here rather than in
         // each of the handlers, which all need the same answer.

@@ -189,8 +189,7 @@ pub(crate) enum BuildAnswer {
     },
 }
 
-/// The blocking half. Handed in rather than called directly, so a test can drive the whole
-/// mechanism with no cargo on the machine.
+/// The blocking half, which [`use_building`] hands to [`use_building_with`].
 pub(crate) fn build_work(job: BuildJob) -> BuildAnswer {
     let BuildJob {
         directory,
@@ -270,6 +269,16 @@ fn read(
 pub(crate) type BuildJobs = Requests<BuildJob>;
 
 /// Start the worker and keep the state in step with it. Called once, at the root.
+pub(crate) fn use_building(
+    build: State<Builds>,
+    states: ProjectStates,
+    opened: State<Opened>,
+) -> BuildJobs {
+    use_building_with(build, states, opened, build_work)
+}
+
+/// The same, with the work an argument: the seam a test drives the whole mechanism
+/// through, there being no cargo to run.
 pub(crate) fn use_building_with(
     build: State<Builds>,
     states: ProjectStates,

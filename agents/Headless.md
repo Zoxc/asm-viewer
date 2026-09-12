@@ -414,6 +414,10 @@ The shape every test in `ui.rs` follows:
    the first, which leaves the harness reading one state and the test another. That is what
    `listing_states` and `code_states` do -- the root's list with one answer already in it.
 
+   A harness too small for `test_roots` still provides the modifiers with one call,
+   `provide_modifiers` (`src/ui/keys.rs`), which is `roots`'s own: a code row reads all three, so
+   a harness that provided Shift alone mounted rows that panicked on the first link.
+
    None of this needs a macro. The two freya types a signature would have to name are
    `freya_core::integration::Runner` and `freya_core::element::AppComponent`, neither in freya's
    prelude and this crate does not depend on `freya-core` by name -- so a helper that provides
@@ -438,12 +442,12 @@ needs to take it. That cache is also where every source pane's file comes from n
 what it read with it through `forget_source_under(&directory)` and **never**
 `highlighted().clear()`, which would empty the cache another test's pane is drawing out of.
 
-A source pane in a test needs a reader behind it: `use_source_reading_now`, which answers where it
-stands rather than on a thread, so a test about what a pane draws settles rather than pumps. The
-chain is longer than it looks -- the pane asks, the reader answers, the rows are drawn from what it
-filed -- which is why `settle` is eight passes and a couple of tests want two of them. The tests
-that are about the reading itself mount the real `use_source_reading_with` with the read gated, and
-pump.
+A source pane in a test needs a reader behind it: `use_source_reading_now` (`src/ui/tests.rs`), the
+app's own asking effect (`use_source_asking`) answered where it stands rather than on a thread, so
+a test about what a pane draws settles rather than pumps. The chain is longer than it looks -- the
+pane asks, the reader answers, the rows are drawn from what it filed -- which is why `settle` is
+eight passes and a couple of tests want two of them. The tests that are about the reading itself
+mount the real `use_source_reading_with` with the read gated, and pump.
 
 ## Verdict
 

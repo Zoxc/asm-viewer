@@ -388,6 +388,13 @@ impl Sourced {
         };
         owed.then_some(SourceAsk { file, appearance })
     }
+
+    /// A file has been read: the write both readers end with, which is what has the
+    /// effect below look in the cache again. The count and not the file, an answer
+    /// carrying nothing.
+    pub(crate) fn answered(&mut self) {
+        self.answers = self.answers.wrapping_add(1);
+    }
 }
 
 /// Read and parse the file `ask` names into [`HIGHLIGHTED`], and hand back what was filed
@@ -455,11 +462,10 @@ pub(crate) fn use_source_reading_with(
             Some(())
         },
         move |(), _| {
-            let mut sourced = sourced;
             // The parse is in the cache; this is the write that has the pane look there
-            // again. Bound before the write, the peek being a read.
-            let answered = sourced.peek().answers.wrapping_add(1);
-            sourced.write().answers = answered;
+            // again.
+            let mut sourced = sourced;
+            sourced.write().answered();
         },
     );
 
@@ -467,7 +473,8 @@ pub(crate) fn use_source_reading_with(
 }
 
 /// Ask for whatever the pane is showing and has not been read: the effect both readers
-/// share, the app's one and the tests' own.
+/// share, the app's one above and the one the headless tests mount
+/// (`use_source_reading_now`, `src/ui/tests.rs`), which is what it is `pub(crate)` for.
 ///
 /// **The one asking effect that is not [`use_asking`]'s**, and the reason is the answer:
 /// a read that filed nothing -- the file forgotten under it, [`read`]'s bounded giving up
@@ -475,7 +482,7 @@ pub(crate) fn use_source_reading_with(
 /// Read through a memo the question would be unchanged, nothing would wake, and the pane
 /// would wait on a file nobody is reading. [`Sourced::pending`] reading no field of the
 /// state is the same thing said at the method.
-fn use_source_asking(
+pub(crate) fn use_source_asking(
     sourced: State<Sourced>,
     showing: State<Option<Arc<str>>>,
     ask: impl Fn(SourceAsk) + 'static,
@@ -492,22 +499,5 @@ fn use_source_asking(
             return;
         };
         ask(pending);
-    });
-}
-
-/// The reader a test mounts: the same effect, answering where it stands rather than on a
-/// thread.
-///
-/// A test that draws a source pane is about what the pane draws and not about where the
-/// file was read, and a real worker would have every one of them pumping a channel for an
-/// answer that is a millisecond's work. The tests that *are* about the reading mount
-/// [`use_source_reading`] and pump.
-#[cfg(test)]
-pub(crate) fn use_source_reading_now(sourced: State<Sourced>, showing: State<Option<Arc<str>>>) {
-    use_source_asking(sourced, showing, move |ask| {
-        read(&ask);
-        let mut sourced = sourced;
-        let answered = sourced.peek().answers.wrapping_add(1);
-        sourced.write().answers = answered;
     });
 }

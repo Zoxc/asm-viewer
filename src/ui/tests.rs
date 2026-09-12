@@ -1927,11 +1927,10 @@ fn the_bar_forgets_the_place_of_a_chip_whose_tab_has_closed() {
     let (mut test, (states, measured)) = TestingRunner::new(
         bar_harness,
         (240., 100.).into(),
+        // The bar measures into the root's own list, so the test reads the context the
+        // app has and provides nothing of its own.
         |runner: &mut _| {
-            let states = runner.provide_root_context(test_roots).states;
-            let measured =
-                runner.provide_root_context(|| Measured(State::create(Chips::default())));
-            (states, measured)
+            runner.provide_root_context(|| (test_roots().states, consume_context::<Chipped>().0))
         },
         1.,
     );
@@ -1943,7 +1942,7 @@ fn the_bar_forgets_the_place_of_a_chip_whose_tab_has_closed() {
     }
     settle(&mut test);
 
-    let held = || -> Vec<Tab> { measured.0.peek().keys().copied().collect() };
+    let held = || -> Vec<Tab> { measured.peek().keys().copied().collect() };
     let open = || -> Vec<Tab> { states.open.ids().into_iter().map(Tab::Document).collect() };
     let same = |held: &[Tab], open: &[Tab]| {
         held.len() == open.len() && held.iter().all(|tab| open.contains(tab))
@@ -4202,17 +4201,49 @@ struct Work(Arc<dyn Fn(Question) -> Answer + Send + Sync>);
 #[derive(Clone, Copy)]
 struct Seen(State<Vec<Symbol>>);
 
-/// The question as the analysis tests drive it. Deliberately not [`Asked`], which in the
-/// app is a memo over the dock beside the driven lines: these tests have no business
-/// building a dock to say what is being asked, and `use_analysis_with` takes anything
-/// that reads and peeks.
+/// The question as the analysis tests drive it: the tab that is active and what drives
+/// it, which is what [`Asked`] is a function of.
+///
+/// The tests still say what they want in [`Ask`]s -- that is what supersession is
+/// compared by and what every assertion here names -- and [`Driving::set`] puts the two
+/// halves of one where `ask()` reads them. There is no dock: an entry is a [`DocId`] and
+/// a [`Stop`], and the id is [`DocId::unfiled`], no tab being open behind any of this.
 #[derive(Clone, Copy)]
-struct Driving(State<Option<Ask>>);
+struct Driving {
+    active: State<Option<Entry>>,
+    driven: State<Driven>,
+}
+
+impl Driving {
+    /// Ask `ask`, by writing the entry and the driving it is worked out from. The
+    /// inverse of `ask()`, and [`Driven`] is rebuilt each time rather than added to, so
+    /// that a question with no choice in it is one the last choice does not answer.
+    fn set(mut self, ask: Option<Ask>) {
+        let entry = ask
+            .as_ref()
+            .map(|ask| (DocId::unfiled(), Stop::whole(asked_of(ask))));
+        let mut driven = Driven::default();
+        if let (Some(Ask::Source { at, chosen }), Some(entry)) = (&ask, &entry) {
+            driven.remember(entry.clone(), at.line);
+            if let Some(chosen) = chosen {
+                driven.choose(entry.clone(), chosen.clone());
+            }
+        }
+        // The driving before the entry, so that nothing ever reads a new question
+        // against the last one's lines.
+        self.driven.set(driven);
+        self.active.set(entry);
+    }
+}
 
 /// The analysis wiring and nothing else: no panes, since what is under test is which
 /// answers reach them rather than what they draw.
 fn analysis_harness() -> impl IntoElement {
-    let asking = use_consume::<Driving>().0;
+    let driving = use_consume::<Driving>();
+    let asked = super::analyzed::Asked {
+        active: use_memo(move || driving.active.read().clone()),
+        driven: driving.driven,
+    };
     let analysis = use_consume::<Analysis>().0;
     let objects = use_consume::<Objects>().0;
     let history = use_doors().visits;
@@ -4225,7 +4256,7 @@ fn analysis_harness() -> impl IntoElement {
 
     let showing = use_consume::<ShowingFile>().0;
     let asks = use_analysis_with(
-        asking,
+        asked,
         objects,
         use_consume::<Beside>().0,
         history,
@@ -4267,13 +4298,15 @@ fn analysis_harness() -> impl IntoElement {
 /// a test controls is what the worker thread is handed.
 fn analysis_states(
     work: impl Fn(Question) -> Answer + Send + Sync + 'static,
-) -> (Roots, State<Option<Ask>>, State<Vec<Symbol>>) {
+) -> (Roots, Driving, State<Vec<Symbol>>) {
     provide(Work(Arc::new(work)));
-    (
-        test_roots(),
-        provide(Driving(State::create(None))).0,
-        provide(Seen(State::create(Vec::new()))).0,
-    )
+    let roots = test_roots();
+    let driving = provide(Driving {
+        active: State::create(None),
+        // The root's own, which is the map the app drives a tab from.
+        driven: roots.states.places.driven,
+    });
+    (roots, driving, provide(Seen(State::create(Vec::new()))).0)
 }
 
 /// One file read and parsed where the test stands, which is what the reader's worker
@@ -4356,7 +4389,6 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
         1.,
     );
     let analysis = roots.analysis;
-    let mut asking = asking;
     let settle = |test: &mut TestingRunner| {
         for _ in 0..8 {
             test.sync_and_update();
@@ -4423,7 +4455,6 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
         1.,
     );
     let analysis = roots.analysis;
-    let mut asking = asking;
     test.sync_and_update();
 
     asking.set(Some(Ask::Symbol(symbol.clone())));
@@ -4446,8 +4477,10 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
     assert_eq!(seen.peek().len(), 1);
 
     // Being asked nothing is answered on the spot: clearing does not wait on the worker,
-    // only replacing does.
+    // only replacing does. Two passes and not one, for the memo the harness reads the
+    // active tab through, which recomputes in a pass of its own as the app's does.
     asking.set(None);
+    test.sync_and_update();
     test.sync_and_update();
     assert!(analysis.peek().clone() == Analyzed::default());
 }
@@ -4527,7 +4560,7 @@ fn a_source_line_answers_with_the_symbol_it_was_compiled_into() {
     );
     let analysis = roots.analysis;
     let objects = roots.states.objects;
-    let (mut asking, mut objects) = (asking, objects);
+    let mut objects = objects;
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
 
@@ -4600,7 +4633,7 @@ fn a_line_of_the_symbol_on_screen_is_answered_with_the_listing_on_screen() {
         1.,
     );
     let analysis = roots.analysis;
-    let (mut asking, mut objects) = (asking, roots.states.objects);
+    let mut objects = roots.states.objects;
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
 
@@ -4681,7 +4714,7 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
     );
     let analysis = roots.analysis;
     let objects = roots.states.objects;
-    let (mut asking, mut objects) = (asking, objects);
+    let mut objects = objects;
     objects.set(vec![wanted.object.clone()]);
     test.sync_and_update();
 
@@ -4778,7 +4811,7 @@ fn held_inside(open: Arc<Object>, first: Ask, second: Ask) -> Analyzed {
         1.,
     );
     let analysis = roots.analysis;
-    let (mut asking, mut objects) = (asking, roots.states.objects);
+    let mut objects = roots.states.objects;
     objects.set(vec![open]);
     test.sync_and_update();
 
@@ -5516,7 +5549,7 @@ fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
     let analysis = roots.analysis;
     let objects = roots.states.objects;
     let located = roots.located;
-    let (mut asking, mut objects, mut located) = (asking, objects, located);
+    let (mut objects, mut located) = (objects, located);
     objects.set(vec![symbol.object.clone()]);
     let settle = |test: &mut TestingRunner| {
         for _ in 0..8 {
@@ -6775,7 +6808,7 @@ fn a_chosen_symbol_wins_the_pick_for_its_line() {
     );
     let analysis = roots.analysis;
     let objects = roots.states.objects;
-    let (mut asking, mut objects) = (asking, objects);
+    let mut objects = objects;
     objects.set(vec![wanted.object.clone(), twin.object.clone()]);
     test.sync_and_update();
 
@@ -7178,6 +7211,22 @@ fn the_row_lit_is_the_symbol_drawn_and_not_the_active_document() {
         holds(&rows[0], lit_rows[0]),
         "the lit row is not the first's"
     );
+}
+
+/// The source reader the harnesses mount: the app's own asking effect
+/// ([`use_source_asking`]), answered where it stands rather than on a thread.
+///
+/// A test that draws a source pane is about what the pane draws and not about where the
+/// file was read, and a real worker would have every one of them pumping a channel for an
+/// answer that is a millisecond's work. So this settles rather than pumps. The tests that
+/// *are* about the reading mount the app's [`use_source_reading_with`] with the read
+/// gated, and pump.
+fn use_source_reading_now(sourced: State<Sourced>, showing: State<Option<Arc<str>>>) {
+    use_source_asking(sourced, showing, move |ask| {
+        read(&ask);
+        let mut sourced = sourced;
+        sourced.write().answered();
+    });
 }
 
 /// The file a source-driven tab is about, for [`source_menu_harness`].
@@ -10398,7 +10447,7 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
     );
     let analysis = roots.analysis;
     let objects = roots.states.objects;
-    let (mut asking, mut objects) = (asking, objects);
+    let mut objects = objects;
     objects.set(vec![wanted.object.clone()]);
     let settle = |test: &mut TestingRunner| {
         for _ in 0..8 {
@@ -10518,7 +10567,7 @@ fn closing_a_binary_lets_go_of_the_listing_it_answered() {
     );
     let analysis = roots.analysis;
     let objects = roots.states.objects;
-    let (mut asking, mut objects, mut seen) = (asking, objects, seen);
+    let (mut objects, mut seen) = (objects, seen);
     objects.set(vec![object.clone()]);
     test.sync_and_update();
 
@@ -14178,7 +14227,7 @@ fn a_swept_run_survives_the_button_coming_up() {
         harness,
         (100., 100.).into(),
         |runner| {
-            runner.provide_root_context(|| Shift(State::create(false)));
+            runner.provide_root_context(provide_modifiers);
             runner
                 .provide_root_context(|| Marked(State::create(Marks::default())))
                 .0
@@ -14249,10 +14298,13 @@ fn scratchpad_listing_harness() -> impl IntoElement {
     use_reading_of(active, objects, beside, reading, window);
     // Nothing on this page asks the analysis a question of its own -- the listing beside
     // the editor is a whole program's code, which is read in windows and asks nothing --
-    // so the question is a state that stays `None`.
-    let asking = use_hook(|| State::create(None::<Ask>));
+    // so the question is an `Asked` over a tab that is never there.
+    let asked = use_hook(|| super::analyzed::Asked {
+        active: Memo::create(|| None),
+        driven: State::create(Driven::default()),
+    });
     let asks = use_analysis_with(
-        asking,
+        asked,
         objects,
         beside,
         use_doors().visits,
@@ -21294,10 +21346,7 @@ fn a_caps_lock_that_acts_as_ctrl_is_learnt_from_its_release() {
         bare_harness,
         (100., 100.).into(),
         |runner| {
-            let shift = runner
-                .provide_root_context(|| Shift(State::create(false)))
-                .0;
-            let ctrl = runner.provide_root_context(|| Ctrl(State::create(false))).0;
+            let modifiers = runner.provide_root_context(provide_modifiers);
             // Two states of the root's own, made where a state can be: in a context.
             #[derive(Clone, Copy)]
             struct CapsIsCtrl(State<bool>);
@@ -21306,11 +21355,11 @@ fn a_caps_lock_that_acts_as_ctrl_is_learnt_from_its_release() {
             let caps = runner
                 .provide_root_context(|| CapsIsCtrl(State::create(false)))
                 .0;
-            let held = runner
+            let control = runner
                 .provide_root_context(|| ControlHeld(State::create(false)))
                 .0;
-            let alt = runner.provide_root_context(|| Alt(State::create(false))).0;
-            (ModifierKeys::new(shift, ctrl, alt, caps, held), ctrl)
+            let Held { shift, ctrl, alt } = modifiers;
+            (ModifierKeys::new(shift, ctrl, alt, caps, control), ctrl)
         },
         1.,
     );
@@ -23525,7 +23574,7 @@ fn a_row_the_list_has_stopped_building_lets_its_paragraph_go() {
         (600., 300.).into(),
         |runner| {
             runner.provide_root_context(|| Marked(State::create(Marks::default())));
-            runner.provide_root_context(|| Shift(State::create(false)));
+            runner.provide_root_context(provide_modifiers);
             runner.provide_root_context(|| LentFrom(State::create(0)));
             (
                 runner.provide_root_context(|| LentRows(State::create(2))).0,
@@ -23576,7 +23625,7 @@ fn the_list_forgets_what_a_row_it_has_stopped_building_lent_it() {
         (600., 300.).into(),
         |runner| {
             runner.provide_root_context(|| Marked(State::create(Marks::default())));
-            runner.provide_root_context(|| Shift(State::create(false)));
+            runner.provide_root_context(provide_modifiers);
             runner.provide_root_context(|| LentRows(State::create(LENT_WINDOW)));
             (
                 runner.provide_root_context(|| LentFrom(State::create(0))).0,

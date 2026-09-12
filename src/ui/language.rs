@@ -869,6 +869,27 @@ fn is_run(language: State<Language>, run: u64) -> bool {
 }
 
 /// Start the worker and keep the state in step with it. Called once, at the root.
+pub(crate) fn use_language(
+    language: State<Language>,
+    follow: State<Follow>,
+    located: State<Located>,
+    linked: State<Linked>,
+    hover: State<Hover>,
+    proj: State<OpenProject>,
+) -> LspJobs {
+    use_language_with(
+        language,
+        follow,
+        located,
+        linked,
+        hover,
+        proj,
+        language_work(),
+    )
+}
+
+/// The same, with the work an argument: the seam a test drives the whole mechanism
+/// through, there being no server on the machine to talk to.
 pub(crate) fn use_language_with(
     language: State<Language>,
     follow: State<Follow>,

@@ -528,6 +528,10 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
             .into()
     })));
 
+    // Where the tab bar has measured its chips to. At the root and not in the bar: the
+    // bar is mounted at most once, and a test reads the places off it from here.
+    provide(Chipped(State::create(Chips::default())));
+
     // The three the window's arrangement is kept in, and the two contexts their panes
     // register into. 50.0: what the leading side starts at, before anything is dragged.
     // 380: what the widest group of the default arrangement needs to name every panel in
@@ -573,9 +577,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         plant: State::create(None),
     });
     let code_rows = provide(CodeRows(State::create(None))).0;
-    let shift = provide(Shift(State::create(false))).0;
-    let ctrl = provide(Ctrl(State::create(false))).0;
-    let alt = provide(Alt(State::create(false))).0;
+    let Held { shift, ctrl, alt } = provide_modifiers();
     let proj = provide(Proj(State::create(OpenProject::default()))).0;
     // Whether a delete is being asked about. At the root, since the control that asks is
     // in the bar and the window that answers is over everything.
@@ -833,17 +835,9 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     use_scratchpad_with(pad, pad_text, pad_work);
     // After the scratchpad and before the server: a build says which files it rewrote,
     // and the server holds the text it was given until it is told otherwise.
-    use_building_with(build, states, opened, build_work);
+    use_building(build, states, opened);
 
-    let jobs = use_language_with(
-        language,
-        follow,
-        located,
-        linked,
-        hover,
-        proj,
-        language_work(),
-    );
+    let jobs = use_language(language, follow, located, linked, hover, proj);
     // What a name followed in the source opens, which the answer above fills in.
     use_follow(follow, doors, places);
     use_opened(language, opened, open, proj, jobs.clone());

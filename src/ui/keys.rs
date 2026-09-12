@@ -22,6 +22,32 @@ pub(crate) struct Ctrl(pub(crate) State<bool>);
 #[derive(Clone, Copy)]
 pub(crate) struct Alt(pub(crate) State<bool>);
 
+/// The three states [`provide_modifiers`] made, for the caller that keeps them.
+#[derive(Clone, Copy)]
+pub(crate) struct Held {
+    pub(crate) shift: State<bool>,
+    pub(crate) ctrl: State<bool>,
+    pub(crate) alt: State<bool>,
+}
+
+/// The three, made and provided together.
+///
+/// One call and not three, because a code row reads all three: Shift for a press that
+/// reaches, Ctrl for whether a label is a link now, Alt for whether a press on one is a
+/// door at all. A harness that provided Shift alone mounted rows that panicked on the
+/// first link, so [`roots`] and the bare test harnesses both come here.
+pub(crate) fn provide_modifiers() -> Held {
+    let held = Held {
+        shift: State::create(false),
+        ctrl: State::create(false),
+        alt: State::create(false),
+    };
+    provide_root_context(Shift(held.shift));
+    provide_root_context(Ctrl(held.ctrl));
+    provide_root_context(Alt(held.alt));
+    held
+}
+
 /// The three modifiers as the root's global key handlers keep them, and what it takes to keep
 /// them right.
 ///

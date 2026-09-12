@@ -732,7 +732,7 @@ fn row(
     // `set_if_modified`, so a row is drawn again when the pointer crosses a link's edge
     // and not as it moves along one.
     let mut over = use_state(|| None::<usize>);
-    let alt = try_consume_context::<Alt>().map(|alt| alt.0);
+    let alt = use_consume::<Alt>().0;
     let grid = pixel_grid();
 
     // The row's links, taken out of `text` before its spans are moved into the paragraph
@@ -758,10 +758,7 @@ fn row(
     // Both are read only while the pointer is on a run, so a row nobody is pointing at is
     // on neither modifier's list -- and read whether or not the answer is yes, or the row
     // would never be drawn again when the modifier came up.
-    let lit = over().filter(|_| {
-        let blocked = alt.is_some_and(|alt| *alt.read());
-        (links.open)() && !blocked
-    });
+    let lit = over().filter(|_| (links.open)() && !*alt.read());
     let columns = lit.and_then(|lit| links.columns.get(lit)).cloned();
     let drawn = text.map(|text| {
         let units = text.line.units();
@@ -1149,7 +1146,7 @@ fn on_down(
     menu: Option<Rc<dyn Fn(Event<PressEventData>, Option<usize>)>>,
     marked: State<Marks>,
     shift: State<bool>,
-    alt: Option<State<bool>>,
+    alt: State<bool>,
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
     let (cells, links) = (cells.clone(), links.clone());
     let (pane, row, file) = (chrome.pane, chrome.row, chrome.file.clone());
@@ -1166,7 +1163,7 @@ fn on_down(
             // press is the row's, as it is over any other text.
             let link = links
                 .at(at)
-                .filter(|_| presses == PressEventType::Single && !held(alt) && (links.open)())
+                .filter(|_| presses == PressEventType::Single && !*alt.peek() && (links.open)())
                 .zip(links.follow.clone());
             if let Some((link, follow)) = link {
                 // And it picks no line out: the press is the question and not a place in
@@ -1204,7 +1201,7 @@ fn on_move(
     tell: Rc<dyn Fn(Option<usize>)>,
     mut over: State<Option<usize>>,
     marked: State<Marks>,
-    alt: Option<State<bool>>,
+    alt: State<bool>,
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
     let (cells, links) = (cells.clone(), links.clone());
     let (pane, row) = (chrome.pane, chrome.row);
@@ -1217,7 +1214,8 @@ fn on_move(
         // passed under. The name is said whether it is a link or not -- a name where one
         // is defined is not a link and is still something to ask the server about -- but
         // under the same guard, for the same reason.
-        let sweeping = dragging(marked, pane) || held(alt);
+        // Alt says a press on a link is not a door, so what is under the pointer is text.
+        let sweeping = dragging(marked, pane) || *alt.peek();
         let hovered = (!sweeping).then(|| links.at(column)).flatten();
         over.set_if_modified(hovered);
         tell(if sweeping { None } else { column });
@@ -1234,12 +1232,6 @@ fn on_move(
             CursorIcon::Default
         });
     }
-}
-
-/// Alt held, which says a press on a link is not a door, so what is under the pointer is
-/// text.
-fn held(alt: Option<State<bool>>) -> bool {
-    alt.is_some_and(|alt| *alt.peek())
 }
 
 /// `head` cut so that every run in `links` is exactly one span of it, splitting a span

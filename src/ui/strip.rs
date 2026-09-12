@@ -1007,14 +1007,9 @@ impl Component for TabBar {
 
 /// Every measurement the bar keeps, made in one place: the hook [`TabBar`] opens with.
 fn use_bar() -> Bar {
-    let places = use_state(Chips::default);
-    // The test that asks what the bar still holds a place for hands it the list to keep
-    // them in, there being no reading a component's own state from outside.
-    #[cfg(test)]
-    let places = try_consume_context::<Measured>().map_or(places, |measured| measured.0);
     let shape = use_state(|| 0u64);
     Bar {
-        places,
+        places: use_consume::<Chipped>().0,
         viewport: use_state(|| None),
         content: use_state(|| 0.0f32),
         // Read as well as written: the row of chips is drawn at this offset, so the bar
@@ -1028,12 +1023,15 @@ fn use_bar() -> Bar {
 
 /// Where every chip is: its two sides along the row, one entry per open tab. The map the
 /// panes keep their places in, keyed by a tab rather than by a place on one.
-pub(super) type Chips = Positions<Tab, (f32, f32)>;
+pub(crate) type Chips = Positions<Tab, (f32, f32)>;
 
-/// The list a test hands the bar to measure its chips into, so that it can read them.
-#[cfg(test)]
+/// Where the bar has measured its chips to, at the root rather than in [`TabBar`] itself.
+///
+/// The bar is mounted at most once, so this is the same one state either way -- and at
+/// the root a test can read what the bar still holds a place for, there being no reading
+/// a component's own state from outside.
 #[derive(Clone, Copy)]
-pub(crate) struct Measured(pub(crate) State<Chips>);
+pub(crate) struct Chipped(pub(crate) State<Chips>);
 
 /// What the bar has been measured as, how far along it is, and every rule over the two:
 /// passed about as one thing because nothing that scrolls can do without all of it.
