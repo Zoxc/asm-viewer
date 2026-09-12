@@ -149,10 +149,19 @@ fn an_answer_comes_back_in_the_shape_the_question_was_asked_in() {
         line: 3,
         columns: 9..15,
     };
-    let read = |_: &Path| Some("fn main() {\n    let n = 1;\n    ø = helper(n);\n}\n".to_owned());
+    // The answer's own reader, as the worker hands one over.
+    let lines = || {
+        lsp::Lines::reading(|_| {
+            Some("fn main() {\n    let n = 1;\n    ø = helper(n);\n}\n".to_owned())
+        })
+    };
 
     for want in [lsp::Followed::Definition, lsp::Followed::Declaration] {
-        let reply = replied(lsp::Question::Followed(want), Ok(vec![place.clone()]), read);
+        let reply = replied(
+            lsp::Question::Followed(want),
+            Ok(vec![place.clone()]),
+            &mut lines(),
+        );
         let Reply::Followed(Ok(places)) = reply else {
             panic!("a followed question is answered with places");
         };
@@ -168,7 +177,11 @@ fn an_answer_comes_back_in_the_shape_the_question_was_asked_in() {
     }
 
     for want in [lsp::Listed::Implementations, lsp::Listed::References] {
-        let reply = replied(lsp::Question::Listed(want), Ok(vec![place.clone()]), read);
+        let reply = replied(
+            lsp::Question::Listed(want),
+            Ok(vec![place.clone()]),
+            &mut lines(),
+        );
         let Reply::Listed(Ok(found)) = reply else {
             panic!("a listed question is answered with a list");
         };

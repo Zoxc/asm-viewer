@@ -5471,7 +5471,10 @@ fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)])
         ..Located::default()
     };
     // Grouped as the worker groups it, reading each file's text off the disk.
-    let found = references::of(&places, |path| std::fs::read_to_string(path).ok());
+    let found = references::of(
+        &places,
+        &mut lsp::Lines::reading(|path| std::fs::read_to_string(path).ok()),
+    );
     assert!(
         located.answer_places(7, 1, found),
         "the answer was not taken"
@@ -5684,7 +5687,7 @@ fn a_locations_answer_lands_on_the_question_it_was_asked_of() {
                 line,
                 columns: 0..3,
             }],
-            |_| None,
+            &mut unread(),
         )
     };
 
@@ -6980,6 +6983,12 @@ fn next_ask(
     None
 }
 
+/// The reader an answer is counted through ([`lsp::Lines`]), for a test whose answer
+/// names files that hold nothing: the columns then stand as the server gave them.
+fn unread() -> lsp::Lines {
+    lsp::Lines::reading(|_| None)
+}
+
 /// The file a call-following test reads, written where a test can put one.
 fn calling_file(name: &str) -> (Arc<str>, Seeded) {
     let directory = Seeded::directory(name);
@@ -7004,7 +7013,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                reply: replied(want, Ok(vec![place.clone()]), |_| None),
+                reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
         },
@@ -7082,7 +7091,7 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                reply: replied(want, Ok(vec![place.clone()]), |_| None),
+                reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
         },
@@ -7155,7 +7164,11 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
                 run,
                 id,
                 // The worker's own read, as the app hands it in.
-                reply: replied(want, Ok(vec![place.clone()]), source::read_text),
+                reply: replied(
+                    want,
+                    Ok(vec![place.clone()]),
+                    &mut lsp::Lines::reading(source::read_text),
+                ),
             }),
             _ => None,
         },
@@ -7216,7 +7229,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                reply: replied(want, Ok(vec![place.clone()]), |_| None),
+                reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
         },
@@ -7305,7 +7318,7 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
                 Some(LspAnswer::Answered {
                     run,
                     id,
-                    reply: replied(want, Ok(vec![place]), |_| None),
+                    reply: replied(want, Ok(vec![place]), &mut unread()),
                 })
             }
             _ => None,
@@ -7379,7 +7392,7 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
                 Some(LspAnswer::Answered {
                     run,
                     id,
-                    reply: replied(want, Ok(vec![place.clone()]), |_| None),
+                    reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
                 })
             }
             _ => None,
@@ -8132,7 +8145,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                reply: replied(want, Ok(vec![place.clone()]), |_| None),
+                reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
         },
@@ -8211,7 +8224,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                reply: replied(want, Ok(vec![place.clone()]), |_| None),
+                reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
         },
@@ -8778,7 +8791,7 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
             LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
                 run,
                 id,
-                reply: replied(want, Ok(vec![itself.clone()]), |_| None),
+                reply: replied(want, Ok(vec![itself.clone()]), &mut unread()),
             }),
             _ => None,
         },
@@ -9312,7 +9325,7 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
                         code: -32603,
                         said: "file not found".to_owned(),
                     }),
-                    |_| None,
+                    &mut unread(),
                 ),
             }),
             _ => None,

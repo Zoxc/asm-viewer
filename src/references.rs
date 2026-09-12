@@ -10,8 +10,9 @@
 //!
 //! A row draws its line's text, as a search hit's does and cut the same way
 //! ([`search::drawn`]) -- a list of line numbers says where a name is used and not how.
-//! The server says nothing about the text, so the lines are **read off the disk here**,
-//! each file once; the read blocks, which is why it happens with the ask on the language
+//! The server says nothing about the text, so the lines are **read off the disk**, each
+//! file once and through the same reader the answer's columns came back through
+//! ([`lsp::Lines`]); the read blocks, which is why it happens with the ask on the language
 //! worker and never on the UI thread. A file that will not read leaves its references with
 //! the line number they already have.
 
@@ -53,36 +54,26 @@ pub type ReferenceRows = grouped::Rows<Reference>;
 /// Two references on one line are two rows: a name used twice there is used twice, and
 /// each selects its own.
 ///
-/// `read` answers a file's whole text, and is asked **once per file** however many
-/// references are in it. It is an argument so that the read is the caller's -- the
-/// worker passes [`crate::source::read_text`], the app's one rule for reading a source
-/// file, and a test passes what it wrote -- and so that nothing here blocks unless the
-/// caller's read does.
-pub fn of(places: &[lsp::Place], read: impl Fn(&Path) -> Option<String>) -> References {
+/// `lines` is the answer's own reader ([`lsp::Lines`]), the one its columns came back off
+/// the wire through, so a file is read once however many references are in it. It is an
+/// argument so that the read is the caller's -- the worker's reads with
+/// [`crate::source::read_text`], the app's one rule for reading a source file, and a
+/// test's hands over what it wrote -- and so that nothing here blocks unless the caller's
+/// read does.
+pub fn of(places: &[lsp::Place], lines: &mut lsp::Lines) -> References {
     let mut by_file: BTreeMap<&Path, Vec<&lsp::Place>> = BTreeMap::new();
     for place in places {
         by_file.entry(&place.file).or_default().push(place);
     }
     Grouped::from_files(by_file.into_iter().map(|(path, places)| {
-        let text = read(path);
-        let source: Vec<&str> = text.iter().flat_map(|text| text.lines()).collect();
-        let mut lines: Vec<Reference> = places
+        let mut rows: Vec<Reference> = places
             .into_iter()
-            .map(|place| {
-                // Checked, not `line - 1`: a line is 1-based by the server's answer and
-                // nothing here can hold that constructor to it, so a 0 is a line the
-                // file does not have and not a panic.
-                let at = (place.line as usize)
-                    .checked_sub(1)
-                    .and_then(|at| source.get(at))
-                    .copied();
-                reference(place, at)
-            })
+            .map(|place| reference(place, lines.at(path, place.line)))
             .collect();
-        lines.sort_by(|one, other| {
+        rows.sort_by(|one, other| {
             (one.line, one.columns.start).cmp(&(other.line, other.columns.start))
         });
-        (path, lines)
+        (path, rows)
     }))
 }
 

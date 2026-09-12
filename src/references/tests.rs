@@ -2,6 +2,7 @@ use super::*;
 use crate::filter::Matcher;
 use crate::grouped::Row;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// A place as the server answers one.
@@ -18,9 +19,15 @@ fn all(references: &References) -> ReferenceRows {
     references.rows(&Matcher::Everything)
 }
 
+/// A grouping over `places` whose files are read with `read`: the reader the language
+/// worker builds per answer ([`lsp::Lines`]), which is what `of` takes.
+fn read_with(places: &[lsp::Place], read: fn(&Path) -> Option<String>) -> References {
+    of(places, &mut lsp::Lines::reading(read))
+}
+
 /// A grouping over places whose files hold nothing: what the rows are without any text.
 fn grouped(places: &[lsp::Place]) -> References {
-    of(places, |_| None)
+    read_with(places, |_| None)
 }
 
 /// The text of the reference rows, in the order they are drawn.
@@ -98,8 +105,8 @@ fn a_name_used_twice_on_one_line_is_two_rows_each_with_its_own_columns() {
 
 #[test]
 fn a_reference_carries_its_line_marked_where_the_name_is() {
-    let source = "fn main() {\n    let n = helper(1);\n}\n";
-    let references = of(&[place("/p/src/main.rs", 2, 12..18)], |path| {
+    let references = read_with(&[place("/p/src/main.rs", 2, 12..18)], |path| {
+        let source = "fn main() {\n    let n = helper(1);\n}\n";
         (path == Path::new("/p/src/main.rs")).then(|| source.to_owned())
     });
 
@@ -116,23 +123,28 @@ fn a_reference_carries_its_line_marked_where_the_name_is() {
     assert_eq!(item.columns, 12..18);
 }
 
+/// How many files [`counts_reads`] was asked for.
+static READS: AtomicUsize = AtomicUsize::new(0);
+
+fn counts_reads(_: &Path) -> Option<String> {
+    READS.fetch_add(1, Ordering::SeqCst);
+    Some("main here\nmain there\n".to_owned())
+}
+
 #[test]
 fn every_reference_in_one_file_costs_one_read() {
-    let reads = std::cell::Cell::new(0);
-    let references = of(
+    READS.store(0, Ordering::SeqCst);
+    let references = read_with(
         &[
             place("/p/src/main.rs", 1, 3..7),
             place("/p/src/main.rs", 2, 0..4),
             place("/p/src/other.rs", 1, 0..4),
         ],
-        |_| {
-            reads.set(reads.get() + 1);
-            Some("main here\nmain there\n".to_owned())
-        },
+        counts_reads,
     );
 
     assert_eq!(
-        reads.get(),
+        READS.load(Ordering::SeqCst),
         2,
         "a file is read once however many references are in it"
     );
@@ -145,7 +157,7 @@ fn every_reference_in_one_file_costs_one_read() {
 #[test]
 fn a_line_the_file_does_not_have_is_the_number_alone() {
     // The file changed under the answer, or would not read at all.
-    let references = of(&[place("/p/src/main.rs", 9, 0..4)], |_| {
+    let references = read_with(&[place("/p/src/main.rs", 9, 0..4)], |_| {
         Some("one\ntwo\n".to_owned())
     });
 
@@ -163,7 +175,7 @@ fn a_name_after_a_wide_character_is_marked_in_bytes_and_counted_in_units() {
     // The answer's columns are bytes and a pane's are UTF-16 units, and an emoji is
     // where the two part: four bytes, two units. `// ` is three of each, then the crab,
     // then a space, so the name begins at byte 8 and at column 6.
-    let references = of(&[place("/p/src/main.rs", 1, 8..14)], |_| {
+    let references = read_with(&[place("/p/src/main.rs", 1, 8..14)], |_| {
         Some("// \u{1f980} helper\n".to_owned())
     });
 
@@ -180,10 +192,10 @@ fn columns_the_line_has_no_such_bytes_for_mark_nothing() {
     // Half of a character, and a run past the end of the line: a line that has changed
     // under the answer, or a server counting some other way. Both are marks that are not
     // drawn, and neither is a slice taken off a character boundary.
-    let inside = of(&[place("/p/src/main.rs", 1, 4..6)], |_| {
+    let inside = read_with(&[place("/p/src/main.rs", 1, 4..6)], |_| {
         Some("// \u{1f980} helper\n".to_owned())
     });
-    let beyond = of(&[place("/p/src/main.rs", 1, 8..99)], |_| {
+    let beyond = read_with(&[place("/p/src/main.rs", 1, 8..99)], |_| {
         Some("// \u{1f980} helper\n".to_owned())
     });
 
@@ -201,7 +213,7 @@ fn columns_the_line_has_no_such_bytes_for_mark_nothing() {
 fn a_line_of_zero_is_the_number_alone_and_not_a_panic() {
     // Places are 1-based by the server's answer, so a 0 is a line no file has. The
     // subtraction that finds it must not wrap: in release it would read `usize::MAX`.
-    let references = of(&[place("/p/src/main.rs", 0, 0..4)], |_| {
+    let references = read_with(&[place("/p/src/main.rs", 0, 0..4)], |_| {
         Some("one\ntwo\n".to_owned())
     });
 

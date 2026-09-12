@@ -254,18 +254,24 @@ word nobody said. Never a failure: a server is not broken for being older.
 file, and, for an answer, whatever file it named -- a definition in another crate, a
 reference in a file no tab shows. Each file once per answer, through `source::read_text`,
 the app's one rule for reading a source file; the read blocks, which is why every question
-here is a worker's. It is asked with a 1-based line, like everything here but the wire,
-and counts it down itself: no caller does that for it. A file that will not read leaves
-the number alone, which is the right answer for a line of ASCII and the nearest one for
-the rest. **Where the server took `utf-8` nothing is read at all**: the numbers are
-already the app's.
+here is a worker's. Where a file's lines are is found when it is read, so the nth is a
+lookup: an answer naming a name used a hundred times in one file would otherwise walk that
+file from the top a hundred times. `Lines` is asked with a 1-based
+line, like everything here but the wire, and counts it down itself: no caller does that
+for it. A file that will not read leaves the number alone, which is the right answer for a
+line of ASCII and the nearest one for the rest. **Where the server took `utf-8` nothing is
+read for the wire at all**: the numbers are already the app's. That is `Talk`'s rule and
+not `Lines`', since the drawing below has to convert whatever the server chose.
 
 The drawing side converts the other way, since skia is what wants units: the source pane
 counts a link's columns into the row it draws and a press back into a byte offset
 (`src/ui/source_view.rs`), and both halves of an answer count theirs on the worker --
 `references::of` for the Locations panel's rows and `Arrival::of` for the caret a followed
-one plants, each with the line read there. The conversion itself is `chars::columns_of`
-and `chars::bytes_of` and is written once.
+one plants. Both count them with `Lines::drawn`, through **the same `Lines` the answer's
+own columns came back on the wire through**: `language_work` builds one per answer and
+hands it to the question and then to the shape the answer is taken in, so a file an answer
+names is read once and not once per conversion. The conversion itself is
+`chars::columns_of` and `chars::bytes_of` and is written once.
 
 An answer that names no column at all is column 0 and not no place at all, the line being
 what opens the file.
@@ -669,10 +675,10 @@ questions a name can be asked is written where they are asked. It comes back gro
 done on the worker: the reply is `Reply::Listed` where a definition's is `Reply::Followed`,
 and both carry what their lines said, reading a line being a file read and belonging on the
 thread that already blocks. The
-read handed to `references::of` is `source::read_text` and not a `read_to_string` of its
-own: a path a server answers with is file input, and a second rule for what a source file
-is would be a directory or a fifo opened on this thread, and a line the pane draws that the
-panel leaves blank. It
+reader handed to `references::of` reads with `source::read_text` and not with a
+`read_to_string` of its own: a path a server answers with is file input, and a second rule
+for what a source file is would be a directory or a fifo opened on this thread, and a line
+the pane draws that the panel leaves blank. It
 follows the **name** and not the link, so the row a function is defined on offers it too --
 there is nothing to follow there, and it is where a reader asks what refers to it. What comes
 back is a place in a file and not a symbol, so a row of it opens a source-driven tab

@@ -464,6 +464,16 @@ fn reads_wide(_: &Path) -> Option<String> {
     Some(WIDE_LINE.to_owned())
 }
 
+/// The places `question` about `at` is answered with, for a test whose files are not on
+/// the disk: there is nothing to count the columns against, so the numbers stand.
+fn asked_places(
+    talk: &mut Talk<PipeWriter>,
+    question: Question,
+    at: &Lookup,
+) -> Result<Vec<Place>, Failure> {
+    talk.places(question, at, &mut Lines::reading(|_| None))
+}
+
 /// How many files [`counts_reads`] was asked for, for the test that a server counting in
 /// bytes has nothing read for it.
 static READS: AtomicU32 = AtomicU32::new(0);
@@ -546,8 +556,12 @@ fn asked_over_wide_line(
             reading(talk, read);
             talk.initialize(Path::new("/p"), &wanted())
                 .expect("a handshake");
-            talk.places(Question::Followed(Followed::Definition), &at(1, 8))
-                .expect("an answer")
+            talk.places(
+                Question::Followed(Followed::Definition),
+                &at(1, 8),
+                &mut Lines::reading(read),
+            )
+            .expect("an answer")
         },
     );
     let asked = said
@@ -580,6 +594,103 @@ fn a_server_that_took_utf_8_is_asked_in_bytes_and_reads_nothing() {
     assert_eq!(READS.load(Ordering::SeqCst), 0);
 }
 
+/// A file is cut into lines where [`str::lines`] cuts it, and it is cut once: the `\r`
+/// of a CRLF goes with the newline, a last line without one is a line, and there is
+/// nothing past the end. A line of zero is a line no file has and not a panic.
+#[test]
+fn a_files_lines_are_the_lines_str_lines_finds() {
+    fn reads_mixed(_: &Path) -> Option<String> {
+        Some("one\r\ntwo\n\nfour".to_owned())
+    }
+    let file = Path::new("/p/src/main.rs");
+    let mut lines = Lines::reading(reads_mixed);
+
+    let found: Vec<Option<String>> = (0..6)
+        .map(|line| lines.at(file, line).map(str::to_owned))
+        .collect();
+    let text: Vec<Option<&str>> = found.iter().map(Option::as_deref).collect();
+    assert_eq!(
+        text,
+        [None, Some("one"), Some("two"), Some(""), Some("four"), None]
+    );
+
+    // A file that will not read has no lines at all.
+    assert_eq!(Lines::reading(|_| None).at(file, 1), None);
+}
+
+/// How many files [`counts_answer_reads`] was asked for. Its own counter and not
+/// [`READS`]: the tests run at the same time.
+static ANSWER_READS: AtomicU32 = AtomicU32::new(0);
+
+fn counts_answer_reads(path: &Path) -> Option<String> {
+    ANSWER_READS.fetch_add(1, Ordering::SeqCst);
+    reads_wide_lines(path)
+}
+
+/// **One answer reads each file it names once.** The columns come back off the wire
+/// through the answer's own reader, and the rows drawn from them are counted through the
+/// same one, so a file is opened once however many conversions the answer needs.
+#[test]
+fn one_answer_reads_each_file_it_names_once() {
+    ANSWER_READS.store(0, Ordering::SeqCst);
+    let mut lines = Lines::reading(counts_answer_reads);
+    let (_said, found, _notes) = against(
+        |fake, message| {
+            let result = match message["method"] == json!("initialize") {
+                true => json!({ "capabilities": { "positionEncoding": "utf-16" } }),
+                // `helper` on the first line, and `helper` on the second.
+                false => json!([
+                    {
+                        "uri": "file:///p/src/main.rs",
+                        "range": { "start": { "line": 0, "character": 6 },
+                                   "end": { "line": 0, "character": 12 } },
+                    },
+                    {
+                        "uri": "file:///p/src/main.rs",
+                        "range": { "start": { "line": 1, "character": 8 },
+                                   "end": { "line": 1, "character": 14 } },
+                    },
+                ]),
+            };
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "result": result,
+            }));
+        },
+        |talk| {
+            reading(talk, counts_answer_reads);
+            talk.initialize(Path::new("/p"), &wanted())
+                .expect("a handshake");
+            talk.places(Question::Listed(Listed::References), &at(1, 8), &mut lines)
+                .expect("an answer")
+        },
+    );
+
+    // What came back off the wire: the server's units as the app's bytes.
+    let columns: Vec<Range<u32>> = found.iter().map(|place| place.columns.clone()).collect();
+    assert_eq!(columns, [8..14, 12..18]);
+
+    // And the same places as the panel draws them, counted back into the units a row is
+    // drawn in -- through the reader the wire's own conversion has already filled.
+    let references = crate::references::of(&found, &mut lines);
+    let drawn: Vec<Range<usize>> = references
+        .rows(&crate::filter::Matcher::Everything)
+        .iter()
+        .filter_map(|row| match row {
+            crate::grouped::Row::Item { item, .. } => Some(item.columns.clone()),
+            crate::grouped::Row::File { .. } => None,
+        })
+        .collect();
+    assert_eq!(drawn, [6..12, 8..14]);
+
+    assert_eq!(
+        ANSWER_READS.load(Ordering::SeqCst),
+        1,
+        "the wire and the drawing count off one text"
+    );
+}
+
 #[test]
 fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_place() {
     let (said, found, _notes) = against(
@@ -595,7 +706,7 @@ fn a_definition_is_asked_for_where_the_reader_pointed_and_answered_with_the_plac
             }));
         },
         |talk| {
-            talk.places(Question::Followed(Followed::Definition), &at(42, 17))
+            asked_places(talk, Question::Followed(Followed::Definition), &at(42, 17))
                 .expect("an answer")
         },
     );
@@ -978,7 +1089,7 @@ fn implementations_are_asked_for_where_the_reader_pointed() {
             }));
         },
         |talk| {
-            talk.places(Question::Listed(Listed::Implementations), &at(5, 11))
+            asked_places(talk, Question::Listed(Listed::Implementations), &at(5, 11))
                 .expect("an answer")
         },
     );
@@ -1011,7 +1122,7 @@ fn references_are_asked_for_where_the_reader_pointed_and_leave_the_definition_ou
             }));
         },
         |talk| {
-            talk.places(Question::Listed(Listed::References), &at(42, 17))
+            asked_places(talk, Question::Listed(Listed::References), &at(42, 17))
                 .expect("an answer")
         },
     );
@@ -1055,8 +1166,7 @@ fn what_arrives_before_the_answer_is_dealt_with_and_the_answer_is_still_the_answ
             }
         },
         |talk| {
-            let places = talk
-                .places(Question::Followed(Followed::Definition), &at(1, 0))
+            let places = asked_places(talk, Question::Followed(Followed::Definition), &at(1, 0))
                 .expect("an answer");
             assert_eq!(places, Vec::new());
         },
@@ -1091,7 +1201,7 @@ fn what_the_server_says_unasked_is_whether_it_is_working() {
             fake.say(json!({ "jsonrpc": "2.0", "id": message["id"].clone(), "result": null }));
         },
         |talk| {
-            talk.places(Question::Followed(Followed::Definition), &at(1, 0))
+            asked_places(talk, Question::Followed(Followed::Definition), &at(1, 0))
                 .expect("an answer");
         },
     );
@@ -1119,7 +1229,7 @@ fn a_server_that_says_it_has_settled_is_heard_saying_so() {
             fake.say(json!({ "jsonrpc": "2.0", "id": message["id"].clone(), "result": null }));
         },
         |talk| {
-            talk.places(Question::Followed(Followed::Definition), &at(1, 0))
+            asked_places(talk, Question::Followed(Followed::Definition), &at(1, 0))
                 .expect("an answer");
         },
     );
@@ -1142,8 +1252,7 @@ fn a_server_that_is_still_reading_the_project_is_no_answer_and_not_a_failure() {
             }));
         },
         |talk| {
-            let places = talk
-                .places(Question::Followed(Followed::Definition), &at(1, 0))
+            let places = asked_places(talk, Question::Followed(Followed::Definition), &at(1, 0))
                 .expect("no failure");
             assert_eq!(places, Vec::new());
         },
@@ -1162,7 +1271,7 @@ fn any_other_error_is_the_failure_the_server_named() {
         },
         |talk| {
             assert_eq!(
-                talk.places(Question::Followed(Followed::Definition), &at(1, 0)),
+                asked_places(talk, Question::Followed(Followed::Definition), &at(1, 0)),
                 Err(Failure::Refused {
                     code: -32603,
                     said: "it panicked".to_owned(),
@@ -1180,7 +1289,11 @@ fn a_server_that_stops_answering_ends_the_conversation() {
     drop(fake);
 
     assert!(matches!(
-        talk.places(Question::Followed(Followed::Definition), &at(1, 0)),
+        asked_places(
+            &mut talk,
+            Question::Followed(Followed::Definition),
+            &at(1, 0)
+        ),
         Err(Failure::Broken(_))
     ));
 }

@@ -593,23 +593,24 @@ pub(crate) enum Reply {
 /// The answer to `want`, out of what the server said. The one place the shape of an
 /// answer is decided, and it is decided by the question.
 ///
-/// `read` is how a named file's text is got, [`source::read_text`] on the worker: a path a
-/// server answers with is file input, and two rules for what a source file is would be two
-/// ideas of which files this app can show.
+/// `lines` is the answer's own reader, the one its columns came back off the wire
+/// through: a named file's text is got with it, [`source::read_text`] on the worker. A
+/// path a server answers with is file input, and two rules for what a source file is
+/// would be two ideas of which files this app can show.
 pub(crate) fn replied(
     want: lsp::Question,
     places: Result<Vec<lsp::Place>, lsp::Failure>,
-    read: impl Fn(&Path) -> Option<String>,
+    lines: &mut lsp::Lines,
 ) -> Reply {
     match want {
-        // The caret each place opens on, counted into the pane's units off the line it is
-        // on, which is read here.
+        // The caret each place opens on, counted into the pane's units off the line it
+        // is on.
         lsp::Question::Followed(_) => {
-            Reply::Followed(places.map(|places| Arrival::of(places, read)))
+            Reply::Followed(places.map(|places| Arrival::of(places, lines)))
         }
         // Grouped and their lines read with the ask, since that is what the panel draws.
         lsp::Question::Listed(_) => {
-            Reply::Listed(places.map(|places| references::of(&places, read)))
+            Reply::Listed(places.map(|places| references::of(&places, lines)))
         }
     }
 }
@@ -679,11 +680,15 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 Some(LspAnswer::Started { run, server })
             }
             LspJob::Ask { run, id, at, want } => {
-                let places = asked(&mut talking, |talk| talk.places(want, &at))?;
+                // One reader for the whole answer: the columns come back off the wire
+                // through it and the rows it will be drawn as are counted through it, so
+                // a file an answer names is read once and not once per conversion.
+                let mut lines = lsp::Lines::reading(source::read_text);
+                let places = asked(&mut talking, |talk| talk.places(want, &at, &mut lines))?;
                 Some(LspAnswer::Answered {
                     run,
                     id,
-                    reply: replied(want, places, source::read_text),
+                    reply: replied(want, places, &mut lines),
                 })
             }
             LspJob::Tokens { run, file } => {

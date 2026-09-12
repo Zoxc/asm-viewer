@@ -469,8 +469,17 @@ impl Server {
     }
 
     /// Put `question` about what is at `at`, in the app's own units ([`Lookup`]).
-    pub fn places(&mut self, question: Question, at: &Lookup) -> Result<Vec<Place>, Failure> {
-        self.talk.places(question, at)
+    ///
+    /// `lines` is the answer's own reader and belongs to the caller, so that whatever
+    /// counts the answer into the units a pane draws counts it off the same text
+    /// ([`Lines`]).
+    pub fn places(
+        &mut self,
+        question: Question,
+        at: &Lookup,
+        lines: &mut Lines,
+    ) -> Result<Vec<Place>, Failure> {
+        self.talk.places(question, at, lines)
     }
 
     /// Every name in `file`, as the server classifies them.
@@ -672,14 +681,21 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// up. A file the app never opened -- one outside the project, or of a language this
     /// server is not for -- answers whatever the server can work out on its own, which
     /// is often nothing, and nothing is what a question with no answer gets anyway.
-    pub fn places(&mut self, question: Question, at: &Lookup) -> Result<Vec<Place>, Failure> {
-        let mut lines = self.lines();
-        let params = question.params(at, lines.out(&at.file, at.line, at.column));
+    ///
+    /// `lines` is the answer's own reader and is the caller's, so that the columns coming
+    /// back and the columns a pane will draw come off one text ([`Lines`]).
+    pub fn places(
+        &mut self,
+        question: Question,
+        at: &Lookup,
+        lines: &mut Lines,
+    ) -> Result<Vec<Place>, Failure> {
+        let params = question.params(at, self.out(lines, &at.file, at.line, at.column));
         let mut found = self
             .asked(question.method(), params)
             .map(|value| places(&value))?;
         for place in &mut found {
-            place.columns = lines.back(&place.file, place.line, place.columns.clone());
+            place.columns = self.back(lines, &place.file, place.line, place.columns.clone());
         }
         Ok(found)
     }
@@ -694,12 +710,12 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// costs nothing to wait for that.
     pub fn hover(&mut self, at: &Lookup) -> Result<Option<Hovered>, Failure> {
         let mut lines = self.lines();
-        let column = lines.out(&at.file, at.line, at.column);
+        let column = self.out(&mut lines, &at.file, at.line, at.column);
         let mut said = self
             .asked("textDocument/hover", asked_at(at, column))
             .map(|value| hovered(&value, at.line, column))?;
         if let Some(said) = said.as_mut() {
-            said.columns = lines.back(&at.file, said.line, said.columns.clone());
+            said.columns = self.back(&mut lines, &at.file, said.line, said.columns.clone());
         }
         Ok(said)
     }
@@ -728,7 +744,7 @@ impl<W: Write + Send + 'static> Talk<W> {
             .map(|value| tokens(&value))?;
         let mut lines = self.lines();
         for token in &mut found {
-            token.columns = lines.back(file, token.line, token.columns.clone());
+            token.columns = self.back(&mut lines, file, token.line, token.columns.clone());
         }
         Ok(found)
     }
@@ -786,14 +802,39 @@ impl<W: Write + Send + 'static> Talk<W> {
         &self.legend
     }
 
-    /// The lines one question's conversion may need. Empty, and never filled at all where
-    /// the server took `utf-8`.
+    /// A reader for a question whose answer nothing else counts through: a hover, the
+    /// names in a file. A question whose answer is drawn takes the caller's instead, so
+    /// that the wire and the drawing read one text ([`Lines`]).
     fn lines(&self) -> Lines {
-        Lines {
-            encoding: self.encoding,
-            read: self.read,
-            files: BTreeMap::new(),
+        Lines::reading(self.read)
+    }
+
+    /// A byte column as the server counts one: what goes out with a question.
+    ///
+    /// **Nothing is read where the server took `utf-8`**: the numbers are already the
+    /// app's.
+    fn out(&self, lines: &mut Lines, file: &Path, line: u32, column: u32) -> u32 {
+        if self.encoding == Encoding::Utf8 {
+            return column;
         }
+        let Some(text) = lines.at(file, line) else {
+            return column;
+        };
+        let at = column as usize;
+        narrowed(chars::columns_of(text, at..at).start)
+    }
+
+    /// The server's columns as bytes: what comes back with an answer. [`Talk::out`]'s
+    /// rule about `utf-8` holds here too.
+    fn back(&self, lines: &mut Lines, file: &Path, line: u32, columns: Range<u32>) -> Range<u32> {
+        if self.encoding == Encoding::Utf8 {
+            return columns;
+        }
+        let Some(text) = lines.at(file, line) else {
+            return columns;
+        };
+        let bytes = chars::bytes_of(text, columns.start as usize..columns.end as usize);
+        narrowed(bytes.start)..narrowed(bytes.end)
     }
 
     /// One request whose refusal may be a "not now", which is the layer between
@@ -871,59 +912,90 @@ impl<W: Write + Send + 'static> Talk<W> {
     }
 }
 
-/// The lines one question's columns are converted through, each file read once.
+/// The lines one answer's columns are counted through, each file read once.
 ///
-/// A column crossing this module is a byte offset into its line and a column on the wire
-/// is whatever the handshake agreed on, so converting between them takes the line's text.
-/// The question's own file is one the app has open; an answer can name any file at all --
-/// a definition in another crate, a reference in a file no tab shows -- so the text is
-/// read rather than remembered, through the app's one rule for reading a source file
-/// (`source::read_text`). The read blocks, which is why every question here is a worker's
-/// (`src/ui/language.rs`).
+/// A column comes in three units, and converting between them takes the line's text: a
+/// byte offset into the line everywhere in the app, whatever the handshake agreed on for
+/// the wire ([`Talk::out`], [`Talk::back`]), and a UTF-16 unit in a pane that draws the
+/// line ([`Lines::drawn`]). The question's own file is one the app has open; an
+/// answer can name any file at all -- a definition in another crate, a reference in a file
+/// no tab shows -- so the text is read rather than remembered, through the app's one rule
+/// for reading a source file (`source::read_text`). The read blocks, which is why every
+/// question here is a worker's (`src/ui/language.rs`).
 ///
-/// **Nothing is read where the server took `utf-8`**: the numbers are already the app's,
-/// and nothing here has an answer to give.
-struct Lines {
-    encoding: Encoding,
+/// **One of these is built per answer**, and the wire and the drawing are given the same
+/// one (`ui::language::language_work`): a file an answer names twenty times is read once,
+/// and both units are counted off the one text.
+pub(crate) struct Lines {
     read: fn(&Path) -> Option<String>,
-    /// What each file said, a miss included, so an answer naming one file twenty times
-    /// reads it once.
-    files: BTreeMap<PathBuf, Option<String>>,
+    /// What each file said, a miss included.
+    files: BTreeMap<PathBuf, Option<Text>>,
+}
+
+/// A file as this holds one: its text, and where each line of it is.
+///
+/// The lines are found once, when the file is read, so the nth is a lookup and not a walk
+/// from the top: an answer naming a name used a hundred times in one file would otherwise
+/// scan that file a hundred times.
+struct Text {
+    text: String,
+    /// The byte range of each line, cut as [`str::lines`] cuts them -- the `\n` gone, and
+    /// a `\r` before it gone with it.
+    rows: Vec<Range<usize>>,
+}
+
+impl Text {
+    fn of(text: String) -> Text {
+        let mut rows = Vec::new();
+        let mut at = 0;
+        for piece in text.split_inclusive('\n') {
+            let line = piece.strip_suffix('\n').unwrap_or(piece);
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            rows.push(at..at + line.len());
+            at += piece.len();
+        }
+        Text { text, rows }
+    }
+
+    fn row(&self, row: usize) -> Option<&str> {
+        self.rows.get(row).map(|row| &self.text[row.clone()])
+    }
 }
 
 impl Lines {
-    /// The text of `line` -- 1-based, as every line here but the wire's own is -- of
-    /// `file`, and nothing where there is no converting to do, the file would not read,
-    /// or it is too short for the line.
-    fn at(&mut self, file: &Path, line: u32) -> Option<&str> {
-        if self.encoding == Encoding::Utf8 {
-            return None;
+    /// A reader of whatever files one answer names. `read` is `source::read_text` outside
+    /// the tests, which hand over text rather than write a file for it.
+    pub(crate) fn reading(read: fn(&Path) -> Option<String>) -> Lines {
+        Lines {
+            read,
+            files: BTreeMap::new(),
         }
+    }
+
+    /// The text of `line` -- 1-based, as every line here but the wire's own is -- of
+    /// `file`, and nothing where the file would not read or is too short for the line.
+    /// The one place a line is counted down, so no caller does it.
+    pub(crate) fn at(&mut self, file: &Path, line: u32) -> Option<&str> {
         let row = (line as usize).checked_sub(1)?;
         let read = self.read;
-        let text = self
+        let held = self
             .files
             .entry(file.to_path_buf())
-            .or_insert_with(|| read(file));
-        text.as_deref()?.lines().nth(row)
+            .or_insert_with(|| read(file).map(Text::of));
+        held.as_ref()?.row(row)
     }
 
-    /// A byte column as the server counts one: what goes out with a question.
-    fn out(&mut self, file: &Path, line: u32, column: u32) -> u32 {
+    /// A byte range on `line` as the pane drawing that line counts one: the columns a row
+    /// marks, and the caret a door plants.
+    ///
+    /// A file that will not read leaves the numbers alone, which is the right answer for
+    /// a line of ASCII and the nearest one for the rest.
+    pub(crate) fn drawn(&mut self, file: &Path, line: u32, columns: Range<u32>) -> Range<usize> {
+        let bytes = columns.start as usize..columns.end as usize;
         let Some(text) = self.at(file, line) else {
-            return column;
+            return bytes;
         };
-        let at = column as usize;
-        narrowed(chars::columns_of(text, at..at).start)
-    }
-
-    /// The server's columns as bytes: what comes back with an answer.
-    fn back(&mut self, file: &Path, line: u32, columns: Range<u32>) -> Range<u32> {
-        let Some(text) = self.at(file, line) else {
-            return columns;
-        };
-        let bytes = chars::bytes_of(text, columns.start as usize..columns.end as usize);
-        narrowed(bytes.start)..narrowed(bytes.end)
+        chars::columns_of(text, bytes)
     }
 }
 

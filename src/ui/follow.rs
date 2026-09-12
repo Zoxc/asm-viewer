@@ -34,7 +34,8 @@ pub(crate) struct Follow {
 /// counts UTF-16 units, so converting takes the line's text -- which is why the answer
 /// carries the caret and not the columns alone. The line is read where the ask is, on the
 /// language worker, for the reason the Locations panel's lines are (`src/references.rs`):
-/// a read blocks, and that is the thread that may block.
+/// a read blocks, and that is the thread that may block. A file that will not read leaves
+/// the column alone, which is the same column on any line of ASCII.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Arrival {
     pub(crate) place: lsp::Place,
@@ -44,37 +45,22 @@ pub(crate) struct Arrival {
 }
 
 impl Arrival {
-    /// The places an answer named, each with its caret. `read` answers a file's whole
-    /// text and is asked **once per file**, [`source::read_text`] on the worker: a path a
-    /// server answers with is file input, and two rules for what a source file is would
-    /// be two ideas of which files this app can show.
-    ///
-    /// A file that will not read leaves the column alone, which is the same column on any
-    /// line of ASCII.
+    /// The places an answer named, each with its caret. `lines` is the answer's own
+    /// reader ([`lsp::Lines`]), the one its columns came back off the wire through, so a
+    /// file is read once however many places name it. It reads with
+    /// [`source::read_text`] on the worker: a path a server answers with is file input,
+    /// and two rules for what a source file is would be two ideas of which files this app
+    /// can show.
     ///
     /// Every place is counted, though [`Follow::answer`] opens only the first: which one
     /// that is, is its rule, and an answer names one place for nearly every name.
-    pub(crate) fn of(
-        places: Vec<lsp::Place>,
-        read: impl Fn(&Path) -> Option<String>,
-    ) -> Vec<Arrival> {
-        let mut texts: HashMap<PathBuf, Option<String>> = HashMap::new();
+    pub(crate) fn of(places: Vec<lsp::Place>, lines: &mut lsp::Lines) -> Vec<Arrival> {
         places
             .into_iter()
             .map(|place| {
-                let text = texts
-                    .entry(place.file.clone())
-                    .or_insert_with(|| read(&place.file));
-                let at = place.columns.start as usize;
-                let start = text
-                    .as_deref()
-                    .and_then(|text| text.lines().nth((place.line as usize).checked_sub(1)?))
-                    .map(|row| chars::columns_of(row, at..at).start)
-                    .unwrap_or(at);
-                Arrival {
-                    place,
-                    caret: start..start,
-                }
+                let at = place.columns.start;
+                let caret = lines.drawn(&place.file, place.line, at..at);
+                Arrival { place, caret }
             })
             .collect()
     }
