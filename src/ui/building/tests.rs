@@ -67,6 +67,49 @@ fn a_build_that_produced_nothing_leaves_the_previous_list_standing() {
     assert!(!state.building);
 }
 
+/// **A clone of the state shares the build rather than copying it.** The cargo section
+/// clones the whole of `Builds` to draw it, and a keystroke in any of the pane's boxes is a
+/// redraw: a build that said two hundred things would copy every diagnostic and the text
+/// the compiler rendered for it, hundreds of kilobytes, per character typed. The worker's
+/// hooks clone it too, to write two fields ([`write_if`]).
+///
+/// The sharing itself is what is asserted: the diagnostics a clone reads are the same
+/// allocation, and so is the set of files it may open.
+#[test]
+fn a_clone_of_the_state_shares_the_build_rather_than_copying_it() {
+    let said = |line: usize| Diagnostic {
+        level: Level::Warning,
+        message: "unused variable".to_owned(),
+        rendered: "warning: unused variable".to_owned(),
+        span: Some(cargo::Span {
+            file: "src/main.rs".to_owned(),
+            line,
+            column: 1,
+        }),
+    };
+    let run = cargo::Run::Built {
+        artifacts: Vec::new(),
+        diagnostics: (1..=3).map(said).collect(),
+    };
+
+    let mut state = Builds::default();
+    state.finished(run, HashSet::from([PathBuf::from("src/main.rs")]), &[]);
+    let copy = state.clone();
+
+    assert!(
+        std::ptr::eq(state.diagnostics().as_ptr(), copy.diagnostics().as_ptr()),
+        "the clone copied every diagnostic"
+    );
+    // Typed, so what is compared is the sets and not the fields holding them.
+    let one_set = |held: &HashSet<PathBuf>, also: &HashSet<PathBuf>| std::ptr::eq(held, also);
+    assert!(
+        one_set(&state.sources, &copy.sources),
+        "the clone copied the set of files it may open"
+    );
+    // Not vacuous: there is something there to have been copied.
+    assert_eq!(state.diagnostics().len(), 3);
+}
+
 #[test]
 fn a_second_build_is_not_started_over_the_first() {
     let mut state = Builds::default();
@@ -158,7 +201,7 @@ fn both_build_panes_say_the_same_line_about_the_same_build() {
         ),
     ] {
         let project = Builds {
-            built: Some(run.clone()),
+            built: Some(Arc::new(run.clone())),
             ..Builds::default()
         };
         let pad = pad_holding(Build { run, executable });
@@ -169,7 +212,7 @@ fn both_build_panes_say_the_same_line_about_the_same_build() {
     // A cargo that would not start, which both hold as cargo's own answer: one sentence,
     // and it names what stopped it.
     let project = Builds {
-        built: Some(cargo::Run::NoCargo("not found".to_owned())),
+        built: Some(Arc::new(cargo::Run::NoCargo("not found".to_owned()))),
         ..Builds::default()
     };
     let pad = pad_holding(Build {

@@ -25412,7 +25412,7 @@ fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
     {
         let mut held = build.write();
         held.manifest = Some(PathBuf::from("/work/app/Cargo.toml"));
-        held.built = Some(run([&one, &two]));
+        held.built = Some(Arc::new(run([&one, &two])));
     }
     settle(&mut test);
 
@@ -25436,7 +25436,7 @@ fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
 
     // The same two targets the other way around, as a build that reordered them would
     // hand them over. The pointer has not moved.
-    build.write().built = Some(run([&two, &one]));
+    build.write().built = Some(Arc::new(run([&two, &one])));
     settle(&mut test);
     let (first_row, second_row) = (
         label_area(&test, &about(&two)).expect("the reordered row is drawn"),
@@ -25870,8 +25870,8 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     let mut build = states.build;
     // Both halves of what the worker answers with: the run, and the diagnostic files it
     // picked out as ones this pane may open (`building::openable`).
-    build.write().built = Some(run);
-    build.write().sources = HashSet::from([directory.join("src/main.rs")]);
+    build.write().built = Some(Arc::new(run));
+    build.write().sources = Arc::new(HashSet::from([directory.join("src/main.rs")]));
     settle(&mut test);
 
     // Both places are drawn, each spelled as the file, the line and the column.
@@ -25941,8 +25941,8 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
     pump(&mut test, || states.build.peek().manifest.is_some());
 
     let mut build = states.build;
-    build.write().built = Some(run);
-    build.write().sources = HashSet::from([file]);
+    build.write().built = Some(Arc::new(run));
+    build.write().sources = Arc::new(HashSet::from([file]));
 
     let before = source::touches();
     settle(&mut test);

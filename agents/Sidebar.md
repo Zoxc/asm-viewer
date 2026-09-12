@@ -425,7 +425,11 @@ cargo build, the language server and the recent projects are each a component re
 it draws, so a change redraws the sections that read it and no others: an answer from the language
 server leaves the artifact rows and the diagnostics standing, and a binary opening touches nothing
 but the list of them. A keystroke still redraws the four sections that read `Proj`, the boxes
-writing straight into it, but not the binaries -- and this is the pane the reader types into.
+writing straight into it, but not the binaries -- and this is the pane the reader types into. So a
+redraw is kept cheap: the cargo section clones the whole of `Builds` to draw it, and its two large
+fields are behind `Arc`s (`Builds::built`, `Builds::sources`). A build says two hundred things as
+readily as two, each carrying the text the compiler rendered for it, and none of that is copied per
+keystroke.
 
 **The Project view is also where the project is built** (`src/ui/building.rs` over
 `src/cargo.rs`), under a heading naming the tool rather than the act, since the pane has

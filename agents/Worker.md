@@ -45,7 +45,10 @@ file closed is not taken" is a unit test of five lines rather than an app mounte
 `freya-testing` driving a fake worker. Two states write through the guard instead, and for one
 reason: what `Searched` and `Pads` hold *is* the answer -- ten thousand hits, every pad's source and
 output -- and `write_if`'s clone per batch would copy all of it to add the few lines that just
-arrived. The rule is still the type's; only the writing differs.
+arrived. The rule is still the type's; only the writing differs. `Builds` would be a third, and
+answers differently: the build it holds and the files that build names are behind `Arc`s, so a
+clone is a few pointers and the plain shape holds -- here, and in the Project view's render
+(`agents/Sidebar.md`).
 
 Two things the shape does not swallow. A drain policy may hand a job **back** rather than drop it,
 which is the scratchpad's rule -- a save may not be stepped over by a job for another pad -- so the

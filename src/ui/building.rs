@@ -14,12 +14,17 @@
 use super::*;
 
 /// What the app holds about building the open project.
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Default)]
 pub(crate) struct Builds {
     /// A build is going. Two cannot: a second would compile what the first is writing.
     pub(crate) building: bool,
     /// The last build, whatever came of it.
-    pub(crate) built: Option<cargo::Run>,
+    ///
+    /// Shared, because the cargo section clones this whole state to draw it and a keystroke
+    /// in any of the pane's boxes is a redraw: a build says two hundred things as readily as
+    /// two, each with the text the compiler rendered for it, so a copy per frame is hundreds
+    /// of kilobytes for nothing. [`Builds::finished`] wraps it once.
+    pub(crate) built: Option<Arc<cargo::Run>>,
     /// The manifest the project's directory holds, which is what cargo would be run over.
     /// `None` is a placeholder and not an error.
     pub(crate) manifest: Option<PathBuf>,
@@ -45,14 +50,14 @@ pub(crate) struct Builds {
     ///
     /// Worked out **on the worker** beside the build ([`openable`]), because deciding it
     /// at the row costs a `stat` per diagnostic per frame and a build says two hundred
-    /// things as readily as two.
-    pub(crate) sources: HashSet<PathBuf>,
+    /// things as readily as two. Shared for the same reason as the build above.
+    pub(crate) sources: Arc<HashSet<PathBuf>>,
 }
 
 impl Builds {
     /// What the last build produced, in the order cargo named them.
     pub(crate) fn artifacts(&self) -> &[cargo::Artifact] {
-        match &self.built {
+        match self.built.as_deref() {
             Some(cargo::Run::Built { artifacts, .. }) => artifacts,
             _ => &[],
         }
@@ -61,7 +66,7 @@ impl Builds {
     /// What the compiler said about the last build.
     pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
         self.built
-            .as_ref()
+            .as_deref()
             .map(cargo::Run::diagnostics)
             .unwrap_or_default()
     }
@@ -74,7 +79,7 @@ impl Builds {
 
     /// cargo's own words, for the failures said there and nowhere else.
     pub(crate) fn refusal(&self) -> Option<&str> {
-        self.built.as_ref().and_then(cargo::Run::refusal)
+        self.built.as_deref().and_then(cargo::Run::refusal)
     }
 
     /// What the manifest says, as the worker read it. Whether anything changed, so the
@@ -134,8 +139,8 @@ impl Builds {
             _ => self.previous.clone(),
         };
         self.building = false;
-        self.built = Some(run);
-        self.sources = sources;
+        self.built = Some(Arc::new(run));
+        self.sources = Arc::new(sources);
         self.previous = produced;
         self.previous
             .iter()
@@ -149,7 +154,7 @@ impl Builds {
     pub(crate) fn verdict(&self) -> Option<Verdict> {
         match self.building {
             true => Some(Verdict::plain(cargo::BUILDING)),
-            false => self.built.as_ref().map(cargo::Run::verdict),
+            false => self.built.as_deref().map(cargo::Run::verdict),
         }
     }
 }
