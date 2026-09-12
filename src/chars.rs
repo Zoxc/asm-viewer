@@ -16,6 +16,7 @@
 //! the same kind of fact for the count a length written for a reader is in.
 
 use std::fmt;
+use std::iter;
 use std::ops::{Range, RangeInclusive};
 
 /// A place in a listing: a row, and a column in UTF-16 units of that row's text. Ordered
@@ -529,9 +530,9 @@ impl Piece {
 
     /// The piece character by character: how many columns each takes, and the character
     /// itself where the piece is text. An inline element is one character of its own, one
-    /// column wide whatever its name. The one place a piece's width is stated -- counting
-    /// a row's units, laying out its atoms and slicing it all step over this -- so no two
-    /// of them can put a column in a different place.
+    /// column wide whatever its name. The one place a piece's width is stated: a row's
+    /// units are the sum of it, and every walk along a row is [`Line::cells`], which
+    /// steps over it -- so no two of them can put a column in a different place.
     fn characters(&self) -> impl Iterator<Item = (usize, Option<char>)> + '_ {
         let text = match self {
             Piece::Text(text) => Some(text),
@@ -545,6 +546,17 @@ impl Piece {
     fn units(&self) -> usize {
         self.characters().map(|(units, _)| units).sum()
     }
+}
+
+/// One stretch of a row a pattern is looked for in ([`Line::runs`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Run<'a> {
+    /// A stretch of adjacent text pieces, joined: a row is pushed one span at a time and
+    /// a pattern crossing two of them is the ordinary case.
+    Text(String),
+    /// The name an inline element draws. It is one character of the row, so there are no
+    /// columns inside it to point at, and it ends the text run either side of it.
+    Inline(&'a str),
 }
 
 /// What kind of character one is, for a step by word: a word is a run of one kind, and
@@ -662,24 +674,56 @@ impl Line {
         self.pieces.iter().map(Piece::units).sum()
     }
 
+    /// The row character by character: the columns each spans, the piece it is in, and
+    /// the character itself where that piece is text. **The row's one walk.** The atoms,
+    /// a slice and the runs a pattern is looked for in are all this walk, so a change to
+    /// how wide a piece draws ([`Piece::characters`]) moves every column at once.
+    pub fn cells(&self) -> impl Iterator<Item = (Range<usize>, &Piece, Option<char>)> + '_ {
+        self.pieces
+            .iter()
+            .flat_map(|piece| piece.characters().map(move |character| (piece, character)))
+            .scan(0, |col, (piece, (units, character))| {
+                let start = *col;
+                *col += units;
+                Some((start..*col, piece, character))
+            })
+    }
+
+    /// The row in the stretches a pattern is looked for in, each with the columns it
+    /// covers: adjacent text joined into one run, and every inline element on its own.
+    pub fn runs(&self) -> impl Iterator<Item = (Range<usize>, Run<'_>)> + '_ {
+        let mut cells = self.cells().peekable();
+        iter::from_fn(move || {
+            let (span, piece, character) = cells.next()?;
+            let Some(character) = character else {
+                return Some((span, Run::Inline(piece.text())));
+            };
+            let mut text = String::from(character);
+            let mut end = span.end;
+            loop {
+                let Some((next, _, Some(character))) = cells.peek() else {
+                    break;
+                };
+                let (next_end, character) = (next.end, *character);
+                cells.next();
+                text.push(character);
+                end = next_end;
+            }
+            Some((span.start..end, Run::Text(text)))
+        })
+    }
+
     /// The row's characters, each as the columns it spans and what kind it is; an inline
     /// element is one of its own kind. What every step along the row is a step over, so
     /// none can land inside a character two units wide.
     fn atoms(&self) -> Vec<Atom> {
-        let mut atoms = Vec::new();
-        let mut col = 0;
-        for piece in &self.pieces {
-            for (units, character) in piece.characters() {
-                let end = col + units;
-                atoms.push(Atom {
-                    start: col,
-                    end,
-                    class: character.map_or(Class::Inline, Class::of),
-                });
-                col = end;
-            }
-        }
-        atoms
+        self.cells()
+            .map(|(span, _, character)| Atom {
+                start: span.start,
+                end: span.end,
+                class: character.map_or(Class::Inline, Class::of),
+            })
+            .collect()
     }
 
     /// The text between two columns. A column inside a character that is two units wide
@@ -688,17 +732,12 @@ impl Line {
     pub fn slice(&self, from: usize, to: usize) -> String {
         let (from, to) = (from.min(to), from.max(to));
         let mut out = String::new();
-        let mut col = 0;
-        for piece in &self.pieces {
-            for (units, character) in piece.characters() {
-                let end = col + units;
-                if end > from && col < to {
-                    match character {
-                        Some(character) => out.push(character),
-                        None => out.push_str(piece.text()),
-                    }
+        for (span, piece, character) in self.cells() {
+            if span.end > from && span.start < to {
+                match character {
+                    Some(character) => out.push(character),
+                    None => out.push_str(piece.text()),
                 }
-                col = end;
             }
         }
         out

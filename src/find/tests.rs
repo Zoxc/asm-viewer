@@ -171,3 +171,23 @@ fn a_step_from_an_index_that_is_gone_reads_the_caret() {
 
     assert_eq!(step(&hits, Some(9), caret, Direction::Forward), Some(1));
 }
+
+/// **The columns are the row's own.** Where a hit lands after an inline element is
+/// whatever the row says the element is wide, read off the line and not restated here:
+/// widen an element in `Piece::characters` and the text past it moves with it.
+#[test]
+fn a_hit_after_an_inline_element_is_where_the_row_puts_it() {
+    let mut leading = Line::default();
+    leading.push_inline("some_function");
+    let mut line = leading.clone();
+    line.push_text(", 7");
+
+    // The columns the element takes, as the row itself counts them.
+    let element = 0..leading.units();
+
+    assert_eq!(hits_in(&line, &matcher("some_fun")), vec![element.clone()]);
+    assert_eq!(
+        hits_in(&line, &matcher(", 7")),
+        vec![element.end..element.end + 3]
+    );
+}

@@ -13,7 +13,7 @@
 
 use std::ops::Range;
 
-use crate::chars::{self, Caret, Line, Piece};
+use crate::chars::{self, Caret, Line, Run};
 use crate::filter::Matcher;
 
 /// One hit in a listing: the line it is on and the columns it covers.
@@ -31,44 +31,30 @@ pub struct Hit {
 ///
 /// **An inline element matches as a unit.** It is one column to the text engine and its
 /// text is a whole symbol name (`Piece::Inline`), so there are no columns inside it to
-/// mark: either the pattern is somewhere in the name, and the one column the element is
-/// drawn at is the hit, or it is not. That is also what a reader sees, the element being
-/// drawn as one thing. It ends the run either way: a pattern cannot straddle it.
+/// mark: either the pattern is somewhere in the name, and the column the element is drawn
+/// at is the hit, or it is not. That is also what a reader sees, the element being drawn
+/// as one thing. It ends the run either way: a pattern cannot straddle it.
+///
+/// Both are [`Line::runs`], columns and all: nothing here counts a column. How wide a
+/// piece draws is the row's own rule (`Piece::characters`), and restating it here would
+/// put every hit past an element that changed width one column off.
 pub fn hits_in(line: &Line, matcher: &Matcher) -> Vec<Range<usize>> {
     let mut hits = Vec::new();
-    // The run being gathered: where it starts, in columns, and its text so far.
-    let mut start = 0;
-    let mut run = String::new();
-    let mut column = 0;
-
-    let flush = |start: usize, run: &mut String, hits: &mut Vec<Range<usize>>| {
-        for bytes in matcher.marks(run) {
-            let columns = chars::columns_of(run, bytes);
-            hits.push(start + columns.start..start + columns.end);
-        }
-        run.clear();
-    };
-
-    for piece in &line.pieces {
-        match piece {
-            Piece::Text(text) => {
-                if run.is_empty() {
-                    start = column;
+    for (columns, run) in line.runs() {
+        match run {
+            Run::Text(text) => {
+                for bytes in matcher.marks(&text) {
+                    let marked = chars::columns_of(&text, bytes);
+                    hits.push(columns.start + marked.start..columns.start + marked.end);
                 }
-                run.push_str(text);
-                column += chars::units(text);
             }
-            Piece::Inline(name) => {
-                flush(start, &mut run, &mut hits);
+            Run::Inline(name) => {
                 if matcher.marked(name) {
-                    hits.push(column..column + 1);
+                    hits.push(columns);
                 }
-                column += 1;
             }
         }
     }
-    flush(start, &mut run, &mut hits);
-
     hits
 }
 

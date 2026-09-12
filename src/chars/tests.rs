@@ -176,6 +176,30 @@ fn the_units_the_atoms_and_the_slice_put_a_column_in_the_same_place() {
     assert_eq!(atoms[8].end - atoms[8].start, 1);
 }
 
+/// The same walk again, in the runs a pattern is looked for in: adjacent text joined --
+/// a row is pushed one span at a time -- an inline element a run of its own, and each
+/// run's columns the ones the row draws it at.
+#[test]
+fn the_runs_join_adjacent_text_and_leave_an_element_on_its_own() {
+    let mut line = Line::default();
+    line.push_text("call ");
+    line.push_text("a\u{1F600}");
+    line.push_inline("core::fmt::write");
+    line.push_text("+8");
+
+    let runs: Vec<_> = line.runs().collect();
+    assert_eq!(
+        runs,
+        vec![
+            (0..8, Run::Text("call a\u{1F600}".to_owned())),
+            (8..9, Run::Inline("core::fmt::write")),
+            (9..11, Run::Text("+8".to_owned())),
+        ]
+    );
+    // The runs cover the row end to end, in the columns everything else counts in.
+    assert_eq!(runs.last().unwrap().0.end, line.units());
+}
+
 /// A sweep that has left the rows reaches the row on screen nearest the pointer, at the
 /// pointer's x clamped into the box -- and nothing while the pointer is over a row, which
 /// answers for itself.

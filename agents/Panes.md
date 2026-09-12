@@ -1280,9 +1280,13 @@ rather than a worker.
 
 **A hit is columns, and a match is drawn as rects and never as split spans.** `find::hits_in` matches
 each run of adjacent `Piece::Text` whole -- an assembly line is pushed one span at a time, so
-`mov rax` crosses three of them -- and treats a `Piece::Inline` as one unit, which is what it is to
-the text engine: either the pattern is somewhere in the symbol name it draws, and the one column the
-element occupies is the hit, or it is not. The wash is one more always-present sibling in
+`mov rax` crosses three of them -- and matches a `Piece::Inline` against the whole symbol name it
+draws: either the pattern is somewhere in that name, and the columns the element occupies are the
+hit, or it is not. **It counts no column of its own.** The runs and the columns they cover are
+`Line::runs` (`src/chars.rs`), over `Line::cells`, the row's one walk: the atoms a caret steps by,
+a slice and these runs all read how wide a piece draws off `Piece::characters`. `hits_in` used to
+restate that width, so an element drawn as anything but one unit would have put every hit past it
+one column off. The wash is one more always-present sibling in
 `code_row::row`, a single rect holding one child per match, under the selection; freya matches
 siblings by position, so the varying count sits inside a slot that never varies. It is **purple**
 and not the `match_bg` a filter's hits wear (`find_bg`): green already means "the same place as the
