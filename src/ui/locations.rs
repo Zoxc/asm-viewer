@@ -59,16 +59,15 @@ pub(crate) enum Scope {
     /// shape and the panel draws one of them at a time; `of` is which.
     ///
     /// `column` is where the name was asked about, as a byte offset into its line
-    /// (`src/lsp.rs`); `run` is the server run it was asked in, since an answer from a server
-    /// started since is not an answer to this question; and `id` is the question's own,
-    /// since neither is a run when two questions are asked in one -- which is the
-    /// ordinary case, a run lasting as long as the server.
+    /// (`src/lsp.rs`), and `ticket` is what the question went out under: its run, since an
+    /// answer from a server started since is not an answer to this question, and its id,
+    /// since two questions in one run is the ordinary case, a run lasting as long as the
+    /// server.
     Listed {
         of: lsp::Listed,
         name: String,
         column: u32,
-        run: u64,
-        id: u64,
+        ticket: Ticket,
     },
 }
 
@@ -92,15 +91,13 @@ impl Query {
         }
     }
 
-    /// The question `of` about `name`, asked at `column` of `at` as the question `id` of
-    /// the server run `run`.
+    /// The question `of` about `name`, asked at `column` of `at` under `ticket`.
     pub(crate) fn listed(
         of: lsp::Listed,
         at: LinePos,
         name: String,
         column: u32,
-        run: u64,
-        id: u64,
+        ticket: Ticket,
     ) -> Query {
         Query {
             at,
@@ -108,19 +105,18 @@ impl Query {
                 of,
                 name,
                 column,
-                run,
-                id,
+                ticket,
             },
         }
     }
 
-    /// The server run this was asked in and which question of it this is, and `None`
-    /// where it is not a question for a server at all. What an answer is matched against,
-    /// so that neither the question nor what it was asked under has to be named twice.
-    pub(crate) fn asked(&self) -> Option<(u64, u64)> {
+    /// The [`Ticket`] this went out under, and `None` where it is not a question for a
+    /// server at all. What an answer is matched against, so that what the question was
+    /// asked under is not named twice.
+    pub(crate) fn asked(&self) -> Option<Ticket> {
         match &self.scope {
             Scope::Line | Scope::Function { .. } => None,
-            Scope::Listed { run, id, .. } => Some((*run, *id)),
+            Scope::Listed { ticket, .. } => Some(*ticket),
         }
     }
 
@@ -209,9 +205,8 @@ impl Located {
         (found != Some(asked)).then_some(asked)
     }
 
-    /// Take `found` as the answer to the question this is waiting for, `run` and `id`
-    /// being the server run and the question it came back under. Whether anything
-    /// changed, so the caller writes only then.
+    /// Take `found` as the answer to the question this is waiting for, `ticket` being
+    /// what it came back under. Whether anything changed, so the caller writes only then.
     ///
     /// An answer under a run this did not ask in is an answer to nobody; so is one to
     /// another question of that run, which is what a reader asking a second thing before
@@ -219,15 +214,8 @@ impl Located {
     /// **Every way of not answering is an empty answer**: a server that refused the
     /// question or stopped answering it leaves a question that would otherwise be looked
     /// for for ever.
-    pub(crate) fn answer_places(
-        &mut self,
-        run: u64,
-        id: u64,
-        found: references::References,
-    ) -> bool {
-        let asked = self
-            .pending()
-            .filter(|query| query.asked() == Some((run, id)));
+    pub(crate) fn answer_places(&mut self, ticket: Ticket, found: references::References) -> bool {
+        let asked = self.pending().filter(|query| query.asked() == Some(ticket));
         let Some(of) = asked.cloned() else {
             return false;
         };
@@ -418,14 +406,14 @@ pub(crate) fn find_listed(
         Lookup::at(&at, column),
         lsp::Question::Listed(of),
     );
-    let Some((run, id)) = asked else {
+    let Some(ticket) = asked else {
         return;
     };
     // These answers are places in files: no row of one chooses a symbol for a tab.
     find_locations(
         located,
         dock,
-        Query::listed(of, at, name, column, run, id),
+        Query::listed(of, at, name, column, ticket),
         None,
     );
 }

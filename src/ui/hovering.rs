@@ -63,11 +63,11 @@ pub(crate) struct Hover {
     /// The name the box is about. It outlives the pointer leaving the name, which is what
     /// lets the pointer move into the box.
     about: Option<Pointing>,
-    /// The question in flight: the run it went out in, its id, and the place it is about.
-    /// `Linked`'s reason for holding one -- an answer to a question nobody is waiting for
-    /// is an answer to nobody -- and here it also keeps a second question about the one
-    /// name from going out.
-    asked: Option<(u64, u64, Lookup)>,
+    /// The question in flight: the [`Ticket`] it went out under, and the place it is
+    /// about. `Linked`'s reason for holding one -- an answer to a question nobody is
+    /// waiting for is an answer to nobody -- and here it also keeps a second question
+    /// about the one name from going out.
+    asked: Option<(Ticket, Lookup)>,
     /// What came back, and which place it was about.
     said: Option<(Lookup, String)>,
 }
@@ -176,7 +176,7 @@ impl Hover {
     /// none is already on its way in this run.
     fn pending(&self, run: u64) -> Option<&Lookup> {
         let at = &self.about.as_ref()?.pointed.at;
-        if matches!(&self.asked, Some((asked, _, about)) if *asked == run && about == at) {
+        if matches!(&self.asked, Some((asked, about)) if asked.run == run && about == at) {
             return None;
         }
         match &self.said {
@@ -187,8 +187,8 @@ impl Hover {
 
     /// The question has gone out. Whether anything changed, so the caller writes only
     /// then.
-    pub(crate) fn asking(&mut self, run: u64, id: u64, at: Lookup) -> bool {
-        let going = Some((run, id, at));
+    pub(crate) fn asking(&mut self, ticket: Ticket, at: Lookup) -> bool {
+        let going = Some((ticket, at));
         if self.asked == going {
             return false;
         }
@@ -198,14 +198,14 @@ impl Hover {
 
     /// Take what the server said, and `None` where it said nothing. Whether anything
     /// changed, so the caller writes only then.
-    pub(crate) fn answer(&mut self, run: u64, id: u64, said: Option<String>) -> bool {
+    pub(crate) fn answer(&mut self, ticket: Ticket, said: Option<String>) -> bool {
         // An answer to a question nobody is waiting for: one about a name the pointer has
         // since left, or one from a server that has been restarted since.
-        let Some((asked, at, about)) = self.asked.take() else {
+        let Some((asked, about)) = self.asked.take() else {
             return false;
         };
-        if (asked, at) != (run, id) {
-            self.asked = Some((asked, at, about));
+        if asked != ticket {
+            self.asked = Some((asked, about));
             return false;
         }
         // A name the server has nothing to say about is a name with no box, and not a
@@ -303,11 +303,11 @@ pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs:
             if !held.started() || !hover.peek().rested(&at) {
                 return;
             }
-            let Some((run, id)) = ask_hover(language, &jobs, at.clone()) else {
+            let Some(ticket) = ask_hover(language, &jobs, at.clone()) else {
                 return;
             };
-            // Written after the send, which is what mints the id.
-            write_if(hover, |waiting| waiting.asking(run, id, at));
+            // Written after the send, which is what mints the ticket.
+            write_if(hover, |waiting| waiting.asking(ticket, at));
         });
     });
 }

@@ -11,7 +11,7 @@
 //! One question is remembered, so a reader who clicks twice gets the second answer: the
 //! worker already drops all but the last still queued (`worth_doing`), and an answer
 //! arriving for a question this no longer holds is an answer to nobody. Which is why the
-//! question is held by its **id** and not by the server run it was asked in: a run lasts
+//! question is held by its whole [`Ticket`] and not by the server run alone: a run lasts
 //! as long as the server, so two clicks inside one are the ordinary case, and the first
 //! click's answer would otherwise be taken for the second's.
 
@@ -66,12 +66,11 @@ impl Arrival {
     }
 }
 
-/// A question put and not yet answered: which server run it was asked in and which
-/// question of that run it is, where it was asked about, and where its answer is to open.
+/// A question put and not yet answered: the [`Ticket`] it went out under, where it was
+/// asked about, and where its answer is to open.
 #[derive(Clone, PartialEq)]
 struct Asked {
-    run: u64,
-    id: u64,
+    ticket: Ticket,
     at: Lookup,
     /// Which question was put, which only matters for what an answer naming the line it
     /// was asked on means. See [`Follow::answer`].
@@ -93,11 +92,8 @@ impl Follow {
     /// question and opens nothing: the click was a question and never a promise. So does
     /// a **declaration** placed on the line the question was asked on, which is somewhere
     /// the reader already is.
-    pub(crate) fn answer(&mut self, run: u64, id: u64, places: &[Arrival]) -> bool {
-        let waiting = self
-            .asked
-            .as_ref()
-            .filter(|asked| asked.run == run && asked.id == id);
+    pub(crate) fn answer(&mut self, ticket: Ticket, places: &[Arrival]) -> bool {
+        let waiting = self.asked.as_ref().filter(|asked| asked.ticket == ticket);
         let Some(asked) = waiting else {
             return false;
         };
@@ -126,7 +122,7 @@ impl Follow {
     }
 
     /// The question has gone out. Whether anything changed, so the caller writes only
-    /// then -- always, [`ask_where`] minting an id per question. An answer that has
+    /// then -- always, [`ask_where`] minting a ticket per question. An answer that has
     /// landed and not yet been taken stays: it is the last press's, and this question is
     /// not answered yet.
     fn asking(&mut self, asked: Asked) -> bool {
@@ -135,11 +131,11 @@ impl Follow {
     }
 
     /// Give up on the question this is waiting for: the server refused it, or is gone.
-    pub(crate) fn give_up(&mut self, run: u64, id: u64) -> bool {
+    pub(crate) fn give_up(&mut self, ticket: Ticket) -> bool {
         let waiting = self
             .asked
             .as_ref()
-            .is_some_and(|asked| asked.run == run && asked.id == id);
+            .is_some_and(|asked| asked.ticket == ticket);
         if waiting {
             self.asked = None;
         }
@@ -231,13 +227,12 @@ pub(crate) fn follow_name(
         at.clone(),
         lsp::Question::Followed(want),
     );
-    let Some((run, id)) = asked else {
+    let Some(ticket) = asked else {
         return;
     };
     let tab = open.active_id();
     let asked = Asked {
-        run,
-        id,
+        ticket,
         at,
         want,
         reach,

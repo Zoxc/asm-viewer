@@ -199,7 +199,7 @@ and the locate effect steps over it; what makes them one panel is that they are 
 asking where else to look, and two panels would show one thing at a time. The answer is a place in a
 file and not a symbol, so it is held as its own arm of `Found` (`src/references.rs`, grouped under
 the file each is in) and takes nothing from `retain_open`: a reference holds no object for a closed
-binary to take. It carries the server run it was asked in, since the run is what an answer is about here, and
+binary to take. It carries the `Ticket` it was asked under, since that is what an answer is matched by, and
 **every way of not answering is an empty answer** -- a refusal or a server that stopped answering
 would otherwise leave the panel looking for ever.
 

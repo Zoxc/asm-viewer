@@ -24,8 +24,8 @@
 //! nothing can ever find again.
 //!
 //! Neither says which **question** an answer is to. A run lasts as long as the server, so
-//! two questions inside one is the ordinary case; the id [`ask_where`] mints is what an
-//! asker matches its own answer by.
+//! two questions inside one is the ordinary case; the run and the id [`ask_where`] mints
+//! travel together as a [`Ticket`], which is what an asker matches its own answer by.
 //!
 //! The handle arrives the moment the process does and not when the handshake is over: a
 //! program that reads its input and answers nothing would otherwise hold the worker in
@@ -480,6 +480,20 @@ impl Lookup {
     }
 }
 
+/// One question put to one server: the run it was asked in, and its own number.
+///
+/// The two are always carried together and neither answers on its own. The run says which
+/// server, and a run lasts as long as that server, so two questions inside one is the
+/// ordinary case; the id, minted once per question ([`LspJobs::ticket`]), says which. A
+/// job carries one, its answer carries it back, and whoever is waiting holds the one they
+/// are waiting for -- so "is this mine" is `== ticket` and not a pair of fields compared
+/// by hand.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Ticket {
+    pub(crate) run: u64,
+    pub(crate) id: u64,
+}
+
 /// What the worker is asked to do.
 pub(crate) enum LspJob {
     /// Start a server over `directory` and shake hands with it. The channel is what the
@@ -502,11 +516,10 @@ pub(crate) enum LspJob {
     /// because what it answers is what a start has to carry.
     ReadSettings { directory: PathBuf },
     /// What is at a place: which of the four questions is in `want` (`lsp::Question`).
-    /// `id` is the question's own, minted by [`ask_where`] and copied into the answer: a
-    /// run says which server was asked and nothing about which question this is.
+    /// The [`Ticket`] is minted by [`ask_where`] and copied into the answer, which is what
+    /// lets the asker tell its own answer from the one before it.
     Ask {
-        run: u64,
-        id: u64,
+        ticket: Ticket,
         at: Lookup,
         want: lsp::Question,
     },
@@ -518,7 +531,7 @@ pub(crate) enum LspJob {
     /// four, and **not** a fifth `lsp::Question`: those are bucketed by consumer, of which
     /// this is a third, and a pointer crossing a name must neither take back a definition
     /// the reader clicked for nor be taken back by one.
-    Hover { run: u64, id: u64, at: Lookup },
+    Hover { ticket: Ticket, at: Lookup },
     /// The app is showing this file, or has stopped showing it. Not a question: the
     /// server answers neither, and what they change is what every other question about
     /// the file is answered out of (`lsp::Talk::opened`).
@@ -550,8 +563,8 @@ pub(crate) enum LspAnswer {
         server: Result<process::Handle, lsp::Failure>,
     },
     /// What one question about a place came back with. Which question it was is the
-    /// [`Reply`]'s to say; `id` is the [`LspJob::Ask`]'s, carried through untouched.
-    Answered { run: u64, id: u64, reply: Reply },
+    /// [`Reply`]'s to say; the ticket is the [`LspJob::Ask`]'s, carried through untouched.
+    Answered { ticket: Ticket, reply: Reply },
     /// What every name in one file is, and which file. Its own answer and not a `Reply`,
     /// since it is the one question about a file rather than about a place in one.
     Linked {
@@ -566,8 +579,7 @@ pub(crate) enum LspAnswer {
     /// What the server says the name at one place is. Its own answer and not a `Reply`,
     /// for the reason the links are: it is contents and a range where the four are places.
     Hovered {
-        run: u64,
-        id: u64,
+        ticket: Ticket,
         said: Result<Option<lsp::Hovered>, lsp::Failure>,
     },
     /// What the project's own settings file said. Named by the directory it was read in
@@ -680,15 +692,14 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 };
                 Some(LspAnswer::Started { run, server })
             }
-            LspJob::Ask { run, id, at, want } => {
+            LspJob::Ask { ticket, at, want } => {
                 // One reader for the whole answer: the columns come back off the wire
                 // through it and the rows it will be drawn as are counted through it, so
                 // a file an answer names is read once and not once per conversion.
                 let mut lines = lsp::Lines::reading(source::read_text);
                 let places = asked(&mut talking, |talk| talk.places(want, &at, &mut lines))?;
                 Some(LspAnswer::Answered {
-                    run,
-                    id,
+                    ticket,
                     reply: replied(want, places, &mut lines),
                 })
             }
@@ -702,9 +713,9 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 })?;
                 Some(LspAnswer::Linked { run, file, links })
             }
-            LspJob::Hover { run, id, at } => {
+            LspJob::Hover { ticket, at } => {
                 let said = asked(&mut talking, |talk| talk.hover(&at))?;
-                Some(LspAnswer::Hovered { run, id, said })
+                Some(LspAnswer::Hovered { ticket, said })
             }
             LspJob::Opened {
                 run,
@@ -826,10 +837,14 @@ pub(crate) struct LspJobs {
 }
 
 impl LspJobs {
-    /// The id the next question goes out under. Never handed out twice, which is what
-    /// lets an answer name the question it is to and not merely the server it came from.
-    fn next_question(&self) -> u64 {
-        self.asked.fetch_add(1, Ordering::Relaxed)
+    /// The [`Ticket`] the next question of run `run` goes out under. The id is never
+    /// handed out twice, which is what lets an answer name the question it is to and not
+    /// merely the server it came from.
+    fn ticket(&self, run: u64) -> Ticket {
+        Ticket {
+            run,
+            id: self.asked.fetch_add(1, Ordering::Relaxed),
+        }
     }
 
     pub(crate) fn send(&self, job: LspJob) {
@@ -852,6 +867,9 @@ pub(crate) struct Talking(pub(crate) State<Language>);
 
 /// Whether an answer naming `run` is about the server the app still has. One whose run
 /// has moved on answers a question nobody has any more, and is dropped.
+///
+/// Only for the answers that carry no [`Ticket`]: one that does is matched against the
+/// ticket whoever is waiting holds, and that carries the run.
 ///
 /// A function so the read ends with it: every caller writes the state this was read from,
 /// and a guard held across that write panics.
@@ -964,10 +982,11 @@ pub(crate) fn use_language_with(
                 // file.
                 write_if(linked, |waiting| waiting.forget_file(&file));
             }
-            LspAnswer::Hovered { run, id, said } => {
-                if !is_run(language, run) {
-                    return;
-                }
+            LspAnswer::Hovered { ticket, said } => {
+                // No run check of its own: the ticket carries the run, so an answer to a
+                // question nobody holds lands on nobody -- and so does a failure named
+                // for a server that has moved on (`Language::failed`).
+                //
                 // A refusal is already no answer by the time it is here
                 // (`lsp::Talk::hover`), so what is left is a name the server had nothing
                 // to say about -- no box, and no question to put again -- or a
@@ -975,7 +994,7 @@ pub(crate) fn use_language_with(
                 let why = match said {
                     Ok(said) => {
                         write_if(hover, |waiting| {
-                            waiting.answer(run, id, said.map(|said| said.text))
+                            waiting.answer(ticket, said.map(|said| said.text))
                         });
                         return;
                     }
@@ -983,14 +1002,15 @@ pub(crate) fn use_language_with(
                 };
                 // The question is dropped either way: a box that stayed asked would keep
                 // the name from ever being asked about again.
-                write_if(hover, |waiting| waiting.answer(run, id, None));
-                write_if(language, |held| held.failed(run, why.to_string()));
+                write_if(hover, |waiting| waiting.answer(ticket, None));
+                write_if(language, |held| held.failed(ticket.run, why.to_string()));
             }
-            LspAnswer::Answered { run, id, reply } => {
-                // An answer from a server that has been stopped is an answer to nobody.
-                if !is_run(language, run) {
-                    return;
-                }
+            LspAnswer::Answered { ticket, reply } => {
+                // An answer from a server that has been stopped is an answer to nobody,
+                // and the ticket says so: it carries the run, and no question of a run
+                // that has moved on is still held. Nor is a failure named for that server
+                // (`Language::failed`), which is why there is no run check here.
+                //
                 // Whoever asked takes the answer, and gives up on it where there is none.
                 // The reply's own shape says which of them, so neither can be handed the
                 // other's. An answer naming nowhere is an answer: the click was a
@@ -999,8 +1019,8 @@ pub(crate) fn use_language_with(
                     Reply::Followed(reply) => {
                         let (places, why) = split(reply);
                         write_if(follow, |waiting| match &places {
-                            Some(places) => waiting.answer(run, id, places),
-                            None => waiting.give_up(run, id),
+                            Some(places) => waiting.answer(ticket, places),
+                            None => waiting.give_up(ticket),
                         });
                         why
                     }
@@ -1010,7 +1030,7 @@ pub(crate) fn use_language_with(
                         // saying so: a question that stayed pending would say it was
                         // still looking for ever.
                         write_if(located, |waiting| {
-                            waiting.answer_places(run, id, found.unwrap_or_default())
+                            waiting.answer_places(ticket, found.unwrap_or_default())
                         });
                         why
                     }
@@ -1027,7 +1047,7 @@ pub(crate) fn use_language_with(
                 }
                 // What is left is a server that stopped answering, which is the one thing
                 // the control has to show.
-                write_if(language, |held| held.failed(run, why.to_string()));
+                write_if(language, |held| held.failed(ticket.run, why.to_string()));
             }
         },
     );
@@ -1234,10 +1254,9 @@ fn current(language: State<Language>) -> Option<u64> {
     held.started().then_some(held.run)
 }
 
-/// Ask `want` about the place `at`. The answer is the worker's, and arrives under the run
-/// it was asked in and the id minted here, which is what this hands back: a run tells one
-/// server from another, and the id tells this question from the next one the same caller
-/// puts.
+/// Ask `want` about the place `at`. The answer is the worker's, and arrives under the
+/// [`Ticket`] minted here, which is what this hands back: its run tells one server from
+/// another, and its id tells this question from the next one the same caller puts.
 ///
 /// `None` with no server: there is nobody to ask, and a question is not what starts one --
 /// that is the control, and only the reader presses it. One that is still starting is
@@ -1248,25 +1267,19 @@ pub(crate) fn ask_where(
     jobs: &LspJobs,
     at: Lookup,
     want: lsp::Question,
-) -> Option<(u64, u64)> {
-    let run = current(language)?;
-    let id = jobs.next_question();
-    jobs.send(LspJob::Ask { run, id, at, want });
-    Some((run, id))
+) -> Option<Ticket> {
+    let ticket = jobs.ticket(current(language)?);
+    jobs.send(LspJob::Ask { ticket, at, want });
+    Some(ticket)
 }
 
 /// Ask what the name at `at` is. [`ask_where`]'s rules, in every respect: the answer
-/// arrives under the run it was asked in and the id minted here, there is nobody to ask
-/// with no server, and a question put while one is starting waits for it.
-pub(crate) fn ask_hover(
-    language: State<Language>,
-    jobs: &LspJobs,
-    at: Lookup,
-) -> Option<(u64, u64)> {
-    let run = current(language)?;
-    let id = jobs.next_question();
-    jobs.send(LspJob::Hover { run, id, at });
-    Some((run, id))
+/// arrives under the ticket minted here, there is nobody to ask with no server, and a
+/// question put while one is starting waits for it.
+pub(crate) fn ask_hover(language: State<Language>, jobs: &LspJobs, at: Lookup) -> Option<Ticket> {
+    let ticket = jobs.ticket(current(language)?);
+    jobs.send(LspJob::Hover { ticket, at });
+    Some(ticket)
 }
 
 /// The control in the top bar: one press starts the language server, the next stops it.

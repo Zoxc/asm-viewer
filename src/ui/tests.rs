@@ -5457,7 +5457,13 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
 
 /// A uses answer as the panel takes one: the question, and the places the server named.
 fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)]) -> Located {
-    let query = Query::listed(lsp::Listed::References, at, name.to_owned(), 0, 7, 1);
+    let query = Query::listed(
+        lsp::Listed::References,
+        at,
+        name.to_owned(),
+        0,
+        ticket(7, 1),
+    );
     let places: Vec<lsp::Place> = places
         .iter()
         .map(|(file, line, columns)| lsp::Place {
@@ -5476,7 +5482,7 @@ fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)])
         &mut lsp::Lines::reading(|path| std::fs::read_to_string(path).ok()),
     );
     assert!(
-        located.answer_places(7, 1, found),
+        located.answer_places(ticket(7, 1), found),
         "the answer was not taken"
     );
     located
@@ -5543,8 +5549,7 @@ fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
         at.clone(),
         "helper".to_owned(),
         12,
-        7,
-        1,
+        ticket(7, 1),
     ));
     settle(&mut test);
     assert!(
@@ -5655,13 +5660,12 @@ fn a_references_question_that_answers_nothing_says_there_are_none() {
             at,
             "helper".to_owned(),
             12,
-            7,
-            1,
+            ticket(7, 1),
         )),
         ..Located::default()
     };
     assert!(
-        !asking.answer_places(8, 1, references::References::default()),
+        !asking.answer_places(ticket(8, 1), references::References::default()),
         "an answer from another server"
     );
     assert!(asking.pending().is_some());
@@ -5698,8 +5702,7 @@ fn a_locations_answer_lands_on_the_question_it_was_asked_of() {
             at(2),
             "foo".to_owned(),
             4,
-            7,
-            1,
+            ticket(7, 1),
         )),
         ..Located::default()
     };
@@ -5708,13 +5711,12 @@ fn a_locations_answer_lands_on_the_question_it_was_asked_of() {
         at(9),
         "bar".to_owned(),
         8,
-        7,
-        2,
+        ticket(7, 2),
     );
     located.asked = Some(second.clone());
 
     assert!(
-        !located.answer_places(7, 1, places("/p/src/other.rs", 4)),
+        !located.answer_places(ticket(7, 1), places("/p/src/other.rs", 4)),
         "the first question's answer was taken for the second's"
     );
     assert!(
@@ -5722,7 +5724,7 @@ fn a_locations_answer_lands_on_the_question_it_was_asked_of() {
         "the panel stopped looking for the question it is waiting for"
     );
     assert!(
-        located.answer_places(7, 2, places("/p/src/bar.rs", 12)),
+        located.answer_places(ticket(7, 2), places("/p/src/bar.rs", 12)),
         "the second question's own answer was not taken"
     );
     assert!(
@@ -6983,6 +6985,12 @@ fn next_ask(
     None
 }
 
+/// A question's [`Ticket`], written out: the server run it went out in, and its own
+/// number.
+fn ticket(run: u64, id: u64) -> Ticket {
+    Ticket { run, id }
+}
+
 /// The reader an answer is counted through ([`lsp::Lines`]), for a test whose answer
 /// names files that hold nothing: the columns then stand as the server gave them.
 fn unread() -> lsp::Lines {
@@ -7010,9 +7018,8 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
     };
     let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
-            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
-                run,
-                id,
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
                 reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
@@ -7072,6 +7079,86 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
     );
 }
 
+/// **The ticket alone says whose answer this is.** An answer stamped with the run before
+/// the one the question went out in opens nothing, even though its id is the id of the
+/// question in flight: what the asker holds is the whole [`Ticket`], and a run that has
+/// moved on is another server's.
+///
+/// The root's `Answered` arm makes no run check of its own -- the ticket carries the run,
+/// and no question of a run that has moved on is still held -- so `Follow`'s own is the
+/// only thing between a restarted server's leftovers and a tab that jumps. The second
+/// half is the control: another call on the same line, answered under the ticket it went
+/// out with, so a test that has stopped reaching the links cannot pass by doing nothing.
+#[test]
+fn a_definition_answer_from_another_run_opens_nothing() {
+    let (file, directory) = two_calling_file("stale-run");
+    let defined = "fn f(n: u32) -> u32 {\n    n\n}\n";
+    let (one, two) = (
+        directory.file("one.rs", defined),
+        directory.file("two.rs", defined),
+    );
+    // The first call's question is answered under the run before the one it went out in;
+    // the second call's under its own.
+    let (mut test, roots, asks) = mount_linking_calling(
+        move |job: LspJob| match job {
+            LspJob::Ask { ticket, at, want } => {
+                let first = at.column == 12;
+                let place = lsp::Place {
+                    file: if first { one.clone() } else { two.clone() },
+                    line: 1,
+                    columns: 3..4,
+                };
+                let run = match first {
+                    true => ticket.run - 1,
+                    false => ticket.run,
+                };
+                Some(LspAnswer::Answered {
+                    ticket: Ticket { run, ..ticket },
+                    reply: replied(want, Ok(vec![place]), &mut unread()),
+                })
+            }
+            _ => None,
+        },
+        file.clone(),
+        two_calling_links(),
+    );
+    let states = roots.states;
+    let mut language = roots.language;
+    let calling = Document::Source(file.clone());
+    open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
+    settle(&mut test);
+    // A server started and stopped a few times, so that there is a run before this one
+    // for an answer to be stamped with.
+    language.write().run = 4;
+    serving(&mut test, &mut language);
+
+    // The first click, and the answer to it that names another server's run.
+    let first = word_point(&test, "one");
+    press_at(&mut test, first);
+    let (asked, _) = next_ask(&mut test, &asks).expect("the first question went out");
+    assert_eq!(asked.column, 12, "the question is about the wrong name");
+    // Long enough for the answer to have landed if it were going to: the worker answers
+    // the moment it is asked.
+    for _ in 0..40 {
+        test.sync_and_update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        states.open.active() == Some(calling.clone()),
+        "an answer from another run opened a tab"
+    );
+
+    // And the control: the other call, answered under its own ticket.
+    let second = word_point(&test, "two");
+    press_at(&mut test, second);
+    pump(&mut test, || states.open.active() != Some(calling.clone()));
+    let opened = |path: &Path| Document::Source(Arc::from(path.to_str().expect("a utf-8 path")));
+    assert!(
+        states.open.active() == Some(opened(&directory.join("two.rs"))),
+        "the second click opened nothing either"
+    );
+}
+
 /// The caret lands on the **name** and not at the start of its line: the column the
 /// server named is where the answer's run is, and the run is empty, so nothing is
 /// selected.
@@ -7088,9 +7175,8 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
     };
     let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
-            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
-                run,
-                id,
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
                 reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
@@ -7160,9 +7246,8 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
     };
     let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
-            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
-                run,
-                id,
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
                 // The worker's own read, as the app hands it in.
                 reply: replied(
                     want,
@@ -7226,9 +7311,8 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
     };
     let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
-            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
-                run,
-                id,
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
                 reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
@@ -7305,7 +7389,7 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
     let (release, held) = async_channel::bounded::<()>(1);
     let (mut test, roots, asks) = mount_linking_calling(
         move |job: LspJob| match job {
-            LspJob::Ask { run, id, at, want } => {
+            LspJob::Ask { ticket, at, want } => {
                 let first = at.column == 12;
                 if first {
                     let _ = held.recv_blocking();
@@ -7316,8 +7400,7 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
                     columns: 3..4,
                 };
                 Some(LspAnswer::Answered {
-                    run,
-                    id,
+                    ticket,
                     reply: replied(want, Ok(vec![place]), &mut unread()),
                 })
             }
@@ -7387,11 +7470,10 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
     let (release, held) = async_channel::bounded::<()>(1);
     let (mut test, roots, asks) = mount_linking(
         move |job: LspJob| match job {
-            LspJob::Ask { run, id, want, .. } => {
+            LspJob::Ask { ticket, want, .. } => {
                 let _ = held.recv_blocking();
                 Some(LspAnswer::Answered {
-                    run,
-                    id,
+                    ticket,
                     reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
                 })
             }
@@ -7471,9 +7553,8 @@ fn hovering_over(
     let (file, directory) = calling_file("hover");
     let (mut test, roots, asks) = mount_linking(
         move |job: LspJob| match job {
-            LspJob::Hover { run, id, .. } => Some(LspAnswer::Hovered {
-                run,
-                id,
+            LspJob::Hover { ticket, .. } => Some(LspAnswer::Hovered {
+                ticket,
                 said: Ok(Some(lsp::Hovered {
                     text: said.clone(),
                     line: 2,
@@ -7620,8 +7701,8 @@ fn a_move_inside_the_name_puts_the_wait_back_to_the_beginning() {
 
     // And an answer stops the pushing: the box is up, and a pointer moving about inside
     // the name it is about does not write it afresh.
-    assert!(hover.asking(1, 1, hovered_name(3).at));
-    assert!(hover.answer(1, 1, Some("what it is".to_owned())));
+    assert!(hover.asking(ticket(1, 1), hovered_name(3).at));
+    assert!(hover.answer(ticket(1, 1), Some("what it is".to_owned())));
     let answered = hover.until();
     hover.enter(hovered_name(3));
     assert_eq!(
@@ -7670,11 +7751,11 @@ fn hover_says_whether_a_write_is_owed() {
     assert!(!hover.left_name(), "the pointer left the name twice");
 
     assert!(
-        hover.asking(1, 1, hovered_name(3).at),
+        hover.asking(ticket(1, 1), hovered_name(3).at),
         "the question was not written down"
     );
     assert!(
-        !hover.asking(1, 1, hovered_name(3).at),
+        !hover.asking(ticket(1, 1), hovered_name(3).at),
         "the same question was written down twice"
     );
 
@@ -7853,9 +7934,8 @@ fn a_name_the_server_says_nothing_about_draws_no_box() {
     let (file, _directory) = calling_file("hover-nothing");
     let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
-            LspJob::Hover { run, id, .. } => Some(LspAnswer::Hovered {
-                run,
-                id,
+            LspJob::Hover { ticket, .. } => Some(LspAnswer::Hovered {
+                ticket,
                 said: Ok(None),
             }),
             _ => None,
@@ -8198,9 +8278,8 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
     };
     let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
-            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
-                run,
-                id,
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
                 reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
@@ -8277,9 +8356,8 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
     };
     let (mut test, roots, _asks) = mount_linking(
         move |job: LspJob| match job {
-            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
-                run,
-                id,
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
                 reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
             }),
             _ => None,
@@ -8844,9 +8922,8 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
     };
     let (mut test, roots, asks) = mount_linking_calling(
         move |job: LspJob| match job {
-            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
-                run,
-                id,
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
                 reply: replied(want, Ok(vec![itself.clone()]), &mut unread()),
             }),
             _ => None,
@@ -9372,9 +9449,8 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
     let (file, _directory) = calling_file("refused");
     let (mut test, roots, _asks) = mount_linking(
         |job: LspJob| match job {
-            LspJob::Ask { run, id, want, .. } => Some(LspAnswer::Answered {
-                run,
-                id,
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
                 reply: replied(
                     want,
                     Err(lsp::Failure::Refused {
@@ -27434,11 +27510,11 @@ fn a_hover_question_is_asked_under_the_running_servers_run() {
     let first = ask_hover(language, &jobs, at.clone()).expect("a server to ask");
     let second = ask_hover(language, &jobs, at.clone()).expect("a server to ask");
     assert_eq!(
-        (first.0, second.0),
+        (first.run, second.run),
         (run, run),
         "the question went out under another run than the server's"
     );
-    assert_ne!(first.1, second.1, "two questions went out under one id");
+    assert_ne!(first.id, second.id, "two questions went out under one id");
     settle(&mut test);
     assert_eq!(next_job(&asks), Some(AskedOfServer::Hover(at)));
 }
@@ -27836,15 +27912,13 @@ fn the_queue_keeps_the_last_question_and_every_press() {
 
     let drained = worth_doing(
         LspJob::Ask {
-            run: 1,
-            id: 1,
+            ticket: ticket(1, 1),
             at: at(1),
             want: lsp::Question::Followed(lsp::Followed::Definition),
         },
         vec![
             LspJob::Ask {
-                run: 1,
-                id: 2,
+                ticket: ticket(1, 2),
                 at: at(2),
                 want: lsp::Question::Followed(lsp::Followed::Definition),
             },
@@ -27864,8 +27938,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
                 directory: PathBuf::from("/p"),
             },
             LspJob::Ask {
-                run: 2,
-                id: 3,
+                ticket: ticket(2, 3),
                 at: at(3),
                 want: lsp::Question::Followed(lsp::Followed::Definition),
             },
@@ -27879,8 +27952,7 @@ fn the_queue_keeps_the_last_question_and_every_press() {
     // One of a kind is simply itself.
     let alone = worth_doing(
         LspJob::Ask {
-            run: 1,
-            id: 9,
+            ticket: ticket(1, 9),
             at: at(9),
             want: lsp::Question::Followed(lsp::Followed::Definition),
         },
@@ -27910,21 +27982,18 @@ fn a_question_about_references_does_not_cancel_one_about_a_definition() {
 
     let drained = worth_doing(
         LspJob::Ask {
-            run: 1,
-            id: 1,
+            ticket: ticket(1, 1),
             at: at(1),
             want: lsp::Question::Followed(lsp::Followed::Definition),
         },
         vec![
             LspJob::Ask {
-                run: 1,
-                id: 2,
+                ticket: ticket(1, 2),
                 at: at(2),
                 want: lsp::Question::Listed(lsp::Listed::References),
             },
             LspJob::Ask {
-                run: 1,
-                id: 3,
+                ticket: ticket(1, 3),
                 at: at(3),
                 want: lsp::Question::Listed(lsp::Listed::References),
             },

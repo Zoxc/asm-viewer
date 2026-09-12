@@ -493,18 +493,22 @@ Two things say which server an answer is about, and they are not the same thing:
   it was handed.
 
 Which **question** an answer is to is a third thing, and the run cannot stand in for it: a
-run lasts as long as the server, so two questions inside one is the ordinary case.
-`ask_where` mints an id per question, the `Ask` job carries it and the answer copies it
-back, and `Follow` and `Located` each keep the id of the one they are waiting for.
-`ask_hover` is the same, for the same reason and with a `Hover` of its own to hold it.
-`worth_doing` drops the duplicates still queued; the id is what makes an answer to a
-question the worker had already taken land on nobody.
+run lasts as long as the server, so two questions inside one is the ordinary case. The two
+travel together as a `Ticket` -- the run, and an id minted per question -- which the `Ask`
+and `Hover` jobs carry and their answers copy back. `Follow`, `Located` and `Hover` each
+keep the ticket of the question they are waiting for, so "is this mine" is `== ticket` in
+all three and neither half can be compared without the other. `worth_doing` drops the
+duplicates still queued; the ticket is what makes an answer to a question the worker had
+already taken, or to a server that has been restarted since, land on nobody.
+
+Which is also why those two answers are **not** run-checked at the root: the check would
+be the ticket's run compared twice. The answers that carry no ticket still are, through
+`is_run` -- a file's names, and a file the server has just been told about.
 
 Both asks take the run from `current`: one `peek` says whether there is a server and
 which, and a `u64` comes back. A function and not a line in each, because the state holds
 a process handle and the project's settings -- cloning it to read a `bool` and a `u64`
 copied all of that on the UI thread, and a hover is put again at every pointer stop.
-`is_run` is that read for the answers, which are dropped where the run has moved on.
 
 What the server says unasked comes back on a bounded channel the `Start` job carries, under
 the run it was started in, and the only thing said so far is whether it is working. Bounded
@@ -581,7 +585,7 @@ answer lands; so the asking tab is kept with the question and raised to take it,
 answer to a tab that has closed opens nothing -- nobody is waiting for it. Resolved against
 the tab on screen instead, as it was, the definition replaced what an unrelated tab showed.
 
-One question is held, by the id it went out under. A reader clicking twice wants the
+One question is held, by the ticket it went out under. A reader clicking twice wants the
 second answer: `worth_doing` drops all but the last still queued, and the id drops the
 answer to one the worker had already taken. Matched by the run alone -- as it was -- the
 first click's places opened under the second click's reach, and the second click's answer
