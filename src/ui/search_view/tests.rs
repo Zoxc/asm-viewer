@@ -6,7 +6,7 @@ use crate::search::Hit;
 /// One hit, and the file it was found in, as a batch carries them.
 fn hit(line: u32) -> SearchEvent {
     SearchEvent::Hit(
-        PathBuf::from("src/main.rs"),
+        Arc::from(Path::new("src/main.rs")),
         Hit {
             line,
             text: "fn main() {}".to_owned(),

@@ -24718,8 +24718,8 @@ fn ask_for(states: &ProjectStates, dock: State<DockArea>, directory: &Path, patt
 /// folds its own away. Fails on rows built from anything but the streamed state.
 #[test]
 fn hits_arrive_under_their_file_and_fold() {
-    let first = PathBuf::from("/project/one.rs");
-    let second = PathBuf::from("/project/two.rs");
+    let first: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
+    let second: Arc<Path> = Arc::from(Path::new("/project/two.rs"));
     let (one, two) = (first.clone(), second.clone());
     let (mut test, states, directory, dock) = search_over(line!(), move |_query, emit| {
         let _ = emit(SearchEvent::Hit(one.clone(), hit_at(3, "first hit")));
@@ -24759,7 +24759,7 @@ fn hits_arrive_under_their_file_and_fold() {
 fn a_hit_from_a_replaced_search_is_dropped() {
     let (gate, held) = std::sync::mpsc::channel::<()>();
     let held = Arc::new(std::sync::Mutex::new(held));
-    let file = PathBuf::from("/project/one.rs");
+    let file: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
     let (mut test, states, directory, dock) = search_over(line!(), move |query, emit| {
         if query.filter.pattern == "slow" {
             let _ = emit(SearchEvent::Hit(file.clone(), hit_at(1, "early answer")));
@@ -24816,7 +24816,7 @@ fn a_walk_of_the_project_left_cannot_answer_into_the_next() {
     // search to end.
     let (going, waiting) = std::sync::mpsc::channel::<()>();
     let waiting = Arc::new(std::sync::Mutex::new(waiting));
-    let file = PathBuf::from("/project/one.rs");
+    let file: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
     let (mut test, states, directory, dock) = search_over(line!(), move |query, emit| {
         if query.filter.pattern == "left" {
             let _ = emit(SearchEvent::Hit(file.clone(), hit_at(1, "the old project")));
@@ -24882,13 +24882,16 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
         },
     });
     searched.write().hits.push(
-        &path,
+        &Arc::from(path.as_path()),
         Hit {
             columns: Some(4..5),
             ..hit_at(2, "int y;")
         },
     );
-    searched.write().hits.push(&missing, hit_at(4, "gone"));
+    searched
+        .write()
+        .hits
+        .push(&Arc::from(missing.as_path()), hit_at(4, "gone"));
     settle(&mut test);
 
     let at = centre_of(&test, "gone");
@@ -24941,7 +24944,10 @@ fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
             ..Filter::default()
         },
     });
-    searched.write().hits.push(&path, hit_at(2, "int y;"));
+    searched
+        .write()
+        .hits
+        .push(&Arc::from(path.as_path()), hit_at(2, "int y;"));
     settle(&mut test);
 
     let at = centre_of(&test, "int y;");
@@ -24983,7 +24989,10 @@ fn pressing_a_hit_asks_the_filesystem_nothing() {
             ..Filter::default()
         },
     });
-    searched.write().hits.push(&path, hit_at(2, "int y;"));
+    searched
+        .write()
+        .hits
+        .push(&Arc::from(path.as_path()), hit_at(2, "int y;"));
     settle(&mut test);
 
     let at = centre_of(&test, "int y;");
@@ -25008,7 +25017,7 @@ fn pressing_a_hit_asks_the_filesystem_nothing() {
 /// reached by pressing it, as a reader reaches it.
 #[test]
 fn enter_in_the_box_asks_for_what_is_in_it() {
-    let file = PathBuf::from("/project/one.rs");
+    let file: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
     let (mut test, states, directory, _dock) = search_over(line!(), move |query, emit| {
         let _ = emit(SearchEvent::Hit(
             file.clone(),

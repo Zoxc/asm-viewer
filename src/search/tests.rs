@@ -25,7 +25,7 @@ fn write(path: &Path, text: &str) {
 }
 
 /// A plain search for `pattern` under `root`: every hit, with the file it was found in.
-fn found(root: &Path, pattern: &str) -> Vec<(PathBuf, Hit)> {
+fn found(root: &Path, pattern: &str) -> Vec<(Arc<Path>, Hit)> {
     hits(root, filter(pattern))
 }
 
@@ -36,7 +36,7 @@ fn filter(pattern: &str) -> Filter {
     }
 }
 
-fn hits(root: &Path, filter: Filter) -> Vec<(PathBuf, Hit)> {
+fn hits(root: &Path, filter: Filter) -> Vec<(Arc<Path>, Hit)> {
     let query = SearchQuery {
         root: root.to_path_buf(),
         filter,
@@ -56,7 +56,7 @@ fn hits(root: &Path, filter: Filter) -> Vec<(PathBuf, Hit)> {
 
 /// Each hit as `path:line`, the path relative to the root, which is what the order
 /// assertions are about.
-fn places(root: &Path, hits: &[(PathBuf, Hit)]) -> Vec<String> {
+fn places(root: &Path, hits: &[(Arc<Path>, Hit)]) -> Vec<String> {
     hits.iter()
         .map(|(path, hit)| {
             let path = path.strip_prefix(root).unwrap_or(path);
@@ -86,6 +86,24 @@ fn a_directorys_files_come_before_the_directories_under_it() {
         "{:?}",
         places(&root, &hits)
     );
+}
+
+/// A file's hits all carry the one `Arc` the search made for it, so a capped search
+/// allocates a path per file and not per hit. Fails on a `PathBuf` built for each.
+#[test]
+fn every_hit_of_a_file_carries_the_one_path() {
+    let root = temp_dir("one-path");
+    write(&root.join("a.rs"), "needle\nneedle\nneedle\n");
+    write(&root.join("b.rs"), "needle\n");
+
+    let hits = found(&root, "needle");
+
+    assert_eq!(hits.len(), 4);
+    let first = &hits[0].0;
+    for (path, _) in &hits[..3] {
+        assert!(Arc::ptr_eq(path, first), "a.rs allocated a path per hit");
+    }
+    assert!(!Arc::ptr_eq(&hits[3].0, first), "b.rs is another file");
 }
 
 /// Every line of a file that matches is its own hit, numbered from one.

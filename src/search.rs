@@ -23,6 +23,7 @@ use std::{
     io,
     ops::{ControlFlow, Range},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// The most hits a search reports. A pattern like `.` matches every line of every file, so
@@ -72,8 +73,11 @@ pub struct Hit {
 
 /// What a running search says.
 pub enum SearchEvent {
-    /// One matched line, and the file it was found in.
-    Hit(PathBuf, Hit),
+    /// One matched line, and the file it was found in. The path is one `Arc` per file,
+    /// cloned per hit: a capped search reports up to [`MAX_HITS`] of them, and it is the
+    /// same `Arc` the rows are built from ([`crate::grouped`]), so no path is copied on
+    /// the way.
+    Hit(Arc<Path>, Hit),
     /// The walk is over, whether it ended, was capped, or found nothing.
     Finished,
 }
@@ -103,6 +107,7 @@ pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlF
     for entry in crate::walk::files(&query.root) {
         let mut sink = Hits {
             path: entry.path(),
+            shared: None,
             matcher: &matcher,
             emit,
             progress: &mut progress,
@@ -167,6 +172,8 @@ struct Progress {
 /// One file's matches on their way out: the sink `grep-searcher` reports to.
 struct Hits<'a> {
     path: &'a Path,
+    /// The path as the hits carry it, made at the first match. [`None`] until then.
+    shared: Option<Arc<Path>>,
     matcher: &'a RegexMatcher,
     emit: &'a mut dyn FnMut(SearchEvent) -> ControlFlow<()>,
     progress: &'a mut Progress,
@@ -179,10 +186,15 @@ impl Sink for Hits<'_> {
         // One `SinkMatch` is one line while multi-line search is off, but the type does not
         // promise it, so the lines are walked and numbered rather than assumed to be one.
         let first = matched.line_number().unwrap_or(1);
+        // The one path this file's hits carry. Made here and not per file walked, so a
+        // file with no matches -- almost every file -- allocates none. Cloned out of the
+        // sink because `emit` below borrows the whole of it.
+        let borrowed = self.path;
+        let path = Arc::clone(self.shared.get_or_insert_with(|| Arc::from(borrowed)));
         for (offset, line) in matched.lines().enumerate() {
             let number = first.saturating_add(offset as u64);
             let hit = hit_from(self.matcher, line, number);
-            if (self.emit)(SearchEvent::Hit(self.path.to_path_buf(), hit)).is_break() {
+            if (self.emit)(SearchEvent::Hit(Arc::clone(&path), hit)).is_break() {
                 self.progress.ended = Some(Ended::Stopped);
                 return Ok(false);
             }

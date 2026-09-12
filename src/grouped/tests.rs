@@ -20,14 +20,51 @@ fn all(grouped: &Grouped<u32>) -> Rows<u32> {
     grouped.rows(&Matcher::Everything)
 }
 
+/// A file's path as a caller holds it: one `Arc` for every item pushed under it.
+fn path(spelling: &str) -> Arc<Path> {
+    Arc::from(Path::new(spelling))
+}
+
+/// The path a push is given is the path the rows are built from, and not a copy of it:
+/// the search makes one per file, and nothing after it allocates another. Fails on a
+/// `push` that takes `&Path` and makes its own `Arc`.
+#[test]
+fn a_files_rows_are_built_from_the_arc_it_was_pushed_under() {
+    let a = path("/p/a.rs");
+    let mut grouped = Grouped::default();
+    grouped.push(&a, 1);
+    grouped.push(&a, 7);
+
+    for row in all(&grouped).iter() {
+        let (Row::File { path, .. } | Row::Item { path, .. }) = row;
+        assert!(
+            Arc::ptr_eq(path, &a),
+            "the row copied the path it was given"
+        );
+    }
+}
+
+/// Two `Arc`s spelling the same path are the same file: `push` shortcuts through
+/// `Arc::ptr_eq`, but what it means by the same file is what the path says.
+#[test]
+fn the_same_path_under_another_arc_is_the_same_file() {
+    let mut grouped = Grouped::default();
+    grouped.push(&path("/p/a.rs"), 1);
+    grouped.push(&path("/p/a.rs"), 7);
+
+    assert_eq!(grouped.files(), 1);
+    assert_eq!(drawn(&all(&grouped)), ["a.rs 2", "1", "7"]);
+}
+
 /// Items are grouped under the file they came with, the files in the order they arrived,
 /// and each row carries the path it is under.
 #[test]
 fn items_are_grouped_under_their_file_in_the_order_they_arrived() {
+    let (a, b) = (path("/p/a.rs"), path("/p/b.rs"));
     let mut grouped = Grouped::default();
-    grouped.push(Path::new("/p/a.rs"), 1);
-    grouped.push(Path::new("/p/a.rs"), 7);
-    grouped.push(Path::new("/p/b.rs"), 2);
+    grouped.push(&a, 1);
+    grouped.push(&a, 7);
+    grouped.push(&b, 2);
 
     assert_eq!((grouped.count(), grouped.files()), (3, 2));
     let rows = all(&grouped);
@@ -45,10 +82,11 @@ fn items_are_grouped_under_their_file_in_the_order_they_arrived() {
 /// against the last file and not a lookup, since a walk reports a file's items together.
 #[test]
 fn a_file_that_comes_back_later_is_a_group_of_its_own() {
+    let (a, b) = (path("/p/a.rs"), path("/p/b.rs"));
     let mut grouped = Grouped::default();
-    grouped.push(Path::new("/p/a.rs"), 1);
-    grouped.push(Path::new("/p/b.rs"), 2);
-    grouped.push(Path::new("/p/a.rs"), 3);
+    grouped.push(&a, 1);
+    grouped.push(&b, 2);
+    grouped.push(&a, 3);
 
     assert_eq!(grouped.files(), 3);
     assert_eq!(

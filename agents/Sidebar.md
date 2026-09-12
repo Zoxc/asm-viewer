@@ -278,27 +278,31 @@ them to a scroll view is a pointer compare -- because it is the same drawing pro
 spares the handing over and not the building: the rows are made again from scratch every
 time a search's hits grow, which is once a batch. So **each item, and the path and name of
 the file it is under, are under an `Arc` from the moment they are pushed**, and building a
-row is pointer bumps and nothing else. Copying a hit -- a path, up to
-300 characters of the line and a vector of spans -- into every rebuild is work that squares
-over one search, on the UI thread, for rows whose contents never change once pushed: over a
-capped 10,000-hit search the rebuilding measured 70 ms against 19 ms. Sharing the file's
-path took most of what was left, a path being copied once per *row* where a hit is copied
-once per hit: 100 rebuilds of a 10,500-row list, 137 ms against 17 ms. The `Arc`s are for
-the copying and never for identity, so a row still compares by the path it says, and a
-`Pick` -- minted per row drawn and not per row built -- takes a copy of it. What
-differs is only how a list is built and what an item is: a search appends as it walks, and a
-server's answer, which lands whole, is grouped when it does -- files by path and references
-by line, so a reader can find a file, where a search keeps the order its walk found them in
-and only ever grows at the end. The lines are read off the disk there, since the server says
-nothing about the text: each file once, on the language worker with the ask -- a read blocks,
-and that is the thread that may block; a file that will not read leaves its references the
-number they already have. The panels draw one row too (`ui::place_row`), down to the line's
-text with the name marked in it (`search::drawn` cuts a long line for both, `found_line`
-washes what matched in both): a list of line numbers says where a name is used and not how.
-`Folding` is what is left of the difference -- which state a press on a file row writes its
-fold to, and which panel's pick the row is drawn against. The filter matches the file's path,
-applied where the rows are built rather than through `Filtered`'s memo -- that is for the
-thousands a line's symbols can be, and a name's references are tens.
+row is pointer bumps and nothing else. The path's `Arc` is made before that, by the search:
+one per file, made at its first match, cloned into each of its hits and taken as it is by
+`Grouped::push`, so no path is copied between the walk and the row. Copying a hit -- a path,
+up to 300 characters of the line and a vector of spans -- into every rebuild is work that
+squares over one search, on the UI thread, for rows whose contents never change once pushed:
+over a capped 10,000-hit search the rebuilding measured 70 ms against 19 ms. Sharing the
+file's path took most of what was left, a path being copied once per *row* where a hit is
+copied once per hit: 100 rebuilds of a 10,500-row list, 137 ms against 17 ms. The `Arc`s are
+for the copying and never for identity, so a row still compares by the path it says --
+`push` tries `Arc::ptr_eq` against the last file first, but only to skip a comparison whose
+answer the sender already knows -- and a `Pick` -- minted per row drawn and not per row
+built -- takes a copy of it. What differs is only how a list is built and what an item is: a
+search appends as it walks, and a server's answer, which lands whole, is grouped when it
+does -- files by path and references by line, so a reader can find a file, where a search
+keeps the order its walk found them in and only ever grows at the end. The lines are read
+off the disk there, since the server says nothing about the text: each file once, on the
+language worker with the ask -- a read blocks, and that is the thread that may block; a file
+that will not read leaves its references the number they already have. The panels draw one
+row too (`ui::place_row`), down to the line's text with the name marked in it
+(`search::drawn` cuts a long line for both, `found_line` washes what matched in both): a
+list of line numbers says where a name is used and not how. `Folding` is what is left of the
+difference -- which state a press on a file row writes its fold to, and which panel's pick
+the row is drawn against. The filter matches the file's path, applied where the rows are
+built rather than through `Filtered`'s memo -- that is for the thousands a line's symbols
+can be, and a name's references are tens.
 
 **A place row opens through `open_source_place`** (`agents/Panes.md`), the arrival every door
 into a place in a source file makes, so a hit opens exactly as a reference does, down to the tab's

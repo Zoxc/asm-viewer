@@ -17,6 +17,8 @@
 //! The `Arc`s here are for the copying and never for identity: two rows are the same row
 //! when they name the same file, whichever `Arc` each spells it with, so every comparison
 //! in this module -- the derived ones included -- is of what a path says (`AGENTS.md`).
+//! [`Grouped::push`] tries `Arc::ptr_eq` before the paths, but only as a shortcut past a
+//! comparison whose answer is already known.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -78,18 +80,23 @@ impl<T> Grouped<T> {
     /// Add an item under `path`: the last file when it is the same one, and a new one
     /// otherwise. A search reports a file's items together, so this is a comparison
     /// against the last and not a lookup, and the files stay in the order they arrived.
-    pub fn push(&mut self, path: &Path, item: T) {
+    ///
+    /// The `Arc` is the caller's, made once per file, and it is what a new file's rows
+    /// are built from: nothing here allocates a path. `Arc::ptr_eq` is tried first, so
+    /// every item after a file's first skips comparing the paths. That is a shortcut and
+    /// not the rule -- two `Arc`s spelling the same path are still the same file.
+    pub fn push(&mut self, path: &Arc<Path>, item: T) {
         self.count += 1;
         let item = Arc::new(item);
         if let Some(last) = self.files.last_mut() {
-            if *last.path == *path {
+            if Arc::ptr_eq(&last.path, path) || *last.path == **path {
                 last.items.push(item);
                 return;
             }
         }
         self.files.push(InFile {
             name: crate::source::name_of(path).into(),
-            path: path.into(),
+            path: path.clone(),
             items: vec![item],
             folded: false,
         });
