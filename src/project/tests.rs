@@ -1537,7 +1537,12 @@ fn a_record_keeps_the_directory_the_project_was_given() {
         cargo: None,
         bookmarks: Vec::new(),
     };
-    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &named, false);
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("kernel-1"),
+        &named,
+        &Session::default(),
+    );
 
     let (project, _) = written(&mut saves, &["/tmp/lib.a"], None).expect("a write");
     assert_eq!(project.directory, Some(PathBuf::from("/src/kernel")));
@@ -1561,7 +1566,12 @@ fn reopening_seeds_the_details_but_not_the_baseline() {
         cargo: None,
         bookmarks: Vec::new(),
     };
-    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &loaded, false);
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("kernel-1"),
+        &loaded,
+        &Session::default(),
+    );
 
     // The boot state equals the baseline, so nothing is written.
     assert_eq!(recorded(&mut saves, Vec::new(), Session::default()), None);
@@ -1586,7 +1596,12 @@ fn a_binary_landing_mid_load_is_not_written() {
         cargo: None,
         bookmarks: Vec::new(),
     };
-    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &loaded, false);
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("kernel-1"),
+        &loaded,
+        &Session::default(),
+    );
 
     // The first of the two lands, and the app's session is still the empty one. Nothing
     // is written, and nothing is left pending for a flush to write either.
@@ -1636,7 +1651,12 @@ fn a_session_recorded_mid_load_is_not_left_pending() {
         cargo: None,
         bookmarks: Vec::new(),
     };
-    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &loaded, false);
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("kernel-1"),
+        &loaded,
+        &Session::default(),
+    );
 
     // The save observer runs as the object lands. The app has the page it was on back,
     // but no tabs and no active document: those wait for the load to end.
@@ -1767,7 +1787,7 @@ fn clearing_a_detail_is_a_change_too() {
             directory: Some(PathBuf::from("/src/kernel")),
             ..Project::default()
         },
-        false,
+        &Session::default(),
     );
 
     let decided = saves.record(
@@ -1797,7 +1817,12 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
         cargo: None,
         bookmarks: Vec::new(),
     };
-    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &loaded, false);
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("kernel-1"),
+        &loaded,
+        &Session::default(),
+    );
 
     let named = Details {
         directory: Some(PathBuf::from("/src/kernel")),
@@ -1893,7 +1918,12 @@ fn entering_a_project_empties_every_baseline() {
         directory: Some(PathBuf::from("/src/other")),
         ..Project::default()
     };
-    saves.opened(&Store::at("/state"), kept_at("other-2"), &entered, false);
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("other-2"),
+        &entered,
+        &Session::default(),
+    );
 
     // The state a switch leaves the app in: nothing open, nothing selected, and the
     // directory of the project just entered — every one of them the baseline.
@@ -2267,6 +2297,60 @@ fn unsaved_projects_do_not_collide() {
     assert_eq!(
         fs::read(&squatter).expect("the squatter reads"),
         b"someone else's"
+    );
+}
+
+/// Giving a project a place writes what `Saves` holds, not what the old files hold. The two
+/// differ twice over. A project just **started** has an empty file, so its id is the app's
+/// alone until a write puts it there -- and a project put somewhere without one is a project
+/// whose session the next load throws away, the two being matched by id. A project just
+/// **opened** has the other half of it: the baseline every change is measured against is the
+/// stub `opened` seeded, and only `stored` says what the session file holds.
+///
+/// The one test here that goes through the `SAVES` static; every other builds a `Saves` of
+/// its own, and nothing else in the suite touches it.
+#[test]
+fn putting_a_project_somewhere_carries_the_id_and_the_session() {
+    let base = directory(line!());
+    let store = Store::at(&base);
+    let from = start_new(&store).expect("a project is started");
+    assert_eq!(fs::read(&from).expect("the claimed file"), b"");
+
+    // A session worth carrying across, left pending until the flush inside `put_in`.
+    record(
+        Details::default(),
+        Vec::new(),
+        false,
+        Vec::new(),
+        session_with(Some("a.o")),
+    );
+
+    let to = base.join(format!("kernel.{PROJECT_EXTENSION}"));
+    assert!(put_in(&store, &to, Put::Move), "the project was written");
+
+    let (project, session) = load_project(&store, &to).expect("the project reads back");
+    assert!(project.id.is_some(), "the id the app gave it");
+    assert_eq!(
+        session.active,
+        Some(saved_object("a.o")),
+        "the session came with it"
+    );
+
+    // Opened again and copied elsewhere before anything has been recorded, which is the
+    // window a load in flight holds open for as long as it runs.
+    open_at(&store, &to).expect("the project opens");
+    let elsewhere = base.join(format!("copy.{PROJECT_EXTENSION}"));
+    assert!(
+        put_in(&store, &elsewhere, Put::Copy),
+        "the copy was written"
+    );
+
+    let (copy, carried) = load_project(&store, &elsewhere).expect("the copy reads back");
+    assert_ne!(copy.id, project.id, "a copy is a project of its own");
+    assert_eq!(
+        carried.active,
+        Some(saved_object("a.o")),
+        "and it has the session the file held"
     );
 }
 
@@ -3097,7 +3181,12 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         }],
         ..a_project()
     };
-    saves.opened(&Store::at("/state"), kept_at("1"), &reopened, false);
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("1"),
+        &reopened,
+        &Session::default(),
+    );
 
     // Seeded: the same bookmarks are no change, while the parse has yet to land.
     let unchanged = saves.record(

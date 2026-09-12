@@ -1479,6 +1479,14 @@ struct Saves {
     binaries: Vec<PathBuf>,
     /// The session as last written, empty for `binaries`' reason.
     session: Session,
+    /// What `session.toml` holds. The baseline above only becomes that once something has
+    /// been written: until then it is the stub [`Saves::opened`] seeded, while the file
+    /// holds the session the project was opened on. A load in flight holds every session
+    /// back, so the two differ for as long as the load.
+    ///
+    /// Seeded whole by `opened`, and moved with the baseline by [`Saves::wrote_session`].
+    /// [`put_in`] asks what the files hold, so it reads this one.
+    stored: Session,
     /// A newer session that has not been written yet. Only ever a *session*: a change to
     /// the other file is written at once.
     pending: Option<Session>,
@@ -1494,7 +1502,7 @@ impl Saves {
     /// state the app will be in the instant afterwards. The two empty baselines are
     /// *assigned* rather than assumed because a project switched away from leaves its own
     /// binaries and pending session behind.
-    fn opened(&mut self, store: &Store, path: PathBuf, project: &Project, trusted: bool) {
+    fn opened(&mut self, store: &Store, path: PathBuf, project: &Project, session: &Session) {
         self.store = Some(store.clone());
         self.open = Some(path);
         self.written = project.clone();
@@ -1504,8 +1512,13 @@ impl Saves {
         // baseline without them would read the state the app boots into as a change.
         self.session = Session {
             id: self.written.id,
-            trusted,
+            trusted: session.trusted,
             ..Session::default()
+        };
+        // What the file holds, which is the whole session and not the stub above.
+        self.stored = Session {
+            id: self.written.id,
+            ..session.clone()
         };
         self.pending = None;
     }
@@ -1617,6 +1630,7 @@ impl Saves {
     /// Note that `session` reached `session.toml`: it is what the file holds, and nothing
     /// is owed.
     fn wrote_session(&mut self, session: Session) {
+        self.stored = session.clone();
         self.session = session;
         self.pending = None;
     }
@@ -1628,6 +1642,7 @@ impl Saves {
         self.open = Some(path);
         self.written.id = id;
         self.session.id = id;
+        self.stored.id = id;
         if let Some(pending) = &mut self.pending {
             pending.id = id;
         }
@@ -1787,7 +1802,7 @@ pub fn switch(store: &Store, path: &Path) -> Result<(Project, Session), Failure>
 pub fn open_at(store: &Store, path: &Path) -> Result<(PathBuf, Project, Session), Failure> {
     let (project, session) = load_project(store, path)?;
     remember(store, path);
-    saves().opened(store, path.to_path_buf(), &project, session.trusted);
+    saves().opened(store, path.to_path_buf(), &project, &session);
     Ok((path.to_path_buf(), project, session))
 }
 
@@ -1801,7 +1816,7 @@ pub fn start_new(store: &Store) -> Option<PathBuf> {
         ..Project::default()
     };
     remember(store, &path);
-    saves().opened(store, path.clone(), &project, false);
+    saves().opened(store, path.clone(), &project, &Session::default());
     log::debug!("started the project {}", path.display());
     Some(path)
 }
@@ -1821,13 +1836,19 @@ pub enum Put {
 
 /// Put the open project in the file at `path`. Answers whether it was written.
 ///
-/// Read and written rather than copied byte for byte, because a path in a project file is
+/// Serialised afresh rather than copied byte for byte, because a path in a project file is
 /// relative to the file's own directory ([`Project::against`]): the same bytes in another
 /// directory would be a claim about *that* tree. The session beside it holds absolute paths
 /// and is only carried across.
 ///
 /// The pending session is flushed **first**, while [`Saves`] still points at the old place,
-/// so what is carried across is what the app holds and not what the disk happened to have.
+/// and what travels is then what [`Saves`] holds: `written` and `stored` are the two files
+/// as they now stand, so neither is read back. That saves two reads and a parse under the
+/// lock, on the UI thread, and drops a failure a Save has no business having -- a project
+/// file deleted or mangled underneath a run holding it perfectly well used to make this
+/// answer `false` and write nothing. The baselines are the truer answer besides: a project
+/// just started ([`start_new`]) has an empty file and an id only the app knows, and a
+/// re-read would hand it to its new place with no id, and so with no session either.
 pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
     flush();
     let mut saves = saves();
@@ -1835,16 +1856,19 @@ pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
         log::warn!("no project to save");
         return false;
     };
-    let Ok((project, session)) = load_project(store, &from) else {
-        return false;
-    };
 
     let id = match put {
         Put::Copy => ProjectId::new(),
-        Put::Move => project.id,
+        Put::Move => saves.written.id,
     };
-    let project = Project { id, ..project };
-    let session = Session { id, ..session };
+    let project = Project {
+        id,
+        ..saves.written.clone()
+    };
+    let session = Session {
+        id,
+        ..saves.stored.clone()
+    };
 
     if !write_or_warn(path, |path| project.save_to(store, path)) {
         return false;

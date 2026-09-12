@@ -151,12 +151,18 @@ reopen rather than a failure, since the list never prunes itself and that is wha
 startup after a deleted project looks like. A file that is there and will not open is reported
 like any other.
 
-**Where a project is kept is `put_in`, and it reads and writes rather than copying bytes.**
+**Where a project is kept is `put_in`, and it serialises afresh rather than copying bytes.**
 A path in a project file is relative to that file's own directory, so the same bytes in
-another directory would be a claim about *that* tree; the project is therefore loaded and
-saved through `Project::save_to`, and the session -- absolute throughout -- carried across.
-What is pending is flushed **first**, while `Saves` still points at the old place, so what
-travels is what the app holds and not what the disk happened to have. `Put::Copy` is Save as:
+another directory would be a claim about *that* tree; the project is therefore written out
+through `Project::save_to`, and the session -- absolute throughout -- carried across. What is
+pending is flushed **first**, while `Saves` still points at the old place, and what travels
+is then what `Saves` holds: `written` and `stored` are the two files as they now stand, so
+neither is read back. That saves two reads and a parse under the lock, on the UI thread, and
+drops a failure a Save has no business having -- a project file deleted or mangled underneath
+a run holding it perfectly well used to make Save write nothing. The baselines are the truer
+answer besides: a project just started has an empty file and an id only the app knows, and a
+re-read would hand it to its new place with no id, and so with no session either.
+`Put::Copy` is Save as:
 a copy under a **new id**, because there are two projects afterwards and one id across both
 would mean each matched the other's session. `Put::Move` is an unsaved project's Save: the id
 stays, and the two files it came from go. `Saves::moved_to` then moves the id and nothing
@@ -398,6 +404,12 @@ against: they are what the project file currently *says*, and a write that is no
 binaries writes them back rather than the app's own list. Otherwise a change during the startup
 parse, or after a restore that opened none of them, would forget a file through a change that had
 nothing to do with it.
+
+**`Saves::stored` is the session file itself**, beside the empty baseline rather than instead
+of it. The baseline answers "has this changed", which needs the boot state; `put_in` asks
+"what does the file hold", which needs the session the project was opened on. The two are the
+same the moment anything has been written, so `wrote_session` moves both; before that they
+differ, for as long as a load holds every session back.
 
 **A list still being read is not the app's list**, which is the `loading` flag. The objects arrive
 one at a time, so while a load is in flight `record` neither compares the binaries nor writes them:
