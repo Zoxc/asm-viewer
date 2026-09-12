@@ -446,32 +446,25 @@ impl Listed {
         self.rows.len()
     }
 
-    /// Which row `at` is of this list: the last one when it is past the end, and the
-    /// first when the list is empty.
-    ///
-    /// The keyboard's row is the finder's own and the rows are the worker's, so a row
-    /// chosen against a longer list outlasts it. Written once, because the panel drawing
-    /// a row, Enter opening one and an arrow moving one all have to land on the same
-    /// one.
-    fn clamp(&self, at: usize) -> usize {
-        at.min(self.len().saturating_sub(1))
-    }
-
     /// Whether these rows are the answer to what the box says.
     pub(crate) fn answers(&self, typed: &str) -> bool {
         self.for_query.trim() == typed.trim()
     }
 
-    /// The `index`th row: the file, and the runs of its path that matched.
-    fn row(&self, index: usize) -> Option<(&Found, &[Range<usize>])> {
-        let row = self.rows.get(index)?;
-        Some((&row.file, &row.marks))
-    }
-
     /// What opening the `index`th row opens.
     fn path(&self, index: usize) -> Option<PathBuf> {
-        self.row(index).map(|(file, _)| file.path.clone())
+        Some(self.rows.get(index)?.file.path.clone())
     }
+}
+
+/// Which row `at` is of a list of `len` rows: the last one when it is past the end, and
+/// the first when the list is empty.
+///
+/// The keyboard's row is the finder's own and the rows are the worker's, so a row chosen
+/// against a longer list outlasts it. Written once, because the panel drawing a row,
+/// Enter opening one and an arrow moving one all have to land on the same one.
+fn clamped(len: usize, at: usize) -> usize {
+    at.min(len.saturating_sub(1))
 }
 
 /// The source files visited most recently, newest first: what an empty box lists.
@@ -569,7 +562,7 @@ impl Component for FinderOverlay {
         // this same list, so it moves and opens the rows the reader is looking at.
         let drawn = listed.read().clone();
         let rows = drawn.len();
-        let at = drawn.clamp(state.selected());
+        let at = clamped(rows, state.selected());
 
         let body: Element = match (&state.root, rows) {
             (None, _) => note("No project directory. Set one in the Project view."),
@@ -587,10 +580,12 @@ impl Component for FinderOverlay {
                 .height(Size::px(rows.min(FINDER_ROWS) as f32 * list_row_height()))
                 .child(
                     VirtualScrollView::new_with_data_controlled(
-                        (drawn, at),
-                        |index, (drawn, at): &(Listed, usize)| {
+                        // The rows alone: a row draws one of them and nothing about the
+                        // query they were picked out for, which is the panel's business.
+                        (drawn.rows.clone(), at),
+                        |index, (found, at): &(Shared<Row>, usize)| {
                             FoundRow {
-                                listed: drawn.clone(),
+                                rows: found.clone(),
                                 index,
                                 on_row: index == *at,
                                 key: DiffKey::None,
@@ -704,18 +699,19 @@ fn finder_key(
     key: &Key,
     modifiers: Modifiers,
 ) {
-    let page = page_of(listed);
+    let rows = listed.len();
+    let page = page_of(rows);
     match key {
         Key::Named(NamedKey::Escape) => close_finder(finder),
-        Key::Named(NamedKey::ArrowDown) => followed(list, moved(finder, listed, 1)),
-        Key::Named(NamedKey::ArrowUp) => followed(list, moved(finder, listed, -1)),
-        Key::Named(NamedKey::PageDown) => followed(list, moved(finder, listed, page)),
-        Key::Named(NamedKey::PageUp) => followed(list, moved(finder, listed, -page)),
-        Key::Named(NamedKey::Home) => followed(list, moved_to(finder, listed, 0)),
-        Key::Named(NamedKey::End) => followed(list, moved_to(finder, listed, usize::MAX)),
+        Key::Named(NamedKey::ArrowDown) => followed(list, moved(finder, rows, 1)),
+        Key::Named(NamedKey::ArrowUp) => followed(list, moved(finder, rows, -1)),
+        Key::Named(NamedKey::PageDown) => followed(list, moved(finder, rows, page)),
+        Key::Named(NamedKey::PageUp) => followed(list, moved(finder, rows, -page)),
+        Key::Named(NamedKey::Home) => followed(list, moved_to(finder, rows, 0)),
+        Key::Named(NamedKey::End) => followed(list, moved_to(finder, rows, usize::MAX)),
         Key::Named(NamedKey::Enter) => {
             // Bound before the write below, so the read guard is gone by then.
-            let at = listed.clamp(finder.peek().selected());
+            let at = clamped(rows, finder.peek().selected());
             if let Some(path) = listed.path(at) {
                 open_found(finder, states, keyboard, &path, reach_of(modifiers));
             }
@@ -724,15 +720,15 @@ fn finder_key(
     }
 }
 
-/// How far Page Up and Page Down move: a screen of the list, which is the panel's viewport
-/// over the row height.
+/// How far Page Up and Page Down move over a list of `rows` rows: a screen of it, which is
+/// the panel's viewport over the row height.
 ///
 /// The viewport is not measured, as a code pane's is. The panel is exactly as tall as the
 /// rows it draws -- [`FINDER_ROWS`] of them, or the whole list where it is shorter -- so a
 /// page is the number the layout was handed, and measuring it back would only be asking
 /// the layout what this told it.
-fn page_of(listed: &Listed) -> isize {
-    listed.len().min(FINDER_ROWS) as isize
+fn page_of(rows: usize) -> isize {
+    rows.min(FINDER_ROWS) as isize
 }
 
 /// Which tab a file the finder opens lands in: the rule every row that opens something
@@ -747,32 +743,32 @@ fn reach_of(modifiers: Modifiers) -> Reach {
     }
 }
 
-/// Move the keyboard `by` rows of `listed`, and remember what the box said when it was
-/// moved: the row is the list's as the query stands, and the list changes under it.
+/// Move the keyboard `by` rows of a list `rows` long, and remember what the box said when
+/// it was moved: the row is the list's as the query stands, and the list changes under it.
 ///
-/// Both ends stop at the list, which is why the list is handed in at all: unclamped,
+/// Both ends stop at the list, which is why its length is handed in at all: unclamped,
 /// Down held past the last row counted on above it, and every Up after that was spent
-/// coming back before the highlight moved at all. The list is the drawn one and not a
+/// coming back before the highlight moved at all. The count is the drawn list's and not a
 /// ranking made here.
 ///
 /// Hands back the row it moved to and how many there are, which is what the scroll
 /// follows.
-fn moved(finder: State<Finder>, listed: &Listed, by: isize) -> (usize, usize) {
+fn moved(finder: State<Finder>, rows: usize, by: isize) -> (usize, usize) {
     // Bound before the write below, so the read guard is gone by then.
-    let at = listed.clamp(finder.peek().selected());
-    moved_to(finder, listed, at.saturating_add_signed(by))
+    let at = clamped(rows, finder.peek().selected());
+    moved_to(finder, rows, at.saturating_add_signed(by))
 }
 
 /// The same to a row named outright: the first row and the last however many there are,
 /// which is what Home and End are ([`usize::MAX`], the clamp doing the counting), and the
 /// row under the pointer, which is what an Alt+press is.
-fn moved_to(mut finder: State<Finder>, listed: &Listed, to: usize) -> (usize, usize) {
+fn moved_to(mut finder: State<Finder>, rows: usize, to: usize) -> (usize, usize) {
     // Bound before the write, so the read guard is gone by then.
     let typed = finder.peek().typed.clone();
     let mut state = finder.write();
-    state.at = listed.clamp(to);
+    state.at = clamped(rows, to);
     state.at_for = typed;
-    (state.at, listed.len())
+    (state.at, rows)
 }
 
 /// Scroll the list so the row the keyboard was moved to is one of the rows drawn: the
@@ -870,7 +866,10 @@ impl Component for FinderBox {
 /// matched marked in both.
 #[derive(Clone, PartialEq)]
 struct FoundRow {
-    listed: Listed,
+    /// The list this row is one of. A [`Shared`], so the props compare by its pointer.
+    /// The query it was picked out for stays the panel's: carried here it would be
+    /// copied and compared once per row, per render, for something no row draws.
+    rows: Shared<Row>,
     index: usize,
     /// Whether the keyboard is on this row.
     on_row: bool,
@@ -894,14 +893,14 @@ impl Component for FoundRow {
         let keyboard = use_consume::<Keyboard>().0;
         let index = self.index;
 
-        let Some((file, marks)) = self.listed.row(self.index) else {
+        let Some(row) = self.rows.get(self.index) else {
             return rect().into_element();
         };
+        let (file, marks) = (&row.file, &row.marks[..]);
         let pressed = file.path.clone();
-        // The list this row is one of, which is what an Alt+press moves the keyboard
-        // against: the index is under its length by construction, the row having been
-        // drawn from it.
-        let listed = self.listed.clone();
+        // How long the list is, which is what an Alt+press moves the keyboard against:
+        // the index is under it by construction, the row having been drawn from it.
+        let length = self.rows.len();
 
         // Cut and not extra, though the strings differ: the row draws every part of the
         // path the tooltip holds, the name first and the directories after it.
@@ -918,7 +917,7 @@ impl Component for FoundRow {
                     if *alt.peek() {
                         // The row it moved to is dropped: the row is under the pointer,
                         // so there is nothing for the list to scroll to.
-                        moved_to(finder, &listed, index);
+                        moved_to(finder, length, index);
                         return;
                     }
                     open_found(finder, states, keyboard, &pressed, Reach::outside(ctrl));

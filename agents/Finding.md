@@ -120,13 +120,16 @@ deps effect runs a render late, so a Down pressed in the same pass as the typing
 reset arriving after it. Nothing here needs an effect at all once the row carries the query it
 belongs to. The row is **clamped where it is moved**, not only where it is drawn: counting on past
 the last row left it above the list, and the reader who held Down then spent an Up per overshoot
-before the highlight moved at all. The clamp is `Listed::clamp` and `moved_to` is the one writer of
+before the highlight moved at all. `clamped` is that clamp and `moved_to` is the one writer of
 the row, so the panel drawing a row, Enter opening one, an arrow moving one and an Alt+press picking
 one all land on the same row. What it clamps against is the drawn list -- the key handler is handed
-the list the memo holds, peeked, and a row holds the list it was drawn from -- so a press reads what
-the panel is showing rather than working a list out for itself. That row is also the finder's
-**pick**, in the sense every list in the app now has one (`agents/Sidebar.md`): an Alt+press moves
-the keyboard to the row under the pointer and opens nothing, where a plain press opens the file.
+the list the memo holds, peeked, and a row is handed the rows it was drawn from -- so a press reads
+what the panel is showing rather than working a list out for itself. Those rows and an index are the
+whole of what a row is handed: the query they were picked out for is the panel's business, and a row
+that carried it would copy and compare a string per row per render for something it never draws.
+That row is also the finder's **pick**, in the sense every list in the app now has one
+(`agents/Sidebar.md`): an Alt+press moves the keyboard to the row under the pointer and opens
+nothing, where a plain press opens the file.
 Enter and that press are the one door, `open_found`, which closes the panel itself rather than
 leaving each caller to. It is drawn in the selection while the box holds the keyboard, which it does
 from the moment the chord opens the finder, and in the grey a list not being typed in draws its pick

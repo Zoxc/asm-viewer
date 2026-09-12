@@ -1249,7 +1249,11 @@ from inside the box. They are answered in the same wrap and for the same reason:
 node that has the keyboard, so the bar stepped is the one over the pane being read. What they write
 is the ask the box's own Enter writes and nothing more -- the step itself stays the bar's -- and
 `edit_find` is what makes a pane with no bar do nothing at all, there being no entry to write into.
-The keyboard stays where it was, which is the whole point of the pair.
+The keyboard stays where it was, which is the whole point of the pair. The bar's two step buttons
+write that same ask, and write it themselves rather than being handed a closure: an `EventHandler`
+prop never compares equal, so a button holding one was built again on every render of the bar --
+which is every write to `Finds`, a keystroke among them. Each carries the pane and the direction,
+and both are the same on every render.
 
 **The bar is the last child of the pane's own flex column.** Both panes were already
 `Content::Flex` with a fixed-height bar and one `height(Size::flex(1.0))` body, so a third child

@@ -644,12 +644,12 @@ impl Component for FindBar {
                             .max_lines(1),
                     )
                     .child(StepButton {
+                        at,
                         direction: Direction::Back,
-                        step: EventHandler::new(move |_| step(Direction::Back)),
                     })
                     .child(StepButton {
+                        at,
                         direction: Direction::Forward,
-                        step: EventHandler::new(move |_| step(Direction::Forward)),
                     }),
             )
             .maybe_child(error.map(invalid_line))
@@ -692,16 +692,24 @@ fn counted(bar: &Find) -> String {
 }
 
 /// One of the bar's two step buttons.
+///
+/// It writes the step itself rather than being handed a closure to call. An
+/// `EventHandler` prop never compares equal, so a button holding one was re-rendered by
+/// every render of the bar -- which is every write to `Finds`: every keystroke, every
+/// progress word of a hunt, every step. The pane and the direction are all the write
+/// needs, and both are the same on every render.
 #[derive(Clone, PartialEq)]
 struct StepButton {
+    at: Where,
     direction: Direction,
-    step: EventHandler<()>,
 }
 
 impl Component for StepButton {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let step = self.step.clone();
+        // Consumed in the render, as every context is: the press below runs no hook.
+        let finds = use_consume::<Looking>().0;
+        let (at, direction) = (self.at, self.direction);
         let (glyph, says) = match self.direction {
             Direction::Back => ("\u{2039}", "Previous match"),
             Direction::Forward => ("\u{203a}", "Next match"),
@@ -723,7 +731,7 @@ impl Component for StepButton {
                     // As a toggle does: the box beside this gives up its keyboard focus
                     // from the global press, which is cancellable and sorts last.
                     e.prevent_default();
-                    step.call(());
+                    edit_find(finds, at, move |bar| bar.step = Some(direction));
                 })
                 .child(label().text(glyph).max_lines(1)),
         )

@@ -16,6 +16,7 @@
 //! there being one worker and one [`Answer`].
 
 use super::*;
+use std::borrow::Cow;
 
 /// Everything the analysis crate has to say about what the panes are drawing, shared
 /// through context.
@@ -353,9 +354,9 @@ pub(crate) enum Showing<'a> {
     /// The listing and the question it answers: a pane needs both, the question being
     /// what says which tab the listing belongs to.
     Listing(&'a Shown),
-    /// Nothing to draw and a word for why. Owned and not `&'static`: a line that came
-    /// to nothing is named in the words.
-    Message(String),
+    /// Nothing to draw and a word for why. A `Cow`: four of the five are fixed
+    /// sentences, and the fifth names the line that came to nothing.
+    Message(Cow<'static, str>),
     /// A wait too short to name, with no previous listing to leave up.
     Nothing,
 }
@@ -381,7 +382,7 @@ impl Analyzed {
             (shown, Some(pending))
                 if pending.slow && !keeps_listing(shown.as_ref(), &pending.ask) =>
             {
-                Showing::Message("Analysing...".to_owned())
+                Showing::Message(Cow::Borrowed("Analysing..."))
             }
             (Some(shown), _) => Showing::Listing(shown),
             // Answered with no symbol at all, whether or not the next question is out
@@ -389,22 +390,21 @@ impl Analyzed {
             // outlives the click, so which line came to nothing is not otherwise on
             // screen.
             (None, _) if self.answered.is_some() => Showing::Message(match &self.answered {
-                Some(Ask::Source { at, .. }) => format!("No code compiled from {}", at.spell()),
-                _ => "No code compiled from this line".to_owned(),
+                Some(Ask::Source { at, .. }) => {
+                    Cow::Owned(format!("No code compiled from {}", at.spell()))
+                }
+                _ => Cow::Borrowed("No code compiled from this line"),
             }),
             // Asked with nothing behind it: the first question of a tab, which has no
             // sentence to leave up either.
             (None, Some(_)) => Showing::Nothing,
-            (None, None) => Showing::Message(
-                match document {
-                    Document::Assembly(_) => "No symbol selected",
-                    Document::Source(_) => "Click a source line",
-                    // The listing beside this asks nothing; its source side follows the
-                    // instruction picked out in it.
-                    Document::Code(_) => "Click an instruction",
-                }
-                .to_owned(),
-            ),
+            (None, None) => Showing::Message(Cow::Borrowed(match document {
+                Document::Assembly(_) => "No symbol selected",
+                Document::Source(_) => "Click a source line",
+                // The listing beside this asks nothing; its source side follows the
+                // instruction picked out in it.
+                Document::Code(_) => "Click an instruction",
+            })),
         }
     }
 

@@ -330,7 +330,8 @@ its caller, which is what keeps that true: it says "Click a source line" where a
 symbol selected". A line that came to nothing is **named** in what it says -- "No code compiled
 from lexer.rs:42", the Locations panel's spelling of a line (`LinePos::spell`) -- because the answer
 outlives the click that asked for it: the reader has read on, and "this line" would be about a line
-nothing on screen points at. That is what `Showing::Message` carries a `String` for.
+nothing on screen points at. That is the one arm of `Showing::Message` that owns its words; the
+four fixed sentences beside it are borrowed, `showing` being called from each pane's render.
 `answered` is the last question answered *whatever it answered with*, the one
 thing a listing cannot say for itself. A source line no object holds code from leaves the listing
 that is up and lights no pair in it, which is what says the click landed nowhere.

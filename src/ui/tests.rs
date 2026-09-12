@@ -4909,6 +4909,68 @@ fn a_wait_with_no_listing_keeps_the_sentence_that_is_up() {
     assert!(matches!(fresh.showing(&file), crate::ui::Showing::Nothing));
 }
 
+/// **Only the sentence that names a line is allocated.** Each pane calls `showing` as it
+/// renders, so a pair of panes over a slow analysis asks for the same fixed sentence
+/// twice a repaint: the four fixed ones are borrowed, and the fifth, which spells the
+/// line that came to nothing, is the one that is built. Fails on a `Showing::Message`
+/// that owns whatever it is handed.
+#[test]
+fn the_fixed_sentences_a_pane_draws_are_borrowed() {
+    use std::borrow::Cow;
+
+    let symbol = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let fresh = Analyzed::default();
+    for document in [
+        Document::Assembly(Selection::Symbol(symbol.clone())),
+        Document::Source(Arc::from("one.rs")),
+        Document::Code(symbol.object.clone()),
+    ] {
+        assert!(
+            matches!(
+                fresh.showing(&document),
+                crate::ui::Showing::Message(Cow::Borrowed(_))
+            ),
+            "the word a pane draws with nothing asked was allocated"
+        );
+    }
+
+    // The one that names the line, and the one that cannot: a source line answered with
+    // no code at all, and the same answer with the line forgotten.
+    let at = a_line_of(&symbol);
+    let barren = Ask::Source {
+        at: at.clone(),
+        chosen: None,
+    };
+    let file = Document::Source(at.file.clone());
+    let mut held = Analyzed::default();
+    held.take(
+        barren.clone(),
+        None,
+        Some(&barren),
+        &[symbol.object.clone()],
+    );
+    assert!(
+        matches!(
+            held.showing(&file),
+            crate::ui::Showing::Message(Cow::Owned(_))
+        ),
+        "the line that came to nothing was not named"
+    );
+
+    let mut waiting = Analyzed::default();
+    waiting.take(Ask::Symbol(symbol), None, None, &[]);
+    assert!(
+        matches!(
+            waiting.showing(&file),
+            crate::ui::Showing::Message(Cow::Borrowed(_))
+        ),
+        "the sentence naming no line was allocated"
+    );
+}
+
 /// The queue is drained to the newest question of each kind and not to the newest
 /// overall: a locate behind a listing question cancels neither, and the listing is
 /// worked first.
@@ -25965,6 +26027,70 @@ fn the_find_bars_step_buttons_go_opposite_ways() {
         press_step(&mut test, "\u{2039}"),
         first,
         "the back button did not step back"
+    );
+}
+
+/// **Typing in the find bar leaves its two step buttons alone.** A button's props are
+/// what stop it re-rendering, and the bar renders on every write to `Finds` -- every
+/// keystroke, every progress word of a hunt, every step. Holding an `EventHandler` made
+/// the two buttons unequal to themselves on every one of those, so each hover-tracked
+/// square was built again for a keystroke that changed nothing about it. Now the button
+/// carries the pane and the direction and writes the step itself.
+///
+/// That the buttons still step, and opposite ways, is
+/// `the_find_bars_step_buttons_go_opposite_ways` above.
+///
+/// Headless because nothing shows either way: only the element freya rebuilt says whether
+/// the scope rendered. Fails on a `StepButton` handed a closure.
+#[test]
+fn a_keystroke_in_the_find_bar_leaves_the_step_buttons_alone() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let (mut test, roots) = TestingRunner::new(
+        find_harness,
+        (600., 600.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    let mnemonic = drawn_twice(&test);
+
+    open_find_bar(&mut test);
+    test.write_text(&mnemonic);
+    let at = find_at(&states, &document);
+    let finds = states.places.finds;
+    find_answered(&mut test, finds, at, &mnemonic);
+
+    // The button's own square: the one carrying the press, found by the glyph inside it,
+    // since the bar's three toggles are squares of the same size beside it. The element
+    // and not the area, because **the element is how this asks whether the button
+    // rendered again**: an element carrying event handlers never compares equal to the
+    // one before it, so a scope that renders is handed a new one.
+    let button = |test: &TestingRunner, glyph: &str| {
+        let mark = label_area(test, glyph).expect("a step button");
+        test.find(|node, element| {
+            let area = node.layout().area;
+            let square = area.width() == toggle_size() && area.height() == toggle_size();
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            let around = area.min_x() <= mark.min_x() && mark.max_x() <= area.max_x();
+            (square && handled && around).then(|| node.element())
+        })
+        .expect("the step button is a square carrying its own handlers")
+    };
+
+    let (back, forward) = (button(&test, "\u{2039}"), button(&test, "\u{203a}"));
+    test.write_text("z");
+    pump(&mut test, || {
+        finds.peek().get(&at).filter.pattern == format!("{mnemonic}z")
+    });
+    settle(&mut test);
+    assert!(
+        Rc::ptr_eq(&back, &button(&test, "\u{2039}"))
+            && Rc::ptr_eq(&forward, &button(&test, "\u{203a}")),
+        "a keystroke in the box re-rendered the step buttons beside it"
     );
 }
 
