@@ -149,7 +149,17 @@ agree without this file knowing which that is. Windows stores no desktop-wide mo
 so that half stays `Consolas`. Each font is then a *chain*: the desktop's answer in front of the
 platform's own (`Segoe UI`/`Consolas`, `.AppleSystemUIFont`/`Menlo`, else the generic
 `sans-serif`/`monospace` that skia resolves through fontconfig). A family named with no usable size
-keeps the family and takes the app's default size. `Font::family` is the front of that chain on its
+keeps the family and takes the app's default size. What *usable* means is `settings::points`, one
+function both sources are judged by: a finite number of points above zero and no larger than
+`MAX_POINTS`, 72. `resolve_font` puts the reader's size in front of the desktop's with an `or_else`,
+which means something only if both halves have been judged the same way, and written twice the two
+could drift. The ceiling is against a slip in a hand-edited file -- `size = 900` would draw one row
+taller than the window -- and it is set where neither source can reach it honestly: the settings
+page's stepper stops at 32 and a desktop's own font is smaller still, while an inch of type is a row
+of a little over a hundred pixels, so the app still opens on several. Out of range is refused and
+not clamped, `text_scaling`'s rule. Gnome's factor is the one size not put back through it: it is
+bounded where it is read and it multiplies a size already judged, so all that would be left to
+refuse is a reader who asked for text that big deliberately. `Font::family` is the front of that chain on its
 own, for the three callers freya hands one family rather than a list -- the scratchpad's editor, the
 hover box's markdown and the placeholder saying what a font row is inheriting -- each of which gets
 the rest by inheriting the families of the box around it. The platform font must be named, since

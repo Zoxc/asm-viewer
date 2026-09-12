@@ -129,3 +129,20 @@ fn a_family_of_nothing_is_not_a_family() {
     assert_eq!(named.family(), Some("Fira Code"));
     assert_eq!(named.size(), Some(10.5));
 }
+
+/// The ceiling: the half of the rule a positive number can still fail. `size = 900` in
+/// a hand-edited file is a slip, and honouring it would draw one row taller than the
+/// window.
+#[test]
+fn a_size_the_app_cannot_draw_at_is_no_size() {
+    let huge = FontSetting {
+        family: None,
+        size: Some(900.0),
+    };
+    assert_eq!(huge.size(), None);
+
+    assert_eq!(points(f32::INFINITY), None);
+    assert_eq!(points(MAX_POINTS + 1.0), None);
+    // Large but drawable, so the reader gets what they asked for.
+    assert_eq!(points(MAX_POINTS), Some(MAX_POINTS));
+}

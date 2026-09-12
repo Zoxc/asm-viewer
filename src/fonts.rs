@@ -12,7 +12,7 @@
 
 use std::{borrow::Cow, sync::OnceLock};
 
-use crate::settings::{FontSetting, Settings};
+use crate::settings::{self, FontSetting, Settings};
 
 /// The platform's own interface and fixed-width families. These have to be *named*:
 /// freya's global fallbacks are all proportional, so a font nothing resolves would
@@ -125,13 +125,14 @@ struct Spec {
 
 impl Spec {
     /// The one place a parsed spec is judged: an empty family is not an answer, and a
-    /// size that is not a positive finite number is the same as no size at all.
+    /// size the app will not draw at ([`settings::points`], the same rule the reader's
+    /// own size is held to) is the same as no size at all.
     fn new(family: &str, points: Option<f32>) -> Option<Spec> {
         let family = family.trim();
 
         (!family.is_empty()).then(|| Spec {
             family: family.to_owned(),
-            points: points.filter(|points| points.is_finite() && *points > 0.0),
+            points: points.and_then(settings::points),
         })
     }
 }
@@ -242,6 +243,10 @@ mod desktop {
         // its nominal size and the accessibility slider moves this instead. It multiplies
         // the point size and nothing else, as GTK does -- the *window* scale is winit's,
         // taken from the display, and multiplying that too would compound.
+        //
+        // The product is not judged again: the factor is bounded where it is read and
+        // the size it multiplies has been through `settings::points` already, so all a
+        // second look could refuse is a reader who asked for text this big on purpose.
         if let Some(points) = spec.points.as_mut() {
             *points *= text_scaling();
         }

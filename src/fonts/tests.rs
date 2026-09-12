@@ -261,3 +261,27 @@ fn a_logfont_that_names_nothing_is_no_font() {
     // can use; the family still survives, with the app's own size behind it.
     assert_eq!(font_spec(&face("Segoe UI"), 0, 96), spec("Segoe UI", None));
 }
+
+/// Both halves of the `or_else` in [`resolve_font`] judge a size by the one rule, so a
+/// size neither source could mean is refused whichever side it came from. Two copies of
+/// the rule could be tightened one at a time, and the chain would then take from one
+/// source what it had just refused from the other.
+#[test]
+fn a_size_out_of_range_is_refused_from_either_source() {
+    let huge = settings::MAX_POINTS + 1.0;
+
+    // The reader's, out of `settings.toml` or the settings page.
+    assert_eq!(
+        resolved(&setting(None, Some(huge)), None).points,
+        DEFAULT_MONO_POINTS
+    );
+
+    // The desktop's, refused as the answer is parsed, so the family it named still
+    // stands and only the size falls back.
+    let desktop = parse_pango(&format!("'Fira Code {huge}'"));
+    assert_eq!(desktop, spec("Fira Code", None));
+
+    let font = resolved(&setting(None, None), desktop);
+    assert_eq!(font.families, ["Fira Code", "monospace"]);
+    assert_eq!(font.points, DEFAULT_MONO_POINTS);
+}

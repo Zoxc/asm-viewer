@@ -54,9 +54,32 @@ impl FontSetting {
     /// an override and the value it overrides are comparable. `fonts.rs` converts once,
     /// at the end.
     pub fn size(&self) -> Option<f32> {
-        self.size
-            .filter(|points| points.is_finite() && *points > 0.0)
+        self.size.and_then(points)
     }
+}
+
+/// The largest size the app will draw at, in points.
+///
+/// Out of reach of anything either source can honestly mean: the settings page's stepper
+/// stops at 32, and a desktop's own font is smaller still. And still a size the app can
+/// draw at — an inch of type is a row of a little over a hundred pixels, so the window
+/// opens on several of them rather than on one.
+pub const MAX_POINTS: f32 = 72.0;
+
+/// A size the app will draw at, **in points**: finite, above zero, and no larger than
+/// [`MAX_POINTS`].
+///
+/// One rule for a size from any source — this file, the settings page, or a desktop's
+/// answer. `fonts::resolve_font` puts the reader's size in front of the desktop's with an
+/// `or_else`, which means something only if both have been judged the same way; written
+/// twice, the two could drift and the chain would stop meaning it.
+///
+/// The ceiling is against a slip in a hand-edited file: `size = 900` would draw one row
+/// taller than the window. A size out of range is refused rather than clamped, as Gnome's
+/// `text-scaling-factor` already is — a number that far out is a mistake, and part of a
+/// mistake is not what was asked for.
+pub fn points(value: f32) -> Option<f32> {
+    (value.is_finite() && value > 0.0 && value <= MAX_POINTS).then_some(value)
 }
 
 /// Which theme the user asked for. Resolving [`Theme::Desktop`] to an [`Appearance`] is
