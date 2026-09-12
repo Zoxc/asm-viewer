@@ -729,31 +729,22 @@ impl Component for SourceList {
         use_kept_position(
             use_places().src_at,
             docs,
+            Pane::Source,
             {
                 let file = self.file.clone();
                 let document = self.document.clone();
-                move |controller: &mut ScrollController| {
+                move || {
                     // Asked before anything else: `owed_reveal` reads the marks, and that
                     // read is what wakes this on the next click.
-                    let Some(owing) = owed_reveal(marked, Pane::Source) else {
-                        return false;
-                    };
-                    let owed = owed_file_row(&owing, &file, length, |pair| {
+                    let owing = owed_reveal(marked, Pane::Source)?;
+                    owed_file_row(&owing, &file, length, |pair| {
                         places_of(
                             &document,
                             pair,
                             &analysis.peek(),
                             code_rows.peek().as_deref(),
                         )
-                    });
-                    let Some(index) = owed else {
-                        return false;
-                    };
-                    if !reveal_row(controller, *viewport.read(), length, index) {
-                        return false;
-                    }
-                    reveal_made(marked, Pane::Source);
-                    true
+                    })
                 }
             },
             {
@@ -764,15 +755,7 @@ impl Component for SourceList {
                 // `use_land`'s to plant -- and the reveal it plants finds the row here.
                 let file = self.file.clone();
                 let document = self.document.clone();
-                move |asked: &Landing, controller: &mut ScrollController| {
-                    let Some(index) = landing_row(asked, &document, &file, length) else {
-                        return false;
-                    };
-                    // Answered only where the pane could go there: a landing is gone
-                    // to once, so one taken by a pane with no measurement yet would be
-                    // remembered as answered and never made good.
-                    reveal_row(controller, *viewport.read(), length, index)
-                }
+                move |asked: &Landing| landing_row(asked, &document, &file, length)
             },
             controller,
             viewport,

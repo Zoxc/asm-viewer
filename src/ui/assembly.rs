@@ -1282,33 +1282,22 @@ impl Component for InstructionList {
         use_kept_position(
             use_places().asm_at,
             docs,
+            Pane::Assembly,
             {
                 let data = data.clone();
-                move |controller: &mut ScrollController| {
+                move || {
                     // Asked before anything else: `owed_reveal` reads the marks, and that
                     // read is what wakes this on the next click. **The request it answers
                     // nothing for is left owed**, so the listing that can answer it still
                     // finds it.
-                    let Some(owing) = owed_reveal(marked, Pane::Assembly) else {
-                        return false;
-                    };
-                    let owed = owed_listing_row(&owing, data.lanes(), |pair| {
-                        data.studied.first_paired(pair)
-                    });
-                    let Some(row) = owed else {
-                        return false;
-                    };
-                    if !reveal_row(controller, *viewport.read(), length, row) {
-                        return false;
-                    }
-                    reveal_made(marked, Pane::Assembly);
-                    true
+                    let owing = owed_reveal(marked, Pane::Assembly)?;
+                    owed_listing_row(&owing, data.lanes(), |pair| data.studied.first_paired(pair))
                 }
             },
             // A landing's half for this pane is an address, and an address is a row of a
             // listing that arrives later than the document: it is left as a `Planting`
             // and spent below, never taken here.
-            |_: &Landing, _: &mut ScrollController| false,
+            |_: &Landing| None,
             controller,
             viewport,
             &entry,

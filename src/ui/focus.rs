@@ -304,12 +304,17 @@ pub(crate) fn caret_reveal(
     }
 }
 
-/// What a pane's [`use_kept_position`] asks of it every render: the reveal it owes, the
-/// landing it can take, and the row it opens at. Held so the effect reads the latest and
-/// not the first.
-struct Latest {
-    reveal: Box<dyn FnMut(&mut ScrollController) -> bool>,
-    coming: Box<dyn FnMut(&Landing, &mut ScrollController) -> bool>,
+/// What a pane's [`use_kept_position`] asks of it every render: the row it owes a reveal
+/// to, the row a landing names in it, and the row it opens at. Held so the effect reads
+/// the latest and not the first.
+///
+/// Both answers are rows and not scrolls: the hook holds the controller, the viewport and
+/// the length, so the scroll is made there, once, and a pane says only which row it
+/// means. Generic over the two closures rather than boxing them, this being written
+/// afresh on every render.
+struct Latest<R, C> {
+    reveal: R,
+    coming: C,
     opening: Option<usize>,
 }
 
@@ -399,26 +404,35 @@ fn kept_move(
 ///   showing: they differ for exactly the one run that has to move the view, and every
 ///   write goes under the held tab.
 ///
-/// And the pane's reveal is made **here**, by `reveal`, rather than by an effect of its
-/// own: it is handed the controller and answers whether it scrolled, and a scroll it made
+/// And the pane's reveal is made **here**, rather than by an effect of its own: `reveal`
+/// answers the row this pane owes a scroll to, the scroll is made here, and a scroll made
 /// is where the arriving tab goes instead of back to its row. The two are owed at once
 /// when a row in the Locations panel opens a symbol on a line, and two effects' scrolls
-/// land in whichever order the runtime wakes them -- with the reveal first, it had
-/// marked itself made by the time the kept row was put over it. One effect has one
-/// order. `reveal` reads the marks, which is what wakes this on a click inside a tab.
+/// land in whichever order the runtime wakes them -- with the reveal first, it had marked
+/// itself made by the time the kept row was put over it. One effect has one order.
+/// `reveal` reads the marks, which is what wakes this on a click inside a tab, so it is
+/// asked before anything here can return.
+///
+/// A reveal the pane could be scrolled to is then said to be made, for `pane`, in the
+/// marks the [`Marked`] context holds -- the state both panes pick their runs out in.
+/// Said here and not by the caller, so a reveal is marked made exactly when the scroll
+/// was: marked before it, one owed to a pane that cannot scroll yet is answered and
+/// nothing is left to correct it ([`reveal_row`]).
 ///
 /// **A tab arriving with a landing on its way goes to the row the landing names as it
 /// draws it, and holds the move it would otherwise make until the landing is spent.**
 /// `use_land` turns a landing into a run two passes after the switch reaches here -- it
 /// runs off `Active`, which is a memo -- so a pane left to its own devices drew the
 /// arriving document at the outgoing place's offset until then, and a pane that made its
-/// move first drew it at the top of the file. `coming` is asked to take the landing: it
-/// answers for a row of what this pane is drawing, with the same `reveal_row` the run
-/// makes later, so the run finds the row already on screen and moves nothing. A landing
-/// it does not take -- a door that knew only an address, or one meant for the other pane
-/// -- leaves the move held rather than made, since that pass may still plant this pane a
-/// run. Nothing is stranded by a landing that never lands: one is only ever left by a
-/// move that changes the place, and that arrival is what spends it.
+/// move first drew it at the top of the file. `coming` is asked for the row the landing
+/// names in what this pane is drawing, revealed with the same `reveal_row` the run makes
+/// later, so the run finds the row already on screen and moves nothing. Only a row the
+/// pane could be scrolled to counts as taken: a landing is gone to once, so one taken by
+/// a pane with no measurement yet would be remembered as answered and never made good. A
+/// landing it does not take -- a door that knew only an address, or one meant for the
+/// other pane -- leaves the move held rather than made, since that pass may still plant
+/// this pane a run. Nothing is stranded by a landing that never lands: one is only ever
+/// left by a move that changes the place, and that arrival is what spends it.
 ///
 /// `reveal` and `opening` are the **latest render's**, kept in a cell for the effect to
 /// take. A tab handed another document is not mounted again -- a link followed in place,
@@ -448,8 +462,9 @@ fn kept_move(
 pub(crate) fn use_kept_position(
     mut positions: State<Positions<Entry>>,
     docs: State<Docs>,
-    reveal: impl FnMut(&mut ScrollController) -> bool + 'static,
-    coming: impl FnMut(&Landing, &mut ScrollController) -> bool + 'static,
+    pane: Pane,
+    reveal: impl FnMut() -> Option<usize> + 'static,
+    coming: impl FnMut(&Landing) -> Option<usize> + 'static,
     mut controller: ScrollController,
     viewport: State<f32>,
     tab: &Entry,
@@ -461,22 +476,16 @@ pub(crate) fn use_kept_position(
     // nothing renders from it, and a state would cost the pane a render per switch.
     let held = use_hook(|| Rc::new(RefCell::new(None::<Entry>)));
 
-    // The reveal and the opening row as this render made them. The effect below is handed
-    // fresh deps, but its callback is built once in a `use_hook`, so a value passed to it
-    // by hand would stay the first render's. The one the hook makes is never read: every
-    // render writes over it before the effect can run.
-    let latest = use_hook(|| {
-        Rc::new(RefCell::new(Latest {
-            reveal: Box::new(|_| false),
-            coming: Box::new(|_, _| false),
-            opening: None,
-        }))
-    });
-    *latest.borrow_mut() = Latest {
-        reveal: Box::new(reveal),
-        coming: Box::new(coming),
+    // The two answers and the opening row as this render made them. The effect below is
+    // handed fresh deps, but its callback is built once in a `use_hook`, so a value passed
+    // to it by hand would stay the first render's. `None` only before the first render has
+    // written it, which no run of the effect comes before.
+    let latest = use_hook(|| Rc::new(RefCell::new(None)));
+    *latest.borrow_mut() = Some(Latest {
+        reveal,
+        coming,
         opening,
-    };
+    });
 
     // The move this hook owes the view and has not made. An `Rc<RefCell>` for the same
     // reason as the tab above.
@@ -486,6 +495,9 @@ pub(crate) fn use_kept_position(
     // `try_consume_context`, a pane mounted without the landing machinery having none on
     // its way.
     let landing = try_consume_context::<Doors>().map(|doors| doors.land);
+    // Where a reveal made is said to be made, asked for the same way: a list that keeps a
+    // position without the panes' marks is owed no reveal to answer.
+    let marked = try_consume_context::<Marked>().map(|marked| marked.0);
     // The landing this pane has already gone to, held exactly as long as that landing is
     // on its way. **The pane does not spend the landing** -- `use_land` does, a pass or
     // more later -- so without this the reveal below is made again on every wake, and the
@@ -534,7 +546,8 @@ pub(crate) fn use_kept_position(
             // is a hint out of debug info and the file under it may have been cut short since.
             let opening = latest
                 .borrow()
-                .opening
+                .as_ref()
+                .and_then(|asked| asked.opening)
                 .map(|row| row.min(length.saturating_sub(1)));
 
             // Whose row the offset above is, and where this run has to move the view to.
@@ -569,11 +582,21 @@ pub(crate) fn use_kept_position(
 
             // The reveal first, and the kept row only when it made none: either scroll is a
             // write this effect is subscribed to, so it wakes once more, finds the tab it is
-            // holding is the tab it is showing, and writes the row down.
+            // holding is the tab it is showing, and writes the row down. The row is the
+            // pane's to say and the scroll this run's to make, over the viewport read
+            // above and the length these rows are of.
             let mut asked = latest.borrow_mut();
-            if (asked.reveal)(&mut controller) {
-                *owing.borrow_mut() = None;
-                return;
+            let owed = asked.as_mut().and_then(|asked| (asked.reveal)());
+            if let Some(row) = owed {
+                if reveal_row(&mut controller, seen, *length, row) {
+                    // Only now: a reveal the pane could not be scrolled to is left owed,
+                    // for the run the measurement wakes to pay.
+                    if let Some(marked) = marked {
+                        reveal_made(marked, pane);
+                    }
+                    *owing.borrow_mut() = None;
+                    return;
+                }
             }
             // Then the landing that has not been spent yet, which the pane takes when it
             // names a row of what it is drawing. The row is where this pane is going, so it
@@ -582,7 +605,12 @@ pub(crate) fn use_kept_position(
             if let Some(asking) = &coming {
                 // Bound to a `let` of its own: the borrow must be over before the write.
                 let gone = answered.borrow().as_ref() == Some(asking);
-                if !gone && (asked.coming)(asking, &mut controller) {
+                let taken = !gone
+                    && asked
+                        .as_mut()
+                        .and_then(|asked| (asked.coming)(asking))
+                        .is_some_and(|row| reveal_row(&mut controller, seen, *length, row));
+                if taken {
                     *answered.borrow_mut() = Some(asking.clone());
                     *owing.borrow_mut() = None;
                     return;

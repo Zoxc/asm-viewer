@@ -768,28 +768,32 @@ survives the window merely being closed. The tab the controller is *holding* is 
 in an `Rc<RefCell>` and not a `State`, since nothing renders from it. That is because it is not the
 tab the app is showing during the one run that has to move the view, and every write goes under the
 held one. And a reveal a run is owed (`Picked::owed`) **wins** over a remembered position because
-the same effect makes both: `use_kept_position` is handed the pane's reveal as a closure and asks it
-first, applying the remembered row only when no scroll was made. The two *are* owed at once (a
-Locations row opens a symbol on a line, so the tab changes and the arriving one is owed a reveal),
-and two effects' scrolls land in whichever order the runtime wakes them. With the reveal first, it
-had marked itself made by the time the kept row was put over it, which reset both panes to the top.
-One effect has one order, and when a reveal scrolls, the effect wakes on that scroll and records
-where it landed. **The reveal and the opening row are read out of a cell the pane rewrites every
-render**, not passed into the effect: `use_side_effect_with_deps` builds its callback once in a
-`use_hook` and refreshes only the deps, and a tab handed another document is not mounted again -- a
-link followed in place, a search hit shown in the temporal tab -- so a closure kept from the mount
-measured the row it owed against the file that render drew, refused it for ever, and left the pane
-to fall back to the opening row. **A tab arriving with a landing on its way goes to the row the
+the same effect makes both: `use_kept_position` asks the pane for the row it owes a reveal to and
+makes that scroll itself, applying the remembered row only when it made none. The pane answers a
+row and never a scroll, so the arithmetic -- the viewport as this run read it, the length these
+rows are of, `reveal_row` and then `reveal_made` -- is written once in the hook instead of in
+every caller's closure. The two *are* owed at once (a Locations row opens a symbol on a line, so
+the tab changes and the arriving one is owed a reveal), and two effects' scrolls land in whichever
+order the runtime wakes them. With the reveal first, it had marked itself made by the time the
+kept row was put over it, which reset both panes to the top. One effect has one order, and when a
+reveal scrolls, the effect wakes on that scroll and records where it landed. **The reveal and the
+opening row are read out of a cell the pane rewrites every render**, not passed into the effect:
+`use_side_effect_with_deps` builds its callback once in a `use_hook` and refreshes only the deps,
+and a tab handed another document is not mounted again -- a link followed in place, a search hit
+shown in the temporal tab -- so a closure kept from the mount measured the row it owed against the
+file that render drew, refused it for ever, and left the pane to fall back to the opening row. **A tab arriving with a landing on its way goes to the row the
 landing names as it draws it**, and holds the move it would otherwise make until the landing has
 been spent. `use_land` turns a landing into a run two passes after the switch reaches the hook -- it
 runs off `Active`, and that is a memo -- so a pane that waited for it drew the arriving document at
 the outgoing place's offset until then, and one that made its move first drew it at the top of the
-file. The hook asks the pane to take the landing instead (`coming`), which the source pane does for
-a line of the file it is drawing, with the same `reveal_row` the run makes later, so the run finds
-the row already there. A landing the pane does not take -- a door that knew only an address, or one
-meant for the other pane -- leaves the move held rather than made, since that pass may still plant
-this pane a run. Nothing strands the pane on the offset of the tab it left: a landing is only ever
-left by a move that changes the place, and that arrival is what spends it.
+file. The hook asks the pane for the row the landing names instead (`coming`), which the source
+pane answers for a line of the file it is drawing, and reveals it with the same `reveal_row` the
+run makes later, so the run finds the row already there. Only a row it could be scrolled to counts
+as taken: a landing is gone to once, and one taken by an unmeasured pane would be remembered as
+answered and never made good. A landing the pane does not take -- a door that knew only an
+address, or one meant for the other pane -- leaves the move held rather than made, since that pass
+may still plant this pane a run. Nothing strands the pane on the offset of the tab it left: a
+landing is only ever left by a move that changes the place, and that arrival is what spends it.
 `close_tab`/`close_others`/`close_binary` forget every position of a tab's entries with the tab, by
 id, and `close_binary` forgets those of the entries it takes off the surviving trails too. Each ends
 in one `Places::forgetting`, which is why none of them can forget four of the five maps: that is not

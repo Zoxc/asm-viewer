@@ -122,9 +122,12 @@ fn scrolling_harness() -> impl IntoElement {
     use_kept_position(
         at,
         docs,
-        |_| false,
+        // The pane it says it is, which nothing here reads: this harness is about the
+        // kept position alone, so nothing is owed a reveal.
+        Pane::Assembly,
+        || None,
         // No landing machinery here, so no landing to take.
-        |_: &Landing, _: &mut ScrollController| false,
+        |_: &Landing| None,
         controller,
         viewport,
         &showing,
@@ -269,36 +272,35 @@ fn revealing_harness() -> impl IntoElement {
     let showing = tab.read().clone();
     let rows = *length.read();
     let drawn = *listing.read();
-    // What the pane has been measured as, which a test may say is nothing yet. Held as
-    // the panes hold theirs and read inside the closure, so the measurement wakes it.
+    // What the pane has been measured as, which a test may say is nothing yet. Handed to
+    // the hook as the panes hand it theirs, which is what reads it, so the measurement
+    // wakes the reveal it kept.
     let seen = try_consume_context::<KeptViewport>().map(|kept| kept.0);
     // What `use_kept_position` is told the pane is, for a test that provides no viewport
-    // of its own: the same number the reveal below falls back to.
+    // of its own.
     let assumed = use_state(|| VIEWPORT);
     use_kept_position(
         at,
         docs,
-        move |controller: &mut ScrollController| {
-            let owed = owed_reveal(marked, Pane::Assembly).and_then(|owing| {
+        Pane::Assembly,
+        move || {
+            owed_reveal(marked, Pane::Assembly).and_then(|owing| {
                 // Only the listing the pair has a row in can pay it; every other leaves
                 // it owed, as the assembly pane's reveal does. Peeked, so the arrival of
                 // a listing is not itself what wakes the effect.
                 owing.row(|pair| {
                     (*listing.peek() == PAIRED_LISTING).then(|| *pair.chars.rows().start())
                 })
-            });
-            let Some(row) = owed else {
-                return false;
-            };
-            let measured = seen.map_or(VIEWPORT, |kept| *kept.read());
-            if !reveal_row(controller, measured, *length.peek(), row) {
-                return false;
-            }
-            reveal_made(marked, Pane::Assembly);
-            true
+            })
         },
-        // No landing machinery here, so no landing to take.
-        |_: &Landing, _: &mut ScrollController| false,
+        // The landing's line as a row of these, as the source pane reads one. A test
+        // without [`Doors`] has no landing on its way and this is never asked.
+        |asked: &Landing| {
+            asked
+                .at
+                .as_ref()
+                .and_then(|at| (at.line as usize).checked_sub(1))
+        },
         controller,
         seen.unwrap_or(assumed),
         &showing,
@@ -391,6 +393,88 @@ fn a_reveal_owed_to_an_unmeasured_pane_is_kept_until_it_is_measured() {
         "the reveal was not paid once the pane was measured: row {landed}"
     );
     assert!(owed_reveal(marked, Pane::Assembly).is_none());
+}
+
+/// The same for the landing half: a landing a pane could not be scrolled to is **not**
+/// counted as gone to. A landing is gone to once -- the pane does not spend it, `use_land`
+/// does, a pass or more later -- so one taken by a pane with no measurement yet would be
+/// remembered as answered with the view still at the top, and the measurement after it
+/// would find nothing to do.
+#[test]
+fn a_landing_an_unmeasured_pane_could_not_go_to_is_not_counted_as_gone_to() {
+    let (mut test, (top, land, viewport)) = TestingRunner::new(
+        revealing_harness,
+        (100., 100.).into(),
+        |runner| {
+            let (docs, a, _) = kept_tabs();
+            let docs = runner
+                .provide_root_context(|| KeptDocs(State::create(docs)))
+                .0;
+            runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
+            runner.provide_root_context(|| KeptLength(State::create(100)));
+            runner.provide_root_context(|| KeptListing(State::create(PAIRED_LISTING)));
+            runner.provide_root_context(|| KeptTab(State::create(a)));
+            runner.provide_root_context(|| Marked(State::create(Marks::default())));
+            (
+                runner.provide_root_context(|| KeptTop(State::create(0))).0,
+                // The landing machinery, which is all the hook asks `Doors` for: nothing
+                // here spends what is left in it.
+                runner
+                    .provide_root_context(|| Doors {
+                        open: Open {
+                            strip: State::create(Strip::default()),
+                            docs,
+                        },
+                        visits: State::create(Visits::default()),
+                        marked: State::create(Marks::default()),
+                        land: State::create(None),
+                        plant: State::create(None),
+                    })
+                    .land,
+                // Not laid out yet, as a pane is on the pass a door reaches it.
+                runner
+                    .provide_root_context(|| KeptViewport(State::create(0.0)))
+                    .0,
+            )
+        },
+        1.,
+    );
+    let (mut land, mut viewport) = (land, viewport);
+    let top_row = |test: &mut TestingRunner| {
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+        test.move_cursor((50., 90.));
+        test.sync_and_update();
+        test.move_cursor((50., 5.));
+        test.sync_and_update();
+        *top.peek()
+    };
+    test.sync_and_update();
+
+    // The door: a landing on the 41st line, which is row 40 of what the pane draws.
+    land.set(Some(Landing {
+        tab: Document::Source(Arc::from("a.rs")),
+        at: Some(LinePos {
+            file: Arc::from("a.rs"),
+            line: 41,
+        }),
+        address: None,
+        columns: None,
+    }));
+    assert_eq!(
+        top_row(&mut test),
+        0,
+        "an unmeasured pane was scrolled anyway"
+    );
+
+    // Measured, and the pass that measures it goes to the landing that was kept.
+    viewport.set(VIEWPORT);
+    let landed = top_row(&mut test);
+    assert!(
+        (30..=40).contains(&landed),
+        "the landing was counted as gone to by a pane that never went: row {landed}"
+    );
 }
 
 /// A reveal owed when the tab changes wins over where the tab was left: the two are
