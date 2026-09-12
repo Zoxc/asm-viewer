@@ -106,6 +106,28 @@ pub(crate) fn look(listed: &Searchable, filter: &Filter) -> Vec<Hit> {
     hits
 }
 
+/// What a search is about: which listing, by pointer, and which pattern.
+///
+/// One value and not two loose fields: the ask, the answer and the hits the bar draws are
+/// judged by one `==`, where comparing the two halves in each of the three places is three
+/// places to forget one and draw an answer about a listing the pane has left or a pattern
+/// typed past.
+#[derive(Clone, PartialEq)]
+pub(crate) struct About {
+    listing: usize,
+    filter: Filter,
+}
+
+impl About {
+    /// What a search of `listed` for `filter` is about.
+    fn of(listed: &Searchable, filter: &Filter) -> Self {
+        About {
+            listing: listed.id(),
+            filter: filter.clone(),
+        }
+    }
+}
+
 /// What a bar has of its listing: the hits of one searched whole, or the walk through an
 /// object's code.
 ///
@@ -115,9 +137,8 @@ enum Sought {
     /// Neither: nothing has answered, and no walk has been asked for.
     #[default]
     Nothing,
-    /// A listing searched whole: which listing and pattern the hits are about, and the
-    /// hits in order.
-    Hits(usize, Filter, Shared<Hit>),
+    /// A listing searched whole: what the hits are about, and the hits in order.
+    Hits(About, Shared<Hit>),
     /// The walk a step through an object's code asked for ([`Hunt`]).
     Walk(Hunt),
 }
@@ -132,7 +153,7 @@ pub(crate) struct Find {
     /// search -- an object's code, or a pane with nothing in it.
     pub(crate) listing: Option<Searchable>,
     /// What was last asked, so a question in flight is not asked again every render.
-    asked: Option<(usize, Filter)>,
+    asked: Option<About>,
     /// What came back, whichever way this listing is searched.
     sought: Sought,
     /// Which hit the pane is on, `None` until a step has landed. A new pattern clears it,
@@ -146,14 +167,18 @@ pub(crate) struct Find {
 }
 
 impl Find {
+    /// What a search of the listing the pane is drawing, for what is typed now, is about.
+    /// `None` where the pane has no listing, there being nothing to search.
+    fn about(&self) -> Option<About> {
+        Some(About::of(self.listing.as_ref()?, &self.filter))
+    }
+
     /// The hits, where the answer is about the listing and pattern being asked about now.
     /// A stale answer draws nothing rather than the last file's marks.
     pub(crate) fn hits(&self) -> Option<&Shared<Hit>> {
-        let listing = self.listing.as_ref()?.id();
+        let about = self.about()?;
         match &self.sought {
-            Sought::Hits(about, filter, hits) if *about == listing && *filter == self.filter => {
-                Some(hits)
-            }
+            Sought::Hits(sought, hits) if *sought == about => Some(hits),
             _ => None,
         }
     }
@@ -193,21 +218,21 @@ impl Find {
             return None;
         }
         let listed = self.listing.clone().filter(|listed| !listed.walked())?;
-        let about = (listed.id(), self.filter.clone());
+        let about = About::of(&listed, &self.filter);
         if self.asked.as_ref() == Some(&about) || self.hits().is_some() {
             return None;
         }
         Some((listed, self.filter.clone()))
     }
 
-    /// Take `hits` as the answer about `listing` and `filter`, and say whether anything
-    /// changed. Refused where the pane has moved on, which is the whole of the
-    /// supersession rule: a comparison and not a generation count.
-    fn take(&mut self, listing: usize, filter: Filter, hits: Shared<Hit>) -> bool {
-        if self.listing.as_ref().map(Searchable::id) != Some(listing) || self.filter != filter {
+    /// Take `hits` as the answer `about` says it is, and say whether anything changed.
+    /// Refused where the pane has moved on, which is the whole of the supersession rule:
+    /// a comparison and not a generation count.
+    fn take(&mut self, about: About, hits: Shared<Hit>) -> bool {
+        if self.about().as_ref() != Some(&about) {
             return false;
         }
-        self.sought = Sought::Hits(listing, filter, hits);
+        self.sought = Sought::Hits(about, hits);
         true
     }
 }
@@ -393,8 +418,7 @@ pub(crate) struct FindAsk {
 
 pub(crate) struct FindAnswer {
     pub(crate) at: Where,
-    pub(crate) listing: usize,
-    pub(crate) filter: Filter,
+    pub(crate) about: About,
     pub(crate) hits: Shared<Hit>,
 }
 
@@ -402,8 +426,7 @@ pub(crate) struct FindAnswer {
 pub(crate) fn find_work(ask: FindAsk) -> FindAnswer {
     FindAnswer {
         at: ask.at,
-        listing: ask.listed.id(),
-        filter: ask.filter.clone(),
+        about: About::of(&ask.listed, &ask.filter),
         hits: look(&ask.listed, &ask.filter).into(),
     }
 }
@@ -441,10 +464,7 @@ pub(crate) fn use_find_with(
             if !next.open(&answer.at) {
                 return;
             }
-            if next
-                .get_mut(&answer.at)
-                .take(answer.listing, answer.filter, answer.hits)
-            {
+            if next.get_mut(&answer.at).take(answer.about, answer.hits) {
                 finds.set(next);
             }
         },
@@ -468,7 +488,7 @@ pub(crate) fn use_find_with(
         let mut finds = finds;
         let mut next = finds.peek().clone();
         for (at, listed, filter) in wanted {
-            next.get_mut(&at).asked = Some((listed.id(), filter.clone()));
+            next.get_mut(&at).asked = Some(About::of(&listed, &filter));
             requests.send(FindAsk { at, listed, filter });
         }
         finds.set(next);

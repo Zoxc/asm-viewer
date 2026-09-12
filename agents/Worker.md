@@ -336,9 +336,11 @@ source reader's: a pattern supersedes on every keystroke, and a question queued 
 DWARF a click costs would land long after the reader had typed past it. Its drain keeps the newest
 question **per pane**, not the newest outright, so the two panes of a tab do not drop each other's,
 and its answer is judged by comparison as every other is -- the listing it is about, by pointer, and
-the pattern it was asked with. The listing travels with the job (`Searchable`), a worker thread being
-able to read no UI state; both arms of it are `Send` already, and the two functions that build a
-row's line from them ask for no colour, `palette()` being thread-local. A pane asks by *claiming*
-what it draws (`use_searching`, the shape `use_code_beside` has) and the effect beside the worker
-reads that and sends: a view cannot reach the request channel. An empty pattern is not asked at all
--- nothing typed marks nothing, so there is nothing to search for.
+the pattern it was asked with, held as one value (`About`) so that the ask, the answer and the hits
+the bar draws are judged by one `==` and not by three comparisons that can disagree. The listing
+travels with the job (`Searchable`), a worker thread being able to read no UI state; both arms of it
+are `Send` already, and the two functions that build a row's line from them ask for no colour,
+`palette()` being thread-local. A pane asks by *claiming* what it draws (`use_searching`, the shape
+`use_code_beside` has) and the effect beside the worker reads that and sends: a view cannot reach the
+request channel. An empty pattern is not asked at all -- nothing typed marks nothing, so there is
+nothing to search for.

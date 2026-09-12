@@ -24167,6 +24167,90 @@ fn a_find_write_that_changed_nothing_redraws_nothing() {
     );
 }
 
+/// How many questions the find worker has been asked, in a context of its own so the
+/// harness can count them without the test reaching the worker.
+#[derive(Clone)]
+struct Questions(Arc<std::sync::atomic::AtomicUsize>);
+
+/// The Assembly pane with a find worker that counts what it is asked and then answers it
+/// for real.
+fn counting_find_harness() -> impl IntoElement {
+    let questions = use_consume::<Questions>().0;
+    use_find_with(use_consume::<Looking>().0, move |ask| {
+        questions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        find_work(ask)
+    });
+    listing_harness()
+}
+
+/// Another symbol's listing, as the find bar sees one: a second `Searchable`, whose
+/// pointer is not the pane's.
+fn other_listing() -> Searchable {
+    let symbol = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name != "sum_to")
+        .expect("the fixture holds more than one function");
+    let studied = Studied::new(symbol);
+    Searchable::Symbol {
+        assembly: studied.assembly.clone().expect("the symbol decodes"),
+        lanes: studied.lanes.clone(),
+    }
+}
+
+/// **A find is asked once for each listing and pattern, and again the moment either
+/// changes.** Which listing, by pointer, and which pattern is one value (`About`), and the
+/// ask, the answer and the hits the bar draws are judged by the same comparison: a bar
+/// already answered asks nothing on the renders after it, and one whose pattern or whose
+/// listing has moved is answered afresh rather than left drawing the last answer's marks.
+///
+/// Fails on either half dropped from that comparison: forget the pattern and the second
+/// question is never asked, forget the listing and the third is not.
+#[test]
+fn a_find_is_asked_once_per_listing_and_pattern() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let questions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = || questions.load(std::sync::atomic::Ordering::Relaxed);
+    let (mut test, roots) = TestingRunner::new(
+        counting_find_harness,
+        (600., 600.).into(),
+        {
+            let questions = questions.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || Questions(questions));
+                runner.provide_root_context(move || listing_states(shown))
+            }
+        },
+        1.,
+    );
+    let states = roots.states;
+    let finds = states.places.finds;
+    let at = find_at(&states, &document);
+    settle(&mut test);
+
+    open_find_bar(&mut test);
+    assert_eq!(counted(), 0, "a bar with nothing typed was searched for");
+
+    // A pattern, written as the box writes one.
+    edit_find(finds, at, |bar| bar.filter.pattern = "mov".to_owned());
+    find_answered(&mut test, finds, at, "mov");
+    assert_eq!(counted(), 1, "one listing and one pattern, one question");
+    settle(&mut test);
+    assert_eq!(counted(), 1, "a question already answered was asked again");
+
+    // Another pattern over the same listing.
+    edit_find(finds, at, |bar| bar.filter.pattern = "ret".to_owned());
+    find_answered(&mut test, finds, at, "ret");
+    assert_eq!(counted(), 2, "the new pattern was never asked about");
+
+    // And the same pattern over another listing, which is what the claim writes when the
+    // pane moves to another symbol (`use_searching`).
+    let other = other_listing();
+    edit_find(finds, at, |bar| bar.listing = Some(other));
+    find_answered(&mut test, finds, at, "ret");
+    assert_eq!(counted(), 3, "the new listing was never asked about");
+}
+
 /// **Ctrl+F in a code pane opens the bar over that pane**, which is the chord's one
 /// meaning there: the sidebar's lists answer it on their rows and a code pane on its own
 /// box, so the bar a reader opens is the one they were reading. Fails on a binding at the
