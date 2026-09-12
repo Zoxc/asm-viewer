@@ -34,10 +34,13 @@ same map rather than a flag of its own with a `match` in front of every reader o
 pane decides what that is, so the pane and the effect that drops its selected rows cannot disagree
 about which listing is up. It answers the whole question -- which file, which place the rows are
 kept under, and which line the tab opens at -- so the pane spends the answer rather than working
-the kind out a second time; `use_clear_marks`, which wants the file alone, takes `file()` and hands
-in no rows. A **subject** is a source-driven tab's own file. A **companion** is the file the drawn
-symbol was compiled from, which comes out of `SymbolLines` inside `Studied` and not out of
-`Active`, because the analysis arrives from a worker thread and anything reading the
+the kind out a second time. **The `SourceSide` answers each part itself**: `file`, the place the
+rows are kept under (`document`), the row the pane opens at (`opening`), and whether the bar's
+name is a door (`opens`), so nothing matches on the kind again and a third kind of side cannot be
+handled in the pane and missed in the bar. `use_clear_marks`, which wants the file alone, takes
+`file()` and hands in no rows. A **subject** is a source-driven tab's own file. A **companion**
+is the file the drawn symbol was compiled from, which comes out of `SymbolLines` inside `Studied`
+and not out of `Active`, because the analysis arrives from a worker thread and anything reading the
 two separately sees them disagree for as long as the work takes. Only the symbol's *own* file is
 drawn, never the rest of `LineInfo::files`, since a Rust function inlines dozens, with one
 exception: when the source pane's selected run is in another file the listing's line info names, the
@@ -60,13 +63,21 @@ instruction compiled from that line, which `use_kept_place`'s reveal pays out of
 stretch has one and leaves owed while none does; the stretch may not be decoded yet, and the answer
 that decodes it wakes the effect again.
 
+**The pane draws both states through a guard and copies neither.** It is drawn again on every
+move of a sweep in either pane -- it reads the runs -- and on every word from the worker, and
+`Analyzed` is a whole answer: a listing, the symbol it is of, and the questions either side of it.
+So the two guards are bound around the one call that wants both (`source_side`), spent and
+dropped, and every later read of the analysis is a short scope of its own. `Analyzed`'s `Clone`
+counts itself (`analyzed::copies`), as `Grouped`'s does (`agents/Sidebar.md`), so a headless test
+can say a sweep copied nothing.
+
 **A tab opens its source side on the symbol's own lines**, which is what selecting a symbol asked to
 see: a function a hundred lines into its file was otherwise read from the top of the file for as
 long as it took to scroll. `SymbolLines` carries the **line** the symbol opens at beside the file it
 opens in, both taken from **one** line-info row (the row the first instruction was compiled from,
 else the first row naming a file at all), so the line can never be a line of some other file; both
 are worked out on the worker, beside the info they come from. `source_side` names that line, or
-the pressed instruction's for an object's code, and `opening_row` turns it into the row
+the pressed instruction's for an object's code, and `SourceSide::opening` turns it into the row
 `use_kept_position` opens a tab it has never shown at, backed off by the `CONTEXT_ROWS` a reveal
 keeps above the row it scrolls to. A row remembered for the tab wins over it, so this is the *first*
 open and not every one. Everything with nothing to say falls back to the top of the file as it
@@ -476,8 +487,9 @@ the decision itself `moved_off`) and not whenever the file changes, since a land
 show and the switch it causes must not be what drops it. A change of the active *entry* is neither
 effect's to answer, being a switch of place, which `use_land` owns whole (below). And **the scroll
 is a request, answered once**: `Picked::owed` says which panes have yet to scroll to the run,
-`owed_reveal` only *looks*, `reveal_made` is what clears a pane's flag, and `reveal_row` does
-nothing when the row is already on screen -- measured against the offset it would write and not
+`owed_reveal` only *looks*, `reveal_made` is what clears a pane's flag -- through `marks::update`,
+as every writer of the runs is, so a clearing that clears nothing is not a write -- and `reveal_row`
+does nothing when the row is already on screen -- measured against the offset it would write and not
 against the context rows alone, a row in the first few of a listing having nowhere to put them, so
 that measured that way it was never in view -- and with a pixel of slack, an offset being a whole
 number of pixels where a listing of rows is not, so a view clamped hard against its end stands a
@@ -1056,7 +1068,12 @@ on the tab's chip being enough, and a run of no file pairs with nothing on the o
 never dropped, since what drops the source run is the pane moving off *its* file.
 The state is `Marked`, holding one `Picked` **per pane**
 (`Marks`), independent, each the other pane's pair and the scroll it owes, and Ctrl+C copies the run
-of the pane whose box has the keyboard. The press is `pointer_down` (a press event arrives only once
+of the pane whose box has the keyboard. Every writer goes through `marks::update`, which clones the
+runs, hands the copy to the edit and puts it back only where it differs: the guard is gone before
+anything writes, and a write that moved nothing does not draw both lists again. Each builds its run
+in one call -- `Picked::settled`, a run nobody is sweeping, which is every run a door makes, over
+`row_run`, the columns a door named on a row or a caret at its start -- so a field added to a run
+is one edit and not seven. The press is `pointer_down` (a press event arrives only once
 the button is back up), in the same handler as the right button's menu (`secondary`), and the sweep
 is `pointer_move`, not `pointer_over`, which freya fires once on entry whatever its doc string says
 (`notes/upstream/freya.md`). Shift is watched globally at the root, because a freya pointer event

@@ -571,10 +571,11 @@ struct SourceList {
     /// two functions compiled from one file are two places, and keying by the file would
     /// have them share a position.
     document: Document,
-    /// The row this tab opens at the first time it is shown, from [`opening_row`], and
-    /// [`None`] for a tab with nothing better to open at than the top. The row itself and
-    /// never one backed off towards the top: the rows kept above it are the pane's to
-    /// add. A row remembered for the tab wins over it -- see `use_kept_position`.
+    /// The row this tab opens at the first time it is shown, from
+    /// [`SourceSide::opening`], and [`None`] for a tab with nothing better to open at
+    /// than the top. The row itself and never one backed off towards the top: the rows
+    /// kept above it are the pane's to add. A row remembered for the tab wins over it --
+    /// see `use_kept_position`.
     opening: Option<usize>,
 }
 
@@ -873,6 +874,42 @@ impl SourceSide {
             SourceSide::Subject(file) | SourceSide::Companion { file, .. } => file,
         }
     }
+
+    /// The place the rows are kept under: the companion's own, and the file itself for a
+    /// subject, which is the tab the reader opened.
+    fn document(&self) -> Document {
+        match self {
+            SourceSide::Subject(file) => Document::Source(file.clone()),
+            SourceSide::Companion { document, .. } => document.clone(),
+        }
+    }
+
+    /// The row the pane opens at the first time it shows this side: the line the
+    /// companion named, as a row, which is what selecting a symbol or pressing an
+    /// instruction asked to see. The row itself, the margin [`reveal_row`] keeps above
+    /// the row it scrolls to being the reveal's to add.
+    ///
+    /// **The top** for a subject, files being opened at the top, and for a companion that
+    /// named no line -- which is what selecting a symbol used to do in every case.
+    fn opening(&self) -> Option<usize> {
+        match self {
+            SourceSide::Subject(_) => None,
+            SourceSide::Companion { line, .. } => LinePos::row_of((*line)?),
+        }
+    }
+
+    /// Whether the bar's name is a door: a companion's is, a subject being that tab
+    /// already.
+    fn opens(&self) -> bool {
+        matches!(self, SourceSide::Companion { .. })
+    }
+
+    /// The file as a source-driven tab: what the bar draws its glyph from, and what its
+    /// name opens where the name is a door. The same as [`SourceSide::document`] for a
+    /// subject, which is why a subject's name is not one.
+    fn as_source(&self) -> Document {
+        Document::Source(self.file().clone())
+    }
 }
 
 /// The whole of what the Source pane draws for `active`: which file, which place its rows
@@ -1008,17 +1045,6 @@ thread_local! {
 #[derive(Clone, Copy)]
 pub(crate) struct ShowingFile(pub(crate) State<Option<Arc<str>>>);
 
-/// The row the Source pane opens a tab it has never shown at: the line
-/// [`SourceSide::Companion`] named, as a row, which is what selecting a symbol or pressing
-/// an instruction asked to see. The row itself, the margin [`reveal_row`] keeps above the
-/// row it scrolls to being the reveal's to add.
-///
-/// **The top of the file where the side named no line**, which is what selecting a symbol
-/// used to do in every case.
-fn opening_row(line: Option<u32>) -> Option<usize> {
-    LinePos::row_of(line?)
-}
-
 /// What the Source pane says over a file whose bytes are not the ones the debug info's
 /// checksum was taken of: the file is shown, since it is still the best thing to show, but
 /// its line numbers are the compiler's and not necessarily this file's.
@@ -1044,10 +1070,10 @@ fn source_bar(
     sweeping: bool,
 ) -> Element {
     let file = side.file().clone();
-    let opens = matches!(side, SourceSide::Companion { .. });
+    let opens = side.opens();
     // The file as a document: what the glyph is drawn from, and what a press opens where
     // the name is a door.
-    let document = Document::Source(file.clone());
+    let document = side.as_source();
 
     rect()
         .width(Size::fill())
@@ -1112,25 +1138,34 @@ pub(crate) struct SourcePane {
 
 impl Component for SourcePane {
     fn render(&self) -> impl IntoElement {
+        let marked = use_consume::<Marked>().0;
         // Whether a sweep is under way, for the header not to answer the pointer during one.
-        let sweeping = sweeping(use_consume::<Marked>().0);
+        let sweeping = sweeping(marked);
         let doors = use_doors();
         let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
-        // Reading it is what subscribes this tab to the analysis, so the pane fills in when
-        // a newly selected symbol's line info is worked out.
-        let analysis = use_consume::<Analysis>().0.read().clone();
-        // The tab's own document and not `Active`, which is a memo and a beat behind: this
-        // pane is only ever mounted for the tab it belongs to.
-        let marks = use_consume::<Marked>().0.read().clone();
+        let analysis = use_consume::<Analysis>().0;
         let sectioned = use_sectioned();
-        // Peeked and not read: the line a code tab opens at is read out of the rows, and
-        // a window of them decoding must not draw the pane again.
-        let built = self
-            .document
-            .code()
-            .and_then(|object| sectioned.peek_rows_of(object));
-        let side = source_side(Some(&self.document), &analysis, &marks, built.as_deref());
+        // **Borrowed and not cloned.** This pane is drawn again on every move of a sweep
+        // in either pane and on every word from the worker, and both states are whole
+        // answers -- a listing and its question, and the two runs with their files. So
+        // the guards are bound here, spent, and dropped; the side that comes out of them
+        // is owned, and every later read of the analysis is a scope of its own. Reading
+        // them is also what subscribes this tab to the two, so the pane fills in when a
+        // newly selected symbol's line info is worked out.
+        //
+        // The tab's own document and not `Active`, which is a memo and a beat behind:
+        // this pane is only ever mounted for the tab it belongs to.
+        let side = {
+            let (analysis, marks) = (analysis.read(), marked.read());
+            // Peeked and not read: the line a code tab opens at is read out of the rows,
+            // and a window of them decoding must not draw the pane again.
+            let built = self
+                .document
+                .code()
+                .and_then(|object| sectioned.peek_rows_of(object));
+            source_side(Some(&self.document), &analysis, &marks, built.as_deref())
+        };
 
         // **The one fact three questions are asked about:** which file this pane is
         // showing. Its text, the lines of it anything open has code from, and which of
@@ -1156,6 +1191,7 @@ impl Component for SourcePane {
         let Some(side) = side else {
             // The same answer the assembly pane gives, from the same place, plus one case
             // of its own: a symbol can be analysed and still name no file.
+            let analysis = analysis.read();
             return match analysis.showing(&self.document) {
                 Showing::Message(text) => placeholder(text),
                 Showing::Nothing => blank_pane(palette().pane_bg),
@@ -1171,10 +1207,7 @@ impl Component for SourcePane {
         // tab is a *file* the reader opened, so it opens where a file does, at the top;
         // a companion opens on the line [`source_side`] named, which is the symbol's own
         // or the pressed instruction's.
-        let (document, opening) = match &side {
-            SourceSide::Subject(file) => (Document::Source(file.clone()), None),
-            SourceSide::Companion { document, line, .. } => (document.clone(), opening_row(*line)),
-        };
+        let (document, opening) = (side.document(), side.opening());
 
         // The file itself, out of what the reader has answered -- and nothing until it
         // has, which is what keeps the read off this thread.
@@ -1191,6 +1224,7 @@ impl Component for SourcePane {
         // bytes are the ones the parse was made from, so nothing here reads a file to
         // find out.
         let stale = analysis
+            .read()
             .shown
             .as_ref()
             .and_then(|shown| shown.studied.lines.hash_for(&file))

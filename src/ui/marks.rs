@@ -34,6 +34,20 @@ pub(crate) struct Picked {
 }
 
 impl Picked {
+    /// A **settled** run over `chars` in `file`, with `owed` still owed: nobody is
+    /// sweeping it, and it goes by characters rather than by rows. Every run a door makes
+    /// is one -- the button is back up by the time the answer is known, so a sweep from
+    /// here would be a sweep nobody began.
+    fn settled(chars: CharSelection, file: Option<Arc<str>>, owed: Owed) -> Picked {
+        Picked {
+            chars,
+            dragging: false,
+            by_rows: false,
+            file,
+            owed,
+        }
+    }
+
     /// Whether this is a run of the one row `line` of `file`, which is what every door
     /// onto a line makes ([`line_pick`]). The caret it holds on that row is its own: it
     /// may be at a column, where a line alone says only the row.
@@ -294,12 +308,24 @@ pub(crate) fn land_row(marked: State<Marks>, file: Option<Arc<str>>, row: usize,
 /// The one-row run [`mark_row`] and [`land_row`] make of `row`: the row, and a caret at
 /// its start.
 fn row_pick(file: Option<Arc<str>>, row: usize, owed: Owed) -> Picked {
-    Picked {
-        chars: CharSelection::at(Caret { row, col: 0 }),
-        dragging: false,
-        by_rows: false,
-        file,
-        owed,
+    Picked::settled(row_run(row, None), file, owed)
+}
+
+/// The run `columns` of `row`, or a caret at its start where a door named none: what
+/// every door onto a row picks out.
+fn row_run(row: usize, columns: Option<Range<usize>>) -> CharSelection {
+    match columns {
+        Some(columns) => CharSelection::between(
+            Caret {
+                row,
+                col: columns.start,
+            },
+            Caret {
+                row,
+                col: columns.end,
+            },
+        ),
+        None => CharSelection::at(Caret { row, col: 0 }),
     }
 }
 
@@ -313,11 +339,7 @@ fn row_pick(file: Option<Arc<str>>, row: usize, owed: Owed) -> Picked {
 /// already is.
 pub(crate) fn mark_top(marked: State<Marks>, pane: Pane) {
     update(marked, |marks| {
-        let picked = row_pick(None, 0, Owed::NEITHER);
-        match pane {
-            Pane::Assembly => marks.assembly = Some(picked),
-            Pane::Source => marks.source = Some(picked),
-        }
+        *marks.of_mut(pane) = Some(row_pick(None, 0, Owed::NEITHER));
     });
 }
 
@@ -356,26 +378,7 @@ pub(crate) fn line_pick(
     owed: Owed,
 ) -> Option<Picked> {
     let row = LinePos::row_of(line)?;
-    let chars = match columns {
-        Some(columns) => CharSelection::between(
-            Caret {
-                row,
-                col: columns.start,
-            },
-            Caret {
-                row,
-                col: columns.end,
-            },
-        ),
-        None => CharSelection::at(Caret { row, col: 0 }),
-    };
-    Some(Picked {
-        chars,
-        dragging: false,
-        by_rows: false,
-        file: Some(file),
-        owed,
-    })
+    Some(Picked::settled(row_run(row, columns), Some(file), owed))
 }
 
 /// Pick out a run of one row's characters in `pane`: what a find lands on, and the only
@@ -392,23 +395,8 @@ pub(crate) fn mark_columns(
     row: usize,
     columns: Range<usize>,
 ) {
-    let picked = Picked {
-        chars: CharSelection::between(
-            Caret {
-                row,
-                col: columns.start,
-            },
-            Caret {
-                row,
-                col: columns.end,
-            },
-        ),
-        dragging: false,
-        by_rows: false,
-        file,
-        owed: Owed::NEITHER,
-    };
-    update(marked, |marks| *marks.of_mut(pane) = Some(picked.clone()));
+    let picked = Picked::settled(row_run(row, Some(columns)), file, Owed::NEITHER);
+    update(marked, |marks| *marks.of_mut(pane) = Some(picked));
 }
 
 /// Sweep `pane`'s run out to `row`, which does nothing unless a run is already started.
@@ -455,9 +443,6 @@ pub(crate) fn mark_release(marked: State<Marks>) {
 
 /// Drop `pane`'s run, and leave the other pane's alone.
 pub(crate) fn unmark(marked: State<Marks>, pane: Pane) {
-    if marked.peek().of(pane).is_none() {
-        return;
-    }
     update(marked, |marks| *marks.of_mut(pane) = None);
 }
 
@@ -511,23 +496,15 @@ pub(crate) fn owed_reveal(marked: State<Marks>, pane: Pane) -> Option<Owing> {
 /// Say that `pane` has made the scroll it was owed. The runs themselves stay, only
 /// `pane`'s flag is cleared, so it is answered exactly once and a repeat click is a
 /// second request.
-pub(crate) fn reveal_made(mut marked: State<Marks>, pane: Pane) {
-    let owed = {
-        let marks = marked.peek();
-        let owes = |picked: &Option<Picked>| picked.as_ref().is_some_and(|p| p.owed.owes(pane));
-        owes(&marks.assembly) || owes(&marks.source)
-    };
-    if !owed {
-        return;
-    }
-
-    let mut marks = marked.write();
-    if let Some(picked) = marks.assembly.as_mut() {
-        picked.owed.paid(pane);
-    }
-    if let Some(picked) = marks.source.as_mut() {
-        picked.owed.paid(pane);
-    }
+pub(crate) fn reveal_made(marked: State<Marks>, pane: Pane) {
+    update(marked, |marks| {
+        for picked in [&mut marks.assembly, &mut marks.source]
+            .into_iter()
+            .flatten()
+        {
+            picked.owed.paid(pane);
+        }
+    });
 }
 
 /// What Ctrl+C takes from `pane`'s run: the characters, where any are selected, and
@@ -688,20 +665,15 @@ fn on_listing_key(
                         .as_ref()
                         .and_then(|picked| picked.file.clone())
                         .or_else(|| file.clone());
+                    let whole = CharSelection::between(
+                        Caret { row: 0, col: 0 },
+                        Caret {
+                            row: last,
+                            col: crate::chars::END,
+                        },
+                    );
                     update(marked, |marks| {
-                        *marks.of_mut(pane) = Some(Picked {
-                            chars: CharSelection::between(
-                                Caret { row: 0, col: 0 },
-                                Caret {
-                                    row: last,
-                                    col: crate::chars::END,
-                                },
-                            ),
-                            dragging: false,
-                            by_rows: false,
-                            file,
-                            owed: Owed::default(),
-                        });
+                        *marks.of_mut(pane) = Some(Picked::settled(whole, file, Owed::default()));
                     });
                 }
             }
@@ -735,13 +707,7 @@ fn move_caret(
     let moved = picked.chars.moved(motion, extend, text, length, page);
     let row = moved.lead().row;
     update(marked, |marks| {
-        *marks.of_mut(pane) = Some(Picked {
-            chars: moved,
-            dragging: false,
-            by_rows: false,
-            owed: Owed::default(),
-            ..picked
-        });
+        *marks.of_mut(pane) = Some(Picked::settled(moved, picked.file, Owed::default()));
     });
     Some(row)
 }
@@ -781,15 +747,7 @@ fn peel(marked: State<Marks>, pane: Pane) {
         return;
     };
     update(marked, |marks| {
-        *marks.of_mut(pane) = if picked.chars.is_empty() {
-            None
-        } else {
-            Some(Picked {
-                chars: picked.chars.collapsed(),
-                dragging: false,
-                by_rows: false,
-                ..picked
-            })
-        };
+        *marks.of_mut(pane) = (!picked.chars.is_empty())
+            .then(|| Picked::settled(picked.chars.collapsed(), picked.file, picked.owed));
     });
 }

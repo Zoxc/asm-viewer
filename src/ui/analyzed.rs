@@ -317,7 +317,7 @@ impl Shown {
 }
 
 /// What the two panes are drawing, and what is being worked out for them.
-#[derive(Clone, Default, PartialEq)]
+#[derive(Default, PartialEq)]
 pub(crate) struct Analyzed {
     /// The listing the panes draw, and the question it answers. Replaced by the next
     /// listing and never by a blank, so its question can be older than `answered`.
@@ -330,6 +330,37 @@ pub(crate) struct Analyzed {
     /// What the worker is working on, or `None` when it is idle -- which is what tells
     /// the two ways `shown` can be `None` apart: nothing asked, and nothing yet.
     pub(crate) pending: Option<Pending>,
+}
+
+impl Clone for Analyzed {
+    /// Hand-written only to count. A whole answer -- a listing, the symbol it is of, and
+    /// the questions either side of it -- so the panes read it through a guard and copy
+    /// none of it, and [`copies`] is what says a render made no copy.
+    fn clone(&self) -> Analyzed {
+        #[cfg(test)]
+        COPIES.set(COPIES.get() + 1);
+        Analyzed {
+            shown: self.shown.clone(),
+            answered: self.answered.clone(),
+            pending: self.pending.clone(),
+        }
+    }
+}
+
+/// Test-only: how many whole answers this thread has copied.
+///
+/// [`crate::grouped::copies`]'s shape and its reason. A thread-local, because
+/// `freya-testing` runs the whole app on the test's own thread, which makes this the one
+/// thing that can settle that a render copied nothing. Nothing resets it -- a test takes
+/// the count before and after what it is about.
+#[cfg(test)]
+pub(crate) fn copies() -> usize {
+    COPIES.get()
+}
+
+#[cfg(test)]
+thread_local! {
+    static COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A question the worker has been sent and has not answered yet.

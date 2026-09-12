@@ -25292,6 +25292,33 @@ fn runs_of(marked: State<Marks>) -> (Option<Picked>, Option<Picked>) {
     (marks.assembly.clone(), marks.source.clone())
 }
 
+/// The Source pane draws both states through a guard and copies neither. It is
+/// re-rendered on every move of a sweep in either pane -- it reads the runs -- and on
+/// every word from the worker, and `Analyzed` is a whole answer: a listing, the symbol it
+/// is of, and the questions either side of it. Fails on
+/// `use_consume::<Analysis>().0.read().clone()`, which copied it three times over one
+/// sweep.
+#[test]
+fn sweeping_the_source_pane_copies_no_analysis() {
+    let (mut test, states, marked, _landing, _doors, sum_to, file, _directory) = navigating_panes();
+    open_document(states.open, states.visits, sum_to, Reach::NewTab).expect("a document panel");
+    settle(&mut test);
+    settle(&mut test);
+
+    let copied = crate::ui::analyzed::copies();
+    sweep(&mut test, marked, Pane::Source, 2, 3);
+
+    let (_, source) = runs_of(marked);
+    let source = source.expect("the sweep picked no lines out");
+    assert_eq!(source.chars.rows(), 2..=3);
+    assert!(source.file.as_deref() == Some(&*file));
+    assert_eq!(
+        crate::ui::analyzed::copies(),
+        copied,
+        "drawing the source side copied the whole answer"
+    );
+}
+
 /// Navigating brings back each pane's caret and selection for the place arriving, in
 /// both panes -- the companion's run too, in a tab driven from the other side -- and
 /// nothing is owed: the kept rows put the view back, and a reveal beside them would fight

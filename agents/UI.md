@@ -834,7 +834,7 @@ share a position they have no reason to share. What is kept is a **row**, clampe
 holds *now*, so a rebuilt binary or a shortened file cannot come back past the end. A tab nothing is
 remembered for opens at an **opening row** the caller hands in: `0` for the Assembly pane, whose
 first row is the symbol's own first line, and the symbol's own line for the Source pane
-(`opening_row`, off `SymbolLines::line`). A remembered row always wins over it, so it is the first
+(`SourceSide::opening`, off `SymbolLines::line`). A remembered row wins over it, so it is the first
 open this answers and not every one. An opening row of `0` is left alone rather than scrolled to,
 since the effect runs a beat after the first render and setting the offset the pane already has
 would undo a wheel that got in. Whose row the offset is and where the run has to move to is one
