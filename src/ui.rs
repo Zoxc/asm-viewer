@@ -795,8 +795,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // above, and the project the line above reopened. Both are synchronous, so one ask
     // here catches everything they moved aside. A write and not a value handed to `roots`,
     // for that reason: what to say is only known once the loads have run.
-    let mut rescued = rescued;
-    use_hook(move || rescued.set(store::moved()));
+    use_hook(move || note_moved(rescued));
 
     use_reading_of(active, objects, beside, reading, window);
     // The question and not the active document: a source-driven tab's assembly side

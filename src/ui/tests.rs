@@ -26081,6 +26081,45 @@ fn the_rescued_window_names_every_path_and_its_button_empties_the_list() {
     assert!(label_area(&quiet, "Close").is_none());
 }
 
+/// A load says what it moved through one function, and that function adds: what an earlier
+/// load put in the window is still named after a later one has run.
+///
+/// The harness is the startup's own line -- a hook over a window that is already naming
+/// something -- which is the case `set` got wrong and only the empty start hid. What
+/// `store::moved()` hands back is not asserted on: the tests share one process and one
+/// list.
+#[test]
+fn a_load_notes_what_it_moved_without_losing_an_earlier_ones() {
+    fn noting_harness() -> impl IntoElement {
+        let rescued = use_consume::<Rescued>().0;
+        use_hook(move || note_moved(rescued));
+        rect().expanded().child(RescuedPopup)
+    }
+
+    let earlier = "/state/incompatible/settings.toml";
+    let (mut test, rescued) = TestingRunner::new(
+        noting_harness,
+        (600., 400.).into(),
+        |runner: &mut _| {
+            runner
+                .provide_root_context(|| Rescued(State::create(vec![PathBuf::from(earlier)])))
+                .0
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    assert!(
+        rescued.peek().contains(&PathBuf::from(earlier)),
+        "the later load threw away what the earlier one moved: {:?}",
+        rescued.peek(),
+    );
+    assert!(
+        label_area(&test, earlier).is_some(),
+        "the window stopped naming it"
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // The language server and its control.
 

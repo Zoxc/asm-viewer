@@ -429,6 +429,22 @@ pub(crate) fn clear_project(states: ProjectStates) {
     build.set(Builds::default());
 }
 
+/// Add what the load that just ran moved aside to what the window is already naming.
+///
+/// The one place any load says what it moved: the startup's in `app()`, a project
+/// switch's below, and whatever comes later. Added to rather than set, so a window still
+/// naming an earlier load's files does not lose them; and nothing at all when the load
+/// moved nothing, so a quiet load leaves a closed window closed.
+pub(crate) fn note_moved(mut rescued: State<Vec<PathBuf>>) {
+    let moved = store::moved();
+    if moved.is_empty() {
+        return;
+    }
+    let mut naming = rescued.peek().clone();
+    naming.extend(moved);
+    rescued.set(naming);
+}
+
 /// Leave the project on screen and open the one the file at `path` holds in its place.
 ///
 /// The order is what makes a switch safe: `project::switch` flushes the old project and
@@ -437,7 +453,7 @@ pub(crate) fn clear_project(states: ProjectStates) {
 /// settled state that matches the baseline and writes nothing.
 pub(crate) fn switch_project(
     states: ProjectStates,
-    mut rescued: State<Vec<PathBuf>>,
+    rescued: State<Vec<PathBuf>>,
     mut unopened: State<Option<project::Failure>>,
     path: PathBuf,
 ) {
@@ -459,14 +475,7 @@ pub(crate) fn switch_project(
         }
     };
 
-    // The other of the two loads a run makes, the startup's being `app()`'s. Added to
-    // rather than set: a window still naming what the startup moved must not lose it.
-    let moved = store::moved();
-    if !moved.is_empty() {
-        let mut naming = rescued.peek().clone();
-        naming.extend(moved);
-        rescued.set(naming);
-    }
+    note_moved(rescued);
 
     clear_project(states);
     enter_project(states, path, project, session);

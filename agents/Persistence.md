@@ -53,16 +53,18 @@ but it is still why the project did not open.
 
 **And the reader is told**, which is the half that makes it a rescue at all: a file moved somewhere
 nobody hears about is a file lost politely. `store::moved()` hands over the destinations recorded
-since it was last asked -- a `static Mutex<Vec<PathBuf>>`, because what fills it is a load and not a
-component -- and `RescuedPopup` (`src/ui/rescued_view.rs`) names them over freya's `Popup`, which is
-shown exactly when it has children, so the list being empty *is* the window not being there. It is
-asked twice, at the two points a run loads any of these files. `app()` asks **after**
-`use_restore_on_startup`, the three loads a startup makes (`Settings::load`, the same again behind
-`fonts()`, and the project reopened) all being synchronous and all landing before that line;
-`switch_project` asks again and **adds** to the list rather than setting it, so a window still naming
-what the startup moved does not lose it when a project is switched. Neither `PopupTitle` nor
-`PopupContent` is used: both set a font size of their own, which would draw this in a size the reader
-never chose.
+since it was last asked -- a `static Mutex<Vec<PathBuf>>`, because what fills it is a load and not
+a component -- and `RescuedPopup` (`src/ui/rescued_view.rs`) names them over freya's `Popup`, which
+is shown exactly when it has children, so the list being empty *is* the window not being there. It
+is asked at every point a run loads any of these files, and always through the one function
+`note_moved` (`src/ui/session.rs`), which **adds** to the list rather than setting it: a window
+still naming what one load moved does not lose it when the next runs, and a load that moved nothing
+leaves a closed window closed. `app()` asks **after** `use_restore_on_startup`, the three loads a
+startup makes (`Settings::load`, the same again behind `fonts()`, and the project reopened) all
+being synchronous and all landing before that line; `switch_project` asks for the project it opens.
+Setting the list would do for the startup, which finds it empty, and for nothing after it. Neither
+`PopupTitle` nor `PopupContent` is used: both set a font size of their own, which would draw this
+in a size the reader never chose.
 
 **That directory is a `Store`** (`src/store.rs`), and it is the whole of the storage layer:
 where a file goes, how one is written, how one is read back when it may be bad, and how a free

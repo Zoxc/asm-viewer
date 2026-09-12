@@ -408,8 +408,8 @@ pub(crate) struct Shortcuts(pub(crate) State<Filter>);
 /// [`RescuedPopup`] draws, and empty for every run in which nothing was moved.
 ///
 /// A state at the root and not one inside the popup, because what fills it is a *load*
-/// (`store::moved`), and the two loads a run makes are the startup's and a project
-/// switch's -- neither of them anywhere near a component that could own this.
+/// (`store::moved`, through `note_moved`): the startup's, and a project switch's -- neither
+/// of them anywhere near a component that could own this.
 #[derive(Clone, Copy)]
 pub(crate) struct Rescued(pub(crate) State<Vec<PathBuf>>);
 
