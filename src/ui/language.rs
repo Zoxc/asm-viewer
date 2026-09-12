@@ -1028,13 +1028,16 @@ pub(crate) fn use_language_with(
         asked: Arc::new(AtomicU64::new(0)),
     });
 
-    // Leaving a project ends its server and takes the reader's agreement with it: it is
-    // the project's directory the server was started over and the directory they agreed
-    // to, and a directory typed into the Project view is a different project's on both
-    // counts. The two reads are bound first, since the stop below writes the state this
-    // effect is about.
-    let open = proj.read().clone();
-    let deps = (open.file.clone(), open.workspace());
+    // The two paths that say which project is open. **A memo and not a read**: this hook
+    // is called at the root, and `Proj` is written by every keystroke in the Project
+    // view's boxes, so reading it here would re-render the whole window for each -- the
+    // cost `WindowBody` is a component of its own to avoid (`src/ui/no_project.rs`). The
+    // memo is subscribed to `Proj` and the effect below to the memo, so neither the root
+    // nor the effect wakes until one of the two paths changes.
+    let places = use_memo(move || {
+        let open = proj.read();
+        (open.file.clone(), open.workspace())
+    });
     // What the effect last saw, so that it can tell the two changes apart. A directory
     // typed into the box is the reader pointing *this* project somewhere else, and the
     // agreement was to the old place; a project arriving is another project's answer
@@ -1043,9 +1046,17 @@ pub(crate) fn use_language_with(
     // render, so an agreement read out of `project.toml` survives the launch that read it.
     let seen: Rc<RefCell<Option<(Option<PathBuf>, Option<PathBuf>)>>> =
         use_hook(|| Rc::new(RefCell::new(None)));
-    use_side_effect_with_deps(&deps, {
+    // Leaving a project ends its server and takes the reader's agreement with it: it is
+    // the project's directory the server was started over and the directory they agreed
+    // to, and a directory typed into the Project view is a different project's on both
+    // counts.
+    use_side_effect({
         let jobs = jobs.clone();
-        move |(file, directory): &(Option<PathBuf>, Option<PathBuf>)| {
+        move || {
+            // Reading the memo is what subscribes this effect to the two paths. Cloned
+            // out so the guard ends with the statement: what follows writes the state
+            // this effect is about, and `Proj` itself.
+            let (file, directory) = places.read().clone();
             stop_server(language, &jobs);
             // And the settings go with it: they were another project's. Read again here,
             // where a project arrives, so the answer is in hand before either press can
@@ -1057,7 +1068,7 @@ pub(crate) fn use_language_with(
             }
             let before = seen.replace(Some((file.clone(), directory.clone())));
             let moved = before.is_some_and(|(was_file, was_directory)| {
-                was_file == *file && was_directory != *directory
+                was_file == file && was_directory != directory
             });
             if moved {
                 proj.write().trusted = false;

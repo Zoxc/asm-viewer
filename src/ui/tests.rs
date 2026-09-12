@@ -27110,6 +27110,100 @@ fn changing_the_directory_asks_about_the_new_one() {
     assert!(drawn.iter().any(|text| text == "/elsewhere"), "{drawn:?}");
 }
 
+/// How many times the scope that called [`use_language_with`] has rendered. An
+/// `Arc<AtomicUsize>` and not a state: nothing draws from it, and a state read in a render
+/// body would be one more thing the scope under test was subscribed to.
+#[derive(Clone)]
+struct RootRenders(Arc<std::sync::atomic::AtomicUsize>);
+
+/// The hook as `app()` calls it, over a worker that answers nothing. It draws nothing:
+/// what is under test is which scope a write to `Proj` wakes, so the harness is the root
+/// and counts its own renders.
+fn root_language_harness() -> Element {
+    let states = use_project_states();
+    let language = use_consume::<Talking>().0;
+    let follow = use_consume::<Following>().0;
+    let located = use_consume::<Locations>().0;
+    let linked = use_consume::<Linking>().0;
+    let hover = use_consume::<Hovering>().0;
+    let counted = use_consume::<RootRenders>().0;
+    use_language_with(
+        language,
+        follow,
+        located,
+        linked,
+        hover,
+        states.proj,
+        |_| None,
+    );
+    counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    rect().expanded().into_element()
+}
+
+/// **The root is not subscribed to `Proj`.** The hook that follows the project's file and
+/// directory is called at the root, and the Project view's boxes write `Proj` on every
+/// keystroke: reading it there rebuilds the toolbar, the tab strip, the dock and the panes
+/// for every character typed into any of the three. It reads through a memo instead, which
+/// is what `WindowBody` is a component of its own for.
+#[test]
+fn typing_in_the_project_view_does_not_re_render_the_root() {
+    let counted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (mut test, roots) = TestingRunner::new(
+        root_language_harness,
+        (100., 100.).into(),
+        {
+            let counted = counted.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || {
+                    provide(RootRenders(counted.clone()));
+                    let roots = test_roots();
+                    let mut proj = roots.states.proj;
+                    proj.set(OpenProject {
+                        file: Some(PathBuf::from("/p/p.avproj")),
+                        workspace_text: "/p".to_owned(),
+                        trusted: true,
+                        ..OpenProject::default()
+                    });
+                    roots
+                })
+            }
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    let renders = || counted.load(std::sync::atomic::Ordering::Relaxed);
+    let before = renders();
+    let mut proj = roots.states.proj;
+
+    // The Program box, a character at a time, and then the Files box.
+    for typed in ["c", "cl", "cla", "clan", "clangd"] {
+        proj.write().language_server = typed.to_owned();
+        settle(&mut test);
+    }
+    proj.write().language_files = "c h cpp".to_owned();
+    settle(&mut test);
+
+    assert_eq!(
+        renders(),
+        before,
+        "a keystroke in the Project view's boxes re-rendered the root"
+    );
+    assert!(
+        proj.read().trusted,
+        "the agreement was dropped by a box the directory is not in"
+    );
+
+    // Not vacuous: the directory is one of the two paths the hook is about, and a change
+    // to it still reaches the effect.
+    proj.write().workspace_text = "/elsewhere".to_owned();
+    settle(&mut test);
+    assert!(
+        !proj.read().trusted,
+        "the effect no longer follows the project's directory"
+    );
+}
+
 /// The Project view says whether the reader has agreed to a server reading this directory,
 /// and is the way back: taking it back forgets the answer and stops the server it was
 /// given for, since a reader who did not mean to let a program read their project has said

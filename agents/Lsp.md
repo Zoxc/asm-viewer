@@ -58,6 +58,13 @@ remembers the id and directory it last saw, and clears only where the id stayed 
 directory moved. The server still stops for all three: it belonged to the project that is
 being left.
 
+It sees those two paths through a **memo** rather than reading the project at the root.
+The hook is called from `app()`, and the Project view's boxes write the open project on
+every keystroke, so a read there would rebuild the whole window for each character -- the
+cost `WindowBody` is a component of its own to avoid (`agents/UI.md`). The memo is
+subscribed to the project and the effect to the memo, so a keystroke that leaves the file
+and the directory alone wakes neither.
+
 The gate is in `start_server`, which both presses go through, and `run_server` is the half
 that actually starts one; so neither the top bar's control nor the Project view's button can
 grow a path around it. The question holds the directory and program it named rather than
