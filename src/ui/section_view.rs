@@ -733,43 +733,37 @@ impl Component for SectionList {
             );
         }
 
-        let on_key_down = {
-            let rows = built.clone();
-            let drawn = built.clone();
-            let seeded = built.clone();
-            find_chord(
-                at,
-                marked,
-                searchable,
-                move |row| {
-                    seeded
-                        .as_ref()
-                        .map(|built| code_line(built, &built.reading, row))
-                        .unwrap_or_default()
-                },
-                on_listing_key(
-                    marked,
-                    Pane::Assembly,
-                    // An assembly run's file is the row's own, so a run of the whole
-                    // listing is a run of no one file.
-                    None,
-                    length,
-                    viewport,
+        // The bar's chords, the step it asks for and the listing's own keys, all of it
+        // wired once (`use_listing_keys`). The step over an object's code is the walk
+        // above's and not the hook's: `use_find_steps` leaves a walked listing alone.
+        let on_key_down = use_listing_keys(
+            at,
+            marked,
+            // An assembly run's file is the row's own, so a run of the whole listing is a
+            // run of no one file.
+            None,
+            &list,
+            length,
+            searchable,
+            ListingText {
+                line: Rc::new({
+                    let rows = built.clone();
                     move |row| {
                         rows.as_ref()
                             .map(|built| row_line(built, &built.reading, row))
                             .unwrap_or_default()
-                    },
+                    }
+                }),
+                text: Rc::new({
+                    let rows = built.clone();
                     move |row| {
-                        drawn
-                            .as_ref()
+                        rows.as_ref()
                             .map(|built| code_line(built, &built.reading, row))
                             .unwrap_or_default()
-                    },
-                    caret_reveal(controller, viewport, length),
-                ),
-            )
-        };
+                    }
+                }),
+            },
+        );
 
         list.render(
             marked,

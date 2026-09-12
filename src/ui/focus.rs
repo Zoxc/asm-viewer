@@ -277,7 +277,11 @@ pub(crate) fn reveal_caret(
 }
 
 /// [`reveal_caret`] with what a code listing already knows bound in: the reveal its
-/// keyboard and its find bar are each handed, a call apiece rather than a closure apiece.
+/// keyboard and its find bar are both handed, built once by [`use_listing_keys`].
+///
+/// **`Copy`**, so one build serves both: every capture is one -- a scroll controller, a
+/// state and a length -- and the second owner costs a copy rather than a second call with
+/// the arguments written out again.
 ///
 /// **What it reads, it reads when the reveal is made and not when it is built.**
 /// `viewport` is kept as the state and peeked per call, since a pane measured after this
@@ -292,7 +296,7 @@ pub(crate) fn caret_reveal(
     mut controller: ScrollController,
     viewport: State<f32>,
     length: usize,
-) -> impl FnMut(usize) + 'static {
+) -> impl FnMut(usize) + Copy + 'static {
     move |row| {
         reveal_caret(
             &mut controller,

@@ -25322,9 +25322,15 @@ fn f3_with_no_find_bar_open_does_nothing() {
 
 /// **Selected text within one line becomes the search term**, and a selection crossing
 /// lines does not: a run of rows is a page of disassembly and not something to look for.
+///
+/// The term is the row **as it is drawn**, which is the one closure a copy of characters is
+/// taken through as well (`ListingText::text`). The row's other reading, what a whole row
+/// copies as, is the address column and then that text (`asm_line`), so a seed taken
+/// through the wrong one of the two would arrive with an address on the front.
 #[test]
 fn a_run_inside_one_line_seeds_the_box_and_one_across_lines_does_not() {
     let shown = shown_sum_to();
+    let assembly = shown.studied.assembly.clone().expect("sum_to decodes");
     let document = asked_of(&shown.ask);
     let (mut test, roots) = TestingRunner::new(
         find_harness,
@@ -25352,6 +25358,18 @@ fn a_run_inside_one_line_seeds_the_box_and_one_across_lines_does_not() {
     key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
     let seeded = finds.peek().get(&at).filter.pattern.clone();
     assert!(!seeded.is_empty(), "the run did not reach the box");
+    // The whole of the first row, and nothing the row does not draw: the first instruction
+    // is no branch target, so the first paragraph is the first row.
+    assert_eq!(
+        seeded,
+        instruction_line(&assembly, 0).to_string(),
+        "the seed is not the row as it is drawn"
+    );
+    assert!(
+        !seeded.contains(&format!("{:016X}", assembly.instructions[0].address)),
+        "the seed carried the address column, which is the whole row's copy and not the \
+         drawn line: {seeded}"
+    );
 
     // A run across rows leaves it as it was.
     let second = paragraphs(&test)[1].0;

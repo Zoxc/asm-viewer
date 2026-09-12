@@ -1341,52 +1341,41 @@ impl Component for InstructionList {
             .map(|indices| data.lanes().touching_any(indices))
             .unwrap_or_default();
 
-        // The step the bar asked for, made here: the hits are rows, and only the list
-        // knows how far to scroll to reach one.
-        use_find_steps(at, marked, None, caret_reveal(controller, viewport, length));
-
-        let on_key_down = {
-            let assembly = data.assembly().clone();
-            let lanes = data.lanes().clone();
-            let (text_assembly, text_lanes) = (assembly.clone(), lanes.clone());
-            let (seed_assembly, seed_lanes) = (assembly.clone(), lanes.clone());
-            // A separator copies as the blank line it is drawn as, so a run lifted out of
-            // the listing keeps the blocks apart on the way to the clipboard.
-            find_chord(
-                at,
-                marked,
-                data.searchable(),
-                move |row| {
-                    seed_lanes
-                        .instruction_at(row)
-                        .map(|index| instruction_line(&seed_assembly, index))
-                        .unwrap_or_default()
-                },
-                on_listing_key(
-                    marked,
-                    Pane::Assembly,
-                    // An assembly run's file is the row's own, so a run of the whole
-                    // listing is a run of no one file.
-                    None,
-                    length,
-                    viewport,
+        // The bar's chords, the step it asks for and the listing's own keys, all of it
+        // wired once (`use_listing_keys`). A separator copies as the blank line it is
+        // drawn as, so a run lifted out of the listing keeps the blocks apart on the way
+        // to the clipboard.
+        let on_key_down = use_listing_keys(
+            at,
+            marked,
+            // An assembly run's file is the row's own, so a run of the whole listing is a
+            // run of no one file.
+            None,
+            &list,
+            length,
+            data.searchable(),
+            ListingText {
+                line: Rc::new({
+                    let (assembly, lanes) = (data.assembly().clone(), data.lanes().clone());
                     move |row| {
                         lanes
                             .instruction_at(row)
                             .and_then(|index| assembly.instructions.get(index))
                             .map(|instruction| asm_line(instruction, 0))
                             .unwrap_or_default()
-                    },
+                    }
+                }),
+                text: Rc::new({
+                    let (assembly, lanes) = (data.assembly().clone(), data.lanes().clone());
                     move |row| {
-                        text_lanes
+                        lanes
                             .instruction_at(row)
-                            .map(|index| instruction_line(&text_assembly, index))
+                            .map(|index| instruction_line(&assembly, index))
                             .unwrap_or_default()
-                    },
-                    caret_reveal(controller, viewport, length),
-                ),
-            )
-        };
+                    }
+                }),
+            },
+        );
 
         list.render(
             marked,

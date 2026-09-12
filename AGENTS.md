@@ -270,7 +270,9 @@ command.
   hook every text box declines them with: freya's own default for each of its two boxes,
   written once.
 - `src/ui/marks.rs` — the run picked out in each pane, the pair it lights on the other
-  side, the scroll it owes, the keyboard's moves over it, and what Ctrl+C copies.
+  side, the scroll it owes, the keyboard's moves over it, and what Ctrl+C copies. Also
+  the one hook all three code listings wire their keyboard with, and the two ways each
+  reads one of its rows.
 - `src/ui/highlight.rs` — a source file read and parsed off the UI thread: the reader's worker
   thread, the cache its answers land in, what the pane draws until one does, and every line of
   a parse cut into what a row draws.

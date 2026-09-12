@@ -539,6 +539,58 @@ pub(crate) fn copy_text(
     }
 }
 
+/// The two ways a code listing reads one of its rows, which is everything its keys and the
+/// find bar over it ask of the rows.
+///
+/// **Named fields and not two arguments.** Both are `Fn(usize)` over the same rows, so
+/// spelled out at a call site they are easy to swap; the pair travels as one value instead.
+pub(crate) struct ListingText {
+    /// The row as a caret's row is copied: the line as it is on disk, address column and
+    /// all, and never the row's spans.
+    pub(crate) line: Rc<dyn Fn(usize) -> String>,
+    /// The row as it is drawn. Columns count through this, so it is what a run of
+    /// characters copies **and** what Ctrl+F seeds the box with -- one closure the two read,
+    /// not two that have to agree.
+    pub(crate) text: Rc<dyn Fn(usize) -> Line>,
+}
+
+/// A code listing's whole keyboard, wired once for all three of them (`SourceList`,
+/// `InstructionList`, `SectionRows`): the find bar's chords over the listing's own keys, the
+/// step the bar asked for made in the rows, and one [`caret_reveal`] for both.
+///
+/// A hook, [`use_find_steps`] being one, so a list calls it once and on every render.
+///
+/// `file` is what this listing's rows are rows of -- the source list's own file, and `None`
+/// for the two assembly listings, where a run's file is the row's own. `searchable` is the
+/// listing the chords name, which must be the one [`use_searching`] claimed: an answer is
+/// judged by `Searchable::id`.
+///
+/// The pane is `at.1` and asked for nowhere else: the run a key moves and the run a seed is
+/// taken from are one run, and two arguments could name two panes.
+pub(crate) fn use_listing_keys(
+    at: Where,
+    marked: State<Marks>,
+    file: Option<Arc<str>>,
+    list: &ListBox,
+    length: usize,
+    searchable: Searchable,
+    rows: ListingText,
+) -> impl FnMut(Event<KeyboardEventData>) + 'static {
+    let viewport = list.viewport();
+    let reveal = caret_reveal(list.controller, viewport, length);
+    // The step the bar asked for, made here: the hits are rows, and only the list knows how
+    // far to scroll to reach one.
+    use_find_steps(at, marked, file.clone(), reveal);
+    let seed = rows.text.clone();
+    find_chord(
+        at,
+        marked,
+        searchable,
+        seed,
+        on_listing_key(marked, at.1, file, length, viewport, rows, reveal),
+    )
+}
+
 /// What the keyboard does to a listing's selection: Ctrl+C, Ctrl+A and Escape, and the
 /// caret's keys -- the arrows by character and, with Ctrl, by word; Home and End to the
 /// row's ends and, with Ctrl, the listing's; Page Up and Page Down by a screen of rows
@@ -556,16 +608,16 @@ pub(crate) fn copy_text(
 /// `None` for the two assembly listings, where a run's file is the row's own. It is what
 /// a run made from nothing takes ([`Picked::file`]): the keyboard reaches a pane with no
 /// press on a row, a press on the tab's chip being enough.
-pub(crate) fn on_listing_key(
+fn on_listing_key(
     marked: State<Marks>,
     pane: Pane,
     file: Option<Arc<str>>,
-    rows: usize,
+    length: usize,
     viewport: State<f32>,
-    line: impl Fn(usize) -> String + 'static,
-    text: impl Fn(usize) -> Line + 'static,
+    rows: ListingText,
     mut reveal: impl FnMut(usize) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
+    let ListingText { line, text } = rows;
     move |e: Event<KeyboardEventData>| {
         let shift = e.modifiers.contains(Modifiers::SHIFT);
         // **A motion answers only for the modifiers that are its own.** Shift is every
@@ -598,7 +650,7 @@ pub(crate) fn on_listing_key(
         if let Some(motion) = motion {
             // A page is the rows the list shows whole; the motion makes one of none.
             let page = (*viewport.peek() / code_row_height()).floor().max(0.0) as usize;
-            let moved = move_caret(marked, pane, motion, shift, rows, page, &text);
+            let moved = move_caret(marked, pane, motion, shift, length, page, &*text);
             if let Some(row) = moved {
                 reveal(row);
             }
@@ -607,7 +659,7 @@ pub(crate) fn on_listing_key(
 
         match &e.key {
             Key::Character(character) if command && character == "c" => {
-                let copied = copy_text(&marked.peek(), pane, &line, &text);
+                let copied = copy_text(&marked.peek(), pane, &*line, &*text);
                 if let Some(copied) = copied {
                     // Failing silently: a platform whose display handle gave freya-winit
                     // no clipboard has none, and a listing has nowhere to say so.
@@ -619,7 +671,7 @@ pub(crate) fn on_listing_key(
                 // nothing at all for one with no rows. The file stays what the run's was,
                 // or the listing's own where there is no run yet, and no scroll is owed:
                 // the whole listing names no one place to go to.
-                if let Some(last) = rows.checked_sub(1) {
+                if let Some(last) = length.checked_sub(1) {
                     let file = marked
                         .peek()
                         .of(pane)

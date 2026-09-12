@@ -765,69 +765,59 @@ impl Component for SourceList {
             self.opening,
         );
 
-        // The step the bar asked for, made here: the hits are rows, and only the list
-        // knows how far to scroll to reach one.
-        use_find_steps(
-            at,
-            marked,
-            Some(self.file.clone()),
-            caret_reveal(controller, viewport, length),
-        );
-
         // The tab this file's own line questions are answered for, which is the tab it
         // drives: a companion file beside a symbol drives none.
         let drives = (self.document.driven_from() == Pane::Source).then_some(self.tab);
 
-        let on_key_down = {
-            let source = self.source.clone();
-            let drawn = self.source.clone();
-            let seeded = self.source.clone();
-            find_chord(
-                at,
-                marked,
-                searchable,
-                // What Ctrl+F seeds the box with is what a copy would take: the columns
-                // are columns of the line as drawn.
-                move |index| source_line(&seeded, index),
-                caret_questions(
-                    marked,
-                    self.source.clone(),
-                    self.file.clone(),
-                    links.clone(),
-                    server,
-                    located,
-                    dock,
-                    open,
-                    drives.map(|tab| (tab, self.file.clone())),
-                    on_listing_key(
-                        marked,
-                        Pane::Source,
-                        // Every run of this pane is a run of the file it is showing.
-                        Some(self.file.clone()),
-                        length,
-                        viewport,
-                        move |index| {
-                            // The file's own text and not the row's spans: what is pasted is the
-                            // line as it is on disk, tabs and all. The newline is the join's
-                            // business.
-                            source
-                                .0
-                                .rope
-                                .get_line(index)
-                                .map(|line| {
-                                    let line = line.to_string();
-                                    line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
-                                })
-                                .unwrap_or_default()
-                        },
-                        // The characters are columns of the line as drawn, so that is what they
-                        // copy: an indentation as the spaces the row draws it as.
-                        move |index| source_line(&drawn, index),
-                        caret_reveal(controller, viewport, length),
-                    ),
-                ),
-            )
-        };
+        // The bar's chords, the step it asks for and the listing's own keys, all of it
+        // wired once (`use_listing_keys`).
+        let keys = use_listing_keys(
+            at,
+            marked,
+            // Every run of this pane is a run of the file it is showing.
+            Some(self.file.clone()),
+            &list,
+            length,
+            searchable,
+            ListingText {
+                line: Rc::new({
+                    let source = self.source.clone();
+                    move |index| {
+                        // The file's own text and not the row's spans: what is pasted is the
+                        // line as it is on disk, tabs and all. The newline is the join's
+                        // business.
+                        source
+                            .0
+                            .rope
+                            .get_line(index)
+                            .map(|line| {
+                                let line = line.to_string();
+                                line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
+                            })
+                            .unwrap_or_default()
+                    }
+                }),
+                text: Rc::new({
+                    let drawn = self.source.clone();
+                    move |index| source_line(&drawn, index)
+                }),
+            },
+        );
+        // The four questions about the name under the caret, around the whole of that: the
+        // F12 family is neither the bar's chord nor the listing's key, and the three sets
+        // of keys are disjoint, so which is asked first settles nothing.
+        let on_key_down = caret_questions(
+            marked,
+            self.source.clone(),
+            self.file.clone(),
+            links.clone(),
+            server,
+            located,
+            dock,
+            open,
+            drives.map(|tab| (tab, self.file.clone())),
+            keys,
+        );
 
         rect()
             .width(Size::fill())

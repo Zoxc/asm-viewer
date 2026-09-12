@@ -256,7 +256,9 @@ about a name, so they are asked wherever the caret is, exactly as the menu item 
 every row. A pane with **no run at all** has no caret and answers none of the four. Only the
 Source pane offers them: the two assembly listings draw no names. The states they need are
 consumed in the list's render and handed down to the handler, a handler being no place to call a
-hook.
+hook. The four wrap the listing's whole keyboard (`use_listing_keys`) from the outside rather than
+sitting between the find bar's chords and the listing's own keys: the three sets of keys are
+disjoint, so which is asked first settles nothing.
 
 The rows are the app's own (`SourceRow`, a `VirtualScrollView`), **not** freya's `CodeEditor`, which
 paints a line background only for the cursor's row and keeps its scroll state private. So it cannot
@@ -1047,6 +1049,18 @@ measurement is written from, the padding, the focus a press asks for -- so it is
 a list is its own hooks (the position it puts back, the caret a door planted, the window it asks
 the worker for) and one call handing in its pane, its rows and its builder.
 
+**And their keyboards are wired once too** (`use_listing_keys`, `src/ui/marks.rs`): the find bar's
+chords around the listing's own keys, the step the bar asked for made in the rows, and one
+`caret_reveal` for both. A list hands in what it is -- where it is, its box, how many rows it has,
+what the bar searches -- and one `ListingText`, which is the two ways a row reads: `line`, the line
+as it is on disk, which is what a caret's row copies whole, and `text`, the row as it is drawn,
+which the columns count through. Named fields and not two arguments, both being `Fn(usize)` over the
+same rows. The three lists were the same five lines of nesting spelled out three times, with
+`caret_reveal` written twice apiece and the drawn-line closure written a second time over a second
+clone of the same `Arc` to seed the find box -- so "the columns are the columns of the line as
+drawn" was a rule two closures had to agree on. Now it is one closure the seed and the copy both
+read, and a fourth listing, or a fourth chord shared by all three, is one edit.
+
 **A sweep along a row's text selects characters**, beside the rows and not instead of them
 (`src/chars.rs`; `Picked::chars`). Every row of the three listings is drawn by one `code_row`
 (`src/ui/code_row.rs`): the shared width, wash and handlers, with what comes before the text (the
@@ -1198,7 +1212,7 @@ A caret on row 12 with the pair lit for row 3 would be two places at once, and t
 run left behind to be one. **No scroll is owed**
 to the other pane (`Owed::default()`), since a held key repeats and every repeat would yank the
 other pane about while the reader walks this one. And the pane reveals the caret's row through
-`reveal_caret`, handed in as a closure by each list, **not** the `reveal_row` a click uses, whose
+`reveal_caret`, **not** the `reveal_row` a click uses, whose
 `CONTEXT_ROWS` of margin would scroll the view while the caret was still on screen and walk the rows
 away from under the reader on every repeat of a held key. The caret's reveal moves the view only
 when the caret has left it, a row above coming to the top and one below to the bottom. A caret
@@ -1215,10 +1229,12 @@ and the motion makes one of none. Nothing edits: no Backspace, no typing.
 (`src/ui/find_bar.rs`). The chord already meant "the filter box over this list" in the sidebar and
 was answered there on the *rows* node rather than at the root, deliberately leaving it free inside a
 code pane (`filter_bar.rs`); this takes it up. `find_chord` wraps `on_listing_key` rather than being
-folded into it, so a listing's keys stay the whole of what `marks.rs` says they are, and the wrap is
-where each list already builds its handler. **The seed is the run picked out within one line**, taken
-through the same `Fn(usize) -> Line` a copy is taken through: a run of rows is a page of disassembly
-and not a search term, so a run crossing rows leaves the box as it was.
+folded into it, so a listing's keys stay the whole of what `marks.rs` says they are, and
+`use_listing_keys` is the one place the wrap is made. **The seed is the run picked out within one
+line**, taken through `ListingText::text`, which is the closure a copy of characters is taken
+through: not the same rule written twice but the same closure, so the two cannot drift. A run of
+rows is a page of disassembly and not a search term, so a run crossing rows leaves the box as it
+was.
 
 **`F3` and `Shift+F3` step that bar from inside the code**, where `Enter` and `Shift+Enter` step it
 from inside the box. They are answered in the same wrap and for the same reason: a key reaches the
@@ -1286,7 +1302,11 @@ starts from where the reader is looking rather than from the top.
 
 **An object's code is walked, not passed over.** It is read a piece at a time, so there is no
 listing to search whole and nothing to count: a step asks for the *next* match from where the pane
-is, and the whole of the answer is one address (`hunt`, `use_code_hunt`). The walk is the one-shot
+is, and the whole of the answer is one address (`hunt`, `use_code_hunt`). The two takers of a step
+divide the bar between them by one question, `Searchable::walked`: `use_listing_keys` calls
+`use_find_steps` for all three listings, a hook having to run on every render, and it leaves a walked
+listing's step where it is for `use_code_hunt` to spend. Without that it spends the step first --
+finds no hits, since there are none to find -- and a step over an object's code walks nowhere. The walk is the one-shot
 `stream` shape the Search panel has -- the receiver dropping is what calls it off -- and it decodes
 each stretch exactly as the view's own window ask does and **throws it away again**: what comes back
 is an address, so walking a whole object leaves the app's memory where it found it and the landing

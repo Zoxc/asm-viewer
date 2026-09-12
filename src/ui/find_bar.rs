@@ -740,7 +740,7 @@ pub(crate) fn find_chord(
     at: Where,
     marked: State<Marks>,
     listing: Searchable,
-    text: impl Fn(usize) -> Line + 'static,
+    text: Rc<dyn Fn(usize) -> Line>,
     mut keys: impl FnMut(Event<KeyboardEventData>) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     let finds = try_consume_context::<Looking>().map(|looking| looking.0);
@@ -749,7 +749,7 @@ pub(crate) fn find_chord(
             return keys(e);
         };
         if Chord::Find.is(&e.key, e.modifiers) {
-            let seed = seed_of(&marked.peek(), at.1, &text);
+            let seed = seed_of(&marked.peek(), at.1, &*text);
             open_find(finds, at, seed, listing.clone());
             return;
         }
@@ -791,6 +791,11 @@ fn seed_of(marks: &Marks, pane: Pane, text: impl Fn(usize) -> Line) -> Option<St
 /// **In the list and not in the bar**, because the answer is in rows: only the list knows
 /// how far to scroll to reach one. `file` is what a run of this listing is a run of -- the
 /// source list's own file, and `None` for the assembly's, where a run's file is the row's.
+///
+/// **A walked listing's step is not this one's to spend.** [`use_listing_keys`] calls this
+/// for all three listings, a hook having to run on every render, and an object's code is
+/// searched by walking it: that step is [`use_code_hunt`]'s, and the two tell theirs apart
+/// by `Searchable::walked`.
 pub(crate) fn use_find_steps(
     at: Where,
     marked: State<Marks>,
@@ -804,7 +809,10 @@ pub(crate) fn use_find_steps(
         };
         // Bound before the write below, the read being a guard.
         let bar = finds.read().get(&at).clone();
-        let Some(back) = bar.step else {
+        let Some(back) = bar
+            .step
+            .filter(|_| !bar.listing.as_ref().is_some_and(|listing| listing.walked()))
+        else {
             return;
         };
         // Where the pane is, for a first step: the caret, or the top of the listing where
