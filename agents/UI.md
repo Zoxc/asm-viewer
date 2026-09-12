@@ -178,7 +178,12 @@ be open beside the one the app already had -- a mark to resolve from whichever w
 a toggle standing in for a close. The strip does it: opening Settings with no project brings the
 bar back for it, and closing the last tab takes the bar away and puts the screen back.
 `WindowBody` asks the strip through a memo over the one thing it wants, whether there is any tab
-at all, so a tab moved along the bar does not re-render the window. The recents are a real
+at all, so a tab moved along the bar does not re-render the window. **`PagesButton` reads nothing
+while its menu is down**, for the same reason: the marks come from the strip and the recents from
+the disk, and neither is drawn until the menu is up, so both reads sit under that branch. Read
+there and not peeked, so the marks follow a page opening or closing under an open menu; read per
+render instead, the button would subscribe to the most-written state in the app and repaint for
+every tab opened, closed, moved or raised. The recents are a real
 `SubMenu`, **keyed by how many there are**, because `MenuContainer` measures itself once and a
 list that grew after it was laid out would hang off the side of the window
 (`notes/upstream/freya.md`).

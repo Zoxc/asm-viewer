@@ -2423,6 +2423,99 @@ fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
     assert_eq!(strip.active(), Some(Tab::Page(Page::Project)));
 }
 
+/// What the menu row reading `name` is painted: the smallest painted box the label sits
+/// inside, which is the row's own where it is marked and the menu's own where it is not.
+/// Asked by containment and not by colour, so a mark is told from a plain row without
+/// naming freya's theme.
+fn row_background(test: &TestingRunner, name: &str) -> Fill {
+    let label = label_area(test, name).unwrap_or_else(|| panic!("{name:?} is drawn"));
+    test.find_many(|node, element| {
+        let area = node.layout().area;
+        let background = element.style().background.clone();
+        let painted = background != Fill::Color(Color::TRANSPARENT);
+        (painted && area.contains_rect(&label))
+            .then(|| (area.size.width * area.size.height, background))
+    })
+    .into_iter()
+    .min_by(|one, two| one.0.total_cmp(&two.0))
+    .expect("a painted box around the row")
+    .1
+}
+
+/// **A tab opened, closed or moved leaves the pages button alone while its menu is down.**
+/// The marks on the open pages come from the strip, the most-written state in the app, and
+/// nothing draws them until the menu is up -- so the read sits under the branch that does,
+/// as the recents read does. Read there and not peeked, which is the second half: the
+/// marks follow a page opened under an open menu.
+///
+/// Headless because nothing shows either way: the button draws the same square, and only
+/// the element freya rebuilt says whether the scope rendered again.
+#[test]
+fn a_tab_opened_leaves_the_pages_button_alone_while_its_menu_is_down() {
+    let (mut test, states) = TestingRunner::new(
+        pages_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    settle(&mut test);
+
+    // The button's own box: the square carrying the handlers, inside the square
+    // `PagesButton` draws it in. The element as well as the area, because **the element
+    // is how this asks whether the button rendered again**: a scope that renders builds
+    // its elements afresh, and an element carrying event handlers never compares equal to
+    // the one before it (`EventHandler`'s `PartialEq` answers `false`), so the tree is
+    // handed a new one. Holding the old `Rc` keeps its address from being handed out
+    // again. A closure and not a function: the trait an element sits behind has no name
+    // in freya's prelude.
+    let button = |test: &TestingRunner| {
+        test.find(|node, element| {
+            let area = node.layout().area;
+            let square = area.width() == toggle_size() && area.height() == toggle_size();
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            (square && handled).then(|| (area, node.element()))
+        })
+        .expect("the button is a square carrying its own handlers")
+    };
+
+    let (area, before) = button(&test);
+    let document = Document::Source(Arc::from("/src/one.rs"));
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    settle(&mut test);
+    let (_, after) = button(&test);
+    assert!(
+        Rc::ptr_eq(&before, &after),
+        "a tab opened re-rendered the button, for a menu nobody has opened"
+    );
+
+    // The other half. With the menu up, a page opened under it is marked without the
+    // reader closing and reopening the menu.
+    press_at(
+        &mut test,
+        (
+            (area.origin.x + area.width() / 2.0) as f64,
+            (area.origin.y + area.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+    let plain = row_background(&test, Page::Settings.title());
+    let mut strip = states.open.strip;
+    strip.write().show(Tab::Page(Page::Settings));
+    settle(&mut test);
+    assert_ne!(
+        row_background(&test, Page::Settings.title()),
+        plain,
+        "the open menu did not mark the page that opened under it"
+    );
+    assert_eq!(
+        row_background(&test, Page::Shortcuts.title()),
+        plain,
+        "the mark is on every row and says nothing"
+    );
+}
+
 /// **A menu item that has grown a key says so**, the way a desktop menu does: the key
 /// after the name, in the spelling the Shortcuts page uses and nowhere written twice
 /// (`shortcuts::key!`). Here that is Ctrl+O on "Open a project...", Ctrl+, on Settings and

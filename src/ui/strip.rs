@@ -418,9 +418,6 @@ impl Component for PagesButton {
         let states = use_project_states();
         let rescued = use_consume::<Rescued>().0;
         let unopened = use_consume::<Unopened>().0;
-        // Read and not peeked: the marks are drawn from it, so the menu has to follow a
-        // page opening or closing while it is up.
-        let strip = states.open.strip.read();
         // The Debug page is the ways to make the app misbehave on purpose, so it is not in
         // a menu the reader opened to get to their project. Alt held as the menu is opened
         // is what asks for it -- no rebuild, no variable, and nothing on screen for a
@@ -429,12 +426,22 @@ impl Component for PagesButton {
             .into_iter()
             .filter(|page| *page != Page::Debug || asked())
             .collect();
-        let is_open: Vec<bool> = pages
-            .iter()
-            .copied()
-            .map(|page| strip.contains(Tab::Page(page)))
-            .collect();
-        drop(strip);
+        // Read only while the menu is up, as the recents below are: the marks are all the
+        // strip is wanted for here, and nothing draws them until then. Read and not
+        // peeked, so they follow a page opening or closing under an open menu; read every
+        // render, it would subscribe the button to every tab opened, closed, moved or
+        // raised.
+        let is_open: Vec<bool> = match showing() {
+            true => {
+                let strip = states.open.strip.read();
+                pages
+                    .iter()
+                    .copied()
+                    .map(|page| strip.contains(Tab::Page(page)))
+                    .collect()
+            }
+            false => Vec::new(),
+        };
         // Read when the menu is opened and not per render: each row is a small read of
         // another project's own file.
         let recents = match showing() {
