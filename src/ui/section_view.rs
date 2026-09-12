@@ -578,7 +578,7 @@ impl Component for SectionList {
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
-        let (controller, viewport) = (list.controller, list.viewport);
+        let (controller, viewport) = (list.controller, list.viewport());
         // What the find bar over this pane is looking for, for every row to wash, and
         // what it searches, claimed for as long as these rows are drawn: an object's code
         // is walked rather than passed over, so the bar has no count over it.

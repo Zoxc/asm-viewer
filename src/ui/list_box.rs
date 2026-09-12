@@ -2,12 +2,12 @@
 //!
 //! `InstructionList`, `SourceList` and `SectionList` differ in what their rows are and
 //! where the rows come from. What holds the rows does not: the focusable box the keyboard
-//! reaches the pane through, the `on_sized` the viewport and the nudge come out of, the
+//! reaches the pane through, the `on_sized` the list's measurement comes out of, the
 //! sweep that carries a run on past the edge, and the `VirtualScrollView` itself, one
-//! `code_row_height()` a row. Every line of it is load-bearing -- the order that handler
-//! writes in, the padding that puts the rows on the pixel grid, the focus a press asks
-//! for -- so it is written once here and each list hands in its pane, its rows and its
-//! builder.
+//! `code_row_height()` a row. Every line of it is load-bearing -- the one handler the
+//! whole measurement is written from ([`Listing::measured`]), the padding that puts the
+//! rows on the pixel grid, the focus a press asks for -- so it is written once here and
+//! each list hands in its pane, its rows and its builder.
 //!
 //! [`use_list_box`] is the hooks the box is made of and [`ListBox::render`] the box.
 //! **Both are hooks**, so a list calls each once and on every render; what is the list's
@@ -39,12 +39,9 @@ pub(crate) struct ListBox {
     a11y: AccessibilityId,
     /// The list's scroll, which its own position hooks move.
     pub(crate) controller: ScrollController,
-    /// How tall the list is, which `reveal_row` needs to know whether the row it was
-    /// asked for is on screen already. `VirtualScrollView` measures itself but keeps the
-    /// answer, so the box around it is what is measured.
-    pub(crate) viewport: State<f32>,
-    /// The list as its rows and a sweep past its edge know it: its scroll, its box, the
-    /// paragraphs the rows lend it, its widest row, how many rows it has and its nudge.
+    /// The list as its rows and a sweep past its edge know it: its scroll, its box, how
+    /// tall it is, the paragraphs the rows lend it, its widest row, how many rows it has
+    /// and its nudge.
     listing: Listing,
     /// The device pixel grid, read at the render so the `on_sized` handler asks nothing
     /// of the runtime.
@@ -63,27 +60,32 @@ pub(crate) fn use_list_box(pane: Pane, listing: u64) -> ListBox {
     let a11y = use_a11y();
     use_tab_keyboard(Some(pane), a11y);
     let controller = use_scroll_controller(ScrollConfig::default);
-    let viewport = use_state(|| 0.0f32);
     // The widest row drawn, under the listing's identity: what every row is at least as
     // wide as, so the list scrolls sideways over a stable extent.
     let widest = use_widest();
     // Made here and not in the context's closure, which runs once: a hook has to run on
     // every render.
     let nudge = use_state(|| 0.0f32);
+    let viewport = use_state(|| 0.0f32);
     let grid = pixel_grid();
-    let held = use_provide_context(|| Listing::new(controller, widest, nudge));
+    let held = use_provide_context(|| Listing::new(controller, widest, nudge, viewport));
     held.drawing(listing);
     ListBox {
         pane,
         a11y,
         controller,
-        viewport,
         listing: held,
         grid,
     }
 }
 
 impl ListBox {
+    /// How tall the list is, for the list's own hooks to read: the [`Listing`]'s state,
+    /// which the `on_sized` below is the one writer of.
+    pub(crate) fn viewport(&self) -> State<f32> {
+        self.listing.viewport()
+    }
+
     /// The box, around `length` rows built from `data` by `build`. A hook, the sweep's
     /// cells being one, so it is called once per render.
     ///
@@ -99,12 +101,10 @@ impl ListBox {
         build: impl Fn(usize, &D) -> Element + 'static,
     ) -> Rect {
         let (a11y, grid) = (self.a11y, self.grid);
-        let mut viewport = self.viewport;
         let listing = self.listing.clone();
         // How many rows the list is drawing, told to the listing as its key is: what the
         // sweep beyond the rows reaches over and what the scroll is clamped to.
         listing.counting(length);
-        let bounds = listing.bounds.clone();
 
         rect()
             .expanded()
@@ -122,13 +122,11 @@ impl ListBox {
                 });
             })
             .on_key_down(on_key_down)
+            // One handler for everything the list learns from being laid out -- its
+            // height, its top and its box -- and the `Listing` holds all three.
             .on_sized({
                 let listing = listing.clone();
-                move |e: Event<SizedEventData>| {
-                    viewport.set_if_modified(e.area.height());
-                    listing.measured(grid, e.area.min_y());
-                    bounds.set(e.area);
-                }
+                move |e: Event<SizedEventData>| listing.measured(grid, e.area)
             })
             .on_global_pointer_move(use_sweep_beyond(marked, self.pane, listing.clone()))
             // On the grid: see `Listing::padding`.

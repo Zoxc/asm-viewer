@@ -807,11 +807,17 @@ pass a door arrives on. Read as room, it puts the row flush against the top, whi
 answer the margin exists to avoid, and `reveal_made` spends the debt so nothing corrects it. So
 `reveal_row` says it did nothing and the caller keeps what it owes. The callers **read** their
 viewport rather than peeking it, which is what wakes them when the measurement lands; peeked, the
-debt would be kept and never paid. `use_kept_position` reads its own for the same reason and one
-more: the row it puts back is the one write in the panes that cannot be held to an extent, an
-unmeasured pane having no extent to be held to, so the run the measurement wakes is what puts the
-controller back inside the listing -- which is also what mends an offset left past the end by
-anything else, freya's own End key included (`notes/upstream/freya.md`).
+debt would be kept and never paid. **There is one measurement to read**: the box's `on_sized`
+writes its height, its top and the box itself into the `Listing` in one call
+(`Listing::measured`), so a caller picks how to ask and not where -- `Listing::viewport` to be
+woken by it, `Listing::height` for a handler or a task, which must not subscribe. The height was a
+state on `ListBox` and the box a cell on the `Listing`, and a press on a branch link took its
+height off the box while every other reveal read the state: one number, two homes, and which a
+caller got turned on which of the two structs it happened to hold. `use_kept_position` reads its
+own for the same reason and one more: the row it puts back is the one write in the panes that
+cannot be held to an extent, an unmeasured pane having no extent to be held to, so the run the
+measurement wakes is what puts the controller back inside the listing -- which is also what mends
+an offset left past the end by anything else, freya's own End key included (`notes/upstream/freya.md`).
 
 **Every stroke in it is put on the device pixel grid by its edges.** freya lays a window out in
 logical pixels and multiplies the whole tree by the window's scale factor on the way to Skia,
@@ -1024,12 +1030,12 @@ above). It used to be dropped on every answer that landed, and with up to 64 str
 companion file with it.
 
 **All three lists are held in one box** (`ListBox`, `src/ui/list_box.rs`), whatever their rows are:
-the focusable box the keyboard reaches the pane through, the `on_sized` the viewport and the nudge
-come out of, the sweep that carries a run past the edge, and the `VirtualScrollView` itself, one
-`code_row_height()` a row. Every line of it is load-bearing -- the order that handler writes in,
-the padding, the focus a press asks for -- so it is written once and a list is its own hooks (the
-position it puts back, the caret a door planted, the window it asks the worker for) and one call
-handing in its pane, its rows and its builder.
+the focusable box the keyboard reaches the pane through, the `on_sized` the list's measurement
+comes out of, the sweep that carries a run past the edge, and the `VirtualScrollView` itself, one
+`code_row_height()` a row. Every line of it is load-bearing -- the one handler the whole
+measurement is written from, the padding, the focus a press asks for -- so it is written once and
+a list is its own hooks (the position it puts back, the caret a door planted, the window it asks
+the worker for) and one call handing in its pane, its rows and its builder.
 
 **A sweep along a row's text selects characters**, beside the rows and not instead of them
 (`src/chars.rs`; `Picked::chars`). Every row of the three listings is drawn by one `code_row`

@@ -467,14 +467,10 @@ impl Opens {
             }
             Opens::Nothing => {}
             Opens::Row { to, at } => {
-                // The row is reached by a press, so the pane is on screen and measured.
+                // The row is reached by a press, so the pane is on screen and measured:
+                // the height is peeked, a handler subscribing to nothing.
                 let mut controller = listing.controller;
-                let _ = reveal_row(
-                    &mut controller,
-                    listing.bounds.get().height(),
-                    listing.rows(),
-                    to,
-                );
+                let _ = reveal_row(&mut controller, listing.height(), listing.rows(), to);
                 // The row landed on becomes the picked-out one, replacing the row the
                 // press started on -- which `pointer_down` has already marked, that being
                 // the one handler a stopped press does not undo. The source pane owes the
@@ -587,8 +583,8 @@ impl Component for DoorLabel {
         let alt = use_consume::<Alt>().0;
         let doors = use_doors();
         let places = use_places();
-        // The list's own scroll and its box, which `reveal_row` needs at the moment of
-        // the press rather than at the render that drew this label.
+        // The list's own scroll and its measured height, which `reveal_row` needs at the
+        // moment of the press rather than at the render that drew this label.
         let listing = use_consume::<Listing>();
         let door = self.door.clone();
         let (rest, lit_fg) = door.colours();
@@ -1262,7 +1258,7 @@ impl Component for InstructionList {
         let at = (Placing::Tab(self.tab), Pane::Assembly);
         let marking = use_marking(at);
         use_searching(at, self.data.searchable());
-        let (controller, viewport) = (list.controller, list.viewport);
+        let (controller, viewport) = (list.controller, list.viewport());
 
         let data = self.data.clone();
         // The listing's rows, which is the instructions plus a separator above every row a

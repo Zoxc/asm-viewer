@@ -361,7 +361,14 @@ impl RowChars {
 /// wide -- the paragraphs its rows have lent it, for a sweep that has left the rows to ask
 /// a row where a column is, the widest row drawn, which every row is floored to and which
 /// is the sideways extent, how many rows it has, which is how far it scrolls and how far a
-/// sweep reaches, and the nudge that puts the rows on the device pixel grid.
+/// sweep reaches, how tall it is, which is what a reveal and a page are measured against,
+/// and the nudge that puts the rows on the device pixel grid.
+///
+/// **The box's own `on_sized` writes the box, the height and the nudge in one call**
+/// ([`Listing::measured`]), so the one measurement has the one home and a caller picks
+/// how to ask for it rather than where: [`Listing::viewport`] and [`Listing::padding`]
+/// read, so the scope that asked is woken by the next measurement; [`Listing::height`]
+/// and the box are peeked, for the handlers and the tasks that must not subscribe.
 ///
 /// The listing that width is held under, and how many rows it has, are **cells**, written
 /// by every render of the list ([`Listing::drawing`], [`Listing::counting`]) and read
@@ -383,6 +390,9 @@ pub(crate) struct Listing {
     /// How far down the rows are pushed to sit on the device pixel grid: see
     /// [`Listing::padding`].
     nudge: State<f32>,
+    /// How tall the list is: see [`Listing::viewport`]. The `VirtualScrollView` measures
+    /// itself but keeps the answer, so the box around it is what is measured.
+    viewport: State<f32>,
 }
 
 /// A row's laid-out paragraph and where it starts, lent to the list by the row as it
@@ -399,9 +409,15 @@ pub(crate) struct RowText {
 }
 
 impl Listing {
-    /// A fresh list, with nothing lent yet and no listing drawn. The nudge is handed in
-    /// rather than made here, this being called once from inside a hook's closure.
-    pub(crate) fn new(controller: ScrollController, widest: Widest, nudge: State<f32>) -> Self {
+    /// A fresh list, with nothing lent yet and no listing drawn. The two states are
+    /// handed in rather than made here, this being called once from inside a hook's
+    /// closure.
+    pub(crate) fn new(
+        controller: ScrollController,
+        widest: Widest,
+        nudge: State<f32>,
+        viewport: State<f32>,
+    ) -> Self {
         Listing {
             controller,
             bounds: Rc::new(Cell::new(Area::zero())),
@@ -410,15 +426,19 @@ impl Listing {
             key: Rc::new(Cell::new(0)),
             rows: Rc::new(Cell::new(0)),
             nudge,
+            viewport,
         }
     }
 
-    /// The box was laid out with its top at `top`, which is what the rows are pushed off.
-    /// The grid is taken at the render and not here, so the handler asks nothing of the
-    /// runtime.
-    pub(crate) fn measured(&self, grid: Grid, top: f32) {
-        let mut nudge = self.nudge;
-        nudge.set_if_modified(grid.nudge(top));
+    /// The box was laid out as `area`, which is everything the list learns from being
+    /// measured: where its top is, which is what the rows are pushed off, how tall it is,
+    /// and the box a sweep is judged against. The grid is taken at the render and not
+    /// here, so the handler asks nothing of the runtime.
+    pub(crate) fn measured(&self, grid: Grid, area: Area) {
+        let (mut nudge, mut viewport) = (self.nudge, self.viewport);
+        viewport.set_if_modified(area.height());
+        nudge.set_if_modified(grid.nudge(area.min_y()));
+        self.bounds.set(area);
     }
 
     /// The padding that puts the rows on the device pixel grid, read as the box's top
@@ -433,6 +453,21 @@ impl Listing {
     /// That padding as it is, for a handler, which subscribes nothing.
     fn nudge(&self) -> f32 {
         *self.nudge.peek()
+    }
+
+    /// How tall the list is, which is what a reveal, a page and the scroll's extent are
+    /// measured against: the state itself, for the hooks that must **read** it. Nothing
+    /// is known before the first layout, so a reveal in an unmeasured pane keeps what it
+    /// owes ([`reveal_row`]) and only a read is woken when the measurement lands. A
+    /// reveal made outside a render peeks this same state per call, the pane having been
+    /// zero tall when the closure was built.
+    pub(crate) fn viewport(&self) -> State<f32> {
+        self.viewport
+    }
+
+    /// That height as it is, for a handler and for a task, which subscribe nothing.
+    pub(crate) fn height(&self) -> f32 {
+        *self.viewport.peek()
     }
 
     /// The listing the list is drawing, told to this by every render of the list: what
@@ -475,7 +510,7 @@ impl Listing {
     /// last was picked out.
     pub(crate) fn scrolled(&self) -> f32 {
         let (_, scrolled) = <(i32, i32)>::from(self.controller);
-        let extent = scroll_extent(self.rows(), code_row_height(), self.bounds.get().height());
+        let extent = scroll_extent(self.rows(), code_row_height(), self.height());
         (scrolled as f32).clamp(-extent, 0.0)
     }
 

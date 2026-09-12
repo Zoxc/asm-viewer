@@ -698,7 +698,7 @@ impl Component for SourceList {
         // listing: an answer is judged by `Searchable::id`.
         let searchable = Searchable::Source(self.source.clone());
         use_searching(at, searchable.clone());
-        let (controller, viewport) = (list.controller, list.viewport);
+        let (controller, viewport) = (list.controller, list.viewport());
 
         // Which of this file's names are links, which is the server's to say and not the
         // pane's to guess. Nothing until it has said so -- so no link is ever drawn that

@@ -22116,11 +22116,14 @@ fn sweeping_harness() -> impl IntoElement {
     let widest = use_widest();
     let controller = use_scroll_controller(ScrollConfig::default);
     let nudge = use_state(|| 0.0f32);
-    let listing_ctx = use_provide_context(|| Listing::new(controller, widest, nudge));
+    let viewport = use_state(|| 0.0f32);
+    let listing_ctx = use_provide_context(|| Listing::new(controller, widest, nudge, viewport));
     // Every render, as each list tells its own.
     listing_ctx.drawing(listing);
     listing_ctx.counting(4);
-    let bounds = listing_ctx.bounds.clone();
+    // Measured as the app's box measures its own: one call, the box and the height both.
+    let grid = pixel_grid();
+    let measured = listing_ctx.clone();
 
     // What a row of the arriving listing reports as it is laid out. The app's rows report
     // through `on_sized`; this reports in the render, which is the pass a test can rely
@@ -22134,7 +22137,7 @@ fn sweeping_harness() -> impl IntoElement {
 
     rect()
         .expanded()
-        .on_sized(move |e: Event<SizedEventData>| bounds.set(e.area))
+        .on_sized(move |e: Event<SizedEventData>| measured.measured(grid, e.area))
         .on_global_pointer_move(use_sweep_beyond(
             marked,
             Pane::Assembly,
@@ -22215,16 +22218,19 @@ fn over_scrolled_harness() -> impl IntoElement {
     let widest = use_widest();
     let controller = use_scroll_controller(ScrollConfig::default);
     let nudge = use_state(|| 0.0f32);
-    let listing = use_provide_context(|| Listing::new(controller, widest, nudge));
+    let viewport = use_state(|| 0.0f32);
+    let listing = use_provide_context(|| Listing::new(controller, widest, nudge, viewport));
     listing.drawing(1);
     listing.counting(OVER_ROWS);
     let out = use_consume::<OverListing>().0;
     use_hook(|| *out.borrow_mut() = Some(listing.clone()));
-    let bounds = listing.bounds.clone();
+    // Measured as the app's box measures its own: one call, the box and the height both.
+    let grid = pixel_grid();
+    let measured = listing.clone();
 
     rect()
         .expanded()
-        .on_sized(move |e: Event<SizedEventData>| bounds.set(e.area))
+        .on_sized(move |e: Event<SizedEventData>| measured.measured(grid, e.area))
         .on_global_pointer_move(use_sweep_beyond(marked, Pane::Assembly, listing.clone()))
 }
 
@@ -22262,7 +22268,7 @@ fn a_sweep_reads_the_scroll_the_rows_are_drawn_at() {
     settle(&mut test);
     let listing = held.borrow().clone().expect("the harness kept no listing");
     let height = code_row_height();
-    let extent = scroll_extent(OVER_ROWS, height, listing.bounds.get().height());
+    let extent = scroll_extent(OVER_ROWS, height, listing.height());
     assert!(
         extent > 0.0,
         "the listing fits its box, so there is no offset past its end to be given"
@@ -22297,6 +22303,107 @@ fn a_sweep_reads_the_scroll_the_rows_are_drawn_at() {
     // Which is because the rows are read where they are drawn: at the end of the listing,
     // whatever the controller was told.
     assert_eq!(listing.scrolled(), -extent);
+}
+
+/// How many rows [`measured_harness`] draws, how tall its window is, and how tall the
+/// test then makes the box inside it.
+const MEASURED_ROWS: usize = 40;
+const MEASURED_BOX: f32 = 200.0;
+const MEASURED_SHORTER: f32 = 150.0;
+
+/// How tall [`measured_harness`] draws its box, which the test shortens.
+#[derive(Clone, Copy)]
+struct MeasuredTall(State<f32>);
+
+/// The `Listing` [`measured_harness`]'s box provides, put out for the test to ask.
+#[derive(Clone)]
+struct MeasuredListing(Rc<RefCell<Option<Listing>>>);
+
+/// Every height a scope that **read** the list's viewport has run with, in order.
+#[derive(Clone, Copy)]
+struct MeasuredSeen(State<Vec<f32>>);
+
+/// A code pane's box as the app makes it -- `use_list_box` and its `render`, with rows
+/// enough to scroll over -- inside a box the test resizes, and a scope reading the height
+/// the list reports.
+fn measured_harness() -> impl IntoElement {
+    let marked = use_consume::<Marked>().0;
+    let mut seen = use_consume::<MeasuredSeen>().0;
+    let tall = *use_consume::<MeasuredTall>().0.read();
+    let list = use_list_box(Pane::Assembly, 1);
+    // The context the box provided, which is what a row, a handler and the sweep hold.
+    let listing = use_consume::<Listing>();
+    let out = use_consume::<MeasuredListing>().0;
+    use_hook(|| *out.borrow_mut() = Some(listing.clone()));
+
+    // Subscribed to the height by reading it, as a reveal that keeps what it owes is.
+    let viewport = list.viewport();
+    use_side_effect(move || {
+        let height = *viewport.read();
+        seen.write().push(height);
+    });
+
+    rect()
+        .width(Size::fill())
+        .height(Size::px(tall))
+        .child(list.render(
+            marked,
+            MEASURED_ROWS,
+            |_: Event<KeyboardEventData>| {},
+            (),
+            |_, _: &()| rect().height(Size::px(code_row_height())).into_element(),
+        ))
+}
+
+/// **The box's `on_sized` writes the list's height into the `Listing`, and reading it
+/// there is what a measurement wakes.** The height had two homes: a state on `ListBox`
+/// that the reveals read, and the box on the `Listing` that the handlers and the sweep
+/// took it off without subscribing, so which of the two a caller got turned on which
+/// struct it held. One home now, asked two ways: `Listing::viewport` to be woken by a
+/// measurement, `Listing::height` not to be.
+#[test]
+fn the_box_writes_its_height_into_the_listing_and_a_read_of_it_wakes() {
+    let (mut test, (tall, held, seen)) = TestingRunner::new(
+        measured_harness,
+        (MEASURED_BOX, MEASURED_BOX).into(),
+        |runner| {
+            runner.provide_root_context(|| Marked(State::create(Marks::default())));
+            runner.provide_root_context(|| Keyboard(State::create(Keys::default())));
+            (
+                runner
+                    .provide_root_context(|| MeasuredTall(State::create(MEASURED_BOX)))
+                    .0,
+                runner
+                    .provide_root_context(|| MeasuredListing(Rc::new(RefCell::new(None))))
+                    .0,
+                runner
+                    .provide_root_context(|| MeasuredSeen(State::create(Vec::new())))
+                    .0,
+            )
+        },
+        1.,
+    );
+    settle(&mut test);
+    let listing = held.borrow().clone().expect("the harness kept no listing");
+
+    // One measurement, whichever way it is asked for.
+    assert_eq!(listing.height(), MEASURED_BOX);
+    assert_eq!(listing.height(), listing.bounds.get().height());
+    assert_eq!(seen.peek().last(), Some(&MEASURED_BOX));
+
+    // The box made shorter: the scope that read the height is woken by the measurement,
+    // which is what pays a reveal an unmeasured pane kept.
+    let mut tall = tall;
+    tall.set(MEASURED_SHORTER);
+    settle(&mut test);
+    assert_eq!(listing.height(), MEASURED_SHORTER);
+    assert_eq!(listing.height(), listing.bounds.get().height());
+    assert_eq!(
+        seen.peek().last(),
+        Some(&MEASURED_SHORTER),
+        "the read was not woken by the measurement: {:?}",
+        seen.peek()
+    );
 }
 
 /// The text every row of [`lending_harness`] draws: wide enough that a column well inside
@@ -22364,7 +22471,8 @@ fn lending_harness() -> impl IntoElement {
     let widest = use_widest();
     let controller = use_scroll_controller(ScrollConfig::default);
     let nudge = use_state(|| 0.0f32);
-    let listing = use_provide_context(|| Listing::new(controller, widest, nudge));
+    let viewport = use_state(|| 0.0f32);
+    let listing = use_provide_context(|| Listing::new(controller, widest, nudge, viewport));
     // Every render, as each list tells its own.
     listing.drawing(1);
     let out = use_consume::<LentTo>().0;
