@@ -133,12 +133,7 @@ impl Component for BinaryRow {
             text.clone(),
             dead_list_row()
                 .child(tree_name_fitted(fitted, text, false, &[]))
-                .child(
-                    label()
-                        .text(counted(self.objects, "object", "objects"))
-                        .color(palette().address_fg)
-                        .max_lines(1),
-                ),
+                .child(dim_line(counted(self.objects, "object", "objects"))),
         )
     }
 
@@ -160,13 +155,7 @@ fn override_row(name: &str, value: &str) -> Element {
                 .color(palette().text_fg)
                 .max_lines(1),
         )
-        .child(
-            label()
-                .text(value.to_owned())
-                .width(Size::flex(1.0))
-                .color(palette().address_fg)
-                .max_lines(1),
-        )
+        .child(dim_line(value.to_owned()).width(Size::flex(1.0)))
         .into_element()
 }
 
@@ -216,7 +205,7 @@ impl Component for ArtifactRow {
                         });
                     })
                     .child(tree_name_fitted(fitted, text, false, &[]))
-                    .child(label().text(about).color(palette().address_fg).max_lines(1)),
+                    .child(dim_line(about)),
             ),
         )
     }
@@ -287,11 +276,7 @@ fn source_place(
             }
             .into_element()
         }
-        None => label()
-            .text(text)
-            .color(palette().address_fg)
-            .max_lines(1)
-            .into_element(),
+        None => dim_line(text).into_element(),
     })
 }
 
@@ -331,7 +316,7 @@ impl Component for RecentRow {
             list_row(hovering, Chosen::No)
                 .on_press(move |_| switch_project(states, rescued, unopened, path.clone()))
                 .child(one_line(text).width(Size::flex(1.0)))
-                .child(label().text(about).color(palette().address_fg).max_lines(1)),
+                .child(dim_line(about)),
         )
     }
 
@@ -350,21 +335,13 @@ impl Component for IdentitySection {
         let file = proj.read().file.clone();
 
         let on_choose = move |_| {
-            // `spawn_forever`, not `spawn`: the dialog is asynchronous and, through the
-            // xdg portal, not modal to the window, so the reader can raise another tab
-            // while it is up -- and that unmounts the scope a `spawn` would belong to,
-            // losing the folder they then chose. `proj` is a root state, so the write
-            // is good whatever is on screen.
-            spawn_forever(async move {
-                let Some(handle) = AsyncFileDialog::new()
-                    .set_title("Choose the project's directory...")
-                    .pick_folder()
-                    .await
-                else {
-                    return;
-                };
-                proj.write().workspace_text = handle.path().to_string_lossy().into_owned();
-            });
+            // On a task that outlives this view, which is drawn only while its tab is on
+            // screen and the dialog is not modal to the window (`ask_file`).
+            ask_file(
+                AsyncFileDialog::new().set_title("Choose the project's directory..."),
+                AskFor::Folder,
+                move |path| proj.write().workspace_text = path.to_string_lossy().into_owned(),
+            );
         };
 
         rect()
@@ -396,15 +373,12 @@ impl Component for IdentitySection {
             // inside neither it nor the session beside it.
             .child(field_row(
                 "Kept in",
-                label()
-                    .text(match &file {
-                        Some(file) => file.to_string_lossy().into_owned(),
-                        // A project file is made by the first write that has something
-                        // to put in it.
-                        None => "not saved yet".to_owned(),
-                    })
-                    .color(palette().address_fg)
-                    .max_lines(1),
+                dim_line(match &file {
+                    Some(file) => file.to_string_lossy().into_owned(),
+                    // A project file is made by the first write that has something
+                    // to put in it.
+                    None => "not saved yet".to_owned(),
+                }),
             ))
     }
 }
@@ -439,10 +413,7 @@ impl Component for BinariesSection {
             .width(Size::fill())
             .spacing(6.0)
             .child(section_heading("Binaries", None))
-            .child(match binaries.is_empty() {
-                true => info_line("Nothing open".to_owned()).into_element(),
-                false => rect().width(Size::fill()).children(binaries).into_element(),
-            })
+            .child(rows_or(binaries, "Nothing open"))
     }
 }
 
@@ -541,10 +512,7 @@ impl Component for CargoSection {
                     // who knows the rule.
                     .child(field_row(
                         "Manifest",
-                        label()
-                            .text(manifest.to_string_lossy().into_owned())
-                            .color(palette().address_fg)
-                            .max_lines(1),
+                        dim_line(manifest.to_string_lossy().into_owned()),
                     ))
                     // Where its `[profile.*]` is read from, when that is not the file
                     // above: cargo takes profiles from the workspace root alone, so a
@@ -553,10 +521,7 @@ impl Component for CargoSection {
                     .maybe_child(held.manifest.profiles.as_ref().map(|profiles| {
                         field_row(
                             "Profiles",
-                            label()
-                                .text(profiles.to_string_lossy().into_owned())
-                                .color(palette().address_fg)
-                                .max_lines(1),
+                            dim_line(profiles.to_string_lossy().into_owned()),
                         )
                         .into_element()
                     }))
@@ -725,14 +690,11 @@ impl Component for LanguageSection {
                         .content(Content::Flex)
                         .spacing(8.0)
                         .child(
-                            label()
-                                .text(match open.trusted {
-                                    true => "Agreed to".to_owned(),
-                                    false => "Not agreed to".to_owned(),
-                                })
-                                .width(Size::flex(1.0))
-                                .color(palette().address_fg)
-                                .max_lines(1),
+                            dim_line(match open.trusted {
+                                true => "Agreed to".to_owned(),
+                                false => "Not agreed to".to_owned(),
+                            })
+                            .width(Size::flex(1.0)),
                         )
                         .maybe(open.trusted, |row| {
                             row.child(
@@ -821,10 +783,7 @@ impl Component for RecentsSection {
                         .into_element(),
                 ),
             ))
-            .child(match others.is_empty() {
-                true => info_line("No other projects".to_owned()).into_element(),
-                false => rect().width(Size::fill()).children(others).into_element(),
-            })
+            .child(rows_or(others, "No other projects"))
     }
 }
 

@@ -361,7 +361,7 @@ pub(crate) fn root_key_down(
         arranged,
         ..
     } = states;
-    let mut strip = open.strip;
+    let strip = open.strip;
 
     match chord {
         // The panels and the overlay that are reached from anywhere. Each panel chord
@@ -391,11 +391,11 @@ pub(crate) fn root_key_down(
         Chord::Back => navigate(open, Nav::Back),
         Chord::Forward => navigate(open, Nav::Forward),
 
-        // The window's own doors. `Strip::show` for the two pages, which opens one beside
+        // The window's own doors. `show_page` for the two pages, which opens one beside
         // the tab on screen and raises one already open -- what the pages menu's row does.
         Chord::OpenProject => ask_for_a_project(states, rescued, unopened),
-        Chord::Settings => strip.write().show(Tab::Page(Page::Settings)),
-        Chord::Shortcuts => strip.write().show(Tab::Page(Page::Shortcuts)),
+        Chord::Settings => show_page(open, Page::Settings),
+        Chord::Shortcuts => show_page(open, Page::Shortcuts),
         Chord::Server => toggle_server(language, proj, jobs),
 
         // The reader's own list, added to or taken from: the tab menu's item asked of the
@@ -410,15 +410,15 @@ pub(crate) fn root_key_down(
         }
 
         // The pane that follows the one on screen, put away or brought back: the toggle on
-        // the leading bar, pressed by key. A document tab and the Scratchpad page each
-        // write the flag under their own `Placing`; every other page has no second pane
-        // and does nothing.
+        // the leading bar, pressed by key. A document tab writes the flag under its own
+        // `Placing`; which pages have a second pane at all is the page table's
+        // (`page_following`, `ui/strip.rs`).
         Chord::OtherPane => {
             let showing = strip.peek().active();
             let of = match showing {
                 Some(Tab::Document(id)) => Some(Placing::Tab(id)),
-                Some(Tab::Page(Page::Scratchpad)) => Some(Placing::Pad),
-                Some(Tab::Page(_)) | None => None,
+                Some(Tab::Page(page)) => page_following(page),
+                None => None,
             };
             if let Some(of) = of {
                 toggle_pane(of, open, follows);

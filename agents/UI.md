@@ -283,8 +283,9 @@ key is a way round the doors. `close` is the match from a `Tab` onto `close_tab`
 -- a page's close is not a document's, which is a reason for two functions and not for a match
 per caller, so the × on a chip and the tab menu's Close row press the same one. The
 trail keys are the `navigate` the mouse's side buttons and the toolbar's two chevrons already
-call. The two pages are `Strip::show`, what the pages menu's row does, so one opens beside the
-tab on screen and one already open is raised. And the server chord is `toggle_server`
+call. The two pages are `show_page`, what the pages menu's row does, so one opens beside the
+tab on screen and one already open is raised -- and the page already on screen is left alone, the
+door asking that itself as `raise_tab` asks `Strip::would_raise`. And the server chord is `toggle_server`
 (`ui/language.rs`), pulled out of the control in the top bar so that a key and a button cannot
 come to mean different things. The four panel chords are `reach_panel` (`ui/dock.rs`), which
 raises a panel and asks for the keyboard to go into the box it registered -- one door for
@@ -338,6 +339,16 @@ opening a function from the symbol list produce the same kind of thing, differin
 the mapping runs. Each tab has one glyph that tells the two apart. One strip rather than one per
 kind is what lets the history record a visited file and the session keep the strip's interleaved
 order.
+
+**A page is one row of a table**, `page_row` (`src/ui/strip.rs`), the shape `Panel::row` settled and
+for its reason: the glyph, the window's key where it has one, the body, and the three rules the rest
+of the app has about the page -- whether it is a reading of a project, whether the pages menu offers
+it only with Alt held, and which second pane it has. The glyph and the body are `fn() -> Element`,
+so both are built in the scope that draws them. `Page::title` and `Page::stored` stay in
+`src/tabs.rs`, which is framework-free, and a stored name is a file format
+(`agents/Persistence.md`). Before the table, adding a page was five matches over five variants in
+two files plus three rules outside all of them, and the Debug page was the last to need every
+edit.
 
 **`Active` is a derivation, not a state.** What is open is `Open { strip, docs }`: the `Strip`
 (`src/tabs.rs`), whose `tabs` vec *is* the list of open tabs in the reader's own order and which

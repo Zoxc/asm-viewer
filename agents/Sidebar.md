@@ -603,7 +603,10 @@ An **artifact row**'s load goes the same way, and what it leaves is worse than n
 registered before a byte is read, so a row stays in the Objects list loading for ever, and only
 closing the file clears one. So does the **folder dialog** behind "Choose...": through the xdg
 portal it is not modal to the window, the app keeps taking input while it is up, and a reader who
-raised another tab meanwhile got the directory they had before and nothing to say why.
+raised another tab meanwhile got the directory they had before and nothing to say why. Every
+dialog in the app goes up through `ask_file` or `ask_files` (`ui/session.rs`), which is that task
+and that reason written once. Six sites each spelled it out, which is the shape where the seventh
+gets it wrong -- and the header over four of them called them three.
 
 **Every list row is one frame.** `list_row` (`src/ui/parts.rs`) is the chrome the thirteen
 sidebar-style rows open with: the height the scroll view over them uses as its `item_size` --

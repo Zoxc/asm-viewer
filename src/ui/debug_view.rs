@@ -55,7 +55,7 @@ impl Component for DebugTab {
                             });
                         }))
                         .child(section_heading("Panic files", None))
-                        .children(recorded_rows(store)),
+                        .child(rows_or(recorded_rows(store), "Nothing has panicked.")),
                 ),
             )
     }
@@ -80,7 +80,8 @@ fn panic_row(name: &str, press: impl FnMut(Event<PressEventData>) + 'static) -> 
         .child(Button::new().on_press(press).child("Panic"))
 }
 
-/// A row per run that has panicked, newest first, or a line saying there are none.
+/// A row per run that has panicked, newest first. The line for none is `rows_or`'s, as
+/// every other section's is.
 ///
 /// **Read on every render and not held.** The list changes when this app panics, which is
 /// the one moment nothing here will be redrawn afterwards; and it is one `read_dir` of a
@@ -91,9 +92,6 @@ fn recorded_rows(store: State<Option<Store>>) -> Vec<Element> {
         .as_ref()
         .map(crate::panics::recorded)
         .unwrap_or_default();
-    if files.is_empty() {
-        return vec![info_line("Nothing has panicked.".to_owned()).into_element()];
-    }
     files
         .into_iter()
         .map(|path| FileRow { path }.into_element())

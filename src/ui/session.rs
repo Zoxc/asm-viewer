@@ -493,61 +493,105 @@ pub(crate) fn switch_project(
     enter_project(states, path, project, session);
 }
 
-/// Ask for a project file and open it in place of the one on screen.
+/// Which file a dialog asks the reader for: one that is there, a directory, or a name to
+/// write under. The last is the app's one **save** dialog: the only place the reader names
+/// a file that is not there yet.
+#[derive(Clone, Copy)]
+pub(crate) enum AskFor {
+    File,
+    Folder,
+    Save,
+}
+
+/// Put `dialog` up and hand the path it answered with to `then`. Nothing at all where it
+/// was dismissed.
 ///
-/// `spawn_forever` in all three of these, not `spawn`: the dialog is asynchronous and,
-/// through the xdg portal, not modal to the window, so the reader can raise another tab
-/// while it is up -- and that unmounts the scope a `spawn` would belong to, losing the file
-/// they then chose. Every state written here is a root state, so the write is good whatever
-/// is on screen.
+/// **On a task that outlives the scope this was called from.** The dialog is asynchronous
+/// and, through the xdg portal, not modal to the window, so the reader can raise another
+/// tab or drag a panel out from under the button while it is up -- and that unmounts the
+/// scope a `spawn` would belong to, losing the file they then chose. Everything `then`
+/// writes is a root state, so the write is good whatever is on screen.
+///
+/// The one place that reason is written, so the next dialog cannot be the one that gets
+/// it wrong.
+pub(crate) fn ask_file(
+    dialog: AsyncFileDialog,
+    asking: AskFor,
+    then: impl FnOnce(PathBuf) + 'static,
+) {
+    spawn_forever(async move {
+        let picked = match asking {
+            AskFor::File => dialog.pick_file().await,
+            AskFor::Folder => dialog.pick_folder().await,
+            AskFor::Save => dialog.save_file().await,
+        };
+        let Some(handle) = picked else {
+            return;
+        };
+        then(handle.path().to_path_buf());
+    });
+}
+
+/// The same for the several files one dialog can answer with. `then` is awaited, both
+/// callers having a load to run; the task and the reason are [`ask_file`]'s.
+pub(crate) fn ask_files<F: std::future::Future<Output = ()> + 'static>(
+    dialog: AsyncFileDialog,
+    then: impl FnOnce(Vec<PathBuf>) -> F + 'static,
+) {
+    spawn_forever(async move {
+        let Some(handles) = dialog.pick_files().await else {
+            return;
+        };
+        then(handles.iter().map(|h| h.path().to_path_buf()).collect()).await;
+    });
+}
+
+/// The dialog that asks for binaries, under `title`.
+///
+/// The Objects panel's "Add binaries..." and the menu's "Open a file as a project..." are
+/// the same gesture from two places, so the title is all they differ in. An object-file
+/// filter, which there is none of today, would be one edit here.
+pub(crate) fn binaries_dialog(title: &str) -> AsyncFileDialog {
+    AsyncFileDialog::new().set_title(title)
+}
+
+/// Ask for a project file and open it in place of the one on screen.
 pub(crate) fn ask_for_a_project(
     states: ProjectStates,
     rescued: State<Vec<PathBuf>>,
     unopened: State<Option<project::Failure>>,
 ) {
-    spawn_forever(async move {
-        let Some(handle) = AsyncFileDialog::new()
+    ask_file(
+        AsyncFileDialog::new()
             .set_title("Open a project...")
-            .add_filter("Project", &[project::PROJECT_EXTENSION])
-            .pick_file()
-            .await
-        else {
-            return;
-        };
-        switch_project(states, rescued, unopened, handle.path().to_path_buf());
-    });
+            .add_filter("Project", &[project::PROJECT_EXTENSION]),
+        AskFor::File,
+        move |path| switch_project(states, rescued, unopened, path),
+    );
 }
 
 /// Ask for a directory and start a project about it.
 pub(crate) fn ask_for_a_directory(states: ProjectStates) {
     let mut proj = states.proj;
-    spawn_forever(async move {
-        let Some(handle) = AsyncFileDialog::new()
-            .set_title("Open a directory as a project...")
-            .pick_folder()
-            .await
-        else {
-            return;
-        };
-        new_project(states);
-        proj.write().workspace_text = handle.path().to_string_lossy().into_owned();
-    });
+    ask_file(
+        AsyncFileDialog::new().set_title("Open a directory as a project..."),
+        AskFor::Folder,
+        move |path| {
+            new_project(states);
+            proj.write().workspace_text = path.to_string_lossy().into_owned();
+        },
+    );
 }
 
 /// Ask for binaries and start a project holding them.
 pub(crate) fn ask_for_a_binary(states: ProjectStates) {
-    spawn_forever(async move {
-        let Some(handles) = AsyncFileDialog::new()
-            .set_title("Open a file as a project...")
-            .pick_files()
-            .await
-        else {
-            return;
-        };
-        new_project(states);
-        let paths: Vec<PathBuf> = handles.iter().map(|h| h.path().to_path_buf()).collect();
-        open_binaries(states.objects, states.loading, paths).await;
-    });
+    ask_files(
+        binaries_dialog("Open a file as a project..."),
+        move |paths| async move {
+            new_project(states);
+            open_binaries(states.objects, states.loading, paths).await;
+        },
+    );
 }
 
 /// Put the window back the way the session left it: the sidebar's arrangement, and the two
@@ -594,24 +638,22 @@ pub(crate) fn ask_where_to_save(states: ProjectStates, put: project::Put) {
         .filter(|_| put == project::Put::Copy)
         .unwrap_or_else(|| format!("project.{}", project::PROJECT_EXTENSION));
 
-    spawn_forever(async move {
-        let Some(handle) = AsyncFileDialog::new()
+    ask_file(
+        AsyncFileDialog::new()
             .set_title("Save the project as...")
             .add_filter("Project", &[project::PROJECT_EXTENSION])
-            .set_file_name(suggested)
-            .save_file()
-            .await
-        else {
-            return;
-        };
-        let path = handle.path().to_path_buf();
-        let store = store.peek().clone();
-        if store.is_some_and(|store| project::put_in(&store, &path, put)) {
-            // The only thing that changed is where the project is kept, so this is the
-            // only state that moves; the save observer sees no change and writes nothing.
-            proj.write().file = Some(path);
-        }
-    });
+            .set_file_name(suggested),
+        AskFor::Save,
+        move |path| {
+            let store = store.peek().clone();
+            if store.is_some_and(|store| project::put_in(&store, &path, put)) {
+                // The only thing that changed is where the project is kept, so this is
+                // the only state that moves; the save observer sees no change and writes
+                // nothing.
+                proj.write().file = Some(path);
+            }
+        },
+    );
 }
 
 /// Leave the project the app is in with none in its place.

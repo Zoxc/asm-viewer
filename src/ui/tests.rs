@@ -2573,6 +2573,86 @@ fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
     assert_eq!(strip.active(), Some(Tab::Page(Page::Project)));
 }
 
+/// How many times the strip-reading row below has been drawn, in a context of its own so
+/// the component can count its own renders.
+#[derive(Clone)]
+struct StripDrawn(Arc<std::sync::atomic::AtomicUsize>);
+
+/// A row as a tab chip is: it reads the strip and draws nothing else, so the one thing
+/// that can re-render it is a write to the strip.
+#[derive(PartialEq)]
+struct StripRow;
+
+impl Component for StripRow {
+    fn render(&self) -> impl IntoElement {
+        let strip = use_open().strip;
+        let _showing = strip.read().active();
+        use_consume::<StripDrawn>()
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        rect().expanded()
+    }
+}
+
+fn strip_harness() -> impl IntoElement {
+    rect().expanded().child(StripRow)
+}
+
+/// **Showing the page already on screen writes nothing.** `State::write` notifies whether
+/// or not the value changed, so a strip written for the page that was showing re-renders
+/// the bar, the body under it and the save observer for nothing -- and a pages menu press
+/// on the open page is exactly that press. `show_page` is the door the four sites that
+/// wrote the strip themselves now go through, and it asks first, as `raise_tab` does.
+///
+/// Headless because nothing shows either way: the page was on screen and stays there, and
+/// only a count of the renders says whether the strip was written. Fails on the unguarded
+/// `strip.write().show(Tab::Page(page))`.
+#[test]
+fn showing_the_page_already_on_screen_redraws_nothing() {
+    let drawn = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = || drawn.load(std::sync::atomic::Ordering::Relaxed);
+    let (mut test, open) = TestingRunner::new(
+        strip_harness,
+        (200., 200.).into(),
+        {
+            let drawn = drawn.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || StripDrawn(drawn));
+                runner.provide_root_context(test_roots).states.open
+            }
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    show_page(open, Page::Settings);
+    settle(&mut test);
+    assert_eq!(
+        open.strip.peek().active(),
+        Some(Tab::Page(Page::Settings)),
+        "the page did not open"
+    );
+    let opened = counted();
+
+    // The same page again, which is what a menu press on the page on screen does.
+    show_page(open, Page::Settings);
+    settle(&mut test);
+    assert_eq!(counted(), opened, "a show that changed nothing redrew");
+
+    // And the row is still wired to the strip: a page opened beside it redraws, and so
+    // does the first one raised back.
+    show_page(open, Page::Shortcuts);
+    settle(&mut test);
+    let two = counted();
+    assert!(
+        two > opened,
+        "the row was not drawn again for a page opened"
+    );
+    show_page(open, Page::Settings);
+    settle(&mut test);
+    assert!(counted() > two, "the row was not drawn again for a raise");
+}
+
 /// What the menu row reading `name` is painted: the smallest painted box the label sits
 /// inside, which is the row's own where it is marked and the menu's own where it is not.
 /// Asked by containment and not by colour, so a mark is told from a plain row without

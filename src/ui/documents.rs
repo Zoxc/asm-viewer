@@ -8,8 +8,9 @@
 //! [`raise_tab`], [`navigate`], [`close_tab`], [`close_others`] and [`close_binary`] are
 //! what open or close a **document** tab or change what one shows, and every path that
 //! opens a document -- [`land`] included -- goes through [`open_document`]. A page is the
-//! one tab outside that: it draws state held at the root, so it has no trail, and
-//! [`close_page`] takes its chip out of the bar and nothing else.
+//! one tab outside that: it draws state held at the root and has no trail, so
+//! [`show_page`] puts its chip in the bar and [`close_page`] takes it out, and neither
+//! owes anything else.
 //!
 //! The window's tab keys are answered here too, and each of them is one of those doors
 //! and not a second way round it: [`step_tab`] and [`show_nth`] work out which tab the
@@ -268,6 +269,27 @@ pub(crate) fn close_tab(open: Open, places: Places, id: DocId) {
         return;
     }
     places.forgetting(&closed, |_| true);
+}
+
+/// Show the page `page`: **beside the tab on screen** when it is not open, and raised
+/// where it is, which is what [`Strip::show`] is. The way in that [`close_page`] is the
+/// way out, so no caller writes the strip itself.
+///
+/// Asked before it is written, as [`raise_tab`] is: `State::write` notifies whether or not
+/// the value changed, so the page already on screen must not reach for it -- a pages menu
+/// press on the open page would otherwise re-render the bar, the body under it and the
+/// save observer for nothing.
+///
+/// With no project open it is still a tab: the bar comes back for it, and closing it takes
+/// the bar away again.
+pub(crate) fn show_page(open: Open, page: Page) {
+    let mut strip = open.strip;
+    let tab = Tab::Page(page);
+    // Bound in a statement of its own: the write below is to the state this read.
+    let showing = strip.peek().active() == Some(tab);
+    if !showing {
+        strip.write().show(tab);
+    }
 }
 
 /// Close the page `page`, which is a tab leaving the bar and nothing else: what it was

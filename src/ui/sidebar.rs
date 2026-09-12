@@ -426,22 +426,13 @@ impl Component for AddBinaries {
             .child(
                 Button::new()
                     .on_press(move |_| {
-                        // `spawn_forever`, not `spawn`: the dialog is not modal to the
-                        // window, so the reader can drag this panel elsewhere in the dock
-                        // while it is up -- and that unmounts the scope a `spawn` would
-                        // belong to, losing the files they then chose.
-                        spawn_forever(async move {
-                            let Some(handles) = AsyncFileDialog::new()
-                                .set_title("Add binaries to the project...")
-                                .pick_files()
-                                .await
-                            else {
-                                return;
-                            };
-                            let paths: Vec<PathBuf> =
-                                handles.iter().map(|h| h.path().to_path_buf()).collect();
-                            open_binaries(objects, loading, paths).await;
-                        });
+                        // The same dialog the menu's "Open a file as a project..." puts
+                        // up, and on a task that outlives this panel: the reader can drag
+                        // it elsewhere in the dock while the dialog is up (`ask_files`).
+                        ask_files(
+                            binaries_dialog("Add binaries to the project..."),
+                            move |paths| open_binaries(objects, loading, paths),
+                        );
                     })
                     .child("Add binaries..."),
             )

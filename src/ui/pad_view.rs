@@ -1132,10 +1132,7 @@ impl Component for DependencyList {
                         .into_element(),
                 ),
             ))
-            .child(match rows.is_empty() {
-                true => info_line("No crates asked for".to_owned()).into_element(),
-                false => rect().width(Size::fill()).children(rows).into_element(),
-            })
+            .child(rows_or(rows, "No crates asked for"))
             .maybe_child(
                 unsaved.map(|failure| {
                     verdict_line(Verdict::bad_news(format!("Not saved: {failure}")))

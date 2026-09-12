@@ -1,5 +1,6 @@
 //! The app's own tab bar and what it draws: the chips, the × on one, the list of every
-//! open tab, and the body under it all.
+//! open tab, the body under it all, and the table saying what each page is
+//! ([`PageRow`]).
 //!
 //! **The bar is the app's and not the dock's.** It cannot be folded away, split, or
 //! dragged out of; what is open is a [`Strip`] the app holds, and a chip is a plain
@@ -350,38 +351,102 @@ fn tab_icon(tab: Tab, docs: &Docs) -> Element {
     }
 }
 
-/// The glyph a page's tab is drawn with.
-fn page_icon(page: Page) -> Element {
+/// One page's row of the UI's table: what it is drawn with, and the three rules the rest
+/// of the app has about it.
+///
+/// A row per page rather than a match per column, which is [`Panel::row`]'s shape and its
+/// reason: a page is one place and not five. [`Page::title`] and [`Page::stored`] stay in
+/// `src/tabs.rs`, being framework-free -- and `stored` is a file format besides.
+/// [`page_row`] matches on every page, so a page added to the enum has no row until one is
+/// written for it.
+struct PageRow {
+    /// The Lucide glyph drawn before the title. A function rather than an element, so it
+    /// is built in the scope that draws it: `glyph` asks for a colour, and asking is what
+    /// subscribes a scope to the palette.
+    icon: fn() -> Element,
+    /// The window's own key for the page, where it has one: what the pages menu draws
+    /// beside the row. The keys are the root's ([`root_key_down`]), so they work wherever
+    /// the menu is opened from.
+    key: Option<&'static str>,
+    /// What the page's tab draws under the bar, built where it is drawn for the icon's
+    /// reason.
+    body: fn() -> Element,
+    /// Whether the page is a reading of a project, so that with none open there is
+    /// nothing for it to draw and the pages menu leaves the row out.
+    needs_project: bool,
+    /// Whether the pages menu offers the page only when Alt was held as it was opened.
+    ///
+    /// The Debug page is the ways to make the app misbehave on purpose, so it is not in a
+    /// menu the reader opened to get to their project. Alt is what asks for it -- no
+    /// rebuild, no variable, and nothing on screen for a reader who has not asked. Only
+    /// the menu is gated: a session that names the page puts it back.
+    hidden_unless_alt: bool,
+    /// The place the page's second pane is filed under, for the chord that puts that pane
+    /// away and brings it back ([`root_key_down`]); `None` for a page that has one pane.
+    following: Option<Placing>,
+}
+
+/// This page's [`PageRow`].
+fn page_row(page: Page) -> PageRow {
     match page {
-        Page::Project => glyph(("folder-open", lucide::folder_open())),
-        Page::Settings => glyph(("settings", lucide::settings())),
-        Page::Shortcuts => glyph(("keyboard", lucide::keyboard())),
-        Page::Scratchpad => glyph(("notebook-pen", lucide::notebook_pen())),
-        Page::Debug => glyph(("bug", lucide::bug())),
+        Page::Project => PageRow {
+            icon: || glyph(("folder-open", lucide::folder_open())),
+            key: None,
+            body: || ProjectTab.into_element(),
+            needs_project: true,
+            hidden_unless_alt: false,
+            following: None,
+        },
+        Page::Settings => PageRow {
+            icon: || glyph(("settings", lucide::settings())),
+            key: Some(shortcuts::key!(Settings)),
+            body: || SettingsTab.into_element(),
+            needs_project: false,
+            hidden_unless_alt: false,
+            following: None,
+        },
+        Page::Shortcuts => PageRow {
+            icon: || glyph(("keyboard", lucide::keyboard())),
+            key: Some(shortcuts::key!(Shortcuts)),
+            body: || ShortcutsTab.into_element(),
+            needs_project: false,
+            hidden_unless_alt: false,
+            following: None,
+        },
+        Page::Scratchpad => PageRow {
+            icon: || glyph(("notebook-pen", lucide::notebook_pen())),
+            key: None,
+            body: || ScratchpadTab.into_element(),
+            needs_project: false,
+            hidden_unless_alt: false,
+            following: Some(Placing::Pad),
+        },
+        Page::Debug => PageRow {
+            icon: || glyph(("bug", lucide::bug())),
+            key: None,
+            body: || DebugTab.into_element(),
+            needs_project: false,
+            hidden_unless_alt: true,
+            following: None,
+        },
     }
 }
 
-/// The window's own key for a page, where it has one: what the pages menu draws beside
-/// the row. The two keys are the root's ([`root_key_down`]), so they work wherever this
-/// menu is opened from.
-fn page_key(page: Page) -> Option<&'static str> {
-    match page {
-        Page::Settings => Some(shortcuts::key!(Settings)),
-        Page::Shortcuts => Some(shortcuts::key!(Shortcuts)),
-        Page::Project | Page::Scratchpad | Page::Debug => None,
-    }
+/// The glyph a page's tab is drawn with ([`PageRow::icon`]).
+fn page_icon(page: Page) -> Element {
+    (page_row(page).icon)()
 }
 
 /// What a page's tab draws under the bar -- and what a window with no project draws in
-/// place of its screen, there being no bar there to put a tab in.
+/// place of its screen, there being no bar there to put a tab in ([`PageRow::body`]).
 pub(crate) fn page_body(page: Page) -> Element {
-    match page {
-        Page::Project => ProjectTab.into_element(),
-        Page::Settings => SettingsTab.into_element(),
-        Page::Shortcuts => ShortcutsTab.into_element(),
-        Page::Scratchpad => ScratchpadTab.into_element(),
-        Page::Debug => DebugTab.into_element(),
-    }
+    (page_row(page).body)()
+}
+
+/// The pane that follows this page's own, for the chord that puts it away
+/// ([`PageRow::following`]).
+pub(crate) fn page_following(page: Page) -> Option<Placing> {
+    page_row(page).following
 }
 
 /// The menu at the **top left of the window**: the ways in and out of a project, and under
@@ -415,26 +480,23 @@ impl Component for PagesButton {
         let states = use_project_states();
         let rescued = use_consume::<Rescued>().0;
         let unopened = use_consume::<Unopened>().0;
-        // The Debug page is the ways to make the app misbehave on purpose, so it is not in
-        // a menu the reader opened to get to their project. Alt held as the menu is opened
-        // is what asks for it -- no rebuild, no variable, and nothing on screen for a
-        // reader who has not asked.
-        let pages: Vec<Page> = Page::ALL
-            .into_iter()
-            .filter(|page| *page != Page::Debug || asked())
-            .collect();
-        // Read only while the menu is up, as the recents below are: the marks are all the
-        // strip is wanted for here, and nothing draws them until then. Read and not
+        // The pages this run offers, each with whether it is open already: one list of
+        // pairs, so the mark cannot come to be about a different page than the row it is
+        // drawn on. `hidden_unless_alt` is the Debug page's rule and is the row's
+        // ([`PageRow`]).
+        //
+        // Built only while the menu is up, as the recents below are: the marks are all
+        // the strip is wanted for here, and nothing draws them until then. Read and not
         // peeked, so they follow a page opening or closing under an open menu; read every
         // render, it would subscribe the button to every tab opened, closed, moved or
         // raised.
-        let is_open: Vec<bool> = match showing() {
+        let pages: Vec<(Page, bool)> = match showing() {
             true => {
                 let strip = states.open.strip.read();
-                pages
-                    .iter()
-                    .copied()
-                    .map(|page| strip.contains(Tab::Page(page)))
+                Page::ALL
+                    .into_iter()
+                    .filter(|page| !page_row(*page).hidden_unless_alt || asked())
+                    .map(|page| (page, strip.contains(Tab::Page(page))))
                     .collect()
             }
             false => Vec::new(),
@@ -483,10 +545,8 @@ impl Component for PagesButton {
                     // window's: the menu opens rightward into it.
                     .position(Position::new_absolute().top(side))
                     .child(
-                        main_menu(
-                            states, rescued, unopened, &recents, &pages, &is_open, showing,
-                        )
-                        .on_close(move |_| showing.set(false)),
+                        main_menu(states, rescued, unopened, &recents, &pages, showing)
+                            .on_close(move |_| showing.set(false)),
                     )
                     .into_element()
             }))
@@ -594,10 +654,9 @@ fn main_menu(
     rescued: State<Vec<PathBuf>>,
     unopened: State<Option<project::Failure>>,
     recents: &[Recent],
-    // The pages this run has, asked for by the caller: `is_open` is one per page in this
-    // order, and the two cannot be allowed to disagree.
-    pages: &[Page],
-    is_open: &[bool],
+    // The pages this run has, each with whether it is open already, asked for by the
+    // caller ([`PagesButton`]).
+    pages: &[(Page, bool)],
     close: State<bool>,
 ) -> Menu {
     let open = states.proj.peek().file.clone();
@@ -639,21 +698,20 @@ fn main_menu(
         pages
             .iter()
             .copied()
-            .zip(is_open.iter().copied())
-            // The Project page is a reading of a project, so with none there is nothing
-            // for it to draw.
-            .filter(|(page, _)| *page != Page::Project || open.is_some())
+            // A page that is a reading of a project has nothing to draw with none open
+            // ([`PageRow::needs_project`]).
+            .filter(|(page, _)| !page_row(*page).needs_project || open.is_some())
             .map(|(page, open_already)| {
-                let mut strip = states.open.strip;
+                let opened = states.open;
                 let mut close = close;
+                let row = page_row(page);
                 MenuItem::new()
                     .selected(open_already)
                     .on_press(move |_| {
-                        // `show` and not `push`: a page opens beside the tab on screen,
-                        // the way anything else the reader opens does, and one already
-                        // open is only raised. With no project it is still a tab: the bar
-                        // comes back for it, and closing it takes the bar away again.
-                        strip.write().show(Tab::Page(page));
+                        // The page door and not a write of the strip: a page opens beside
+                        // the tab on screen, the way anything else the reader opens does,
+                        // and one already showing is left alone (`show_page`).
+                        show_page(opened, page);
                         close.set(false);
                     })
                     .child(
@@ -661,8 +719,8 @@ fn main_menu(
                             .horizontal()
                             .cross_align(Alignment::Center)
                             .spacing(6.0)
-                            .child(page_icon(page))
-                            .child(menu_label(page.title(), page_key(page))),
+                            .child((row.icon)())
+                            .child(menu_label(page.title(), row.key)),
                     )
                     .into_element()
             })

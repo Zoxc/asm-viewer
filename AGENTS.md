@@ -337,7 +337,7 @@ command.
 - `src/ui/dock.rs` — the sidebar's dock: what a panel is, every panel there is, and the groups
   they can be arranged in.
 - `src/ui/strip.rs` — the app's own tab bar: the chips, the × on one, the list of every open
-  tab, and the body under it all.
+  tab, the body under it all, and the table saying what each page is drawn as.
 - `src/ui/project_view.rs` — which project is open: the project's own fields, its binaries,
   the cargo build, the language server and the other projects, five sections each redrawn on
   its own; and `OpenProject`, the project as the view's boxes hold it.
@@ -454,7 +454,7 @@ feature there with the substitute, so a release that brings it is noticed.
 - **A document is a place in a binary or a file; everything else is a view.** `open_document`,
   `raise`, `navigate`, `close_tab`, `close_others` and `close_binary` are the only six functions
   that open or close a **document** tab, or change what one shows. A page's chip goes in and
-  comes out on its own, through `Strip::show` and `close_page`: a page draws state held at the
+  comes out on its own, through `show_page` and `close_page`: a page draws state held at the
   root, so it has no trail to keep in step and closing one loses nothing. `close` is no seventh
   function: it is the one match from a `Tab` onto whichever of the two closes it belongs to,
   which every caller holding a tab rather than an id goes through.

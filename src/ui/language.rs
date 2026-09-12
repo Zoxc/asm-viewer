@@ -1459,12 +1459,7 @@ impl Component for TrustPrompt {
                             .text("It runs the project's own build scripts and macros.".to_owned())
                             .color(palette().address_fg),
                     )
-                    .child(
-                        label()
-                            .text(asking.directory.to_string_lossy().into_owned())
-                            .color(palette().address_fg)
-                            .max_lines(1),
-                    ),
+                    .child(dim_line(asking.directory.to_string_lossy().into_owned())),
             )
             .child(
                 Button::new()

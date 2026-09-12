@@ -90,7 +90,7 @@ impl Component for ProjectChip {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let proj = use_consume::<Proj>().0;
-        let mut strip = use_open().strip;
+        let open = use_open();
         // Read and not peeked: the bar follows the project being saved, closed or opened.
         let file = proj.read().file.clone();
         let Some(file) = file else {
@@ -115,9 +115,7 @@ impl Component for ProjectChip {
                     })
                     .on_pointer_over(move |_| hovering.set_if_modified(true))
                     .on_pointer_out(move |_| hovering.set_if_modified(false))
-                    .on_press(move |_| {
-                        strip.write().show(Tab::Page(Page::Project));
-                    })
+                    .on_press(move |_| show_page(open, Page::Project))
                     .child(label().text(elide(&project::label(&file))).max_lines(1)),
             ))
             .maybe(!unsaved, |chip| {
@@ -369,10 +367,7 @@ impl Component for NoProject {
                                 ),
                         )
                         .child(section_heading("Recent projects", None))
-                        .child(match rows.is_empty() {
-                            true => info_line("None yet".to_owned()).into_element(),
-                            false => rect().width(Size::fill()).children(rows).into_element(),
-                        }),
+                        .child(rows_or(rows, "None yet")),
                 ),
             )
             .into_element()

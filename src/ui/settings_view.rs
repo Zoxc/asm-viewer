@@ -116,11 +116,7 @@ fn setting_row(
                             .on_press(clear)
                             .child("Clear")
                             .into_element(),
-                        false => label()
-                            .text("inherited")
-                            .color(palette().address_fg)
-                            .max_lines(1)
-                            .into_element(),
+                        false => dim_line("inherited").into_element(),
                     }),
             ),
     )

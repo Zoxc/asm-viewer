@@ -189,6 +189,35 @@ pub(crate) fn info_line(text: String) -> impl IntoElement {
     rect().padding(5.0).child(label().text(text))
 }
 
+/// `rows` in a column, or a line saying `empty` where there are none.
+///
+/// One shape for every section that draws a list which may be empty, so the empty state
+/// cannot come to differ from one section to the next.
+pub(crate) fn rows_or(rows: Vec<Element>, empty: &str) -> Element {
+    match rows.is_empty() {
+        true => info_line(empty.to_owned()).into_element(),
+        false => rect().width(Size::fill()).children(rows).into_element(),
+    }
+}
+
+/// One line of secondary text: a count beside a row, a path beside a name, a state
+/// written in words.
+///
+/// **A role with a name, rather than the colour spelled out.** [`Palette`] documents
+/// `address_fg` as *where a thing is* -- the instruction addresses and the source
+/// line-number gutter -- and a dozen labels borrow it to mean dim. Whether secondary
+/// text stays that colour is a decision the palette cannot make while the role has no
+/// name; with one it is this line.
+///
+/// freya's builder and not an element, so a caller can still say how wide the line is or
+/// how it is aligned.
+pub(crate) fn dim_line(text: impl Into<String>) -> Label {
+    label()
+        .text(text.into())
+        .color(palette().address_fg)
+        .max_lines(1)
+}
+
 /// The colour a line saying how something went is drawn in: the red every invalid thing
 /// wears when it is bad news, and the receding grey when it is not. For a line laid out by
 /// the pane around it; one on its own is [`verdict_line`].
