@@ -633,20 +633,17 @@ impl Component for SectionList {
             doors,
             places,
             docs,
-            // The scroll this pane owes: to the source pane's run, the row of the first
-            // instruction compiled from one of its lines, in whichever held stretch has
-            // one. Left owed while none does -- the stretch may not be decoded yet, and
-            // the answer that decodes it wakes this again.
+            // The scroll this pane owes: to its own run's first row, or to the source
+            // pane's run, the row of the first instruction compiled from one of its
+            // lines, in whichever held stretch has one. Left owed while none does -- the
+            // stretch may not be decoded yet, and the answer that decodes it wakes this
+            // again.
             move |controller: &mut ScrollController, built: &Built| {
-                let row = match owed_reveal(marked, Pane::Assembly) {
-                    None => return false,
-                    Some(Owing::Own(rows)) => *rows.start(),
-                    Some(Owing::Pair(pair)) => {
-                        let Some(row) = row_compiled_from(built, &built.reading, &pair) else {
-                            return false;
-                        };
-                        row
-                    }
+                let owed = owed_reveal(marked, Pane::Assembly).and_then(|owing| {
+                    owing.row(|pair| row_compiled_from(built, &built.reading, pair))
+                });
+                let Some(row) = owed else {
+                    return false;
                 };
                 if !reveal_row(controller, *viewport.read(), built.len(), row) {
                     return false;

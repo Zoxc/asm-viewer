@@ -50,13 +50,13 @@ fn a_pane_reveals_the_first_row_of_its_own_run() {
     let file: Arc<str> = Arc::from("now.c");
     let owing = Owing::Own(3..=7);
     assert_eq!(
-        owed_row(&owing, &file, 10, |_| panic!(
+        owed_file_row(&owing, &file, 10, |_| panic!(
             "its own run asks the listing nothing"
         )),
         Some(3)
     );
     assert_eq!(
-        owed_row(&owing, &file, 3, |_| Vec::new()),
+        owed_file_row(&owing, &file, 3, |_| Vec::new()),
         None,
         "a row past the end of the file on screen"
     );
@@ -71,12 +71,12 @@ fn a_pane_reveals_the_line_the_other_panes_run_was_compiled_from() {
         line,
     };
     assert_eq!(
-        owed_row(&pair, &file, 10, |_| vec![at("now.c", 6)]),
+        owed_file_row(&pair, &file, 10, |_| vec![at("now.c", 6)]),
         Some(5),
         "the line, as a row"
     );
     assert_eq!(
-        owed_row(&pair, &file, 10, |_| vec![
+        owed_file_row(&pair, &file, 10, |_| vec![
             at("before.h", 6),
             at("now.c", 8)
         ]),
@@ -84,17 +84,17 @@ fn a_pane_reveals_the_line_the_other_panes_run_was_compiled_from() {
         "the first place in the file on screen, not the first place"
     );
     assert_eq!(
-        owed_row(&pair, &file, 10, |_| vec![at("before.h", 6)]),
+        owed_file_row(&pair, &file, 10, |_| vec![at("before.h", 6)]),
         None,
         "a line of a file this pane is not showing"
     );
     assert_eq!(
-        owed_row(&pair, &file, 10, |_| vec![at("now.c", 0)]),
+        owed_file_row(&pair, &file, 10, |_| vec![at("now.c", 0)]),
         None,
         "no line at all"
     );
     assert_eq!(
-        owed_row(&pair, &file, 4, |_| vec![at("now.c", 9)]),
+        owed_file_row(&pair, &file, 4, |_| vec![at("now.c", 9)]),
         None,
         "past the end of a file that has moved on since it was compiled"
     );

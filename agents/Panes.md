@@ -472,10 +472,13 @@ handed to the effect, since a tab given another document keeps the panes it had,
 the mount would go on measuring the row against the file before it (`agents/UI.md`), and a move of
 its own is held back while a landing is on its way -- taken by the pane where the landing names a
 row of what it draws, so the arriving document is drawn on that row and not at the offset the
-outgoing place left (`agents/UI.md`). A click in one pane owes the other; a landing owes both. The
-split is not tidiness: in a source-driven tab the click that selects a line is the click that asks
-for the listing, so the run it wakes is still holding the previous one, in which no row matches; a
-single take would spend the request there and the listing that can answer it would arrive to nothing
+outgoing place left (`agents/UI.md`). `Owing::row` is the half every pane answers alike -- a run of
+a pane's own is a run of the rows it draws, so its first row is the answer -- and each pane hands it
+only its own way from the other pane's run to a row here (`owed_file_row`, `owed_listing_row`,
+`row_compiled_from`), none of which always finds one. A click in one pane owes the other; a landing
+owes both. The split is not tidiness: in a source-driven tab the click that selects a line is the
+click that asks for the listing, so the run it wakes is still holding the previous one, in which no
+row matches; a single take would spend the request there and the listing that can answer it would arrive to nothing
 owed. A request nothing matches stays owed until the next click replaces it or the run is dropped
 with its listing, and **what wakes the pane when the listing that matches arrives is that
 listing's key**: `use_kept_position` takes it as a dep beside the tab and the row count, the effect

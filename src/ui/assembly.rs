@@ -1216,8 +1216,8 @@ struct InstructionList {
 /// The listing row the reveal `owing` asks for goes to, and [`None`] where this listing
 /// cannot answer it -- which leaves the request owed rather than spent on a guess.
 ///
-/// A run of the pane's own is a run of these rows, so the run's first row is the answer.
-/// The other pane's run is answered by the first instruction compiled from a line of it.
+/// A run of the pane's own is a run of these rows, which [`Owing::row`] answers. The
+/// other pane's run is answered here by the first instruction compiled from a line of it.
 /// Nothing at all when those lines produced no instruction here -- ones the optimiser
 /// folded away, or belonging to another function, or, in a source-driven tab, the listing
 /// this very click is asking for not having arrived yet. Scrolling somewhere arbitrary
@@ -1225,15 +1225,12 @@ struct InstructionList {
 ///
 /// The own run is already in the listing's rows and the paired instruction is not, so
 /// `lanes` is what makes a row of it: the separators above it are rows too.
-fn owed_row(
+fn owed_listing_row(
     owing: &Owing,
     lanes: &Lanes,
     paired: impl FnOnce(&Picked) -> Option<usize>,
 ) -> Option<usize> {
-    match owing {
-        Owing::Own(rows) => Some(*rows.start()),
-        Owing::Pair(pair) => paired(pair).map(|index| lanes.row_of(index)),
-    }
+    owing.row(|pair| paired(pair).map(|index| lanes.row_of(index)))
 }
 
 /// The instruction a door's planted `address` lands on: the last one at or below it, so a
@@ -1299,8 +1296,9 @@ impl Component for InstructionList {
                     let Some(owing) = owed_reveal(marked, Pane::Assembly) else {
                         return false;
                     };
-                    let owed =
-                        owed_row(&owing, data.lanes(), |pair| data.studied.first_paired(pair));
+                    let owed = owed_listing_row(&owing, data.lanes(), |pair| {
+                        data.studied.first_paired(pair)
+                    });
                     let Some(row) = owed else {
                         return false;
                     };

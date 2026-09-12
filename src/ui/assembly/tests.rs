@@ -297,19 +297,19 @@ fn the_row_a_reveal_goes_to_is_the_runs_own_or_the_paired_instructions() {
     let pick = line_pick(Arc::from("now.c"), 7, None, Owed::default());
 
     assert_eq!(
-        owed_row(&Owing::Own(4..=6), &lanes, |_| panic!(
+        owed_listing_row(&Owing::Own(4..=6), &lanes, |_| panic!(
             "its own run asks the listing nothing"
         )),
         Some(4),
         "a run of this pane's own is already in listing rows"
     );
     assert_eq!(
-        owed_row(&Owing::Pair(pick.clone()), &lanes, |_| Some(3)),
+        owed_listing_row(&Owing::Pair(pick.clone()), &lanes, |_| Some(3)),
         Some(4),
         "the paired instruction, as a listing row"
     );
     assert_eq!(
-        owed_row(&Owing::Pair(pick), &lanes, |_| None),
+        owed_listing_row(&Owing::Pair(pick), &lanes, |_| None),
         None,
         "lines that produced no instruction in this listing"
     );

@@ -605,26 +605,24 @@ impl PartialEq for SourceList {
 /// showing that file cannot answer it -- which leaves the request owed rather than spent
 /// on a guess.
 ///
-/// A run of the pane's own is a run of the file it is showing, so the run's first row is
-/// the answer. The other pane's run is answered by the line its first placed instruction
-/// came from, which `places` reads off the listing: nothing to scroll to when that is a
-/// file this pane is not showing -- an inlined header's line 42 is not line 42 of the
-/// file on screen -- nor when the line is past the end of a file that has moved on since
-/// it was compiled.
-fn owed_row(
+/// A run of the pane's own is a run of the file it is showing, which [`Owing::row`]
+/// answers. The other pane's run is answered here by the line its first placed
+/// instruction came from, which `places` reads off the listing: nothing to scroll to when
+/// that is a file this pane is not showing -- an inlined header's line 42 is not line 42
+/// of the file on screen -- nor when the line is past the end of a file that has moved on
+/// since it was compiled.
+fn owed_file_row(
     owing: &Owing,
     file: &Arc<str>,
     length: usize,
     places: impl FnOnce(&Picked) -> Vec<LinePos>,
 ) -> Option<usize> {
-    let index = match owing {
-        Owing::Own(rows) => *rows.start(),
-        Owing::Pair(pair) => {
+    owing
+        .row(|pair| {
             let line = places(pair).into_iter().find(|at| at.file == *file)?.line;
-            (line as usize).checked_sub(1)?
-        }
-    };
-    (index < length).then_some(index)
+            (line as usize).checked_sub(1)
+        })
+        .filter(|index| *index < length)
 }
 
 /// The row of `file` a landing names for the pane drawing `document`, and [`None`] where
@@ -740,7 +738,7 @@ impl Component for SourceList {
                     let Some(owing) = owed_reveal(marked, Pane::Source) else {
                         return false;
                     };
-                    let owed = owed_row(&owing, &file, length, |pair| {
+                    let owed = owed_file_row(&owing, &file, length, |pair| {
                         places_of(
                             &document,
                             pair,

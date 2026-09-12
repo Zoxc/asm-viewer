@@ -279,18 +279,16 @@ fn revealing_harness() -> impl IntoElement {
         at,
         docs,
         move |controller: &mut ScrollController| {
-            let row = match owed_reveal(marked, Pane::Assembly) {
-                None => return false,
-                Some(Owing::Own(rows)) => *rows.start(),
+            let owed = owed_reveal(marked, Pane::Assembly).and_then(|owing| {
                 // Only the listing the pair has a row in can pay it; every other leaves
                 // it owed, as the assembly pane's reveal does. Peeked, so the arrival of
                 // a listing is not itself what wakes the effect.
-                Some(Owing::Pair(pair)) => {
-                    if *listing.peek() != PAIRED_LISTING {
-                        return false;
-                    }
-                    *pair.chars.rows().start()
-                }
+                owing.row(|pair| {
+                    (*listing.peek() == PAIRED_LISTING).then(|| *pair.chars.rows().start())
+                })
+            });
+            let Some(row) = owed else {
+                return false;
             };
             let measured = seen.map_or(VIEWPORT, |kept| *kept.read());
             if !reveal_row(controller, measured, *length.peek(), row) {
@@ -18094,6 +18092,48 @@ fn a_source_click_beside_the_section_view_reveals_its_instruction() {
             .iter()
             .all(|text| u64::from_str_radix(text.trim(), 16).unwrap() >= 0x30),
         "sum_to's rows are not what is on screen: {drawn:?}"
+    );
+}
+
+/// **A run of the section view's own is a row of its own listing**, and its first row is
+/// where the view scrolls. A run picked out from outside the panes leaves the view owing
+/// itself the scroll, and it pays that without asking the source side anything.
+#[test]
+fn a_run_of_the_section_views_own_reveals_its_first_row() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[2]);
+    let last = rows_of(&reading).len() - 1;
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let mut marked = roots.doors.marked;
+    settle(&mut test);
+    assert_eq!(address_labels(&test)[0], "0000000000000000 ");
+
+    // The listing's own last row, picked out with the pane yet to scroll to it.
+    marked.set(Marks {
+        assembly: Some(Picked {
+            chars: CharSelection::at(Caret { row: last, col: 0 }),
+            dragging: false,
+            by_rows: true,
+            file: None,
+            owed: Owed::by(Pane::Assembly),
+        }),
+        source: None,
+    });
+    settle(&mut test);
+    assert!(
+        owed_reveal(marked, Pane::Assembly).is_none(),
+        "the reveal is still owed"
+    );
+    let drawn = address_labels(&test);
+    assert_ne!(
+        drawn[0], "0000000000000000 ",
+        "the listing did not scroll to the run: {drawn:?}"
     );
 }
 

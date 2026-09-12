@@ -459,6 +459,22 @@ pub(crate) enum Owing {
     Pair(Picked),
 }
 
+impl Owing {
+    /// The row the pane owes its scroll to: the first row of its own run, or what
+    /// `paired` makes of the other pane's. [`None`] where the pair has no row here,
+    /// which leaves the request owed rather than spent on a guess.
+    ///
+    /// The own run is the same answer in every pane, being a run of the rows that pane
+    /// draws. The pair is not: each pane has its own way from the other's run to a row
+    /// here, and none of them always finds one.
+    pub(crate) fn row(&self, paired: impl FnOnce(&Picked) -> Option<usize>) -> Option<usize> {
+        match self {
+            Owing::Own(rows) => Some(*rows.start()),
+            Owing::Pair(pair) => paired(pair),
+        }
+    }
+}
+
 /// The scroll `pane` still owes, if it is owed one.
 ///
 /// **A look and not a take.** The click that picks a line out is, in a source-driven
