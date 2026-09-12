@@ -81,8 +81,8 @@ box. And Enter opens the row the panel **drew** -- the row the reader is looking
 waiting for the answer to the box, which would drop the keystroke of a reader who typed and
 pressed Enter in one movement.
 
-**Not freya's `Popup`.** `RescuedPopup` gets its overlay layer, its press-outside and its
-Escape from `Popup` for free. The finder cannot: `PopupBackground` `.center()`s its content down
+**Not freya's `Popup`.** The four `notice` windows get their overlay layer, their press-outside and
+their Escape from `Popup` for free. The finder cannot: `PopupBackground` `.center()`s its content down
 the window and offers no way to pin it to the top, which is where an editor's quick-open is and
 where a reader typing a path is looking. So the layout is hand-rolled, and Escape and the press
 outside come with it. This is `DocumentMenuButton` giving up `ContextMenu` for the same kind of

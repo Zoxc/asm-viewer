@@ -115,8 +115,8 @@ pub(crate) fn file_menu(states: ProjectStates, path: PathBuf) -> Menu {
 /// The one menu item every bookmark gesture is: adding a bookmark of `document`, or
 /// removing the one that points at it, whichever is true at the press. Which it is comes
 /// from `Bookmarks::matching` -- by resolution, so a symbol that moved under a rebuild still
-/// reads as bookmarked -- and the name a new one gets is the whole `entry_name`, what the
-/// row's tooltip says. `add` is what the item says when there is none yet: a sidebar row
+/// reads as bookmarked -- and the name a new one gets is [`Names::whole`], what the row's
+/// tooltip says. `add` is what the item says when there is none yet: a sidebar row
 /// and a tab say "Add bookmark", an instruction row "Bookmark symbol", since the row is not
 /// the symbol and has to say what it would bookmark.
 ///
@@ -148,8 +148,8 @@ pub(crate) fn bookmark_item(
 /// (`Chord::Bookmark`), so the two cannot come to mean different things.
 ///
 /// Which of the two happens is [`Bookmarks::toggle`]'s own question, asked by resolving
-/// each entry against what is loaded; the name a new one is made under is the whole
-/// [`entry_name`].
+/// each entry against what is loaded; the name a new one is made under is
+/// [`Names::whole`].
 pub(crate) fn toggle_bookmark(
     mut bookmarked: State<Bookmarks>,
     objects: State<Vec<Arc<Object>>>,
@@ -160,7 +160,7 @@ pub(crate) fn toggle_bookmark(
     let loaded = objects.peek().clone();
     bookmarked
         .write()
-        .toggle(document, entry_name(document), &loaded);
+        .toggle(document, Names::of(document).whole, &loaded);
 }
 
 /// The item that shows a file, or a folder, where the rest of the reader's tools are: on

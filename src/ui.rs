@@ -210,7 +210,7 @@ struct NavButton {
 
 impl Component for NavButton {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let open = use_open();
         let active = use_consume::<Active>().0;
 
@@ -241,37 +241,18 @@ impl Component for NavButton {
             None => word.to_owned(),
         };
 
-        let side = toggle_size();
-        let glyph = icon_size();
+        // A button with nowhere to go keeps its tooltip and loses everything else: no
+        // wash, no press, and the chevron dimmed. `bar_button` drops the first two; the
+        // colour is this button's own, being the only disabled drawing in the app.
+        let colour = match live {
+            true => palette().icon_fg,
+            false => dimmed(palette().icon_fg, palette().pane_bg),
+        };
 
         TooltipContainer::new(Tooltip::new(tooltip)).child(
-            rect()
-                .width(Size::px(side))
-                .height(Size::px(side))
-                .center()
-                .corner_radius(4.0)
-                .background(if live && hovering() {
-                    palette().toggle_hover_bg
-                } else {
-                    Color::TRANSPARENT
-                })
-                .maybe(live, |button| {
-                    button
-                        .on_pointer_over(move |_| hovering.set_if_modified(true))
-                        .on_pointer_out(move |_| hovering.set_if_modified(false))
-                        .on_press(move |_| navigate(open, nav))
-                })
-                .child(
-                    SvgViewer::new(icon)
-                        .width(Size::px(glyph))
-                        .height(Size::px(glyph))
-                        .color(if live {
-                            palette().icon_fg
-                        } else {
-                            dimmed(palette().icon_fg, palette().pane_bg)
-                        })
-                        .show_loader(false),
-                ),
+            bar_button(hovering, live, Glow::No)
+                .maybe(live, |button| button.on_press(move |_| navigate(open, nav)))
+                .child(glyph_in(icon, colour)),
         )
     }
 }

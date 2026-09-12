@@ -95,27 +95,17 @@ impl PartialEq for FilterToggle {
 
 impl Component for FilterToggle {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let mut filter = self.filter;
         let toggle = self.toggle;
 
-        let background = if self.on {
-            palette().toggle_on_bg
-        } else if hovering() {
-            palette().toggle_hover_bg
-        } else {
-            Color::TRANSPARENT
+        let glow = match self.on {
+            true => Glow::On,
+            false => Glow::No,
         };
 
         TooltipContainer::new(Tooltip::new(toggle.tooltip())).child(
-            rect()
-                .width(Size::px(toggle_size()))
-                .height(Size::px(toggle_size()))
-                .center()
-                .corner_radius(4.0)
-                .background(background)
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            bar_button(hovering, true, glow)
                 .on_press(move |e: Event<PressEventData>| {
                     // **Load-bearing**: the `Input` beside this one gives its keyboard
                     // focus up from `on_global_pointer_press`, so without this a toggle

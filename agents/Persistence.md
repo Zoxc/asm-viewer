@@ -64,9 +64,10 @@ still naming what one load moved does not lose it when the next runs, and a load
 leaves a closed window closed. `app()` asks **after** `use_restore_on_startup`, the three loads a
 startup makes (`Settings::load`, the same again behind `fonts()`, and the project reopened) all
 being synchronous and all landing before that line; `switch_project` asks for the project it opens.
-Setting the list would do for the startup, which finds it empty, and for nothing after it. Neither
-`PopupTitle` nor `PopupContent` is used: both set a font size of their own, which would draw this
-in a size the reader never chose.
+Setting the list would do for the startup, which finds it empty, and for nothing after it. It is drawn through `notice` (`src/ui/parts.rs`), the shell all four of
+the app's asking windows share, which is `Popup` itself and neither `PopupTitle` nor
+`PopupContent`: both of those set a font size of their own, which would draw the window in a size
+the reader never chose.
 
 **That directory is a `Store`** (`src/store.rs`), and it is the whole of the storage layer:
 where a file goes, how one is written, how one is read back when it may be bad, and how a free

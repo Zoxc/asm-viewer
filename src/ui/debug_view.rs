@@ -27,18 +27,11 @@ pub(crate) struct DebugTab;
 impl Component for DebugTab {
     fn render(&self) -> impl IntoElement {
         let store = use_consume::<Storage>().0;
-        rect()
-            .expanded()
-            .background(palette().pane_bg)
-            .font(&fonts().ui)
-            .color(palette().text_fg)
-            .child(
-                ScrollView::new().child(
-                    rect()
-                        .width(Size::fill())
-                        .padding(Gaps::new_symmetric(8.0, 12.0))
-                        .spacing(6.0)
-                        .child(section_heading("Panics", None))
+        page(
+            None,
+            page_column()
+                .child(
+                    section("Panics", None)
                         .child(info_line(
                             "Each of these is a real panic. The app writes the record, \
                              says so, and stops -- except the guarded one, which is \
@@ -53,11 +46,13 @@ impl Component for DebugTab {
                             analysis::guard::guard(|| {
                                 panic!("a guarded panic asked for on the Debug page")
                             });
-                        }))
-                        .child(section_heading("Panic files", None))
+                        })),
+                )
+                .child(
+                    section("Panic files", None)
                         .child(rows_or(recorded_rows(store), "Nothing has panicked.")),
                 ),
-            )
+        )
     }
 }
 

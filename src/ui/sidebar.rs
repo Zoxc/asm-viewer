@@ -28,22 +28,35 @@ fn fold_archive(
     Pressed::Folded
 }
 
-/// One opened file that contributed several objects -- an archive -- and the row its
-/// members fold under. It has no `Object` behind it, so it selects nothing: pressing it
-/// folds it open or shut.
+/// The part of a file's row that a file still being read has not got: the group it folds,
+/// how many objects came out of it, and which way it is folded now.
+#[derive(Clone, Copy, PartialEq)]
+struct Folds {
+    /// The group this row is, in the tab's set of the groups the reader has opened.
+    group: usize,
+    members: usize,
+    expansion: Expansion,
+    expanded: State<HashSet<usize>>,
+}
+
+/// One opened file, and the row its objects fold under. It has no `Object` behind it, so
+/// it selects nothing: pressing it folds it open or shut.
+///
+/// **A file still working on its first object is the same row with `folds: None`**: no
+/// triangle, no count, and the loading tag. It was a component of its own once -- the same
+/// fifty-five lines with three values fixed -- which is two right-click handlers to keep in
+/// step and two spellings of the tag. `TreeRow::Pending` stays a variant of its own all the
+/// same: that argument is about the model, a file with nothing behind it having no group
+/// key and nothing to fold (`agents/Sidebar.md`).
 #[derive(Clone, PartialEq)]
 struct ArchiveRow {
     name: String,
     path: PathBuf,
-    members: usize,
-    expansion: Expansion,
+    folds: Option<Folds>,
     /// Whether objects may still be arriving out of this file. The tag column says so and
     /// the name is dimmed with it, rather than a spinner: a sidebar row is one of hundreds
     /// and none of the others move.
     loading: bool,
-    /// The group this row is, in the tab's set of the groups the reader has opened.
-    group: usize,
-    expanded: State<HashSet<usize>>,
     /// Where this row is in the list as it is drawn, which is what the arrows step and
     /// what a press writes down with the pick (`ui/picks.rs`).
     at: usize,
@@ -58,9 +71,7 @@ impl Component for ArchiveRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let at = self.at;
-        let expanded = self.expanded;
-        let group = self.group;
-        let expansion = self.expansion;
+        let folds = self.folds;
         // Consumed here, in the render, because the handler that uses them may not run a
         // hook.
         let states = use_project_states();
@@ -70,17 +81,23 @@ impl Component for ArchiveRow {
 
         // `Forced` draws no triangle, only the space one would have taken: the filter is
         // holding the file open and folding it would hide the rows the filter put on
-        // screen.
-        let open = match expansion {
-            Expansion::Collapsed => Some(false),
-            Expansion::Expanded => Some(true),
-            Expansion::Forced => None,
+        // screen. Nor does a file with nothing under it yet, which has nothing to fold.
+        let open = match folds.map(|folds| folds.expansion) {
+            Some(Expansion::Collapsed) => Some(false),
+            Some(Expansion::Expanded) => Some(true),
+            Some(Expansion::Forced) | None => None,
         };
         // Which format a file is is not known until it has been parsed.
         let tag = if self.loading {
             "\u{2026}"
         } else {
             ARCHIVE_TAG
+        };
+        // How many objects came out of this file, which under a filter is how many of them
+        // matched. A file that has produced nothing yet shows no count rather than a zero.
+        let count = match folds.map_or(0, |folds| folds.members) {
+            0 => String::new(),
+            members => members.to_string(),
         };
 
         extra_tooltip(
@@ -89,8 +106,10 @@ impl Component for ArchiveRow {
             // ever picks one out: it lights when the reader pressed it and not otherwise.
             list_row(hovering, picking.drawn(&pick, false))
                 .on_press(move |_| {
-                    picking.press(pick.clone(), at, || {
-                        fold_archive(expanded, group, expansion)
+                    picking.press(pick.clone(), at, || match folds {
+                        Some(folds) => fold_archive(folds.expanded, folds.group, folds.expansion),
+                        // Nothing under it to fold and nothing behind it to open.
+                        None => Pressed::Folded,
                     });
                 })
                 // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
@@ -101,87 +120,17 @@ impl Component for ArchiveRow {
                 .child(disclosure(open))
                 .child(tag_label(tag))
                 .child(tree_name(self.name.clone(), self.loading, &self.marks))
-                // How many objects came out of this file, which under a filter is how many
-                // of them matched -- the one thing about an archive that is not visible
-                // while it is folded shut. A file that has produced nothing yet shows no
-                // count rather than a zero.
-                //
-                // A column of its own, `COUNT_GUTTER` and all, rather than a label at the
-                // end of the row: the count is measured whole before the name is handed
-                // what the columns leave, so a sidebar dragged narrow ellipsises the name
-                // and never eats the digits, and the ellipsis never runs into them.
+                // The count -- the one thing about an archive that is not visible while it
+                // is folded shut -- in a column of its own, `COUNT_GUTTER` and all, rather
+                // than a label at the end of the row: the count is measured whole before
+                // the name is handed what the columns leave, so a sidebar dragged narrow
+                // ellipsises the name and never eats the digits, and the ellipsis never
+                // runs into them. Every row keeps the column, empty or not.
                 .child(
                     rect()
                         .padding(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))
-                        .child(
-                            label()
-                                .text(if self.members == 0 {
-                                    String::new()
-                                } else {
-                                    self.members.to_string()
-                                })
-                                .font_size(TAG_FONT_SIZE)
-                                .color(palette().address_fg)
-                                .max_lines(1),
-                        ),
+                        .child(dim_line(count).font_size(TAG_FONT_SIZE)),
                 ),
-        )
-    }
-
-    fn render_key(&self) -> DiffKey {
-        self.keyed()
-    }
-}
-
-/// A file that has been asked for and has produced nothing yet. It is a row so that the
-/// reader can see the file was opened and close it again, and there is nothing under it to
-/// fold: no triangle, no count, and `\u{2026}` where the format tag goes, since what a file
-/// is is not known until it has been parsed.
-#[derive(Clone, PartialEq)]
-struct PendingRow {
-    name: String,
-    path: PathBuf,
-    /// Where this row is in the list as it is drawn, which is what the arrows step and
-    /// what a press writes down with the pick (`ui/picks.rs`).
-    at: usize,
-    /// Where the filter matched in the name, for the row to mark.
-    marks: Vec<Range<usize>>,
-    key: DiffKey,
-}
-
-keyed!(PendingRow);
-
-impl Component for PendingRow {
-    fn render(&self) -> impl IntoElement {
-        let hovering = use_state(|| false);
-        let at = self.at;
-        // Consumed here, in the render, because the handler that uses them may not run a
-        // hook.
-        let states = use_project_states();
-        let picking = use_picking(Panel::Objects);
-        let path = self.path.clone();
-        let pick = Pick::Path(self.path.clone());
-
-        extra_tooltip(
-            self.path.display().to_string(),
-            // Nothing behind the row to open, so a press only picks it out.
-            list_row(hovering, picking.drawn(&pick, false))
-                .on_press(move |_| {
-                    picking.press(pick.clone(), at, || Pressed::Folded);
-                })
-                // Needs the `ContextMenuViewer` mounted at the root of `app()`; opening one
-                // without it panics.
-                .on_secondary_down(move |e: Event<PressEventData>| {
-                    ContextMenu::open_from_event(&e, close_menu(states, path.clone()));
-                })
-                .child(disclosure(None))
-                .child(tag_label("\u{2026}"))
-                // Dimmed, and the tag beside it, rather than a spinner: a sidebar row is one
-                // of hundreds and none of the others move.
-                .child(tree_name(self.name.clone(), true, &self.marks))
-                // The count column every tree row keeps, empty: a file that has produced
-                // nothing shows no count rather than a zero.
-                .child(rect().padding(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))),
         )
     }
 
@@ -368,9 +317,9 @@ impl Component for HistoryRow {
         let objects = use_consume::<Objects>().0;
         let picking = use_picking(Panel::History);
         let at = self.at;
-        // One build of the name for both spellings: the row draws the short one and its
-        // tooltip says the whole one (`entry_labels`).
-        let (text, tooltip) = entry_labels(&self.entry);
+        // One build of the name for every spelling: the row draws the short one and its
+        // tooltip says the whole one.
+        let Names { text, tooltip, .. } = Names::of(&self.entry);
         let entry = self.entry.clone();
         let target = self.entry.clone();
         let pick = Pick::Visit(self.entry.clone());
@@ -547,22 +496,26 @@ impl Component for ObjectsPanel {
                         } => ArchiveRow {
                             name: name.clone(),
                             path: path.clone(),
-                            members: *members,
-                            expansion: *expansion,
+                            folds: Some(Folds {
+                                group: *group,
+                                members: *members,
+                                expansion: *expansion,
+                                expanded: *expanded,
+                            }),
                             loading: *loading,
-                            group: *group,
-                            expanded: *expanded,
                             at: row,
                             marks: marking.marks(name),
                             key: DiffKey::None,
                         }
                         .key(*group)
                         .into(),
-                        // Keyed by the path, the only identity a file with nothing behind
-                        // it yet has.
-                        TreeRow::Pending { name, path } => PendingRow {
+                        // The same row with nothing to fold, and keyed by the path, the
+                        // only identity a file with nothing behind it yet has.
+                        TreeRow::Pending { name, path } => ArchiveRow {
                             name: name.clone(),
                             path: path.clone(),
+                            folds: None,
+                            loading: true,
                             at: row,
                             marks: marking.marks(name),
                             key: DiffKey::None,
@@ -708,10 +661,12 @@ impl Component for HistoryPanel {
                 .entries()
                 .iter()
                 .filter_map(|entry| {
-                    let (text, whole) = entry_spellings(entry);
+                    let names = Names::of(entry);
                     // The whole name and not the shortened one the row draws: the generic
                     // arguments a tab has no room for are still worth searching for.
-                    matcher.matches(&whole).then(|| (entry.clone(), text))
+                    matcher
+                        .matches(&names.whole)
+                        .then(|| (entry.clone(), names.text))
                 })
                 .collect();
             let rows = kept

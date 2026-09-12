@@ -22,8 +22,8 @@ render would never see the pattern change. The toggles call `prevent_default` on
 `Input` gives up its keyboard focus mid-word. Only the Symbols list needs a memo (`Filtered`,
 holding indices, and `None` for the unfiltered case so it costs what it did before there was a
 filter); Objects, History and Bookmarks filter where their rows are built. A History row draws the
-shortened name (`entry_text`) and is filtered on the whole one (`entry_name`), so a generic argument
-the row has no room for can still be searched for. The two short lists, History and Bookmarks, draw
+shortened name (`Names::text`) and is filtered on the whole one (`Names::whole`), so a generic
+argument the row has no room for can still be searched for. The two short lists, History and Bookmarks, draw
 what the filter left through one `ListPane::short_list` (`src/ui/filter_bar.rs`): a plain
 `ScrollView` of the rows on the pane's own scroll, or the word for why there are none. An empty list means two things -- nothing has been added
 to it, or the filter left nothing of it -- and they are worth different words, so which of the two
@@ -135,7 +135,11 @@ Three rules come with it. A file still being read is **always** a file row even 
 itself to a parent as the second member landed would move the list under a reader already reading
 it. A row with nothing behind it is **a variant of its own**, not a `File` with its group, its count
 and its expansion set to sentinels: it has no members, so there is nothing to fold and it draws no
-triangle, and the path is the whole of its identity, which is what keys it. And it shows `…` rather
+triangle, and the path is the whole of its identity, which is what keys it. That is about the model
+and not the drawing: **one component draws both**, `ArchiveRow` with its folding part an
+`Option<Folds>`, which is `None` for a file with nothing under it yet. It was a second component of
+fifty-five lines -- the same row with three values fixed -- and two components is two right-click
+handlers to keep in step, two spellings of the tag and a second set of keys. And it shows `…` rather
 than a format tag, since a file's format is not known until it has been parsed; the name beside it
 is dimmed to `address_fg`. Those are two static cues rather than a spinner, because a sidebar row is
 one of hundreds and none of the others move.
@@ -192,7 +196,7 @@ tab (`agents/UI.md`), or on an instruction row in either assembly listing (`agen
 says "Add bookmark" or "Remove bookmark" by `Bookmarks::matching` at the press, so a symbol that
 moved under a rebuild still shows as bookmarked. On an instruction row it says "Bookmark symbol",
 since the row is not the symbol and has to say what it would bookmark. The name a new one gets is
-the whole `entry_name`, what the row's tooltip says. `Ctrl+D` is the same item without a pointer,
+`Names::whole`, what the row's tooltip says. `Ctrl+D` is the same item without a pointer,
 asked of the tab on screen (`root_key_down`), and a page tab is no place and has none to add; the
 write both make is `toggle_bookmark` beside the item, so the key and the menu cannot come to mean
 different things. The rows *consume* `Bookmarked` and `Objects`
@@ -624,7 +628,8 @@ row, and the Project view's binary and override rows. They too were the frame wr
 and none of them matched it -- two spaced at 8 where the shared spacing is 5, one padded at 4 and
 one not padded at all, and none of the three clipping. Taking the shared frame moves what they draw
 by a pixel or two and clips what overruns, which is the point: a row is a row wherever it is drawn.
-The panic-file row keeps its rounded corners, which are its own and not drift. The two washes looked like one per pane ground -- one over
+The panic-file row keeps its rounded corners, which are its own and not drift: they are a lone row
+on a page and not a control in a bar, which is what `bar_button` rounds (`agents/Appearance.md`). The two washes looked like one per pane ground -- one over
 `pane_bg`, another over the cream four of the panels sat on -- but the Locations panel drew its
 reference rows in one and its location rows in the other on the same ground, which is what makes it
 drift and not a rule. So one wash lights a row wherever it is drawn. The grounds went next: **every

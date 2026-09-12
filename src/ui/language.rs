@@ -1329,7 +1329,7 @@ pub(crate) struct ServerButton;
 
 impl Component for ServerButton {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let language = use_consume::<Talking>().0;
         let proj = use_consume::<Proj>().0;
         let jobs = use_consume::<LspJobs>();
@@ -1344,7 +1344,7 @@ impl Component for ServerButton {
         let live = directory.is_some();
         let tooltip = held.words(&open.server(), directory.as_deref());
 
-        let (side, square) = (toggle_size(), icon_size());
+        let square = icon_size();
         // Dim only where a press would do nothing. Off is a control the reader is meant
         // to find, not one that is unavailable, so it is written as plainly as the two
         // buttons beside it; what says it is off is the lack of a border and a colour.
@@ -1365,32 +1365,23 @@ impl Component for ServerButton {
             (Lsp::Running { .. }, _) => dimmed(colour, palette().server_bg),
             _ => dimmed(colour, palette().pane_bg),
         };
-        let background = match (&held.state, hovering()) {
-            (Lsp::Running { .. }, _) => palette().server_bg,
-            (_, true) if live => palette().toggle_hover_bg,
-            _ => Color::TRANSPARENT,
-        };
+        // A running server wears a ground of its own, over the hover: the one state the
+        // control says by its own colour rather than by the pointer being on it.
+        let running = matches!(held.state, Lsp::Running { .. });
 
         TooltipContainer::new(Tooltip::new(tooltip)).child(
-            rect()
+            bar_pill(hovering, live, Glow::No)
                 .horizontal()
-                .height(Size::px(side))
-                .cross_align(Alignment::Center)
-                .padding(Gaps::new_symmetric(0.0, 6.0))
                 .spacing(4.0)
-                .corner_radius(4.0)
-                .background(background)
+                .maybe(running, |button| button.background(palette().server_bg))
                 .border(Border::new().fill(edge).width(1.0))
                 .maybe(live, |button| {
-                    button
-                        .on_pointer_over(move |_| hovering.set_if_modified(true))
-                        .on_pointer_out(move |_| hovering.set_if_modified(false))
-                        .on_press({
-                            let jobs = jobs.clone();
-                            // The same call the window's chord makes, so the two
-                            // cannot come to mean different things.
-                            move |_| toggle_server(language, proj, &jobs)
-                        })
+                    button.on_press({
+                        let jobs = jobs.clone();
+                        // The same call the window's chord makes, so the two cannot come
+                        // to mean different things.
+                        move |_| toggle_server(language, proj, &jobs)
+                    })
                 })
                 // The same square either way, so nothing beside it moves.
                 .child(

@@ -94,10 +94,25 @@ pub(crate) fn window_size() -> Size2D {
 }
 
 /// The side of one of the three square toggle buttons in a filter bar: a row less the air
-/// around it.
+/// around it. Every other square control in a bar is drawn at it too (`bar_button`,
+/// `src/ui/parts.rs`).
 pub(crate) fn toggle_size() -> f32 {
     list_row_height() - 4.0
 }
+
+/// The corner a small button in a bar is cut to: the toolbar's two chevrons and its pages
+/// menu, a filter's toggles, the find bar's steps, the pane toggle, the project chips, the
+/// language server's control and the close mark on a tab.
+///
+/// A `const` and not a share of the row, [`CLEAR_CELL_WIDTH`]'s reasoning: it is fitted to
+/// what it rounds and a multiplier here would be invented. It was nine copies of the same
+/// four before it had a name.
+pub(crate) const BAR_BUTTON_RADIUS: f32 = 4.0;
+
+/// The air a bar button with a **word** in it keeps at each end -- the project's name and
+/// the language server's -- where a square one holds its glyph centred in what
+/// [`toggle_size`] leaves.
+pub(crate) const BAR_PILL_PAD: f32 = 6.0;
 
 /// The side of the square the × on a document's tab is centred in.
 ///
@@ -179,6 +194,31 @@ pub(crate) const MENU_MARK_GAP: f32 = 10.0;
 pub(crate) fn field_label_width() -> f32 {
     fonts().ui.size() * 6.0
 }
+
+/// The margins a page keeps round its sections: the Project, Settings, Shortcuts and
+/// Debug pages, the screen with no project open, and the Scratchpad's own column. Wider at
+/// the sides than at the top and bottom, a page being read down.
+///
+/// A `const` and not a share of the font, unlike [`field_label_width`]: what it holds off
+/// is the pane's edge, which does not move when the reader enlarges the text.
+pub(crate) const PAGE_PAD: Gaps = Gaps::new_symmetric(8.0, 12.0);
+
+/// The gap between one section of a page and the next, and between a section's heading and
+/// the rows under it. One number for both, so a page reads as a column of rows and not as
+/// two rhythms.
+pub(crate) const SECTION_GAP: f32 = 6.0;
+
+/// How wide a window that says something and offers a button or two is (`notice`,
+/// `src/ui/parts.rs`): a state directory's path with a file name at the end of it, which
+/// is the longest thing any of the four draws.
+///
+/// One number and not one each. The four asked different questions and kept the same 520
+/// under three private names, each defended by a comment saying the others should not move
+/// with it -- so the number they shared could only be changed in three places.
+pub(crate) const NOTICE_WIDTH: f32 = 520.0;
+
+/// The air inside one, and the gap between its lines.
+pub(crate) const NOTICE_PAD: f32 = 8.0;
 
 /// The cell at the right of a row on the Settings page, holding either the **Clear**
 /// button or the word "inherited". Wide enough for the button, so the value boxes above

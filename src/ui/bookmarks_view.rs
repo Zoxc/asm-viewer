@@ -37,22 +37,9 @@ impl Component for BookmarkRow {
         let pick = Pick::Bookmark(self.bookmark.clone());
         let dead = self.live.is_none();
 
-        // Drawn from the bookmark whether or not the place is live, so a row does not
-        // change its spelling when its binary is closed.
-        let label = self.bookmark.label();
-        let text = match &self.bookmark.document {
-            SavedDocument::Symbol { .. } => short_name(&label),
-            _ => label.to_string(),
-        };
-        let tooltip = match &self.bookmark.document {
-            SavedDocument::Source { path } => path.clone(),
-            SavedDocument::Object {
-                path,
-                shown: SavedShown::Code,
-                ..
-            } => path.display().to_string(),
-            _ => label.to_string(),
-        };
+        // The same three rules a live document's row draws by, over the saved place: the
+        // row keeps its spelling when its binary goes.
+        let Names { text, tooltip, .. } = Names::of_saved(&self.bookmark);
 
         // A dead row has no handlers at all, like a dimmed history button: nothing to go
         // to, so nothing to light up for, and nothing to pick out either. Nothing about

@@ -706,7 +706,7 @@ struct StepButton {
 
 impl Component for StepButton {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         // Consumed in the render, as every context is: the press below runs no hook.
         let finds = use_consume::<Looking>().0;
         let (at, direction) = (self.at, self.direction);
@@ -716,17 +716,7 @@ impl Component for StepButton {
         };
 
         TooltipContainer::new(Tooltip::new(says)).child(
-            rect()
-                .width(Size::px(toggle_size()))
-                .height(Size::px(toggle_size()))
-                .center()
-                .corner_radius(4.0)
-                .background(match hovering() {
-                    true => palette().toggle_hover_bg,
-                    false => Color::TRANSPARENT,
-                })
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            bar_button(hovering, true, Glow::No)
                 .on_press(move |e: Event<PressEventData>| {
                     // As a toggle does: the box beside this gives up its keyboard focus
                     // from the global press, which is cancellable and sorts last.

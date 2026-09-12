@@ -1,12 +1,9 @@
 //! What a document is called and drawn as wherever a list names one: a tab's chip, a
 //! sidebar row, a bookmark, a place on a trail.
 //!
-//! Nothing here opens or closes anything. [`entry_text`] is the short spelling a chip and
-//! a row draw and [`entry_name`] the whole one, which is what a tooltip says and what a
-//! filter reads -- so a generic argument no tab draws is still something to search for.
-//! [`entry_spellings`] is those two at once, for a list that draws one and filters on the
-//! other, and [`entry_labels`] the drawn one with the tooltip beside it. [`entry_key`] is
-//! the identity a row or a chip is keyed by.
+//! Nothing here opens or closes anything. [`Names`] is the whole of what a place is called
+//! -- the short spelling a row draws, the whole one a filter reads, and what hovering says
+//! -- built in one pass, and [`entry_key`] is the identity a row or a chip is keyed by.
 
 use super::*;
 
@@ -21,73 +18,93 @@ pub(crate) fn stop_text(stop: &Stop) -> String {
     match stop.place() {
         Place::Code(object, address) => match object.symbol_at(address) {
             Some(symbol) => short_name(symbol.display()),
-            None => entry_text(&stop.document),
+            None => Names::of(&stop.document).text,
         },
-        Place::Source(line) => format!("{}:{line}", entry_text(&stop.document)),
-        Place::Whole => entry_text(&stop.document),
+        Place::Source(line) => format!("{}:{line}", Names::of(&stop.document).text),
+        Place::Whole => Names::of(&stop.document).text,
     }
 }
 
-/// What a document is called where it is named in a list. A source file's *name* only and
-/// a symbol's `module::fn_name` only ([`short_name`]); the whole of either is in
-/// [`entry_tooltip`].
-pub(crate) fn entry_text(entry: &Document) -> String {
-    match entry {
-        Document::Symbol(_) => short_name(&entry_name(entry)),
-        entry => entry_name(entry),
-    }
-}
-
-/// The whole of what a document is called: the demangled symbol name, the object's name,
-/// or the source file's path. What a filter reads, so that a generic argument is still
-/// something a reader can search for after the tab stopped drawing it.
-pub(crate) fn entry_name(entry: &Document) -> String {
-    match entry {
-        Document::Object(object) | Document::Code(object) => object.name.clone(),
-        Document::Symbol(symbol) => symbol.data.display().to_owned(),
-        Document::Source(file) => source::name_of(Path::new(&**file)),
-    }
-}
-
-/// Both spellings of the name at once, for a list that draws one and reads the other:
-/// [`entry_text`] and [`entry_name`].
+/// What a document is called, every way a list or a chip says it.
 ///
-/// A symbol's is where the two are one name cut two ways, and a demangled name runs to a
-/// hundred and fifty characters, so it is built once here and the short spelling cut from
-/// it. Every other kind is drawn under the whole of its name, so the one string is both.
-pub(crate) fn entry_spellings(entry: &Document) -> (String, String) {
-    match entry {
-        Document::Symbol(symbol) => {
-            let whole = symbol.data.display().to_owned();
-            (short_name(&whole), whole)
-        }
-        entry => {
-            let whole = entry_name(entry);
-            (whole.clone(), whole)
-        }
-    }
+/// **One value and not a function each.** A symbol's three spellings are one demangled
+/// name -- a hundred and fifty characters on average -- cut two ways, so a caller wanting
+/// both the drawn name and the whole one used to have to know which of five functions
+/// built it once. Here every caller gets all three for the price of the longest.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct Names {
+    /// The short spelling a row or a chip draws: a symbol's `module::fn_name`
+    /// ([`short_name`]), a source file's name without its path.
+    pub(crate) text: String,
+    /// The whole of it, which is what a filter reads -- so a generic argument no tab draws
+    /// is still something a reader can search for.
+    pub(crate) whole: String,
+    /// What hovering says: the path for a source file and for an object's code, whose name
+    /// says nothing about where it came from, and the whole name for everything else,
+    /// which is where the rest of a shortened symbol name is.
+    pub(crate) tooltip: String,
 }
 
-/// Both spellings at once, for a chip or a row that draws one and says the other:
-/// [`entry_text`] and [`entry_tooltip`].
-///
-/// A symbol's tooltip is the whole of the name the chip cut down, which is
-/// [`entry_spellings`]. Every other kind asks the two functions, which stay the rules.
-pub(crate) fn entry_labels(entry: &Document) -> (String, String) {
-    match entry {
-        Document::Symbol(_) => entry_spellings(entry),
-        entry => (entry_text(entry), entry_tooltip(entry)),
+impl Names {
+    /// What an open document is called: one arm per kind of place, and the symbol's
+    /// demangled name built once.
+    pub(crate) fn of(entry: &Document) -> Names {
+        match entry {
+            Document::Symbol(symbol) => {
+                let whole = symbol.data.display().to_owned();
+                Names {
+                    text: short_name(&whole),
+                    tooltip: whole.clone(),
+                    whole,
+                }
+            }
+            Document::Object(object) => Names::whole_of(object.name.clone(), object.name.clone()),
+            Document::Code(object) => {
+                Names::whole_of(object.name.clone(), object.path.display().to_string())
+            }
+            Document::Source(file) => {
+                Names::whole_of(source::name_of(Path::new(&**file)), file.to_string())
+            }
+        }
     }
-}
 
-/// What hovering a document's tab or row says: the whole path for a file and for an
-/// object's code, whose name says nothing about where it came from; the whole name for
-/// everything else -- which is where the rest of a shortened symbol name is.
-pub(crate) fn entry_tooltip(entry: &Document) -> String {
-    match entry {
-        Document::Source(file) => file.to_string(),
-        Document::Code(object) => object.path.display().to_string(),
-        entry => entry_name(entry),
+    /// The same for a **saved** place, which has the name it was bookmarked under and no
+    /// object behind it. Drawn from the bookmark whether or not the place resolves, so a
+    /// row does not change its spelling when its binary is closed.
+    ///
+    /// Beside [`Names::of`] and not in the Bookmarks view, because it is the same three
+    /// rules over the saved spelling of the same four kinds: apart, the two drifted.
+    pub(crate) fn of_saved(bookmark: &Bookmark) -> Names {
+        let label = bookmark.label().into_owned();
+        match &bookmark.document {
+            SavedDocument::Symbol { .. } => Names {
+                text: short_name(&label),
+                tooltip: label.clone(),
+                whole: label,
+            },
+            SavedDocument::Source { path } => Names::whole_of(label, path.clone()),
+            SavedDocument::Object {
+                path,
+                shown: SavedShown::Code,
+                ..
+            } => Names::whole_of(label, path.display().to_string()),
+            SavedDocument::Object { .. } => Names::whole_of(label.clone(), label),
+        }
+    }
+
+    /// A name a page is called by, which is one word either way.
+    pub(crate) fn page(title: &str) -> Names {
+        Names::whole_of(title.to_owned(), title.to_owned())
+    }
+
+    /// A name that is not cut down: the one string is both what is drawn and what a filter
+    /// reads, with whatever hovering says beside it.
+    fn whole_of(name: String, tooltip: String) -> Names {
+        Names {
+            text: name.clone(),
+            whole: name,
+            tooltip,
+        }
     }
 }
 

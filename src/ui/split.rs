@@ -191,7 +191,7 @@ impl Component for PaneToggle {
         let open = use_open();
         let docs = open.docs;
         let said = use_consume::<Follows>().0;
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         // Not hit while a sweep is under way, as the names beside it are not: the pointer
         // dragging a selection up past the bar would otherwise arm this tooltip.
         let sweeping = try_consume_context::<Marked>().is_some_and(|marked| sweeping(marked.0));
@@ -226,7 +226,6 @@ impl Component for PaneToggle {
                 format!("Show the {name} pane"),
             ),
         };
-        let side = toggle_size();
         let of = self.of;
 
         // A box of the bar's own row height around the square, so the control sits beside
@@ -239,16 +238,7 @@ impl Component for PaneToggle {
             .child(extra_tooltip(
                 tip,
                 CursorArea::new().child(
-                    rect()
-                        .width(Size::px(side))
-                        .height(Size::px(side))
-                        .center()
-                        .corner_radius(4.0)
-                        .maybe(hovering(), |button| {
-                            button.background(palette().toggle_hover_bg)
-                        })
-                        .on_pointer_over(move |_| hovering.set_if_modified(true))
-                        .on_pointer_out(move |_| hovering.set_if_modified(false))
+                    bar_button(hovering, true, Glow::No)
                         // The press writes nothing itself: which flag it is and the rule
                         // for flipping it are `toggle_pane`'s, which the key calls too.
                         .on_press(move |_| toggle_pane(of, open, said))

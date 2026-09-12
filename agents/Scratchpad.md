@@ -269,8 +269,8 @@ nowhere, and that is an answer rather than a failure.
 
 **A delete is asked for, and a row is where it is asked from.** A right-click on a pad's row offers
 one item, and the item deletes nothing: it writes `Pads::confirming`, and the popup that field draws
-is the question -- `RescuedPopup`'s `Popup` in a second place, dimming what is under it and taking
-Escape or a press outside as no. Not the × a dependency row has: a × there is one press away from a
+is the question -- the app's `notice` shell (`src/ui/parts.rs`) in a fourth place, dimming what is
+under it and taking Escape or a press outside as no. Not the × a dependency row has: a × there is one press away from a
 list one row shorter, and this is one press away from the reader's own source being gone. The
 question names the pad and the path its package is at, since if there were anything to get back that
 is where it would be, and there is not. `confirming` sits beside `refused` at the root for the

@@ -6,16 +6,8 @@
 
 use super::*;
 
-/// How wide the window is: a state directory's path with a file name at the end of it,
-/// which is all it draws.
-const WIDTH: f32 = 520.0;
-
-/// The paths [`Rescued`] holds, until the reader closes it.
-///
-/// Not freya's `PopupTitle` or `PopupContent`: both set a font size of their own, which
-/// would draw this in a size the reader never chose. `Popup` itself is what is wanted --
-/// the overlay layer, the dimmed background, the press outside and the Escape key -- and
-/// it shows exactly when it has children, so an empty list is a window that is not there.
+/// The paths [`Rescued`] holds, until the reader closes it. One of the app's four
+/// [`notice`] windows, and drawn as nothing at all while the list is empty.
 #[derive(Clone, PartialEq)]
 pub(crate) struct RescuedPopup;
 
@@ -23,43 +15,32 @@ impl Component for RescuedPopup {
     fn render(&self) -> impl IntoElement {
         let mut rescued = use_consume::<Rescued>().0;
         let paths = rescued.read().clone();
-        let close = move |_| rescued.set(Vec::new());
+        // The one way out, spelled once: Escape, a press outside, and the button.
+        let mut close = move |_: ()| rescued.set(Vec::new());
 
-        Popup::new()
-            .width(Size::px(WIDTH))
-            .on_close_request(move |_| rescued.set(Vec::new()))
-            .maybe(!paths.is_empty(), |popup| {
-                popup
-                    .child(
-                        rect()
-                            .padding(8.0)
-                            .spacing(8.0)
-                            .font(&fonts().ui)
-                            .color(palette().text_fg)
-                            .child(label().text(match paths.len() {
-                                1 => "This file would not load. It was moved aside:".to_owned(),
-                                n => format!("{n} files would not load. They were moved aside:"),
-                            }))
-                            .children(
-                                paths
-                                    .iter()
-                                    .map(|path| {
-                                        // A paragraph and not a label: a path is as long as
-                                        // it is, and one that is cut off is one the reader
-                                        // cannot go and look at.
-                                        paragraph()
-                                            .assembly_font()
-                                            .color(palette().address_fg)
-                                            .span(path.display().to_string())
-                                            .into()
-                                    })
-                                    .collect::<Vec<Element>>(),
-                            ),
-                    )
-                    .child(
-                        PopupButtons::new()
-                            .child(Button::new().on_press(close).filled().child("Close")),
-                    )
-            })
+        notice(close).maybe(!paths.is_empty(), |popup| {
+            popup
+                .child(
+                    notice_body()
+                        .child(label().text(match paths.len() {
+                            1 => "This file would not load. It was moved aside:".to_owned(),
+                            n => format!("{n} files would not load. They were moved aside:"),
+                        }))
+                        .children(
+                            paths
+                                .iter()
+                                .map(|path| notice_path(path.display().to_string()).into())
+                                .collect::<Vec<Element>>(),
+                        ),
+                )
+                .child(
+                    PopupButtons::new().child(
+                        Button::new()
+                            .on_press(move |_| close(()))
+                            .filled()
+                            .child("Close"),
+                    ),
+                )
+        })
     }
 }

@@ -344,10 +344,7 @@ impl Component for IdentitySection {
             );
         };
 
-        rect()
-            .width(Size::fill())
-            .spacing(6.0)
-            .child(section_heading("Project", None))
+        section("Project", None)
             // The box writes straight into `Proj`, so a keystroke is a state change the
             // save observer sees and the project file is written at once.
             .child(field_row(
@@ -409,11 +406,7 @@ impl Component for BinariesSection {
                 .collect()
         };
 
-        rect()
-            .width(Size::fill())
-            .spacing(6.0)
-            .child(section_heading("Binaries", None))
-            .child(rows_or(binaries, "Nothing open"))
+        section("Binaries", None).child(rows_or(binaries, "Nothing open"))
     }
 }
 
@@ -479,34 +472,32 @@ impl Component for CargoSection {
             })
             .collect();
 
-        rect()
-            .width(Size::fill())
-            .spacing(6.0)
-            .child(section_heading(
-                "Cargo build",
-                directory.clone().map(|directory| {
-                    let jobs = jobs.clone();
-                    Button::new()
-                        // Two builds cannot go at once: the second would compile what
-                        // the first is writing.
-                        .enabled(held.manifest.path.is_some() && !held.building)
-                        .on_press(move |_| start_build(build, &jobs, directory.clone(), profile))
-                        .child(match held.building {
-                            true => cargo::BUILDING,
-                            false => "Build",
-                        })
-                        .into_element()
-                }),
-            ))
-            .child(match &held.manifest.path {
-                None => info_line(match directory.is_some() {
-                    true => "No Cargo.toml in the directory".to_owned(),
-                    false => "No directory".to_owned(),
-                })
-                .into_element(),
-                Some(manifest) => rect()
+        section(
+            "Cargo build",
+            directory.clone().map(|directory| {
+                let jobs = jobs.clone();
+                Button::new()
+                    // Two builds cannot go at once: the second would compile what
+                    // the first is writing.
+                    .enabled(held.manifest.path.is_some() && !held.building)
+                    .on_press(move |_| start_build(build, &jobs, directory.clone(), profile))
+                    .child(match held.building {
+                        true => cargo::BUILDING,
+                        false => "Build",
+                    })
+                    .into_element()
+            }),
+        )
+        .child(match &held.manifest.path {
+            None => info_line(match directory.is_some() {
+                true => "No Cargo.toml in the directory".to_owned(),
+                false => "No directory".to_owned(),
+            })
+            .into_element(),
+            Some(manifest) => {
+                rect()
                     .width(Size::fill())
-                    .spacing(6.0)
+                    .spacing(SECTION_GAP)
                     // The file cargo is run over, named rather than implied: what is
                     // built is a question the directory alone answers only for a reader
                     // who knows the rule.
@@ -602,8 +593,9 @@ impl Component for CargoSection {
                     // height a virtual list could use, and this whole view scrolls
                     // already.
                     .children(diagnostics)
-                    .into_element(),
-            })
+                    .into_element()
+            }
+        })
     }
 }
 
@@ -623,110 +615,107 @@ impl Component for LanguageSection {
         let open = proj.read().clone();
         let directory = open.workspace();
 
-        rect()
-            .width(Size::fill())
-            .spacing(6.0)
-            .child(section_heading(
-                "Language server",
-                Some({
-                    let lsp = lsp.clone();
-                    let started = spoken.started();
-                    Button::new()
-                        // Nothing to run one over is the one state neither press has an
-                        // answer to.
-                        .enabled(directory.is_some())
-                        // The toggle the top bar's control and the window's chord press,
-                        // which is what asks the state again at the press and puts the
-                        // question first where the reader has not agreed to the directory
-                        // yet. The `started` above is the caption and nothing else.
-                        .on_press(move |_| toggle_server(language, proj, &lsp))
-                        .child(match started {
-                            true => "Stop",
-                            false => "Start",
+        section(
+            "Language server",
+            Some({
+                let lsp = lsp.clone();
+                let started = spoken.started();
+                Button::new()
+                    // Nothing to run one over is the one state neither press has an
+                    // answer to.
+                    .enabled(directory.is_some())
+                    // The toggle the top bar's control and the window's chord press,
+                    // which is what asks the state again at the press and puts the
+                    // question first where the reader has not agreed to the directory
+                    // yet. The `started` above is the caption and nothing else.
+                    .on_press(move |_| toggle_server(language, proj, &lsp))
+                    .child(match started {
+                        true => "Stop",
+                        false => "Start",
+                    })
+                    .into_element()
+            }),
+        )
+        // Which program, named rather than assumed: a project on a toolchain of its
+        // own is read by a server this app cannot guess, and a reader who has one
+        // needs somewhere to say so. Straight into `Proj`, so a keystroke is saved
+        // like a rename.
+        .child(field_row(
+            "Program",
+            Input::new(proj.into_writable().map(
+                |open| &open.language_server,
+                |open| &mut open.language_server,
+            ))
+            .placeholder(OpenProject::default_server())
+            .width(Size::fill()),
+        ))
+        // Which of the project's files that server is for. A server answers about a
+        // file whatever language it is -- rust-analyzer reads a C file as Rust and
+        // names things in it the app would draw as links -- and the app knows the
+        // program and not what it serves, so this is where a project says.
+        .child(field_row(
+            "Files",
+            Input::new(
+                proj.into_writable()
+                    .map(|open| &open.language_files, |open| &mut open.language_files),
+            )
+            .placeholder(match open.names_server() {
+                true => "every file opened",
+                false => source::Language::Rust.spoken(),
+            })
+            .width(Size::fill()),
+        ))
+        // Whether the reader has agreed to a server reading this directory, and the
+        // way back. Agreeing happens where the question is asked, at the start it
+        // holds up; taking it back has nowhere else to live, and a reader who cannot
+        // see the answer they gave cannot change their mind about it.
+        .maybe_child(directory.is_some().then(|| {
+            field_row(
+                "Directory",
+                rect()
+                    .width(Size::fill())
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .content(Content::Flex)
+                    .spacing(8.0)
+                    .child(
+                        dim_line(match open.trusted {
+                            true => "Agreed to".to_owned(),
+                            false => "Not agreed to".to_owned(),
                         })
-                        .into_element()
-                }),
-            ))
-            // Which program, named rather than assumed: a project on a toolchain of its
-            // own is read by a server this app cannot guess, and a reader who has one
-            // needs somewhere to say so. Straight into `Proj`, so a keystroke is saved
-            // like a rename.
-            .child(field_row(
-                "Program",
-                Input::new(proj.into_writable().map(
-                    |open| &open.language_server,
-                    |open| &mut open.language_server,
-                ))
-                .placeholder(OpenProject::default_server())
-                .width(Size::fill()),
-            ))
-            // Which of the project's files that server is for. A server answers about a
-            // file whatever language it is -- rust-analyzer reads a C file as Rust and
-            // names things in it the app would draw as links -- and the app knows the
-            // program and not what it serves, so this is where a project says.
-            .child(field_row(
-                "Files",
-                Input::new(
-                    proj.into_writable()
-                        .map(|open| &open.language_files, |open| &mut open.language_files),
-                )
-                .placeholder(match open.names_server() {
-                    true => "every file opened",
-                    false => source::Language::Rust.spoken(),
-                })
-                .width(Size::fill()),
-            ))
-            // Whether the reader has agreed to a server reading this directory, and the
-            // way back. Agreeing happens where the question is asked, at the start it
-            // holds up; taking it back has nowhere else to live, and a reader who cannot
-            // see the answer they gave cannot change their mind about it.
-            .maybe_child(directory.is_some().then(|| {
-                field_row(
-                    "Directory",
-                    rect()
-                        .width(Size::fill())
-                        .horizontal()
-                        .cross_align(Alignment::Center)
-                        .content(Content::Flex)
-                        .spacing(8.0)
-                        .child(
-                            dim_line(match open.trusted {
-                                true => "Agreed to".to_owned(),
-                                false => "Not agreed to".to_owned(),
-                            })
-                            .width(Size::flex(1.0)),
+                        .width(Size::flex(1.0)),
+                    )
+                    .maybe(open.trusted, |row| {
+                        row.child(
+                            Button::new()
+                                .on_press(move |_| revoke_trust(language, proj, &lsp))
+                                .child("Take it back"),
                         )
-                        .maybe(open.trusted, |row| {
-                            row.child(
-                                Button::new()
-                                    .on_press(move |_| revoke_trust(language, proj, &lsp))
-                                    .child("Take it back"),
-                            )
-                        }),
-                )
-                .into_element()
-            }))
-            .child(verdict_line(spoken.verdict(directory.as_deref())).into_element())
-            // What the project's own settings file gave the server, so a reader can see
-            // what theirs is being told; and why it could not be used, in the colour the
-            // failure above is in, since that file is the one thing that stops a start
-            // before it is one. Nothing at all where a project said nothing, which is
-            // most of them.
-            .maybe_child(
-                spoken
-                    .unreadable()
-                    .map(|why| verdict_line(Verdict::bad_news(why)).into_element()),
+                    }),
             )
-            .maybe_child((!spoken.overrides().is_empty()).then(|| {
-                verdict_line(Verdict::plain(format!("From {}", lsp::SETTINGS))).into_element()
-            }))
-            .children(
-                spoken
-                    .overrides()
-                    .iter()
-                    .map(|(name, value)| override_row(name, value))
-                    .collect::<Vec<Element>>(),
-            )
+            .into_element()
+        }))
+        .child(verdict_line(spoken.verdict(directory.as_deref())).into_element())
+        // What the project's own settings file gave the server, so a reader can see
+        // what theirs is being told; and why it could not be used, in the colour the
+        // failure above is in, since that file is the one thing that stops a start
+        // before it is one. Nothing at all where a project said nothing, which is
+        // most of them.
+        .maybe_child(
+            spoken
+                .unreadable()
+                .map(|why| verdict_line(Verdict::bad_news(why)).into_element()),
+        )
+        .maybe_child((!spoken.overrides().is_empty()).then(|| {
+            verdict_line(Verdict::plain(format!("From {}", lsp::SETTINGS))).into_element()
+        }))
+        .children(
+            spoken
+                .overrides()
+                .iter()
+                .map(|(name, value)| override_row(name, value))
+                .collect::<Vec<Element>>(),
+        )
     }
 }
 
@@ -771,19 +760,16 @@ impl Component for RecentsSection {
             })
             .collect();
 
-        rect()
-            .width(Size::fill())
-            .spacing(6.0)
-            .child(section_heading(
-                "Recent projects",
-                Some(
-                    Button::new()
-                        .on_press(move |_| new_project(states))
-                        .child("New project")
-                        .into_element(),
-                ),
-            ))
-            .child(rows_or(others, "No other projects"))
+        section(
+            "Recent projects",
+            Some(
+                Button::new()
+                    .on_press(move |_| new_project(states))
+                    .child("New project")
+                    .into_element(),
+            ),
+        )
+        .child(rows_or(others, "No other projects"))
     }
 }
 
@@ -799,22 +785,15 @@ pub(crate) struct ProjectTab;
 
 impl Component for ProjectTab {
     fn render(&self) -> impl IntoElement {
-        rect()
-            .expanded()
-            .background(palette().pane_bg)
-            .child(
-                ScrollView::new().child(
-                    rect()
-                        .width(Size::fill())
-                        .padding(Gaps::new_symmetric(8.0, 12.0))
-                        .spacing(6.0)
-                        .child(IdentitySection)
-                        .child(BinariesSection)
-                        .child(CargoSection)
-                        .child(LanguageSection)
-                        .child(RecentsSection),
-                ),
-            )
-            .into_element()
+        page(
+            None,
+            page_column()
+                .child(IdentitySection)
+                .child(BinariesSection)
+                .child(CargoSection)
+                .child(LanguageSection)
+                .child(RecentsSection),
+        )
+        .into_element()
     }
 }

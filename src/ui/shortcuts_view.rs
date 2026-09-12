@@ -8,14 +8,11 @@
 //! The list is a plain `ScrollView` and not a `VirtualScrollView`: it is a few dozen rows
 //! written into the binary, the way the Settings and Debug pages are, so there is no
 //! `item_size` for a row height to have to agree with and a row is free to be as tall as
-//! its text needs.
+//! its text needs. The rows stand [`SECTION_GAP`] apart, as every page's do -- more air
+//! than a list's rows carry, because these are read one at a time rather than scanned as a
+//! column: the reader is looking for one gesture, not comparing forty.
 
 use super::*;
-
-/// The air between one gesture's row and the next. More than a list's rows carry, because
-/// these are read one at a time rather than scanned as a column: the reader is looking for
-/// one gesture, not comparing forty.
-const ROW_SPACING: f32 = 6.0;
 
 /// The page's body: the filter box, then a heading and its rows for each section the
 /// filter left.
@@ -35,48 +32,36 @@ impl Component for ShortcutsTab {
         let listed = shortcuts::matching(&matcher);
         let nothing = listed.is_empty();
 
-        rect()
-            .expanded()
-            .background(palette().pane_bg)
-            .font(&fonts().ui)
-            .color(palette().text_fg)
-            .child(FilterBox)
-            .child(
-                ScrollView::new().child(
-                    rect()
-                        .width(Size::fill())
-                        .padding(Gaps::new_symmetric(8.0, 12.0))
-                        .spacing(6.0)
-                        .children(
-                            listed
-                                .into_iter()
-                                .map(|listed| {
-                                    rect()
-                                        .key(listed.section.place)
-                                        .width(Size::fill())
-                                        .spacing(ROW_SPACING)
-                                        .child(section_heading(listed.section.place, None))
-                                        .children(
-                                            listed
-                                                .gestures
-                                                .into_iter()
-                                                .map(|gesture| {
-                                                    GestureRow { gesture }.into_element()
-                                                })
-                                                .collect::<Vec<Element>>(),
-                                        )
-                                        .into_element()
-                                })
-                                .collect::<Vec<Element>>(),
-                        )
-                        // A filter that matches nothing has to read as one. An empty page
-                        // under a box with text in it looks like a page that failed to
-                        // draw, which is the same lie an empty section would tell.
-                        .maybe_child(nothing.then(|| {
-                            info_line("Nothing answers to that.".to_owned()).into_element()
-                        })),
+        page(
+            // The one page with something above its scroll: the box stays put while the
+            // gestures under it move.
+            Some(FilterBox.into_element()),
+            page_column()
+                .children(
+                    listed
+                        .into_iter()
+                        .map(|listed| {
+                            section(listed.section.place, None)
+                                .key(listed.section.place)
+                                .children(
+                                    listed
+                                        .gestures
+                                        .into_iter()
+                                        .map(|gesture| GestureRow { gesture }.into_element())
+                                        .collect::<Vec<Element>>(),
+                                )
+                                .into_element()
+                        })
+                        .collect::<Vec<Element>>(),
+                )
+                // A filter that matches nothing has to read as one. An empty page under a
+                // box with text in it looks like a page that failed to draw, which is the
+                // same lie an empty section would tell.
+                .maybe_child(
+                    nothing
+                        .then(|| info_line("Nothing answers to that.".to_owned()).into_element()),
                 ),
-            )
+        )
     }
 }
 

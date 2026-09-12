@@ -181,7 +181,7 @@ let go of, so it has a close; one the app is keeping has nowhere to be let go *t
 Save and Delete named outright rather than a x that would mean one of them. Each is a
 component holding a `Doing` and not a handler, for `TabClose`'s reason: a `Component` is
 `PartialEq` and a closure is not. Delete sets `Deleting` and nothing else -- what acts is
-`DeleteProjectPopup` over freya's `Popup`, whose `on_close_request` is the "no" for free and
+`DeleteProjectPopup` on the app's `notice` shell, whose `on_close_request` is the "no" for free and
 which draws nothing at all while there is nothing to ask, the same shape the scratchpad's
 delete has.
 
@@ -462,8 +462,10 @@ bar, which is the whole reason `Active` is a memo. A button with nothing in its 
 than hidden**, the first disabled drawing in this app: hiding it would slide the other one under the
 pointer, and a reader who has been nowhere yet would never learn the pair is there. Disabled is the
 whole of the drawing (no hover wash, no press handler, and the chevron in
-`dimmed(icon_fg, pane_bg)`) while the tooltip stays, naming the direction where `entry_text` gives
-it nothing to name. Where a step lands is the trail's own -- `History::behind` and
+`dimmed(icon_fg, pane_bg)`) while the tooltip stays, naming the direction where `Names` gives it
+nothing to name. The first two of those are `bar_button`'s own: it takes whether a press would do
+anything and drops the wash and the handlers with it, so the button is dimmed the way every bar
+button would be, and only the chevron's colour is this pair's. Where a step lands is the trail's own -- `History::behind` and
 `History::ahead`, which is what `back` and `forward` move by and the only place the question is
 answered -- and `Nav::destination` asks it rather than deriving it again from the cursor, so a live
 button and a step that does something cannot disagree.
@@ -515,9 +517,9 @@ with whether the keyboard is inside it, or that copy -- so `dragged` wraps `chip
 spelling the frame a second time, as `dock.rs` draws a panel's from `panel_label`. Where a drop
 would land is not one of the marks but a flag beside it: that rule is on another edge and is worn
 with any of them, the tab on screen being the one a reader most often drags. What a tab is called and
-the glyph before it are `tab_title` and `tab_icon`, which the tab list and the drag copy read too;
-a chip asks `entry_labels` instead, since it draws the one and says the other, and for a symbol's
-tab those are one name cut two ways. **The chip activates its own tab**, freya's docking having
+the glyph before it are one `tab_drawn`, which the chip, the tab list and the drag copy all read: a
+page's own title and glyph, or the document's `Names` and kind. A chip draws `text` and says
+`tooltip`, and for a symbol's tab those are one name cut two ways. **The chip activates its own tab**, freya's docking having
 been what did that before -- it wraps a header in a `DropZone` around a
 `rect().on_press(set_active)` around a `DragZone` -- so the press handler calls `raise_tab` and then
 asks whether it was a **double press**
@@ -725,15 +727,17 @@ against it. They were four loops once, and had drifted: only the last skipped a 
 rather than beside the demangling in `analysis`, because the crate has no use for it: it hands out
 the name the file states and the name the demangler made of it, and *how much of one to draw* is a
 question only a view has.
-`entry_text` is where it is applied and is the one spelling a document tab and a History row
-share; `entry_name` beside it is the whole name, which is what a tooltip says where the two differ
-and what the History filter matches, so a generic argument no tab draws is still something a reader
-can search for. Two functions answer with both at once, for a caller that needs both: `entry_labels`
-the drawn name with the tooltip beside it, for a chip and a History row, which draw the one and say
-the other; and `entry_spellings` the drawn name with the whole one, for the History panel, which
-draws the one and filters on the other. A demangled name averages a hundred and fifty characters,
-and building it once and cutting the short spelling from it is one such string per row per render
-rather than two -- three, where the filter asked for the whole name and the mark for the short one.
+`Names` (`src/ui/entries.rs`) is where it is applied, and it is **one value and not a function
+each**: `text` is the drawn spelling a document tab and a History row share, `whole` is the name a
+filter matches -- so a generic argument no tab draws is still something a reader can search for --
+and `tooltip` is what hovering says, which is the path for a file and for an object's code and the
+whole name otherwise. A demangled name averages a hundred and fifty characters, and a symbol's three
+spellings are that one name cut two ways, so building it once is one such string per row per render
+rather than three. It was five functions over the same four arms, each calling the others, and a
+caller wanting two spellings had to know which of them built the name once. `Names::of_saved` is the
+same three rules over a `SavedDocument`, for the Bookmarks row: it draws from the bookmark whether
+or not the place resolves, so a row does not change its spelling when its binary goes, and it sits
+beside `Names::of` because apart the two had already drifted into two spellings of one rule.
 
 **Nothing in that scanner recurses.** A name is file input, and reading a `<Type as Trait>`
 qualifier used to be one call per group: a symbol of a hundred thousand `<` -- which a string table
@@ -788,7 +792,7 @@ this again. A document tab stands for a `Document` and never anything else, and 
 separate things work without a case each: the Assembly *and* Source panes both render "the active
 tab", the record of visits holds it, `SavedDocument::from_document`/`::resolve` write it down and
 find it again after a restart, `close_binary` knows which tabs a closing file takes with it, and
-`entry_text` knows what to call it. A project view, the settings page and a scratchpad's editor are
+`Names` knows what to call it. A project view, the settings page and a scratchpad's editor are
 none of that: they resolve against no object, they are no file on disk the panes could open, there
 is one of each rather than many, and neither pane could draw one. So they are **pages**, the other
 arm of `Tab`: a tab like a document's, drawn from state that lives at the root rather than in it. A

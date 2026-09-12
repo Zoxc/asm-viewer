@@ -7,11 +7,6 @@
 
 use super::*;
 
-/// How wide the window asking about a delete is. The scratchpad's own is the same number
-/// and stays its own: the two windows ask different questions and neither should move
-/// because the other did.
-const ASKING_WIDTH: f32 = 520.0;
-
 /// What one of the project's buttons in the bar does.
 ///
 /// An enum and not a handler, for [`TabClose`]'s reason: a `Component` is `PartialEq` and a
@@ -34,7 +29,7 @@ struct ChipButton {
 
 impl Component for ChipButton {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let states = use_project_states();
         let mut deleting = use_consume::<Deleting>().0;
         let doing = self.doing;
@@ -45,20 +40,9 @@ impl Component for ChipButton {
             Doing::Delete => ("Delete the project", ("trash-2", lucide::trash_2())),
         };
 
-        let side = toggle_size();
         extra_tooltip(
             tooltip.to_owned(),
-            rect()
-                .width(Size::px(side))
-                .height(Size::px(side))
-                .center()
-                .corner_radius(4.0)
-                .background(match hovering() {
-                    true => palette().toggle_hover_bg,
-                    false => Color::TRANSPARENT,
-                })
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
+            bar_button(hovering, true, Glow::No)
                 .on_press(move |_| match doing {
                     Doing::Close => close_project(states),
                     Doing::Save => ask_where_to_save(states, project::Put::Move),
@@ -88,7 +72,7 @@ pub(crate) struct ProjectChip;
 
 impl Component for ProjectChip {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let proj = use_consume::<Proj>().0;
         let open = use_open();
         // Read and not peeked: the bar follows the project being saved, closed or opened.
@@ -104,17 +88,7 @@ impl Component for ProjectChip {
             .spacing(2.0)
             .child(extra_tooltip(
                 file.to_string_lossy().into_owned(),
-                rect()
-                    .height(Size::px(toggle_size()))
-                    .center()
-                    .padding(Gaps::new_symmetric(0.0, 6.0))
-                    .corner_radius(4.0)
-                    .background(match hovering() {
-                        true => palette().toggle_hover_bg,
-                        false => Color::TRANSPARENT,
-                    })
-                    .on_pointer_over(move |_| hovering.set_if_modified(true))
-                    .on_pointer_out(move |_| hovering.set_if_modified(false))
+                bar_pill(hovering, true, Glow::No)
                     .on_press(move |_| show_page(open, Page::Project))
                     .child(label().text(elide(&project::label(&file))).max_lines(1)),
             ))
@@ -201,52 +175,38 @@ impl Component for UnopenedPopup {
     fn render(&self) -> impl IntoElement {
         let mut unopened = use_consume::<Unopened>().0;
 
-        Popup::new()
-            .width(Size::px(ASKING_WIDTH))
-            .on_close_request(move |_| unopened.set(None))
-            .map(self.naming.clone(), |popup, failure| {
-                popup
-                    .child(
-                        rect()
-                            .padding(8.0)
-                            .spacing(8.0)
-                            .font(&fonts().ui)
-                            .color(palette().text_fg)
-                            .child(label().text("That project would not open".to_owned()))
-                            // What went wrong, in the reason's own words. A paragraph and
-                            // not a label: a parser's message is as long as it is.
-                            .child(
-                                paragraph()
-                                    .color(palette().address_fg)
-                                    .span(failure.reason.to_string()),
-                            )
-                            // Said only where there is a file to have left alone. The app
-                            // never moves a project of the reader's aside, and a window
-                            // about a file that will not parse is the one place that is
-                            // worth saying.
-                            .maybe_child((failure.reason != project::Reason::Missing).then(|| {
-                                label()
-                                    .text("It has been left exactly as it is.".to_owned())
-                                    .color(palette().address_fg)
-                            }))
-                            // A path is as long as it is, and one that is cut off is one
-                            // the reader cannot go and look at.
-                            .child(
-                                paragraph()
-                                    .assembly_font()
-                                    .color(palette().address_fg)
-                                    .span(failure.path.to_string_lossy().into_owned()),
-                            ),
-                    )
-                    .child(
-                        PopupButtons::new().child(
-                            Button::new()
-                                .filled()
-                                .on_press(move |_| unopened.set(None))
-                                .child("Close"),
-                        ),
-                    )
-            })
+        notice(move |_| unopened.set(None)).map(self.naming.clone(), |popup, failure| {
+            popup
+                .child(
+                    notice_body()
+                        .child(label().text("That project would not open".to_owned()))
+                        // What went wrong, in the reason's own words. A paragraph and not
+                        // a label: a parser's message is as long as it is.
+                        .child(
+                            paragraph()
+                                .color(palette().address_fg)
+                                .span(failure.reason.to_string()),
+                        )
+                        // Said only where there is a file to have left alone. The app
+                        // never moves a project of the reader's aside, and a window about
+                        // a file that will not parse is the one place that is worth
+                        // saying.
+                        .maybe_child(
+                            (failure.reason != project::Reason::Missing).then(|| {
+                                notice_line("It has been left exactly as it is.".to_owned())
+                            }),
+                        )
+                        .child(notice_path(failure.path.to_string_lossy().into_owned())),
+                )
+                .child(
+                    PopupButtons::new().child(
+                        Button::new()
+                            .filled()
+                            .on_press(move |_| unopened.set(None))
+                            .child("Close"),
+                    ),
+                )
+        })
     }
 }
 
@@ -266,46 +226,35 @@ impl Component for DeleteProjectPopup {
         let states = use_project_states();
         let mut deleting = use_consume::<Deleting>().0;
 
-        Popup::new()
-            .width(Size::px(ASKING_WIDTH))
-            .on_close_request(move |_| deleting.set(None))
-            .map(self.asking.clone(), |popup, name| {
-                popup
-                    .child(
-                        rect()
-                            .padding(8.0)
-                            .spacing(8.0)
-                            .font(&fonts().ui)
-                            .color(palette().text_fg)
-                            .child(label().text(format!("Delete {name}?")))
-                            .child(
-                                label()
-                                    .text(
-                                        "It is saved nowhere else: its binaries and its \
-                                         bookmarks go with it."
-                                            .to_owned(),
-                                    )
-                                    .color(palette().address_fg),
-                            ),
-                    )
-                    .child(
-                        PopupButtons::new()
-                            .child(
-                                Button::new()
-                                    .on_press(move |_| deleting.set(None))
-                                    .child("Cancel"),
-                            )
-                            .child(
-                                Button::new()
-                                    .filled()
-                                    .on_press(move |_| {
-                                        deleting.set(None);
-                                        delete_project(states);
-                                    })
-                                    .child("Delete"),
-                            ),
-                    )
-            })
+        notice(move |_| deleting.set(None)).map(self.asking.clone(), |popup, name| {
+            popup
+                .child(
+                    notice_body()
+                        .child(label().text(format!("Delete {name}?")))
+                        .child(notice_line(
+                            "It is saved nowhere else: its binaries and its bookmarks go \
+                             with it."
+                                .to_owned(),
+                        )),
+                )
+                .child(
+                    PopupButtons::new()
+                        .child(
+                            Button::new()
+                                .on_press(move |_| deleting.set(None))
+                                .child("Cancel"),
+                        )
+                        .child(
+                            Button::new()
+                                .filled()
+                                .on_press(move |_| {
+                                    deleting.set(None);
+                                    delete_project(states);
+                                })
+                                .child("Delete"),
+                        ),
+                )
+        })
     }
 }
 
@@ -334,42 +283,33 @@ impl Component for NoProject {
             })
             .collect();
 
-        rect()
-            .expanded()
-            .background(palette().pane_bg)
-            .child(
-                ScrollView::new().child(
-                    rect()
-                        .width(Size::fill())
-                        .padding(Gaps::new_symmetric(8.0, 12.0))
-                        .spacing(6.0)
-                        .child(section_heading("Open a project", None))
-                        .child(
-                            rect()
-                                .horizontal()
-                                .spacing(6.0)
-                                .child(
-                                    Button::new()
-                                        .on_press(move |_| {
-                                            ask_for_a_project(states, rescued, unopened)
-                                        })
-                                        .child("Project file..."),
-                                )
-                                .child(
-                                    Button::new()
-                                        .on_press(move |_| ask_for_a_directory(states))
-                                        .child("Directory..."),
-                                )
-                                .child(
-                                    Button::new()
-                                        .on_press(move |_| ask_for_a_binary(states))
-                                        .child("Binary..."),
-                                ),
-                        )
-                        .child(section_heading("Recent projects", None))
-                        .child(rows_or(rows, "None yet")),
-                ),
-            )
-            .into_element()
+        page(
+            None,
+            page_column()
+                .child(
+                    section("Open a project", None).child(
+                        rect()
+                            .horizontal()
+                            .spacing(SECTION_GAP)
+                            .child(
+                                Button::new()
+                                    .on_press(move |_| ask_for_a_project(states, rescued, unopened))
+                                    .child("Project file..."),
+                            )
+                            .child(
+                                Button::new()
+                                    .on_press(move |_| ask_for_a_directory(states))
+                                    .child("Directory..."),
+                            )
+                            .child(
+                                Button::new()
+                                    .on_press(move |_| ask_for_a_binary(states))
+                                    .child("Binary..."),
+                            ),
+                    ),
+                )
+                .child(section("Recent projects", None).child(rows_or(rows, "None yet"))),
+        )
+        .into_element()
     }
 }

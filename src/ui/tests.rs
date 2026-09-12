@@ -1321,9 +1321,9 @@ fn history_harness() -> impl IntoElement {
 }
 
 /// A row is named after the function and not after the whole of what the demangler said.
-/// `entry_text` is the one spelling a tab and a history row share, and it is [`short_name`]
-/// over the demangled name; the whole of it stays on the entry, where the tooltip and the
-/// filter read it.
+/// `Names::text` is the one spelling a tab and a history row share, and it is
+/// [`short_name`] over the demangled name; `Names::whole` beside it is what the tooltip and
+/// the filter read.
 ///
 /// **The filter reads the whole one**, which is the half of the rule the drawn row cannot
 /// show: a pattern only in the part no row has room for still leaves the row on screen.
@@ -1640,6 +1640,105 @@ fn press_at(test: &mut TestingRunner, at: (f64, f64)) {
     test.press_cursor(at);
     test.release_cursor(at);
     test.sync_and_update();
+}
+
+/// **One page shell, one rhythm.** A page is `page` over `page_column`
+/// (`src/ui/parts.rs`): the pane's ground, a scroll, and a column of sections inside
+/// [`PAGE_PAD`] with [`SECTION_GAP`] between one row and the next. The margins and the gap
+/// were six copies of two literals before, and this is the page the copies differed on --
+/// its two font sections packed their rows flush while every other section on it left the
+/// gap, so the same two rows stood at two rhythms on one screen.
+#[test]
+fn the_settings_pages_rows_stand_one_gap_apart_inside_the_pages_margins() {
+    let (mut test, ()) = TestingRunner::new(
+        || page_body(Page::Settings),
+        (500., 700.).into(),
+        |runner| {
+            runner.provide_root_context(|| Prefs(State::create(EditedSettings::default())));
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    let drawn = labels_with_areas(&test);
+    let at = |name: &str| {
+        drawn
+            .iter()
+            .find_map(|(text, area)| (text == name).then_some(*area))
+            .unwrap_or_else(|| panic!("{name} is not on the page: {drawn:?}"))
+    };
+
+    // The margins: nothing on the page starts left of them, and the heading at the top of
+    // it starts at them.
+    let left = drawn
+        .iter()
+        .map(|(_, area)| area.origin.x)
+        .fold(f32::MAX, f32::min);
+    assert_eq!(left, PAGE_PAD.left(), "the page draws outside its margins");
+
+    // The gap: the two rows of a font section are one row and one gap apart, which is what
+    // every other pair of rows on the page is.
+    let (family, size) = (at("Family"), at("Size"));
+    assert_eq!(
+        size.origin.y - family.origin.y,
+        text_box_height() + SECTION_GAP,
+        "a font section's rows stand at a rhythm of their own"
+    );
+}
+
+/// Three of the eight square bar buttons, from three files, side by side.
+fn bar_button_harness() -> impl IntoElement {
+    let filter = use_state(Filter::default);
+    rect()
+        .expanded()
+        .horizontal()
+        .child(NavButton { back: true })
+        .child(PagesButton)
+        .child(FilterToggle {
+            filter,
+            toggle: Toggle::Case,
+            on: false,
+        })
+}
+
+/// **One design, drawn by one function.** The square in a bar -- a [`toggle_size`] side,
+/// centred, cut to [`BAR_BUTTON_RADIUS`], washed under the pointer -- was written out eight
+/// times before `bar_button` (`src/ui/parts.rs`), each a little differently. Three of the
+/// eight are mounted here, out of `ui.rs`, `strip.rs` and `filter_bar.rs`, and all three
+/// have to be that square and that corner.
+///
+/// The corner is what a copy would drift in first, and it is the half a size check misses:
+/// every button is **two** nodes of one square, `TooltipContainer` wrapping its child in a
+/// box of the child's own size, and the wrapper is the one with no corner. So the buttons
+/// are the rounded ones, and a button that lost its corner would be counted as a wrapper
+/// and missed here rather than passing.
+#[test]
+fn every_square_bar_button_is_one_size_and_one_corner() {
+    let (mut test, _states) = TestingRunner::new(
+        bar_button_harness,
+        (300., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    settle(&mut test);
+
+    let side = toggle_size();
+    let corners: Vec<f32> = test.find_many(|node, element| {
+        let area = node.layout().area;
+        let corner = element.style().corner_radius.top_left;
+        (area.width() == side && area.height() == side && corner > 0.0).then_some(corner)
+    });
+    assert_eq!(
+        corners.len(),
+        3,
+        "not every button is a {side} square with a corner: {corners:?}"
+    );
+    for corner in corners {
+        assert_eq!(
+            corner, BAR_BUTTON_RADIUS,
+            "a button is cut to its own corner"
+        );
+    }
 }
 
 /// The toolbar's buttons step the history, a button with nothing in its direction takes no
@@ -4139,6 +4238,66 @@ fn objects_reach_the_sidebar_as_they_are_parsed() {
     // Done, so the ordinary rules take over: three objects out of one file is an
     // archive-shaped row.
     assert_eq!(reading(&states), [("line_fixture.o".to_owned(), 3, false)]);
+}
+
+/// **A file being read and a file that has been read are one row.** The pending row was a
+/// component of its own -- fifty-five lines of `ArchiveRow` with three values fixed -- and
+/// is now that row with `folds: None`, so this walks the one file from the first to the
+/// last: no triangle and no count while it is being read, both once it has been, and the
+/// name in the same column throughout.
+///
+/// The column is the point. Two components was two arrangements of the same four children,
+/// and a name that shifted sideways as the file finished reading is exactly what nothing
+/// but a laid-out size can see.
+#[test]
+fn a_file_being_read_draws_the_row_it_will_be_when_it_is_read() {
+    let (path, objects) = fixture_objects(3);
+    let (mut test, states, sender) = mount_load(&path);
+    settle(&mut test);
+
+    // Nothing parsed yet: the tag says so, the count column is empty, and there is no
+    // triangle -- a file with nothing under it has nothing to fold.
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"\u{2026}".to_owned()),
+        "the row being read wears no loading tag: {drawn:?}"
+    );
+    assert!(
+        !drawn.contains(&"3".to_owned()),
+        "the row being read counts objects it has not got: {drawn:?}"
+    );
+    assert_eq!(disclosures(&test), Vec::<bool>::new(), "a triangle to fold");
+    let name_at = |test: &TestingRunner| {
+        labels_with_areas(test)
+            .into_iter()
+            .find_map(|(text, area)| (text == "line_fixture.o").then_some(area.origin.x))
+            .expect("the file has a row")
+    };
+    let reading = name_at(&test);
+
+    for object in &objects {
+        sender
+            .send_blocking(Progress::Parsed(object.clone()))
+            .expect("the app is still listening");
+    }
+    sender
+        .send_blocking(Progress::Finished(path.clone()))
+        .expect("the app is still listening");
+    pump(&mut test, || !states.loading.peek().is_loading(&path));
+    settle(&mut test);
+
+    // Read: the format tag, the count of what came out of it, and a triangle to fold it.
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&ARCHIVE_TAG.to_owned()) && drawn.contains(&"3".to_owned()),
+        "the file that has been read is not an archive row: {drawn:?}"
+    );
+    assert_eq!(disclosures(&test), [false], "the read file has no triangle");
+    assert_eq!(
+        name_at(&test),
+        reading,
+        "the name changed column when the file finished reading"
+    );
 }
 
 /// Two loads reading at once put their objects into one list, and each file still makes
@@ -18775,7 +18934,7 @@ fn pressing_an_object_row_opens_its_code() {
         states.open.active() != Some(Document::Object(object)),
         "the object tab is not what opened"
     );
-    assert_eq!(entry_text(&document), "line_fixture.o");
+    assert_eq!(Names::of(&document).text, "line_fixture.o");
 }
 
 use crate::section::{Kind, Row, Rows};
@@ -21894,7 +22053,10 @@ fn bookmarks_harness() -> impl IntoElement {
 
 /// A bookmark of `symbol`, the way a gesture on a live document would make one.
 fn bookmark_of(document: &Document) -> Bookmark {
-    Bookmark::new(SavedDocument::from_document(document), entry_name(document))
+    Bookmark::new(
+        SavedDocument::from_document(document),
+        Names::of(document).whole,
+    )
 }
 
 /// Pressing a live bookmark is a navigation: the place becomes the active document and
@@ -22159,7 +22321,7 @@ fn a_symbol_row_bookmarks_its_symbol_from_its_menu() {
         made,
         [Bookmark::new(
             SavedDocument::from_document(&document),
-            entry_name(&document)
+            Names::of(&document).whole
         )]
     );
     assert!(
@@ -22249,7 +22411,7 @@ fn a_tabs_menu_bookmarks_its_document() {
     open_document(states.open, states.visits, first.clone(), Reach::NewTab);
     settle(&mut test);
 
-    let tab = centre_of(&test, &entry_text(&first));
+    let tab = centre_of(&test, &Names::of(&first).text);
     right_click(&mut test, tab);
     let drawn = labels(&test);
     assert!(drawn.contains(&"Add bookmark".to_owned()), "{drawn:?}");
@@ -22311,7 +22473,7 @@ fn chip_menu_labels<E: IntoElement + 'static>(
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     settle(&mut test);
 
-    let tab = centre_of(&test, &entry_text(document));
+    let tab = centre_of(&test, &Names::of(document).text);
     right_click(&mut test, tab);
     labels(&test)
 }
@@ -25880,7 +26042,7 @@ fn the_temporal_tabs_name_is_italic_and_a_double_press_makes_it_stay() {
         .expect("a document panel");
     settle(&mut test);
 
-    let name = entry_text(&document);
+    let name = Names::of(&document).text;
     assert_eq!(label_slant(&test, &name), Some(FontSlant::Italic));
 
     // One press is a press: the tab stays temporal.
@@ -33842,7 +34004,7 @@ fn mount_bookmark_chords() -> (TestingRunner, ProjectStates) {
 }
 
 /// **Ctrl+D is the tab menu's bookmark item asked of the tab on screen.** The first press
-/// adds a bookmark of the place the tab is showing, under the name `entry_name` gives it,
+/// adds a bookmark of the place the tab is showing, under the whole name `Names` gives it,
 /// and the panel draws its row; the second press takes that same bookmark off rather than
 /// adding a second of the same place.
 #[test]

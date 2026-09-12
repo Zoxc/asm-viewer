@@ -23,10 +23,6 @@
 use super::*;
 use std::cell::Cell;
 
-/// How wide the delete question is: a pad's name over the path its package is at, which is
-/// the longest thing it draws.
-const DELETE_WIDTH: f32 = 520.0;
-
 /// How much of a dependency row the crate name takes against the version beside it.
 const NAME_FLEX: f32 = 2.0;
 const VERSION_FLEX: f32 = 1.0;
@@ -628,59 +624,37 @@ impl Component for DeletePopup {
             })
         };
 
-        Popup::new()
-            .width(Size::px(DELETE_WIDTH))
-            .on_close_request(move |_| pad.write().confirming = None)
-            .map(asking, |popup, asking| {
-                let id = asking.id.clone();
-                popup
-                    .child(
-                        rect()
-                            .padding(8.0)
-                            .spacing(8.0)
-                            .font(&fonts().ui)
-                            .color(palette().text_fg)
-                            .child(
-                                label().text(format!(
-                                    "Delete {}?",
-                                    pad_label(&asking.id, &asking.name)
-                                )),
-                            )
-                            .child(
-                                label()
-                                    .text(
-                                        "Its source, its crates and everything built from it \
-                                         go with it."
-                                            .to_owned(),
-                                    )
-                                    .color(palette().address_fg),
-                            )
-                            // A path is as long as it is, and one that is cut off is one
-                            // the reader cannot go and look at.
-                            .child(
-                                paragraph()
-                                    .assembly_font()
-                                    .color(palette().address_fg)
-                                    .span(asking.package.clone()),
-                            ),
-                    )
-                    .child(
-                        PopupButtons::new()
-                            .child(
-                                Button::new()
-                                    .on_press(move |_| pad.write().confirming = None)
-                                    .child("Cancel"),
-                            )
-                            .child(
-                                Button::new()
-                                    .filled()
-                                    .on_press(move |_| {
-                                        request_delete_pad(pad, text, &jobs, id.clone())
-                                    })
-                                    .child("Delete"),
-                            ),
-                    )
-            })
+        notice(move |_| pad.write().confirming = None).map(asking, |popup, asking| {
+            let id = asking.id.clone();
+            popup
+                .child(
+                    notice_body()
+                        .child(
+                            label()
+                                .text(format!("Delete {}?", pad_label(&asking.id, &asking.name))),
+                        )
+                        .child(notice_line(
+                            "Its source, its crates and everything built from it go \
+                                 with it."
+                                .to_owned(),
+                        ))
+                        .child(notice_path(asking.package.clone())),
+                )
+                .child(
+                    PopupButtons::new()
+                        .child(
+                            Button::new()
+                                .on_press(move |_| pad.write().confirming = None)
+                                .child("Cancel"),
+                        )
+                        .child(
+                            Button::new()
+                                .filled()
+                                .on_press(move |_| request_delete_pad(pad, text, &jobs, id.clone()))
+                                .child("Delete"),
+                        ),
+                )
+        })
     }
 }
 
@@ -1048,7 +1022,7 @@ impl Component for PadDetails {
 
         rect()
             .width(Size::fill())
-            .spacing(6.0)
+            .spacing(SECTION_GAP)
             // An ordinary bound box, exactly the project view's: the name is a value in the
             // pad's own package and nothing is filed under it, so a keystroke is a state
             // change the save effect writes out and there is nothing to refuse, nothing to
@@ -1117,28 +1091,23 @@ impl Component for DependencyList {
             (rows, state.unsaved.clone(), state.refusal().map(text_block))
         };
 
-        rect()
-            .width(Size::fill())
-            .spacing(6.0)
-            .child(section_heading(
-                "Dependencies",
-                Some(
-                    Button::new()
-                        .compact()
-                        .on_press(move |_| {
-                            pad.write().state_mut().scratchpad.add_dependency("", "");
-                        })
-                        .child("Add")
-                        .into_element(),
-                ),
-            ))
-            .child(rows_or(rows, "No crates asked for"))
-            .maybe_child(
-                unsaved.map(|failure| {
-                    verdict_line(Verdict::bad_news(format!("Not saved: {failure}")))
-                }),
-            )
-            .maybe_child(refusal)
+        section(
+            "Dependencies",
+            Some(
+                Button::new()
+                    .compact()
+                    .on_press(move |_| {
+                        pad.write().state_mut().scratchpad.add_dependency("", "");
+                    })
+                    .child("Add")
+                    .into_element(),
+            ),
+        )
+        .child(rows_or(rows, "No crates asked for"))
+        .maybe_child(
+            unsaved.map(|failure| verdict_line(Verdict::bad_news(format!("Not saved: {failure}")))),
+        )
+        .maybe_child(refusal)
     }
 }
 
@@ -1316,11 +1285,10 @@ impl Component for ScratchpadTab {
             .width(Size::flex(1.0))
             .height(Size::fill())
             .content(Content::Flex)
+            // A page's own column, though the pane is not a page: it is not scrolled and
+            // it stands beside a split rather than filling the tab.
             .child(
-                rect()
-                    .width(Size::fill())
-                    .padding(Gaps::new_symmetric(8.0, 12.0))
-                    .spacing(6.0)
+                page_column()
                     .child(PadHeader)
                     .child(PadDetails)
                     .child(DependencyList),

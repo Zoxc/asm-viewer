@@ -178,7 +178,7 @@ impl Component for TabClose {
             // into the tab list's rows as well.
             .margin(Gaps::new(0.0, 2.0, 0.0, 0.0))
             .center()
-            .corner_radius(4.0)
+            .corner_radius(BAR_BUTTON_RADIUS)
             .background(if hovering() {
                 palette().close_hover_bg
             } else {
@@ -206,20 +206,76 @@ impl Component for TabClose {
     }
 }
 
+/// A button that opens a menu under itself: [`bar_button`] lit while the menu is up or the
+/// pointer is on it, and the menu hung from the button's bottom edge, closed by `Menu`'s
+/// own press-outside. The position is **vertical only**; which way the menu opens is
+/// `MenuContainer`'s own overflow correction, so a button at either end of the bar opens
+/// its menu into the window.
+///
+/// **The popup is positioned by hand** rather than through `ContextMenu`, which pins a
+/// menu's top-left corner to the pointer and clamps to nothing -- opened from a button at
+/// the right-hand edge of the bar it would draw off the side of the window.
+///
+/// **No guard against `Menu`'s own close-on-any-global-press**, and none is needed: global
+/// listeners are snapshotted when the event is measured, before any handler runs, so the
+/// menu this press opens is not in that batch. A popup opened from a `*_down` handler is
+/// the case that does need the swallow; copying it here ate the first press outside the
+/// menu.
+///
+/// A helper and not a component: `hovering` and `showing` are the caller's, a hook running
+/// only where one renders. `press` is what the press does with `showing`, so a caller that
+/// reads a modifier at that moment ([`PagesButton`]) can. The box is the caller's too --
+/// the tab list's is as wide as the chips' close column and as tall as the bar it is
+/// pinned to the end of, where the pages menu is a toolbar square.
+fn dropdown(
+    size: (f32, f32),
+    tooltip: &str,
+    icon: Element,
+    hovering: State<bool>,
+    showing: State<bool>,
+    press: impl FnMut(Event<PressEventData>) + 'static,
+    menu: impl FnOnce() -> Element,
+) -> Element {
+    let (width, height) = size;
+    let glow = match showing() {
+        true => Glow::Open,
+        false => Glow::No,
+    };
+    let button = extra_tooltip(
+        tooltip.to_owned(),
+        bar_button(hovering, true, glow)
+            .width(Size::px(width))
+            .height(Size::px(height))
+            .on_press(press)
+            .child(icon),
+    );
+
+    rect()
+        .width(Size::px(width))
+        .height(Size::px(height))
+        .child(button)
+        .maybe_child(showing().then(|| {
+            rect()
+                .position(Position::new_absolute().top(height))
+                .child(menu())
+                .into_element()
+        }))
+        .into_element()
+}
+
 /// The control that opens a list of every open tab, pinned at the **right** of the bar so
 /// it never scrolls away with the tabs it is there to reach. It lists all of them and not
 /// only the hidden ones: which are off-screen would mean measuring the bar against its
 /// viewport, and a list whose length changed as the bar was dragged would be worse to use.
 ///
-/// The popup is positioned here rather than through `ContextMenu`, which pins a menu's
-/// top-left corner to the pointer and clamps to nothing -- opened from a button at the
-/// right-hand edge it would draw off the side of the window.
+/// Its menu ends up aligned to the button's right-hand edge, so the list opens leftward
+/// into the window instead of off the side of it.
 #[derive(PartialEq)]
 pub(crate) struct TabListButton;
 
 impl Component for TabListButton {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let mut showing = use_state(|| false);
         let open = use_open();
 
@@ -233,53 +289,27 @@ impl Component for TabListButton {
             return rect().into_element();
         }
 
-        let button = extra_tooltip(
-            "Open tabs".to_owned(),
-            rect()
-                .width(Size::px(TAB_LIST_WIDTH))
-                .height(Size::px(tab_row_height()))
-                .main_align(Alignment::Center)
-                .cross_align(Alignment::Center)
-                .background(if showing() || hovering() {
-                    palette().toggle_hover_bg
-                } else {
-                    Color::TRANSPARENT
-                })
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
-                // No guard against `Menu`'s own close-on-any-global-press, and none is
-                // needed: global listeners are snapshotted when the event is measured,
-                // before any handler runs, so the menu this press opens is not in that
-                // batch. A popup opened from a `*_down` handler is the case that does need
-                // the swallow; copying it here ate the first press outside the menu.
-                .on_press(move |_| {
-                    let was = showing();
-                    showing.set(!was);
-                })
-                .child(glyph(("chevron-down", lucide::chevron_down()))),
-        );
-
-        rect()
-            .width(Size::px(TAB_LIST_WIDTH))
-            .height(Size::px(tab_row_height()))
-            .child(button)
-            .maybe_child(showing().then(|| {
-                rect()
-                    // Under the bar and aligned to its right-hand edge, so the list opens
-                    // leftward into the window instead of off the side of it.
-                    .position(Position::new_absolute().top(tab_row_height()))
-                    .child(
-                        tabs_menu(open, &tabs, active, showing)
-                            .on_close(move |_| showing.set(false))
-                            // Keyed by row count so a list that grows while the menu is
-                            // open remounts it: `MenuContainer` measures itself once and
-                            // keeps that offset, so a menu that widens afterwards hangs
-                            // off the side of the window.
-                            .key(tabs.len()),
-                    )
+        dropdown(
+            (TAB_LIST_WIDTH, tab_row_height()),
+            "Open tabs",
+            glyph(("chevron-down", lucide::chevron_down())),
+            hovering,
+            showing,
+            move |_| {
+                let was = showing();
+                showing.set(!was);
+            },
+            move || {
+                tabs_menu(open, &tabs, active, showing)
+                    .on_close(move |_| showing.set(false))
+                    // Keyed by row count so a list that grows while the menu is open
+                    // remounts it: `MenuContainer` measures itself once and keeps that
+                    // offset, so a menu that widens afterwards hangs off the side of the
+                    // window.
+                    .key(tabs.len())
                     .into_element()
-            }))
-            .into_element()
+            },
+        )
     }
 }
 
@@ -291,7 +321,10 @@ fn tabs_menu(open: Open, tabs: &[Tab], active: Option<Tab>, mut close: State<boo
     let rows: Vec<(Tab, String, Element)> = {
         let docs = open.docs.read();
         tabs.iter()
-            .map(|tab| (*tab, elide(&tab_title(*tab, &docs)), tab_icon(*tab, &docs)))
+            .map(|tab| {
+                let (icon, names) = tab_drawn(*tab, &docs);
+                (*tab, elide(&names.text), icon)
+            })
             .collect()
     };
 
@@ -331,22 +364,15 @@ fn tabs_menu(open: Open, tabs: &[Tab], active: Option<Tab>, mut close: State<boo
         })
 }
 
-/// What a tab is called in a list. Not elided here -- the chip decides how much of a name
-/// it has room for.
-fn tab_title(tab: Tab, docs: &Docs) -> String {
+/// What a tab is called and drawn as, out of one look at the table: a page's own title and
+/// glyph, or the document's [`Names`] and kind. Not elided here -- the chip decides how
+/// much of a name it has room for.
+fn tab_drawn(tab: Tab, docs: &Docs) -> (Element, Names) {
     match tab {
-        Tab::Page(page) => page.title().to_owned(),
-        Tab::Document(id) => docs.get(id).map(entry_text).unwrap_or_default(),
-    }
-}
-
-/// The Lucide glyph drawn before that title.
-fn tab_icon(tab: Tab, docs: &Docs) -> Element {
-    match tab {
-        Tab::Page(page) => page_icon(page),
+        Tab::Page(page) => (page_icon(page), Names::page(page.title())),
         Tab::Document(id) => match docs.get(id) {
-            Some(document) => entry_icon(document),
-            None => rect().into_element(),
+            Some(document) => (entry_icon(document), Names::of(document)),
+            None => (rect().into_element(), Names::default()),
         },
     }
 }
@@ -463,14 +489,14 @@ pub(crate) fn page_following(page: Page) -> Option<Placing> {
 /// Save as is not there with no project open, nor for one the app is keeping, which has Save
 /// in the bar instead; Close project and Project are not there with no project at all.
 ///
-/// The popup is positioned by hand, as [`TabListButton`]'s is: `ContextMenu` pins a menu
-/// to the pointer and clamps to nothing.
+/// Its menu hangs from the button's left edge, which at the left of the bar is the
+/// window's: the menu opens rightward into it.
 #[derive(PartialEq)]
 pub(crate) struct PagesButton;
 
 impl Component for PagesButton {
     fn render(&self) -> impl IntoElement {
-        let mut hovering = use_state(|| false);
+        let hovering = use_state(|| false);
         let mut showing = use_state(|| false);
         // Whether the menu that is up was opened with Alt held. Kept from the press rather
         // than read per render: the reader lets the key go to reach for the row, and a row
@@ -509,48 +535,27 @@ impl Component for PagesButton {
         };
 
         let side = toggle_size();
-        let button = extra_tooltip(
-            "Projects, Settings and the Scratchpad".to_owned(),
-            rect()
-                .width(Size::px(side))
-                .height(Size::px(side))
-                .center()
-                .corner_radius(4.0)
-                .background(if showing() || hovering() {
-                    palette().toggle_hover_bg
-                } else {
-                    Color::TRANSPARENT
-                })
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |_| {
-                    // Read here and not in the render: this press is the moment the
-                    // reader is asking about, and a freya pointer event carries no
-                    // modifiers of its own, which is what `Alt` is kept for.
-                    let held = *alt.peek();
-                    let was = showing();
-                    asked.set(!was && held);
-                    showing.set(!was);
-                })
-                .child(glyph(("menu", lucide::menu()))),
-        );
-
-        rect()
-            .width(Size::px(side))
-            .height(Size::px(side))
-            .child(button)
-            .maybe_child(showing().then(|| {
-                rect()
-                    // Under the button and hanging from its left edge, which is the
-                    // window's: the menu opens rightward into it.
-                    .position(Position::new_absolute().top(side))
-                    .child(
-                        main_menu(states, rescued, unopened, &recents, &pages, showing)
-                            .on_close(move |_| showing.set(false)),
-                    )
+        dropdown(
+            (side, side),
+            "Projects, Settings and the Scratchpad",
+            glyph(("menu", lucide::menu())),
+            hovering,
+            showing,
+            move |_| {
+                // Read here and not in the render: this press is the moment the reader is
+                // asking about, and a freya pointer event carries no modifiers of its own,
+                // which is what `Alt` is kept for.
+                let held = *alt.peek();
+                let was = showing();
+                asked.set(!was && held);
+                showing.set(!was);
+            },
+            move || {
+                main_menu(states, rescued, unopened, &recents, &pages, showing)
+                    .on_close(move |_| showing.set(false))
                     .into_element()
-            }))
-            .into_element()
+            },
+        )
     }
 }
 
@@ -822,27 +827,17 @@ impl Component for TabHeader {
         // chip follows the trail's current entry, so navigating in place renames it. A
         // page's name is its own, and leaving the table unread keeps a page's chip out of
         // every re-render a document causes.
-        let (icon, text, tooltip, temporal) = match tab {
-            Tab::Page(page) => (
-                page_icon(page),
-                page.title().to_owned(),
-                page.title().to_owned(),
-                false,
-            ),
+        let (icon, names, temporal) = match tab {
+            Tab::Page(page) => (page_icon(page), Names::page(page.title()), false),
             Tab::Document(id) => {
                 let docs = open.docs.read();
-                // What it draws and what hovering it says out of one name: on a
-                // symbol's tab the first is the short spelling of the second
-                // (`entry_labels`).
-                let (text, tooltip) = docs.get(id).map(entry_labels).unwrap_or_default();
-                (
-                    tab_icon(tab, &docs),
-                    text,
-                    tooltip,
-                    docs.temporal() == Some(id),
-                )
+                // What it draws and what hovering it says out of one name: on a symbol's
+                // tab the first is the short spelling of the second.
+                let (icon, names) = tab_drawn(tab, &docs);
+                (icon, names, docs.temporal() == Some(id))
             }
         };
+        let Names { text, tooltip, .. } = names;
 
         name_tooltip(
             elided(&text),
@@ -1282,12 +1277,13 @@ fn drop_zone(
 /// on the ground a drop lands on, with nothing that answers a pointer. As `dock.rs` draws
 /// a panel's, so the padding and the spacing cannot drift from the bar's.
 fn dragged(tab: Tab, docs: &Docs) -> Element {
+    let (icon, names) = tab_drawn(tab, docs);
     rect()
         .interactive(false)
         .overflow(Overflow::Clip)
         .child(chip(
-            tab_icon(tab, docs),
-            &tab_title(tab, docs),
+            icon,
+            &names.text,
             Mark::Dragging,
             false,
             false,

@@ -253,6 +253,23 @@ box off the hairlines above and below it and, where the rows are stacked into a 
 between one box and the next. It was four sites writing `list_row_height()` plus a constant, two of
 them saying 8 with nothing saying why, and those two rows lost the two pixels.
 
+**The shapes no one component owns are three functions and five numbers.** A small button in a bar
+is `bar_button` (`src/ui/parts.rs`): a `toggle_size` square cut to `BAR_BUTTON_RADIUS`, its glyph
+centred, washed in `toggle_hover_bg` under the pointer, with the pointer handlers on it only where a
+press would do something -- and `bar_pill` beside it for the two that hold a word instead, as tall as
+the square and `BAR_PILL_PAD` at each end. What lights it with the pointer elsewhere is a `Glow`: the
+hover wash held while a menu the button opened is up, or `toggle_on_bg` for a toggle that is on. It
+was written out eight times, each a little differently -- one with `main_align`/`cross_align` where
+the rest said `.center()`, one with no corner at all -- which is what happened to the list row before
+`list_row`. A page's **body** is drawn by `page` over `page_column` -- which is not `page_row`, the
+table saying what a `Page` *is* (`agents/UI.md`): the pane's ground, a scroll, and a column of
+`section`s `SECTION_GAP` apart inside `PAGE_PAD`, where the margins and the gap were six copies of
+two literals and two pages set a font and a colour the root had already set. And a window that asks
+or tells is `notice`: `NOTICE_WIDTH` wide with `NOTICE_PAD` of air, over `Popup` for the overlay, the
+dim, the press outside and Escape. The four of those kept the same 520 under three private names,
+each with a comment saying the others should not move with it -- a shared number that could only be
+changed in three places.
+
 **The Settings page** (`Tab::Settings`) is where the theme choice and the two font overrides are
 edited. `Prefs` holds an `EditedSettings`, which has `OpenProject`'s shape for its reason: a family
 is a `String` here and an `Option<String>` in the file, an empty box **is** how a reader says "I

@@ -235,9 +235,7 @@ fn font_section(half: FontHalf) -> Element {
         }
     };
 
-    rect()
-        .width(Size::fill())
-        .child(section_heading(which.title(), None))
+    section(which.title(), None)
         .child(setting_row(
             "Family",
             given(&edited.family).is_some(),
@@ -324,16 +322,11 @@ impl Component for SettingsTab {
             (ThemeChoice::Desktop, "Desktop"),
         ];
 
-        rect()
-            .expanded()
-            .background(palette().pane_bg)
-            .child(
-                ScrollView::new().child(
-                    rect()
-                        .width(Size::fill())
-                        .padding(Gaps::new_symmetric(8.0, 12.0))
-                        .spacing(6.0)
-                        .child(section_heading("Appearance", None))
+        page(
+            None,
+            page_column()
+                .child(
+                    section("Appearance", None)
                         .child(field_row(
                             "Theme",
                             SegmentedButton::new().children(themes.map(|(choice, text)| {
@@ -347,22 +340,21 @@ impl Component for SettingsTab {
                                     .into()
                             })),
                         ))
-                        .maybe_child(following)
-                        .child(font_section(half(prefs, Which::Interface)))
-                        .child(font_section(half(prefs, Which::Fixed)))
-                        // The one consequence of a font change that is not a font, and two
-                        // numbers rather than one because each half of the page above
-                        // moves exactly one of them. Whole numbers, so nothing is lost
-                        // rounding them: a row is its font's size plus its leading,
-                        // itself rounded (`row_height_for`).
-                        .child(info_line(format!(
-                            "Rows follow the font they are drawn in: {:.0} pixels in the \
-                             lists, {:.0} in the code panes.",
-                            list_row_height(),
-                            code_row_height()
-                        ))),
-                ),
-            )
-            .into_element()
+                        .maybe_child(following),
+                )
+                .child(font_section(half(prefs, Which::Interface)))
+                .child(font_section(half(prefs, Which::Fixed)))
+                // The one consequence of a font change that is not a font, and two numbers
+                // rather than one because each half of the page above moves exactly one of
+                // them. Whole numbers, so nothing is lost rounding them: a row is its
+                // font's size plus its leading, itself rounded (`row_height_for`).
+                .child(info_line(format!(
+                    "Rows follow the font they are drawn in: {:.0} pixels in the \
+                     lists, {:.0} in the code panes.",
+                    list_row_height(),
+                    code_row_height()
+                ))),
+        )
+        .into_element()
     }
 }

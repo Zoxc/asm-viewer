@@ -544,8 +544,8 @@ directory typed into the Project view is a different project's as far as it is c
 
 In the top bar, left of the two history buttons, drawn as a link and three letters -- what
 a language server is asked here is where a name leads, and a link is that question rather
-than the machinery answering it -- and built like `NavButton` but **named and bordered**
-rather than an icon alone: it is the only thing in the app that starts a process
+than the machinery answering it -- and built on `bar_pill`, the same frame `NavButton` takes as a square, but **named and
+bordered** rather than an icon alone: it is the only thing in the app that starts a process
 the reader did not ask for by name. It says `LSP` and not `rust-analyzer`, which is what
 that corner has room for beside two chevrons and is the part of the app being named rather
 than the program; the program's own name is in the tooltip and in the Project view. Which

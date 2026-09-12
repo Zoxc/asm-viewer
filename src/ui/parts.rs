@@ -323,6 +323,71 @@ fn row_frame(background: Color) -> Rect {
         .overflow(Overflow::Clip)
 }
 
+/// What a bar button wears with the pointer somewhere else.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Glow {
+    /// Nothing: the bar's own ground, until the pointer arrives.
+    No,
+    /// The hover wash, held while a menu the button opened is up, so a button whose menu
+    /// is on screen stays picked out.
+    Open,
+    /// A toggle that is on, which is a step darker than the hover and beats it.
+    On,
+}
+
+/// The frame of a small button in a bar: a [`toggle_size`] square cut to
+/// [`BAR_BUTTON_RADIUS`], its glyph centred, lit under the pointer. The caller adds the
+/// press, the child and the tooltip.
+///
+/// `live` is whether pressing it would do anything. A dead button takes neither the
+/// pointer handlers nor the wash, which is the whole of how a history chevron with nowhere
+/// to go is drawn disabled; the caller dims its glyph.
+///
+/// **The hover state stays the caller's**, [`list_row`]'s reason: there is no `.hover()`
+/// pseudo-state, so a button that lights holds a `use_state` of its own, and a hook may
+/// only run while a component renders, which this is not. Reading it here is what
+/// subscribes the button being rendered to it.
+///
+/// A `Rect` and not an `Element`, so a caller with a box of its own says so on the frame
+/// itself: the tab list's button is as wide as the chips' close column and as tall as the
+/// bar it is pinned to the end of, being a control in the tab strip rather than a square
+/// dropped in one.
+pub(crate) fn bar_button(hovering: State<bool>, live: bool, glow: Glow) -> Rect {
+    bar_control(hovering, live, glow)
+        .width(Size::px(toggle_size()))
+        .height(Size::px(toggle_size()))
+        .center()
+}
+
+/// The same button round a **word** rather than a glyph: as tall as the square and as wide
+/// as what it holds, with [`BAR_PILL_PAD`] at each end. The project's name in the top bar
+/// and the language server's control.
+pub(crate) fn bar_pill(hovering: State<bool>, live: bool, glow: Glow) -> Rect {
+    bar_control(hovering, live, glow)
+        .height(Size::px(toggle_size()))
+        .center()
+        .padding(Gaps::new_symmetric(0.0, BAR_PILL_PAD))
+}
+
+/// What the two share: the corner, the wash, and the two pointer handlers -- attached only
+/// where a press would do something, so a dead button does not light.
+fn bar_control(mut hovering: State<bool>, live: bool, glow: Glow) -> Rect {
+    let background = match glow {
+        Glow::On => palette().toggle_on_bg,
+        Glow::Open => palette().toggle_hover_bg,
+        Glow::No if live && hovering() => palette().toggle_hover_bg,
+        Glow::No => Color::TRANSPARENT,
+    };
+    rect()
+        .corner_radius(BAR_BUTTON_RADIUS)
+        .background(background)
+        .maybe(live, |button| {
+            button
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+        })
+}
+
 /// The rest of a text the row had only room for part of, **mounted only where the text
 /// was cut**: a tooltip repeating a name already whole on screen is noise the pointer
 /// drags down a list.
@@ -628,6 +693,85 @@ pub(crate) fn section_heading(text: &str, action: Option<Element>) -> impl IntoE
                 .font_weight(FontWeight::BOLD),
         )
         .maybe_child(action)
+}
+
+/// One section of a page: its heading with the section's own action on the right, and
+/// room under it for the rows the caller adds, [`SECTION_GAP`] apart.
+pub(crate) fn section(title: &str, action: Option<Element>) -> Rect {
+    rect()
+        .width(Size::fill())
+        .spacing(SECTION_GAP)
+        .child(section_heading(title, action))
+}
+
+/// The column a page's sections stand in: as wide as the page, with the page's own margins
+/// round it and [`SECTION_GAP`] between one section and the next.
+///
+/// Apart from [`page`] because not every page is one scroll: the Shortcuts page keeps its
+/// filter box above the scroll, and the Scratchpad's column stands beside a split and is
+/// not scrolled at all.
+pub(crate) fn page_column() -> Rect {
+    rect()
+        .width(Size::fill())
+        .padding(PAGE_PAD)
+        .spacing(SECTION_GAP)
+}
+
+/// A page: the pane's ground, whatever stands above the scroll, and the scroll the body is
+/// in. Nothing to do with `page_row` (`src/ui/strip.rs`), which is the table saying what a
+/// [`Page`] is; this is how any page's body is drawn, the Scratchpad's pane included.
+///
+/// Nothing sets the font or the text colour here. The root sets both once and every page
+/// inherits them (`app`, `src/ui.rs`); two of the five used to set them again, which is
+/// how the copies came to differ.
+pub(crate) fn page(bar: Option<Element>, body: Rect) -> Rect {
+    rect()
+        .expanded()
+        .background(palette().pane_bg)
+        .maybe_child(bar)
+        .child(ScrollView::new().child(body))
+}
+
+/// A window that says something and offers a button or two: its width, and the way out of
+/// it that Escape and a press outside take. The caller adds the body and the buttons.
+///
+/// Over `Popup` itself and not its `PopupTitle`/`PopupContent`: both of those set a font
+/// size of their own, which would draw the window in a size the reader never chose. What
+/// `Popup` is wanted for is the overlay layer, the dimmed background, the press outside and
+/// the Escape key -- and that it shows exactly when it has children, so a caller with
+/// nothing to ask adds none and the window is not there.
+pub(crate) fn notice(on_close: impl Into<EventHandler<()>>) -> Popup {
+    Popup::new()
+        .width(Size::px(NOTICE_WIDTH))
+        .on_close_request(on_close)
+}
+
+/// The body of one: the air round it, the gap between its lines, and the interface font,
+/// which `Popup` does not set.
+pub(crate) fn notice_body() -> Rect {
+    rect()
+        .padding(NOTICE_PAD)
+        .spacing(NOTICE_PAD)
+        .font(&fonts().ui)
+        .color(palette().text_fg)
+}
+
+/// A line of one that is not the question itself: what was done, or what will go with it.
+///
+/// [`dim_line`] with the clip taken off. A notice is a fixed width and its lines are
+/// sentences, so what does not fit wraps; a line cut at the box's edge would lose the half
+/// that says what goes with the thing being deleted.
+pub(crate) fn notice_line(text: String) -> Label {
+    dim_line(text).max_lines(None)
+}
+
+/// A path in one: a paragraph and not a label, because a path is as long as it is and one
+/// cut off is one the reader cannot go and look at.
+pub(crate) fn notice_path(text: String) -> Paragraph {
+    paragraph()
+        .assembly_font()
+        .color(palette().address_fg)
+        .span(text)
 }
 
 /// A list under the line that says what it is: the heading, and the rows taking the rest
