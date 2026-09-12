@@ -20,10 +20,11 @@ use super::*;
 /// Whether a branch is drawn as a link decides which *piece* its number is and never what
 /// the line says, so this needs no listing to ask.
 pub(crate) fn asm_line(instruction: &Instruction, bias: u64) -> String {
+    let (head, link, tail) = split(instruction, false);
     format!(
         "{:016X} {}",
         instruction.address.wrapping_add(bias),
-        line_of(instruction, false)
+        line_of(head, link, tail)
     )
 }
 
@@ -132,14 +133,22 @@ pub(crate) fn linked(assembly: &Assembly, index: usize) -> bool {
 /// the formatter's spans with the link as one inline piece among them. What the row draws
 /// is built from the same [`split`], so a column into one is a column into the other, and
 /// [`asm_line`] is this behind an address column.
+///
+/// Total: an index past the last instruction answers an empty line, which is what a row
+/// asking about its neighbour below wants of the row after the last (see
+/// [`Studied::position`]).
 pub(crate) fn instruction_line(assembly: &Assembly, index: usize) -> Line {
-    line_of(&assembly.instructions[index], linked(assembly, index))
+    let Some(instruction) = assembly.instructions.get(index) else {
+        return Line::default();
+    };
+    let (head, link, tail) = split(instruction, linked(assembly, index));
+    line_of(head, link, tail)
 }
 
-/// [`instruction_line`] over one instruction, with `linked` handed in: the head spans,
-/// the link as the one piece the text engine counts as a single unit, then the tail.
-fn line_of(instruction: &Instruction, linked: bool) -> Line {
-    let (head, link, tail) = split(instruction, linked);
+/// One [`split`] as the line a row copies as: the head spans, the link as the one piece
+/// the text engine counts as a single unit, then the tail. It takes the split and not the
+/// instruction, so a row drawing the spans splits once.
+fn line_of(head: &[(String, SpanKind)], link: Option<Lifted>, tail: &[(String, SpanKind)]) -> Line {
     let mut line = Line::default();
     let push = |line: &mut Line, run: &[(String, SpanKind)]| {
         for (text, _) in run {
@@ -945,6 +954,8 @@ fn instruction_text(
 ) -> Text<Option<InlineLink>> {
     let instruction = &data.assembly().instructions[index];
     let (head, link, tail) = split(instruction, linked(data.assembly(), index));
+    // The copied line, out of the same split the spans below are drawn from.
+    let line = line_of(head, link, tail);
     let inline: Option<InlineLink> = link.and_then(|link| {
         let door = match link.kind {
             // The relocation target's name -- in the operand the relocation applies to,
@@ -1025,7 +1036,6 @@ fn instruction_text(
         );
     }
 
-    let line = instruction_line(data.assembly(), index);
     Text {
         finds: marking
             .map(|marking| marking.hits(&line))
@@ -1397,7 +1407,6 @@ impl Component for InstructionList {
                 move |row| {
                     seed_lanes
                         .instruction_at(row)
-                        .filter(|&index| index < seed_assembly.instructions.len())
                         .map(|index| instruction_line(&seed_assembly, index))
                         .unwrap_or_default()
                 },
@@ -1419,7 +1428,6 @@ impl Component for InstructionList {
                     move |row| {
                         text_lanes
                             .instruction_at(row)
-                            .filter(|&index| index < text_assembly.instructions.len())
                             .map(|index| instruction_line(&text_assembly, index))
                             .unwrap_or_default()
                     },

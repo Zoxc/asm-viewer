@@ -1041,9 +1041,14 @@ crate's own `Operand` (`agents/Analysis.md`) plus `linked`, which is whether thi
 row a branch lands on, and it re-checks none of what the crate already promised. The two sets of
 four do not line up, and need not: the crate's split by how an address was arrived at, `split`'s by
 how the row draws it, which is why an `Operand::Branch` comes back as `Link::Branch` or
-`Link::Target` depending on the listing. The two halves are built side by side there for that reason, and the module's
-own tests hold every column of the drawn text to the same column of the copy, over an instruction of
-each kind a row draws differently. freya supplies
+`Link::Target` depending on the listing. The two halves are built side by side there for that
+reason, out of the **one** `split` a row makes: `instruction_text` draws the spans and builds the
+copied line from the same head, link and tail, and `line_of` takes that split rather than the
+instruction so neither half can work it out again. `instruction_line` is a split and a `line_of`,
+and it is total -- an index the listing has no instruction for answers an empty line, which is
+what a row asking about its neighbour below wants of the row after the last, and what leaves its
+callers no length to check. The module's own tests hold every column of the drawn text to the
+same column of the copy, over an instruction of each kind a row draws differently. freya supplies
 exactly the two primitives a paragraph has anyway: the hit-test behind its `ParagraphHolder`
 (`caret_col`, `word_at`, in `ui/code_row.rs`; `None` before layout where freya's own code would unwrap)
 and the highlight paint (`highlights`, `text_select_bg`, `CursorMode::Expanded` so it fills the

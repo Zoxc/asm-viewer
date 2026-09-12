@@ -225,7 +225,6 @@ pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
             .get(&stretch)
             .and_then(|s| s.code.as_ref())
             .and_then(|studied| studied.assembly.as_ref())
-            .filter(|assembly| index < assembly.instructions.len())
             .map(|assembly| instruction_line(assembly, index))
             .unwrap_or_default(),
         _ => text_of(rows, row)

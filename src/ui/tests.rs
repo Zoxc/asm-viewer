@@ -21415,6 +21415,25 @@ fn a_rows_copy_is_its_address_and_its_text() {
     }
 }
 
+/// `instruction_line` is total. A row asking about its neighbour below asks past the
+/// last instruction, so an index the listing has no instruction for answers an empty
+/// line rather than panicking, and no caller has to check the length first.
+#[test]
+fn an_instruction_line_past_the_listing_is_empty() {
+    let assembly = shown_sum_to()
+        .studied
+        .assembly
+        .clone()
+        .expect("sum_to decodes");
+    let past = assembly.instructions.len();
+    assert!(
+        !instruction_line(&assembly, past - 1).pieces.is_empty(),
+        "the last instruction has text"
+    );
+    assert!(instruction_line(&assembly, past).pieces.is_empty());
+    assert!(instruction_line(&assembly, usize::MAX).pieces.is_empty());
+}
+
 /// The listing under half a pixel of something above it: what the real window does to it
 /// through whatever the dock, the bars and the fonts add up to.
 fn offset_listing_harness() -> impl IntoElement {
