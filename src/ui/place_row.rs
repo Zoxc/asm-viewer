@@ -112,11 +112,10 @@ pub(crate) struct PlaceRow<T> {
 /// the file and the line together.
 ///
 /// The path is copied here and not shared on, though the row holds it under an `Arc`
-/// (`src/grouped.rs`). A pick is minted per row **drawn**, which is a screenful, and never
-/// per row of a rebuild, so the copy is off the path that pays; and a [`Pick::Path`] is the
-/// Files tree's row and the Objects tree's too, neither of which shares its paths with
-/// anything. An `Arc` in a [`Pick`] would read as identity, which is what one means
-/// everywhere else in the UI, where a pick is about what a path spells.
+/// (`src/grouped.rs`, and `src/files.rs` for the Files tree's rows). A pick is minted per
+/// row **drawn**, which is a screenful, and never per row of a rebuild, so the copy is off
+/// the path that pays. An `Arc` in a [`Pick`] would read as identity, which is what one
+/// means everywhere else in the UI, where a pick is about what a path spells.
 pub(crate) fn place_pick<T: Place>(row: &Row<T>) -> Pick {
     match row {
         Row::File { path, .. } => Pick::Path(path.to_path_buf()),

@@ -207,7 +207,12 @@ something to compare against it would read the root a second time at the first r
 rows memo a tree equal to the one already there. A keystroke in the Project view's box is a change,
 and costs one `read_dir` of a half-typed path, which fails cheaply. The root is a row like any
 other, named after the directory's last component, so refolding it is how the top level is
-refreshed. A root that cannot be read is a placeholder's job to say, as is a project with no
+refreshed. **A row is the node's own name and path**, held under an `Arc` from the read that made
+the node: the tree is flattened again whole on every toggle, over everything unfolded, so copying a
+name and a path into each of a few thousand rows would be paid per click. That is the rule the other
+flattener states and measured (`src/grouped.rs`, below); the `Arc`s are for the copying and never
+for identity, so a row still compares by what it says, and a `Pick` takes a copy of the path per row
+*drawn*. A root that cannot be read is a placeholder's job to say, as is a project with no
 directory at all, which points at the Project view and never puts the working directory in its
 place. The read is on the UI thread, one `read_dir` of one level per fold, the `pads_in` precedent:
 nothing is *analysed*, and a listing is what a file dialog does; a worker is the upgrade if a

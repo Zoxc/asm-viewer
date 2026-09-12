@@ -68,7 +68,9 @@ impl Component for EntryRow {
         let fold = self.row.fold;
         let path = self.row.path.clone();
         let pressed = path.clone();
-        let pick = Pick::Path(path.clone());
+        // A copy per row *drawn* and never per row built, which is what the row's `Arc`
+        // is for: `place_pick`'s rule (`src/ui/place_row.rs`) under both trees.
+        let pick = Pick::Path(path.to_path_buf());
 
         // A failed directory keeps its triangle: pressing it tries the read again.
         let open = match fold {
@@ -105,7 +107,7 @@ impl Component for EntryRow {
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     let menu = match fold {
                         Some(_) => Menu::new(),
-                        None => file_menu(states, path.clone()),
+                        None => file_menu(states, path.to_path_buf()),
                     };
                     // Appended after the match, beside the reveal, so the Objects rows -- which
                     // share `close_menu` -- keep the one item they had. A project file is the one
@@ -116,18 +118,23 @@ impl Component for EntryRow {
                             menu.child(
                                 MenuButton::new()
                                     .on_press(move |_| {
-                                        switch_project(states, rescued, unopened, path.clone())
+                                        switch_project(
+                                            states,
+                                            rescued,
+                                            unopened,
+                                            path.to_path_buf(),
+                                        )
                                     })
                                     .child("Open as project"),
                             )
                         })
-                        .child(reveal_item(path.clone()));
+                        .child(reveal_item(path.to_path_buf()));
                     ContextMenu::open_from_event(&e, menu);
                 })
                 .child(rect().width(Size::px(self.row.depth as f32 * TREE_INDENT)))
                 .child(disclosure(open))
                 .child(glyph(icon))
-                .child(tree_name(self.row.name.clone(), failed, &[])),
+                .child(tree_name(self.row.name.to_string(), failed, &[])),
         )
     }
 
@@ -193,7 +200,7 @@ impl Component for FilesPanel {
                 keys = ListKeys {
                     length,
                     at: Box::new(move |at| {
-                        (at < stepped.len()).then(|| Pick::Path(stepped[at].path.clone()))
+                        (at < stepped.len()).then(|| Pick::Path(stepped[at].path.to_path_buf()))
                     }),
                     open: Box::new(move |at| match at < listed.len() {
                         true => {

@@ -262,3 +262,27 @@ fn a_symlink_is_not_a_row() {
     );
     assert!(!crate::source::showable(&link));
 }
+
+/// The rows are the nodes' own names and paths and never copies of them. The tree is
+/// flattened again whole on every toggle, over everything the reader has unfolded, so a
+/// rebuild has to allocate nothing (`src/files.rs`).
+#[test]
+fn flattening_the_tree_allocates_no_name_and_no_path() {
+    let root = project("rows");
+    let mut tree = FileTree::new(&root).expect("a readable directory");
+    tree.toggle(&root.join("src"));
+    tree.toggle(&root.join("src/ui"));
+
+    let counted = allocations();
+    let first = tree.rows();
+    let again = tree.rows();
+    assert_eq!(allocations(), counted, "flattening allocated");
+
+    // And by whichever route, counted or not: every row says what the node says, from the
+    // same allocation.
+    assert_eq!(first.len(), again.len());
+    for (one, two) in first.iter().zip(again.iter()) {
+        assert!(Arc::ptr_eq(&one.name, &two.name), "a name was copied");
+        assert!(Arc::ptr_eq(&one.path, &two.path), "a path was copied");
+    }
+}

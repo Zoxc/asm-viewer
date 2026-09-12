@@ -7,10 +7,21 @@
 //! unfolded exactly when its children have been read, and there is no second set to keep
 //! in step with it. [`FileTree::rows`] flattens what has been read into [`FileRow`]s, the
 //! shape a `VirtualScrollView` asks for, as `tree.rs` does for the Objects list.
+//!
+//! **A node's name and path are allocated once, when its level is read, and held under an
+//! `Arc` from there on**, so flattening is pointer bumps and nothing else. The rows are
+//! made again whole on every toggle, over everything the reader has unfolded, and copying
+//! a name and a path into each of a few thousand rows is work paid per click. That is the
+//! rule `grouped.rs`, the other flattener, states for the same reason.
+//!
+//! The `Arc`s are for the copying and never for identity: two rows are the same row when
+//! they name the same file, whichever `Arc` each spells it with, so [`FileRow`]'s derived
+//! comparison is of what its name and path say (`AGENTS.md`).
 
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use crate::shared::Shared;
@@ -56,8 +67,8 @@ impl Kind {
 /// One entry, and for a directory whatever of its contents has been read.
 #[derive(Clone, Debug)]
 struct Node {
-    name: String,
-    path: PathBuf,
+    name: Arc<str>,
+    path: Arc<Path>,
     kind: Kind,
 }
 
@@ -77,12 +88,12 @@ pub enum Fold {
 /// and asked for row *n*: the tree is a shape in the data, never in the element tree.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FileRow {
-    /// The entry's name, without its directory.
-    pub name: String,
+    /// The entry's name, without its directory. The node's own, never a copy of it.
+    pub name: Arc<str>,
     /// The whole path, spelled as the root joined with each entry's own name and never
     /// canonicalised: a source file opened from here has to be the string the debug info
     /// spells, and that is `DW_AT_comp_dir` joined with the file's entry.
-    pub path: PathBuf,
+    pub path: Arc<Path>,
     /// How many directories deep under the root, the root itself being `0`.
     pub depth: usize,
     /// The fold of a directory row, or [`None`] for a file.
@@ -104,10 +115,11 @@ impl FileTree {
     /// to say and not a row's.
     pub fn new(root: &Path) -> Option<FileTree> {
         let children = read_level(root).ok()?;
+        let (name, path) = hold(&source::name_of(root), root.to_path_buf());
         Some(FileTree {
             root: Node {
-                name: source::name_of(root),
-                path: root.to_path_buf(),
+                name,
+                path,
                 kind: Kind::Directory(Children::Read(children)),
             },
         })
@@ -146,8 +158,8 @@ impl FileTree {
                 Kind::Directory(children) => Some(children.fold()),
             };
             rows.push(FileRow {
-                name: node.name.clone(),
-                path: node.path.clone(),
+                name: Arc::clone(&node.name),
+                path: Arc::clone(&node.path),
                 depth,
                 fold,
             });
@@ -165,7 +177,7 @@ impl Node {
     fn find_mut(&mut self, path: &Path) -> Option<&mut Node> {
         let mut stack = vec![self];
         while let Some(node) = stack.pop() {
-            if node.path == path {
+            if *node.path == *path {
                 return Some(node);
             }
             if let Kind::Directory(Children::Read(children)) = &mut node.kind {
@@ -194,9 +206,10 @@ fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
             if kind.is_symlink() {
                 return None;
             }
+            let (name, path) = hold(&entry.file_name().to_string_lossy(), entry.path());
             Some(Node {
-                name: entry.file_name().to_string_lossy().into_owned(),
-                path: entry.path(),
+                name,
+                path,
                 kind: if kind.is_dir() {
                     Kind::Directory(Children::Unread)
                 } else {
@@ -212,6 +225,30 @@ fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
             .then_with(|| walk::by_name(&a.name, &b.name))
     });
     Ok(nodes)
+}
+
+/// A name and a path allocated once, for the node that holds them and every row built from
+/// it. Every `Arc` in this module is made here, which is what lets [`allocations`] say a
+/// rebuild of the rows made none.
+fn hold(name: &str, path: PathBuf) -> (Arc<str>, Arc<Path>) {
+    #[cfg(test)]
+    ALLOCATIONS.with(|made| made.set(made.get() + 1));
+    (Arc::from(name), Arc::from(path))
+}
+
+/// Test-only: how many names and paths this thread has allocated for a tree.
+///
+/// [`reads`]'s shape and its reason: one entry is counted once, however many rows are built
+/// from it, so a test can settle that flattening the tree again allocated nothing. Nothing
+/// resets it -- a test takes the count before and after what it is about.
+#[cfg(test)]
+pub fn allocations() -> usize {
+    ALLOCATIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Test-only: how many directories this thread has read into a tree.
