@@ -380,41 +380,44 @@ pub(crate) fn use_linking(
     opened: State<Opened>,
     jobs: LspJobs,
 ) {
+    // A server that has stopped or failed has nothing left to answer for, so what it said
+    // goes with it: the rows are handed the links as data and would go on drawing every
+    // name as one a press follows. A server that is *working* keeps them -- they are
+    // still the right names while it reads more of the project -- and so does one that is
+    // starting, which is the beat before its first answer.
     use_side_effect(move || {
-        // Read and not peeked, all of them: the pane moving to another file is one of
-        // the things that wakes this, and the server saying it has finished reading the
-        // project is another. A file opened while it was still reading has no links
-        // until then, and gets them without the reader doing anything.
-        let held = language.read().clone();
-        if !held.ready() {
-            // A server that has stopped or failed has nothing left to answer for, so what
-            // it said goes with it: the rows are handed the links as data and would go on
-            // drawing every name as one a press follows. A server that is *working* keeps
-            // them -- they are still the right names while it reads more of the project --
-            // and so does one that is starting, which is the beat before its first answer.
-            if matches!(held.state, Lsp::Off | Lsp::Failed(_)) {
-                write_if(linked, |waiting| waiting.forget());
-            }
-            return;
+        if matches!(language.read().state, Lsp::Off | Lsp::Failed(_)) {
+            write_if(linked, |waiting| waiting.forget());
         }
-        let Some(file) = showing.read().clone() else {
-            return;
-        };
-        if !linked.read().pending(&file, held.run) {
-            return;
-        }
-        // Only about a file the server has been told the app is showing, which is what
-        // `Opened` decides -- and which leaves out a file of a language the server is not
-        // for, since one asked about it answers as if it were its own (`serves`).
-        if !opened.read().holds(held.run, &file) {
-            return;
-        }
-        jobs.send(LspJob::Tokens {
-            run: held.run,
-            file: file.clone(),
-        });
-        // Written after the send. This is what the next turn of the effect reads to see
-        // that the question is already on its way.
-        write_if(linked, |waiting| waiting.asking(held.run, file));
     });
+
+    use_asking(
+        // All four are read and none peeked, and read in the memo, which is what
+        // subscribes it to them: the pane moving to another file is one of the things
+        // that wakes this, and the server saying it has finished reading the project is
+        // another. A file opened while it was still reading has no links until then, and
+        // gets them without the reader doing anything.
+        move || {
+            let held = language.read().clone();
+            if !held.ready() {
+                return None;
+            }
+            let file = showing.read().clone()?;
+            if !linked.read().pending(&file, held.run) {
+                return None;
+            }
+            // Only about a file the server has been told the app is showing, which is
+            // what `Opened` decides -- and which leaves out a file of a language the
+            // server is not for, since one asked about it answers as if it were its own
+            // (`serves`).
+            opened
+                .read()
+                .holds(held.run, &file)
+                .then_some((held.run, file))
+        },
+        move |(run, file)| {
+            write_if(linked, |waiting| waiting.asking(*run, file.clone()));
+        },
+        move |(run, file)| jobs.send(LspJob::Tokens { run, file }),
+    );
 }

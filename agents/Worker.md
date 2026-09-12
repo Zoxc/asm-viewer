@@ -51,6 +51,31 @@ answers differently: the build it holds and the files that build names are behin
 clone is a few pointers and the plain shape holds -- here, and in the Project view's render
 (`agents/Sidebar.md`).
 
+**A state is asked through one effect, and that effect is written once** (`use_asking`,
+`src/ui/worker.rs`). Every worker is fed the same way: a view writes what it wants into a state --
+the file it is showing into `ShowingFile`, the window it needs into `Window` -- and an effect at the
+root reads what is owed off that and the state the answer lands in, marks it and sends. That was nine copies of four
+lines with the same two hazards in each; both are the hook's now. The question is read **through a
+memo**, so a state its own answers are written into is not asked again for each of them -- a fold of
+the Locations rows, a batch of search hits, a bar's answer landing in the state every other bar's
+question is read from. The memo recomputes for those writes and wakes nothing while the question is
+unchanged. And the mark is written **before** the send, so a question is never in flight unmarked: a
+worker answering where it stands, as a test's does, would otherwise answer into a state that is then
+told the question has just gone out. What is left at each site is what the question is (`pending`)
+and what marks it (`asking`), both already the state's own methods. Whether there is a question at
+all is `pending`'s too, so a gate -- the language server being `ready()` before a whole file's names
+are asked about -- is read there, which is what subscribes the memo to it.
+
+**Two questions keep an effect of their own, and both say why.** The listing's: what is pending and
+the mark for it are one call (`Analyzed::asked` answers with the question and records it in the same
+pass), the objects it is asked of have no equality for a memo to compare, and the send is followed
+by the `SLOW_ANALYSIS` timer. And the source reader's (`use_source_asking`), where the answer is
+what asks again: a read that filed nothing -- the file forgotten under it, `read`'s bounded giving
+up -- leaves the same question owed, and what wakes the effect is the answer count going up.
+`Sourced::pending` reads no field of the state at all, so reading it *is* the subscription and
+nothing else; through a memo the question would be unchanged, nothing would wake, and the pane
+would wait on a file nobody is reading.
+
 Two things the shape does not swallow. A drain policy may hand a job **back** rather than drop it,
 which is the scratchpad's rule -- a save may not be stepped over by a job for another pad -- so the
 queue of what has been taken off the channel and not done is the mechanism's, and the policy stays
@@ -169,11 +194,11 @@ other way round. The listing is worked first, being what is on screen, then the 
 locate. A window the reader scrolled past is the one question here that *should* go; the next one
 asks for whatever of it still matters. The answer is kept only while its line is the one `asked`
 now (`Located::take`), the listing's comparison rule again. There is no `pending` field: a line is pending exactly
-while `asked` and `found` disagree. The effect that sends it reads that pendency through a **memo**
-and not off the state, the shape the finder's walk and the search are asked in: a fold of the rows
-on screen and `retain_open` are writes to `Located` too, and an effect reading the state would send
-a question the worker already has again for each of them -- a second run of seconds of work, under
-the lock every listing question waits on, answering what the first was about to. And **a closed
+while `asked` and `found` disagree. It is asked through `use_asking` like the rest, and this is
+the state whose memo matters most: a fold of the rows on screen and `retain_open` are writes to
+`Located` too, and an effect reading the state would send a question the worker already has again
+for each of them -- a second run of seconds of work, under the lock every listing question waits on,
+answering what the first was about to. And **a closed
 binary takes its locations with it** (`Located::retain_open` over `Found::retain_open`, asked by the
 effect reading `Objects` and by `Located::take` as the answer lands). This is
 `Shown::still_open`'s rule in a second place: a `Symbol` holds the file's bytes and this list can
@@ -214,8 +239,9 @@ the answer whose absence costs the reader least while they wait. It is judged on
 file the pane is showing *now*, handed to `Coded::take` from `ShowingFile`, the listing's comparison
 rule once more. What keeps it true is different from the locate's, though: a set of line numbers
 has nothing in it to sweep for a binary that has closed, and a state holding the objects to notice
-would be the state stopping them from closing — so `Coded` records which objects the answer was worked out over, by pointer
-(`object_ids`), and the effect asks again whenever those differ from what is open. A load finishing
+would be the state stopping them from closing — so `Coded` records which objects the answer was
+worked out over, by pointer (`object_ids`), and those ids are part of the question, so it is asked
+again whenever they differ from what is open. A load finishing
 is such a difference, which is what puts marks in a gutter drawn before its binary had been read.
 
 **The source reader is a second worker, and deliberately not this one** (`ui/highlight.rs`). The

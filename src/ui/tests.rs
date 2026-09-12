@@ -32427,3 +32427,128 @@ fn raising_the_panel_already_on_top_redraws_nothing() {
         "the row was not drawn again for a raise"
     );
 }
+
+/// The state a [`use_asking`] harness is asked out of: a question, and a count of the
+/// answers written into it that are no part of it.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct AskingOwed {
+    wanted: Option<u32>,
+    answers: u32,
+}
+
+#[derive(Clone, Copy)]
+struct AskingState(State<AskingOwed>);
+
+/// The mark, in a state of its own as the section view's window and its reading are.
+#[derive(Clone, Copy)]
+struct AskingMark(State<bool>);
+
+/// What the sends were: the question each carried, and whether the mark had been written
+/// by the time it went out.
+#[derive(Clone)]
+struct AskingSent(Arc<Mutex<Vec<(u32, bool)>>>);
+
+/// One [`use_asking`] and nothing else, wired the way every worker in the app is.
+fn asking_harness() -> impl IntoElement {
+    let state = use_consume::<AskingState>().0;
+    let mark = use_consume::<AskingMark>().0;
+    let sent = use_consume::<AskingSent>().0;
+
+    use_asking(
+        move || state.read().wanted,
+        move |_| {
+            write_if(mark, |asked| {
+                *asked = true;
+                true
+            });
+        },
+        move |question| sent.lock().unwrap().push((question, *mark.peek())),
+    );
+
+    rect()
+}
+
+/// A question is sent once, however many answers are written into the state it is read
+/// from. This is what the memo in [`use_asking`] is for: an effect reading the state
+/// would send the question again for every answer to it, which is a second run of the
+/// work the first answer is still arriving from.
+#[test]
+fn a_question_is_asked_once_and_not_once_per_answer() {
+    let (mut test, (state, sent)) = TestingRunner::new(
+        asking_harness,
+        (100., 100.).into(),
+        |runner: &mut _| {
+            let state = runner
+                .provide_root_context(|| AskingState(State::create(AskingOwed::default())))
+                .0;
+            runner.provide_root_context(|| AskingMark(State::create(false)));
+            let sent = runner
+                .provide_root_context(|| AskingSent(Arc::new(Mutex::new(Vec::new()))))
+                .0;
+            (state, sent)
+        },
+        1.,
+    );
+    settle(&mut test);
+    let asked = || {
+        sent.lock()
+            .unwrap()
+            .iter()
+            .map(|(question, _)| *question)
+            .collect::<Vec<_>>()
+    };
+
+    let mut state = state;
+    state.write().wanted = Some(1);
+    settle(&mut test);
+    assert_eq!(asked(), vec![1], "the question was not asked");
+
+    // Three answers, each a write to the state the question is read from and none of them
+    // a change to the question.
+    for _ in 0..3 {
+        state.write().answers += 1;
+        settle(&mut test);
+    }
+    assert_eq!(
+        asked(),
+        vec![1],
+        "the question was asked again for an answer to it"
+    );
+
+    // And a question that did change is asked.
+    state.write().wanted = Some(2);
+    settle(&mut test);
+    assert_eq!(asked(), vec![1, 2], "the new question was not asked");
+}
+
+/// The mark is written before the send, so a question is never in flight unmarked. A
+/// worker answering where it stands -- as a test's does -- would otherwise answer into a
+/// state that is then told the question has just gone out.
+#[test]
+fn a_question_is_marked_before_it_goes_out() {
+    let (mut test, (state, sent)) = TestingRunner::new(
+        asking_harness,
+        (100., 100.).into(),
+        |runner: &mut _| {
+            let state = runner
+                .provide_root_context(|| AskingState(State::create(AskingOwed::default())))
+                .0;
+            runner.provide_root_context(|| AskingMark(State::create(false)));
+            let sent = runner
+                .provide_root_context(|| AskingSent(Arc::new(Mutex::new(Vec::new()))))
+                .0;
+            (state, sent)
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    let mut state = state;
+    state.write().wanted = Some(1);
+    settle(&mut test);
+    assert_eq!(
+        sent.lock().unwrap().as_slice(),
+        [(1, true)],
+        "the question went out before it was marked"
+    );
+}

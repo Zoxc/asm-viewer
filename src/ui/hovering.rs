@@ -266,48 +266,58 @@ pub(crate) struct Hovering(pub(crate) State<Hover>);
 /// finished. What it does not answer is nothing shown, and the pointer resting on the name
 /// again is what asks anew.
 pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs: LspJobs) {
+    // Nothing to answer for, so nothing is held about a name: the box would otherwise go
+    // on saying what a server that is gone once said.
     use_side_effect(move || {
-        // Read and not peeked, both of them: the row writing the name under the pointer is
-        // one half of what wakes this, and a server starting is the other.
-        let held = language.read().clone();
-        if !held.started() {
-            // Nothing to answer for, so nothing is held about a name: the box would
-            // otherwise go on saying what a server that is gone once said.
+        if !language.read().started() {
             hover_gone(hover);
-            return;
         }
-        let resting = hover.read().resting(held.run).cloned();
-        let Some(at) = resting else {
-            return;
-        };
-        // The wait, and the question after it. Armed before the task, so a pointer moving
-        // inside the one name arms one wait and not one per move; the task is what asks,
+    });
+
+    use_asking(
+        // Read and not peeked, both of them: the row writing the name under the pointer
+        // is one half of what wakes this, and a server starting is the other.
+        move || {
+            let held = language.read().clone();
+            if !held.started() {
+                return None;
+            }
+            hover.read().resting(held.run).cloned()
+        },
+        // The wait, armed before the task below, so a pointer moving inside the one name
+        // arms one wait and not one per move.
+        move |at: &Lookup| {
+            write_if(hover, |waiting| waiting.resting_on(at.clone()));
+        },
+        // What is sent is not the question but the wait before it: the task is what asks,
         // and only where the pointer is still on the name it was armed for.
-        write_if(hover, |waiting| waiting.resting_on(at.clone()));
-        let jobs = jobs.clone();
-        spawn(async move {
-            // Waited out rather than slept through: every move of the pointer pushes the
-            // end of it back, so what this wakes to is the time to wait *now*, and a
-            // pointer travelling slowly over one name wakes it as often as it moves.
-            loop {
-                let Some(until) = hover.peek().until() else {
+        move |at| {
+            let jobs = jobs.clone();
+            spawn(async move {
+                // Waited out rather than slept through: every move of the pointer
+                // pushes the end of it back, so what this wakes to is the time to wait
+                // *now*, and a pointer travelling slowly over one name wakes it as often
+                // as it moves.
+                loop {
+                    let Some(until) = hover.peek().until() else {
+                        return;
+                    };
+                    let left = until.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    Timer::after(left).await;
+                }
+                let held = language.peek().clone();
+                if !held.started() || !hover.peek().rested(&at) {
+                    return;
+                }
+                let Some(ticket) = ask_hover(language, &jobs, at.clone()) else {
                     return;
                 };
-                let left = until.saturating_duration_since(Instant::now());
-                if left.is_zero() {
-                    break;
-                }
-                Timer::after(left).await;
-            }
-            let held = language.peek().clone();
-            if !held.started() || !hover.peek().rested(&at) {
-                return;
-            }
-            let Some(ticket) = ask_hover(language, &jobs, at.clone()) else {
-                return;
-            };
-            // Written after the send, which is what mints the ticket.
-            write_if(hover, |waiting| waiting.asking(ticket, at));
-        });
-    });
+                // Written after the send, which is what mints the ticket.
+                write_if(hover, |waiting| waiting.asking(ticket, at));
+            });
+        },
+    );
 }

@@ -122,35 +122,33 @@ pub(crate) fn use_search_with(
     searched: State<Searched>,
     work: impl Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Clone + 'static,
 ) {
-    // A memo and not a read: every hit is a write to this state, and an effect reading it
-    // would start a new search for each batch of its own answer. The memo recomputes for
-    // each of them and wakes nothing, the question being unchanged.
-    let asked = use_memo(move || {
-        let searched = searched.read();
-        (searched.id, searched.asked.clone())
-    });
+    // Every hit is a write to this state, and what keeps a new search from being started
+    // for each batch of its own answer is [`use_asking`]'s memo: it recomputes for each of
+    // them and wakes nothing, the question being unchanged. The id is part of the
+    // question, since asking again for what is already on screen is a question again.
+    use_asking(
+        move || {
+            let searched = searched.read();
+            let query = searched.asked.clone()?;
+            Some((searched.id, query))
+        },
+        unmarked,
+        move |(id, query)| {
+            // A `std::thread` and not a task: this walks a directory and reads every file
+            // in it, and freya's executor is the UI thread. What stops one search when
+            // the next is asked for is [`take_hits`] letting go of the receiver.
+            //
+            // 512, and bounded, because a grep finds hits far faster than a window draws
+            // them and a worker parked in a send is one that learns the moment the reader
+            // has moved on.
+            let work = work.clone();
+            let events = stream("the search worker", Some(512), move |emit| {
+                work(&query, emit)
+            });
 
-    use_side_effect(move || {
-        // Reading the memo subscribes this to the question; the state it writes is peeked.
-        let (id, query) = asked.read().clone();
-        let Some(query) = query else {
-            return;
-        };
-
-        // A `std::thread` and not a task: this walks a directory and reads every file in
-        // it, and freya's executor is the UI thread. What stops one search when the next
-        // is asked for is [`take_hits`] letting go of the receiver.
-        //
-        // 512, and bounded, because a grep finds hits far faster than a window draws them
-        // and a worker parked in a send is one that learns the moment the reader has
-        // moved on.
-        let work = work.clone();
-        let events = stream("the search worker", Some(512), move |emit| {
-            work(&query, emit)
-        });
-
-        spawn(take_hits(searched, id, events));
-    });
+            spawn(take_hits(searched, id, events));
+        },
+    );
 }
 
 /// Take the hits of search `id` as they arrive, until they stop or the search is replaced.

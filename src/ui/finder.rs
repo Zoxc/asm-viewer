@@ -320,78 +320,72 @@ pub(crate) fn use_finder_with(
         (tells, Arc::new(AtomicU64::new(0)))
     });
 
-    // A memo and not a read: the state is written for every answer, and an effect reading
-    // it would start a walk for each answer to its own question.
-    let asked = use_memo(move || {
-        let state = finder.read();
-        (state.id, state.root.clone())
-    });
-    let typed = use_memo(move || {
-        let state = finder.read();
-        (state.id, state.typed.clone())
-    });
-
-    use_side_effect({
-        let tells = tells.clone();
-        let current = current.clone();
+    // The state is written for every answer, and what keeps a walk from being started for
+    // each answer to its own question is [`use_asking`]'s memo. The id is part of both
+    // questions: the same directory opened again is a walk again.
+    use_asking(
         move || {
-            // Reading the memo subscribes this to the question; the state it writes is
-            // peeked.
-            let (id, root) = asked.read().clone();
-            let Some(root) = root else {
-                return;
-            };
-            if id == 0 {
-                return;
-            }
-            // Bumped before the walk is told of, so a walk already running reads it and
-            // stops where it stands.
-            current.store(id, atomic::Ordering::Relaxed);
-            if tells
-                .send_blocking(Told::Walking {
-                    id,
-                    root: root.clone(),
-                })
-                .is_err()
-            {
-                return;
-            }
-
-            // Not a [`stream`]: what a walk finds goes to the worker above and never to
-            // the UI thread, over the one channel that worker blocks on, so there is no
-            // receiver here for the walk to be stopped by dropping. `current` is what
-            // stops it instead.
-            let work = work.clone();
+            let state = finder.read();
+            let root = state.root.clone()?;
+            (state.id != 0).then_some((state.id, root))
+        },
+        unmarked,
+        {
             let tells = tells.clone();
             let current = current.clone();
-            thread("the file finder's walk", move || {
-                work(&root, &mut |event| {
-                    let told = match event {
-                        WalkEvent::File(file) => Told::Found { id, file },
-                        WalkEvent::Finished => Told::Walked { id },
-                    };
-                    if tells.send_blocking(told).is_err() {
-                        return ControlFlow::Break(());
-                    }
-                    // This walk has been replaced, and nobody is waiting for the rest of
-                    // it.
-                    if current.load(atomic::Ordering::Relaxed) == id {
-                        ControlFlow::Continue(())
-                    } else {
-                        ControlFlow::Break(())
-                    }
-                });
-            });
-        }
-    });
+            move |(id, root): (u64, PathBuf)| {
+                // Bumped before the walk is told of, so a walk already running reads it and
+                // stops where it stands.
+                current.store(id, atomic::Ordering::Relaxed);
+                if tells
+                    .send_blocking(Told::Walking {
+                        id,
+                        root: root.clone(),
+                    })
+                    .is_err()
+                {
+                    return;
+                }
 
-    use_side_effect(move || {
-        let (id, query) = typed.read().clone();
-        if id == 0 {
-            return;
-        }
-        let _ = tells.send_blocking(Told::Asked { id, query });
-    });
+                // Not a [`stream`]: what a walk finds goes to the worker above and never to
+                // the UI thread, over the one channel that worker blocks on, so there is no
+                // receiver here for the walk to be stopped by dropping. `current` is what
+                // stops it instead.
+                let work = work.clone();
+                let tells = tells.clone();
+                let current = current.clone();
+                thread("the file finder's walk", move || {
+                    work(&root, &mut |event| {
+                        let told = match event {
+                            WalkEvent::File(file) => Told::Found { id, file },
+                            WalkEvent::Finished => Told::Walked { id },
+                        };
+                        if tells.send_blocking(told).is_err() {
+                            return ControlFlow::Break(());
+                        }
+                        // This walk has been replaced, and nobody is waiting for the rest of
+                        // it.
+                        if current.load(atomic::Ordering::Relaxed) == id {
+                            ControlFlow::Continue(())
+                        } else {
+                            ControlFlow::Break(())
+                        }
+                    });
+                });
+            }
+        },
+    );
+
+    use_asking(
+        move || {
+            let state = finder.read();
+            (state.id != 0).then(|| (state.id, state.typed.clone()))
+        },
+        unmarked,
+        move |(id, query)| {
+            let _ = tells.send_blocking(Told::Asked { id, query });
+        },
+    );
 }
 
 /// Take the worker's answers into [`Finder`], which drops the ones belonging to a walk

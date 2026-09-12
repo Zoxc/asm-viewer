@@ -874,22 +874,23 @@ pub(crate) fn use_analysis_with(
         },
     );
 
-    // The window question: what the section view wants next, asked once. Reading the
-    // window subscribes this to it; the reading it writes is peeked, so it cannot wake
-    // itself. Whether the ask is one to send is the reading's ([`Reading::asking`]).
+    // The window question: what the section view wants next, asked once ([`use_asking`]).
+    // The mark it leaves is the reading's ([`Reading::asking`]).
     let requests_for_code = requests.clone();
-    use_side_effect(move || {
-        let wanted = window.read().clone();
-        let Some(ask) = wanted else {
-            return;
-        };
-        if write_if(reading, |next| next.asking(&ask)) {
-            requests_for_code.send(Question::Code(ask));
-        }
-    });
+    use_asking(
+        move || window.read().clone(),
+        move |ask| {
+            write_if(reading, |next| next.asking(ask));
+        },
+        move |ask| requests_for_code.send(Question::Code(ask)),
+    );
 
     let requests_for_locate = requests.clone();
     let requests_for_marks = requests.clone();
+    // The listing question is the one here that is **not** [`use_asking`]'s: what is
+    // pending and the mark for it are one call ([`Analyzed::asked`] answers with the
+    // question and records it in the same pass), and the objects it is asked of have no
+    // equality for a memo to compare.
     use_side_effect(move || {
         // Reading subscribes this to the question; the state it writes is `peek`ed, so it
         // cannot wake itself.
@@ -920,59 +921,64 @@ pub(crate) fn use_analysis_with(
         });
     });
 
-    // The locate question, as the finder's and the search's are asked: **a memo and not a
-    // read**. A fold of the panel's rows and a binary closed under an older answer are
-    // writes to this state too, and an effect reading the state would send the question
-    // again for each of them while the worker is still on it -- a second run of seconds of
-    // work, under the lock every listing question waits on. The memo recomputes for those
-    // writes and wakes nothing, the question being unchanged.
+    // The locate question. A fold of the panel's rows and a binary closed under an older
+    // answer are writes to this state too, and what keeps the question from going out
+    // again for each of them, while the worker is still on it, is [`use_asking`]'s memo:
+    // it would be a second run of seconds of work, under the lock every listing question
+    // waits on.
     //
     // A question about a name's uses is the language server's, asked where it was pressed
     // and answered into the same panel; nothing here can answer it.
-    let locating = use_memo(move || {
-        located
-            .read()
-            .pending()
-            .filter(|query| query.symbols_wanted().is_some())
-            .cloned()
-    });
-
+    //
     // The objects are **peeked** where the listing reads them: an answer stands until
     // replaced, so a file opened afterwards is not searched until the line is asked again
     // -- the panel says which objects it answered for by saying when. A file closed
     // afterwards is the effect below.
-    use_side_effect(move || {
-        // Reading the memo subscribes this to the question.
-        let Some(query) = locating.read().clone() else {
-            return;
-        };
-        requests_for_locate.send(Question::Locate {
-            query,
-            objects: objects.peek().clone(),
-        });
-    });
+    use_asking(
+        move || {
+            located
+                .read()
+                .pending()
+                .filter(|query| query.symbols_wanted().is_some())
+                .cloned()
+        },
+        unmarked,
+        move |query| {
+            requests_for_locate.send(Question::Locate {
+                query,
+                objects: objects.peek().clone(),
+            });
+        },
+    );
 
     // The gutter marks' question, asked for whichever file the Source pane last said it
-    // was showing. The objects are **read** and not peeked, unlike the locate's: an
-    // answer here is a set of bare line numbers with nothing in it to sweep for a closed
-    // binary, so the way it stays true is to drop it and ask again whenever the open
-    // objects change -- which a load finishing also is, and which is what puts marks in
-    // a gutter that was drawn before its binary had been read.
-    use_side_effect(move || {
-        let open = objects.read().clone();
-        // Read and not peeked, both: the pane moving to another file is the other half
-        // of what wakes this. Bound before the send, the guards being reads.
-        let Some(file) = showing.read().clone() else {
-            return;
-        };
-        if !coded.read().pending(&file, &open) {
-            return;
-        }
-        requests_for_marks.send(Question::Marks {
-            file,
-            objects: open,
-        });
-    });
+    // was showing. The objects are part of the question here and not only of the answer,
+    // unlike the locate's: an answer is a set of bare line numbers with nothing in it to
+    // sweep for a closed binary, so the way it stays true is to ask again whenever the
+    // open objects change -- which a load finishing also is, and which is what puts marks
+    // in a gutter that was drawn before its binary had been read. They are in it by their
+    // ids, an `Arc<Object>` having no equality for the memo to compare and the ids being
+    // what `Coded` judges the answer against anyway.
+    use_asking(
+        // All three read and none peeked, and read in the memo, which is what subscribes
+        // it to them: the pane moving to another file, an answer landing and a load
+        // finishing are what wake this.
+        move || {
+            let open = objects.read().clone();
+            let file = showing.read().clone()?;
+            coded
+                .read()
+                .pending(&file, &open)
+                .then(|| (file, object_ids(&open)))
+        },
+        unmarked,
+        move |(file, _)| {
+            requests_for_marks.send(Question::Marks {
+                file,
+                objects: objects.peek().clone(),
+            });
+        },
+    );
 
     // A closed binary takes its locations with it, at once and whatever the panel is
     // doing: `Found::retain_open` answers whether anything went, so a load that added an

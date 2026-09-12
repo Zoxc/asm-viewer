@@ -468,6 +468,13 @@ pub(crate) fn use_source_reading_with(
 
 /// Ask for whatever the pane is showing and has not been read: the effect both readers
 /// share, the app's one and the tests' own.
+///
+/// **The one asking effect that is not [`use_asking`]'s**, and the reason is the answer:
+/// a read that filed nothing -- the file forgotten under it, [`read`]'s bounded giving up
+/// -- leaves the same question owed, and what asks it again is the answer count going up.
+/// Read through a memo the question would be unchanged, nothing would wake, and the pane
+/// would wait on a file nobody is reading. [`Sourced::pending`] reading no field of the
+/// state is the same thing said at the method.
 fn use_source_asking(
     sourced: State<Sourced>,
     showing: State<Option<Arc<str>>>,

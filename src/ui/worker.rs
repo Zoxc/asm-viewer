@@ -218,3 +218,43 @@ pub(crate) fn write_if<S: Clone + 'static>(
     }
     moved
 }
+
+/// Send the question a state is owed, once per question: the asking effect every worker
+/// is fed by, written once.
+///
+/// `pending` is what the state wants asked, and it is read **through a memo**. That is
+/// the one choice this hook makes for every site, and it is the one that is easy to get
+/// wrong: a state its own answers are written into would otherwise be asked again for
+/// each of them -- a second run of the work the first answer is still arriving from. The
+/// memo recomputes for those writes and wakes nothing, the question being unchanged.
+///
+/// Whether there is a question at all is `pending`'s too, so a gate -- a language server
+/// that has to be ready before it is asked -- is read there, which is what subscribes the
+/// memo to it.
+///
+/// `mark` records that the question has gone out, and is called **before** the send, so
+/// that a question is never in flight unmarked: a worker answering where it stands, as a
+/// test's does, would otherwise answer into a state that is then told the question has
+/// just gone out. It is a [`write_if`] over the state, whose own rule says what a mark
+/// is; a state with nothing to mark passes [`unmarked`].
+pub(crate) fn use_asking<J: Clone + PartialEq + 'static>(
+    pending: impl Fn() -> Option<J> + 'static,
+    mark: impl Fn(&J) + 'static,
+    send: impl Fn(J) + 'static,
+) {
+    let asked = use_memo(pending);
+    use_side_effect(move || {
+        // Reading the memo subscribes this to the question. Bound before the mark, the
+        // read being a guard (`AGENTS.md`).
+        let job = asked.read().clone();
+        let Some(job) = job else {
+            return;
+        };
+        mark(&job);
+        send(job);
+    });
+}
+
+/// The `mark` of a state with nothing to record, where the memo is the whole of what
+/// stops a question being sent twice.
+pub(crate) fn unmarked<J>(_: &J) {}

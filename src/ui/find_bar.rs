@@ -470,29 +470,36 @@ pub(crate) fn use_find_with(
         },
     );
 
-    use_side_effect(move || {
-        // Read and not peeked: a pattern typed and a listing written are the two things
-        // that wake this. Bound before the writes, the guard being a read.
-        let wanted: Vec<(Where, Searchable, Filter)> = finds
-            .read()
-            .bars
-            .iter()
-            .filter_map(|(at, bar)| {
-                let (listed, filter) = bar.pending()?;
-                Some((*at, listed, filter))
-            })
-            .collect();
-        if wanted.is_empty() {
-            return;
-        }
-        let mut finds = finds;
-        let mut next = finds.peek().clone();
-        for (at, listed, filter) in wanted {
-            next.get_mut(&at).asked = Some(About::of(&listed, &filter));
-            requests.send(FindAsk { at, listed, filter });
-        }
-        finds.set(next);
-    });
+    // Every bar's owed question is one job, the bars being one state: what goes out is
+    // whichever of them a question is owed for, and all of those are marked before any is
+    // sent ([`use_asking`]).
+    use_asking(
+        move || {
+            let wanted: Vec<(Where, Searchable, Filter)> = finds
+                .read()
+                .bars
+                .iter()
+                .filter_map(|(at, bar)| {
+                    let (listed, filter) = bar.pending()?;
+                    Some((*at, listed, filter))
+                })
+                .collect();
+            (!wanted.is_empty()).then_some(wanted)
+        },
+        move |wanted: &Vec<(Where, Searchable, Filter)>| {
+            write_if(finds, |next| {
+                for (at, listed, filter) in wanted {
+                    next.get_mut(at).asked = Some(About::of(listed, filter));
+                }
+                true
+            });
+        },
+        move |wanted| {
+            for (at, listed, filter) in wanted {
+                requests.send(FindAsk { at, listed, filter });
+            }
+        },
+    );
 }
 
 /// The bar along the bottom of a code pane: the box, the three toggles a filter bar has,
