@@ -606,18 +606,34 @@ fn use_row_cells(has_text: bool) -> RowCells {
 }
 
 impl RowCells {
-    /// The column under `at`, a location relative to the row: `None` left of the text on
-    /// a press, which is the gutter and picks rows out alone; and on a sweep column 0,
-    /// since a pointer left of the text is where the line starts.
-    fn column(&self, at: CursorPoint, press: bool) -> Option<usize> {
-        if !self.has_text {
-            return None;
+    /// The column a press lands on, `at` being a location relative to the row: `None` left
+    /// of the text, which is the gutter and picks rows out alone. Either button.
+    fn pressed_column(&self, at: CursorPoint) -> Option<usize> {
+        let x = self.x_into_text(at)?;
+        match x < 0.0 {
+            true => None,
+            false => caret_col(&self.holder.read(), x, at.y as f32),
         }
-        let x = at.x as f32 - (self.text_x.get() - self.row_x.get());
-        if x < 0.0 {
-            return if press { None } else { Some(0) };
+    }
+
+    /// The column the pointer reaches: 0 left of the text, where the line starts. A sweep
+    /// off that edge carries the run there, and a name beginning the line is one the pointer
+    /// is on there.
+    fn swept_column(&self, at: CursorPoint) -> Option<usize> {
+        let x = self.x_into_text(at)?;
+        match x < 0.0 {
+            true => Some(0),
+            false => caret_col(&self.holder.read(), x, at.y as f32),
         }
-        caret_col(&self.holder.read(), x, at.y as f32)
+    }
+
+    /// How far into the row's text `at` is, negative left of where the text begins. `None`
+    /// for a row without text, which answers no column at all. The two questions above and
+    /// the pointer's icon are this one arithmetic: the row-relative x less the paragraph's x
+    /// within the row, both taken from `on_sized` and so scroll-invariant.
+    fn x_into_text(&self, at: CursorPoint) -> Option<f32> {
+        self.has_text
+            .then(|| at.x as f32 - (self.text_x.get() - self.row_x.get()))
     }
 
     /// Where column `col` of a row `units` long is, from the row's padded edge, once the
@@ -1139,7 +1155,7 @@ fn on_down(
     let (pane, row, file) = (chrome.pane, chrome.row, chrome.file.clone());
     move |e: Event<PointerEventData>| {
         if e.button() == Some(MouseButton::Left) {
-            let at = cells.column(e.element_location(), true);
+            let at = cells.pressed_column(e.element_location());
             // freya counts the presses in one place, and **asking is counting**: a press
             // it was not asked about is one the next reads as a double. So it is asked
             // exactly once, whatever the press turns out to be.
@@ -1165,7 +1181,7 @@ fn on_down(
         }
         // The column before the event is turned into a press: what the menu is asked
         // about is where the pointer was.
-        let at = cells.column(e.element_location(), true);
+        let at = cells.pressed_column(e.element_location());
         let Some(e) = secondary(e) else {
             return;
         };
@@ -1194,7 +1210,7 @@ fn on_move(
     let (pane, row) = (chrome.pane, chrome.row);
     move |e: Event<PointerEventData>| {
         let at = e.element_location();
-        let column = cells.column(at, false);
+        let column = cells.swept_column(at);
         mark_drag(marked, pane, row, column);
         // Neither the link under the pointer nor the name is answered while a selection
         // is being swept out: a drag along a line would otherwise light every name it
@@ -1205,7 +1221,7 @@ fn on_move(
         let hovered = (!sweeping).then(|| links.at(column)).flatten();
         over.set_if_modified(hovered);
         tell(if sweeping { None } else { column });
-        let on_text = cells.has_text && at.x as f32 >= cells.text_x.get() - cells.row_x.get();
+        let on_text = cells.x_into_text(at).is_some_and(|x| x >= 0.0);
         // The hand over a link, whichever kind it is, and only while a press on it would
         // be a door: the link's own rule, which is what lights it, so the two cannot
         // disagree.

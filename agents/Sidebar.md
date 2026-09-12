@@ -515,6 +515,12 @@ when pressed being worse than never offering one. Both questions are the worker'
 for as long as the section was on screen, and a build says two hundred things as readily as
 two.
 
+**How a place is spelled is a separate question**, and the row's own: a file under the
+directory is a short path as cargo named it and is drawn whole, and a path from outside is a
+registry path, cut down to its name (`diagnostic_place`, `diagnostic_place_by_name`). A file
+under the directory that the source cache would not read is no target and keeps its path all
+the same -- whether a place can be pressed says nothing about how long it is.
+
 The **debug-lines offer** is why the profile and the manifest are read together. Release is the
 default profile, since a reader inspecting a binary is usually asking what the optimiser did, and
 cargo's own default for release is *no* debug information -- which is a binary with no source side,

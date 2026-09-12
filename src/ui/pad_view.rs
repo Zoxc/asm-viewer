@@ -48,7 +48,12 @@ const VERSION_FLEX: f32 = 1.0;
 fn pad_place(text: State<PadBuffers>, pad: &PadId, diagnostic: &Diagnostic) -> Option<Element> {
     let span = diagnostic.span.as_ref()?;
     let own = is_source_file(&span.file);
-    let place = diagnostic_place(span, own);
+    // The pad's own file is `src/main.rs` as cargo named it, so the place is spelled
+    // whole; anywhere else is a registry path and is cut to its name.
+    let place = match own {
+        true => diagnostic_place(span),
+        false => diagnostic_place_by_name(span),
+    };
 
     Some(match own {
         true => {
@@ -1110,13 +1115,7 @@ impl Component for DependencyList {
                     .into()
                 })
                 .collect();
-            (
-                rows,
-                state.unsaved.clone(),
-                state
-                    .refusal()
-                    .map(|message| text_block(message, palette().text_fg)),
-            )
+            (rows, state.unsaved.clone(), state.refusal().map(text_block))
         };
 
         rect()

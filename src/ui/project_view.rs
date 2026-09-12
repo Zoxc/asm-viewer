@@ -250,11 +250,18 @@ fn source_place(
     diagnostic: &Diagnostic,
 ) -> Option<Element> {
     let span = diagnostic.span.as_ref()?;
-    let target = directory.and_then(|directory| {
+    let under = directory.and_then(|directory| {
         let file = directory.join(&span.file);
-        build.shows(&file).then_some(file)
+        file.starts_with(directory).then_some(file)
     });
-    let text = diagnostic_place(span, target.is_some());
+    // How the place is spelled is the *other* question: a file under the directory is a
+    // short path as cargo named it and is drawn whole, whether or not the source cache
+    // would read it, and a path from outside is cut to its name.
+    let text = match under.is_some() {
+        true => diagnostic_place(span),
+        false => diagnostic_place_by_name(span),
+    };
+    let target = under.filter(|file| build.shows(file));
 
     Some(match target {
         Some(file) => {
@@ -626,10 +633,7 @@ impl Component for CargoSection {
                     )
                     .children(artifacts)
                     // cargo's own words, for what it says nowhere else.
-                    .maybe_child(
-                        held.refusal()
-                            .map(|message| text_block(message, palette().text_fg)),
-                    )
+                    .maybe_child(held.refusal().map(text_block))
                     // Drawn straight into the pane's own scroll: a wrapping block has no
                     // height a virtual list could use, and this whole view scrolls
                     // already.

@@ -19414,6 +19414,85 @@ fn leaving_a_text_row_puts_the_pointers_icon_back() {
     );
 }
 
+/// **A press in a code row's gutter is not a press on its text.** Left of the text the
+/// press picks the row out and makes the sweep go by rows, as a sweep down an editor's line
+/// numbers goes; on the text it anchors a caret at the column pressed. The pointer over the
+/// gutter is the arrow and not the I-beam.
+///
+/// Headless because all three answers are the row's own arithmetic over a laid-out
+/// paragraph: where its text begins is known only once the row has been drawn.
+#[test]
+fn a_press_left_of_a_rows_text_picks_the_row_out_and_one_on_it_puts_a_caret() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[0, 1, 2]);
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let marked = roots.doors.marked;
+    let code = Document::Code(object.clone());
+    open_document(states.open, states.visits, code, Reach::NewTab);
+    settle(&mut test);
+
+    // A row with text, and where that text begins: everything left of it is gutter.
+    let (area, text, _) = paragraphs(&test)
+        .into_iter()
+        .find(|(_, text, _)| text.len() > 4)
+        .expect("a row of the listing draws text");
+    let middle = (area.origin.y + area.height() / 2.0) as f64;
+    let gutter = ((area.min_x() - 4.0) as f64, middle);
+
+    // The gutter is not text, whatever the row draws to the right of it.
+    test.move_cursor(gutter);
+    settle(&mut test);
+    assert_eq!(
+        icon_now(),
+        CursorIcon::Default,
+        "the gutter wears the I-beam"
+    );
+
+    press_at(&mut test, gutter);
+    settle(&mut test);
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the press picked out");
+    assert!(
+        picked.by_rows,
+        "a press in the gutter left a run that sweeps by character"
+    );
+    assert_eq!(
+        picked.chars.lead().col,
+        0,
+        "the gutter's caret is not at the row's start"
+    );
+
+    // And on the text, half way along it: a caret at the column pressed, and a sweep from
+    // there that goes by character.
+    let on_text = ((area.min_x() + area.width() / 2.0) as f64, middle);
+    press_at(&mut test, on_text);
+    settle(&mut test);
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the press picked out");
+    assert!(
+        !picked.by_rows,
+        "a press on the text left a run that sweeps by rows"
+    );
+    let col = picked.chars.lead().col;
+    assert!(
+        col > 0 && col < text.encode_utf16().count(),
+        "the caret is at column {col} of {text:?}, not where the press landed"
+    );
+}
+
 /// One function is told from the next by a rule, the way one basic block is told from the
 /// block above it: the row over a stretch carries it, so a symbol's label is never drawn
 /// against the last row of the function before it.
@@ -27622,6 +27701,73 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     assert!(
         open_documents(states.open) == [Document::Source(file)],
         "the place did not open the file it names"
+    );
+}
+
+/// **How a place is spelled and whether it can be pressed are two questions.** cargo spells
+/// a file it built relative to where it ran, so a file under the directory is a short path
+/// already and is drawn whole; a path from outside is a registry path, most of a line on its
+/// own, and is cut down to its name. A file under the directory that the source cache would
+/// not read -- a symlink, one too big -- is no target, and it keeps its own path all the
+/// same: whether a place can be pressed says nothing about how long it is.
+#[test]
+fn a_place_under_the_directory_keeps_its_path_where_it_cannot_be_opened() {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let said = |file: &str| cargo::Diagnostic {
+        level: Level::Error,
+        message: "mismatched types".to_owned(),
+        rendered: "error: mismatched types".to_owned(),
+        span: Some(cargo::Span {
+            file: file.to_owned(),
+            line: 7,
+            column: 2,
+        }),
+    };
+    let run = cargo::Run::Rejected {
+        diagnostics: vec![
+            said("src/nothing.rs"),
+            said("/home/reader/.cargo/registry/src/index/serde-1.0/src/lib.rs"),
+        ],
+        message: String::new(),
+    };
+
+    let manifest = directory.join("Cargo.toml");
+    let (mut test, roots, _asking, _asks) = mount_project(move |_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: Some(manifest.clone()),
+            profiles: None,
+            debug_lines: true,
+            edit_refused: None,
+        })
+    });
+    let states = roots.states;
+
+    let mut proj = states.proj;
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
+    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    // The run alone: the worker named neither file as one this pane may open, the one under
+    // the directory not being a file the source cache would read.
+    let mut build = states.build;
+    build.write().built = Some(Arc::new(run));
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "src/nothing.rs:7:2"),
+        "the place under the directory lost its path: {drawn:?}"
+    );
+    assert!(
+        drawn.iter().any(|text| text == "lib.rs:7:2"),
+        "the registry path was not cut to its name: {drawn:?}"
+    );
+
+    // And neither is a target: pressing the one under the directory opens nothing.
+    let plain = centre_of(&test, "src/nothing.rs:7:2");
+    press_at(&mut test, plain);
+    settle(&mut test);
+    assert!(
+        open_documents(states.open).is_empty(),
+        "a place with nowhere to go opened a tab"
     );
 }
 

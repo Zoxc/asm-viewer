@@ -644,18 +644,15 @@ pub(crate) fn field_row_in(name: &str, colour: Color, value: impl IntoElement) -
 /// `--> src/main.rs:9:17` is that line -- the half of a diagnostic that says *where* --
 /// and a caret under the wrong column is a worse drawing of something the reader can
 /// still read, where a cut is the answer not being there at all.
-pub(crate) fn text_block(text: &str, color: Color) -> Element {
+///
+/// The lines take no colour of their own: the root sets `text_fg` and a label inherits it
+/// (`ui.rs`).
+pub(crate) fn text_block(text: &str) -> Element {
     rect()
         .width(Size::fill())
         .children(
             text.lines()
-                .map(|line| {
-                    label()
-                        .text(line.to_owned())
-                        .assembly_font()
-                        .color(color)
-                        .into()
-                })
+                .map(|line| label().text(line.to_owned()).assembly_font().into())
                 .collect::<Vec<Element>>(),
         )
         .into_element()
@@ -712,18 +709,26 @@ pub(crate) fn diagnostic_block(diagnostic: &Diagnostic, place: Option<Element>) 
                         .width(Size::flex(1.0)),
                 ),
         )
-        .child(text_block(&diagnostic.rendered, palette().text_fg))
+        .child(text_block(&diagnostic.rendered))
         .into_element()
 }
 
-/// How a diagnostic's place is spelled: the file, the line and the column. A registry path
-/// is most of a line on its own and which crate it is in is the useful half, so a file
-/// outside the directory being built is cut down to its name.
-pub(crate) fn diagnostic_place(span: &cargo::Span, whole: bool) -> String {
-    let file = match whole {
-        true => span.file.clone(),
-        false => source::name_of(Path::new(&span.file)),
-    };
+/// How a diagnostic's place is spelled: the file, the line and the column. The file as cargo
+/// named it, which for one under the directory being built is a short path relative to where
+/// it ran.
+pub(crate) fn diagnostic_place(span: &cargo::Span) -> String {
+    place_of(&span.file, span)
+}
+
+/// The same place with the file cut down to its own name, which is what a file outside the
+/// directory being built gets: a registry path is most of a line on its own, and which crate
+/// it is in is the useful half.
+pub(crate) fn diagnostic_place_by_name(span: &cargo::Span) -> String {
+    place_of(&source::name_of(Path::new(&span.file)), span)
+}
+
+/// One place out of a file spelled either way.
+fn place_of(file: &str, span: &cargo::Span) -> String {
     format!("{file}:{}:{}", span.line, span.column)
 }
 
