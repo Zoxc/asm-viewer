@@ -1122,17 +1122,11 @@ fn source_bar(
 }
 
 /// The Source pane: the tab's source side, whichever of the two sides that is.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct SourcePane {
     /// The tab this pane is in, for the positions its rows keep.
     pub(crate) tab: DocId,
     pub(crate) document: Document,
-}
-
-impl PartialEq for SourcePane {
-    fn eq(&self, other: &Self) -> bool {
-        self.tab == other.tab && self.document == other.document
-    }
 }
 
 impl Component for SourcePane {

@@ -859,7 +859,7 @@ impl Component for SeparatorRow {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct InstructionRow {
     pub(crate) data: AsmData,
     /// Which instruction this row draws.
@@ -888,19 +888,6 @@ pub(crate) struct InstructionRow {
     /// by every row of it; `None` where no bar is open (`find_bar.rs`).
     pub(crate) marking: Option<Marking>,
     pub(crate) key: DiffKey,
-}
-
-impl PartialEq for InstructionRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.data == other.data
-            && self.index == other.index
-            && self.row == other.row
-            && self.paired == other.paired
-            && self.wash == other.wash
-            && self.chars == other.chars
-            && self.arrows == other.arrows
-            && self.marking == other.marking
-    }
 }
 
 keyed!(InstructionRow);

@@ -730,7 +730,7 @@ pub(crate) const TAB_LIST_WIDTH: f32 = 26.0;
 const TAB_LIST_ROW_WIDTH: f32 = 220.0;
 
 /// One tab's chip, with the hover state a chip cannot hold for itself.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct TabHeader {
     pub(crate) tab: Tab,
     /// Whether this is the tab on screen.
@@ -738,12 +738,6 @@ pub(crate) struct TabHeader {
     /// Whether a tab being dragged would land here.
     pub(crate) landing: bool,
     pub(crate) key: DiffKey,
-}
-
-impl PartialEq for TabHeader {
-    fn eq(&self, other: &Self) -> bool {
-        self.tab == other.tab && self.active == other.active && self.landing == other.landing
-    }
 }
 
 keyed!(TabHeader);

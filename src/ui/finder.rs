@@ -404,20 +404,12 @@ async fn take_rows(finder: State<Finder>, answers: async_channel::Receiver<Answe
 /// too, so a list worked out straight off the state was worked out again by every arrow
 /// press. This memo does run per press; it hands back what it handed back last time, and
 /// `set_if_modified` stops there.
+#[derive(PartialEq)]
 pub(crate) struct Asking {
     open: bool,
     typed: String,
     root: Option<PathBuf>,
     listed: Listed,
-}
-
-impl PartialEq for Asking {
-    fn eq(&self, other: &Self) -> bool {
-        self.open == other.open
-            && self.typed == other.typed
-            && self.root == other.root
-            && self.listed == other.listed
-    }
 }
 
 /// What the finder is asking for, as the state stands.
@@ -436,7 +428,7 @@ pub(crate) fn asking(state: &Finder) -> Asking {
 /// moved on from -- by a frame, which is what a rank of a large project costs. The panel
 /// goes on drawing the rows it has meanwhile, `Analyzed`'s own rule; what the query is
 /// for is the panel not saying *No files match* about a query nobody has answered yet.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct Listed {
     rows: Shared<Row>,
     for_query: String,
@@ -447,12 +439,6 @@ pub(crate) struct Listed {
 struct Row {
     file: Found,
     marks: Vec<Range<usize>>,
-}
-
-impl PartialEq for Listed {
-    fn eq(&self, other: &Self) -> bool {
-        self.rows == other.rows && self.for_query == other.for_query
-    }
 }
 
 impl Listed {

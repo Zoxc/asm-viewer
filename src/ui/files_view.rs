@@ -7,7 +7,7 @@ use super::*;
 
 /// One row of the tree: a directory that folds, or a file that opens. The tree is the fold
 /// state, so a directory row writes the tree itself and holds no expansion set.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct EntryRow {
     row: FileRow,
     tree: State<Option<FileTree>>,
@@ -15,12 +15,6 @@ struct EntryRow {
     /// what a press writes down with the pick (`ui/picks.rs`).
     at: usize,
     key: DiffKey,
-}
-
-impl PartialEq for EntryRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.row == other.row && self.at == other.at
-    }
 }
 
 /// What pressing a row does: a folder folds, and a file opens as source. Shared by the

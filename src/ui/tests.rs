@@ -4142,6 +4142,62 @@ fn a_narrow_sidebar_ellipsises_the_name_and_keeps_the_count() {
     );
 }
 
+/// **A second file arriving leaves the rows already on the Objects list alone.** A sidebar
+/// row's props are compared field by field, by the derive, which compares the two the
+/// hand-written impls left out: the fold state and the row's own key. Both are stable --
+/// the state is the tab's, minted once, and the key is the row's group -- so an unchanged
+/// row is equal to the one before it and freya keeps its scope. A key that were not a
+/// function of the row's fields, a counter or a build number, would re-render every row on
+/// the list for every batch that lands, which is 115k of them on the app's own binary.
+///
+/// Headless because nothing shows either way: the row draws the same thing, and only the
+/// element freya rebuilt says whether the scope rendered again.
+#[test]
+fn a_second_file_leaves_the_rows_already_drawn_alone() {
+    let (_first, ones) = fixture_objects_of("line_fixture.o", 3);
+    let (_second, twos) = fixture_objects_of("line_fixture_split.o", 2);
+    let (mut test, mut states) = TestingRunner::new(
+        objects_harness,
+        (300., 300.).into(),
+        |runner| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    states.objects.write().extend(ones);
+    settle(&mut test);
+
+    // The first file's archive row: the node one row tall that carries handlers and holds
+    // the member count only that row draws. The element and not the area, because **the
+    // element is how this asks whether the row rendered again**: an element carrying event
+    // handlers never compares equal to the one before it, so a scope that renders is handed
+    // a new one.
+    let row = |test: &TestingRunner| {
+        let count = label_area(test, "3").expect("the archive row says how many members it has");
+        test.find(|node, element| {
+            let area = node.layout().area;
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            let around = area.min_y() <= count.min_y() && count.max_y() <= area.max_y();
+            (handled && around && area.height() == list_row_height()).then(|| node.element())
+        })
+        .expect("the archive row carries its own handlers")
+    };
+
+    let before = row(&test);
+    states.objects.write().extend(twos);
+    settle(&mut test);
+    assert!(
+        label_area(&test, "2").is_some(),
+        "the second file never made a row"
+    );
+
+    let after = row(&test);
+    assert!(
+        Rc::ptr_eq(&before, &after),
+        "a second file re-rendered the first file's row"
+    );
+}
+
 /// The analysis worker's work, handed in through a context so a test can substitute one
 /// that stops when it is told to.
 #[derive(Clone)]

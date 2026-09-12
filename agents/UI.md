@@ -889,8 +889,14 @@ demangling is the only lever there is, and it defers work until the first click 
 distinct, and `#[derive(PartialEq)]` on an `Arc<T>` field would deep-compare on every parent
 render. A prop holding no `Arc` of its own **derives** instead: the pointer rule is inside its
 fields already, and an impl that only spells the derive out is one more place to forget a new
-field -- a prop that stops re-rendering for it (`AsmData`, `InstructionList` and `AssemblyPane`,
-`src/ui/assembly.rs`). **A list of rows is a `Shared`**
+field -- a prop that stops re-rendering for it. Most rows are that shape (`ArchiveRow`,
+`SymbolRow`, `HistoryRow`, `BookmarkRow`, `EntryRow`, `LocationRow`, `TabHeader`,
+`InstructionRow`, `AsmData`), and the derive compares two things the hand-written impls left
+out: the row's `key`, and any `State` it holds. Neither changes what is drawn. A key is a
+function of the row's other fields, and a `State` compares by the box it is -- its own `eq` and
+not `Writable`'s -- so two rows built by one list hold the same one.
+`a_second_file_leaves_the_rows_already_drawn_alone` pins it: a second file landing on the
+Objects list leaves the rows already drawn un-rendered. **A list of rows is a `Shared`**
 (`src/shared.rs`), the rule written once rather than once per list: an `Arc<[T]>` equal only to the
 same build, derefing to its slice, so a view reads the rows as a slice and passes them on as a
 pointer. The Files, Search, Locations and Objects lists, the flattened symbol list, the finder's

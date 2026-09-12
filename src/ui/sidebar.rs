@@ -31,7 +31,7 @@ fn fold_archive(
 /// One opened file that contributed several objects -- an archive -- and the row its
 /// members fold under. It has no `Object` behind it, so it selects nothing: pressing it
 /// folds it open or shut.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct ArchiveRow {
     name: String,
     path: PathBuf,
@@ -50,19 +50,6 @@ struct ArchiveRow {
     /// Where the filter matched in the name, for the row to mark.
     marks: Vec<Range<usize>>,
     key: DiffKey,
-}
-
-impl PartialEq for ArchiveRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-            && self.path == other.path
-            && self.members == other.members
-            && self.expansion == other.expansion
-            && self.loading == other.loading
-            && self.group == other.group
-            && self.at == other.at
-            && self.marks == other.marks
-    }
 }
 
 keyed!(ArchiveRow);
@@ -301,7 +288,7 @@ impl Component for ObjectRow {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct SymbolRow {
     symbols: Shared<Symbol>,
     /// Which symbol this is, in the list the filter narrowed.
@@ -312,16 +299,6 @@ struct SymbolRow {
     /// Where the filter matched in the name, for the row to mark.
     marks: Vec<Range<usize>>,
     key: DiffKey,
-}
-
-impl PartialEq for SymbolRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.symbols == other.symbols
-            && self.index == other.index
-            && self.selected == other.selected
-            && self.at == other.at
-            && self.marks == other.marks
-    }
 }
 
 keyed!(SymbolRow);
@@ -375,7 +352,7 @@ impl Component for SymbolRow {
 /// One visited place in the History list. Clicking it is a click from outside the panes
 /// like any other row's: the place opens in the temporal tab, or the tab already showing
 /// it is raised, and the visit goes to the top of the list.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct HistoryRow {
     entry: Document,
     /// Whether this is what the tab on screen shows.
@@ -385,15 +362,6 @@ struct HistoryRow {
     /// Where the filter matched in the name, for the row to mark.
     marks: Vec<Range<usize>>,
     key: DiffKey,
-}
-
-impl PartialEq for HistoryRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.entry == other.entry
-            && self.current == other.current
-            && self.at == other.at
-            && self.marks == other.marks
-    }
 }
 
 keyed!(HistoryRow);

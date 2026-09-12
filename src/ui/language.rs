@@ -176,7 +176,7 @@ pub(crate) struct Asking {
 }
 
 /// The language server as the app holds it.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct Language {
     pub(crate) state: Lsp,
     /// The start that has been asked about and not answered yet. `None` unless the
@@ -192,15 +192,6 @@ pub(crate) struct Language {
     /// Which server the answers arriving are about, counted up by every start and every
     /// stop.
     pub(crate) run: u64,
-}
-
-impl PartialEq for Language {
-    fn eq(&self, other: &Self) -> bool {
-        self.state == other.state
-            && self.run == other.run
-            && self.asking == other.asking
-            && self.settings == other.settings
-    }
 }
 
 impl Language {

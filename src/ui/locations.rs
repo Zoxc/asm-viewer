@@ -775,7 +775,7 @@ impl Component for LocationsPanel {
 /// One symbol a line was compiled into: its name, and the object it is in after it,
 /// since the same name in two objects is two rows and the object is what tells them
 /// apart.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct LocationRow {
     symbols: Shared<Symbol>,
     /// Which symbol this is, in the list the filter narrowed.
@@ -787,16 +787,6 @@ struct LocationRow {
     /// Where the filter matched in the name, for the row to mark.
     marks: Vec<Range<usize>>,
     key: DiffKey,
-}
-
-impl PartialEq for LocationRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.symbols == other.symbols
-            && self.index == other.index
-            && self.selected == other.selected
-            && self.at == other.at
-            && self.marks == other.marks
-    }
 }
 
 keyed!(LocationRow);

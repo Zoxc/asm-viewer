@@ -83,10 +83,10 @@ pub(crate) struct FilterToggle {
     pub(crate) on: bool,
 }
 
-/// Written out because the filter cannot be compared: two `State`s are equal always, so a
-/// derive would put a line there that reads as a comparison and is a no-op. Nothing is
-/// lost by leaving it out -- the toggle only writes the filter, and `on` is what says it
-/// has to be drawn again.
+/// Written out because the filter cannot be compared: a `State` compares by the box it is
+/// and never by what is in it, so a derive would put a line there that reads as a
+/// comparison of the filter and is not one. Nothing is lost by leaving it out -- the
+/// toggle only writes the filter, and `on` is what says it has to be drawn again.
 impl PartialEq for FilterToggle {
     fn eq(&self, other: &Self) -> bool {
         self.toggle == other.toggle && self.on == other.on
@@ -145,10 +145,11 @@ struct FilterBar {
     submits: Option<State<u64>>,
 }
 
-/// Written out because neither state can be compared: two `State`s are equal always, so a
-/// derive would put two lines there that read as comparisons and are no-ops. What makes
-/// the bar draw again is reading the filter in `render`, which is what subscribes it.
-/// Whether there is a `submits` at all is a real difference and is still compared.
+/// Written out because neither state can be compared: a `State` compares by the box it is
+/// and never by what is in it, so a derive would put two lines there that read as
+/// comparisons and are not. What makes the bar draw again is reading the filter in
+/// `render`, which is what subscribes it. Whether there is a `submits` at all is a real
+/// difference and is still compared.
 impl PartialEq for FilterBar {
     fn eq(&self, other: &Self) -> bool {
         self.a11y == other.a11y

@@ -7,7 +7,7 @@ use super::*;
 /// pressing it is a navigation like a press in the Symbols list; dead when it does not, in
 /// which case it is drawn dimmed and does nothing, and is still there -- a reader's own list
 /// does not shrink behind their back.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct BookmarkRow {
     /// Which bookmark this is, in the reader's own list -- what its menu removes by.
     index: usize,
@@ -18,16 +18,6 @@ struct BookmarkRow {
     /// Where the filter matched in the label, for the row to mark.
     marks: Vec<Range<usize>>,
     key: DiffKey,
-}
-
-impl PartialEq for BookmarkRow {
-    fn eq(&self, other: &Self) -> bool {
-        self.index == other.index
-            && self.bookmark == other.bookmark
-            && self.live == other.live
-            && self.at == other.at
-            && self.marks == other.marks
-    }
 }
 
 keyed!(BookmarkRow);
