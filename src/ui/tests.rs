@@ -2384,7 +2384,7 @@ fn alt_held_as_the_menu_opens_is_what_offers_the_debug_page() {
         (300., 300.).into(),
         |runner: &mut _| {
             let roots = runner.provide_root_context(test_roots);
-            (roots.states, roots.alt)
+            (roots.states, roots.keys.alt)
         },
         1.,
     );
@@ -4278,25 +4278,23 @@ fn analysis_harness() -> impl IntoElement {
     let mut seen = use_consume::<Seen>().0;
     let located = use_consume::<Locations>().0;
     let coded = use_consume::<Coding>().0;
-    let reading = use_consume::<Sections>().0;
-    let window = use_consume::<Window>().0;
+    let sectioned = use_sectioned();
 
     let showing = use_consume::<ShowingFile>().0;
     let asks = use_analysis_with(
         asked,
         objects,
-        use_consume::<Beside>().0,
+        sectioned,
         history,
         analysis,
         located,
         coded,
         showing,
-        reading,
         move |question| work(question),
     );
     // The three questions asked beside their own states, as `app()` asks them: the one
     // worker above answers all four, which is what the supersession tests are about.
-    use_code_asks(reading, window, asks.clone());
+    use_code_asks(sectioned, asks.clone());
     use_locate_asks(located, objects, asks.clone());
     use_mark_asks(coded, showing, objects, asks);
 
@@ -5127,8 +5125,8 @@ fn a_window_lands_in_the_reading_with_the_skeleton() {
         1.,
     );
     let open = roots.states.objects;
-    let reading = roots.reading;
-    let window = roots.window;
+    let reading = roots.sectioned.reading;
+    let window = roots.sectioned.window;
     let (mut open, mut reading, mut window) = (open, reading, window);
     open.write().push(object.clone());
     reading.set(Reading::of(Some(object.clone())));
@@ -5228,8 +5226,8 @@ fn a_window_answer_for_a_reading_that_moved_on_is_dropped() {
         1.,
     );
     let open = roots.states.objects;
-    let reading = roots.reading;
-    let window = roots.window;
+    let reading = roots.sectioned.reading;
+    let window = roots.sectioned.window;
     let (mut open, mut reading, mut window) = (open, reading, window);
     open.write().extend([first.clone(), second.clone()]);
     reading.set(Reading::of(Some(first.clone())));
@@ -5782,8 +5780,7 @@ fn the_marks_question_is_asked_per_file_and_again_when_a_binary_arrives() {
 /// row's press is answered by it.
 fn locations_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let code_rows = use_consume::<CodeRows>().0;
-    use_land(use_doors(), use_places(), active, code_rows);
+    use_land(use_doors(), use_places(), active, use_sectioned());
 
     rect().expanded().child(LocationsPanel)
 }
@@ -6996,7 +6993,7 @@ fn enter_on_a_location_row_opens_what_a_press_on_it_opens() {
             1.,
         );
         let states = roots.states;
-        let (mut located, mut alt) = (roots.located, roots.alt);
+        let (mut located, mut alt) = (roots.located, roots.keys.alt);
         open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
         let entry = entry_of(&states, &tab);
         located.write().asked = Some(Query::line(at.clone()));
@@ -7387,9 +7384,8 @@ fn linking_harness() -> impl IntoElement {
 
     let doors = use_doors();
     let places = use_places();
-    let code_rows = use_consume::<CodeRows>().0;
     let active = use_consume::<Active>().0;
-    use_land(doors, places, active, code_rows);
+    use_land(doors, places, active, use_sectioned());
     use_follow(follow, doors, places);
 
     let file = use_consume::<SubjectFile>().0;
@@ -12738,16 +12734,7 @@ fn a_file_in_no_compiled_language_opens_without_an_assembly_side() {
     let (mut test, roots) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
-        |runner| {
-            let states = runner.provide_root_context(move || listing_states(shown));
-            runner.provide_root_context(|| {
-                Splits(State::create(ResizableContext {
-                    direction: Direction::Horizontal,
-                    ..Default::default()
-                }))
-            });
-            states
-        },
+        |runner| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     let states = roots.states;
@@ -12814,16 +12801,7 @@ fn the_leading_bar_puts_the_following_pane_away() {
     let (mut test, roots) = TestingRunner::new(
         panes_harness,
         (600., 300.).into(),
-        |runner| {
-            let states = runner.provide_root_context(move || listing_states(shown));
-            runner.provide_root_context(|| {
-                Splits(State::create(ResizableContext {
-                    direction: Direction::Horizontal,
-                    ..Default::default()
-                }))
-            });
-            states
-        },
+        |runner| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     let states = roots.states;
@@ -12990,16 +12968,7 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
         let (mut test, roots) = TestingRunner::new(
             panes_harness,
             (600., 300.).into(),
-            |runner| {
-                let states = runner.provide_root_context(move || listing_states(shown));
-                runner.provide_root_context(|| {
-                    Splits(State::create(ResizableContext {
-                        direction: Direction::Horizontal,
-                        ..Default::default()
-                    }))
-                });
-                states
-            },
+            |runner| runner.provide_root_context(move || listing_states(shown)),
             1.,
         );
         let states = roots.states;
@@ -14390,11 +14359,9 @@ fn scratchpad_listing_harness() -> impl IntoElement {
     scratchpad_wiring();
 
     let objects = use_consume::<Objects>().0;
-    let beside = use_consume::<Beside>().0;
-    let reading = use_consume::<Sections>().0;
-    let window = use_consume::<Window>().0;
+    let sectioned = use_sectioned();
     let active = use_consume::<Active>().0;
-    use_reading_of(active, objects, beside, reading, window);
+    use_reading_of(active, objects, sectioned);
     // Nothing on this page asks the analysis a question of its own -- the listing beside
     // the editor is a whole program's code, which is read in windows and asks nothing --
     // so the question is an `Asked` over a tab that is never there.
@@ -14405,18 +14372,17 @@ fn scratchpad_listing_harness() -> impl IntoElement {
     let asks = use_analysis_with(
         asked,
         objects,
-        beside,
+        sectioned,
         use_doors().visits,
         use_consume::<Analysis>().0,
         use_consume::<Locations>().0,
         use_consume::<Coding>().0,
         use_consume::<ShowingFile>().0,
-        reading,
         answer,
     );
     // The window the pane asks for is the whole of what this page asks, so it is the one
     // asking hook mounted here.
-    use_code_asks(reading, window, asks);
+    use_code_asks(sectioned, asks);
 
     rect()
         .expanded()
@@ -18680,10 +18646,9 @@ fn bare_harness() -> impl IntoElement {
 /// the caret it plants is what these tests ask about.
 fn code_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let code_rows = use_consume::<CodeRows>().0;
-    use_land(use_doors(), use_places(), active, code_rows);
+    use_land(use_doors(), use_places(), active, use_sectioned());
 
-    let reading = use_consume::<Sections>().0;
+    let reading = use_sectioned().reading;
     let object = reading.read().object.clone();
     match object {
         Some(object) => rect().expanded().child({
@@ -18702,7 +18667,7 @@ fn code_harness() -> impl IntoElement {
 /// reason.
 fn code_states(reading: Reading) -> Roots {
     let roots = test_roots();
-    let mut sections = roots.reading;
+    let mut sections = roots.sectioned.reading;
     sections.set(reading);
     roots
 }
@@ -18820,7 +18785,7 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
         1.,
     );
     let states = roots.states;
-    let sections = roots.reading;
+    let sections = roots.sectioned.reading;
     let mut sections = sections;
     let document = Document::Code(object.clone());
     // Open, as a tab is in the app: a place is written down only for an open tab.
@@ -18920,7 +18885,7 @@ fn scrolling_asks_for_a_buffer_of_screens_nearest_the_reader_first() {
         move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
         1.,
     );
-    let window = roots.window;
+    let window = roots.sectioned.window;
     settle(&mut test);
     settle(&mut test);
 
@@ -18976,7 +18941,7 @@ fn code_source_harness() -> impl IntoElement {
     // The file the pane draws, read where this stands rather than on the reader's own
     // thread: what these tests are about is what the pane makes of a file it has.
     use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
-    let reading = use_consume::<Sections>().0;
+    let reading = use_sectioned().reading;
     let object = reading.read().object.clone();
     match object {
         Some(object) => rect().expanded().child({
@@ -19040,7 +19005,8 @@ fn a_run_in_the_section_view_opens_its_file_beside_it() {
 ///
 /// The run names a file this test seeded, the path the fixture's DWARF holds being a
 /// build machine's that nothing can read; the line is the fixture's, read off the decoded
-/// rows the view leaves in `CodeRows`, which is where the pane reads it from too. Neither
+/// rows the view leaves in `Sectioned::rows`, which is where the pane reads them from too.
+/// Neither
 /// pane is owed a scroll, so the opening row is the only thing that can move this one.
 ///
 /// Headless because the answer is a scroll offset a `VirtualScrollView` turns into rows,
@@ -19081,7 +19047,7 @@ fn the_pane_beside_an_objects_code_opens_on_the_pressed_rows_line() {
         (600., 300.).into(),
         |runner| {
             let roots = runner.provide_root_context(move || code_states(reading));
-            (roots.states, roots.doors.marked, roots.code_rows)
+            (roots.states, roots.doors.marked, roots.sectioned.rows)
         },
         1.,
     );
@@ -19131,7 +19097,7 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     );
     let states = roots.states;
     let marked = roots.doors.marked;
-    let sections = roots.reading;
+    let sections = roots.sectioned.reading;
     let mut sections = sections;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -19413,7 +19379,7 @@ fn a_source_click_beside_the_section_view_reveals_its_instruction() {
         1.,
     );
     let marked = roots.doors.marked;
-    let sections = roots.reading;
+    let sections = roots.sectioned.reading;
     let (mut marked, mut sections) = (marked, sections);
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000000 ");
@@ -19514,7 +19480,7 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
         1.,
     );
     let states = roots.states;
-    let mut ctrl = roots.ctrl;
+    let mut ctrl = roots.keys.ctrl;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -19726,7 +19692,7 @@ fn show_in_unified_view_keeps_the_rows_before_the_instruction() {
         1.,
     );
     let states = roots.states;
-    let sections = roots.reading;
+    let sections = roots.sectioned.reading;
     let doors = roots.doors;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -19883,7 +19849,7 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
         1.,
     );
     let (states, landing) = (roots.states, roots.doors.land);
-    let mut ctrl = roots.ctrl;
+    let mut ctrl = roots.keys.ctrl;
     let symbol = Document::Assembly(Selection::Symbol(f.clone()));
     open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
     settle(&mut test);
@@ -19963,7 +19929,7 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     );
     let states = roots.states;
     let marked = roots.doors.marked;
-    let ctrl = roots.ctrl;
+    let ctrl = roots.keys.ctrl;
     let mut ctrl = ctrl;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -20363,7 +20329,7 @@ fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
     );
     let states = roots.states;
     let marked = roots.doors.marked;
-    let sections = roots.reading;
+    let sections = roots.sectioned.reading;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
@@ -20491,7 +20457,7 @@ fn an_operand_and_a_label_wear_the_same_box() {
         1.,
     );
     let states = roots.states;
-    let ctrl = roots.ctrl;
+    let ctrl = roots.keys.ctrl;
     let mut ctrl = ctrl;
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code, Reach::NewTab);
@@ -20555,11 +20521,11 @@ fn alt_held_darkens_every_link_and_the_hand() {
             (
                 roots.states,
                 roots.doors.marked,
-                roots.reading,
-                roots.window,
+                roots.sectioned.reading,
+                roots.sectioned.window,
                 roots.doors.land,
-                roots.ctrl,
-                roots.alt,
+                roots.keys.ctrl,
+                roots.keys.alt,
             )
         },
         1.,
@@ -20650,8 +20616,8 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     );
     let states = roots.states;
     let marked = roots.doors.marked;
-    let sections = roots.reading;
-    let ctrl = roots.ctrl;
+    let sections = roots.sectioned.reading;
+    let ctrl = roots.keys.ctrl;
     let (mut ctrl, mut sections) = (ctrl, sections);
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
@@ -20888,7 +20854,7 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
 /// The Assembly pane over an object's code with a menu viewer above it, so a row's menu
 /// can open.
 fn menu_code_harness() -> impl IntoElement {
-    let reading = use_consume::<Sections>().0;
+    let reading = use_sectioned().reading;
     let object = reading.read().object.clone();
     rect()
         .expanded()
@@ -20970,13 +20936,10 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
 fn doors_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
     let open = use_open();
-    let code_rows = use_consume::<CodeRows>().0;
     let objects = use_consume::<Objects>().0;
-    let reading = use_consume::<Sections>().0;
-    let window = use_consume::<Window>().0;
-    use_land(use_doors(), use_places(), active, code_rows);
-    let beside = use_consume::<Beside>().0;
-    use_reading_of(active, objects, beside, reading, window);
+    let sectioned = use_sectioned();
+    use_land(use_doors(), use_places(), active, sectioned);
+    use_reading_of(active, objects, sectioned);
 
     let entry = {
         let (strip, docs) = (open.strip.read(), open.docs.read());
@@ -20996,13 +20959,10 @@ fn doors_harness() -> impl IntoElement {
 fn door_panes_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
     let open = use_open();
-    let code_rows = use_consume::<CodeRows>().0;
     let objects = use_consume::<Objects>().0;
-    let reading = use_consume::<Sections>().0;
-    let window = use_consume::<Window>().0;
-    use_land(use_doors(), use_places(), active, code_rows);
-    let beside = use_consume::<Beside>().0;
-    use_reading_of(active, objects, beside, reading, window);
+    let sectioned = use_sectioned();
+    use_land(use_doors(), use_places(), active, sectioned);
+    use_reading_of(active, objects, sectioned);
 
     let id = {
         let (strip, docs) = (open.strip.read(), open.docs.read());
@@ -21078,7 +21038,7 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
     assert!(states.open.active() == Some(Document::Code(object.clone())));
 
     // The skeleton, as the worker answers first: every body row is still a guess.
-    let mut sections = roots.reading;
+    let mut sections = roots.sectioned.reading;
     sections.set(reading_of(&object, &[]));
     settle(&mut test);
     settle(&mut test);
@@ -21186,7 +21146,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
     let code = Document::Code(object.clone());
     assert!(states.open.active() == Some(code.clone()));
     assert!(
-        roots.reading.peek().is_about(&object),
+        roots.sectioned.reading.peek().is_about(&object),
         "the reading did not follow the tab"
     );
     // No rows yet: the instruction waits for them, and no caret is planted in nothing.
@@ -21200,7 +21160,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
 
     // The worker's first answer, `sum_to` still a guess: the caret on the guessed row,
     // the planting spent.
-    let mut sections = roots.reading;
+    let mut sections = roots.sectioned.reading;
     sections.set(before);
     settle(&mut test);
     settle(&mut test);
@@ -21305,8 +21265,8 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
     settle(&mut test);
-    assert!(roots.reading.peek().is_about(&object));
-    let mut sections = roots.reading;
+    assert!(roots.sectioned.reading.peek().is_about(&object));
+    let mut sections = roots.sectioned.reading;
     sections.set(reading_of(&object, &[1]));
     settle(&mut test);
     settle(&mut test);
@@ -21520,10 +21480,7 @@ fn app_like_code_harness() -> impl IntoElement {
     let object = use_consume::<PaneObject>().0;
     let active = use_consume::<Active>().0;
     let objects = use_consume::<Objects>().0;
-    let reading = use_consume::<Sections>().0;
-    let window = use_consume::<Window>().0;
-    let beside = use_consume::<Beside>().0;
-    use_reading_of(active, objects, beside, reading, window);
+    use_reading_of(active, objects, use_sectioned());
     rect().expanded().child({
         let document = Document::Code(object);
         AssemblyPane {
@@ -21558,7 +21515,11 @@ fn a_unified_view_asks_for_its_skeleton_once_the_reading_is_its_own() {
         },
         1.,
     );
-    let (states, sections, window) = (roots.states, roots.reading, roots.window);
+    let (states, sections, window) = (
+        roots.states,
+        roots.sectioned.reading,
+        roots.sectioned.window,
+    );
     let mut open = states.objects;
     open.write().push(object.clone());
     settle(&mut test);
@@ -21592,10 +21553,7 @@ fn switched_code_harness() -> impl IntoElement {
     let open = use_open();
     let active = use_consume::<Active>().0;
     let objects = use_consume::<Objects>().0;
-    let reading = use_consume::<Sections>().0;
-    let window = use_consume::<Window>().0;
-    let beside = use_consume::<Beside>().0;
-    use_reading_of(active, objects, beside, reading, window);
+    use_reading_of(active, objects, use_sectioned());
 
     let entry = {
         let (strip, docs) = (open.strip.read(), open.docs.read());
@@ -21625,8 +21583,8 @@ fn switching_between_two_objects_code_tabs_asks_for_the_second() {
         1.,
     );
     let states = roots.states;
-    let sections = roots.reading;
-    let window = roots.window;
+    let sections = roots.sectioned.reading;
+    let window = roots.sectioned.window;
     let mut open = states.objects;
     open.write().extend([first.clone(), second.clone()]);
     settle(&mut test);
@@ -21705,7 +21663,7 @@ fn a_stretch_let_go_under_the_rows_on_screen_still_draws_as_it_was() {
         move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
         1.,
     );
-    let sections = roots.reading;
+    let sections = roots.sectioned.reading;
     let mut sections = sections;
     settle(&mut test);
     assert!(labels(&test).contains(&"dq\u{a0}".to_string()));
@@ -21740,20 +21698,10 @@ fn a_caps_lock_that_acts_as_ctrl_is_learnt_from_its_release() {
         bare_harness,
         (100., 100.).into(),
         |runner| {
-            let modifiers = runner.provide_root_context(provide_modifiers);
-            // Two states of the root's own, made where a state can be: in a context.
-            #[derive(Clone, Copy)]
-            struct CapsIsCtrl(State<bool>);
-            #[derive(Clone, Copy)]
-            struct ControlHeld(State<bool>);
-            let caps = runner
-                .provide_root_context(|| CapsIsCtrl(State::create(false)))
-                .0;
-            let control = runner
-                .provide_root_context(|| ControlHeld(State::create(false)))
-                .0;
-            let Held { shift, ctrl, alt } = modifiers;
-            (ModifierKeys::new(shift, ctrl, alt, caps, control), ctrl)
+            // The keyboard the app's own root makes, five states and all: a test cannot
+            // create a `State` outside the runner's context.
+            let keys = runner.provide_root_context(provide_modifiers);
+            (keys, keys.ctrl)
         },
         1.,
     );
@@ -21938,7 +21886,7 @@ fn removing_a_bookmark_leaves_the_pick_on_the_row_it_was_put_on() {
         (300., 300.).into(),
         |runner: &mut _| {
             let roots = runner.provide_root_context(test_roots);
-            (roots.states, roots.alt)
+            (roots.states, roots.keys.alt)
         },
         1.,
     );
@@ -23090,7 +23038,7 @@ fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
                 roots.states,
                 roots.doors.marked,
                 roots.doors.land,
-                roots.alt,
+                roots.keys.alt,
             )
         },
         1.,
@@ -23141,11 +23089,11 @@ fn alt_held_shuts_the_unified_views_own_door() {
             (
                 roots.states,
                 roots.doors.marked,
-                roots.reading,
-                roots.window,
+                roots.sectioned.reading,
+                roots.sectioned.window,
                 roots.doors.land,
-                roots.ctrl,
-                roots.alt,
+                roots.keys.ctrl,
+                roots.keys.alt,
             )
         },
         1.,
@@ -23334,7 +23282,7 @@ fn a_listings_rows_sit_on_whole_device_pixels_wherever_it_is_laid_out() {
 /// The Scratchpad's assembly side over the object the test seeded, and nothing else of
 /// that page: the fourth of the four panes that draw a code listing.
 fn pad_listing_harness() -> impl IntoElement {
-    let reading = use_consume::<Sections>().0;
+    let reading = use_sectioned().reading;
     let object = reading.read().object.clone();
     match object {
         Some(object) => rect().expanded().child(PadAssembly {
@@ -25104,9 +25052,8 @@ fn navigating_harness() -> impl IntoElement {
     let doors = use_doors();
     let places = use_places();
     let active = use_consume::<Active>().0;
-    let code_rows = use_consume::<CodeRows>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(doors, places, active, code_rows);
+    use_land(doors, places, active, use_sectioned());
     use_clear_marks(
         active,
         super::analyzed::Asked {
@@ -25348,13 +25295,12 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
     );
 }
 
-/// [`use_land`] and nothing else, over the project's states and a [`CodeRows`] the test
+/// [`use_land`] and nothing else, over the project's states and the rows the test
 /// writes: what is under test is the runs the hook gives an arriving place, which is a
 /// state and needs no pane to say what it is.
 fn land_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let code_rows = use_consume::<CodeRows>().0;
-    use_land(use_doors(), use_places(), active, code_rows);
+    use_land(use_doors(), use_places(), active, use_sectioned());
 
     rect().expanded()
 }
@@ -25511,9 +25457,8 @@ fn code_navigating_harness() -> impl IntoElement {
     let doors = use_doors();
     let places = use_places();
     let active = use_consume::<Active>().0;
-    let code_rows = use_consume::<CodeRows>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(doors, places, active, code_rows);
+    use_land(doors, places, active, use_sectioned());
     use_clear_marks(
         active,
         super::analyzed::Asked {
@@ -25550,7 +25495,7 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
         1.,
     );
     let (states, marked) = (roots.states, roots.doors.marked);
-    let mut sections = roots.reading;
+    let mut sections = roots.sectioned.reading;
     let mut open = states.objects;
     open.write().push(object.clone());
     settle(&mut test);
@@ -25642,7 +25587,7 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
 /// there and `use_land` has to carry it itself, before the view sees the switch.
 ///
 /// Headless because the carry is the effect's answer to a switch, and only the runner can
-/// make the switch with rows of another generation already in `CodeRows`.
+/// make the switch with rows of another generation already published.
 #[test]
 fn a_kept_run_is_carried_when_the_rows_on_screen_are_of_another_generation() {
     let (_path, objects) = fixture_objects(1);
@@ -25683,7 +25628,7 @@ fn a_kept_run_is_carried_when_the_rows_on_screen_are_of_another_generation() {
     );
     let doors = roots.doors;
     let mut states = roots.states;
-    let (marked, mut code_rows) = (doors.marked, roots.code_rows);
+    let (marked, mut code_rows) = (doors.marked, roots.sectioned.rows);
 
     // The code tab, left for another: the caret on the label, and the place that row
     // stood for kept beside it under the generation it was taken at, as the section view
@@ -27079,8 +27024,7 @@ fn search_harness() -> impl IntoElement {
     // What spends the landing a hit's press leaves, as `app()` does: without it a row
     // opens its tab and picks nothing out.
     let active = use_consume::<Active>().0;
-    let code_rows = use_consume::<CodeRows>().0;
-    use_land(use_doors(), use_places(), active, code_rows);
+    use_land(use_doors(), use_places(), active, use_sectioned());
 
     rect().expanded().child(SearchPanel)
 }
@@ -27095,8 +27039,8 @@ fn search_over(
     (test, states, directory, dock)
 }
 
-/// The same, and the four states `ModifierKeys` is made of: a test cannot create a
-/// `State` outside the runner's own context, so they are made where the rest are.
+/// The same, and the keyboard the root's key handler writes: a test cannot create a
+/// `State` outside the runner's own context, so it is made where the rest are.
 #[allow(clippy::type_complexity)]
 fn search_and_modifiers(
     line: u32,
@@ -27105,7 +27049,7 @@ fn search_and_modifiers(
     TestingRunner,
     ProjectStates,
     Temporary,
-    Modifiers5,
+    ModifierKeys,
     State<Marks>,
     State<Finder>,
     State<DockArea>,
@@ -27119,19 +27063,16 @@ fn search_and_modifiers(
             runner.provide_root_context(move || {
                 provide(Walk(work.clone()));
                 let roots = test_roots();
-                // The five the root's key handler is made of, three of them the
-                // contexts every row reads, as `app()` builds `ModifierKeys`.
-                let held = provide(Modifiers5(
-                    roots.shift,
-                    roots.ctrl,
-                    roots.alt,
-                    State::create(false),
-                    State::create(false),
-                ));
                 // The group the panel is drawn in, written into the dock the root made.
                 let mut dock = roots.states.arranged.dock;
                 dock.set(DockArea::column(vec![vec![Panel::Search]]));
-                (roots.states, held, roots.doors.marked, roots.finder, dock)
+                (
+                    roots.states,
+                    roots.keys,
+                    roots.doors.marked,
+                    roots.finder,
+                    dock,
+                )
             })
         },
         1.,
@@ -27141,30 +27082,6 @@ fn search_and_modifiers(
     settle(&mut test);
     (
         test, states.0, directory, states.1, states.2, states.3, states.4,
-    )
-}
-
-/// The five states `ModifierKeys` is made of, created where freya's context is: a test
-/// cannot make a `State` of its own outside the runner.
-#[derive(Clone, Copy)]
-struct Modifiers5(
-    State<bool>,
-    State<bool>,
-    State<bool>,
-    State<bool>,
-    State<bool>,
-);
-
-/// The five as `app()` makes them: the three contexts every row reads, and two states of
-/// the root's own. So a chord pressed through the root's handler holds the same Shift,
-/// Ctrl and Alt the rows under it are looking at.
-fn held_by(roots: &Roots) -> Modifiers5 {
-    Modifiers5(
-        roots.shift,
-        roots.ctrl,
-        roots.alt,
-        State::create(false),
-        State::create(false),
     )
 }
 
@@ -27183,10 +27100,11 @@ fn search_with_modifiers(
     State<Finder>,
     State<DockArea>,
 ) {
-    let (test, states, directory, held, _, finder, dock) =
+    let (test, states, directory, keys, _, finder, dock) =
         search_and_modifiers(line, |_query, _emit| {});
-    let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
-    (test, states, directory, keys, held.0, held.1, finder, dock)
+    (
+        test, states, directory, keys, keys.shift, keys.ctrl, finder, dock,
+    )
 }
 
 /// One hit, spelled as the walk spells one.
@@ -30383,8 +30301,7 @@ fn the_project_views_button_asks_before_it_starts_too() {
 /// door from outside a document reaches, and what answers it.
 fn landing_panes_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    let code_rows = use_consume::<CodeRows>().0;
-    use_land(use_doors(), use_places(), active, code_rows);
+    use_land(use_doors(), use_places(), active, use_sectioned());
     panes_harness()
 }
 
@@ -30740,7 +30657,7 @@ fn alt_makes_a_press_pick_the_row_out_and_open_nothing() {
         (300., 300.).into(),
         |runner: &mut _| {
             let roots = runner.provide_root_context(test_roots);
-            (roots.states, roots.alt)
+            (roots.states, roots.keys.alt)
         },
         1.,
     );
@@ -30800,7 +30717,7 @@ fn a_lists_pick_is_its_own_and_the_tab_is_only_the_fallback() {
         (300., 300.).into(),
         |runner: &mut _| {
             let roots = runner.provide_root_context(test_roots);
-            (roots.states, roots.alt)
+            (roots.states, roots.keys.alt)
         },
         1.,
     );
@@ -30866,7 +30783,7 @@ fn the_list_with_the_keyboard_draws_its_pick_live_and_the_other_grey() {
         (600., 300.).into(),
         |runner: &mut _| {
             let roots = runner.provide_root_context(test_roots);
-            (roots.states, roots.alt)
+            (roots.states, roots.keys.alt)
         },
         1.,
     );
@@ -31337,7 +31254,7 @@ fn opening_a_tab_hands_it_the_keyboard() {
         (300., 400.).into(),
         |runner: &mut _| {
             let roots = runner.provide_root_context(test_roots);
-            (roots.states, roots.alt)
+            (roots.states, roots.keys.alt)
         },
         1.,
     );
@@ -31389,7 +31306,7 @@ fn the_arrows_move_the_pick_and_enter_opens_the_row() {
         (300., 300.).into(),
         |runner: &mut _| {
             let roots = runner.provide_root_context(test_roots);
-            (roots.states, roots.alt)
+            (roots.states, roots.keys.alt)
         },
         1.,
     );
@@ -31491,7 +31408,7 @@ fn a_long_list(
             // The one context a test wants back that no field of `Roots` carries: taken
             // out of the root the way freya's own states are taken (`agents/Headless.md`).
             let picks = runner.provide_root_context(consume_context::<Picks>).0;
-            (roots.states, picks, roots.alt, roots.ctrl)
+            (roots.states, picks, roots.keys.alt, roots.keys.ctrl)
         },
         1.,
     );
@@ -32008,28 +31925,20 @@ fn finder_over(
             runner.provide_root_context(move || {
                 provide(Walking(work.clone()));
                 let roots = test_roots();
-                // The root's one key handler tracks the modifiers beside answering the
-                // chord, so the chord is pressed through the real thing -- and out of
-                // the same three contexts the rows read, as `app()` builds it. A test
-                // holds a key down through `keys` and the rows see it.
-                let held = provide(Modifiers5(
-                    roots.shift,
-                    roots.ctrl,
-                    roots.alt,
-                    State::create(false),
-                    State::create(false),
-                ));
                 // The group the chord for the Search panel reaches into: Ctrl+P and
                 // Ctrl+Shift+F are answered in the one handler.
                 let mut dock = roots.states.arranged.dock;
                 dock.set(DockArea::column(vec![vec![Panel::Search]]));
-                (roots.states, roots.finder, held, dock)
+                // The root's one key handler tracks the modifiers beside answering the
+                // chord, so the chord is pressed through the real keyboard, whose three
+                // modifiers are the contexts the rows read: a test holds a key down
+                // through `keys` and the rows see it.
+                (roots.states, roots.finder, roots.keys, dock)
             })
         },
         1.,
     );
-    let (states, finder, held, dock) = states;
-    let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
+    let (states, finder, keys, dock) = states;
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
     settle(&mut test);
@@ -33318,8 +33227,9 @@ impl Component for ChordKeys {
     fn render(&self) -> impl IntoElement {
         let states = use_project_states();
         let finder = use_consume::<Finding>().0;
-        let held = use_consume::<Modifiers5>();
-        let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
+        // The keyboard the root made, whole: the same value `app()` hands its handler,
+        // so a chord pressed here writes the modifiers the rows under it read.
+        let keys = use_consume::<ModifierKeys>();
 
         rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
             let RootStates {
@@ -33383,22 +33293,58 @@ fn chord_harness() -> impl IntoElement {
         .child(TrustPrompt)
 }
 
+/// What the `Ctrl` context says, drawn: the state a code row reads to know whether a label
+/// is a link now, which is the one way a test can see what the rows see.
+#[derive(Clone, PartialEq)]
+struct CtrlProbe;
+
+impl Component for CtrlProbe {
+    fn render(&self) -> impl IntoElement {
+        label().text(format!("ctrl: {}", *use_consume::<Ctrl>().0.read()))
+    }
+}
+
+/// The root's key handler with that probe beside it.
+fn ctrl_probe_harness() -> impl IntoElement {
+    use_root_key_states();
+    rect().expanded().child(ChordKeys).child(CtrlProbe)
+}
+
+/// **The keyboard the root's handler writes is the keyboard the rows read.** The five
+/// states are one `ModifierKeys`, made at the root, and the `Shift`, `Ctrl` and `Alt` a
+/// door reads are three of them provided under their own names -- so a key held down
+/// through the window's handler is held for every row under it.
+///
+/// Headless because it is the wiring between two things nothing else puts together: the
+/// handler `app()` hands the keyboard and the context a row consumes. A harness that built
+/// a keyboard of its own out of fresh states was pressing a Ctrl nothing was looking at,
+/// and no test could tell.
+#[test]
+fn a_ctrl_held_through_the_roots_handler_is_the_ctrl_a_row_reads() {
+    let (mut test, _states) = TestingRunner::new(
+        ctrl_probe_harness,
+        (300., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(|| test_roots().states),
+        1.,
+    );
+    settle(&mut test);
+    assert!(labels(&test).contains(&"ctrl: false".to_string()));
+
+    key_with(&mut test, Key::Named(NamedKey::Control), Modifiers::empty());
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"ctrl: true".to_string()),
+        "the row's Ctrl is not the one the root's handler wrote: {drawn:?}"
+    );
+}
+
 /// The harness over the app's own states, with the finder and the modifiers the root's
 /// handler wants.
 fn mount_chords() -> (TestingRunner, ProjectStates) {
     let (mut test, states) = TestingRunner::new(
         chord_harness,
         (700., 200.).into(),
-        |runner: &mut _| {
-            runner.provide_root_context(|| {
-                // The five modifier flags the root's handler is made of, which nothing
-                // else provides: `ModifierKeys` is built in `app()` out of three
-                // contexts and two plain states.
-                let roots = test_roots();
-                provide(held_by(&roots));
-                roots.states
-            })
-        },
+        |runner: &mut _| runner.provide_root_context(|| test_roots().states),
         1.,
     );
     settle(&mut test);
@@ -33673,21 +33619,7 @@ fn mount_bookmark_chords() -> (TestingRunner, ProjectStates) {
     let (mut test, states) = TestingRunner::new(
         bookmark_chord_harness,
         (300., 300.).into(),
-        |runner: &mut _| {
-            runner.provide_root_context(|| {
-                // The five modifier flags the root's handler is made of, which nothing
-                // else provides: `ModifierKeys` is built in `app()` out of three
-                // contexts and two plain states.
-                provide(Modifiers5(
-                    State::create(false),
-                    State::create(false),
-                    State::create(false),
-                    State::create(false),
-                    State::create(false),
-                ));
-                test_roots().states
-            })
-        },
+        |runner: &mut _| runner.provide_root_context(|| test_roots().states),
         1.,
     );
     settle(&mut test);
@@ -33756,13 +33688,7 @@ fn mount_pane_chords(shown: Shown) -> (TestingRunner, ProjectStates) {
     let (mut test, roots) = TestingRunner::new(
         pane_chord_harness,
         (600., 300.).into(),
-        move |runner: &mut _| {
-            runner.provide_root_context(move || {
-                let roots = listing_states(shown);
-                provide(held_by(&roots));
-                roots
-            })
-        },
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
         1.,
     );
     let states = roots.states;
@@ -33920,8 +33846,7 @@ fn reaching_harness() -> impl IntoElement {
     let states = use_project_states();
     let dock = use_consume::<SidebarDock>().0;
     let finder = use_consume::<Finding>().0;
-    let held = use_consume::<Modifiers5>();
-    let keys = ModifierKeys::new(held.0, held.1, held.2, held.3, held.4);
+    let keys = use_consume::<ModifierKeys>();
     // What `app()` calls at the root: a chord leaves an ask behind it, and this is what
     // spends it once the panel it named has drawn a box.
     use_keyboard_asked(
@@ -33980,7 +33905,6 @@ fn mount_reaching() -> (TestingRunner, State<DockArea>, Vec<Symbol>) {
         |runner: &mut _| {
             runner.provide_root_context(|| {
                 let roots = test_roots();
-                provide(held_by(&roots));
                 // The sidebar these tests reach into, written into the dock the root
                 // made: the handle they read the raise back out of is that same state.
                 let mut dock = roots.states.arranged.dock;

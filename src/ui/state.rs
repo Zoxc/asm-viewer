@@ -306,36 +306,12 @@ impl Places {
 #[derive(Clone, Copy)]
 pub(crate) struct SidebarDock(pub(crate) State<DockArea>);
 
-/// How wide the **leading** side of a document is, as a percentage -- the side the tab is
-/// driven from, which `DocumentBody` draws on the left in both kinds of tab. Kept by place
-/// and not by pane, so switching from an assembly-driven tab to a source-driven one leaves
-/// the handle where the reader put it instead of throwing the two widths across the split.
-///
-/// One number for the app, held out here because the container will not remember it: only
-/// the active tab's content is mounted, and a `ResizablePanel` registers at its
-/// `initial_size` in a `use_hook` and removes its entry in a `use_drop`, so a remount comes
-/// back at the initial sizes under new panel ids.
+/// How wide the sidebar is: a [`Split`] like the document's and the Scratchpad's, and the
+/// one of the three in [`Unit::Pixels`] -- the panel is a literal width, so what the
+/// context holds after a drag is one too. The window's body is rebuilt whenever a project
+/// arrives or goes, which is the unmount the number outlives.
 #[derive(Clone, Copy)]
-pub(crate) struct SplitRatio(pub(crate) State<f32>);
-
-/// The `ResizableContext` the document's two panels register into, so a drag on the handle
-/// can be read back out. See [`SplitRatio`].
-#[derive(Clone, Copy)]
-pub(crate) struct Splits(pub(crate) State<ResizableContext>);
-
-/// How wide the sidebar is, in pixels. [`SplitRatio`]'s shape and for its reason: a
-/// `ResizablePanel` registers at its `initial_size` and forgets on unmount, so a container
-/// that is rebuilt -- which the window's body is, whenever a project arrives or goes --
-/// comes back at the initial size unless the number is held out here.
-///
-/// Pixels and not a percentage: this panel is `PanelSize::px`, so what the context holds
-/// after a drag is a literal width.
-#[derive(Clone, Copy)]
-pub(crate) struct SidebarWidth(pub(crate) State<f32>);
-
-/// The `ResizableContext` the sidebar and the content register into. See [`SidebarWidth`].
-#[derive(Clone, Copy)]
-pub(crate) struct SidebarSplits(pub(crate) State<ResizableContext>);
+pub(crate) struct SidebarSplit(pub(crate) Split);
 
 /// Which tabs have the section under their Assembly pane's symbol bar open.
 ///

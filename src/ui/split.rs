@@ -35,29 +35,111 @@ pub(crate) fn following(
     }
 }
 
-/// Follow a split's handle: what the reader drags it to becomes the number the app holds,
-/// which is what carries the size across the container's own unmount.
-///
-/// Reading the context is what subscribes the caller to the drag, and `set_if_modified`
-/// keeps the panels' registration at mount from waking anything.
-///
-/// That number is fed back in as a panel's `initial_size`, and **that read is a `peek` and
-/// never a `read`**: `initial_size` is consulted once, in the panel's own `use_hook` at
-/// mount, so subscribing to it would be a subscription to nothing -- and a loop with this
-/// effect. The clamp around the `peek` stays with the caller; each split has its own floor
-/// and ceiling.
-///
-/// A hook, so every caller calls it while rendering and calls it unconditionally, above
-/// whatever early return it has: the document's split here, the Scratchpad's
-/// (`src/ui/pad_view.rs`) and the sidebar's (`src/ui/no_project.rs`).
-pub(crate) fn use_dragged_size(splits: State<ResizableContext>, mut size: State<f32>) {
-    use_side_effect(move || {
-        let live = splits.read().panels.first().map(|panel| panel.size);
-        if let Some(live) = live {
-            size.set_if_modified(live);
-        }
-    });
+/// What a split's number means, which is the one thing the three differ in: the sidebar
+/// is a literal width and the other two a share of the container.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Unit {
+    Percent,
+    Pixels,
 }
+
+/// One resizable split: the number the app holds for it, the `ResizableContext` its panels
+/// register into, what that number means, and the bounds it is drawn within.
+///
+/// **Two states and not one, because the container will not remember the size.** A
+/// `ResizablePanel` registers at its `initial_size` in a `use_hook` and takes its entry
+/// out again in a `use_drop`, so a container that is unmounted -- the tab off screen, the
+/// window's body rebuilt as a project arrives -- comes back at the initial sizes under new
+/// panel ids. What survives is the number here, fed in as `initial_size` ([`panel_size`])
+/// and written back as the handle is dragged ([`follow`]).
+///
+/// One value and not a pair of contexts per split: the three are the document's
+/// ([`DocumentSplit`]), the sidebar's ([`SidebarSplit`]) and the Scratchpad's
+/// ([`PadSplit`]), each made by one [`Split::create`] call, and each drawn by the same
+/// three lines rather than by three copies of the clamp.
+///
+/// [`panel_size`]: Split::panel_size
+/// [`follow`]: Split::follow
+#[derive(Clone, Copy)]
+pub(crate) struct Split {
+    /// The number the app holds across the container's unmount, in [`Split::unit`].
+    pub(crate) size: State<f32>,
+    /// What the panels register into, so a drag on the handle can be read back out.
+    pub(crate) context: State<ResizableContext>,
+    unit: Unit,
+    floor: f32,
+    ceiling: f32,
+}
+
+impl Split {
+    /// A split at `initial`, dragged within `floor..=ceiling`: the two states of one,
+    /// made together.
+    pub(crate) fn create(initial: f32, unit: Unit, floor: f32, ceiling: f32) -> Split {
+        Split {
+            size: State::create(initial),
+            context: State::create(ResizableContext {
+                direction: Direction::Horizontal,
+                ..Default::default()
+            }),
+            unit,
+            floor,
+            ceiling,
+        }
+    }
+
+    /// Follow the handle: what the reader drags it to becomes the number this holds,
+    /// which is what carries the size across the container's own unmount.
+    ///
+    /// Reading the context is what subscribes the caller to the drag, and
+    /// `set_if_modified` keeps the panels' registration at mount from waking anything.
+    ///
+    /// **A hook**, so every caller calls it while rendering and calls it unconditionally,
+    /// above whatever early return it has: the document's split here, the Scratchpad's
+    /// (`src/ui/pad_view.rs`) and the sidebar's (`src/ui/no_project.rs`).
+    pub(crate) fn follow(self) {
+        let (context, mut size) = (self.context, self.size);
+        use_side_effect(move || {
+            let live = context.read().panels.first().map(|panel| panel.size);
+            if let Some(live) = live {
+                size.set_if_modified(live);
+            }
+        });
+    }
+
+    /// The leading panel's `initial_size`: the number held, clamped to this split's
+    /// bounds and in its unit. The bounds are the split's own and not the caller's, so the
+    /// two panels of one split cannot be clamped differently.
+    ///
+    /// **A `peek` and never a `read`**: `initial_size` is consulted once, in the panel's
+    /// own `use_hook` at mount, so subscribing to it would be a subscription to nothing --
+    /// and a loop with [`Split::follow`].
+    pub(crate) fn panel_size(self) -> PanelSize {
+        let size = self.size.peek().clamp(self.floor, self.ceiling);
+        match self.unit {
+            Unit::Percent => PanelSize::percent(size),
+            Unit::Pixels => PanelSize::px(size),
+        }
+    }
+
+    /// The following panel's: what the leading one leaves. A percentage either way -- the
+    /// rest of a share, or all of what a literal width leaves over.
+    pub(crate) fn rest(self) -> PanelSize {
+        match self.unit {
+            Unit::Percent => {
+                PanelSize::percent(100.0 - self.size.peek().clamp(self.floor, self.ceiling))
+            }
+            Unit::Pixels => PanelSize::percent(100.0),
+        }
+    }
+}
+
+/// How wide the **leading** side of a document is, as a percentage -- the side the tab is
+/// driven from, which [`DocumentBody`] draws on the left in both kinds of tab. Kept by
+/// place and not by pane, so switching from an assembly-driven tab to a source-driven one
+/// leaves the handle where the reader put it instead of throwing the two widths across the
+/// split.
+#[derive(Clone, Copy)]
+pub(crate) struct DocumentSplit(pub(crate) Split);
 
 /// Put the pane that follows away, or bring it back: the one write that gesture is,
 /// wherever it is made. The control on the bar ([`PaneToggle`]) and the window's key
@@ -213,14 +295,12 @@ pub(crate) struct DocumentBody {
 impl Component for DocumentBody {
     fn render(&self) -> impl IntoElement {
         let docs = use_open().docs;
-        let ratio = use_consume::<SplitRatio>().0;
-        let splits = use_consume::<Splits>().0;
+        let split = use_consume::<DocumentSplit>().0;
         let said = use_consume::<Follows>().0;
 
-        // Where the reader last left the handle, written back as they drag it, and read
-        // back with a `peek` for the reason `use_dragged_size` gives.
-        use_dragged_size(splits, ratio);
-        let wide = ratio.peek().clamp(1.0, 99.0);
+        // Where the reader last left the handle, written back as they drag it. Above the
+        // early return below, as a hook has to be.
+        split.follow();
 
         // Not reachable -- the tab and the table entry are closed together -- but a render
         // is no place to panic.
@@ -257,17 +337,17 @@ impl Component for DocumentBody {
 
         ResizableContainer::new()
             .direction(Direction::Horizontal)
-            .controller(splits)
+            .controller(split.context)
             .panel(
                 // `min_size` given rather than left to default: freya's default is a
                 // quarter of the initial size, so it would move with the reader's own
                 // drag instead of staying the floor.
-                ResizablePanel::new(PanelSize::percent(wide))
+                ResizablePanel::new(split.panel_size())
                     .min_size(10.0)
                     .child(leads),
             )
             .panel(
-                ResizablePanel::new(PanelSize::percent(100.0 - wide))
+                ResizablePanel::new(split.rest())
                     .min_size(10.0)
                     .child(follows),
             )

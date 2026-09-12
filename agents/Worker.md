@@ -56,7 +56,7 @@ clone is a few pointers and the plain shape holds -- here, and in the Project vi
 
 **A state is asked through one effect, and that effect is written once** (`use_asking`,
 `src/ui/worker.rs`). Every worker is fed the same way: a view writes what it wants into a state --
-the file it is showing into `ShowingFile`, the window it needs into `Window` -- and an effect at the
+the file it is showing into `ShowingFile`, the window it needs into `Sectioned::window` -- and an effect at the
 root reads what is owed off that and the state the answer lands in, marks it and sends. That was nine copies of four
 lines with the same two hazards in each; both are the hook's now. The question is read **through a
 memo**, so a state its own answers are written into is not asked again for each of them -- a fold of
@@ -118,7 +118,7 @@ worker decodes **at most `CHUNK` (8) of the ask** and then answers, because the 
 its newest question only *between* jobs. A window
 decoded whole would hold a symbol click behind every function on a screen and three screens of
 buffer; a chunk holds it behind a few, and the view asks for the rest once the chunk has landed. The
-answers land in `Reading` (`Sections` at the root) and never in `Analyzed`, which is one symbol's
+answers land in `Reading` (`Sectioned::reading` at the root) and never in `Analyzed`, which is one symbol's
 shape and is read by everything that draws a symbol. **A decoded stretch is a pure function of the
 object and the stretch and is never stale**, unlike a listing, which is stale the moment the ask
 moves on. So an answer is taken whenever it is about the object and the skeleton on screen,
@@ -126,13 +126,13 @@ whichever window asked for it, and only `pending` is judged against the ask; wha
 superseded is exactly what the next window asks for again. Two things bound it. A stretch farther
 than `KEEP` (512) from the last window is dropped as the answer lands. The whole reading is dropped
 when what is on screen stops being that object's code or the object closes under it
-(`use_reading_of`, an effect reading `Active`, `Objects` and `Beside`). It is an effect and not part
+(`use_reading_of`, an effect reading `Active`, `Objects` and the claim below). It is an effect and not part
 of `close_binary` because the skeleton holds every section's bytes, and the effect makes a rebuild
 and a project switch drop it by the same line.
 
 **A listing need not be a document tab, and one is not.** The Scratchpad is a page and has no
 `Document` at all, so a reading that followed the active document alone would leave the pad's
-listing undecoded for ever. `Beside` is the other way in: the object a listing that is no tab is
+listing undecoded for ever. `Sectioned::beside` is the other way in: the object a listing that is no tab is
 drawing, **claimed by the pane that draws it** while it is mounted and let go of on the way out,
 the way a pane registers its focusable box. A claim and not a question asked of the pads, because
 the pane is the only thing that knows there is a listing: a mechanism that asked would have to know
@@ -140,9 +140,12 @@ about pages and pads, and would hold a skeleton for a pad's program while the re
 Settings page. One `Reading` still does for both, because only one tab is ever on screen and a code
 tab and that pane are never mounted at once. `holding` is what an arriving answer is judged by --
 the open binaries *or* that claim -- since a pad's program is deliberately in neither `Objects` nor
-the paths a project saves (`agents/Scratchpad.md`). The window is a state of its own, `Window`, and not a
+the paths a project saves (`agents/Scratchpad.md`). The window is a state of its own and not a
 field of the reading, because the effect that works out the next window reads what is held and would
-wake itself if it wrote beside it.
+wake itself if it wrote beside it. The four -- the reading, the window, that claim and the rows the
+view built of them -- are one `Sectioned` (`src/ui/reading.rs`), so the hooks that keep them in step
+take one bundle, and asking it for rows by object (`rows_of`) is the one place the rule that rows
+outlive the reading they were counted from is written.
 
 **The worker is asked a question, not handed a symbol.** An `Ask` is either the symbol an
 assembly-driven tab names outright, or the source line a source-driven tab is driven from. For a
@@ -254,7 +257,7 @@ would otherwise leave the panel looking for ever.
 code from — `Object::lines_from_source`, which reads the same `SourceIndex` a locate does and hands
 back bare line numbers rather than symbols. It is a whole file at a time and not a query per row,
 and the Source pane asks it by writing the file it is drawing into `ShowingFile`, the way the
-section view asks for a window by writing it into `Window`: a view cannot reach the request channel,
+section view asks for a window by writing it into `Sectioned::window`: a view cannot reach the request channel,
 so a state it writes and an effect at the root reads (`use_mark_asks`, beside `Coded`) is how a pane
 asks. Worked **last** of the four, being the answer whose absence costs the reader least while they
 wait. It is judged on landing by the

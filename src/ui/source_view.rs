@@ -629,7 +629,7 @@ impl Component for SourceList {
         let marked = use_consume::<Marked>().0;
         let chars = chars_of(marked, Pane::Source);
         let analysis = use_consume::<Analysis>().0;
-        let code_rows = use_consume::<CodeRows>().0;
+        let sectioned = use_sectioned();
         // The assembly pane's run, in a memo of its own: `Marks` holds both panes' runs,
         // so a sweep in *this* pane writes the state the other's is read from. The memo
         // hands the same run back where the write left it alone, which is what spares
@@ -648,12 +648,16 @@ impl Component for SourceList {
         let pairs = use_memo(move || {
             let showing = showing.read();
             let (document, file) = &*showing;
+            // The rows only where they are this document's, which is the rule and the
+            // subscription both: a memo over a file's lines is not woken by another
+            // object's listing.
+            let built = document.code().and_then(|object| sectioned.rows_of(object));
             Arc::new(paired_lines(
                 document,
                 file,
                 pair.read().as_ref(),
                 &analysis.read(),
-                code_rows.read().as_deref(),
+                built.as_deref(),
             ))
         });
         let pairs = pairs.read().clone();
@@ -719,13 +723,11 @@ impl Component for SourceList {
                     // Asked before anything else: `owed_reveal` reads the marks, and that
                     // read is what wakes this on the next click.
                     let owing = owed_reveal(marked, Pane::Source)?;
+                    let built = document
+                        .code()
+                        .and_then(|object| sectioned.peek_rows_of(object));
                     owed_file_row(&owing, &file, length, |pair| {
-                        places_of(
-                            &document,
-                            pair,
-                            &analysis.peek(),
-                            code_rows.peek().as_deref(),
-                        )
+                        places_of(&document, pair, &analysis.peek(), built.as_deref())
                     })
                 }
             },
@@ -1121,14 +1123,14 @@ impl Component for SourcePane {
         // The tab's own document and not `Active`, which is a memo and a beat behind: this
         // pane is only ever mounted for the tab it belongs to.
         let marks = use_consume::<Marked>().0.read().clone();
-        let code_rows = use_consume::<CodeRows>().0;
+        let sectioned = use_sectioned();
         // Peeked and not read: the line a code tab opens at is read out of the rows, and
-        // a window of them decoding must not draw the pane again. In a scope of its own,
-        // so the guard is let go before anything below writes.
-        let side = {
-            let built = code_rows.peek();
-            source_side(Some(&self.document), &analysis, &marks, built.as_deref())
-        };
+        // a window of them decoding must not draw the pane again.
+        let built = self
+            .document
+            .code()
+            .and_then(|object| sectioned.peek_rows_of(object));
+        let side = source_side(Some(&self.document), &analysis, &marks, built.as_deref());
 
         // **The one fact three questions are asked about:** which file this pane is
         // showing. Its text, the lines of it anything open has code from, and which of

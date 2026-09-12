@@ -408,7 +408,7 @@ The shape every test in `ui.rs` follows:
    the app's own, that is `runner.provide_root_context(test_roots)`: `test_roots` is `roots`
    (`src/ui.rs`) over a store of this process's own, so a harness is given **the list `app()` is
    given** and not a second one written beside it. It hands back a flat `Roots`, so a test takes
-   the state it wants by name -- `roots.states`, `roots.doors`, `roots.analysis`, `roots.alt`.
+   the state it wants by name -- `roots.states`, `roots.doors`, `roots.analysis`, `roots.keys`.
    Anything the test substitutes goes beside it in the same closure, and a state whose *value*
    differs is **written** rather than provided a second time: a second provide of a type replaces
    the first, which leaves the harness reading one state and the test another. That is what
@@ -416,7 +416,10 @@ The shape every test in `ui.rs` follows:
 
    A harness too small for `test_roots` still provides the modifiers with one call,
    `provide_modifiers` (`src/ui/keys.rs`), which is `roots`'s own: a code row reads all three, so
-   a harness that provided Shift alone mounted rows that panicked on the first link.
+   a harness that provided Shift alone mounted rows that panicked on the first link. It hands back
+   the whole `ModifierKeys`, which is also what the root's key handler is given -- a harness that
+   built a keyboard of its own out of fresh states wrote three no row was looking at, and the
+   chord it pressed held a Ctrl the rows never saw.
 
    None of this needs a macro. The two freya types a signature would have to name are
    `freya_core::integration::Runner` and `freya_core::element::AppComponent`, neither in freya's

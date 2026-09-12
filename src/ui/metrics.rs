@@ -214,7 +214,7 @@ pub(crate) fn gesture_width() -> f32 {
 /// A fixed width and not a `ResizableContainer`, which is what the two splits in this app
 /// that a reader can drag are: a tab that is not the one on screen is unmounted, and a
 /// `ResizablePanel` forgets its size on unmount — so a draggable width
-/// here would need a number kept at the root, the way `SplitRatio` is, for something
+/// here would need a number kept at the root, the way a `Split` is, for something
 /// nobody has asked to be able to drag.
 pub(crate) const PAD_LIST_WIDTH: f32 = 150.0;
 

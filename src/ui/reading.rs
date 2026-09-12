@@ -27,30 +27,74 @@ pub(crate) const CHUNK: usize = 8;
 /// Well past the view's buffer, so filling the buffer never evicts it.
 pub(crate) const KEEP: usize = 512;
 
-/// The decoded stretches of the object whose code is on screen, shared through context.
-#[derive(Clone, Copy)]
-pub(crate) struct Sections(pub(crate) State<Reading>);
-
-/// The stretches the view wants next, shared through context. Its own state and not a
-/// field of [`Reading`]: the effect working out the window reads what is held and would
-/// wake itself on writing beside it.
-#[derive(Clone, Copy)]
-pub(crate) struct Window(pub(crate) State<Option<CodeAsk>>);
-
-/// The object a listing that is **no document tab** is drawing, or `None` while there is
-/// none.
+/// The reading of one object's code, as everything that touches it is given it: what has
+/// been decoded, what is wanted next, whose listing it is when no tab's, and the rows the
+/// view last built.
 ///
-/// The Scratchpad's pane claims it while it is mounted and lets go on the way out, the way
-/// a pane registers its focusable box (`use_tab_keyboard`, `src/ui/keyboard.rs`). It is a
-/// claim and not a question asked of the pads, because the pane drawing the listing is the
-/// only thing that knows there is one: a general mechanism asking would have to know about
-/// pages and pads, and would hold a skeleton for a pad's program while the reader sat on
-/// the Settings page.
+/// **One bundle and not four contexts**, because the four are one mechanism and are read
+/// together: [`use_reading_of`] keeps the first three in step, an answer is taken into two
+/// of them ([`use_analysis_with`]), and the rows mean nothing apart from the reading they
+/// were counted from. That last is the rule [`Sectioned::rows_of`] is -- written once here
+/// rather than checked again at each of the three readers.
 #[derive(Clone, Copy)]
-pub(crate) struct Beside(pub(crate) State<Option<Arc<Object>>>);
+pub(crate) struct Sectioned {
+    /// The decoded stretches of the object whose code is on screen.
+    pub(crate) reading: State<Reading>,
+    /// The stretches the view wants next. Its own state and not a field of [`Reading`]:
+    /// the effect working out the window reads what is held and would wake itself on
+    /// writing beside it.
+    pub(crate) window: State<Option<CodeAsk>>,
+    /// The object a listing that is **no document tab** is drawing, or `None` while there
+    /// is none.
+    ///
+    /// The Scratchpad's pane claims it while it is mounted and lets go on the way out,
+    /// the way a pane registers its focusable box (`use_tab_keyboard`,
+    /// `src/ui/keyboard.rs`). It is a claim and not a question asked of the pads, because
+    /// the pane drawing the listing is the only thing that knows there is one: a general
+    /// mechanism asking would have to know about pages and pads, and would hold a
+    /// skeleton for a pad's program while the reader sat on the Settings page.
+    pub(crate) beside: State<Option<Arc<Object>>>,
+    /// The rows the section view is drawing: [`None`] until the skeleton has come, and
+    /// rebuilt by the view's place-keeping effect with every answer. One slot and not a
+    /// map, since one code listing is mounted at a time; which listing it is about is the
+    /// [`Reading`] the rows were counted from, and asking for them is
+    /// [`Sectioned::rows_of`]. Here and not in the view because the Source pane beside an
+    /// object's code reads them too, to find the lines the picked-out instructions were
+    /// compiled from.
+    pub(crate) rows: State<Option<Arc<Built>>>,
+}
+
+impl Sectioned {
+    /// The rows on screen, and only where they are `object`'s: one slot holds the rows of
+    /// whichever listing is mounted, and for the pass between a switch and the rebuild it
+    /// holds the last one's.
+    ///
+    /// Judged by the [`Built`]'s own reading and not by the state, which the rebuild is a
+    /// pass behind. Reading the rows is what redraws the caller as answers land.
+    pub(crate) fn rows_of(&self, object: &Arc<Object>) -> Option<Arc<Built>> {
+        self.rows
+            .read()
+            .clone()
+            .filter(|built| built.reading.is_about(object))
+    }
+
+    /// The same, peeked: for a handler or an effect that must not be woken by a window
+    /// decoding.
+    pub(crate) fn peek_rows_of(&self, object: &Arc<Object>) -> Option<Arc<Built>> {
+        self.rows
+            .peek()
+            .clone()
+            .filter(|built| built.reading.is_about(object))
+    }
+}
+
+/// The reading as a component sees it.
+pub(crate) fn use_sectioned() -> Sectioned {
+    use_consume::<Sectioned>()
+}
 
 /// Claim `object` as the listing that is no tab, for as long as this scope is mounted.
-/// See [`Beside`].
+/// See [`Sectioned::beside`].
 pub(crate) fn use_code_beside(mut beside: State<Option<Arc<Object>>>, object: &Arc<Object>) {
     // By pointer identity and written from the render, so a rebuild's new object is
     // claimed the moment the pane draws it. `set_if_modified` would compare `Option`s by
@@ -281,10 +325,14 @@ impl Reading {
 pub(crate) fn use_reading_of(
     active: Memo<Option<Entry>>,
     objects: State<Vec<Arc<Object>>>,
-    beside: State<Option<Arc<Object>>>,
-    mut reading: State<Reading>,
-    mut window: State<Option<CodeAsk>>,
+    sectioned: Sectioned,
 ) {
+    let Sectioned {
+        mut reading,
+        mut window,
+        beside,
+        ..
+    } = sectioned;
     use_side_effect(move || {
         let active = active.read().clone().map(|(_, stop)| stop.document);
         let open = objects.read();
@@ -314,11 +362,8 @@ pub(crate) fn use_reading_of(
 ///
 /// Called at the root beside [`use_analysis_with`], which starts the worker and hands
 /// back `requests`, the way to ask it.
-pub(crate) fn use_code_asks(
-    reading: State<Reading>,
-    window: State<Option<CodeAsk>>,
-    requests: Requests<Question>,
-) {
+pub(crate) fn use_code_asks(sectioned: Sectioned, requests: Requests<Question>) {
+    let (reading, window) = (sectioned.reading, sectioned.window);
     use_asking(
         move || window.read().clone(),
         move |ask| {

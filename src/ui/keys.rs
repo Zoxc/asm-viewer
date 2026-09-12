@@ -3,6 +3,10 @@
 //! that means something else under one has to read these rather than the event. Every
 //! door reads one -- a row that opens something, a link in a listing -- and so does the
 //! pages menu, which offers the Debug page only under Alt.
+//!
+//! The three are read off [`ModifierKeys`], which is the whole keyboard: those three and
+//! the two states a Caps Lock made into Ctrl is learnt with. One value and not five
+//! handles passed about, so the learning and what a door reads cannot come apart.
 
 use super::*;
 
@@ -22,34 +26,9 @@ pub(crate) struct Ctrl(pub(crate) State<bool>);
 #[derive(Clone, Copy)]
 pub(crate) struct Alt(pub(crate) State<bool>);
 
-/// The three states [`provide_modifiers`] made, for the caller that keeps them.
-#[derive(Clone, Copy)]
-pub(crate) struct Held {
-    pub(crate) shift: State<bool>,
-    pub(crate) ctrl: State<bool>,
-    pub(crate) alt: State<bool>,
-}
-
-/// The three, made and provided together.
-///
-/// One call and not three, because a code row reads all three: Shift for a press that
-/// reaches, Ctrl for whether a label is a link now, Alt for whether a press on one is a
-/// door at all. A harness that provided Shift alone mounted rows that panicked on the
-/// first link, so [`roots`] and the bare test harnesses both come here.
-pub(crate) fn provide_modifiers() -> Held {
-    let held = Held {
-        shift: State::create(false),
-        ctrl: State::create(false),
-        alt: State::create(false),
-    };
-    provide_root_context(Shift(held.shift));
-    provide_root_context(Ctrl(held.ctrl));
-    provide_root_context(Alt(held.alt));
-    held
-}
-
-/// The three modifiers as the root's global key handlers keep them, and what it takes to keep
-/// them right.
+/// The keyboard as the root's global key handlers keep it: the three modifiers every door
+/// reads and the two states it takes to keep them right, made together
+/// ([`provide_modifiers`]) because they are only right together.
 ///
 /// A key event carries the key's own name and the modifier mask **as it was before the
 /// key**: on Wayland the compositor sends the key and then the modifiers, and freya keeps
@@ -65,9 +44,11 @@ pub(crate) fn provide_modifiers() -> Held {
 /// (`notes/upstream/freya.md`).
 #[derive(Clone, Copy)]
 pub(crate) struct ModifierKeys {
-    shift: State<bool>,
-    ctrl: State<bool>,
-    alt: State<bool>,
+    /// The three every door reads, each provided as a context of its own by
+    /// [`provide_modifiers`] so that a row watching Ctrl is not redrawn by Shift.
+    pub(crate) shift: State<bool>,
+    pub(crate) ctrl: State<bool>,
+    pub(crate) alt: State<bool>,
     /// Whether this keyboard's Caps Lock has shown itself to be a Ctrl.
     caps_is_ctrl: State<bool>,
     /// Whether a key *named* Control is down, which is what tells a Caps Lock released
@@ -76,19 +57,16 @@ pub(crate) struct ModifierKeys {
 }
 
 impl ModifierKeys {
-    pub(crate) fn new(
-        shift: State<bool>,
-        ctrl: State<bool>,
-        alt: State<bool>,
-        caps_is_ctrl: State<bool>,
-        control_held: State<bool>,
-    ) -> Self {
+    /// A keyboard with nothing held: its five states, made here and nowhere else. All
+    /// five are `State<bool>`, so a constructor taking them in would be five arguments
+    /// any two of which could be swapped without a word from the compiler.
+    pub(crate) fn create() -> Self {
         Self {
-            shift,
-            ctrl,
-            alt,
-            caps_is_ctrl,
-            control_held,
+            shift: State::create(false),
+            ctrl: State::create(false),
+            alt: State::create(false),
+            caps_is_ctrl: State::create(false),
+            control_held: State::create(false),
         }
     }
 
@@ -135,4 +113,22 @@ impl ModifierKeys {
             *key != Key::Named(NamedKey::Alt) && modifiers.contains(Modifiers::ALT),
         );
     }
+}
+
+/// The keyboard, and the three contexts read off it, made and provided together.
+///
+/// One call and not four, because the five states have to be one keyboard: a row reads
+/// Shift for a press that reaches, Ctrl for whether a label is a link now and Alt for
+/// whether a press on one is a door at all, and the root's key handler writes those same
+/// three off [`ModifierKeys`]. A harness that provided Shift alone mounted rows that
+/// panicked on the first link, and one that built a keyboard of its own wrote three
+/// states no row was looking at -- so [`roots`] and the bare test harnesses both come
+/// here.
+pub(crate) fn provide_modifiers() -> ModifierKeys {
+    let keys = ModifierKeys::create();
+    provide_root_context(keys);
+    provide_root_context(Shift(keys.shift));
+    provide_root_context(Ctrl(keys.ctrl));
+    provide_root_context(Alt(keys.alt));
+    keys
 }

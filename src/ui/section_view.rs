@@ -36,13 +36,6 @@ pub(crate) struct Built {
     pub(crate) reading: Reading,
 }
 
-/// The rows the section view is drawing, shared through context: [`None`] until the
-/// skeleton has come, and rebuilt by the view's place-keeping effect with every answer.
-/// At the root and not in the view because the Source pane beside an object's code reads
-/// them too, to find the lines the picked-out instructions were compiled from.
-#[derive(Clone, Copy)]
-pub(crate) struct CodeRows(pub(crate) State<Option<Arc<Built>>>);
-
 /// The positions the instructions drawn in the listing rows `rows` of an object's code
 /// were compiled from, in listing order, over the stretches held -- which is the window
 /// around the reader, so a run over the whole listing costs what is decoded and no more.
@@ -563,8 +556,8 @@ impl PartialEq for SectionList {
 
 impl Component for SectionList {
     fn render(&self) -> impl IntoElement {
-        let reading_state = use_consume::<Sections>().0;
-        let window = use_consume::<Window>().0;
+        let sectioned = use_sectioned();
+        let reading_state = sectioned.reading;
         // Reading it is what redraws the listing as answers land.
         let reading = reading_state.read().clone();
         let marked = use_consume::<Marked>().0;
@@ -595,7 +588,7 @@ impl Component for SectionList {
         use_searching(at, searchable.clone());
         // The rows, produced by the place-keeping effect and rendered from here, so that
         // new rows and the offset that keeps the reader's place under them land together.
-        let rows = use_consume::<CodeRows>().0;
+        let rows = sectioned.rows;
 
         let object = self.object.clone();
         // The object as `use_window`'s effect reads it. That effect's closure is built on
@@ -611,12 +604,7 @@ impl Component for SectionList {
         if moved {
             current.set(object.clone());
         }
-        let about = reading.is_about(&object);
-        let generation = if about {
-            Some(reading.generation)
-        } else {
-            None
-        };
+        let generation = reading.is_about(&object).then_some(reading.generation);
         // The place on the trail this listing is showing, which is what its position and
         // its runs are kept under: two stops in one object's code are two places, and
         // stepping between them is what Back does inside a listing. Read and not peeked,
@@ -662,11 +650,11 @@ impl Component for SectionList {
             &stop,
             generation,
         );
-        use_window(reading_state, window, rows, controller, viewport, current);
+        use_window(sectioned, controller, viewport, current);
 
         // No skeleton yet means no rows, and a list of none: mounted all the same, see
-        // `SectionRows::rows`.
-        let built = rows.read().clone().filter(|_| about);
+        // `SectionRows::rows`. Reading them is also what redraws this as a window lands.
+        let built = sectioned.rows_of(&self.object);
         let length = built.as_ref().map_or(0, |rows| rows.len());
 
         // The branches touching a picked-out instruction, stretch by held stretch: the
@@ -1522,13 +1510,12 @@ pub(crate) fn spot_at(rows: &Rows, row: usize) -> Option<Spot> {
 /// Ask for the stretches within [`BUFFER`] screens of the viewport that are not held,
 /// nearest the reader first; and, before there is a skeleton, ask for that.
 fn use_window(
-    reading: State<Reading>,
-    mut window: State<Option<CodeAsk>>,
-    rows: State<Option<Arc<Built>>>,
+    sectioned: Sectioned,
     controller: ScrollController,
     viewport: State<f32>,
     object: State<Arc<Object>>,
 ) {
+    let (reading, mut window, rows) = (sectioned.reading, sectioned.window, sectioned.rows);
     use_side_effect(move || {
         // The five inputs a scroll, a resize, an answer, a change of reading or another
         // object brings. The reading is **read**, so the effect follows it: the pane

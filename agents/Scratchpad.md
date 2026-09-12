@@ -219,7 +219,7 @@ asked for no build is not building.
 
 **The pane draws it as an object's whole code, beside the editor.** The two are a source-driven
 tab's two panes with a source side the reader types in, in a `ResizableContainer` of the pad's own
-(`PadSplit`, `PadSplits`) rather than the document split's -- two containers sharing one context
+(`PadSplit`, a `Split` like the document's) rather than the document split's -- two containers sharing one context
 would carry the handle across a switch between a document and this page, and the pad's drag would
 be written into the project's session, where a pad has no business being. The editor leads, as a
 driven side does and because the keyboard goes to the first box a tab registers. The listing is put
@@ -294,7 +294,8 @@ read the directory the delete is about to remove.
 **That panel is a fixed width** (`PAD_LIST_WIDTH`) and not a `ResizableContainer`, unlike the two
 splits in this app a reader can drag. A tab that is not the one on screen is
 unmounted, and a `ResizablePanel` forgets its size on unmount, so a draggable width here would need
-a number kept at the root the way `SplitRatio` is, for something nobody has asked to drag. Its rows
+a `Split` kept at the root the way the three draggable ones are, for something nobody has asked
+to drag. Its rows
 are a plain `ScrollView`, the History list's shape rather than the symbol list's, there being a
 handful of one-label rows, and each draws the pad's **name**. **`pad_label` is the one place that
 decides what that is**: the name the reader gave it, or, for a pad they have not named, the id in

@@ -123,6 +123,15 @@ impl Document {
         }
     }
 
+    /// The object whose code this is — a document that is a whole binary, and not one
+    /// that is a symbol or a file. What the section view's rows are of.
+    pub fn code(&self) -> Option<&Arc<Object>> {
+        match self {
+            Document::Code(object) => Some(object),
+            _ => None,
+        }
+    }
+
     /// The symbol this is about — a document that is a function, and not one that is an
     /// object or a file. What the analysis worker is asked for.
     pub fn symbol(&self) -> Option<&Symbol> {

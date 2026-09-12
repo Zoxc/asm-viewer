@@ -138,7 +138,8 @@ a reader's arrangement and not a promise: a name this build lacks is dropped, on
 lands once, an empty group is dropped and the split closes up around it, and **every panel
 this build has that the file never named is put in the first group** -- otherwise a release
 that adds a panel would hide it from everyone who had ever arranged their sidebar. The
-sidebar's width needs `SidebarWidth` beside `SidebarSplits` for `SplitRatio`'s reason: a
+sidebar's width is a `SidebarSplit` -- a number and the `ResizableContext` it is read back out
+of, as the document's split is (`Split`, `agents/UI.md`): a
 `ResizablePanel` registers at its `initial_size` and forgets on unmount, and the window's body
 is rebuilt whenever a project arrives or goes. What **cannot** be saved is how tall a group
 inside the dock was dragged; freya recomputes those on every render and hands out no

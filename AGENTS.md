@@ -241,7 +241,8 @@ command.
   one a line is inside; `functions/rust.rs` is the scanner that finds Rust's without the grammar.
 - `src/ui.rs` — the freya UI's root: its prelude, the list of its files, `toolbar` with its two
   history buttons, `app`, and `roots` — the one list of root contexts, which the headless tests
-  are given too.
+  are given too. A context holding one state is one `context(Wrapper, value)` line there; a
+  bundle or a memo is a `provide`.
 - `src/ui/metrics.rs` — every measurement no component owns, and the fonts they follow.
 - `src/ui/palette.rs` — every colour, the theme it is resolved from, and the compositing rules.
 - `src/ui/state.rs` — what the root provides and no one mechanism owns, and the bundles the
@@ -269,7 +270,9 @@ command.
 - `src/ui/keyboard.rs` — the boxes inside the tab on screen the keyboard can be in, and the
   ask a press on a chip makes for it to go there.
 - `src/ui/keys.rs` — whether Shift, Ctrl and Alt are held, kept by the root's global key
-  handlers because a pointer event carries no modifiers.
+  handlers because a pointer event carries no modifiers: `ModifierKeys`, those three and the
+  two states a Caps Lock made into Ctrl is learnt with, made and provided in one call
+  (`provide_modifiers`) so no caller can join five booleans in the wrong order.
 - `src/ui/chords.rs` — the chords the window answers wherever the keyboard is, and the one
   hook every text box declines them with: freya's own default for each of its two boxes,
   written once.
@@ -286,7 +289,8 @@ command.
 - `src/ui/locations.rs` — every symbol a line, or the function around it, was compiled into: the
   question, the answer, the panel; and the three questions a name's menu offers.
 - `src/ui/reading.rs` — what the worker has decoded of an object's code for the section view,
-  and the window of it the view asks for next.
+  and the window of it the view asks for next: `Sectioned`, the one bundle those, the object a
+  listing that is no tab claims, and the rows the view built are all held in.
 - `src/ui/rescued_view.rs` — the window naming the stored files that would not parse and where
   each was moved to.
 - `src/ui/search_view.rs` — the Search panel: what was searched for, the hits as they arrive,
@@ -323,7 +327,9 @@ command.
 - `src/ui/source_view.rs` — the source side of one, the bar over it, and which file it is
   showing: the one fact the reader, the gutter's marks and the links are each asked about.
 - `src/ui/split.rs` — one document drawn: which side leads, and which panes a tab has, with
-  the control on the leading pane's bar that puts the other away.
+  the control on the leading pane's bar that puts the other away. Also `Split`, what each of
+  the app's three resizable splits is: the number it holds across the container's unmount, the
+  context that number is read back out of, and whether it is a percentage or pixels.
 - `src/ui/debug_view.rs` — the Debug page: the panics that can be raised on purpose, so the
   box `src/panics.rs` puts up is one press away rather than a patched build, and the files
   they left behind. In the pages menu only when Alt was held as it opened.

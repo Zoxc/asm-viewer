@@ -106,13 +106,18 @@ and so does the runner's own `provide_root_context`. The list:
 tabs and the trail behind each); `Bookmarked` (the project's bookmarks, in their saved shape);
 `Proj` (which project all of that belongs to); `Loading` (the files on their way into `Objects`);
 `Marked` (each pane's selected run, and what it owes the other) with `Shift` and `Ctrl`;
-`CodeRows` (the section view's rows, which the Source pane beside it reads too);
-`Analysis` (what the worker has to say about the selected symbol); `Sections`/`Window` (what it has
-decoded of the object whose code is on screen, and the stretches the view wants next); `Locations`
-(every symbol the line, or the function around it, last asked about was compiled into);
+`Analysis` (what the worker has to say about the selected symbol); `Sectioned` (the reading of one
+object's code, whole: what has been decoded, the stretches the view wants next, the object a
+listing that is no tab claims, and the rows the view built -- which the Source pane beside it reads
+too); `Locations` (every symbol the line, or the function around it, last asked about was compiled
+into);
 `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad); `Talking` (whether a
-language server is running, and what would stop it -- `agents/Lsp.md`); `SplitRatio`/`Splits`
+language server is running, and what would stop it -- `agents/Lsp.md`); `DocumentSplit`
 (how wide a document's leading side is); plus the memos `Symbols` and `Active`.
+
+**A context holding one state is one line**: `context(Wrapper, value)` makes the state, provides
+it under the wrapper and hands the state back, so the thirty of them differ in two tokens and
+none can wrap the wrong state in the right newtype. A bundle or a memo is `provide` as before.
 
 **Three of them a run has to decide for itself**, and they are what `roots` takes or leaves.
 Where the files go and what the settings file said are handed in, so a test can name a store of
@@ -122,8 +127,9 @@ with a value, because what a load moved aside is only known once the load has ru
 **A context lives with the mechanism that owns it, and so does the bundle that groups it.**
 `src/ui/state.rs` holds only what belongs to no one mechanism -- the objects, the store, the
 project, the window -- and each of the others sits beside the code it is about: `Marked` in
-`marks.rs`, `Doors` in `focus.rs`, `Keyboard` in `keyboard.rs`, `Shift`/`Ctrl`/`Alt` in
-`keys.rs`, `Loading` in `loading.rs`, the `Pad*` family in `pad.rs`. The **value** a context holds goes the same way
+`marks.rs`, `Doors` in `focus.rs`, `Keyboard` in `keyboard.rs`, `ModifierKeys` with
+`Shift`/`Ctrl`/`Alt` in `keys.rs`, `Sectioned` in `reading.rs`, `Loading` in `loading.rs`, the
+`Pad*` family in `pad.rs`. The **value** a context holds goes the same way
 where one page is all that edits it: `Proj` and `Prefs` are provided at the root, but
 `OpenProject` sits in `project_view.rs` and `EditedSettings` in `settings_view.rs`, beside the
 pages that fill them.
@@ -731,15 +737,19 @@ Everything the two panes share is keyed by pane *identity* and not by position (
 and no kept row. The panes are two different component types, so a swap unmounts and remounts both;
 their rows come back where `use_kept_position` puts them.
 
-That unmounting is why the split ratio is held at the root (`SplitRatio`, with `Splits` the shared
-`ResizableContext` it is read back out of). A `ResizablePanel` registers at its `initial_size` in a
-`use_hook` and *removes* its entry in a `use_drop`, so even a shared context comes back holding the
-initial sizes under new panel ids. What survives is a number the app keeps, fed in as `initial_size`
-and written back out while the split is on screen. The writing back is `use_dragged_size`
-(`src/ui/split.rs`), one hook for all three splits -- the document's, the Scratchpad's and the
-sidebar's -- which also carries the reason the number is fed back in with a `peek` and never a
-`read`: `initial_size` is consulted once, in the panel's own `use_hook`, so a `read` there would
-subscribe to nothing and loop with the effect. It is one number for the app and not one per
+That unmounting is why the split ratio is held at the root. A `ResizablePanel` registers at its
+`initial_size` in a `use_hook` and *removes* its entry in a `use_drop`, so even a shared context
+comes back holding the initial sizes under new panel ids. What survives is a number the app keeps,
+fed in as `initial_size` and written back out while the split is on screen. That number and the
+`ResizableContext` it is read back out of are one `Split` (`src/ui/split.rs`), which is what each
+of the app's three splits is: the document's (`DocumentSplit`), the Scratchpad's (`PadSplit`) and
+the sidebar's (`SidebarSplit`) -- that last one in pixels where the other two are percentages,
+since its panel is a literal width. A `Split` carries the bounds it is dragged within, so
+`follow()` writes the drag back and `panel_size()`/`rest()` hand the two panels their sizes: three
+consumers and no clamp restated at any of them. `follow` is a hook, called unconditionally and
+above any early return; `panel_size` `peek`s and never `read`s, `initial_size` being consulted
+once in the panel's own `use_hook`, so a `read` there would subscribe to nothing and loop with the
+effect. It is one number for the app and not one per
 document: per-document would be a third `Positions`-shaped map to forget in `close_tab`, for a
 number nobody asked to differ per document. That number is **the leading panel's width and not the
 assembly pane's**, the one thing here deliberately kept by place rather than by pane. Both readings

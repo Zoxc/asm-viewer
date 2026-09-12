@@ -840,15 +840,15 @@ fn recent_symbols(shown: Option<&Shown>, visits: &Visits) -> Vec<Symbol> {
 pub(crate) fn use_analysis_with(
     asked: Asked,
     objects: State<Vec<Arc<Object>>>,
-    beside: State<Option<Arc<Object>>>,
+    sectioned: Sectioned,
     visits: State<Visits>,
     mut analysis: State<Analyzed>,
     located: State<Located>,
     coded: State<Coded>,
     showing: State<Option<Arc<str>>>,
-    reading: State<Reading>,
     work: impl Fn(Question) -> Answer + Send + 'static,
 ) -> Requests<Question> {
+    let (beside, reading) = (sectioned.beside, sectioned.reading);
     // The worker and the task that listens to it, started once and never restarted.
     //
     // A `std::thread` and not a spawned task: this is seconds of decoding, DWARF parsing

@@ -842,8 +842,7 @@ impl Component for PadAssembly {
     }
 
     fn render(&self) -> impl IntoElement {
-        let beside = use_consume::<Beside>().0;
-        use_code_beside(beside, &self.object);
+        use_code_beside(use_sectioned().beside, &self.object);
 
         // Open on the pad's own code rather than at the top, which for a linked Rust
         // program is the runtime's. A `Planting` and not a place in `Places::code_at`: the listing
@@ -1231,18 +1230,15 @@ impl Component for ScratchpadTab {
 
         let editing = text.read().holds(&shown).then(|| shown.clone());
 
-        let ratio = use_consume::<PadSplit>().0;
-        let splits = use_consume::<PadSplits>().0;
+        let split = use_consume::<PadSplit>().0;
         // The pad's listing is filed under `Placing::Pad`, the key its toggle writes and
         // the one its find bar and its place are kept under. One flag and not one per
         // pad: the reader is arranging the window rather than saying something about a
         // pad.
         let said = use_consume::<Follows>().0;
         let following = following(Placing::Pad, None, &said.read());
-        // Where the reader left the handle, written back as they drag it, and read back
-        // with a `peek` for the reason `use_dragged_size` gives.
-        use_dragged_size(splits, ratio);
-        let leading = ratio.peek().clamp(1.0, 99.0);
+        // Where the reader left the handle, written back as they drag it.
+        split.follow();
 
         let output = ran.map(|(verdict, lines)| {
             OutputPane {
@@ -1303,16 +1299,16 @@ impl Component for ScratchpadTab {
                 false => source_column,
                 true => ResizableContainer::new()
                     .direction(Direction::Horizontal)
-                    .controller(splits)
+                    .controller(split.context)
                     .panel(
                         // The editor leads, as a source-driven tab's own side does -- and
                         // because the keyboard goes to the first box a tab registers.
-                        ResizablePanel::new(PanelSize::percent(leading))
+                        ResizablePanel::new(split.panel_size())
                             .min_size(10.0)
                             .child(source_column),
                     )
                     .panel(
-                        ResizablePanel::new(PanelSize::percent(100.0 - leading))
+                        ResizablePanel::new(split.rest())
                             .min_size(10.0)
                             .child(assembly),
                     )

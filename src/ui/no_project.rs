@@ -150,8 +150,7 @@ impl Component for WindowBody {
     fn render(&self) -> impl IntoElement {
         let proj = use_consume::<Proj>().0;
         let sidebar_dock = use_consume::<SidebarDock>().0;
-        let width = use_consume::<SidebarWidth>().0;
-        let splits = use_consume::<SidebarSplits>().0;
+        let split = use_consume::<SidebarSplit>().0;
         let strip = use_open().strip;
         let opened = use_memo(move || proj.read().file.is_some());
         // A memo over the one thing this branch asks of the strip, not a read of it: the
@@ -160,7 +159,7 @@ impl Component for WindowBody {
         let any_tabs = use_memo(move || !strip.read().tabs().is_empty());
         // Above the early return, as a hook has to be: the width is followed here rather
         // than beside the container, which is only built when a project is open.
-        use_dragged_size(splits, width);
+        split.follow();
 
         if !opened() {
             // Settings and the Scratchpad are nobody's project's, so they open with none --
@@ -175,18 +174,17 @@ impl Component for WindowBody {
 
         // The sidebar beside the one proportional panel, which therefore takes whatever is
         // left. Docking cannot express a literal width, which is why this split is a
-        // `ResizableContainer` and not another `DockingArea`. The width is read back with
-        // a `peek` for the reason `use_dragged_size` gives.
+        // `ResizableContainer` and not another `DockingArea`.
         ResizableContainer::new()
             .direction(Direction::Horizontal)
-            .controller(splits)
+            .controller(split.context)
             .panel(
-                ResizablePanel::new(PanelSize::px(width.peek().clamp(120.0, 900.0)))
+                ResizablePanel::new(split.panel_size())
                     .min_size(120.0)
                     .child(docking_area(sidebar_dock)),
             )
             .panel(
-                ResizablePanel::new(PanelSize::percent(100.0))
+                ResizablePanel::new(split.rest())
                     .min_size(10.0)
                     .child(ContentArea),
             )

@@ -443,10 +443,8 @@ pub(crate) struct Roots {
     pub(crate) follows: State<HashMap<Placing, bool>>,
     pub(crate) states: ProjectStates,
     pub(crate) doors: Doors,
-    pub(crate) code_rows: State<Option<Arc<Built>>>,
-    pub(crate) shift: State<bool>,
-    pub(crate) ctrl: State<bool>,
-    pub(crate) alt: State<bool>,
+    /// The keyboard, the three modifiers a door reads among its five states.
+    pub(crate) keys: ModifierKeys,
     pub(crate) asking: State<Option<String>>,
     pub(crate) unopened: State<Option<project::Failure>>,
     pub(crate) finder: State<Finder>,
@@ -454,9 +452,7 @@ pub(crate) struct Roots {
     pub(crate) analysis: State<Analyzed>,
     pub(crate) located: State<Located>,
     pub(crate) coded: State<Coded>,
-    pub(crate) reading: State<Reading>,
-    pub(crate) window: State<Option<CodeAsk>>,
-    pub(crate) beside: State<Option<Arc<Object>>>,
+    pub(crate) sectioned: Sectioned,
     pub(crate) sourced: State<Sourced>,
     pub(crate) showing: State<Option<Arc<str>>>,
     pub(crate) finds: State<Finds>,
@@ -474,6 +470,19 @@ pub(crate) struct Roots {
 fn provide<T: Clone + 'static>(value: T) -> T {
     provide_root_context(value.clone());
     value
+}
+
+/// Make a state, provide it under the context `wrap` names, and hand the state back:
+/// what a line of [`roots`] that provides one state is, written once.
+///
+/// `wrap` is the context's own tuple struct, used as the function it is. Thirty lines
+/// spelling the make, the wrap and the unwrap out are thirty places to wrap the wrong
+/// state in the right newtype and read like the rest. The bundles and the memos keep
+/// [`provide`]: they are not one state.
+fn context<T: 'static, C: Clone + 'static>(wrap: fn(State<T>) -> C, value: T) -> State<T> {
+    let state = State::create(value);
+    provide_root_context(wrap(state));
+    state
 }
 
 /// Every root context, made and provided in one call.
@@ -494,10 +503,10 @@ fn provide<T: Clone + 'static>(value: T) -> T {
 pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     // The one store this run keeps its files in, handed down from here: no other module
     // looks the place up for itself.
-    let store = provide(Storage(State::create(store))).0;
-    let prefs = provide(Prefs(State::create(EditedSettings::of(settings)))).0;
-    let objects = provide(Objects(State::create(Vec::new()))).0;
-    let loading = provide(Loading(State::create(Loads::default()))).0;
+    let store = context(Storage, store);
+    let prefs = context(Prefs, EditedSettings::of(settings));
+    let objects = context(Objects, Vec::new());
+    let loading = context(Loading, Loads::default());
     // What is open, the strip and the id table together. Empty: what a restored session
     // puts in the bar is what the reader left, and a session that saved nothing opens on
     // the placeholder, the pages being one menu away.
@@ -528,43 +537,39 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
 
     // Where the tab bar has measured its chips to. At the root and not in the bar: the
     // bar is mounted at most once, and a test reads the places off it from here.
-    provide(Chipped(State::create(Chips::default())));
+    context(Chipped, Chips::default());
 
-    // The three the window's arrangement is kept in, and the two contexts their panes
-    // register into. 50.0: what the leading side starts at, before anything is dragged.
-    // 380: what the widest group of the default arrangement needs to name every panel in
-    // it, the four across the top being the widest. A group's bar neither elides nor
-    // scrolls, so a narrower sidebar would open with the last name clipped.
-    let dock = provide(SidebarDock(State::create(DockArea::default()))).0;
-    let split = provide(SplitRatio(State::create(50.0))).0;
-    let sidebar = provide(SidebarWidth(State::create(380.0))).0;
-    provide(Splits(State::create(ResizableContext {
-        direction: Direction::Horizontal,
-        ..Default::default()
-    })));
-    provide(SidebarSplits(State::create(ResizableContext {
-        direction: Direction::Horizontal,
-        ..Default::default()
-    })));
+    // The three the window's arrangement is kept in: the sidebar's dock and the two
+    // splits the reader can drag, each a number and the context it is read back out of
+    // ([`Split`]). 50.0: what the leading side of a document starts at, before anything
+    // is dragged. 380: what the widest group of the default arrangement needs to name
+    // every panel in it, the four across the top being the widest. A group's bar neither
+    // elides nor scrolls, so a narrower sidebar would open with the last name clipped.
+    // The sidebar is the one of the three in pixels, its panel being a literal width.
+    let dock = context(SidebarDock, DockArea::default());
+    let document = Split::create(50.0, Unit::Percent, 1.0, 99.0);
+    let sidebar = Split::create(380.0, Unit::Pixels, 120.0, 900.0);
+    provide(DocumentSplit(document));
+    provide(SidebarSplit(sidebar));
     let arranged = Arrangement {
         dock,
-        sidebar,
-        split,
+        sidebar: sidebar.size,
+        split: document.size,
     };
 
     // Everything kept per place, which every closer forgets together.
     let places = provide(Places::create());
-    provide(Expanded(State::create(HashSet::new())));
+    context(Expanded, HashSet::new());
     // The row each list has picked out. At the root and not in the panels: a panel that is
     // not its dock tab's is unmounted, and a pick outlives the reader looking elsewhere.
-    provide(Picks(State::create(HashMap::new())));
-    let keyboard = provide(Keyboard(State::create(Keys::default()))).0;
-    let follows = provide(Follows(State::create(HashMap::new()))).0;
+    context(Picks, HashMap::new());
+    let keyboard = context(Keyboard, Keys::default());
+    let follows = context(Follows, HashMap::new());
     // The Shortcuts page's box. At the root for the reason the type gives: the page is
     // unmounted whenever another tab is on screen.
-    provide(Shortcuts(State::create(Filter::default())));
-    let bookmarks = provide(Bookmarked(State::create(Bookmarks::default()))).0;
-    let marked = provide(Marked(State::create(Marks::default()))).0;
+    context(Shortcuts, Filter::default());
+    let bookmarks = context(Bookmarked, Bookmarks::default());
+    let marked = context(Marked, Marks::default());
     // What a door is given: the two states it shares with the rest of the app, and the two
     // halves of a landing, which it owns.
     let doors = provide(Doors {
@@ -574,24 +579,25 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         land: State::create(None),
         plant: State::create(None),
     });
-    let code_rows = provide(CodeRows(State::create(None))).0;
-    let Held { shift, ctrl, alt } = provide_modifiers();
-    let proj = provide(Proj(State::create(OpenProject::default()))).0;
+    // The keyboard: the five states the root's key handlers keep, three of them the
+    // contexts every door reads.
+    let keys = provide_modifiers();
+    let proj = context(Proj, OpenProject::default());
     // Whether a delete is being asked about. At the root, since the control that asks is
     // in the bar and the window that answers is over everything.
-    let asking = provide(Deleting(State::create(None))).0;
+    let asking = context(Deleting, None);
     // And which project would not open, for the window that says so.
-    let unopened = provide(Unopened(State::create(None))).0;
+    let unopened = context(Unopened, None);
     // Where each file that would not parse was moved to. Empty here and written by
     // whoever made the load: what a startup moved aside is known only once it has run.
-    let rescued = provide(Rescued(State::create(Vec::new()))).0;
-    let searched = provide(Searching(State::create(Searched::default()))).0;
+    let rescued = context(Rescued, Vec::new());
+    let searched = context(Searching, Searched::default());
     // At the root, not in the overlay: the list of a project's files is kept between
     // opens, and the walk that fills it outlives the overlay being closed.
-    let finder = provide(Finding(State::create(Finder::default()))).0;
+    let finder = context(Finding, Finder::default());
     // At the root, not in the Project tab: a tab that is not on screen is unmounted, and a
     // build that survives the reader looking away cannot live there.
-    let build = provide(Building(State::create(Builds::default()))).0;
+    let build = context(Building, Builds::default());
     // The one place this list is written besides the struct itself: every reader of it
     // takes the bundle whole (`use_project_states`).
     let states = provide(ProjectStates {
@@ -608,45 +614,46 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         arranged,
     });
 
-    let analysis = provide(Analysis(State::create(Analyzed::default()))).0;
-    let located = provide(Locations(State::create(Located::default()))).0;
-    let coded = provide(Coding(State::create(Coded::default()))).0;
-    let reading = provide(Sections(State::create(Reading::default()))).0;
-    let window = provide(Window(State::create(None))).0;
-    let beside = provide(Beside(State::create(None))).0;
+    let analysis = context(Analysis, Analyzed::default());
+    let located = context(Locations, Located::default());
+    let coded = context(Coding, Coded::default());
+    // The reading of one object's code, whole: what is decoded, what is wanted next,
+    // whose listing it is when no tab's, and the rows the view built of it.
+    let sectioned = provide(Sectioned {
+        reading: State::create(Reading::default()),
+        window: State::create(None),
+        beside: State::create(None),
+        rows: State::create(None),
+    });
     // The file the Source pane is showing, read off disk and parsed on a thread of its
     // own -- and every code pane's find bar, whose bars are kept per place. The file
     // itself is a state of its own, the pane writing it and three effects reading it.
-    let sourced = provide(Sourcing(State::create(Sourced::default()))).0;
-    let showing = provide(ShowingFile(State::create(None))).0;
+    let sourced = context(Sourcing, Sourced::default());
+    let showing = context(ShowingFile, None);
     let finds = provide(Looking(places.finds)).0;
 
     // At the root rather than in the tab: a tab off screen is unmounted, and neither a
     // buffer being typed into nor a program that was started can live there. The buffers
     // start empty and a pad gets its own when its source arrives.
     // 50.0: what the editor's side starts at, before anything is dragged.
-    provide(PadSplit(State::create(50.0)));
-    provide(PadSplits(State::create(ResizableContext {
-        direction: Direction::Horizontal,
-        ..Default::default()
-    })));
-    let pad = provide(Pad(State::create(Pads::default()))).0;
-    let pad_text = provide(PadText(State::create(PadBuffers::default()))).0;
+    provide(PadSplit(Split::create(50.0, Unit::Percent, 1.0, 99.0)));
+    let pad = context(Pad, Pads::default());
+    let pad_text = context(PadText, PadBuffers::default());
 
     // Which files the server is told the reader has open, which is what makes it answer
     // about them at all -- and what a build has to say it rewrote, the server holding the
     // text it was given until it is told otherwise.
-    let opened = provide(Documents(State::create(Opened::default()))).0;
+    let opened = context(Documents, Opened::default());
     // At the root for the reason the rest are, and one more: a language server is a
     // process, and a process that outlives the view it was started from is one nothing can
     // stop. Beside it, where a followed name's answer lands; which of a source file's
     // names are links, which is the server's to say and not the pane's to guess; and what
     // the pointer is on, at the root because the box that draws it is, the rows it is
     // about being recycled under it.
-    let language = provide(Talking(State::create(Language::default()))).0;
-    let follow = provide(Following(State::create(Follow::default()))).0;
-    let linked = provide(Linking(State::create(Linked::default()))).0;
-    let hover = provide(Hovering(State::create(Hover::default()))).0;
+    let language = context(Talking, Language::default());
+    let follow = context(Following, Follow::default());
+    let linked = context(Linking, Linked::default());
+    let hover = context(Hovering, Hover::default());
 
     Roots {
         prefs,
@@ -655,10 +662,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         follows,
         states,
         doors,
-        code_rows,
-        shift,
-        ctrl,
-        alt,
+        keys,
         asking,
         unopened,
         finder,
@@ -666,9 +670,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         analysis,
         located,
         coded,
-        reading,
-        window,
-        beside,
+        sectioned,
         sourced,
         showing,
         finds,
@@ -708,10 +710,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         follows,
         states,
         doors,
-        code_rows,
-        shift,
-        ctrl,
-        alt,
+        keys,
         asking,
         unopened,
         finder,
@@ -719,9 +718,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         analysis,
         located,
         coded,
-        reading,
-        window,
-        beside,
+        sectioned,
         sourced,
         showing,
         finds,
@@ -766,15 +763,11 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         interface.set(interface_theme(*appearance, *size));
     });
 
-    let caps_is_ctrl = use_state(|| false);
-    let control_held = use_state(|| false);
-    let keys = ModifierKeys::new(shift, ctrl, alt, caps_is_ctrl, control_held);
-
     // The ask an opened row or a pressed chip leaves, spent on the leading pane of the tab
     // on screen -- which is why it is handed `open` -- and on the caret that pane wants.
     use_keyboard_asked(keyboard, open, marked);
     use_save_on_change(states);
-    use_land(doors, places, active, code_rows);
+    use_land(doors, places, active, sectioned);
     use_periodic_save();
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.
@@ -785,7 +778,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // for that reason: what to say is only known once the loads have run.
     use_hook(move || note_moved(rescued));
 
-    use_reading_of(active, objects, beside, reading, window);
+    use_reading_of(active, objects, sectioned);
     // The question and not the active document: a source-driven tab's assembly side
     // changes when a line in it is clicked, which changes no document.
     let asked = Asked {
@@ -795,19 +788,18 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     let asks = use_analysis_with(
         asked,
         objects,
-        beside,
+        sectioned,
         doors.visits,
         analysis,
         located,
         coded,
         showing,
-        reading,
         answer,
     );
     // The other three questions that worker answers, each asked beside the state it is
     // about and handed the way to ask: the window the section view wants next, the
     // Locations panel's query, and which lines of the file on screen have code.
-    use_code_asks(reading, window, asks.clone());
+    use_code_asks(sectioned, asks.clone());
     use_locate_asks(located, objects, asks.clone());
     use_mark_asks(coded, showing, objects, asks);
     // After the analysis: the file the Source pane draws is what the analysis says it is.

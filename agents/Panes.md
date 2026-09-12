@@ -402,7 +402,9 @@ columns -- plus the file it is a run of, and the rows lit are the rows that pair
 So the assembly side pairs a row by asking the row's own `Studied::position` against the run's file
 and lines, and the source side pairs a line by turning the run's rows into positions
 (`Studied::places` for a symbol's listing, `code_places` over the held stretches for an object's
-code, through the rows the section view shares as `CodeRows`) and keeping the lines of its own file.
+code, through the rows the section view shares as `Sectioned::rows`) and keeping the lines of its
+own file. Those rows are asked for by object (`Sectioned::rows_of`), which is the one place the
+rule that they are the last listing's until the view rebuilds them is written.
 **That set is a memo and not a render's work.** `Marks` holds both panes' runs, so the source pane
 renders for every move of a sweep of its own, and again for a scroll that widens the listing and
 for every answer about the file; the walk over the line info is owed to none of them. Two memos do
@@ -554,8 +556,8 @@ one everywhere; a plain press selects the row like any other, since a label is a
 first, though a label's row is a row of no file. It is the one link Ctrl decides, and for want of
 anything else it could mean: the rows the symbol is compiled into are the rows under the label, so a
 plain press has nowhere to go. Which is why the label is drawn as a link only while Ctrl is held.
-Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift` and `Alt`, all three kept by
-`ModifierKeys` in `ui/keys.rs`), a freya pointer event carrying no modifiers. A Caps Lock the
+Ctrl is watched at the root exactly as Shift is (`Ctrl` beside `Shift` and `Alt`, all three read
+off the one `ModifierKeys` in `ui/keys.rs`), a freya pointer event carrying no modifiers. A Caps Lock the
 desktop has made into Ctrl names itself Caps Lock in every event, so it is learnt from its first
 release
 (`ModifierKeys`' doc, `notes/upstream/freya.md`). **The third door is the address an instruction
@@ -1004,7 +1006,7 @@ something else must be woken when it catches up, or the tab stays empty until th
 The object is read from a state written by each render and never captured: a switch between two
 objects' code tabs re-renders this scope rather than remounting it (`src/ui/split.rs`), while the
 effect's closure is built once, so an effect holding the first object went on asking for nothing
-and the second tab drew an empty listing for as long as it was open. It asks, through `Window`,
+and the second tab drew an empty listing for as long as it was open. It asks, through the reading's `window`,
 which the worker's sender reads, for the stretches within `BUFFER` (3) screens above and below the
 viewport that are not held, nearest the middle of the viewport first and at most `WINDOW` (64) of
 them. The worker answers a chunk, the rows change, the effect wakes on them and asks for the rest,

@@ -840,7 +840,7 @@ pub(crate) fn use_land(
     doors: Doors,
     places: Places,
     active: Memo<Option<Entry>>,
-    code_rows: State<Option<Arc<Built>>>,
+    sectioned: Sectioned,
 ) {
     let Doors {
         open,
@@ -879,7 +879,7 @@ pub(crate) fn use_land(
         take_kept(&mut step, marks_at);
 
         let marks = Marks {
-            assembly: assembly_run(&step, code_rows),
+            assembly: assembly_run(&step, sectioned),
             source: source_run(&step, driven),
         };
         marked.set_if_modified(marks);
@@ -1041,7 +1041,7 @@ fn source_run(step: &Step, driven: State<Driven>) -> Option<Picked> {
 /// same code), and otherwise by the section view itself when it first builds rows again,
 /// which is after this has run; until then the pane's run is none, never a run of rows
 /// that are gone.
-fn assembly_run(step: &Step, code_rows: State<Option<Arc<Built>>>) -> Option<Picked> {
+fn assembly_run(step: &Step, sectioned: Sectioned) -> Option<Picked> {
     let kept = step.kept.as_ref()?;
     let Some((
         _,
@@ -1053,10 +1053,9 @@ fn assembly_run(step: &Step, code_rows: State<Option<Arc<Built>>>) -> Option<Pic
     else {
         return kept.marks.assembly.clone();
     };
-    let built = code_rows.peek().clone()?;
-    if !built.reading.is_about(object) {
-        return None;
-    }
+    // Peeked, an effect having no business waking on a window decoding, and asked about
+    // this object: rows of another are the last listing's.
+    let built = sectioned.peek_rows_of(object)?;
     if kept.generation == Some(built.reading.generation) {
         kept.marks.assembly.clone()
     } else {

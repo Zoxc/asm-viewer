@@ -412,21 +412,16 @@ impl Pads {
     }
 }
 
-/// How wide the editor's side of the Scratchpad's split is, and its panels' own context.
+/// How wide the editor's side of the Scratchpad's split is: a [`Split`] of the page's own.
 ///
-/// At the root for `SplitRatio`'s reason (`agents/UI.md`): a `ResizablePanel` registers at
-/// its `initial_size` in a `use_hook` and takes its entry out again on unmount, so a number
-/// kept in the page would come back at 50/50 every time the reader looked at another tab.
-/// **Not** `SplitRatio` itself: two containers sharing one context would carry the handle
-/// across a switch between a document and this page, and the pad's drag would be written
-/// into the project's session -- where a pad, which is outside every project, has no
-/// business being. Saved nowhere for that same reason.
+/// At the root for the reason a [`Split`] is held at all: a number kept in the page would
+/// come back at 50/50 every time the reader looked at another tab. **Not the document's
+/// [`DocumentSplit`]**: two containers sharing one context would carry the handle across a
+/// switch between a document and this page, and the pad's drag would be written into the
+/// project's session -- where a pad, which is outside every project, has no business
+/// being. Saved nowhere for that same reason.
 #[derive(Clone, Copy)]
-pub(crate) struct PadSplit(pub(crate) State<f32>);
-
-/// The context those two panels register into. See [`PadSplit`].
-#[derive(Clone, Copy)]
-pub(crate) struct PadSplits(pub(crate) State<ResizableContext>);
+pub(crate) struct PadSplit(pub(crate) Split);
 
 /// The program a pad's build made, read.
 ///
