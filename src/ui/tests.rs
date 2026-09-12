@@ -21611,6 +21611,11 @@ const LENT_TEXT: &str = "mov rax, qword ptr [rbp - 8]";
 #[derive(Clone, Copy)]
 struct LentRows(State<usize>);
 
+/// Which row [`lending_harness`] starts at: what a test scrolls, the rows before it
+/// having been built and stopped being built.
+#[derive(Clone, Copy)]
+struct LentFrom(State<usize>);
+
 /// The `Listing` the harness's rows lend their paragraphs to, put out for the test to ask.
 #[derive(Clone)]
 struct LentTo(Rc<RefCell<Option<Listing>>>);
@@ -21663,15 +21668,18 @@ impl Component for LentRow {
 /// test says: a virtual list as far as the lending goes, without one's scrolling.
 fn lending_harness() -> impl IntoElement {
     let rows = *use_consume::<LentRows>().0.read();
+    let from = *use_consume::<LentFrom>().0.read();
     let widest = use_widest();
     let controller = use_scroll_controller(ScrollConfig::default);
     let nudge = use_state(|| 0.0f32);
     let listing = use_provide_context(|| Listing::new(controller, widest, nudge));
+    // Every render, as each list tells its own.
+    listing.drawing(1);
     let out = use_consume::<LentTo>().0;
     use_hook(|| *out.borrow_mut() = Some(listing.clone()));
 
     rect().expanded().children(
-        (0..rows)
+        (from..from + rows)
             .map(|row| {
                 LentRow {
                     row,
@@ -21684,12 +21692,11 @@ fn lending_harness() -> impl IntoElement {
     )
 }
 
-/// A row the list has stopped building lets its paragraph go. The list is keyed by row
-/// and forgets nothing, so the entry a row lends it has to hold the paragraph weakly: a
-/// strong hold kept the shaped text of every row the reader ever scrolled past, for the
-/// life of the list. Asserted through `column_at`, which is the only thing that asks the
-/// lent paragraph anything: it answers a real column while the row is drawn and nothing
-/// once the row is gone.
+/// A row the list has stopped building lets its paragraph go: the entry a row lends
+/// holds the paragraph weakly, so a strong hold cannot keep the shaped text of every row
+/// the reader ever scrolled past. Asserted through `column_at`, which is the only thing
+/// that asks the lent paragraph anything: it answers a real column while the row is
+/// drawn and nothing once the row is gone.
 #[test]
 fn a_row_the_list_has_stopped_building_lets_its_paragraph_go() {
     let (mut test, (rows, lent)) = TestingRunner::new(
@@ -21698,6 +21705,7 @@ fn a_row_the_list_has_stopped_building_lets_its_paragraph_go() {
         |runner| {
             runner.provide_root_context(|| Marked(State::create(Marks::default())));
             runner.provide_root_context(|| Shift(State::create(false)));
+            runner.provide_root_context(|| LentFrom(State::create(0)));
             (
                 runner.provide_root_context(|| LentRows(State::create(2))).0,
                 runner
@@ -21721,11 +21729,61 @@ fn a_row_the_list_has_stopped_building_lets_its_paragraph_go() {
         "the row's paragraph did not answer: {column}"
     );
 
-    // The row taken away: the entry is still there, and answers nothing.
+    // The row taken away: nothing answers for it.
     rows.set(1);
     settle(&mut test);
     assert_eq!(paragraphs(&test).len(), 1);
     assert_eq!(listing.column_at(1, x), 0);
+}
+
+/// How many rows the scrolled [`lending_harness`] draws at once, and how many windows of
+/// them a reader scrolls through: enough that a map keeping one entry per row built is
+/// plainly bigger than one keeping the rows on screen.
+const LENT_WINDOW: usize = 2;
+const LENT_WINDOWS: usize = 10;
+
+/// What a row lends the list is forgotten once the row is gone. The map was keyed by row
+/// and nothing removed an entry, so scrolling a listing left one per row ever built --
+/// millions of them in the app's own binary -- each a `Weak` pinning an allocation and a
+/// cell of its own, for the life of the pane. The sweep is a render behind the unmount,
+/// so what is asserted is that the map is bounded by what is on screen and not by what
+/// has been scrolled past.
+#[test]
+fn the_list_forgets_what_a_row_it_has_stopped_building_lent_it() {
+    let (mut test, (from, lent)) = TestingRunner::new(
+        lending_harness,
+        (600., 300.).into(),
+        |runner| {
+            runner.provide_root_context(|| Marked(State::create(Marks::default())));
+            runner.provide_root_context(|| Shift(State::create(false)));
+            runner.provide_root_context(|| LentRows(State::create(LENT_WINDOW)));
+            (
+                runner.provide_root_context(|| LentFrom(State::create(0))).0,
+                runner
+                    .provide_root_context(|| LentTo(Rc::new(RefCell::new(None))))
+                    .0,
+            )
+        },
+        1.,
+    );
+    let mut from = from;
+    settle(&mut test);
+    let listing = lent.borrow().clone().expect("the harness lent its listing");
+    assert_eq!(paragraphs(&test).len(), LENT_WINDOW);
+
+    // A window at a time down the listing, each row built and then stopped being built.
+    for window in 1..LENT_WINDOWS {
+        from.set(window * LENT_WINDOW);
+        settle(&mut test);
+    }
+    assert_eq!(paragraphs(&test).len(), LENT_WINDOW);
+
+    let held = listing.texts.borrow().len();
+    assert!(
+        held <= 2 * LENT_WINDOW,
+        "{held} entries for {LENT_WINDOW} rows on screen, of {} built",
+        LENT_WINDOWS * LENT_WINDOW
+    );
 }
 
 /// A key under modifiers, which no `TestingRunner` method sends: `press_key` hardcodes

@@ -387,10 +387,11 @@ pub(crate) struct Listing {
 
 /// A row's laid-out paragraph and where it starts, lent to the list by the row as it
 /// renders: what answers a column for an x on a row the pointer is not over. Written
-/// afresh by every render of the row, and the paragraph held **weakly**: the list is keyed
-/// by row and never forgets one, so a strong hold would keep a shaped paragraph for every
-/// row the reader has scrolled past. A row the list has stopped building leaves an entry
-/// that answers nothing, and no reach asks it: a sweep only asks about rows on screen.
+/// afresh by every render of the row, and the paragraph held **weakly**: a strong hold
+/// would keep a shaped paragraph for every row the reader has scrolled past. A row the
+/// list has stopped building drops its paragraph, so its entry answers nothing and the
+/// next render of the list drops it ([`Listing::drawing`]); no reach asks one meanwhile,
+/// a sweep only asking about rows on screen.
 #[derive(Clone)]
 pub(crate) struct RowText {
     holder: Weak<RefCell<Option<ParagraphHolderInner>>>,
@@ -436,8 +437,18 @@ impl Listing {
 
     /// The listing the list is drawing, told to this by every render of the list: what
     /// its rows are floored to and what a sweep's sideways extent is asked under.
+    ///
+    /// Also where the lent paragraphs are swept, this being the one call every list makes
+    /// on every render: an entry whose row has gone answers nothing, and nothing else
+    /// removed one, so the map kept an entry per row ever built -- a `Weak` pinning an
+    /// allocation and a cell of its own for every row scrolled past, for the life of the
+    /// pane. A row unmounts after the render that stopped building it, so what is swept
+    /// is a render behind and the map holds the rows on screen and the last render's.
     pub(crate) fn drawing(&self, listing: u64) {
         self.key.set(listing);
+        self.texts
+            .borrow_mut()
+            .retain(|_, text| text.holder.strong_count() > 0);
     }
 
     /// That listing, as a row and a sweep ask for it.

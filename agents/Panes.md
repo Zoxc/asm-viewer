@@ -1065,11 +1065,14 @@ listener (`notes/upstream/freya.md`). Each list's box listens with `on_sweep_bey
 row, which answers for itself; else the row on screen nearest it (`Reach`: the first above, the last
 below, the one level with the pointer beside) at **the column under the pointer's x clamped into the
 box**, which the list asks of the row through the paragraph the row lent it (`Listing::texts`,
-written by every render of a row with text and held **weakly**: the map is keyed by row and never
-forgets one, so a strong hold kept the shaped text of every row the reader had scrolled past, for
-the life of the list. A row the list has stopped building leaves an entry that answers nothing,
-which no reach asks anyway, the rows asked about being on screen. Past the left edge that is the
-first column in sight and past the right the last, and not the row's start or end, which is what
+written by every render of a row with text and held **weakly**: a strong hold kept the shaped text
+of every row the reader had scrolled past, for the life of the list. A row the list has stopped
+building drops its paragraph, and every render of the list drops the entries whose rows have gone
+(`Listing::drawing`); nothing else removed one, so the map grew by an entry per row ever built, a
+`Weak` pinning an allocation and a cell of its own apiece, millions of them down the app's own
+binary. What is swept is a render behind the unmount, and no reach asks a stale entry in the
+meantime, the rows asked about being on screen. Past the left edge that is the first column in
+sight and past the right the last, and not the row's start or end, which is what
 the sweep used to jump to. Held past any edge of the box, the sweep **scrolls the view**: a task the
 handler starts moves it every `AUTOSCROLL_TICK` towards the pointer (a row up or down, a row's
 height sideways, the sideways extent being the widest row, `Widest::extent`) and reaches the run out
