@@ -342,12 +342,23 @@ must precede its `entries`, a `SavedEntry`'s rows its `document`, a `SavedDocume
 `Session::digests` is the digest each binary had when the session was saved, keyed by path. It is in
 the *other* file from `binaries` and not a field beside them, because `binaries` is the list to
 *open* and a digest is what to *believe* afterwards. A mismatch is not an error, a dialog or a
-refusal. `Rebuilt` collects the paths whose digest no longer matches, and under one of those the
+refusal. `Loaded::of` collects the paths whose digest no longer matches, and under one of those the
 **name is the identity and the address is only a tie-breaker**: a symbol that merely moved resolves,
 where an unchanged file drops it, and a name that names two symbols and no longer names an address
 resolves to neither, since a stale address is exactly what lands a reader on the wrong function. The
 saved **row is dropped**, being a claim about a listing this build no longer has. A path with *no*
 saved digest is a third state, not a mismatch: it behaves as everything did before digests existed.
+
+`Loaded` is what a saved place is resolved against: the objects loaded now, **indexed** by the
+file and member name a saved place names one by, and that set of changed paths. Indexed because a
+restore resolves every entry of every tab, up to 200 visits and the active document against the
+one list, and a scan per place is a component-wise `Path` compare against every member of an
+archive that can hold thousands. A place resolved **on its own** scans instead
+(`Loaded::scanning`, which is what `resolve_by_name` and so every bookmark uses): one index over
+the whole list costs more than the one scan it saves. `project::by_file` is the same thought at
+the other end -- the first object out of each file, in the order the files were opened, which is
+what `binaries` and `digests` are each one of. Where the list holds two objects a saved place
+cannot tell apart, the first is the one that answers.
 
 Coming back, the **active document degrades** (symbol -> its object -> nothing, since there is one
 of it and the app must open somewhere) while **a trail's places and the visits are dropped** (a list
@@ -446,9 +457,10 @@ project with no binaries -- one opened by its directory and read in the Files vi
 binaries have all been deleted -- still comes back with the files the reader had open. Whatever the
 objects list holds, the tabs naming an object that is not there are dropped and the rest put back.
 **The visits, the tabs and the active document are one question and are answered as one**, by
-`Session::restore`: it walks the saved digests once and resolves all three under that one
-`Rebuilt`, so a tab and the active document cannot be read against two different answers about
-which binaries have changed, and a caller cannot take one and forget the others. `Session::pages`
+`Session::restore`: it builds one `Loaded` -- the objects indexed, the saved digests walked once
+against them -- and resolves all three under it, so a tab and the active document cannot be read
+against two different answers about which binaries have changed, and a caller cannot take one and
+forget the others. `Session::pages`
 and `shown_page` stay outside it, being the pages' half and going back first either way.
 `restore_documents` sets the visits, then for each restored tab opens its trail whole
 (`Docs::open_trail`, temporal flag and all), calls `place_entries` and puts the tab in the bar at

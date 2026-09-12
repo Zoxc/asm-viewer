@@ -23,7 +23,7 @@
 
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt, fs,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, MutexGuard},
@@ -377,16 +377,20 @@ enum Spelling {
     Working,
 }
 
+/// The first object out of each file the loaded objects came from, in the order the files
+/// were opened: one walk with a set of the paths already seen. [`binaries`] and
+/// [`digests`] each read their answer off it.
+fn by_file(objects: &[Arc<Object>]) -> impl Iterator<Item = &Arc<Object>> + '_ {
+    let mut seen: HashSet<&Path> = HashSet::new();
+    objects
+        .iter()
+        .filter(move |object| seen.insert(&object.path))
+}
+
 /// Every binary the loaded objects came out of, deduplicated, in the order they were
 /// opened — which is [`Project::binaries`], derived rather than tracked.
 pub fn binaries(objects: &[Arc<Object>]) -> Vec<PathBuf> {
-    let mut binaries: Vec<PathBuf> = Vec::new();
-    for object in objects {
-        if !binaries.contains(&object.path) {
-            binaries.push(object.path.clone());
-        }
-    }
-    binaries
+    by_file(objects).map(|object| object.path.clone()).collect()
 }
 
 /// The digest of every binary those objects came out of, keyed by the same path
@@ -396,13 +400,9 @@ pub fn binaries(objects: &[Arc<Object>]) -> Vec<PathBuf> {
 /// worker thread, and every object out of one file answers the same thing — so an
 /// archive's members cost one pass rather than one each.
 fn digests(objects: &[Arc<Object>]) -> BTreeMap<PathBuf, String> {
-    let mut digests: BTreeMap<PathBuf, String> = BTreeMap::new();
-    for object in objects {
-        digests
-            .entry(object.path.clone())
-            .or_insert_with(|| object.data.digest().to_string());
-    }
-    digests
+    by_file(objects)
+        .map(|object| (object.path.clone(), object.data.digest().to_string()))
+        .collect()
 }
 
 /// How the window was arranged, in the session's `[ui]`.
@@ -490,7 +490,7 @@ pub struct Session {
     /// The values are [`analysis::FileDigest`]'s own written form, sixteen lowercase hex
     /// digits, compared as text: text this build did not write is simply not equal, which
     /// reads as "changed". A path with **no** entry here is a third state and not a
-    /// mismatch — nothing new is done with it. See [`Rebuilt`].
+    /// mismatch — nothing new is done with it. See [`Changed`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub digests: BTreeMap<PathBuf, String>,
     /// The document that was on screen, written out in full rather than as an index into
@@ -764,7 +764,7 @@ pub fn recent_projects(store: &Store) -> Vec<Recent> {
 /// The saved **row** is not either, being a claim about a listing this build no longer
 /// has.
 #[derive(Debug)]
-enum Rebuilt {
+enum Changed {
     /// The paths whose saved digest no longer matches the file loaded under them.
     Paths(HashSet<PathBuf>),
     /// Every path, whatever the digests say: what a bookmark resolves under
@@ -772,14 +772,47 @@ enum Rebuilt {
     Every,
 }
 
-impl Rebuilt {
-    /// Compare every saved digest against the file loaded under that path now. Only a
-    /// digest present on both sides and *different* is a rebuild. Per saved path rather
-    /// than per object, so an archive's 196 members ask it once.
-    fn of(session: &Session, objects: &[Arc<Object>]) -> Rebuilt {
-        let mut rebuilt = HashSet::new();
+/// What a saved place is resolved against: the objects loaded now, and which of the files
+/// they came out of have changed since the session was saved.
+///
+/// A restore resolves a few hundred places against one object list — every entry of every
+/// tab, up to 200 visits, and the active document — so the list is indexed once and each
+/// place is a lookup in it. A scan per place is a component-wise `Path` compare against
+/// every member of an archive that can hold thousands.
+struct Loaded<'a> {
+    objects: Lookup<'a>,
+    changed: Changed,
+}
+
+/// Where the object a saved place names is found.
+enum Lookup<'a> {
+    /// Indexed by the file and member name a saved place names an object by: what a
+    /// restore builds, one pass for the many lookups that follow.
+    Index(HashMap<(&'a Path, &'a str), &'a Arc<Object>>),
+    /// The list itself, scanned. What a **single** lookup uses, since building the index
+    /// would cost more than the one scan it saves: [`SavedDocument::resolve_by_name`],
+    /// asked per bookmark and again per drawn row.
+    Scan(&'a [Arc<Object>]),
+}
+
+impl<'a> Loaded<'a> {
+    /// The loaded objects indexed, and every saved digest compared against the file
+    /// loaded under that path now. Only a digest present on both sides and *different* is
+    /// a rebuild. Per saved path rather than per object, so an archive's 196 members ask
+    /// it once.
+    fn of(session: &Session, objects: &'a [Arc<Object>]) -> Loaded<'a> {
+        let mut index = HashMap::with_capacity(objects.len());
+        let mut first: HashMap<&Path, &Arc<Object>> = HashMap::new();
+        for object in objects {
+            // First in the list wins both, which is where a scan of it stopped.
+            index
+                .entry((object.path.as_path(), object.name.as_str()))
+                .or_insert(object);
+            first.entry(object.path.as_path()).or_insert(object);
+        }
+        let mut changed = HashSet::new();
         for (path, digest) in &session.digests {
-            let Some(object) = objects.iter().find(|object| object.path == *path) else {
+            let Some(object) = first.get(path.as_path()) else {
                 continue;
             };
             if object.data.digest().to_string() != *digest {
@@ -787,16 +820,40 @@ impl Rebuilt {
                     "{} has changed since the session was saved; matching by name",
                     path.display()
                 );
-                rebuilt.insert(path.clone());
+                changed.insert(path.clone());
             }
         }
-        Rebuilt::Paths(rebuilt)
+        Loaded {
+            objects: Lookup::Index(index),
+            changed: Changed::Paths(changed),
+        }
+    }
+
+    /// The objects scanned rather than indexed, every file taken as changed: what one
+    /// place resolved on its own is resolved against ([`SavedDocument::resolve_by_name`]).
+    fn scanning(objects: &'a [Arc<Object>]) -> Loaded<'a> {
+        Loaded {
+            objects: Lookup::Scan(objects),
+            changed: Changed::Every,
+        }
+    }
+
+    /// The loaded object a saved place names, if it is still there.
+    fn object(&self, saved: &SavedDocument) -> Option<Arc<Object>> {
+        let (path, name) = saved.binary()?;
+        match &self.objects {
+            Lookup::Index(index) => index.get(&(path, name)).map(|object| (*object).clone()),
+            Lookup::Scan(objects) => objects
+                .iter()
+                .find(|object| object.path == path && object.name == name)
+                .cloned(),
+        }
     }
 
     fn changed(&self, path: &Path) -> bool {
-        match self {
-            Rebuilt::Paths(paths) => paths.contains(path),
-            Rebuilt::Every => true,
+        match &self.changed {
+            Changed::Paths(paths) => paths.contains(path),
+            Changed::Every => true,
         }
     }
 }
@@ -1010,14 +1067,6 @@ impl SavedDocument {
         }
     }
 
-    /// The loaded object this names, if it is still there.
-    fn find_object<'a>(&self, objects: &'a [Arc<Object>]) -> Option<&'a Arc<Object>> {
-        let (path, name) = self.binary()?;
-        objects
-            .iter()
-            .find(|object| object.path == path && object.name == name)
-    }
-
     /// Exactly what this names, or `None` when the object — or, for a symbol, the symbol
     /// — is no longer loaded. What history entries want: an entry that no longer points
     /// where it did is dropped rather than turned into a destination the user never
@@ -1025,11 +1074,11 @@ impl SavedDocument {
     ///
     /// A source-driven entry resolves against nothing and so cannot fail: a deleted file
     /// comes back as a tab over the pane's own "Source file not found".
-    fn resolve(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Document> {
+    fn resolve(&self, loaded: &Loaded) -> Option<Document> {
         match self {
             SavedDocument::Source { path } => Some(Document::Source(Arc::from(path.as_str()))),
             SavedDocument::Object { shown, .. } => {
-                let object = self.find_object(objects)?.clone();
+                let object = loaded.object(self)?;
                 Some(match shown {
                     SavedShown::Symbols => Document::Assembly(Selection::Object(object)),
                     SavedShown::Code => Document::Code(object),
@@ -1041,23 +1090,24 @@ impl SavedDocument {
                 address,
                 ..
             } => {
-                let object = self.find_object(objects)?;
+                let object = loaded.object(self)?;
                 let data = SavedDocument::find_symbol(
-                    object,
+                    &object,
                     &symbol_name.text(*address),
                     *address,
-                    rebuilt.changed(path),
-                )?;
+                    loaded.changed(path),
+                )?
+                .clone();
                 Some(Document::Assembly(Selection::Symbol(Symbol {
-                    object: object.clone(),
-                    data: data.clone(),
+                    object,
+                    data,
                 })))
             }
         }
     }
 
     /// What this names against whatever is loaded, believing the **name** over the address
-    /// whether or not the file is known to have changed: [`Rebuilt::Every`]'s reading of
+    /// whether or not the file is known to have changed: [`Changed::Every`]'s reading of
     /// [`SavedDocument::resolve`]. What a bookmark resolves by.
     ///
     /// It is the answer the digest-aware rule gives wherever the two could be compared. An
@@ -1068,7 +1118,7 @@ impl SavedDocument {
     /// making, so on the second launch after a rebuild the file would read as unchanged and
     /// a stale address would drop a bookmark the reader made on purpose.
     pub fn resolve_by_name(&self, objects: &[Arc<Object>]) -> Option<Document> {
-        self.resolve(objects, &Rebuilt::Every)
+        self.resolve(&Loaded::scanning(objects))
     }
 
     /// The symbol a saved place names, under a file that either is or is not the one it
@@ -1108,10 +1158,10 @@ impl SavedDocument {
     /// The same, degrading instead of failing: a symbol that is gone falls back to its
     /// object and an object that is gone to nothing at all. What the *active document*
     /// wants, there being one of it and the app having to open somewhere.
-    fn resolve_or_degrade(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Document> {
-        self.resolve(objects, rebuilt).or_else(|| {
-            self.find_object(objects)
-                .cloned()
+    fn resolve_or_degrade(&self, loaded: &Loaded) -> Option<Document> {
+        self.resolve(loaded).or_else(|| {
+            loaded
+                .object(self)
                 .map(|object| Document::Assembly(Selection::Object(object)))
         })
     }
@@ -1125,7 +1175,7 @@ impl SavedTab {
     /// A place that no longer resolves is **dropped** from the trail rather than
     /// degraded, the cursor carried the way [`History::rebuilt`] carries it -- the same
     /// walk closing a file goes through, so the two cannot drift.
-    fn restore(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<RestoredTab> {
+    fn restore(&self, loaded: &Loaded) -> Option<RestoredTab> {
         // A page resolves against nothing, and one this build does not have is dropped as
         // a place that no longer resolves is.
         if let Some(page) = &self.page {
@@ -1134,7 +1184,7 @@ impl SavedTab {
         let resolved: Vec<Option<RestoredEntry>> = self
             .entries
             .iter()
-            .map(|entry| entry.restore(objects, rebuilt))
+            .map(|entry| entry.restore(loaded))
             .collect();
         let trail = History::rebuilt(
             resolved
@@ -1165,12 +1215,12 @@ impl SavedEntry {
     /// place in an object's code comes back as the whole listing. A file has no binary
     /// path and so is never rebuilt. The two lines are claims about a *file* rather than
     /// about a listing, so they survive a rebuild and are simply asked again.
-    fn restore(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<RestoredEntry> {
-        let document = self.document.resolve(objects, rebuilt)?;
+    fn restore(&self, loaded: &Loaded) -> Option<RestoredEntry> {
+        let document = self.document.resolve(loaded)?;
         let changed = self
             .document
             .binary_path()
-            .is_some_and(|path| rebuilt.changed(path));
+            .is_some_and(|path| loaded.changed(path));
         let (asm_row, src_row, address, code_address) = match changed {
             true => (0, 0, None, None),
             false => (
@@ -1306,27 +1356,27 @@ impl Session {
     /// The record of visits, the tabs and the active document against the objects that
     /// are now loaded.
     ///
-    /// **One call, because the three are one question.** They share a [`Rebuilt`] -- one
-    /// walk of the saved digests against the objects loaded now -- so a tab and the active
-    /// document cannot be resolved under two different answers about which binaries have
-    /// changed, and a caller cannot take one and forget the others. [`Session::pages`] and
-    /// [`Session::shown_page`] stay outside it: they resolve against no object and go back
-    /// before any binary has been read.
+    /// **One call, because the three are one question.** They share a [`Loaded`] -- the
+    /// objects indexed once, and one walk of the saved digests against them -- so a tab
+    /// and the active document cannot be resolved under two different answers about which
+    /// binaries have changed, and a caller cannot take one and forget the others.
+    /// [`Session::pages`] and [`Session::shown_page`] stay outside it: they resolve
+    /// against no object and go back before any binary has been read.
     pub fn restore(&self, objects: &[Arc<Object>]) -> Restored {
-        let rebuilt = Rebuilt::of(self, objects);
+        let loaded = Loaded::of(self, objects);
         Restored {
-            visits: self.resolve_history(objects, &rebuilt),
-            tabs: self.resolve_tabs(objects, &rebuilt),
-            active: self.resolve_active(objects, &rebuilt),
+            visits: self.resolve_history(&loaded),
+            tabs: self.resolve_tabs(&loaded),
+            active: self.resolve_active(&loaded),
         }
     }
 
     /// The saved active document against the objects that are now loaded. Degrades
     /// silently: a symbol that is gone falls back to its object, an object that is gone
     /// to nothing.
-    fn resolve_active(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Option<Document> {
+    fn resolve_active(&self, loaded: &Loaded) -> Option<Document> {
         let saved = self.active.as_ref()?;
-        saved.resolve_or_degrade(objects, rebuilt)
+        saved.resolve_or_degrade(loaded)
     }
 
     /// The page that was on screen, where one was and this build still has it.
@@ -1346,22 +1396,22 @@ impl Session {
     /// The saved tabs as live trails, in strip order, each place with the rows its two
     /// sides were left at. A tab with nothing left of it ([`SavedTab::restore`]) is
     /// dropped, and the tabs that survive keep their order.
-    fn resolve_tabs(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Vec<RestoredTab> {
+    fn resolve_tabs(&self, loaded: &Loaded) -> Vec<RestoredTab> {
         self.tabs
             .iter()
-            .filter_map(|saved| saved.restore(objects, rebuilt))
+            .filter_map(|saved| saved.restore(loaded))
             .collect()
     }
 
     /// The saved record of visits as a live one. A place that no longer resolves is
     /// dropped: a list of places the reader cannot get back to is worse than a short
     /// list.
-    fn resolve_history(&self, objects: &[Arc<Object>], rebuilt: &Rebuilt) -> Visits {
+    fn resolve_history(&self, loaded: &Loaded) -> Visits {
         Visits::restored(
             self.history
                 .entries
                 .iter()
-                .filter_map(|saved| saved.resolve(objects, rebuilt))
+                .filter_map(|saved| saved.resolve(loaded))
                 .collect(),
         )
     }

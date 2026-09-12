@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use analysis::{
     Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolData, SymbolIndex,
@@ -1128,6 +1128,19 @@ fn digest_of(bytes: &[u8]) -> String {
     analysis::FileDigest::of(bytes).to_string()
 }
 
+/// What a restore resolves a saved place against: the objects loaded now, with each path
+/// in `changed` named by a digest no build of it ever had.
+fn loaded<'a>(objects: &'a [Arc<Object>], changed: &[&str]) -> Loaded<'a> {
+    let session = Session {
+        digests: changed
+            .iter()
+            .map(|path| (PathBuf::from(path), digest_of(b"never built")))
+            .collect(),
+        ..Session::default()
+    };
+    Loaded::of(&session, objects)
+}
+
 /// A saved session naming one binary at `row`, with the digest of `bytes`.
 fn saved_against(bytes: Option<&[u8]>, saved: SavedDocument, row: usize) -> Session {
     Session {
@@ -1161,6 +1174,37 @@ fn saves_one_digest_per_binary_however_many_objects_it_holds() {
     assert_eq!(binaries(&objects), vec![PathBuf::from("/tmp/lib.a")]);
     assert_eq!(
         session.digests,
+        BTreeMap::from([(PathBuf::from("/tmp/lib.a"), digest_of(b"the first build"))])
+    );
+}
+
+/// One file puts many objects in the list -- an archive's members -- and can put the same
+/// member name in it twice. The **first** answers for the file wherever the list is
+/// asked: the object a saved place resolves to, and the digest written down for the
+/// binary. Indexing the objects has to keep what scanning them found.
+#[test]
+fn the_first_object_out_of_a_file_is_the_one_that_answers_for_it() {
+    let objects = vec![
+        built("/tmp/lib.a", "a.o", &[("target", 6)], b"the first build"),
+        // The same path and the same member name.
+        built("/tmp/lib.a", "a.o", &[("target", 96)], b"the second build"),
+    ];
+    let saved = saved_symbol("a.o", "target", 6);
+
+    for found in [
+        saved.resolve(&loaded(&objects, &[])),
+        saved.resolve_by_name(&objects),
+    ] {
+        let symbol = found
+            .as_ref()
+            .and_then(Document::symbol)
+            .expect("the symbol");
+        assert!(Arc::ptr_eq(&symbol.object, &objects[0]), "the first member");
+    }
+
+    assert_eq!(binaries(&objects), vec![PathBuf::from("/tmp/lib.a")]);
+    assert_eq!(
+        digests(&objects),
         BTreeMap::from([(PathBuf::from("/tmp/lib.a"), digest_of(b"the first build"))])
     );
 }
@@ -2686,7 +2730,7 @@ fn a_code_document_is_saved_by_its_object_and_found_again() {
             shown: SavedShown::Code,
         }
     );
-    let found = saved.resolve(&objects, &Rebuilt::Paths(Default::default()));
+    let found = saved.resolve(&loaded(&objects, &[]));
     assert!(
         found == Some(document.clone()),
         "the code document comes back"
@@ -2698,12 +2742,8 @@ fn a_code_document_is_saved_by_its_object_and_found_again() {
 
     // Gone with its object, and degrading to nothing rather than to another object.
     let rest: Vec<Arc<Object>> = objects[..1].to_vec();
-    assert!(saved
-        .resolve(&rest, &Rebuilt::Paths(Default::default()))
-        .is_none());
-    assert!(saved
-        .resolve_or_degrade(&rest, &Rebuilt::Paths(Default::default()))
-        .is_none());
+    assert!(saved.resolve(&loaded(&rest, &[])).is_none());
+    assert!(saved.resolve_or_degrade(&loaded(&rest, &[])).is_none());
 
     // And it survives the round trip through TOML in a tab.
     let tab = saved_one(saved_entry(saved, 3));
@@ -3025,11 +3065,11 @@ fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
         ],
     );
     let objects = [object.clone()];
-    let unchanged = Rebuilt::Paths(Default::default());
-    let rebuilt = Rebuilt::Paths(HashSet::from([PathBuf::from("/tmp/lib.a")]));
-    let find = |name: &str, address: u64, rebuilt: &Rebuilt| {
+    let unchanged = loaded(&objects, &[]);
+    let rebuilt = loaded(&objects, &["/tmp/lib.a"]);
+    let find = |name: &str, address: u64, against: &Loaded| {
         saved_symbol("a.o", name, address)
-            .resolve(&objects, rebuilt)
+            .resolve(against)
             .and_then(|found| found.symbol().map(|symbol| symbol.data.clone()))
     };
 
@@ -3237,7 +3277,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
 fn resolving_by_name_agrees_with_the_strict_rule_and_survives_a_rebuild() {
     let objects = objects();
     let saved = saved_symbol("a.o", "target", 6);
-    let strict = saved.resolve(&objects, &Rebuilt::Paths(Default::default()));
+    let strict = saved.resolve(&loaded(&objects, &[]));
     assert!(strict.is_some());
     assert!(saved.resolve_by_name(&objects) == strict);
 
