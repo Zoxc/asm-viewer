@@ -196,7 +196,8 @@ fn a_stderr_that_will_not_take_the_line_is_not_a_second_panic() {
 }
 
 /// The stamp on a record and on a file: UTC, and right over a leap day and a year's end,
-/// which is the whole of what the arithmetic can get wrong.
+/// which is the whole of what the arithmetic can get wrong. The file's is the same date
+/// with the separators a name should not carry taken out.
 #[test]
 fn a_stamp_is_the_utc_date_and_time() {
     assert_eq!(stamp(0), "1970-01-01 00:00:00");
@@ -204,7 +205,27 @@ fn a_stamp_is_the_utc_date_and_time() {
     assert_eq!(stamp(951_782_400), "2000-02-29 00:00:00");
     assert_eq!(stamp(1_757_000_000), "2025-09-04 15:33:20");
     assert_eq!(stamp(4_102_444_799), "2099-12-31 23:59:59");
+    assert_eq!(file_stamp(0), "1970-01-01-000000");
     assert_eq!(file_stamp(1_757_000_000), "2025-09-04-153320");
+}
+
+/// The record, the line on stderr and the box all open with the same header, so the
+/// wording is one edit and a panic is grepped for by the same words wherever it was
+/// written down. The box's differs only in the path being cut down.
+#[test]
+fn every_telling_of_a_panic_opens_with_one_header() {
+    let panic = panic_at(1_757_000_000, "a message");
+    let header = "the analysis worker panicked at src/ui/analyzed.rs:214:9";
+
+    assert_eq!(panic.told(), format!("{header}\na message"));
+    assert_eq!(panic.shown(), format!("{header}\na message"));
+    assert!(
+        panic
+            .record()
+            .starts_with(&format!("2025-09-04 15:33:20 {header}\n")),
+        "{}",
+        panic.record()
+    );
 }
 
 /// A capture taken in the hook, cut down to the frames that say anything: the runtime

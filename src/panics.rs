@@ -105,14 +105,23 @@ impl Panic {
         }
     }
 
+    /// The line every telling of a panic opens with: what panicked and where. It is what
+    /// a reader greps a panic file for and what the box says first, so the record, the
+    /// line on stderr and the box all take it from here rather than word it three times.
+    ///
+    /// `location` is handed in because the box cuts the path down where the other two
+    /// keep it whole.
+    fn header(&self, location: &str) -> String {
+        format!("{} panicked at {}", self.thread, location)
+    }
+
     /// The record as it is written down: a header line that reads on its own, then the
     /// backtrace indented under it so one panic is one block.
     fn record(&self) -> String {
         let mut record = format!(
-            "{} {} panicked at {}\n  {}\n",
+            "{} {}\n  {}\n",
             stamp(self.at),
-            self.thread,
-            self.location,
+            self.header(&self.location),
             self.message
         );
         for line in self.backtrace.lines() {
@@ -127,10 +136,7 @@ impl Panic {
     /// The two lines a reader is shown, the message under what panicked. Whole, for the
     /// file and for stderr: both of them scroll.
     fn told(&self) -> String {
-        format!(
-            "{} panicked at {}\n{}",
-            self.thread, self.location, self.message
-        )
+        format!("{}\n{}", self.header(&self.location), self.message)
     }
 
     /// The same for the box, which does not scroll: the path cut down as a frame's is, and
@@ -141,9 +147,8 @@ impl Panic {
     /// what happened; put in whole it made the trimmed backtrace under it pointless.
     fn shown(&self) -> String {
         format!(
-            "{} panicked at {}\n{}",
-            self.thread,
-            trim_path(&self.location),
+            "{}\n{}",
+            self.header(trim_path(&self.location)),
             first_lines(&self.message, MAX_MESSAGE_LINES)
         )
     }
@@ -556,9 +561,11 @@ fn stamp(seconds: u64) -> String {
 }
 
 /// The same as a file name: `2026-09-04-141233`, which sorts by when it was written.
+///
+/// Made from [`stamp`]'s text rather than from the date again, so the two cannot drift
+/// apart: the space becomes a dash, and the colons go.
 fn file_stamp(seconds: u64) -> String {
-    let (year, month, day, hour, minute, second) = civil(seconds);
-    format!("{year:04}-{month:02}-{day:02}-{hour:02}{minute:02}{second:02}")
+    stamp(seconds).replace(' ', "-").replace(':', "")
 }
 
 /// Seconds since the epoch as a UTC date and time.
