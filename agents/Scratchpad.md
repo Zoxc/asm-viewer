@@ -434,6 +434,12 @@ handed out twice, and they say nothing about what a row *asks for* -- two rows a
 name the same crate at the same version -- so neither an id nor the counter nor the spare can make a
 program out of date or the disk copy look stale.
 
+Because the boxes go to the model themselves, **a row is handed its id and its problem and nothing
+else**. A keystroke in either box then draws no row again: the write wakes the list, which hands the
+rows over, and every one of them compares equal. The row it was drawn for was a prop once, and every
+keystroke drew the row typed in again for a text that row does not draw.
+`typing_in_a_row_draws_no_row_again` pins it, counting renders through `pad_view::rows_drawn`.
+
 **A package that will not load is refused rather than replaced.** `load_from` answers `None` both
 for a directory with nothing in it and for one holding a package this module cannot read back -- a
 dependency written by hand as a table, the ordinary way to ask for a feature, is enough. `opened_in`

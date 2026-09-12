@@ -15316,6 +15316,34 @@ fn taking_a_row_away_leaves_the_caret_in_the_row_it_was_in() {
     );
 }
 
+/// **A keystroke in a row's box draws no row again.** The two boxes write into `Pads` and
+/// read the row back out of it themselves, so what a row is asking for is no part of its
+/// props and the list handing the rows over again leaves every one of them equal. Fails
+/// with the row in the props, where a character typed into a name makes that row's props
+/// unequal and draws it for a text it does not draw.
+///
+/// The second keystroke is the same gesture with the one thing a row *does* draw changed:
+/// `!` is a character no crate name may have, so the row's problem arrives and the row is
+/// drawn for it.
+#[test]
+fn typing_in_a_row_draws_no_row_again() {
+    let (mut test, pad, _ids) = mount_rows(&["alpha", "beta"], "beta");
+    let drawn = rows_drawn();
+
+    test.write_text("x");
+    settle(&mut test);
+    assert_eq!(crate_names(pad), ["alpha", "betax"]);
+    assert_eq!(rows_drawn(), drawn, "a keystroke drew a row again");
+
+    test.write_text("!");
+    settle(&mut test);
+    assert_eq!(crate_names(pad), ["alpha", "betax!"]);
+    assert!(
+        rows_drawn() > drawn,
+        "the row was not drawn again for a problem it has to say"
+    );
+}
+
 /// Where a label with this exact text was laid out, as a point to press: the middle of it,
 /// since hit testing is `is_point_inside` and an edge is nobody's.
 fn label_centre(test: &TestingRunner, text: &str) -> Option<(f64, f64)> {
@@ -15997,7 +16025,6 @@ fn output_harness() -> impl IntoElement {
     let lines = use_consume::<RunLines>().0;
 
     rect().expanded().content(Content::Flex).child(OutputPane {
-        pad: pad_id("pad"),
         lines: lines.read().clone(),
         verdict: Verdict::plain("Running"),
         key: DiffKey::None,

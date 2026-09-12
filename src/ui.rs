@@ -58,8 +58,8 @@ pub(crate) use crate::project::{
 pub(crate) use crate::references::{self, ReferenceRows};
 pub(crate) use crate::reveal;
 pub(crate) use crate::scratchpad::{
-    is_source_file, own_source, run_in, Build, Dependency, Failure, Half, PadId, PadListing,
-    PadOrder, Problem, RowId, Scratchpad, SOURCE_FILE,
+    is_source_file, own_source, run_in, Build, Failure, Half, PadId, PadListing, PadOrder, Problem,
+    RowId, Scratchpad, SOURCE_FILE,
 };
 pub(crate) use crate::section;
 pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};

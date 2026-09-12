@@ -71,6 +71,11 @@ fn pad_place(text: State<PadBuffers>, pad: &PadId, diagnostic: &Diagnostic) -> O
 /// it. The problem is a prop because it is a property of the *list* -- `Problem::Repeated`
 /// is about two rows -- and every bad row is marked rather than the first.
 ///
+/// **The id and the problem are all it holds.** The two boxes read and write the row out
+/// of [`Pads`] themselves, so what was typed into it is no part of the props, and a
+/// keystroke in either box draws no row again. The problem is the one thing the row draws
+/// of its own, and the only thing that draws it again.
+///
 /// **Keyed by the row's id, which is what keeps a box with the row it was drawn for.**
 /// freya compares any two `Writable`s as equal (`notes/upstream/freya.md`), so a row
 /// holding one is never told it now points somewhere else. Keyed by position, the boxes
@@ -80,7 +85,6 @@ fn pad_place(text: State<PadBuffers>, pad: &PadId, diagnostic: &Diagnostic) -> O
 #[derive(Clone, PartialEq)]
 struct DependencyRow {
     id: RowId,
-    dependency: Dependency,
     problem: Option<Problem>,
     key: DiffKey,
 }
@@ -91,8 +95,27 @@ impl KeyExt for DependencyRow {
     }
 }
 
+/// Test-only: how many dependency rows this thread has drawn.
+///
+/// A row that was drawn again draws exactly what it drew before, so the render is the one
+/// place the question can be answered from -- what `source::touches` does for a
+/// filesystem call. A thread-local because `freya-testing` runs the app on the test's own
+/// thread. Nothing resets it: a test takes the count before and after what it is about.
+#[cfg(test)]
+pub(crate) fn rows_drawn() -> usize {
+    ROWS_DRAWN.with(Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static ROWS_DRAWN: Cell<usize> = const { Cell::new(0) };
+}
+
 impl Component for DependencyRow {
     fn render(&self) -> impl IntoElement {
+        #[cfg(test)]
+        ROWS_DRAWN.with(|drawn| drawn.set(drawn.get() + 1));
+
         let mut pad = use_consume::<Pad>().0;
         let id = self.id;
         let problem = self.problem.clone();
@@ -421,15 +444,14 @@ fn use_follow_tail(mut controller: ScrollController, viewport: f32, output: usiz
 /// until it has been scrolled to vertically. A virtual list has no other answer, having
 /// never measured the rows it did not draw.
 ///
-/// A component of its own for the sake of [`use_follow_tail`]: **keyed on the pad**, so
-/// the scroll and the follow are that pad's output's and not one position dragged between
-/// them by a switch. What a switch costs is that a pad comes back following again, having
-/// been remounted -- the follow is what a pane arrives armed with rather than something
-/// carried across a switch, and the pad being looked at is the one whose scrolling is
-/// worth keeping.
+/// A component of its own for the sake of [`use_follow_tail`]: **keyed on the pad** where
+/// it is built, so the scroll and the follow are that pad's output's and not one position
+/// dragged between them by a switch. What a switch costs is that a pad comes back
+/// following again, having been remounted -- the follow is what a pane arrives armed with
+/// rather than something carried across a switch, and the pad being looked at is the one
+/// whose scrolling is worth keeping.
 #[derive(Clone)]
 pub(crate) struct OutputPane {
-    pub(crate) pad: PadId,
     pub(crate) lines: Arc<RunOutput>,
     /// Where the run got to -- [`PadState::run_verdict`]'s answer.
     pub(crate) verdict: Verdict,
@@ -438,9 +460,7 @@ pub(crate) struct OutputPane {
 
 impl PartialEq for OutputPane {
     fn eq(&self, other: &Self) -> bool {
-        self.pad == other.pad
-            && Arc::ptr_eq(&self.lines, &other.lines)
-            && self.verdict == other.verdict
+        Arc::ptr_eq(&self.lines, &other.lines) && self.verdict == other.verdict
     }
 }
 
@@ -1099,7 +1119,6 @@ impl Component for DependencyList {
                 .map(|dependency| {
                     DependencyRow {
                         id: dependency.id,
-                        dependency: dependency.clone(),
                         problem: problems.get(&dependency.id).cloned(),
                         key: DiffKey::None,
                     }
@@ -1239,7 +1258,6 @@ impl Component for ScratchpadTab {
 
         let output = ran.map(|(verdict, lines)| {
             OutputPane {
-                pad: shown.clone(),
                 lines,
                 verdict,
                 key: DiffKey::None,
