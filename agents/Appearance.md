@@ -115,7 +115,10 @@ re-render does would repaint them. Each entry says which appearance it was parse
 is both what has the source reader read the file again and what lets the pane go on drawing the
 entry it has meanwhile (`agents/Panes.md`); a clear here would blank every source pane for as long
 as the reading took. `colours(appearance)` is the palette handed the theme rather than asking for
-it, which is how a parse made on a thread resolves its spans at all. The appearance is resolved by
+it, which is how a parse made on a thread resolves its spans at all -- and it is the only way to a
+colour off the UI thread. The state is a **thread-local**, so `palette()` on a worker answers out
+of one of that thread's own: always the light palette, and nothing said about it.
+The appearance is resolved by
 `apply_theme` (`src/ui/palette.rs`) at the root of `app()` from two inputs, through the pure
 `resolve_appearance`: the stored choice (`settings.rs`, read once: it is a file) and
 `Platform::preferred_theme`, which freya keeps from winit's `Window::theme()` and re-sets on the

@@ -126,15 +126,26 @@ impl SectionRows {
     }
 }
 
+/// Which of the three text rows a row is, which is what picks its colour and its weight.
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    Header,
+    Label,
+    Gap,
+}
+
 /// A row that is text and nothing else: the header, a label, a gap's bytes. **One
 /// answer for the three of them**, so that what the row draws, what a run of rows copies
 /// and what a sweep of characters copies cannot drift apart: [`build_row`] draws this,
 /// [`code_line`] is this as a line, and [`row_line`] is that after the address column.
 ///
-/// The colour and the weight are in it because the row draws them from nothing else.
-/// They come from [`palette`], and asking it is what subscribes to the theme: the render
-/// that draws the row, and nothing at all in the copying paths, which run under no
-/// reactive context.
+/// It says what the row **is** and never what it looks like. A colour resolved here would
+/// be a colour asked for wherever this is asked for, and this is asked for in three places
+/// that draw nothing: the sweep, the run of rows, and the walk over an object's code
+/// ([`stretch_texts`]), which runs on the find worker's own thread, where [`palette`]
+/// answers out of a thread-local of that thread's own and never the window's. The row
+/// asks for its own colour where it is drawn, as every other row does.
+#[derive(Clone)]
 struct TextOf {
     /// The address column, or none for a row that stands for no address of its own.
     address: Option<u64>,
@@ -142,11 +153,21 @@ struct TextOf {
     /// anything else ([`dump_line`]).
     mark: Option<&'static str>,
     text: String,
-    color: Color,
-    bold: bool,
+    role: Role,
     /// The symbol a label names, which a **Ctrl**-press on the label opens as a tab of
-    /// its own.
+    /// its own; `None` for the other two.
     opens: Option<Arc<SymbolData>>,
+}
+
+impl PartialEq for TextOf {
+    fn eq(&self, other: &Self) -> bool {
+        self.address == other.address
+            && self.mark == other.mark
+            && self.text == other.text
+            && self.role == other.role
+            // By pointer, as every identity in the UI is: `SymbolData` has no `PartialEq`.
+            && same_arc(&self.opens, &other.opens)
+    }
 }
 
 /// What the row of kind `kind` says in stretch `stretch` of section `placed`, `body`
@@ -166,8 +187,7 @@ fn text_at(
             address: Some(placed.range().start),
             mark: None,
             text: header_text(placed),
-            color: palette().text_fg,
-            bold: true,
+            role: Role::Header,
             opens: None,
         }),
         Kind::Label(index) => {
@@ -176,8 +196,7 @@ fn text_at(
                 address: Some(placed.place(stretch.range.start)),
                 mark: None,
                 text: label_text(&symbol),
-                color: palette().name_fg,
-                bold: true,
+                role: Role::Label,
                 opens: Some(symbol),
             })
         }
@@ -188,8 +207,7 @@ fn text_at(
                 address: Some(address),
                 mark: Some(mark),
                 text: values,
-                color: palette().operand_fg,
-                bold: false,
+                role: Role::Gap,
                 opens: None,
             })
         }
@@ -328,31 +346,40 @@ fn gap_row_bytes(
 /// A row that is text and nothing else -- a section's header, a symbol's label, a gap's
 /// bytes -- drawn as [`text_of`] says it. Takes the mark handlers so a sweep down the
 /// listing is not cut at every one.
-#[derive(Clone, PartialEq)]
+///
+/// It carries that answer **whole** rather than copying its fields out, so a field added
+/// to [`TextOf`] reaches the row without a line here. A row of bytes wears its data
+/// directive in front of its values -- the assembler's own word for what the row is, `db`
+/// to `dq` by the unit it is shown in, with the bytes as characters after the values --
+/// which is a hex dump's shape, and no instruction row has one: a page of data is told
+/// from a page of assembly in the row's shape and not in a colour.
+#[derive(Clone)]
 struct TextRow {
     row: usize,
-    /// The address column, or none for a row that stands for no address of its own.
-    address: Option<u64>,
-    text: String,
-    color: Color,
-    bold: bool,
+    /// What the row says, and what a sweep and a run of rows copy out of it.
+    text: TextOf,
+    /// The object the label's symbol is in, for the door a **Ctrl**-press opens: the way
+    /// from a function read among its neighbours back to reading it alone. A plain press
+    /// is a plain press and picks the row out like any other, which is why the label is
+    /// drawn as a link only while Ctrl is held (`Door::Label`).
+    object: Arc<Object>,
     wash: Wash,
-    /// The symbol a label names, which a **Ctrl**-press on the label opens as a tab of
-    /// its own: the door from a function read among its neighbours back to reading it
-    /// alone. A plain press is a plain press, and picks the row out like any other, which
-    /// is why the label is drawn as a link only while Ctrl is held (`Door::Label`).
-    opens: Option<Symbol>,
-    /// The data directive a row of bytes wears in front of its values, and none for a row
-    /// of anything else: the assembler's own word for what the row is, `db` to `dq` by the
-    /// unit it is shown in, with the bytes as characters after the values -- a hex dump's
-    /// shape, which no instruction row has, so a page of data is not taken for a page of
-    /// assembly. Said in the row's shape and not in a colour.
-    mark: Option<&'static str>,
     /// The columns of this row inside the pane's character selection (`RowChars`).
     chars: RowChars,
     /// What the find bar is looking for. See [`SectionRows::marking`].
     marking: Option<Marking>,
     key: DiffKey,
+}
+
+impl PartialEq for TextRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.row == other.row
+            && self.text == other.text
+            && Arc::ptr_eq(&self.object, &other.object)
+            && self.wash == other.wash
+            && self.chars == other.chars
+            && self.marking == other.marking
+    }
 }
 
 /// A gap row as data: the directive for the largest unit that divides the row's bytes --
@@ -394,16 +421,19 @@ impl Component for TextRow {
     fn render(&self) -> impl IntoElement {
         let ctrl = use_consume::<Ctrl>().0;
         let doors = use_doors();
-        let weight = if self.bold {
-            FontWeight::BOLD
-        } else {
-            FontWeight::NORMAL
+        // What the row is, drawn: the colour and the weight the three kinds differ in.
+        // Asked for here, in the row's own render, because asking is what subscribes a
+        // scope to the theme, and it is this scope a switch has to draw again.
+        let (color, weight) = match self.text.role {
+            Role::Header => (palette().text_fg, FontWeight::BOLD),
+            Role::Label => (palette().name_fg, FontWeight::BOLD),
+            Role::Gap => (palette().operand_fg, FontWeight::NORMAL),
         };
 
         // The text: the data directive, where the row has one, then what the row says --
         // one paragraph, and the same one `code_line` copies.
         let mut head = Vec::new();
-        if let Some(mark) = self.mark {
+        if let Some(mark) = self.text.mark {
             // Non-breaking, so the engine cannot trim it: it is one unit of the text
             // either way.
             head.push(
@@ -414,8 +444,8 @@ impl Component for TextRow {
             );
         }
         head.push(
-            Span::new(self.text.clone())
-                .color(self.color)
+            Span::new(self.text.text.clone())
+                .color(color)
                 .font_weight(weight)
                 .assembly_font(),
         );
@@ -424,17 +454,21 @@ impl Component for TextRow {
         // shows the hand over it and follows it exactly while `Door::open_now` says the
         // door is open, which for a label is while Ctrl is held; without Ctrl the press
         // is the row's, picking it out like any other.
-        let line = text_line(self.mark, &self.text);
+        let line = text_line(self.text.mark, &self.text.text);
         let whole = 0..line.units();
-        let links = self.opens.clone().map(|symbol| {
+        let links = self.text.opens.clone().map(|data| {
+            let symbol = Symbol {
+                object: self.object.clone(),
+                data,
+            };
             let door = Door::Label {
                 symbol: symbol.clone(),
             };
-            TextLinks {
-                columns: vec![whole],
-                is_link: Rc::new(move || door.open_now(|| ctrl())),
+            TextLinks::unnamed(
+                vec![whole],
+                Rc::new(move || door.open_now(|| ctrl())),
                 // A tab of its own, as Ctrl opens one everywhere.
-                follow: Rc::new(move |_| {
+                Rc::new(move |_| {
                     open_document(
                         doors.open,
                         doors.visits,
@@ -442,7 +476,7 @@ impl Component for TextRow {
                         Reach::NewTab,
                     );
                 }),
-            }
+            )
         });
         let text = Text {
             finds: self
@@ -454,9 +488,6 @@ impl Component for TextRow {
             head,
             tail: Vec::new(),
             chars: self.chars,
-            // As in the assembly pane: an instruction is in no file.
-            names: Vec::new(),
-            on_hover: None,
             links,
         };
 
@@ -465,7 +496,7 @@ impl Component for TextRow {
         // row; then the address, gutter too. A row that is nobody's line is never marked.
         let before = std::iter::once(code_mark(false))
             .chain(gutter_column(CODE_LANES, None))
-            .chain([address_label(self.address)])
+            .chain([address_label(self.text.address)])
             .collect();
 
         // A row of no file: a label or a header is nobody's line. Nothing is chained onto
@@ -665,9 +696,8 @@ impl Component for SectionList {
             // stretch may not be decoded yet, and the answer that decodes it wakes this
             // again.
             move |controller: &mut ScrollController, built: &Built| {
-                let owed = owed_reveal(marked, Pane::Assembly).and_then(|owing| {
-                    owing.row(|pair| row_compiled_from(built, &built.reading, pair))
-                });
+                let owed = owed_reveal(marked, Pane::Assembly)
+                    .and_then(|owing| owing.row(|pair| row_compiled_from(built, pair)));
                 let Some(row) = owed else {
                     return false;
                 };
@@ -853,16 +883,9 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             let key = RowKey::of(rows, i, at, text.address);
             TextRow {
                 row: i,
-                address: text.address,
-                text: text.text,
-                color: text.color,
-                bold: text.bold,
+                text,
+                object: data.object.clone(),
                 wash,
-                opens: text.opens.map(|symbol| Symbol {
-                    object: data.object.clone(),
-                    data: symbol,
-                }),
-                mark: text.mark,
                 chars,
                 marking: data.marking.clone(),
                 key: DiffKey::None,
@@ -890,21 +913,16 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                 _ => false,
             };
             let paired = paired_at(i).then(|| Edges::of(i, paired_at));
-            InstructionRow {
-                arrows: RowArrows {
-                    lanes: asm.lanes().row(index),
-                    lit: lanes::lit(touching(stretch), index),
-                },
-                data: asm,
-                asking: data.asking,
+            InstructionRow::at(
+                asm,
+                data.asking,
                 index,
-                row: i,
+                i,
                 paired,
-                wash,
-                chars,
-                marking: data.marking.clone(),
-                key: DiffKey::None,
-            }
+                data.chars,
+                touching(stretch),
+                data.marking.clone(),
+            )
             .key(RowKey::of(rows, i, at, Some(address)))
             .into_element()
         }
@@ -915,20 +933,9 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             let address = asm.assembly().instructions[below]
                 .address
                 .wrapping_add(asm.bias());
-            let mut lit = lanes::lit(touching(stretch), below);
-            lit.corner = false;
-            SeparatorRow {
-                row: i,
-                wash,
-                width: CODE_LANES,
-                arrows: RowArrows {
-                    lanes: asm.lanes().boundary(below),
-                    lit,
-                },
-                key: DiffKey::None,
-            }
-            .key(RowKey::of(rows, i, at, Some(address)))
-            .into_element()
+            SeparatorRow::over(&asm, below, i, data.chars, touching(stretch))
+                .key(RowKey::of(rows, i, at, Some(address)))
+                .into_element()
         }
     }
 }
@@ -1495,11 +1502,15 @@ pub(crate) fn open_as_symbol(doors: Doors, symbol: Symbol, address: u64, at: Opt
 
 /// The listing row of the first held instruction compiled from a line of the source
 /// pane's run `pair`, if any is.
-fn row_compiled_from(rows: &Rows, reading: &Reading, pair: &Picked) -> Option<usize> {
-    reading.held.iter().find_map(|(&flat, stretched)| {
+///
+/// The pair whole, as [`file_at`] takes it: it reads both halves, and rows counted from
+/// one reading against the stretches of another is exactly what [`Built`] exists to make
+/// impossible.
+fn row_compiled_from(built: &Built, pair: &Picked) -> Option<usize> {
+    built.reading.held.iter().find_map(|(&flat, stretched)| {
         let studied = stretched.code.as_ref()?;
         let index = studied.first_paired(pair)?;
-        Some(rows.body_start(flat)? + studied.lanes.row_of(index))
+        Some(built.body_start(flat)? + studied.lanes.row_of(index))
     })
 }
 

@@ -922,6 +922,35 @@ pub(crate) struct SeparatorRow {
 
 keyed!(SeparatorRow);
 
+impl SeparatorRow {
+    /// The separator above instruction `below` of `data`, drawn at listing row `row`.
+    ///
+    /// **The one way either listing makes one**, as [`AsmData::of`] is the one way it makes
+    /// what they are drawn from: the lanes crossing the boundary belong to the row below,
+    /// and the separator lights with that row's branches but never draws their corner,
+    /// which is the arrowhead's and belongs to the row landed on.
+    pub(crate) fn over(
+        data: &AsmData,
+        below: usize,
+        row: usize,
+        chars: Option<CharSelection>,
+        touching: &[PlacedEdge],
+    ) -> SeparatorRow {
+        let mut lit = lanes::lit(touching, below);
+        lit.corner = false;
+        SeparatorRow {
+            row,
+            wash: wash_of(chars, row),
+            width: data.width(),
+            arrows: RowArrows {
+                lanes: data.lanes().boundary(below),
+                lit,
+            },
+            key: DiffKey::None,
+        }
+    }
+}
+
 impl Component for SeparatorRow {
     fn render(&self) -> impl IntoElement {
         let width = self.width;
@@ -991,6 +1020,43 @@ pub(crate) struct InstructionRow {
 }
 
 keyed!(InstructionRow);
+
+impl InstructionRow {
+    /// Instruction `index` of `data`, drawn at listing row `row`. The one way either
+    /// listing makes one, so a field added above is filled in one place and the two
+    /// cannot hand their rows different things.
+    ///
+    /// What the list alone knows is handed in: `paired`, which is about the rows either
+    /// side of this one, and `touching`, the edges of the run picked out in the pane.
+    /// The wash, the columns and the gutter follow from those and are worked out here.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn at(
+        data: AsmData,
+        asking: RowStates,
+        index: usize,
+        row: usize,
+        paired: Option<Edges>,
+        chars: Option<CharSelection>,
+        touching: &[PlacedEdge],
+        marking: Option<Marking>,
+    ) -> InstructionRow {
+        InstructionRow {
+            arrows: RowArrows {
+                lanes: data.lanes().row(index),
+                lit: lanes::lit(touching, index),
+            },
+            data,
+            asking,
+            index,
+            row,
+            paired,
+            wash: wash_of(chars, row),
+            chars: RowChars::of(chars, row),
+            marking,
+            key: DiffKey::None,
+        }
+    }
+}
 
 /// The text instruction `index`'s row draws after its address, and the line that row
 /// copies.
@@ -1108,11 +1174,6 @@ fn instruction_text(
         head,
         tail: spans(tail, false),
         chars,
-        // Nothing in an instruction is a name a language server can place: a question is
-        // put by file, line and column, and an assembly row is in no file
-        // (`notes/Goals.md`).
-        names: Vec::new(),
-        on_hover: None,
         links: inline,
     }
 }
@@ -1478,29 +1539,14 @@ impl Component for InstructionList {
 /// on. Its own function rather than a closure, `new_with_data` never comparing one: what
 /// the rows are built from travels in [`AsmRows`] and nothing is captured here.
 fn asm_row(i: usize, rows: &AsmRows) -> Element {
-    let wash = wash_of(rows.chars, i);
     let Some(index) = rows.data.lanes().instruction_at(i) else {
-        // A separator, which belongs to the instruction below it: the lanes it
-        // carries are that row's, and it lights with them but never draws their
-        // corner.
+        // A separator, which belongs to the instruction below it.
         let below = rows.data.lanes().instruction_at(i + 1).unwrap_or(0);
-        let mut lit = lanes::lit(&rows.touching, below);
-        lit.corner = false;
-
         // Keyed by the row it opens, in a key space of its own: see `SeparatorRow`.
         let address = rows.data.assembly().instructions[below].address;
-        return SeparatorRow {
-            row: i,
-            wash,
-            width: rows.data.width(),
-            arrows: RowArrows {
-                lanes: rows.data.lanes().boundary(below),
-                lit,
-            },
-            key: DiffKey::None,
-        }
-        .key((true, address))
-        .into();
+        return SeparatorRow::over(&rows.data, below, i, rows.chars, &rows.touching)
+            .key((true, address))
+            .into();
     };
 
     // Paired, and if so whether the rows either side are too: the listing's rows,
@@ -1512,21 +1558,16 @@ fn asm_row(i: usize, rows: &AsmRows) -> Element {
             .is_some_and(|index| rows.data.paired(index, rows.pair.as_ref()))
     };
     let paired = paired_at(i).then(|| Edges::of(i, paired_at));
-    InstructionRow {
-        paired,
-        data: rows.data.clone(),
-        asking: rows.asking,
+    InstructionRow::at(
+        rows.data.clone(),
+        rows.asking,
         index,
-        row: i,
-        wash,
-        chars: RowChars::of(rows.chars, i),
-        marking: rows.marking.clone(),
-        arrows: RowArrows {
-            lanes: rows.data.lanes().row(index),
-            lit: lanes::lit(&rows.touching, index),
-        },
-        key: DiffKey::None,
-    }
+        i,
+        paired,
+        rows.chars,
+        &rows.touching,
+        rows.marking.clone(),
+    )
     // Tagged, for the separators' sake: an address alone could be any
     // separator's too.
     .key((false, rows.data.assembly().instructions[index].address))

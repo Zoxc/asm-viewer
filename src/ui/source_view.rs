@@ -214,16 +214,27 @@ impl Named {
         self.common.links.on_line(self.at.line)
     }
 
-    /// The names in `on_line` a press can follow, and what a press on one does: ask the
-    /// server where that name is, and go to what it answers. [`None`] with nobody to ask,
-    /// so no link is ever drawn that could not be followed.
+    /// What the server placed on this row, as the row draws and hit-tests it: which names
+    /// a press can follow and what such a press does -- ask the server where that name is,
+    /// and go to what it answers -- and all of `on_line` beside them for the pointer to be
+    /// answered about.
+    ///
+    /// The names are every one of them, links and the places where a name is defined
+    /// alike: what a reader hovers is a name and not a door, and a hover over the name
+    /// where a function is defined is where its own signature and doc comment are.
+    ///
+    /// [`None`] with nobody to ask, so no link is ever drawn that could not be followed
+    /// and no name is hovered that nobody could be asked about. It is one answer for both
+    /// because there is one server behind both.
     ///
     /// A press with Ctrl held opens what it names in a tab of its own, the rule every
     /// door inside a pane follows.
     fn linked(&self, on_line: &[links::Link]) -> Option<TextLinks> {
         let server = self.common.server.clone()?;
         let (open, ctrl) = (self.common.asking.doors.open, self.common.ctrl);
+        let hover = self.common.hover;
         let named = self.clone();
+        let pointed = self.clone();
         Some(TextLinks {
             columns: links::followed(on_line)
                 .map(|columns| self.drawn(columns))
@@ -242,18 +253,18 @@ impl Named {
                     Reach::inside(ctrl),
                 );
             }),
+            names: on_line
+                .iter()
+                .map(|link| self.drawn(&link.columns))
+                .collect(),
+            // What the pointer on one of them says, and nothing where there is nobody to
+            // write it to.
+            on_hover: hover.map(|hover| {
+                Rc::new(move |under: Under| {
+                    write_if(hover, |waiting| pointed.pointed(waiting, under));
+                }) as Rc<dyn Fn(Under)>
+            }),
         })
-    }
-
-    /// All of `on_line` as the units this row is drawn in, links and the places where a
-    /// name is defined alike: what a reader hovers is a name and not a door, and a hover
-    /// over the name where a function is defined is where its own signature and doc
-    /// comment are.
-    fn names(&self, on_line: &[links::Link]) -> Vec<Range<usize>> {
-        on_line
-            .iter()
-            .map(|link| self.drawn(&link.columns))
-            .collect()
     }
 
     /// What the pointer moving onto one of those names, off them all, or out from under
@@ -497,14 +508,6 @@ impl Component for SourceRow {
             tail: Vec::new(),
             chars: self.chars,
             links: named.linked(on_line),
-            names: named.names(on_line),
-            // What the pointer on one of them says.
-            on_hover: common.hover.map(|hover| {
-                let named = named.clone();
-                Rc::new(move |under: Under| {
-                    write_if(hover, |waiting| named.pointed(waiting, under));
-                }) as Rc<dyn Fn(Under)>
-            }),
         };
 
         let at = named.at.clone();

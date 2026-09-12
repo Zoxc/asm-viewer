@@ -50,7 +50,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::chars;
-use crate::process::{self, Handle};
+use crate::process::{self, Ended, Handle};
 
 /// The largest message that will be read, so a server that says it is about to send a
 /// gigabyte is a broken conversation and not an allocation.
@@ -459,7 +459,7 @@ impl Server {
             // -- and holding its lock over the wait -- is a race the stderr thread loses
             // about half the time. What it costs is the one line saying why the program
             // would not run, which is what this path is here to carry.
-            let ended = self.handle.ending(ENDING);
+            let ended = ended_by_itself(self.handle.ending(ENDING));
             if ended.is_some() {
                 if let Some(reader) = self.stderr.take() {
                     all_said(reader);
@@ -489,6 +489,19 @@ impl std::ops::Deref for Server {
 impl std::ops::DerefMut for Server {
     fn deref_mut(&mut self) -> &mut Talk<ChildStdin> {
         &mut self.talk
+    }
+}
+
+/// How a program that ended before the handshake is named beside its last words, and
+/// [`None`] where it did not end by itself: still going when the wait ran out, or taken by
+/// [`Handle::stop`], which this app asked for.
+fn ended_by_itself(ended: Option<Ended>) -> Option<String> {
+    match ended? {
+        Ended::Exited(Some(code)) => Some(format!("exit status: {code}")),
+        // Killed by a signal on Unix, and nothing else here can say which.
+        Ended::Exited(None) => Some("it left no exit status".to_owned()),
+        Ended::Failed(error) => Some(error),
+        Ended::Stopped => None,
     }
 }
 

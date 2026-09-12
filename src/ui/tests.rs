@@ -24168,8 +24168,6 @@ impl Component for LentRow {
                 tail: Vec::new(),
                 chars: RowChars::default(),
                 finds: Vec::new(),
-                names: Vec::new(),
-                on_hover: None,
                 links: NoLinks,
             }),
             None,

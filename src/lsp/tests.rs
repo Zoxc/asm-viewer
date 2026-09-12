@@ -1395,6 +1395,28 @@ fn a_program_that_ended_saying_nothing_is_still_one_that_would_not_start() {
     );
 }
 
+/// The wait answers what became of the program, and only a program that ended **by
+/// itself** is one that would not start. A stop is this app's own doing -- the handshake's
+/// own failure path stops nothing, but a reader pressing the control does -- and a program
+/// still going when the wait ran out has not ended at all.
+#[test]
+fn only_a_program_that_ended_by_itself_is_one_that_would_not_start() {
+    assert_eq!(ended_by_itself(None), None, "still going");
+    assert_eq!(
+        ended_by_itself(Some(Ended::Stopped)),
+        None,
+        "this app took it"
+    );
+    assert_eq!(
+        ended_by_itself(Some(Ended::Exited(Some(101)))),
+        Some("exit status: 101".to_owned())
+    );
+    assert_eq!(
+        ended_by_itself(Some(Ended::Failed("it could not be waited for".to_owned()))),
+        Some("it could not be waited for".to_owned())
+    );
+}
+
 #[test]
 fn a_conversation_that_broke_against_a_server_still_running_is_still_broken() {
     let broken = Failure::Broken("it closed the connection".to_owned());

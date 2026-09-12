@@ -171,16 +171,8 @@ pub(crate) struct Text<L> {
     /// The columns of every match the pane's find bar has on this row, washed under the
     /// text. Empty where no bar is open, and where nothing is typed in one.
     pub(crate) finds: Vec<Range<usize>>,
-    /// The columns of **every** name the server placed on this row, links and the places
-    /// where one is defined alike: what the pointer is answered about. A superset of
-    /// `links`, and not fed to [`cut_at`] -- hovering a name changes no span's style, so
-    /// it cuts the row nowhere and cannot widen the listing.
-    pub(crate) names: Vec<Range<usize>>,
-    /// What the pointer moving onto one of them, or off them all, says. Built per row,
-    /// as the two above are: the row knows where a name is drawn, and the pane knows what
-    /// place it is.
-    pub(crate) on_hover: Option<Rc<dyn Fn(Under)>>,
-    /// What of this row is a link.
+    /// What of this row is a link, and -- for the one kind that can have them -- what its
+    /// names are.
     pub(crate) links: L,
 }
 
@@ -201,6 +193,10 @@ pub(crate) struct Drawn {
     open: Option<Rc<dyn Fn() -> bool>>,
     inline: Option<Element>,
     runs: Option<(Vec<Range<usize>>, Rc<dyn Fn(Range<usize>)>)>,
+    /// Every name on the row, which only a kind whose links are runs of its own text can
+    /// have: see [`TextLinks::names`].
+    names: Vec<Range<usize>>,
+    on_hover: Option<Rc<dyn Fn(Under)>>,
 }
 
 impl Drawn {
@@ -209,21 +205,20 @@ impl Drawn {
         Drawn {
             open: Some(open),
             inline: Some(element),
-            runs: None,
+            ..Drawn::default()
         }
     }
 
-    /// Runs of the row's own text, whether a press on one is a door now, and what such a
-    /// press follows.
-    fn runs(
-        columns: Vec<Range<usize>>,
-        open: Rc<dyn Fn() -> bool>,
-        follow: Rc<dyn Fn(Range<usize>)>,
-    ) -> Self {
+    /// Runs of the row's own text: which are links, whether a press on one is a door now,
+    /// what such a press follows, and every name the row has for the pointer to be
+    /// answered about.
+    fn runs(links: TextLinks) -> Self {
         Drawn {
-            open: Some(open),
+            open: Some(links.is_link),
             inline: None,
-            runs: Some((columns, follow)),
+            runs: Some((links.columns, links.follow)),
+            names: links.names,
+            on_hover: links.on_hover,
         }
     }
 }
@@ -281,11 +276,43 @@ pub(crate) struct TextLinks {
     pub(crate) is_link: Rc<dyn Fn() -> bool>,
     /// What a press on one follows. Built per row, as the menu is.
     pub(crate) follow: Rc<dyn Fn(Range<usize>)>,
+    /// The columns of **every** name the server placed on this row, links and the places
+    /// where one is defined alike: what the pointer is answered about. A superset of
+    /// `columns`, and not fed to [`cut_at`] -- hovering a name changes no span's style, so
+    /// it cuts the row nowhere and cannot widen the listing.
+    ///
+    /// Here and not on [`Text`] because this is the only kind that can have them: an
+    /// [`InlineLink`] is an element and not a run of text, and [`NoLinks`] has no text to
+    /// name. So no other row kind has two fields to rule out.
+    pub(crate) names: Vec<Range<usize>>,
+    /// What the pointer moving onto one of those names, or off them all, says. Built per
+    /// row, as the rest is: the row knows where a name is drawn, and the pane knows what
+    /// place it is.
+    pub(crate) on_hover: Option<Rc<dyn Fn(Under)>>,
+}
+
+impl TextLinks {
+    /// Links and no names: a row whose text is in no file, so there is nothing on it a
+    /// language server could be asked about -- a question is put by file, line and
+    /// column. The label row in an object's listing is the one such row with a link.
+    pub(crate) fn unnamed(
+        columns: Vec<Range<usize>>,
+        is_link: Rc<dyn Fn() -> bool>,
+        follow: Rc<dyn Fn(Range<usize>)>,
+    ) -> TextLinks {
+        TextLinks {
+            columns,
+            is_link,
+            follow,
+            names: Vec::new(),
+            on_hover: None,
+        }
+    }
 }
 
 impl RowLinks for TextLinks {
     fn drawn(self) -> Drawn {
-        Drawn::runs(self.columns, self.is_link, self.follow)
+        Drawn::runs(self)
     }
 }
 
@@ -299,8 +326,6 @@ impl<L: RowLinks> Text<L> {
             tail: self.tail,
             chars: self.chars,
             finds: self.finds,
-            names: self.names,
-            on_hover: self.on_hover,
             links: self.links.drawn(),
         }
     }
@@ -672,11 +697,26 @@ struct Links {
     follow: Option<Rc<dyn Fn(Range<usize>)>>,
 }
 
+/// The names on a row and whom to tell what the pointer is on: what a row that has any
+/// hit-tests the pointer against ([`tell_hover`]).
+struct Tell {
+    names: Vec<Range<usize>>,
+    on_hover: Option<Rc<dyn Fn(Under)>>,
+}
+
 impl Links {
     /// The row's links taken out of its text, before the spans are moved into the
-    /// paragraph, and the element that goes inside it.
-    fn taken(text: &mut Option<Text<Drawn>>) -> (Self, Option<Element>) {
-        let Drawn { open, inline, runs } = text
+    /// paragraph: what the handlers read, the element that goes inside the paragraph, and
+    /// what the row says about the name under the pointer, which only a row whose links
+    /// are runs of its own text has.
+    fn taken(text: &mut Option<Text<Drawn>>) -> (Self, Option<Element>, Option<Tell>) {
+        let Drawn {
+            open,
+            inline,
+            runs,
+            names,
+            on_hover,
+        } = text
             .as_mut()
             .map(|text| std::mem::take(&mut text.links))
             .unwrap_or_default();
@@ -689,7 +729,10 @@ impl Links {
             columns: Rc::new(columns),
             follow,
         };
-        (links, inline)
+        // A row with no names has nothing to hit-test and nothing to say, which every row
+        // but a source row is.
+        let named = (!names.is_empty()).then_some(Tell { names, on_hover });
+        (links, inline, named)
     }
 
     /// Which of the runs column `column` is in, and `None` where it is in none.
@@ -739,17 +782,14 @@ fn row(
     let alt = use_consume::<Alt>().0;
     let grid = pixel_grid();
 
-    // The row's links, taken out of `text` before its spans are moved into the paragraph
-    // below, since the handlers need them.
-    let (links, inline) = Links::taken(&mut text);
-    // Every name on the row and what to say about the one under the pointer, taken out
-    // of `text` for the same reason the links are.
-    let names = text
-        .as_ref()
-        .map(|text| text.names.clone())
-        .unwrap_or_default();
-    let on_hover = text.as_ref().and_then(|text| text.on_hover.clone());
-    let tell = tell_hover(&cells, names, on_hover.clone());
+    // The row's links, the element inside its paragraph and its names, all taken out of
+    // `text` before its spans are moved into the paragraph below, since the handlers need
+    // them.
+    let (links, inline, named) = Links::taken(&mut text);
+    let on_hover = named.as_ref().and_then(|named| named.on_hover.clone());
+    // Built only for a row that has names, which is a source row and no other.
+    let tell = named.map(|named| tell_hover(&cells, named));
+    let tell_out = tell.clone();
     // The widest row of the listing the list is drawing now, and the listing itself: this
     // row's floor and what it reports its own width under, read once so the two agree.
     let (widest, listing_key) = (listing.widest, listing.key());
@@ -806,18 +846,12 @@ fn row(
             el.border(pair_border(chrome.paired.unwrap_or_default()))
         })
         .on_pointer_down(on_down(&cells, &chrome, &links, menu, marked, shift, alt))
-        .on_pointer_move(on_move(
-            &cells,
-            &chrome,
-            &links,
-            tell.clone(),
-            over,
-            marked,
-            alt,
-        ))
+        .on_pointer_move(on_move(&cells, &chrome, &links, tell, over, marked, alt))
         .on_pointer_out(move |_| {
             over.set_if_modified(None);
-            tell(None);
+            if let Some(tell) = &tell_out {
+                tell(None);
+            }
             set_icon(CursorIcon::Default);
         })
         .children(before);
@@ -843,11 +877,8 @@ fn row(
 /// Say which name the pointer is on, where it is drawn, and say it only when the answer
 /// has changed: a move along one name arrives many times over. A column goes in: the row
 /// knows where its names are drawn, and the pane knows what place one is.
-fn tell_hover(
-    cells: &RowCells,
-    names: Vec<Range<usize>>,
-    on_hover: Option<Rc<dyn Fn(Under)>>,
-) -> Rc<dyn Fn(Option<usize>)> {
+fn tell_hover(cells: &RowCells, named: Tell) -> Rc<dyn Fn(Option<usize>)> {
+    let Tell { names, on_hover } = named;
     let cells = cells.clone();
     Rc::new(move |column: Option<usize>| {
         let on = column.and_then(|column| names.iter().position(|name| name.contains(&column)));
@@ -1202,7 +1233,7 @@ fn on_move(
     cells: &RowCells,
     chrome: &Chrome,
     links: &Links,
-    tell: Rc<dyn Fn(Option<usize>)>,
+    tell: Option<Rc<dyn Fn(Option<usize>)>>,
     mut over: State<Option<usize>>,
     marked: State<Marks>,
     alt: State<bool>,
@@ -1222,7 +1253,9 @@ fn on_move(
         let sweeping = dragging(marked, pane) || *alt.peek();
         let hovered = (!sweeping).then(|| links.at(column)).flatten();
         over.set_if_modified(hovered);
-        tell(if sweeping { None } else { column });
+        if let Some(tell) = &tell {
+            tell(if sweeping { None } else { column });
+        }
         let on_text = cells.x_into_text(at).is_some_and(|x| x >= 0.0);
         // The hand over a link, whichever kind it is, and only while a press on it would
         // be a door: the link's own rule, which is what lights it, so the two cannot

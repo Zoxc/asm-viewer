@@ -190,15 +190,20 @@ impl Pads {
         pads.get_mut(shown).expect("the shown pad")
     }
 
+    /// The state for `pad`, held if this is the first time it is named. The one place a
+    /// pad enters the table.
+    fn held(&mut self, pad: &PadId) -> &mut PadState {
+        self.pads
+            .entry(pad.clone())
+            .or_insert_with(|| PadState::of(Scratchpad::of(pad.clone())))
+    }
+
     /// Hold a pad the listing named, so the panel can draw a name for one that has never
     /// been shown. The name is the one out of that pad's own package, read when the list
     /// was asked for; everything else about it arrives when it is opened. A pad already
     /// open keeps its own name, that being the live one and this a snapshot.
     fn hold(&mut self, listed: &PadListing) {
-        let state = self
-            .pads
-            .entry(listed.id.clone())
-            .or_insert_with(|| PadState::of(Scratchpad::of(listed.id.clone())));
+        let state = self.held(&listed.id);
         if !state.opened() {
             state.scratchpad.name = listed.name.clone();
         }
@@ -207,12 +212,18 @@ impl Pads {
     /// Draw `pad` from now on, holding a state for it if this is the first time, and moving
     /// it to the front of the order the panel draws — the same `touch` the file goes
     /// through on the worker, so the two cannot say different things.
-    fn show(&mut self, pad: PadId) {
-        self.pads
-            .entry(pad.clone())
-            .or_insert_with(|| PadState::of(Scratchpad::of(pad.clone())));
+    ///
+    /// **Answers the pad to ask the worker for**, which is the disk read a
+    /// [`PadJob::Open`] is, and [`None`] for one whose disk has already been read. Every
+    /// door into a pad goes through here, so the rule that a pad already read is never
+    /// read again is written once rather than remembered by each of them
+    /// ([`PadState::opened`]).
+    fn show(&mut self, pad: PadId) -> Option<Scratchpad> {
+        self.held(&pad);
         self.order.touch(pad.clone());
         self.shown = pad;
+        let state = self.state();
+        (!state.opened()).then(|| state.scratchpad.clone())
     }
 
     /// The pads the disk has, as the worker read them. Answers with the pad to open,
@@ -228,17 +239,18 @@ impl Pads {
     /// The order is not written back before it has been read. Nothing here guards that:
     /// the only writer is `scratchpad::remember`, on the worker inside the `PadJob::Open`
     /// this answer sends. [`PadState::opened`]'s rule one level up.
-    fn listed(&mut self, listing: &[PadListing]) -> Scratchpad {
+    fn listed(&mut self, listing: &[PadListing]) -> Option<Scratchpad> {
         if !listing.is_empty() {
             self.order = PadOrder::of(listing);
             for listed in listing {
                 self.hold(listed);
             }
         }
-        if let Some(front) = listing.first() {
-            self.show(front.id.clone());
-        }
-        self.state().scratchpad.clone()
+        let front = match listing.first() {
+            Some(front) => front.id.clone(),
+            None => self.shown.clone(),
+        };
+        self.show(front)
     }
 
     /// What came of the reader pressing New: the pad to open, or the sentence the panel
@@ -249,9 +261,9 @@ impl Pads {
     fn created(&mut self, made: Result<Scratchpad, Failure>) -> Option<Scratchpad> {
         match made {
             Ok(scratchpad) => {
-                self.show(scratchpad.id().clone());
-                self.state_mut().scratchpad = scratchpad.clone();
-                Some(scratchpad)
+                let id = scratchpad.id().clone();
+                self.held(&id).scratchpad = scratchpad;
+                self.show(id)
             }
             Err(failure) => {
                 self.refused = Some(format!("Not made: {failure}"));
@@ -407,8 +419,7 @@ impl Pads {
             // `Pads::default` starts with.
             None => PadId::default(),
         };
-        self.show(next);
-        (!self.state().opened()).then(|| self.state().scratchpad.clone())
+        self.show(next)
     }
 }
 
@@ -932,7 +943,9 @@ pub(crate) fn use_scratchpad_with(
                 // Bound out of a statement of its own, so the guard is gone before the
                 // send.
                 let opening = pad.write().listed(&listing);
-                requests.send(PadJob::Open(opening));
+                if let Some(scratchpad) = opening {
+                    requests.send(PadJob::Open(scratchpad));
+                }
             }
             PadAnswer::Created(made) => {
                 let opening = pad.write().created(made);
@@ -1094,13 +1107,9 @@ pub(crate) fn show_pad(mut pad: State<Pads>, jobs: &PadJobs, name: PadId) {
     }
     save_if_changed(pad, &leaving, jobs);
 
-    let mut pads = pad.write();
-    pads.show(name.clone());
-    let opened = pads.state().opened();
-    let arriving = pads.state().scratchpad.clone();
-    drop(pads);
-
-    if !opened {
+    // Bound out of a statement of its own, so the guard is gone before the send.
+    let arriving = pad.write().show(name);
+    if let Some(arriving) = arriving {
         jobs.jobs.send(PadJob::Open(arriving));
     }
 }

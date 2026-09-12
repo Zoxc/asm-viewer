@@ -692,12 +692,16 @@ row depends on, an `Arc` inside so handing them down is a pointer compare. A row
 the server's state itself -- it says how far through the project it has got over and over,
 and a row that read that would be drawn again for every word of it.
 
-**Hovering a name is the same hit test and a different answer.** `Text::names` carries the
+**Hovering a name is the same hit test and a different answer.** `TextLinks::names` carries the
 columns of every name the server placed on the row -- links and the places where one is
 defined alike, since a hover over the name where a function is defined is its own signature
 and doc comment -- and `code_row` hit-tests the pointer against them beside the links. It is
 not fed to `cut_at`: hovering changes no span's style, so it cuts the row nowhere and cannot
-widen the listing.
+widen the listing. It sits on the link kind and not on `Text`, that kind being the only one that
+can have any: an inline link is an element and not a run of text, and a row with no links has no
+text to name. So no other row kind carries two fields it has to rule out -- the half `Text` was
+made generic in its links to be rid of -- and a row with no names is built without the closure
+that would have hit-tested them.
 
 **The pointer holds still before anything is asked** (`HOVER_DELAY`, 300ms). A
 pointer crossing a line passes over a name every few pixels, and each one is a round trip to
@@ -944,7 +948,11 @@ copies (`Section::bias`, what tells two functions of a relocatable object apart 
 Everything else follows from which one it is and is asked of it: `AsmData::width` is the symbol's
 own lanes alone and `CODE_LANES` among its neighbours, `base` and `bias` are 0 alone, and
 `code_tab` is the variant. They were five fields the two callers filled in lockstep, two of them
-`usize` and so swappable without a compile error. The separator
+`usize` and so swappable without a compile error. **The rows are made the one way too**
+(`InstructionRow::at`, `SeparatorRow::over`), as what they are drawn from is (`AsmData::of`). Each
+listing kept a copy of the wash, the columns, the gutter and the separator's rule, so a field added
+to a row was two edits and the rule was a comment in two places. What is left at each site is what
+only that list knows: which of its rows are neighbours' pairs, and the key. The separator
 draws the lanes that cross it (`Lanes::boundary`; the row below's `top` strokes run full height), so
 a branch's line is unbroken where the listing opens the gap under it, and it carries neither stub
 nor arrowhead, both of which belong to the row landed on. It takes the mark handlers too, so a sweep
@@ -1015,7 +1023,10 @@ reading they were counted from**, as one `Built`, because the effect runs a pass
 and for that pass the reading the pane can read is newer than the rows on screen: a stretch the
 answer let go of, drawn from the old rows against the new reading, found no bytes, and every one of
 its rows fell back to one key, which freya's diff panics on. The list draws from the pair and never
-from the two apart; a gap row is keyed by its own address besides. `use_window` reads the
+from the two apart, and neither does anything else that reads both halves: `file_at` and
+`row_compiled_from` take the `&Built` and not the two, so nobody can hand one a `Rows` and a newer
+`Reading`. What reads only the rows takes only those -- `row_line` and `code_line`, the rows
+holding the bodies. A gap row is keyed by its own address besides. `use_window` reads the
 controller, the viewport, the rows and the reading, and takes **the pane's own object** as a dep.
 The pane mounts a beat before the reading is its own, `Active` being a memo, and a run that found
 the reading about something else must be woken when it catches up, or the tab stays empty until the
@@ -1031,9 +1042,17 @@ first and at most `WINDOW` (64) of them. The worker answers a chunk, the rows ch
 so the buffer fills from the viewport outwards and a page up or down lands on rows already decoded.
 Before there is a skeleton it asks for that, with nothing decoded. What a row copies is what it
 draws, and it is worked out **once**: `text_of` says what a row that is text is -- its address, its
-text, the data directive in front of it, its colour -- and the row drawn, the characters swept
-(`code_line`) and the run of rows copied (`row_line`, the address column then `code_line`) are all
-that one answer. An instruction is the one row read out of the reading instead, and its own tab's
+text, the data directive in front of it, and its `Role`, which is which of the three it is -- and
+the row drawn, the characters swept (`code_line`) and the run of rows copied (`row_line`, the
+address column then `code_line`) are all that one answer. **It says what the row is and never what
+it looks like**: the row asks `palette()` for the colour and the weight its role picks, where it is
+drawn and as every other row does, so the subscription to the theme is the row's scope and not the
+list's. A colour resolved in the answer was a colour asked for in the three places that ask for the
+answer and draw nothing -- and one of them, the walk over an object's code (`stretch_texts`), runs
+on the find worker's thread, where the palette is a thread-local of that thread's own and always
+the light one (`agents/Appearance.md`). Nothing was drawn wrong, the colour being thrown away, but
+asking off the UI thread is the one thing `ui/palette.rs` says nothing may do.
+An instruction is the one row read out of the reading instead, and its own tab's
 line (`instruction_line`). So: `section .text` for a header and `<name>:` for a label, each after
 its address, the instruction's own line for an instruction, and for a gap row a data directive
 (`dq` for a row that divides into quadwords, down to `db` for one that does not, the values

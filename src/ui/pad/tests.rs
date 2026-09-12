@@ -21,7 +21,7 @@ fn the_front_of_the_listing_is_what_a_restart_comes_back_to() {
     let mut pads = Pads::default();
     let opening = pads.listed(&listing(&["pad-a", "pad-b"]));
 
-    assert_eq!(opening.id(), &id("pad-a"));
+    assert_eq!(opening.expect("the front is to be read").id(), &id("pad-a"));
     assert_eq!(pads.shown(), &id("pad-a"));
     assert_eq!(
         pads.get(&id("pad-b"))
@@ -38,7 +38,35 @@ fn an_empty_listing_opens_the_pad_the_app_booted_holding() {
     let mut pads = Pads::default();
     let booted = pads.shown().clone();
     let opening = pads.listed(&[]);
-    assert_eq!(opening.id(), &booted, "which is what seeds its baseline");
+    assert_eq!(
+        opening.expect("the booted pad is read like any other").id(),
+        &booted,
+        "which is what seeds its baseline"
+    );
+}
+
+/// **The check is `show`'s, so every door into a pad makes it.** The listing, a pad just
+/// made, a delete coming back to the next pad and the reader's own switch all show a pad
+/// and then ask the worker for it, and the listing used to ask unconditionally: it was
+/// right only because it is the first question the app puts, so nothing could be open
+/// when it answered. The rule now holds whatever the order.
+#[test]
+fn a_listing_naming_a_pad_already_open_asks_for_nothing() {
+    let mut pads = Pads::default();
+    let read = Scratchpad::new("pad-a").expect("a valid id");
+    assert!(
+        pads.listed(&listing(&["pad-a"])).is_some(),
+        "a pad the disk has never been read for"
+    );
+    assert!(
+        pads.opened(&read, None),
+        "the answer that seeds its baseline"
+    );
+
+    assert!(
+        pads.listed(&listing(&["pad-a"])).is_none(),
+        "a pad already read was asked for a second time"
+    );
 }
 
 #[test]

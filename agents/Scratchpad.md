@@ -394,11 +394,16 @@ save left to the effect would not: the mirror into the model and the write out o
 effects, the second woken by the first, so a click landing between them would leave the last
 keystroke unwritten. `Pads::unsaved_change` is the one comparison behind both callers, the effect
 for the pad being typed into and `show_pad` for the pad being left. A pad already read is shown
-from what is held and is never read a second time. **That is the answer's rule as well as the
-question's** (`Pads::opened`): a pad shown, left and shown again before its first answer arrives
-is asked for twice, `show_pad` going by `PadState::opened` and the answer being what seeds the
-baseline behind it, so an answer for a pad that is already open is dropped -- and the buffer is
-made only where it says it took one. Taking it would put back what the disk held before the read
+from what is held and is never read a second time. **The question's rule is `Pads::show`'s**: it
+draws the pad and answers the one to ask the worker for, which is `None` for a pad whose disk has
+been read, so the four doors in -- the listing, a pad just made, a delete coming back to the next
+pad, and the reader's own switch -- are one shape and none of them can forget the check. The
+listing used to ask unconditionally, and was right only because it is the first question the app
+puts and nothing can be open when it answers.
+**It is the answer's rule too** (`Pads::opened`): a pad shown, left and shown again before its
+first answer arrives is asked for twice, and the answer is what seeds the baseline behind it, so an
+answer for a pad that is already open is dropped -- and the buffer is made only where it says it
+took one. Taking it would put back what the disk held before the read
 -- older than anything typed since -- and make that the baseline, leaving the disk ahead of the
 screen with no save owing until the next keystroke wrote the older text back over it.
 

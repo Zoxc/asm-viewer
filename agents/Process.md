@@ -39,14 +39,23 @@ status, stopped, or could not be waited for. The server is **waited for after a 
 how it ended only when a handshake has already failed, to tell a program that would not start from
 a server that stopped answering.
 
-`Handle::ended` is the first and `Handle::ending` the second, both over one non-blocking `look` that
-does the reaping under the lock. What reconciles them is that a stop takes the process: **a process
-no longer under the lock was taken by a stop, which waited for it there**, so a run's reaper reads
-"taken" as `Ended::Stopped` and has nothing left to wait for. That replaced a separate "was it
-stopped" flag the run used to keep. It also means a run whose reader thread could not be started is
-reported as stopped rather than as an exit with no code, which is the truer of the two: the app
-ended it. `ending` reads the same taken process as "not ended by itself", which is what the
-handshake wants -- a program this app killed is not a program that would not start.
+`Handle::ended` is the first and `Handle::ending` the second, and they are **one wait** apart:
+`Handle::wait` polls the non-blocking `look`, which does the reaping under the lock, and gives up at
+a deadline or never. `ended` is that with no bound and `ending` with one, so a change to the poll --
+a backoff, a wait on the child after a kill -- is one edit. `look` answers `Ended` itself, the one
+enum for the three outcomes; it used to answer a private `State` that existed only to be translated
+twice, once per caller, and the meaning of `Stopped` with it.
+
+What reconciles the two callers is that a stop takes the process: **a process no longer under the
+lock was taken by a stop, which waited for it there**, so a run's reaper reads "taken" as
+`Ended::Stopped` and has nothing left to wait for. That replaced a separate "was it stopped" flag
+the run used to keep. It also means a run whose reader thread could not be started is reported as
+stopped rather than as an exit with no code, which is the truer of the two: the app ended it. The
+handshake reads that same `Ended::Stopped` as "not ended by itself" -- a program this app killed is
+not a program that would not start -- and words the other two for the failure it is there to carry
+(`ended_by_itself`, `src/lsp.rs`). What that loses is `ExitStatus`'s own `Display`, which names a
+signal on Unix. `Ended::Exited` carries the exit code alone because a test has to be able to write
+one, and `ExitStatus` has no portable constructor.
 
 ## The group
 
@@ -74,8 +83,12 @@ the Windows half no longer carries a mutex of its own to make it so.
 Every handle `start` makes goes on a `static` list, because the window's close hook is a `Send`
 callback that can read no UI state -- `project.rs`'s `flush` is there for the same reason -- and a
 child outliving the app holds a terminal, a port or a file the next run will want with nothing able
-to find it again. A handle leaves the list when it is stopped or reaped, so the list is short and a
-`stop_all` is a walk over what is really running.
+to find it again. **A handle leaves the list the moment it is known to be gone**, stopped or reaped,
+and by that one rule (`Handle::forget`): the list is short and a `stop_all` is a walk over what is
+really running. It used to be two rules -- the reap took its own handle off, and the next `start`
+pruned every finished one -- so a stopped handle sat there until something else was started, and a
+language server stopped and never started again was still on the list at the shutdown, where
+`stop_all` signalled a pid the system was free to have handed on.
 
 `shutdown::before_exit` is the whole of the end of the process: the projects flushed, then
 `stop_all`. Two calls and one list, so the sequence cannot be half-copied. The window's close hook
@@ -130,7 +143,9 @@ the row count depend on how long the lines happened to be.
 The two reaps are, against `/bin/sh`: a program that ends by itself is reaped with the status it
 left, and one this app stopped reads as stopped and comes off the list. Both go through `run`, so
 what those tests pin is the count as well -- `Ended` said exactly once and last, with nothing to
-say on either pipe as much as with both of them written to. Nothing short of a real program says
+say on either pipe as much as with both of them written to. The list's one rule is pinned on its
+own, either way in: a stop takes its handle off at once, and so does a bounded wait that found the
+program gone. Nothing short of a real program says
 whether a stop killed anything *else*, and building one means running cargo, which no test here
 does, so the group and what a stop reaches are judged by hand. The Windows half is judged
 by inspection: nothing in this repo runs there.

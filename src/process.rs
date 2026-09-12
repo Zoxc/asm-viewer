@@ -21,7 +21,7 @@
 
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
@@ -179,18 +179,6 @@ impl PartialEq for Handle {
     }
 }
 
-/// What has become of a started program, asked without waiting.
-enum State {
-    /// Still going.
-    Going,
-    /// Gone by itself, with the status it left.
-    Exited(ExitStatus),
-    /// A stop took it, and that stop waited for it.
-    Stopped,
-    /// It could not be waited for.
-    Failed(String),
-}
-
 impl Handle {
     /// Kill the program and everything it started, and wait for it to be gone.
     ///
@@ -207,96 +195,94 @@ impl Handle {
     /// program started here is. The second stop is a no-op for the same reason, the first
     /// having taken the process out from under the lock.
     pub fn stop(&self) {
-        let mut held = self.0.child.lock().unwrap_or_else(|held| held.into_inner());
-        let over = self.0.over.swap(true, Ordering::SeqCst);
-        let Some((mut child, group)) = held.take() else {
-            return;
-        };
-        if over {
-            return;
+        {
+            let mut held = self.0.child.lock().unwrap_or_else(|held| held.into_inner());
+            let over = self.0.over.swap(true, Ordering::SeqCst);
+            // Taken whether or not it is signalled, which is what makes the second stop a
+            // no-op.
+            if let (false, Some((mut child, group))) = (over, held.take()) {
+                group.kill();
+                // The child's own kill after the group's: it is what a platform with no
+                // group, or a job object the system refused, still gets.
+                let _ = child.kill();
+                // It has been killed, so this returns at once, and it is what keeps a
+                // stopped program from sitting in the process table until the app ends.
+                let _ = child.wait();
+            }
         }
-
-        group.kill();
-        // The child's own kill after the group's: it is what a platform with no group, or
-        // a job object the system refused, still gets.
-        let _ = child.kill();
-        // It has been killed, so this returns at once, and it is what keeps a stopped
-        // program from sitting in the process table until the app ends.
-        let _ = child.wait();
+        // Off the list, whether this stop killed the program or found it already gone --
+        // either way it is over. The lock above is let go first: nothing holds both.
+        self.forget();
     }
 
-    /// Whether nothing more is to be done to it: stopped, or seen to have ended by itself.
-    pub fn finished(&self) -> bool {
-        self.0.over.load(Ordering::SeqCst)
-    }
-
-    /// How it ended, if it has, waiting `within` for it to finish doing so. `None` while it
-    /// is still going, and for one this app stopped -- a program the app killed is not a
-    /// program that ended on its own.
+    /// How it ended, if it has within `within`. [`None`] while it is still going -- a
+    /// program that outlasts the wait -- and [`Ended::Stopped`] for one this app took,
+    /// which the caller reads as "not a program that ended on its own".
     ///
     /// The language server's: asked only of a conversation that has already failed, so the
     /// wait is the price of telling a program that would not start from a server that
     /// stopped answering.
-    pub fn ending(&self, within: Duration) -> Option<String> {
-        let until = Instant::now() + within;
+    pub fn ending(&self, within: Duration) -> Option<Ended> {
+        self.wait(Some(within))
+    }
+
+    /// Wait for it to be gone however long that takes and say how it went.
+    ///
+    /// A run's: the pipes have reached their end and what is left is the reap. A process
+    /// no longer under the lock was taken by a stop, which waited for it, so "taken" is
+    /// how a stop is read from here.
+    pub fn ended(&self) -> Ended {
+        self.wait(None)
+            .expect("a wait with no bound ends only when the program has")
+    }
+
+    /// The one poll over [`Handle::look`], `within` a bound or for as long as it takes.
+    /// A handle that has ended leaves the list a shutdown walks; one still going when the
+    /// bound runs out stays on it, and [`None`] is that.
+    fn wait(&self, within: Option<Duration>) -> Option<Ended> {
+        let until = within.map(|within| Instant::now() + within);
         loop {
-            match self.look() {
-                State::Exited(status) => return Some(status.to_string()),
-                State::Failed(error) => return Some(error),
-                State::Stopped => return None,
-                State::Going => {}
+            if let Some(ended) = self.look() {
+                self.forget();
+                return Some(ended);
             }
-            if Instant::now() >= until {
+            if until.is_some_and(|until| Instant::now() >= until) {
                 return None;
             }
             thread::sleep(POLL);
         }
     }
 
-    /// Wait for it to be gone however long that takes, say how it went, and take it off
-    /// the list [`stop_all`] walks.
-    ///
-    /// A run's: the pipes have reached their end and what is left is the reap. A process
-    /// no longer under the lock was taken by a stop, which waited for it, so "taken" is
-    /// how a stop is read from here.
-    pub fn ended(&self) -> Ended {
-        let ended = loop {
-            match self.look() {
-                State::Exited(status) => break Ended::Exited(status.code()),
-                State::Stopped => break Ended::Stopped,
-                State::Failed(error) => break Ended::Failed(error),
-                State::Going => {}
-            }
-            thread::sleep(POLL);
-        };
-
-        let mut list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
-        list.retain(|other| other != self);
-        ended
-    }
-
-    /// What has become of it, asked without waiting.
+    /// How it ended, if it has, asked without waiting. [`None`] while it is still going.
     ///
     /// A process found to be gone is marked over **under the lock**, since `try_wait` is
     /// what reaps it: after this the pid is the system's to hand on, and [`Handle::stop`]
     /// reads the flag under this same lock so that it cannot signal a group that is no
     /// longer this one.
-    fn look(&self) -> State {
+    fn look(&self) -> Option<Ended> {
         let mut held = self.0.child.lock().unwrap_or_else(|held| held.into_inner());
         let Some((child, _)) = held.as_mut() else {
-            return State::Stopped;
+            return Some(Ended::Stopped);
         };
         match child.try_wait() {
             Ok(Some(status)) => {
                 self.0.over.store(true, Ordering::SeqCst);
-                State::Exited(status)
+                Some(Ended::Exited(status.code()))
             }
-            Ok(None) => State::Going,
+            Ok(None) => None,
             Err(error) => {
                 self.0.over.store(true, Ordering::SeqCst);
-                State::Failed(error.to_string())
+                Some(Ended::Failed(error.to_string()))
             }
         }
+    }
+
+    /// Take this handle off the list [`stop_all`] walks. **A handle leaves the list when
+    /// it is known to be gone**, stopped or reaped, and by this one rule: a `stop_all`
+    /// that signalled it would be signalling a pid the system is free to have handed on.
+    fn forget(&self) {
+        let mut list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
+        list.retain(|other| other != self);
     }
 }
 
@@ -332,7 +318,6 @@ pub fn start(command: &mut Command) -> io::Result<(Handle, Pipes)> {
     }));
     {
         let mut list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
-        list.retain(|other| !other.finished());
         list.push(handle.clone());
     }
 

@@ -3,6 +3,14 @@ use std::io::Cursor;
 use super::*;
 
 impl Handle {
+    /// Whether nothing more is to be done to it: stopped, or seen to have ended by
+    /// itself. Nothing in the app asks -- a handle that is over has left the list a
+    /// shutdown walks, which is the only reason anything wanted to know -- so the
+    /// question is the tests' alone.
+    pub fn finished(&self) -> bool {
+        self.0.over.load(Ordering::SeqCst)
+    }
+
     /// A handle with no process behind it, for the tests: everything a handle is asked
     /// about a program it has stopped is bookkeeping, and only the killing needs one.
     pub fn to_nothing() -> Handle {
@@ -211,4 +219,46 @@ fn a_stopped_run_says_it_ended_once_and_leaves_the_list() {
         !list.iter().any(|other| *other == handle),
         "the reaped run is still on the list a shutdown walks"
     );
+}
+
+/// Whether `handle` is still on the list a shutdown walks.
+#[cfg(unix)]
+fn listed(handle: &Handle) -> bool {
+    let list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
+    list.iter().any(|other| other == handle)
+}
+
+/// **A handle leaves the list the moment it is known to be gone**, and by that one rule.
+/// A stop used to leave one on it: the list was pruned of the finished by the next
+/// `start`, so a language server stopped and never started again sat there until the
+/// shutdown's `stop_all` signalled a pid the system was free to have handed on.
+#[cfg(unix)]
+#[test]
+fn a_stopped_program_leaves_the_list_at_once() {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg("sleep 30").stdin(Stdio::null());
+    let (handle, _pipes) = start(&mut command).expect("/bin/sh started");
+    assert!(listed(&handle), "a started program is not on the list");
+
+    handle.stop();
+    assert!(
+        !listed(&handle),
+        "a stopped program is still on the list a shutdown walks"
+    );
+}
+
+/// The other end of the same rule: a program waited for and found gone comes off the list
+/// too, and the wait says how it went whether it is bounded or not.
+#[cfg(unix)]
+#[test]
+fn a_program_waited_for_and_found_gone_leaves_the_list_too() {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg("exit 7").stdin(Stdio::null());
+    let (handle, _pipes) = start(&mut command).expect("/bin/sh started");
+
+    assert_eq!(
+        handle.ending(Duration::from_secs(30)),
+        Some(Ended::Exited(Some(7)))
+    );
+    assert!(!listed(&handle), "the reaped program is still on the list");
 }
