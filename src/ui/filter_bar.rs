@@ -55,11 +55,14 @@ impl Toggle {
         }
     }
 
-    /// The toggle a key is the chord of, where it is one of the three.
+    /// The toggle a key is the chord of, where it is one of the three. The key is read as
+    /// a chord once and the three are compared against that, so [`Toggle::chord`] stays
+    /// the one table.
     pub(crate) fn pressed(key: &Key, modifiers: Modifiers) -> Option<Toggle> {
+        let chord = Chord::of(key, modifiers)?;
         Toggle::ALL
             .into_iter()
-            .find(|toggle| toggle.chord().is(key, modifiers))
+            .find(|toggle| toggle.chord() == chord)
     }
 
     pub(crate) fn flip(self, filter: &mut Filter) {

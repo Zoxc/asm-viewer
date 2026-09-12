@@ -226,6 +226,18 @@ would go unanswered on a keyboard with either on -- Caps Lock being the state th
 an `F` in the first place. `Chord::NthTab` carries the digit rather than being nine variants:
 the nine differ in nothing but the number, and the number is the argument the answer takes.
 
+**A key event is at most one chord**, no two rows of the table being the same key under the same
+modifiers, so `Chord::of` reads a key as the one chord it is and every handler `match`es on that
+-- the root, the scratchpad page, the find bar, the three toggles and the source pane's four
+questions. It was a chain of `Chord::X.is(..)` tests per handler, up to twenty of them at the
+root, each working the modifiers out again; and the chain said nothing about whether a key one
+`if` answered was answered by another, so the panel chords and the nine digits were each a little
+table searched to get round the shape. The one thing the `match` cannot be is exhaustive -- most
+chords are answered somewhere else, or nowhere yet -- so each handler ends in a `_`. What holds
+the whole thing up is the round trip pinned by `no_two_chords_are_the_same_gesture`
+(`ui/tests.rs`): every chord is what `Chord::of` reads its own key press as. `Chord::is` stays for
+the one handler that answers a single chord, and is that lookup compared against it.
+
 **Every chord the plan needs is named, and the bindings are hung off them one at a time.**
 `Chord::ALL` is the list every text box declines, and a box keeps whatever nothing declined: it
 types the character, and its `prevent_default` cancels the global key event the root would have

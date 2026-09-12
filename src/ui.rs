@@ -344,6 +344,13 @@ pub(crate) fn root_key_down(
     modifiers: Modifiers,
 ) {
     keys.down(key, modifiers);
+    // **The one chord this key is, looked up once.** A key event is at most one of them
+    // (`Chord::of`), so the window's keys are one `match` and not a chain of tests, and a
+    // binding added here sits beside the others rather than after them. The `_` is every
+    // chord a list, a box, a pane or the scratchpad answers where it is.
+    let Some(chord) = Chord::of(key, modifiers) else {
+        return;
+    };
     let ProjectStates {
         proj,
         open,
@@ -355,92 +362,69 @@ pub(crate) fn root_key_down(
     } = states;
     let mut strip = open.strip;
 
-    // The panels and the overlay that are reached from anywhere. Each panel chord raises
-    // its panel and puts the keyboard in it (`reach_panel`); a table and not four arms,
-    // since they differ in the panel alone and the panel is the argument the answer
-    // takes. The three lists a reader lives in, and Search: History, Bookmarks and
-    // Locations have none, being a press away or opened by the question that fills them.
-    if let Some((_, panel)) = [
-        (Chord::Search, Panel::Search),
-        (Chord::Files, Panel::Files),
-        (Chord::Objects, Panel::Objects),
-        (Chord::Symbols, Panel::Symbols),
-    ]
-    .into_iter()
-    .find(|(chord, _)| chord.is(key, modifiers))
-    {
-        reach_panel(arranged.dock, keyboard, panel);
-    }
-    if Chord::Finder.is(key, modifiers) {
-        let root = proj.peek().workspace();
-        open_finder(finder, root);
-    }
-
-    // The bar. Two spellings of the close, one door: the tab on screen goes whether it is
-    // a page or a document (`close_showing`).
-    if Chord::CloseTab.is(key, modifiers) || Chord::CloseTabF4.is(key, modifiers) {
-        close_showing(open, places);
-    }
-    if Chord::NextTab.is(key, modifiers) {
-        step_tab(open, Along::Next);
-    }
-    if Chord::PreviousTab.is(key, modifiers) {
-        step_tab(open, Along::Previous);
-    }
-    // The nine asked for as one: they differ in the digit alone, and the digit is the
-    // argument the answer takes.
-    if let Some(nth) = (1..=9).find(|nth| Chord::NthTab(*nth).is(key, modifiers)) {
-        show_nth(open, nth as usize);
-    }
-
-    // The trail of the tab on screen: the same call the mouse's side buttons and the
-    // toolbar's two chevrons make, and nothing at all where the trail has no such step.
-    if Chord::Back.is(key, modifiers) {
-        navigate(open, Nav::Back);
-    }
-    if Chord::Forward.is(key, modifiers) {
-        navigate(open, Nav::Forward);
-    }
-
-    // The window's own doors. `Strip::show` for the two pages, which opens one beside the
-    // tab on screen and raises one already open -- what the pages menu's row does.
-    if Chord::OpenProject.is(key, modifiers) {
-        ask_for_a_project(states, rescued, unopened);
-    }
-    if Chord::Settings.is(key, modifiers) {
-        strip.write().show(Tab::Page(Page::Settings));
-    }
-    if Chord::Shortcuts.is(key, modifiers) {
-        strip.write().show(Tab::Page(Page::Shortcuts));
-    }
-    if Chord::Server.is(key, modifiers) {
-        toggle_server(language, proj, jobs);
-    }
-
-    // The reader's own list, added to or taken from: the tab menu's item asked of the tab
-    // on screen rather than of the tab under the pointer. A page is no place, so it has
-    // nothing to bookmark.
-    if Chord::Bookmark.is(key, modifiers) {
-        // Bound in a statement of its own: the toggle writes a state this read.
-        let showing = open.active();
-        if let Some(document) = showing {
-            toggle_bookmark(bookmarks, objects, &document);
+    match chord {
+        // The panels and the overlay that are reached from anywhere. Each panel chord
+        // raises its panel and puts the keyboard in it (`reach_panel`); the three lists a
+        // reader lives in, and Search. History, Bookmarks and Locations have none, being
+        // a press away or opened by the question that fills them.
+        Chord::Search => reach_panel(arranged.dock, keyboard, Panel::Search),
+        Chord::Files => reach_panel(arranged.dock, keyboard, Panel::Files),
+        Chord::Objects => reach_panel(arranged.dock, keyboard, Panel::Objects),
+        Chord::Symbols => reach_panel(arranged.dock, keyboard, Panel::Symbols),
+        Chord::Finder => {
+            let root = proj.peek().workspace();
+            open_finder(finder, root);
         }
-    }
 
-    // The pane that follows the one on screen, put away or brought back: the toggle on the
-    // leading bar, pressed by key. A document tab writes its own flag and the Scratchpad
-    // page the one at the root; every other page has no second pane and does nothing.
-    if Chord::OtherPane.is(key, modifiers) {
-        let showing = strip.peek().active();
-        let of = match showing {
-            Some(Tab::Document(id)) => Some(Placing::Tab(id)),
-            Some(Tab::Page(Page::Scratchpad)) => Some(Placing::Pad),
-            Some(Tab::Page(_)) | None => None,
-        };
-        if let Some(of) = of {
-            toggle_pane(of, open, follows, pad_follows);
+        // The bar. Two spellings of the close, one door: the tab on screen goes whether
+        // it is a page or a document (`close_showing`). The nine digits are one arm: they
+        // differ in the number alone, and the number is the argument the answer takes.
+        Chord::CloseTab | Chord::CloseTabF4 => close_showing(open, places),
+        Chord::NextTab => step_tab(open, Along::Next),
+        Chord::PreviousTab => step_tab(open, Along::Previous),
+        Chord::NthTab(nth) => show_nth(open, nth as usize),
+
+        // The trail of the tab on screen: the same call the mouse's side buttons and the
+        // toolbar's two chevrons make, and nothing at all where the trail has no such
+        // step.
+        Chord::Back => navigate(open, Nav::Back),
+        Chord::Forward => navigate(open, Nav::Forward),
+
+        // The window's own doors. `Strip::show` for the two pages, which opens one beside
+        // the tab on screen and raises one already open -- what the pages menu's row does.
+        Chord::OpenProject => ask_for_a_project(states, rescued, unopened),
+        Chord::Settings => strip.write().show(Tab::Page(Page::Settings)),
+        Chord::Shortcuts => strip.write().show(Tab::Page(Page::Shortcuts)),
+        Chord::Server => toggle_server(language, proj, jobs),
+
+        // The reader's own list, added to or taken from: the tab menu's item asked of the
+        // tab on screen rather than of the tab under the pointer. A page is no place, so
+        // it has nothing to bookmark.
+        Chord::Bookmark => {
+            // Bound in a statement of its own: the toggle writes a state this read.
+            let showing = open.active();
+            if let Some(document) = showing {
+                toggle_bookmark(bookmarks, objects, &document);
+            }
         }
+
+        // The pane that follows the one on screen, put away or brought back: the toggle on
+        // the leading bar, pressed by key. A document tab writes its own flag and the
+        // Scratchpad page the one at the root; every other page has no second pane and
+        // does nothing.
+        Chord::OtherPane => {
+            let showing = strip.peek().active();
+            let of = match showing {
+                Some(Tab::Document(id)) => Some(Placing::Tab(id)),
+                Some(Tab::Page(Page::Scratchpad)) => Some(Placing::Pad),
+                Some(Tab::Page(_)) | None => None,
+            };
+            if let Some(of) = of {
+                toggle_pane(of, open, follows, pad_follows);
+            }
+        }
+
+        _ => {}
     }
 }
 

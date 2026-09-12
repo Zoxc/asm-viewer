@@ -753,20 +753,14 @@ pub(crate) fn find_chord(
         let Some(finds) = finds else {
             return keys(e);
         };
-        if Chord::Find.is(&e.key, e.modifiers) {
-            let seed = seed_of(&marked.peek(), at.1, &*text);
-            open_find(finds, at, seed, listing.clone());
-            return;
-        }
-        let direction = if Chord::FindNext.is(&e.key, e.modifiers) {
-            Some(Direction::Forward)
-        } else if Chord::FindPrevious.is(&e.key, e.modifiers) {
-            Some(Direction::Back)
-        } else {
-            None
-        };
-        let Some(direction) = direction else {
-            return keys(e);
+        let direction = match Chord::of(&e.key, e.modifiers) {
+            Some(Chord::Find) => {
+                let seed = seed_of(&marked.peek(), at.1, &*text);
+                return open_find(finds, at, seed, listing.clone());
+            }
+            Some(Chord::FindNext) => Direction::Forward,
+            Some(Chord::FindPrevious) => Direction::Back,
+            _ => return keys(e),
         };
         edit_find(finds, at, move |bar| bar.step = Some(direction));
     }

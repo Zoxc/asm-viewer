@@ -24641,23 +24641,44 @@ fn a_lock_held_is_not_part_of_a_chord() {
     assert!(Chord::Shortcuts.is(&Key::Named(NamedKey::F1), Modifiers::CAPS_LOCK));
 }
 
-/// **No two chords are the same key under the same modifiers.** A duplicate would be two
-/// bindings on one gesture, of which the reader would only ever get one, and nothing else
-/// in the app would say which.
+/// **No two chords are the same key under the same modifiers**, which is what makes
+/// `Chord::of` the whole answer: every handler in the app now reads a key as one chord and
+/// `match`es on it. A duplicate would be two bindings on one gesture, of which the reader
+/// would only ever get one, and nothing else in the app would say which.
+///
+/// Asked as a round trip, and not by testing each chord against every other: `Chord::of`
+/// hands back the first row a key fits, so a chord sharing its gesture with an earlier one
+/// gets that earlier one back and fails here. Every collision has a later chord, so every
+/// collision is caught.
 #[test]
 fn no_two_chords_are_the_same_gesture() {
-    for (at, chord) in Chord::ALL.iter().enumerate() {
+    for chord in Chord::ALL {
         let (key, modifiers) = chord.pressed();
-        let same: Vec<usize> = Chord::ALL
-            .iter()
-            .enumerate()
-            .filter(|(_, other)| other.is(&key, modifiers))
-            .map(|(index, _)| index)
-            .collect();
-        assert_eq!(
-            same,
-            [at],
-            "{key:?} under {modifiers:?} is more than one chord"
+        assert!(
+            Chord::of(&key, modifiers) == Some(chord),
+            "{key:?} under {modifiers:?} is another chord as well"
+        );
+    }
+}
+
+/// **A key that is no chord is none**, which is the other half of what the text boxes and
+/// the handlers rest on: a box keeps what `Chord::of` declines to name, and a handler's
+/// `_` arm is reached rather than an arm of some chord the key nearly was.
+#[test]
+fn a_key_that_is_no_chord_is_no_chord() {
+    let ctrl = Modifiers::ctrl_or_meta();
+    // A letter with nothing held, a letter no chord is spelt with, two chords' strokes
+    // under modifiers that are not theirs, and a named key that is nobody's.
+    for (key, modifiers) in [
+        (Key::Character("f".into()), Modifiers::empty()),
+        (Key::Character("q".into()), ctrl),
+        (Key::Character("f".into()), ctrl | Modifiers::ALT),
+        (Key::Named(NamedKey::F1), Modifiers::SHIFT),
+        (Key::Named(NamedKey::Enter), ctrl),
+    ] {
+        assert!(
+            Chord::of(&key, modifiers).is_none(),
+            "{key:?} under {modifiers:?} was read as a chord"
         );
     }
 }

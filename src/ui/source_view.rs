@@ -311,15 +311,13 @@ fn caret_questions(
     mut keys: impl FnMut(Event<KeyboardEventData>) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     move |e: Event<KeyboardEventData>| {
-        let asked = [
-            Chord::Definition,
-            Chord::References,
-            Chord::Implementations,
-            Chord::AllLocations,
-        ]
-        .into_iter()
-        .find(|chord| chord.is(&e.key, e.modifiers));
-        let Some(chord) = asked else {
+        let Some(
+            chord @ (Chord::Definition
+            | Chord::References
+            | Chord::Implementations
+            | Chord::AllLocations),
+        ) = Chord::of(&e.key, e.modifiers)
+        else {
             return keys(e);
         };
         // Bound before anything is written, the read being a guard.

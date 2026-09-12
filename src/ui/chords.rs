@@ -127,8 +127,9 @@ pub(crate) enum Chord {
 }
 
 impl Chord {
-    /// Every one of them, which is what a text box declines. Every variant is named here,
-    /// [`Chord::NthTab`] digit by digit: a chord left out is a chord a box would keep.
+    /// Every one of them: what [`Chord::of`] looks a key up in, and what a text box
+    /// declines. Every variant is named here, [`Chord::NthTab`] digit by digit: a chord
+    /// left out is a chord no key is and a chord a box would keep.
     pub(crate) const ALL: [Chord; 40] = [
         Chord::Find,
         Chord::Search,
@@ -224,18 +225,37 @@ impl Chord {
         }
     }
 
-    /// Whether `key` is this chord: its own key, under its own modifiers and no others.
+    /// **The chord `key` is under `modifiers`, where it is one.** A key event is at most
+    /// one chord: no two rows of [`Chord::spelling`] are the same key under the same
+    /// modifiers, so there is nothing to pick between and this is the whole answer
+    /// (`no_two_chords_are_the_same_gesture`, `ui/tests.rs`).
+    ///
+    /// Asking once and `match`ing on the answer is what every handler does, rather than
+    /// testing its chords one at a time: the modifiers are worked out once, and a
+    /// handler's arms sit beside each other where nothing said before whether a key it
+    /// answers was already answered by the chord above.
+    ///
     /// The modifiers are exact, which is the whole of what tells Ctrl+F from Ctrl+Shift+F
     /// and F12 from its three neighbours -- each is answered for the modifier the others
-    /// decline.
+    /// decline. They are compared first, being one integer against another where a stroke
+    /// is a string.
+    pub(crate) fn of(key: &Key, modifiers: Modifiers) -> Option<Chord> {
+        let held = held(modifiers);
+        Chord::ALL.into_iter().find(|chord| {
+            let (stroke, wanted) = chord.spelling();
+            wanted == held && stroke.is(key)
+        })
+    }
+
+    /// Whether `key` is this chord and not another. For the handler that answers one
+    /// chord, where a `match` would be an arm and a `_`.
     pub(crate) fn is(self, key: &Key, modifiers: Modifiers) -> bool {
-        let (stroke, wanted) = self.spelling();
-        stroke.is(key) && held(modifiers) == wanted
+        Chord::of(key, modifiers) == Some(self)
     }
 
     /// The key event this chord is, as a test presses one. Only the tests want it: the
-    /// app asks the other way round, a key arriving and [`Chord::is`] saying whether it
-    /// was a chord.
+    /// app asks the other way round, a key arriving and [`Chord::of`] saying which chord
+    /// it was.
     #[cfg(test)]
     pub(crate) fn pressed(self) -> (Key, Modifiers) {
         let (stroke, modifiers) = self.spelling();
@@ -248,7 +268,7 @@ impl Chord {
 
     /// Whether `key` is any of them.
     fn any(key: &Key, modifiers: Modifiers) -> bool {
-        Chord::ALL.iter().any(|chord| chord.is(key, modifiers))
+        Chord::of(key, modifiers).is_some()
     }
 }
 

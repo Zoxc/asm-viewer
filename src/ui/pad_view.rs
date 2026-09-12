@@ -1360,14 +1360,12 @@ impl Component for ScratchpadTab {
 /// calling it obeys them all, and asking them again here would be a second reading to
 /// drift.
 fn pad_key(pad: State<Pads>, jobs: &PadJobs, key: &Key, modifiers: Modifiers) {
-    if Chord::Build.is(key, modifiers) {
-        request_build(pad, jobs);
-    } else if Chord::Run.is(key, modifiers) {
-        request_run(pad, jobs);
-    } else if Chord::StopRun.is(key, modifiers) {
-        stop_run(pad);
-    } else if Chord::NewPad.is(key, modifiers) {
-        request_new_pad(jobs);
+    match Chord::of(key, modifiers) {
+        Some(Chord::Build) => request_build(pad, jobs),
+        Some(Chord::Run) => request_run(pad, jobs),
+        Some(Chord::StopRun) => stop_run(pad),
+        Some(Chord::NewPad) => request_new_pad(jobs),
+        _ => {}
     }
 }
 
