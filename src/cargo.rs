@@ -111,8 +111,10 @@ impl Run {
                 diagnostics,
                 message,
             } if diagnostics.is_empty() && !message.is_empty() => Some(message),
-            Run::NoCargo(error) => Some(error),
-            _ => None,
+            // A cargo that would not start is `verdict`'s to say, and says nothing about a
+            // manifest or a dependency row. Answering it here draws it twice, one line
+            // under the other.
+            Run::Rejected { .. } | Run::NoCargo(_) | Run::Built { .. } => None,
         }
     }
 

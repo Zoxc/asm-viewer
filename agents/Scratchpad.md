@@ -453,7 +453,8 @@ sentence.** A rejected build with no compiler diagnostics at all is cargo refusi
 compiled anything, and `[dependencies]` is the only part of the generated package this pane can get
 wrong. So cargo's own stderr, where `no matching package named ... found` is said and nowhere else,
 is drawn under the rows. Once the compiler has spoken, the same stderr says only what the
-diagnostics list already does and is dropped.
+diagnostics list already does and is dropped. A cargo that would not start is dropped too. It is
+the verdict's own line and about no row at all, so drawing it here would only say it twice.
 
 **A diagnostic's span is a target, and the target is the cursor.** rustc says where an error is
 (`src/main.rs:9:17`, under the message) and the editor has a cursor that can be put there, so the

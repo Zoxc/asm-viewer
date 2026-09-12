@@ -181,6 +181,9 @@ fn both_build_panes_say_the_same_line_about_the_same_build() {
         project.verdict().expect("a verdict").text,
         "could not run cargo: not found"
     );
+    // And said once: neither pane repeats it under that line as cargo's own words.
+    assert_eq!(project.refusal(), None);
+    assert_eq!(pad.refusal(), None);
 
     // And while one is going, which is neither's build to describe.
     let mut pad = PadState::default();

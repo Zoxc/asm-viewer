@@ -535,10 +535,13 @@ fn a_refusal_is_cargos_own_words_only_where_the_compiler_said_none() {
         None
     );
     assert_eq!(rejected(Vec::new(), "").refusal(), None);
-    assert_eq!(
-        Run::NoCargo("not found".to_owned()).refusal(),
-        Some("not found")
-    );
+
+    // The verdict already names what stopped a cargo that would not start, so it is not
+    // a refusal as well: a pane drawing both would say it twice, one line under the other.
+    let no_cargo = Run::NoCargo("not found".to_owned());
+    assert!(no_cargo.verdict().text.contains("not found"));
+    assert_eq!(no_cargo.refusal(), None);
+
     assert_eq!(
         Run::Built {
             artifacts: Vec::new(),
