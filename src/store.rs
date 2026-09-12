@@ -18,6 +18,8 @@ use std::{
 
 use serde::{de::DeserializeOwned, Serialize};
 
+use crate::order::Order;
+
 /// The one directory everything this app stores lives under: the projects, the recent
 /// list, the settings, the scratchpads and the panic records.
 const APP_DIR: &str = "assembly-viewer";
@@ -53,7 +55,11 @@ const MAX_CLAIMS: u32 = 1000;
 /// list's, so a pad the panel is holding is not dropped by someone else being shown, and
 /// what is lost past it is an *order*, never a project and never a pad: both listings put
 /// back what the file did not name.
-pub const MAX_ORDER: usize = 50;
+///
+/// Not `pub`, because [`Store::save_order`] is the only way an order file is written and
+/// applies this itself: a caller that had to remember the cap is a caller that can forget
+/// it.
+pub(crate) const MAX_ORDER: usize = 50;
 
 /// Where each file moved aside was put, until the UI asks. A `static` because what fills
 /// it is a load and not a component — the same reason the save policy is one.
@@ -128,6 +134,32 @@ impl Store {
         let data = toml::to_string_pretty(value)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         self.write(path, data.as_bytes())
+    }
+
+    /// [`Store::write_toml`] for a file whose loss is an inconvenience and not a project:
+    /// the failure is logged under the file's name and swallowed.
+    ///
+    /// One spelling of that line, rather than one per module that keeps such a file. What
+    /// it leaves behind is the previous good file, which is why these are the files it is
+    /// for: a settings file or an order that is one save out of date is a file the app
+    /// carries on from.
+    pub fn save(&self, path: impl AsRef<Path>, value: &impl Serialize) {
+        let path = path.as_ref();
+        if let Err(error) = self.write_toml(path, value) {
+            log::warn!("could not save {}: {error}", path.display());
+        }
+    }
+
+    /// An [`Order`] written as one of the app's order files: cut to [`MAX_ORDER`], then
+    /// saved.
+    ///
+    /// The **one** writer of one of those files, which is what makes the cap the file's
+    /// rather than a rule each module that keeps an order is trusted to remember. The order
+    /// goes in by value and the cut is on the way out, so a panel drawing more pads than
+    /// the file names goes on drawing them.
+    pub fn save_order<T: Serialize>(&self, path: impl AsRef<Path>, mut order: Order<T>) {
+        order.truncate(MAX_ORDER);
+        self.save(path, &order);
     }
 
     /// Read `path` as TOML, **moving it aside if it will not parse**.

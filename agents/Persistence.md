@@ -247,6 +247,11 @@ whose file has gone: repairing it on load would write a file on a startup where 
 nothing. A path under the store is written **relative to it** and every other path absolutely, so
 moving the state directory does not lose every unsaved project at once; in memory they are all
 absolute, the relative spelling belonging to the file and nowhere else (`write_recents`).
+The **cap is the store's own**: `Store::save_order` is the one writer of an order file and cuts to
+`MAX_ORDER` on the way out, so a module that keeps an order hands over what it holds and no caller
+has to remember the number. Under it is `Store::save`, the log-and-swallow an order and
+`settings.toml` share: these are the files the app carries on without, where a project's own write
+hands its error back.
 `Order::touch` answers whether anything moved, so reopening the project already at the front
 writes nothing. The order itself is `order::Order<T>`, the newest-first list every list of places
 in the app is: the projects', the scratchpads', a tab's trail and the record of visits. The
@@ -371,8 +376,10 @@ against nothing, so it neither degrades nor drops: a deleted file comes back as 
 pane's own "Source file not found". `History::rebuilt` is the one walk both a restore and a
 file-close go through for each trail, carrying the cursor to the newest survivor at or older than
 it. `History::restored` also collapses duplicates and trims to the newest `MAX_ENTRIES` (50, per
-tab), and `Visits::restored` does the same for the record, at its own `MAX_VISITS` (200) -- both by
-collecting an `Order`, which is where collapsing duplicates onto their newest occurrence lives.
+tab), and `Visits::restored` does the same for the record, at its own `MAX_VISITS` (200) -- both
+through `Order::restored_within`, which is where collapsing duplicates onto their newest
+occurrence and the cut after it live. `Order::touch_within` is the same pair on the way in,
+which is what `Visits::record` and `History::push` are.
 
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
 two of the three things driving it sit outside the component tree.

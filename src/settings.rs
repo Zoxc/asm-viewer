@@ -115,9 +115,7 @@ impl Settings {
     /// deliberate action, so there is no `Saves`-shaped policy and no autosave timer.
     /// Any IO failure is logged and swallowed.
     pub fn save(&self, store: &Store) {
-        if let Err(error) = store.write_toml(FILE_NAME, self) {
-            log::warn!("could not save {FILE_NAME}: {error}");
-        }
+        store.save(FILE_NAME, self);
     }
 }
 

@@ -60,9 +60,9 @@ tell apart from the projects' one, and it is a file where every sibling is a dir
 listing steps over it with no special case. `PadOrder` **is** the projects' order -- both are
 `order::Order<T>`, one type in `src/order.rs`: the front is what to open, `touch` answers whether
 anything *moved* (which is what keeps a startup that reopens the front pad from writing a file),
-and nothing prunes itself on load. **`MAX_ORDER` bounds the file and not the list**, `remember`
-truncating what goes out rather than what a `touch` keeps. That is the pads' rule and the projects
-inherited it: the list here is what the panel draws, and the panel is the only way to open a pad,
+and nothing prunes itself on load. **`MAX_ORDER` bounds the file and not the list**, and
+`Store::save_order` cuts what goes out rather than what a `touch` keeps. That is the pads' rule
+and the projects inherited it: the list here is what the panel draws, and the panel is the only way to open a pad,
 so an order that dropped its own tail would drop exactly the pads the listing below goes to the
 trouble of appending. It is also loaded through `Store::read` like everything else, which is what
 it was not: it parsed its own file and answered a default, so the next `remember` wrote over a pad

@@ -19,22 +19,18 @@ pub type Visits = Order<Document>;
 
 impl Visits {
     /// A record rebuilt from a saved session, `entries` newest first. They come from
-    /// outside, so duplicates are collapsed onto their newest occurrence -- which is what
-    /// collecting an [`Order`] does -- and the list is then trimmed to the newest
-    /// [`MAX_VISITS`].
+    /// outside, so duplicates are collapsed onto their newest occurrence and the list is
+    /// then trimmed to the newest [`MAX_VISITS`] -- which is [`Order::restored_within`],
+    /// with the cap this record's own.
     pub fn restored(entries: Vec<Document>) -> Visits {
-        let mut visits: Visits = entries.into_iter().collect();
-        visits.truncate(MAX_VISITS);
-        visits
+        Order::restored_within(entries, MAX_VISITS)
     }
 
     /// Put `document` at the top, moving it there if it is already recorded, and enforce
     /// the cap. [`Order::would_touch`] says in advance whether it would change anything,
     /// so a caller can skip a write that would wake the panel for nothing.
     pub fn record(&mut self, document: Document) {
-        if self.touch(document) {
-            self.truncate(MAX_VISITS);
-        }
+        self.touch_within(document, MAX_VISITS);
     }
 }
 

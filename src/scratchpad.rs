@@ -24,7 +24,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::cargo;
 use crate::order::Order;
 use crate::process::{self, RunEvent, Stream};
-use crate::store::{write_atomically, Store, MAX_ORDER, RECENTS_FILE};
+use crate::store::{write_atomically, Store, RECENTS_FILE};
 use crate::verdict::Verdict;
 
 /// The one file a scratchpad's source is, as cargo and rustc spell it: relative to the
@@ -705,22 +705,19 @@ impl PadOrder {
 /// recording it before then would leave a `recents.toml` behind on a machine where the
 /// reader never touched the scratchpad at all.
 ///
-/// A read-modify-write of the whole file, and a failure is logged and swallowed: losing an
+/// A read-modify-write of the whole file, through [`Store::save_order`], which is where the
+/// cut to what the file keeps and the log-and-swallow of a failure both live: losing an
 /// order is not losing a pad.
 pub fn remember(store: &Store, id: &PadId) {
     if !pad_in(store, id).is_dir() {
         return;
     }
 
-    let path = pad_recents_in(store);
     let mut order = load_order(store);
     if !order.touch(id.clone()) {
         return;
     }
-    order.truncate(MAX_ORDER);
-    if let Err(error) = store.write_toml(&path, &order) {
-        log::warn!("could not save {}: {error}", path.display());
-    }
+    store.save_order(pad_recents_in(store), order);
 }
 
 /// The order as the file has it. Through [`Store::read`] like every other load on the way

@@ -165,19 +165,17 @@ impl History {
             .get(cursor.min(entries.len().saturating_sub(1)))
             .cloned();
 
-        // Collecting collapses the duplicates, keeping the newest of each; the cursor
-        // then follows its own entry, which is still in there. `unwrap_or(0)` is only
-        // ever the empty history.
-        let mut entries: Order<Stop> = entries.into_iter().collect();
+        // Restoring collapses the duplicates, keeping the newest of each, and then cuts
+        // to the cap; the cursor follows its own entry through both. An entry that is gone
+        // was cut, since the collapse keeps one of every entry -- so it was among the
+        // oldest, and the oldest survivor is where the cursor lands. The empty history's
+        // answer is the same.
+        let entries = Order::restored_within(entries, MAX_ENTRIES);
         let cursor = current
             .and_then(|current| entries.position(&current))
-            .unwrap_or(0);
+            .unwrap_or_else(|| entries.len().saturating_sub(1));
 
-        entries.truncate(MAX_ENTRIES);
-        History {
-            cursor: cursor.min(entries.len().saturating_sub(1)),
-            entries,
-        }
+        History { cursor, entries }
     }
 
     /// A history rebuilt from entries that may no longer point anywhere: one [`Option`]
@@ -248,9 +246,8 @@ impl History {
         }
 
         self.entries.drop_newer_than(self.cursor);
-        self.entries.touch(stop);
+        self.entries.touch_within(stop, MAX_ENTRIES);
         self.cursor = 0;
-        self.entries.truncate(MAX_ENTRIES);
     }
 
     /// The index of the entry the cursor is on, or `None` before anything has been

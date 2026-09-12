@@ -3,7 +3,8 @@
 //!
 //! The four differ only in what they hold, where they stop and whether anything points
 //! into them, so the cap and the cursor stay with whoever owns them
-//! ([`crate::history::History`], [`crate::visits::Visits`], [`crate::store::MAX_ORDER`]).
+//! ([`crate::history::History`], [`crate::visits::Visits`],
+//! [`crate::store::Store::save_order`]).
 //!
 //! Framework-free: no freya types appear here.
 
@@ -16,9 +17,10 @@ use serde::{Deserialize, Serialize};
 /// how often. Collecting one enforces the same rule on entries from outside, which is
 /// what every restore from a file goes through.
 ///
-/// There is no cap here. The lists built on this stop at three different lengths, and the
-/// two on disk cap what is *written* rather than what is held, so [`Order::truncate`] is
-/// called by whoever owns that rule.
+/// No cap is *held* here. The lists built on this stop at three different lengths, and the
+/// two on disk cap what is *written* rather than what is held, so a cap is a number its
+/// owner hands in: [`Order::touch_within`] on the way in, [`Order::restored_within`] on
+/// the way back from a file, [`Order::truncate`] where it stands on its own.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Order<T> {
     /// `Vec::new` and not a plain `default`, which serde's derive would spell as a
@@ -89,6 +91,17 @@ impl<T> Order<T> {
 }
 
 impl<T: PartialEq> Order<T> {
+    /// Entries from outside, collected and then cut to the newest `cap`: what every
+    /// restore from a file goes through.
+    ///
+    /// Collecting first is what makes the cap count places rather than saved rows, so a
+    /// file with every place in it twice restores a full list and not half of one.
+    pub fn restored_within(entries: impl IntoIterator<Item = T>, cap: usize) -> Order<T> {
+        let mut order: Order<T> = entries.into_iter().collect();
+        order.truncate(cap);
+        order
+    }
+
     /// Whether [`Order::touch`] would change anything: false for the entry already at the
     /// front, so a caller can ask before making a write nothing would come of.
     pub fn would_touch(&self, entry: &T) -> bool {
@@ -105,6 +118,19 @@ impl<T: PartialEq> Order<T> {
         self.order.retain(|other| *other != entry);
         self.order.insert(0, entry);
         true
+    }
+
+    /// [`Order::touch`], and then the oldest dropped past `cap`: the way into a list that
+    /// stops somewhere. Whether anything moved, as [`Order::touch`] says.
+    ///
+    /// Nothing is cut when nothing moved: the list is the one it already was, and the
+    /// caller skips its own write for the same reason.
+    pub fn touch_within(&mut self, entry: impl Into<T>, cap: usize) -> bool {
+        let moved = self.touch(entry);
+        if moved {
+            self.truncate(cap);
+        }
+        moved
     }
 
     /// Drop `entry`, and say whether it was there. Nothing prunes one of these on load,

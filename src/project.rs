@@ -40,7 +40,7 @@ use crate::document::{Document, Kind, Selection};
 use crate::history::{History, Stop};
 use crate::order::Order;
 use crate::positions::{Driven, Positions, Spot};
-use crate::store::{Store, MAX_ORDER, RECENTS_FILE};
+use crate::store::{Store, RECENTS_FILE};
 use crate::tabs::Page;
 use crate::visits::Visits;
 
@@ -1761,9 +1761,9 @@ fn remember(store: &Store, path: &Path) {
 }
 
 /// The one write of that file, which is where the paths under the store go back to
-/// relative and where the order is cut to what the file keeps.
-fn write_recents(store: &Store, mut recents: Recents) {
-    recents.truncate(MAX_ORDER);
+/// relative. The cut to what the file keeps is [`Store::save_order`]'s, along with the
+/// log-and-swallow of a failure.
+fn write_recents(store: &Store, recents: Recents) {
     let stored: Recents = recents
         .into_entries()
         .into_iter()
@@ -1772,9 +1772,7 @@ fn write_recents(store: &Store, mut recents: Recents) {
             None => path,
         })
         .collect();
-    if let Err(error) = store.write_toml(RECENTS_FILE, &stored) {
-        log::warn!("could not save {RECENTS_FILE}: {error}");
-    }
+    store.save_order(RECENTS_FILE, stored);
 }
 
 /// Reopen the project the app was last in: the first entry of `recents.toml`. Hands back

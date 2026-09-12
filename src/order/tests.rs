@@ -54,6 +54,32 @@ fn truncating_keeps_the_newest_and_forgetting_takes_one_out() {
     assert_eq!(list.entries(), [3]);
 }
 
+/// The two steps a list with a cap takes on the way in, as one. The cap is the owner's
+/// number and is handed in, but the pair is one rule: a touch that moved something cuts
+/// what it pushed past the end, and a touch that moved nothing leaves the list alone --
+/// which is what lets the caller skip the write as well.
+#[test]
+fn touching_within_a_cap_drops_the_oldest_past_it() {
+    let mut list = order([1, 2, 3]);
+
+    assert!(list.touch_within(4u32, 3));
+    assert_eq!(list.entries(), [4, 3, 2]);
+
+    assert!(!list.touch_within(4u32, 1));
+    assert_eq!(list.entries(), [4, 3, 2]);
+}
+
+/// What a restore from a file goes through: the collapse runs **before** the cut, so a file
+/// with every place in it twice comes back as a full list and not as half of one.
+#[test]
+fn restoring_within_a_cap_collapses_duplicates_before_cutting() {
+    let saved = [3u32, 3, 2, 2, 1, 1];
+
+    assert_eq!(Order::restored_within(saved, 3).entries(), [3, 2, 1]);
+    assert_eq!(Order::restored_within(saved, 2).entries(), [3, 2]);
+    assert!(Order::restored_within(saved, 0).entries().is_empty());
+}
+
 /// What a trail does with the entries in front of its cursor: they are abandoned, and the
 /// one the cursor was on is left the newest.
 #[test]

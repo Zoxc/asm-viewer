@@ -32,7 +32,7 @@ fn written(path: &Path, data: &[u8]) {
 /// A schema of one key, so that "TOML, but not this file's shape" can be told from "not
 /// TOML at all". [`MOVED`] is not asserted on: the tests share one process and one
 /// static, so what any of them drained would be a race. The filesystem is the answer.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
 struct Named {
     name: String,
 }
@@ -183,4 +183,44 @@ fn a_path_is_relative_to_the_store_only_where_it_is_under_it() {
         None
     );
     assert_eq!(store.relative(Path::new("/elsewhere/1.avproj")), None);
+}
+
+/// **The cap on an order file is the store's**, applied on the way out. A module that keeps
+/// one hands over whatever it is holding and the file stops at [`MAX_ORDER`], so a third
+/// order file cannot be the one that forgets the number.
+#[test]
+fn an_order_is_cut_to_the_cap_as_it_is_written() {
+    let base = base(line!());
+    let store = Store::at(&base);
+
+    let over: Order<String> = (0..MAX_ORDER + 10).map(|n| format!("e{n}")).collect();
+    store.save_order(RECENTS_FILE, over);
+
+    let written: Order<String> = store.read(RECENTS_FILE).expect("the order was written");
+    assert_eq!(written.len(), MAX_ORDER);
+    assert_eq!(written.first(), Some(&"e0".to_owned()));
+    assert_eq!(
+        written.entries().last(),
+        Some(&format!("e{}", MAX_ORDER - 1))
+    );
+}
+
+/// A save that cannot happen is logged and swallowed, and what it leaves is the good file
+/// that was already there. That is what these files are: an order or a setting one save out
+/// of date is one the app carries on from, where a project is not.
+#[test]
+fn a_save_that_fails_leaves_the_file_that_was_there() {
+    let base = base(line!());
+    let store = Store::at(&base);
+    written(&base.join("settings.toml"), b"name = \"a\"\n");
+
+    // A directory where the atomic write wants to put its temporary, so the write fails
+    // after the good file is already on the disk.
+    fs::create_dir_all(base.join("settings.toml.tmp")).expect("creating the test directory");
+    store.save("settings.toml", &Named { name: "b".into() });
+
+    assert_eq!(
+        store.read::<Named>("settings.toml"),
+        Some(Named { name: "a".into() })
+    );
 }
