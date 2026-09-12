@@ -327,8 +327,10 @@ pub enum Half {
 /// Why nothing was written, deleted, read back or started.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Failure {
-    /// Rows to fix first, each named by its [`RowId`].
-    Dependencies(Vec<(RowId, Problem)>),
+    /// How many rows to fix first. Which rows they are is [`Scratchpad::problems`]'s to
+    /// say, live: a mark follows what is typed now, not what the last save was refused
+    /// for.
+    Dependencies(usize),
     /// No state directory and no local data directory on this system.
     NoDirectory,
     Write(String),
@@ -513,8 +515,8 @@ impl Scratchpad {
     /// The `Cargo.toml` this scratchpad generates, as text. The empty `[workspace]` makes
     /// the package its own workspace root wherever the state directory turns out to be.
     pub fn manifest(&self) -> Result<String, Failure> {
-        let problems = self.problems();
-        if !problems.is_empty() {
+        let problems = self.problems().len();
+        if problems > 0 {
             return Err(Failure::Dependencies(problems));
         }
 
@@ -1107,7 +1109,7 @@ impl fmt::Display for Failure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             // The rows say the detail; this is the sentence over the top of them.
-            Failure::Dependencies(problems) => match problems.len() {
+            Failure::Dependencies(problems) => match problems {
                 1 => write!(formatter, "1 dependency to fix"),
                 count => write!(formatter, "{count} dependencies to fix"),
             },

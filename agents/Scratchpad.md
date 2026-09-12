@@ -418,7 +418,10 @@ rather than generating a manifest that differs from the rows, so a bad row stops
 written too, which the pane says over the rows, each of which says its own half. Every bad row is
 marked, not the first: `Scratchpad::problems` answers with `(RowId, Problem)` for all of them, and
 `Problem::half` says which of the row's two boxes to redden, because `Repeated` is a *name*
-collision and nothing in its wording says so.
+collision and nothing in its wording says so. The refusal itself carries only how many rows are
+wrong (`Failure::Dependencies(usize)`), which is the whole of the sentence over the rows: the pane
+asks `problems` again on every render, so a mark is about what is typed now and cannot fall a save
+behind.
 
 **A dependency row is named by an id, and the two boxes it is drawn as write back through that id.**
 Mapping one by position runs into both of the things the buffers ran into above. Every event of one

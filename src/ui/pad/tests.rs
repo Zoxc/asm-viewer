@@ -147,7 +147,7 @@ fn a_program_that_would_not_start_is_said_only_for_the_run_that_asked() {
 #[test]
 fn only_a_build_that_wrote_the_package_clears_the_unsaved_marker() {
     let refused = [
-        Failure::Dependencies(Vec::new()),
+        Failure::Dependencies(1),
         Failure::Write("read-only".to_owned()),
         Failure::NoDirectory,
     ];

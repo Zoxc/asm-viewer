@@ -119,9 +119,6 @@ pub(crate) struct Pads {
     /// then the ones the order on disk does not name. Answered by the worker; until then it
     /// is the one pad the app boots holding.
     pub(crate) order: PadOrder,
-    /// Whether the worker has said what pads there are. [`PadState::opened`]'s rule one
-    /// level up: the order is not written back before it has been read.
-    listed: bool,
     shown: PadId,
     pads: HashMap<PadId, PadState>,
     /// Why the last New or Delete did not happen, as the sentence the panel draws, or
@@ -145,7 +142,6 @@ impl Default for Pads {
         order.touch(shown.clone());
         Pads {
             order,
-            listed: false,
             refused: None,
             confirming: None,
             pads: HashMap::from([(shown.clone(), PadState::of(scratchpad))]),
@@ -212,8 +208,11 @@ impl Pads {
     /// and not a pad that exists. The pad the app boots holding is opened like any other --
     /// `opened_in` answers what was handed in when there is nothing there, so the baseline
     /// is seeded and nothing is written until there is something to say.
+    ///
+    /// The order is not written back before it has been read. Nothing here guards that:
+    /// the only writer is `scratchpad::remember`, on the worker inside the `PadJob::Open`
+    /// this answer sends. [`PadState::opened`]'s rule one level up.
     fn listed(&mut self, listing: &[PadListing]) -> Scratchpad {
-        self.listed = true;
         if !listing.is_empty() {
             self.order = PadOrder::of(listing);
             for listed in listing {

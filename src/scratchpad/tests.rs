@@ -162,13 +162,12 @@ fn the_same_crate_twice_is_a_row_that_says_so() {
 fn a_scratchpad_with_a_bad_row_will_not_write() {
     let directory = directory(line!());
     let mut scratchpad = scratchpad();
-    let row = scratchpad.add_dependency("rand", "");
+    scratchpad.add_dependency("rand", "");
 
     let failure = scratchpad.write_to(&directory).expect_err("a refusal");
-    assert_eq!(
-        failure,
-        Failure::Dependencies(vec![(row, Problem::NoVersion)])
-    );
+    // How many rows are wrong, and no more: which ones is `problems` to say, live.
+    assert_eq!(failure, Failure::Dependencies(1));
+    assert_eq!(failure.to_string(), "1 dependency to fix");
     // And nothing was written on the way to refusing.
     assert!(!directory.exists());
 
@@ -176,6 +175,12 @@ fn a_scratchpad_with_a_bad_row_will_not_write() {
     // answering nothing cargo said.
     assert_eq!(scratchpad.build_in(&directory), Err(failure));
     assert!(!directory.exists());
+
+    // A second wrong row is counted, not listed.
+    scratchpad.add_dependency("", "");
+    let failure = scratchpad.write_to(&directory).expect_err("a refusal");
+    assert_eq!(failure, Failure::Dependencies(2));
+    assert_eq!(failure.to_string(), "2 dependencies to fix");
 }
 
 /// The package is the storage, so this is the whole of the persistence test.
