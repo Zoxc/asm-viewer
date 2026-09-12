@@ -326,3 +326,62 @@ fn a_filtered_list_is_equal_only_to_the_same_build() {
     assert!(all == filtered(list, &Filter::default()));
     assert!(all != filtered(names(), &Filter::default()));
 }
+
+/// The two builders read one filter the same way. [`Filter::matcher`] answers the sidebar
+/// lists and [`Filter::grep_matcher`] the source search, out of two crates, so every
+/// toggle has to reach both: one honoured here and forgotten there is a search that
+/// quietly disagrees with the bar that asked for it.
+///
+/// The filter is written out field by field rather than over a `..Filter::default()`, so
+/// a fourth toggle does not compile until it has been put through both builders here.
+#[test]
+fn both_builders_read_the_same_filter() {
+    use grep_matcher::Matcher as _;
+
+    let lines = [
+        "needle",
+        "Needle",
+        "needles",
+        "the needle here",
+        "a.c",
+        "abc",
+        "foo -2 bar",
+        "-2",
+    ];
+
+    for pattern in ["needle", "NEEDLE", "a.c", "-2"] {
+        for case_sensitive in [false, true] {
+            for whole_word in [false, true] {
+                for regex in [false, true] {
+                    let filter = Filter {
+                        pattern: pattern.to_owned(),
+                        case_sensitive,
+                        whole_word,
+                        regex,
+                    };
+                    let matcher = filter.matcher();
+                    let grep = filter.grep_matcher().expect("every pattern here builds");
+
+                    for line in lines {
+                        assert_eq!(
+                            matcher.matches(line),
+                            grep.is_match(line.as_bytes())
+                                .expect("grep-regex reports no errors"),
+                            "{pattern:?} on {line:?}, \
+                             case_sensitive={case_sensitive} \
+                             whole_word={whole_word} regex={regex}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // The empty box is the one place the two part, and each says so in its own way: a
+    // list with nothing typed over it lets every row through, and a search with nothing
+    // typed is no search.
+    let empty = Filter::default();
+    assert!(!empty.asks());
+    assert!(matches!(empty.matcher(), Matcher::Everything));
+    assert!(empty.grep_matcher().is_none());
+}

@@ -7,9 +7,14 @@
 //! same regex ranks: where its first match starts in a name is the [`Rank`] a list under a
 //! filter orders its rows by. [`Filtered`] is that ordering: a list, and where in it the
 //! names that matched are, best first.
+//!
+//! The source search reads the same three toggles with ripgrep's crate instead
+//! (`src/search.rs`). Its builder is here beside this one, so the two cannot drift apart
+//! unnoticed.
 
 use std::ops::Range;
 
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use regex::{Regex, RegexBuilder};
 
 use crate::shared::Shared;
@@ -47,10 +52,17 @@ impl Filter {
         expression
     }
 
+    /// Whether anything was typed, and so whether there is anything to look for. The
+    /// first thing both builders below ask, and where they part: a filter bar with an
+    /// empty box lets every row through, and an empty search is no search at all.
+    pub fn asks(&self) -> bool {
+        !self.pattern.is_empty()
+    }
+
     /// `case_insensitive` is a flag on the builder rather than a `(?i)` prefix, so a regex
     /// carrying its own `(?i)`/`(?-i)` still overrides it for the part it covers.
     pub fn matcher(&self) -> Matcher {
-        if self.pattern.is_empty() {
+        if !self.asks() {
             return Matcher::Everything;
         }
 
@@ -61,6 +73,33 @@ impl Filter {
             Ok(regex) => Matcher::Pattern(regex),
             Err(error) => Matcher::Invalid(message(&error)),
         }
+    }
+
+    /// The same filter for the source search, which reads files with ripgrep's crates
+    /// (`src/search.rs`). [`None`] where there is nothing to look for, and where the
+    /// pattern will not build -- which [`matcher`](Self::matcher) has already said under
+    /// the box, `regex`'s error being the one the bar shows.
+    ///
+    /// Here beside its sibling and not with the search, because the two builders have to
+    /// agree: what [`expression`](Self::expression) does not write into the pattern --
+    /// the case toggle -- and the empty rule are applied by each, so a fourth toggle
+    /// added to one and forgotten in the other would be honoured by the sidebar and
+    /// ignored by the search.
+    ///
+    /// `word` and `fixed_strings` are deliberately left off the builder: the expression
+    /// already carries the escaping and the `\b(?:…)\b`, so the Word toggle means what
+    /// it means in the sidebar. `grep-regex`'s own `word` is looser than `\b` on purpose
+    /// -- its docs have `-2` matching inside `foo -2 bar` -- and one toggle must not mean
+    /// two things in two boxes.
+    pub fn grep_matcher(&self) -> Option<RegexMatcher> {
+        if !self.asks() {
+            return None;
+        }
+
+        RegexMatcherBuilder::new()
+            .case_insensitive(!self.case_sensitive)
+            .build(&self.expression())
+            .ok()
     }
 }
 

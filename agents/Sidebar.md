@@ -238,9 +238,15 @@ holding one would re-render on every render of the panel, which for a streaming 
 batch. The pattern itself is `filter::Filter`, and the expression it compiles to is
 `Filter::expression`, factored out of `Filter::matcher` so the two searches cannot disagree about
 what a toggle means -- `grep-regex` has a `word` option of its own and it is deliberately looser
-than `\b`. Each crate answers for its own half: the box shows `regex`'s error, which is what
-`is_askable` asks for, and the search builds its pattern once with `grep-regex`, where nothing
-typed and a pattern it refuses are both no search.
+than `\b`. **Both builders live in `filter.rs`**, `Filter::grep_matcher` beside `Filter::matcher`:
+what the expression does not carry is applied by each, by hand and in two crates -- the case flag,
+and the rule that an empty box is every row to a list and no search at all. A fourth toggle
+reaching one and not the other would be honoured by the sidebar and ignored by the search, so
+`filter::tests::both_builders_read_the_same_filter` puts one filter through both over a matrix of
+the toggles, with the filter written out field by field: a new toggle does not compile until it has
+been put through both. Each crate still answers for its own half: the box shows `regex`'s error,
+which is what `is_askable` asks for, and the search builds its pattern once with `grep-regex`,
+where nothing typed and a pattern it refuses are both no search.
 
 **The walk is ripgrep's** (`ignore`, `grep-searcher`, `grep-regex`), which is where the ignore
 rules, the binary detection and the line-at-a-time reading come from rather than being written here.

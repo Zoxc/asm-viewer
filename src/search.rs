@@ -10,14 +10,14 @@
 //! than they can be drawn. The callback answering [`ControlFlow::Break`] is how a search
 //! nobody is waiting for stops where it stands.
 //!
-//! The pattern is [`Filter::expression`], the same expression the sidebar's filter bars
-//! compile, so a toggle means one thing in both places.
+//! The pattern is [`Filter::grep_matcher`], built beside the sidebar's own builder and
+//! out of the same expression, so a toggle means one thing in both places.
 
 use crate::chars;
-use crate::filter::{Filter, Matcher};
+use crate::filter::Filter;
 use crate::grouped::{self, Grouped};
 use grep_matcher::Matcher as _;
-use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use grep_regex::RegexMatcher;
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use std::{
     io,
@@ -44,11 +44,15 @@ pub struct SearchQuery {
 }
 
 impl SearchQuery {
-    /// Whether this is a question at all: something typed, and a pattern that compiles.
-    /// Nothing typed is not an empty search but no search, `Matcher::Everything`'s own
-    /// rule, and an invalid pattern is said under the box rather than searched for.
+    /// Whether this is a question at all: something typed ([`Filter::asks`]), and a
+    /// pattern that compiles. Nothing typed is not an empty search but no search, and an
+    /// invalid pattern is said under the box rather than searched for.
+    ///
+    /// The verdict is `regex`'s, since `regex`'s error is what the bar shows. The bar
+    /// compiles the same pattern for the same verdict: a [`Regex`](regex::Regex) is not
+    /// `PartialEq`, so no state can carry the one it built over to here.
     pub fn is_askable(&self) -> bool {
-        matches!(self.filter.matcher(), Matcher::Pattern(_))
+        self.filter.asks() && self.filter.matcher().error().is_none()
     }
 }
 
@@ -89,7 +93,7 @@ pub enum SearchEvent {
 /// `&mut dyn` rather than a generic, so that this is exactly the shape the UI's worker
 /// takes and a test can put its own answer in its place.
 pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) {
-    let Some(matcher) = compile(&query.filter) else {
+    let Some(matcher) = query.filter.grep_matcher() else {
         let _ = emit(SearchEvent::Finished);
         return;
     };
@@ -125,28 +129,6 @@ pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlF
     if progress.ended != Some(Ended::Stopped) {
         let _ = emit(SearchEvent::Finished);
     }
-}
-
-/// The matcher a filter compiles to, or [`None`] where there is nothing to search for.
-///
-/// Nothing typed is no search and not an empty one, [`Matcher::Everything`]'s own rule:
-/// an empty pattern handed to `grep-regex` matches every line of every file. A pattern the
-/// builder refuses is no search either; what is wrong with it has already been said under
-/// the box ([`SearchQuery::is_askable`]).
-///
-/// `word` and `fixed_strings` are deliberately left off the builder: the expression comes
-/// from [`Filter::expression`] with the escaping and the `\b(?:…)\b` already in it, so that
-/// the Word toggle means what it means in the sidebar. `grep-regex`'s own `word` is looser
-/// than `\b` on purpose -- its docs have `-2` matching inside `foo -2 bar` -- and one
-/// toggle must not mean two things in two boxes.
-fn compile(filter: &Filter) -> Option<RegexMatcher> {
-    if filter.pattern.is_empty() {
-        return None;
-    }
-    RegexMatcherBuilder::new()
-        .case_insensitive(!filter.case_sensitive)
-        .build(&filter.expression())
-        .ok()
 }
 
 /// What ended a search short of the end of the walk.
