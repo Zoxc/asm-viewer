@@ -175,8 +175,11 @@ and unlike `set_appearance` it has nothing to invalidate beside it, since a cach
 carries colours and no font. The readers are the two row heights, `icon_size`, `chevron_size` and
 the column it decides, `FontExt::assembly_font`, the root rect's own `.font(&fonts().ui)` and the
 tooltip's `font_size` in the root's `Theme`. That last one is the only place a change has to be
-*carried* rather than picked up, freya's theme sheet being a value, so the root's effect has the
-interface size in its deps beside the appearance. `ROW_HEIGHT` went the same way and became a function: one font's size plus
+*carried* rather than picked up, freya's theme sheet being a value, so the root rebuilds the sheet in
+an effect. Two things wake that effect and each carries what the other does not: its deps, which hold
+the appearance and the interface size, and the `palette()` and `fonts()` reads `interface_theme`
+makes *inside* it, which is how a fixed-width size change gets there -- a read inside an effect
+subscribes it. `ROW_HEIGHT` went the same way and became a function: one font's size plus
 `ROW_LEADING` (12, which is exactly what the old constant's 26 was over the 14px fixed-width
 default). The alternative, a page offering a 20pt assembly font and drawing it clipped inside a 26px
 row, was worse than the work. It is safe because the scroll view's `item_size` and its rows' own

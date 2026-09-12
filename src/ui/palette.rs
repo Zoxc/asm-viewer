@@ -402,8 +402,9 @@ pub(crate) fn apply_theme(choice: ThemeChoice) {
 /// handle, the tooltips, the context menu -- read their colours from. The one override is
 /// the tooltip's font size, which freya's theme hardcodes and no element can set.
 ///
-/// `ui_size` is an argument and not a read of `fonts()`. What rebuilds the sheet on a font
-/// change then lists the same two values as its deps.
+/// A value `app` rebuilds in an effect, reached two ways and needing both: `ui_size`
+/// through the effect's deps, and the colours and the fixed-width size through the
+/// `palette()` and `fonts()` reads below, since a read inside an effect subscribes it.
 pub(crate) fn interface_theme(appearance: Appearance, ui_size: f32) -> Theme {
     let mut theme = match appearance {
         Appearance::Light => light_theme(),
