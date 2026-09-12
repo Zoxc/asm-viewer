@@ -14926,6 +14926,20 @@ fn the_delete_question_says_where_the_asked_about_pad_is() {
     );
 }
 
+/// Say yes on the pane's own delete question, and wait for the job the press sent.
+///
+/// A press and not a call to `request_delete_pad`, because the press is what the two tests
+/// below are about. The job it sends is taken off the queue and recorded on the worker's
+/// thread, so what says it has been is the record arriving and never a count of passes:
+/// under load that thread is not scheduled inside the eight of a `settle`
+/// (`agents/Headless.md`).
+fn confirm_delete(test: &mut TestingRunner, asks: &async_channel::Receiver<Asked>) {
+    let at = centre_of(test, "Delete");
+    press_at(test, at);
+    settle(test);
+    pump(test, || !asks.is_empty());
+}
+
 /// Confirming a delete does not take the editor down with the buffer it lets go of.
 ///
 /// One mouse-up is one batch of events, emitted against the tree freya measured before any
@@ -14961,19 +14975,12 @@ fn confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from() {
     assert!(text.peek().holds(&one), "the shown pad has a buffer");
     while asks.try_recv().is_ok() {}
 
-    // The press on the pane's Delete and not `request_delete_pad`, since the press is what
-    // is under test. The question is opened by hand: what a row's menu does is pinned by
-    // the test above, and a second right-click here would have to wait out the closed
-    // popup's fade, whose overlay is still over the row.
-    let confirm_delete = |test: &mut TestingRunner| {
-        let at = centre_of(test, "Delete");
-        press_at(test, at);
-        settle(test);
-    };
-
+    // The question is opened by hand: what a row's menu does is pinned by the test above,
+    // and a second right-click here would have to wait out the closed popup's fade, whose
+    // overlay is still over the row.
     pad.write().confirming = Some(one.clone());
     settle(&mut test);
-    confirm_delete(&mut test);
+    confirm_delete(&mut test, &asks);
 
     assert!(!text.peek().holds(&one));
     assert!(pad.peek().get(&one).is_none());
@@ -14987,7 +14994,7 @@ fn confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from() {
 
     pad.write().confirming = Some(two.clone());
     settle(&mut test);
-    confirm_delete(&mut test);
+    confirm_delete(&mut test, &asks);
 
     assert!(!text.peek().holds(&two));
     assert_eq!(pad.peek().shown().as_str(), crate::scratchpad::DEFAULT_ID);
@@ -15101,9 +15108,7 @@ fn deleting_a_pad_that_is_not_shown_leaves_the_editor_standing() {
     // tests above already pin.
     pad.write().confirming = Some(two.clone());
     settle(&mut test);
-    let at = centre_of(&test, "Delete");
-    press_at(&mut test, at);
-    settle(&mut test);
+    confirm_delete(&mut test, &asks);
 
     assert!(!text.peek().holds(&two));
     assert_eq!(asks.try_recv(), Ok(Asked::Delete("two".to_owned())));

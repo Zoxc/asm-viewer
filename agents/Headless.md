@@ -370,6 +370,14 @@ link-following tests pressed a name and then ran 32 passes before reading the st
 one press in ten had not been answered by then. Anything a thread or a `Timer` answers waits on its
 condition and never on a number.
 
+**What to wait on where the answer changes nothing.** Usually it is a state the answer sets, and
+that covers the jobs behind it too: a worker is one ordered thread, so an answer that has landed
+means every job up to it was recorded. Where the answer sets nothing there is no such state, and
+the condition is the job itself: `pump(&mut test, || !asks.is_empty())`. A scratchpad's delete is that
+case -- the app lets go of the pad before it asks, and all that comes back is an acknowledgement --
+and both delete tests read the recorded job straight off a `settle`. Under load one run in five
+found the channel still empty.
+
 **A timer the test starts goes on running between its assertions.** A sweep held past a pane's edge
 scrolls the view every `AUTOSCROLL_TICK`, and every pass after that costs real time, so whatever the
 scroll moves -- the rows a `VirtualScrollView` has built, the row the sweep reaches -- is a moving
