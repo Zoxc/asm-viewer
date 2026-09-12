@@ -414,3 +414,139 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
         Some(Opens::Row { to: 12, at: Some(at) }) if at.line == 3
     ));
 }
+
+/// **Every field of the three listing props takes part in its comparison.** A field left
+/// out is a listing that stops re-rendering when only that field changed. The three
+/// derive `PartialEq`, which is what the derive buys, and `AsmData` is where it counts:
+/// it holds the worker's `Studied` whole so that a field added there reaches the rows
+/// without a builder to thread it through.
+#[test]
+fn every_field_of_a_listing_prop_is_compared() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");
+    let objects = analysis::open_files(vec![path]);
+    let object = objects.first().expect("the fixture parses").clone();
+    let mut symbols = object.symbols_sorted.iter().map(|data| Symbol {
+        object: object.clone(),
+        data: data.clone(),
+    });
+    let symbol = symbols.next().expect("the fixture holds a symbol");
+    let other = symbols.next().expect("the fixture holds a second symbol");
+
+    let assembly = Arc::new(listing(symbol.data.clone()));
+    let studied = |symbol: &Symbol| Studied::with_assembly(symbol.clone(), Some(assembly.clone()));
+    let data = AsmData::of(studied(&symbol), None, 0, 0, 1, false).expect("the fixture decodes");
+
+    assert!(data == data.clone(), "a listing differs from itself");
+    for (field, changed) in [
+        // Two analyses of one symbol are two lane layouts, which `Studied` compares by
+        // pointer.
+        (
+            "studied",
+            AsmData {
+                studied: studied(&symbol),
+                ..data.clone()
+            },
+        ),
+        (
+            "subject",
+            AsmData {
+                subject: Some((DocId::unfiled(), Arc::from("main.rs"))),
+                ..data.clone()
+            },
+        ),
+        (
+            "base",
+            AsmData {
+                base: 1,
+                ..data.clone()
+            },
+        ),
+        (
+            "bias",
+            AsmData {
+                bias: 1,
+                ..data.clone()
+            },
+        ),
+        (
+            "width",
+            AsmData {
+                width: 2,
+                ..data.clone()
+            },
+        ),
+        (
+            "code_tab",
+            AsmData {
+                code_tab: true,
+                ..data.clone()
+            },
+        ),
+    ] {
+        assert!(data != changed, "AsmData ignores {field}");
+    }
+
+    let mut docs = Docs::default();
+    let tab = docs.open(Document::Assembly(Selection::Symbol(symbol.clone())));
+    let elsewhere = docs.open(Document::Assembly(Selection::Symbol(other.clone())));
+
+    let rows = InstructionList {
+        tab,
+        data: data.clone(),
+        asked: Ask::Symbol(symbol.clone()),
+    };
+    assert!(rows == rows.clone(), "a list of rows differs from itself");
+    for (field, changed) in [
+        (
+            "tab",
+            InstructionList {
+                tab: elsewhere,
+                ..rows.clone()
+            },
+        ),
+        (
+            "data",
+            InstructionList {
+                data: AsmData {
+                    base: 1,
+                    ..data.clone()
+                },
+                ..rows.clone()
+            },
+        ),
+        (
+            "asked",
+            InstructionList {
+                asked: Ask::Symbol(other.clone()),
+                ..rows.clone()
+            },
+        ),
+    ] {
+        assert!(rows != changed, "InstructionList ignores {field}");
+    }
+
+    let pane = AssemblyPane {
+        tab,
+        document: Document::Assembly(Selection::Symbol(symbol)),
+    };
+    assert!(pane == pane.clone(), "a pane differs from itself");
+    for (field, changed) in [
+        (
+            "tab",
+            AssemblyPane {
+                tab: elsewhere,
+                ..pane.clone()
+            },
+        ),
+        (
+            "document",
+            AssemblyPane {
+                document: Document::Assembly(Selection::Symbol(other)),
+                ..pane.clone()
+            },
+        ),
+    ] {
+        assert!(pane != changed, "AssemblyPane ignores {field}");
+    }
+}

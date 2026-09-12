@@ -856,9 +856,13 @@ demangling is the only lever there is, and it defers work until the first click 
 
 
 **Identity throughout the UI is `Arc` pointer identity**, not names or indices: list keys are
-`Arc::as_ptr(..).addr()` and every prop `PartialEq` is hand-written in terms of `Arc::ptr_eq`. That
-matters twice: duplicate symbol names across objects stay distinct, and `#[derive(PartialEq)]` on an
-`Arc<T>` field would deep-compare on every parent render. **A list of rows is a `Shared`**
+`Arc::as_ptr(..).addr()` and a prop holding an `Arc` compares it with `Arc::ptr_eq`, in a
+`PartialEq` written by hand. That matters twice: duplicate symbol names across objects stay
+distinct, and `#[derive(PartialEq)]` on an `Arc<T>` field would deep-compare on every parent
+render. A prop holding no `Arc` of its own **derives** instead: the pointer rule is inside its
+fields already, and an impl that only spells the derive out is one more place to forget a new
+field -- a prop that stops re-rendering for it (`AsmData`, `InstructionList` and `AssemblyPane`,
+`src/ui/assembly.rs`). **A list of rows is a `Shared`**
 (`src/shared.rs`), the rule written once rather than once per list: an `Arc<[T]>` equal only to the
 same build, derefing to its slice, so a view reads the rows as a slice and passes them on as a
 pointer. The Files, Search, Locations and Objects lists, the flattened symbol list, the finder's

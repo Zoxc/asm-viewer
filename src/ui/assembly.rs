@@ -179,7 +179,7 @@ fn line_of(head: &[(String, SpanKind)], link: Option<Lifted>, tail: &[(String, S
 /// apart, so a field added there reaches the rows without a builder to thread it through.
 /// The rest is what the *listing* adds: which of the two listings this is, and where in it
 /// the symbol sits.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct AsmData {
     /// What the worker made of the symbol: the listing, its gutter layout and its lines.
     pub(crate) studied: Studied,
@@ -203,17 +203,6 @@ pub(crate) struct AsmData {
     /// Whether this listing is the object's code already, where a row has no
     /// neighbours to be shown among.
     pub(crate) code_tab: bool,
-}
-
-impl PartialEq for AsmData {
-    fn eq(&self, other: &Self) -> bool {
-        self.studied == other.studied
-            && self.subject == other.subject
-            && self.base == other.base
-            && self.bias == other.bias
-            && self.width == other.width
-            && self.code_tab == other.code_tab
-    }
 }
 
 impl AsmData {
@@ -1214,7 +1203,7 @@ impl Component for InstructionRow {
 /// The instruction rows themselves, a component of their own so that the pointer focus and
 /// the picked-out run -- which change on every pointer move across a row boundary -- do not
 /// re-render the pane above, which changes only when a symbol is analysed.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct InstructionList {
     /// The tab these rows are in.
     tab: DocId,
@@ -1230,12 +1219,6 @@ struct InstructionList {
     /// which is very likely on no trail at all), and the file a source-driven tab is
     /// about, which its rows' menus choose a location for.
     asked: Ask,
-}
-
-impl PartialEq for InstructionList {
-    fn eq(&self, other: &Self) -> bool {
-        self.tab == other.tab && self.data == other.data && self.asked == other.asked
-    }
 }
 
 /// The listing row the reveal `owing` asks for goes to, and [`None`] where this listing
@@ -1518,18 +1501,12 @@ fn asm_row(i: usize, rows: &AsmRows) -> Element {
 /// it is the analysis that says which symbol is actually in hand. The one thing it asks
 /// the document is the word for having been asked nothing, which differs by the kind of
 /// tab -- a source-driven one is waiting for a line to be clicked in it.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct AssemblyPane {
     /// The tab this pane is in: what its bar's open-or-shut and its rows' positions are
     /// filed under.
     pub(crate) tab: DocId,
     pub(crate) document: Document,
-}
-
-impl PartialEq for AssemblyPane {
-    fn eq(&self, other: &Self) -> bool {
-        self.tab == other.tab && self.document == other.document
-    }
 }
 
 impl AssemblyPane {
