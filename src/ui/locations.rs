@@ -304,6 +304,26 @@ pub(crate) enum What {
     Places(references::References),
 }
 
+/// What an answer came to: which of the two kinds it is, and how much of it there is.
+/// All the pane needs to decide what to draw, the rows coming from the panel's memos, so
+/// this is read in place of copying the answer.
+#[derive(Clone, Copy, PartialEq)]
+enum Answer {
+    /// Symbols, and how many.
+    Symbols(usize),
+    /// Places in files, and how many.
+    Places(usize),
+}
+
+impl Answer {
+    fn of(found: &Found) -> Answer {
+        match &found.what {
+            What::Symbols(symbols) => Answer::Symbols(symbols.len()),
+            What::Places(places) => Answer::Places(places.count()),
+        }
+    }
+}
+
 impl Found {
     pub(crate) fn new(of: Query, symbols: Vec<Symbol>) -> Found {
         Found {
@@ -579,49 +599,45 @@ impl Component for LocationsPanel {
             .shown
             .as_ref()
             .map(|shown| shown.studied.symbol.clone());
-        let state = located.read().clone();
+        // The five facts the pane is drawn from, taken under one guard rather than by
+        // copying the answer: a references answer holds every place under its file, and
+        // copying one per render is an allocation per file and a pointer bump per place
+        // (`grouped.rs`). The rows are the two memos above.
+        let (asked, pending, answer, asked_at, subject) = {
+            let state = located.read();
+            (
+                state.asked.clone(),
+                state.pending().is_some(),
+                state.found.as_ref().map(Answer::of),
+                state.found.as_ref().map(|found| found.of.at.clone()),
+                state.subject.clone(),
+            )
+        };
         // What Enter on a row reaches through, and the two facts a location row opens
         // with: the line the question was asked from, and the tab it was asked in.
         let to = use_landings();
         // What Enter on a reference row reaches through beside those: a place in a file
         // is opened the way both grouped panels open one (`ui/place_row.rs`).
         let places = use_places();
-        let asked_at = state.found.as_ref().map(|found| found.of.at.clone());
-        let subject = state.subject.clone();
 
         // What the rows mark in the text they draw, memoized on the filter beside the
         // two lists above, which compile one of their own to narrow themselves with.
         let marking = use_list_marking(filter);
 
         let mut keys = ListKeys::none();
-        let body: Element = match (&state.asked, state.pending(), &state.found) {
+        let body: Element = match (&asked, pending, answer) {
             // Asked and not pending is found, by `pending`'s definition, so the second
             // of these never comes up.
-            (None, _, _) | (Some(_), None, None) => placeholder("Nothing looked for yet"),
-            (Some(_), Some(query), _) => placeholder(format!(
+            (None, _, _) | (Some(_), false, None) => placeholder("Nothing looked for yet"),
+            (Some(query), true, _) => placeholder(format!(
                 "Finding {} {}\u{2026}",
                 query.words().1,
                 query.spell()
             )),
-            (
-                Some(query),
-                None,
-                Some(Found {
-                    what: What::Places(found),
-                    ..
-                }),
-            ) if found.count() == 0 => {
+            (Some(query), false, Some(Answer::Places(0))) => {
                 placeholder(format!("No {} {}", query.words().1, query.spell()))
             }
-            (
-                Some(query),
-                None,
-                Some(Found {
-                    what: What::Places(found),
-                    ..
-                }),
-            ) => {
-                let count = found.count();
+            (Some(query), false, Some(Answer::Places(count))) => {
                 let length = used.len();
                 // The rows the arrows step and Enter presses: a `ReferenceRows` is the
                 // rows behind an `Arc`, so this is a pointer each.
@@ -658,25 +674,10 @@ impl Component for LocationsPanel {
                     .into(),
                 )
             }
-            (
-                Some(query),
-                None,
-                Some(Found {
-                    what: What::Symbols(symbols),
-                    ..
-                }),
-            ) if symbols.is_empty() => {
+            (Some(query), false, Some(Answer::Symbols(0))) => {
                 placeholder(format!("No code compiled from {}", query.spell()))
             }
-            (
-                Some(query),
-                None,
-                Some(Found {
-                    what: What::Symbols(symbols),
-                    ..
-                }),
-            ) => {
-                let count = symbols.len();
+            (Some(query), false, Some(Answer::Symbols(count))) => {
                 let length = filtered.len();
                 // The rows the arrows step and Enter presses: a `Filtered` is the list
                 // behind an `Arc` and the indices the filter kept.

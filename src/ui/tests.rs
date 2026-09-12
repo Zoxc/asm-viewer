@@ -5479,6 +5479,45 @@ fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)])
     located
 }
 
+/// The Locations panel is drawn the same way as the Search panel: what it needs of an
+/// answer is which kind it is and how much of it there is, so a render copies none of the
+/// places it found. Fails on `located.read().clone()`.
+#[test]
+fn drawing_the_references_copies_none_of_them() {
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let mut located = roots.located;
+    let at = LinePos {
+        file: Arc::from("/p/src/main.rs"),
+        line: 2,
+    };
+    settle(&mut test);
+
+    let answer = found_references(
+        at,
+        "helper",
+        &[("/p/src/other.rs", 9, 4..10), ("/p/src/main.rs", 2, 12..18)],
+    );
+    let copied = crate::grouped::copies();
+    located.set(answer);
+    settle(&mut test);
+
+    let shown = labels(&test);
+    assert!(
+        shown.contains(&"2 references to helper".to_owned()),
+        "the places were not drawn: {shown:?}"
+    );
+    assert_eq!(
+        crate::grouped::copies(),
+        copied,
+        "drawing the places copied the whole answer"
+    );
+}
+
 /// The panel says which of the uses states it is in, groups what it found under the file
 /// each use is in, and folds a file away when its row is pressed.
 #[test]
@@ -24749,6 +24788,38 @@ fn hits_arrive_under_their_file_and_fold() {
         "{folded:?}"
     );
     assert!(folded.iter().any(|label| label == "third hit"));
+}
+
+/// The panel is drawn from counts and never from a copy of the answer. A search renders
+/// once per batch and `Searched` holds every hit found so far, up to `MAX_HITS` of them,
+/// so a copy per render is a pointer bump per hit and an allocation per file on the UI
+/// thread. Fails on `searched.read().clone()`.
+#[test]
+fn drawing_the_hits_copies_none_of_them() {
+    let file = PathBuf::from("/project/one.rs");
+    let found: Arc<Path> = file.clone().into();
+    let (mut test, states, directory, dock) = search_over(line!(), move |_query, emit| {
+        for line in 1..=3 {
+            let _ = emit(SearchEvent::Hit(found.clone(), hit_at(line, "a hit")));
+        }
+        let _ = emit(SearchEvent::Finished);
+    });
+
+    let copied = crate::grouped::copies();
+    ask_for(&states, dock, &directory, "hit");
+    let searched = states.searched;
+    pump(&mut test, || !searched.peek().running);
+
+    let shown = labels(&test);
+    assert!(
+        shown.iter().any(|label| label == "3 matches in 1 file"),
+        "the hits were not drawn: {shown:?}"
+    );
+    assert_eq!(
+        crate::grouped::copies(),
+        copied,
+        "drawing the hits copied the whole answer"
+    );
 }
 
 /// A hit that lands after its search has been replaced is dropped: the batch is checked

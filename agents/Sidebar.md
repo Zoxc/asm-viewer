@@ -289,7 +289,12 @@ copied once per hit: 100 rebuilds of a 10,500-row list, 137 ms against 17 ms. Th
 for the copying and never for identity, so a row still compares by the path it says --
 `push` tries `Arc::ptr_eq` against the last file first, but only to skip a comparison whose
 answer the sender already knows -- and a `Pick` -- minted per row drawn and not per row
-built -- takes a copy of it. What differs is only how a list is built and what an item is: a
+built -- takes a copy of it. **Neither panel copies the answer to draw it.** A render takes
+what it needs -- the question, whether one is running, and the two counts -- under one guard,
+and the rows come from the memo beside it; `Searched` is not `Clone` at all. A copy per render
+would give back most of what the `Arc`s bought, a streaming search rendering once a batch.
+`Grouped`'s `Clone` counts itself (`grouped::copies`), so a headless test can say a render
+made none. What differs is only how a list is built and what an item is: a
 search appends as it walks, and a server's answer, which lands whole, is grouped when it
 does -- files by path and references by line, so a reader can find a file, where a search
 keeps the order its walk found them in and only ever grows at the end. The lines are read

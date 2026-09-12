@@ -28,7 +28,10 @@ pub(crate) struct Searching(pub(crate) State<Searched>);
 /// arrives long after the question, and a reader who asked again is not waiting for the
 /// first. There is no `capped` field beside the hits: [`search::capped`] answers that
 /// off the count.
-#[derive(Clone, Default)]
+///
+/// **Not [`Clone`]**: this holds every hit a search found, up to [`search::MAX_HITS`] of
+/// them, and everything that draws them reads what it needs under the guard.
+#[derive(Default)]
 pub(crate) struct Searched {
     /// Which search is on: bumped by every ask, and what a running task compares itself
     /// against before it writes anything.
@@ -40,7 +43,29 @@ pub(crate) struct Searched {
     pub(crate) hits: SearchHits,
 }
 
+/// What the panel says about an answer, which is all it needs of one besides the
+/// question: how much was found, whether the walk is still going, and whether it stopped
+/// at its cap. Taken under the one guard the render reads, so the hits themselves are
+/// never copied to draw them.
+#[derive(Clone, Copy)]
+struct Summary {
+    running: bool,
+    hits: usize,
+    files: usize,
+    capped: bool,
+}
+
 impl Searched {
+    /// The four counts the panel is drawn from.
+    fn summary(&self) -> Summary {
+        Summary {
+            running: self.running,
+            hits: self.hits.count(),
+            files: self.hits.files(),
+            capped: search::capped(&self.hits),
+        }
+    }
+
     /// Take a batch of events from search `id`. Whether they are this search's, so the
     /// caller goes on taking them only then.
     ///
@@ -199,7 +224,15 @@ impl Component for SearchPanel {
 
         let rows = use_memo(move || searched.read().hits.rows(&Matcher::Everything));
         let rows = rows.read().clone();
-        let state = searched.read().clone();
+        // The question and the counts under one guard, rather than a copy of the answer:
+        // `Searched` holds every hit found so far, up to [`search::MAX_HITS`] of them,
+        // and the panel renders once per batch while a search streams. A copy here is a
+        // pointer bump per hit and an allocation per file, on the UI thread, per render
+        // (`grouped.rs`). The rows are the memo above.
+        let (asked, summary) = {
+            let state = searched.read();
+            (state.asked.clone(), state.summary())
+        };
 
         // Enter in the box. Everything it needs is peeked, and nothing captured: an effect
         // that read the filter would run for every character typed and search for half a
@@ -236,13 +269,13 @@ impl Component for SearchPanel {
             fold: ListKeys::flat(),
         };
 
-        let body: Element = match (&directory, &state.asked) {
+        let body: Element = match (&directory, &asked) {
             (None, _) => placeholder("No project directory. Set one in the Project view."),
             (Some(_), None) => placeholder("Nothing searched for yet."),
-            (Some(_), Some(query)) if state.running && state.hits.count() == 0 => {
+            (Some(_), Some(query)) if summary.running && summary.hits == 0 => {
                 placeholder(format!("Searching for {}\u{2026}", query.filter.pattern))
             }
-            (Some(_), Some(query)) if state.hits.count() == 0 => {
+            (Some(_), Some(query)) if summary.hits == 0 => {
                 placeholder(format!("No matches for {}", query.filter.pattern))
             }
             (Some(_), Some(_)) => {
@@ -250,7 +283,7 @@ impl Component for SearchPanel {
                 rect()
                     .expanded()
                     .content(Content::Flex)
-                    .child(section_heading(&heading(&state), None))
+                    .child(section_heading(&heading(summary), None))
                     .child(
                         rect().width(Size::fill()).height(Size::flex(1.0)).child(
                             VirtualScrollView::new_with_data(
@@ -284,14 +317,19 @@ impl Component for SearchPanel {
 
 /// What is said over the rows: how much was found, and whether the search is still going
 /// or stopped at its cap.
-fn heading(state: &Searched) -> String {
-    let (hits, files) = (state.hits.count(), state.hits.files());
+fn heading(summary: Summary) -> String {
+    let Summary {
+        running,
+        hits,
+        files,
+        capped,
+    } = summary;
     let matches = if hits == 1 { "match" } else { "matches" };
     let files_word = if files == 1 { "file" } else { "files" };
-    if state.running {
+    if running {
         return format!("{hits} {matches} in {files} {files_word}\u{2026}");
     }
-    if search::capped(&state.hits) {
+    if capped {
         return format!("First {hits} {matches} in {files} {files_word}");
     }
     format!("{hits} {matches} in {files} {files_word}")
