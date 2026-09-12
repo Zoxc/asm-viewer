@@ -13,6 +13,32 @@
 
 use super::*;
 
+/// What the worker's read of the project's manifest came back with.
+///
+/// One value, because the four travel together from the read to the rows that draw them,
+/// and two `Option<PathBuf>` passed one by one are a pair a caller can cross without the
+/// compiler noticing. Compared whole, which is how the hook knows a read changed anything
+/// ([`Builds::read`]).
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct Manifest {
+    /// The manifest the project's directory holds, which is what cargo would be run over.
+    /// `None` is a placeholder and not an error.
+    pub(crate) path: Option<PathBuf>,
+    /// The manifest the profile is read from and written to, when that is **not** the one
+    /// above: cargo takes `[profile.*]` from the workspace root alone, so a member's own
+    /// file is not where the offer is taken. `None` when the two are the same, which is
+    /// what leaves the row out for a project that is its own workspace.
+    pub(crate) profiles: Option<PathBuf>,
+    /// Whether the chosen profile carries the line information the source side is drawn
+    /// from, as that manifest has it now.
+    pub(crate) debug_lines: bool,
+    /// Why the "Turn on" that asked for this read did not take, in the words of whatever
+    /// refused it. The row offering it is unchanged either way, so this is the only sign
+    /// the press did anything. `None` for a plain read, which is what clears the last
+    /// refusal.
+    pub(crate) edit_refused: Option<String>,
+}
+
 /// What the app holds about building the open project.
 #[derive(Clone, Default)]
 pub(crate) struct Builds {
@@ -25,21 +51,8 @@ pub(crate) struct Builds {
     /// two, each with the text the compiler rendered for it, so a copy per frame is hundreds
     /// of kilobytes for nothing. [`Builds::finished`] wraps it once.
     pub(crate) built: Option<Arc<cargo::Run>>,
-    /// The manifest the project's directory holds, which is what cargo would be run over.
-    /// `None` is a placeholder and not an error.
-    pub(crate) manifest: Option<PathBuf>,
-    /// The manifest the profile is read from and written to, when that is **not** the one
-    /// above: cargo takes `[profile.*]` from the workspace root alone, so a member's own
-    /// file is not where the offer below is taken. `None` when the two are the same, which
-    /// is what leaves the row out for a project that is its own workspace.
-    pub(crate) profiles: Option<PathBuf>,
-    /// Whether the chosen profile carries the line information the source side is drawn
-    /// from, as that manifest has it now.
-    pub(crate) debug_lines: bool,
-    /// Why the last "Turn on" did not take, in the words of whatever refused it. The row
-    /// offering it is unchanged either way, so this is the only sign the press did
-    /// anything. Cleared by the next read of the manifest.
-    pub(crate) edit_refused: Option<String>,
+    /// What the worker's last read of the manifest came back with.
+    pub(crate) manifest: Manifest,
     /// What the build before this one produced. **The set a build replaces**, which is why
     /// it is saved with the session: a binary the reader opened some other way is left
     /// alone, and the build before may have been in another run of the app.
@@ -79,26 +92,13 @@ impl Builds {
         self.built.as_deref().and_then(cargo::Run::refusal)
     }
 
-    /// What the manifest says, as the worker read it. Whether anything changed, so the
-    /// hook writes only then ([`write_if`]).
-    fn read(
-        &mut self,
-        manifest: Option<PathBuf>,
-        profiles: Option<PathBuf>,
-        lines: bool,
-        refused: Option<String>,
-    ) -> bool {
-        let same = self.manifest == manifest
-            && self.profiles == profiles
-            && self.debug_lines == lines
-            && self.edit_refused == refused;
-        if same {
+    /// Take what the worker read of the manifest. Whether anything changed, so the hook
+    /// writes only then ([`write_if`]).
+    fn read(&mut self, said: Manifest) -> bool {
+        if self.manifest == said {
             return false;
         }
-        self.manifest = manifest;
-        self.profiles = profiles;
-        self.debug_lines = lines;
-        self.edit_refused = refused;
+        self.manifest = said;
         true
     }
 
@@ -180,14 +180,7 @@ pub(crate) enum BuildWhat {
 
 /// What the worker answers with.
 pub(crate) enum BuildAnswer {
-    Read {
-        manifest: Option<PathBuf>,
-        profiles: Option<PathBuf>,
-        debug_lines: bool,
-        /// Why the edit that asked for this read was refused, when one did. `None` for a
-        /// plain read, which is what clears the last refusal.
-        refused: Option<String>,
-    },
+    Read(Manifest),
     /// A finished build, with the diagnostic files the view may offer as targets already
     /// picked out ([`openable`]): the run alone would leave that to the rows.
     Done {
@@ -261,16 +254,16 @@ fn read(
     profile: Profile,
     refused: Option<String>,
 ) -> BuildAnswer {
-    let manifest = cargo::manifest(directory);
-    BuildAnswer::Read {
+    let path = cargo::manifest(directory);
+    BuildAnswer::Read(Manifest {
         debug_lines: cargo::debug_lines(&profiles, profile),
         // Named only when it is not the file cargo is run over: a member's profiles are
         // the workspace root's, and the reader is being offered an edit to that file and
         // not to the one the row above names.
-        profiles: (manifest.as_ref() != Some(&profiles)).then_some(profiles),
-        manifest,
-        refused,
-    }
+        profiles: (path.as_ref() != Some(&profiles)).then_some(profiles),
+        path,
+        edit_refused: refused,
+    })
 }
 
 /// How the view reaches the worker.
@@ -290,15 +283,8 @@ pub(crate) fn use_building_with(
         |job, _, _| vec![job],
         move |job| Some(work(job)),
         move |answer, _| match answer {
-            BuildAnswer::Read {
-                manifest,
-                profiles,
-                debug_lines,
-                refused,
-            } => {
-                write_if(build, |next| {
-                    next.read(manifest, profiles, debug_lines, refused)
-                });
+            BuildAnswer::Read(said) => {
+                write_if(build, |next| next.read(said));
             }
             BuildAnswer::Done { run, sources } => finished(build, states, opened, run, sources),
         },

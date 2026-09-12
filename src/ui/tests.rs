@@ -27011,12 +27011,12 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
             BuildWhat::Build => done(built(&[artifact.clone()])),
-            _ => BuildAnswer::Read {
-                manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+            _ => BuildAnswer::Read(Manifest {
+                path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
                 debug_lines: true,
-                refused: None,
-            },
+                edit_refused: None,
+            }),
         }
     };
     let (mut test, roots, asking, asks) = mount_project(answer);
@@ -27024,7 +27024,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
-    pump(&mut test, || states.build.peek().manifest.is_some());
+    pump(&mut test, || states.build.peek().manifest.path.is_some());
     assert_eq!(asks.try_recv(), Ok(AskedToBuild::Read));
 
     // The file cargo would be run over, named rather than left to be worked out from the
@@ -27091,11 +27091,13 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
 /// put there.
 #[test]
 fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
-    let (mut test, roots, _asking, _asks) = mount_project(|_job: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        profiles: None,
-        debug_lines: true,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(|_job: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: true,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
 
@@ -27123,7 +27125,7 @@ fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
     let mut build = states.build;
     {
         let mut held = build.write();
-        held.manifest = Some(PathBuf::from("/work/app/Cargo.toml"));
+        held.manifest.path = Some(PathBuf::from("/work/app/Cargo.toml"));
         held.built = Some(Arc::new(run([&one, &two])));
     }
     settle(&mut test);
@@ -27175,12 +27177,12 @@ fn an_artifact_load_survives_the_view_being_left() {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
             BuildWhat::Build => done(built(&[artifact.clone()])),
-            _ => BuildAnswer::Read {
-                manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+            _ => BuildAnswer::Read(Manifest {
+                path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
                 debug_lines: true,
-                refused: None,
-            },
+                edit_refused: None,
+            }),
         }
     };
     let (mut test, roots, asking, _asks) = mount_project_over(leaving_project_harness, answer);
@@ -27188,7 +27190,7 @@ fn an_artifact_load_survives_the_view_being_left() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
-    pump(&mut test, || states.build.peek().manifest.is_some());
+    pump(&mut test, || states.build.peek().manifest.path.is_some());
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     start_build(
@@ -27244,12 +27246,12 @@ fn a_finished_build_forgets_the_workspace_sources() {
     // Nothing is opened: what a build produced is another rule, tested above.
     let (mut test, roots, asking, _asks) = mount_project(|job: BuildJob| match job.what {
         BuildWhat::Build => done(built(&[])),
-        _ => BuildAnswer::Read {
-            manifest: None,
+        _ => BuildAnswer::Read(Manifest {
+            path: None,
             profiles: None,
             debug_lines: true,
-            refused: None,
-        },
+            edit_refused: None,
+        }),
     });
     let states = roots.states;
 
@@ -27291,12 +27293,12 @@ fn a_build_replaces_what_the_build_before_it_produced() {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
             BuildWhat::Build => done(built(&[artifact.clone()])),
-            _ => BuildAnswer::Read {
-                manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+            _ => BuildAnswer::Read(Manifest {
+                path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
                 debug_lines: true,
-                refused: None,
-            },
+                edit_refused: None,
+            }),
         }
     };
     let (mut test, roots, asking, _asks) = mount_project(answer);
@@ -27355,17 +27357,19 @@ fn a_build_replaces_what_the_build_before_it_produced() {
 /// on it starts nothing.
 #[test]
 fn a_directory_with_no_manifest_builds_nothing() {
-    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        profiles: None,
-        debug_lines: false,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/not-a-workspace".to_owned();
-    pump(&mut test, || states.build.peek().manifest.is_none());
+    pump(&mut test, || states.build.peek().manifest.path.is_none());
 
     let drawn = labels(&test);
     assert!(
@@ -27403,19 +27407,19 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
         move |job: BuildJob| match job.what {
             BuildWhat::AddDebugLines => {
                 added.store(true, std::sync::atomic::Ordering::SeqCst);
-                BuildAnswer::Read {
-                    manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+                BuildAnswer::Read(Manifest {
+                    path: Some(PathBuf::from("/work/app/Cargo.toml")),
                     profiles: profiles(),
                     debug_lines: true,
-                    refused: None,
-                }
+                    edit_refused: None,
+                })
             }
-            _ => BuildAnswer::Read {
-                manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
+            _ => BuildAnswer::Read(Manifest {
+                path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: profiles(),
                 debug_lines: added.load(std::sync::atomic::Ordering::SeqCst),
-                refused: None,
-            },
+                edit_refused: None,
+            }),
         }
     };
     let (mut test, roots, _asking, _asks) = mount_project(answer);
@@ -27423,7 +27427,7 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
-    pump(&mut test, || states.build.peek().manifest.is_some());
+    pump(&mut test, || states.build.peek().manifest.path.is_some());
 
     let drawn = labels(&test);
     assert!(
@@ -27440,7 +27444,7 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
 
     let button = centre_of(&test, "Turn on");
     press_at(&mut test, button);
-    pump(&mut test, || states.build.peek().debug_lines);
+    pump(&mut test, || states.build.peek().manifest.debug_lines);
 
     let drawn = labels(&test);
     assert!(
@@ -27459,23 +27463,27 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
 /// it no longer is.
 #[test]
 fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
-    let answer = |job: BuildJob| BuildAnswer::Read {
-        manifest: Some(PathBuf::from("/work/app/Cargo.toml")),
-        profiles: None,
-        debug_lines: false,
-        refused: matches!(job.what, BuildWhat::AddDebugLines)
-            .then(|| "Permission denied (os error 13)".to_owned()),
+    let answer = |job: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: Some(PathBuf::from("/work/app/Cargo.toml")),
+            profiles: None,
+            debug_lines: false,
+            edit_refused: matches!(job.what, BuildWhat::AddDebugLines)
+                .then(|| "Permission denied (os error 13)".to_owned()),
+        })
     };
     let (mut test, roots, _asking, _asks) = mount_project(answer);
     let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
-    pump(&mut test, || states.build.peek().manifest.is_some());
+    pump(&mut test, || states.build.peek().manifest.path.is_some());
 
     let button = centre_of(&test, "Turn on");
     press_at(&mut test, button);
-    pump(&mut test, || states.build.peek().edit_refused.is_some());
+    pump(&mut test, || {
+        states.build.peek().manifest.edit_refused.is_some()
+    });
 
     let drawn = labels(&test);
     assert!(
@@ -27495,7 +27503,9 @@ fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
     // one asks again.
     let debug = centre_of(&test, "Debug");
     press_at(&mut test, debug);
-    pump(&mut test, || states.build.peek().edit_refused.is_none());
+    pump(&mut test, || {
+        states.build.peek().manifest.edit_refused.is_none()
+    });
 
     let drawn = labels(&test);
     assert!(
@@ -27567,18 +27577,20 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     };
 
     let manifest = directory.join("Cargo.toml");
-    let (mut test, roots, _asking, _asks) = mount_project(move |_: BuildJob| BuildAnswer::Read {
-        manifest: Some(manifest.clone()),
-        profiles: None,
-        debug_lines: true,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(move |_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: Some(manifest.clone()),
+            profiles: None,
+            debug_lines: true,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
     // The section is drawn once the manifest has been read, which is a worker's answer away.
-    pump(&mut test, || states.build.peek().manifest.is_some());
+    pump(&mut test, || states.build.peek().manifest.path.is_some());
     let mut build = states.build;
     // Both halves of what the worker answers with: the run, and the diagnostic files it
     // picked out as ones this pane may open (`building::openable`).
@@ -27640,17 +27652,19 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
     };
 
     let manifest = directory.join("Cargo.toml");
-    let (mut test, roots, _asking, _asks) = mount_project(move |_: BuildJob| BuildAnswer::Read {
-        manifest: Some(manifest.clone()),
-        profiles: None,
-        debug_lines: true,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(move |_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: Some(manifest.clone()),
+            profiles: None,
+            debug_lines: true,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
-    pump(&mut test, || states.build.peek().manifest.is_some());
+    pump(&mut test, || states.build.peek().manifest.path.is_some());
 
     let mut build = states.build;
     build.write().built = Some(Arc::new(run));
@@ -27704,11 +27718,13 @@ fn the_recent_projects_are_read_once_for_the_project_on_screen() {
             let mut store = states.store;
             store.set(Some(Store::at(&opened)));
             runner.provide_root_context(|| {
-                BuildWorking(Arc::new(|_: BuildJob| BuildAnswer::Read {
-                    manifest: None,
-                    profiles: None,
-                    debug_lines: false,
-                    refused: None,
+                BuildWorking(Arc::new(|_: BuildJob| {
+                    BuildAnswer::Read(Manifest {
+                        path: None,
+                        profiles: None,
+                        debug_lines: false,
+                        edit_refused: None,
+                    })
                 }))
             });
             runner.provide_root_context(|| BuildAsking(State::create(None)));
@@ -28502,11 +28518,13 @@ fn a_hover_question_is_asked_under_the_running_servers_run() {
 /// twice belongs somewhere it stays.
 #[test]
 fn the_project_view_says_how_the_language_server_went() {
-    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        profiles: None,
-        debug_lines: false,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
     let language = roots.language;
@@ -28577,11 +28595,13 @@ fn the_project_view_lists_the_settings_the_project_gave_the_server() {
             "git.detectSubmodulesLimit": 20
         }"#,
     );
-    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        profiles: None,
-        debug_lines: false,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
     let language = roots.language;
@@ -28615,11 +28635,13 @@ fn the_project_view_says_why_a_settings_file_could_not_be_used() {
         line!(),
         r#"{ "rust-analyzer.cargo.sysrootSrc": "${userHome}/rust" }"#,
     );
-    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        profiles: None,
-        debug_lines: false,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
     let language = roots.language;
@@ -28644,11 +28666,13 @@ fn the_project_view_says_why_a_settings_file_could_not_be_used() {
 /// the view, saved with it, and what the press actually starts.
 #[test]
 fn the_project_names_the_language_server_it_is_read_with() {
-    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        profiles: None,
-        debug_lines: false,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
     let mut proj = states.proj;
@@ -28675,11 +28699,13 @@ fn the_project_names_the_language_server_it_is_read_with() {
 /// in the Project view need not go looking.
 #[test]
 fn the_project_views_button_starts_and_stops_the_language_server() {
-    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        profiles: None,
-        debug_lines: false,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
     let language = roots.language;
@@ -29307,11 +29333,13 @@ fn typing_in_the_project_view_does_not_re_render_the_root() {
 /// something about the one reading it now.
 #[test]
 fn the_project_view_shows_the_agreement_and_takes_it_back() {
-    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        profiles: None,
-        debug_lines: false,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
     let language = roots.language;
@@ -29401,11 +29429,13 @@ fn switching_projects_keeps_the_answer_the_new_one_brought() {
 /// same place: the two presses are one control.
 #[test]
 fn the_project_views_button_asks_before_it_starts_too() {
-    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| BuildAnswer::Read {
-        manifest: None,
-        profiles: None,
-        debug_lines: false,
-        refused: None,
+    let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
     });
     let states = roots.states;
     let language = roots.language;

@@ -512,7 +512,7 @@ impl Component for CargoSection {
                     Button::new()
                         // Two builds cannot go at once: the second would compile what
                         // the first is writing.
-                        .enabled(held.manifest.is_some() && !held.building)
+                        .enabled(held.manifest.path.is_some() && !held.building)
                         .on_press(move |_| start_build(build, &jobs, directory.clone(), profile))
                         .child(match held.building {
                             true => cargo::BUILDING,
@@ -521,7 +521,7 @@ impl Component for CargoSection {
                         .into_element()
                 }),
             ))
-            .child(match &held.manifest {
+            .child(match &held.manifest.path {
                 None => info_line(match directory.is_some() {
                     true => "No Cargo.toml in the directory".to_owned(),
                     false => "No directory".to_owned(),
@@ -544,7 +544,7 @@ impl Component for CargoSection {
                     // above: cargo takes profiles from the workspace root alone, so a
                     // member project is offered an edit to a manifest it does not hold,
                     // and it is named rather than written to behind the reader's back.
-                    .maybe_child(held.profiles.as_ref().map(|profiles| {
+                    .maybe_child(held.manifest.profiles.as_ref().map(|profiles| {
                         field_row(
                             "Profiles",
                             label()
@@ -577,7 +577,7 @@ impl Component for CargoSection {
                     // What a binary with no line information costs is the whole source
                     // side, so the offer is made where the profile is chosen and goes as
                     // soon as it is taken.
-                    .maybe_child((!held.debug_lines).then(|| {
+                    .maybe_child((!held.manifest.debug_lines).then(|| {
                         let jobs = jobs.clone();
                         let directory = directory.clone();
                         let row = field_row(
@@ -615,7 +615,7 @@ impl Component for CargoSection {
                             // Why the last press did nothing. The row above is unchanged
                             // whether the write worked or not, so without this the reader
                             // is refused in silence.
-                            .maybe_child(held.edit_refused.as_ref().map(|why| {
+                            .maybe_child(held.manifest.edit_refused.as_ref().map(|why| {
                                 verdict_line(Verdict::bad_news(why.clone())).into_element()
                             }))
                             .into_element()

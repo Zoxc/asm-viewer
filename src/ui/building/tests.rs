@@ -249,3 +249,58 @@ fn both_build_panes_say_the_same_line_about_the_same_build() {
     assert_eq!(Builds::default().verdict(), PadState::default().verdict());
     assert_eq!(Builds::default().verdict(), None);
 }
+
+/// **A read fills each of the two manifest fields with its own file.** A project opened at
+/// a workspace member names both: its own manifest, and the root above it, cargo taking
+/// `[profile.*]` from the root alone.
+///
+/// Both are `Option<PathBuf>`, so the pairing is what is pinned. Crossed, the view would
+/// say the root is what gets built and offer an edit to the member's own file, which cargo
+/// ignores.
+#[test]
+fn a_members_read_names_its_own_manifest_and_the_root_the_profile_comes_from() {
+    // Real files, this being one of the few things the filesystem itself is the question
+    // (`AGENTS.md`): both manifests are read and parsed.
+    let root = Temporary::directory(std::env::temp_dir().join(format!(
+        "assembly-viewer-member-read-{}",
+        std::process::id()
+    )));
+    let member = root.join("app");
+    std::fs::create_dir_all(&member).expect("the directory");
+    std::fs::write(
+        root.join(cargo::MANIFEST),
+        "[workspace]\nmembers = [\"app\"]\n\n[profile.release]\ndebug = \"line-tables-only\"\n",
+    )
+    .expect("the root manifest");
+    std::fs::write(
+        member.join(cargo::MANIFEST),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("the member manifest");
+
+    let profiles = cargo::profile_manifest(&member);
+    let BuildAnswer::Read(said) = read(&member, profiles, Profile::Release, None) else {
+        panic!("a read answers with what the manifest said");
+    };
+
+    assert_eq!(
+        said.path,
+        Some(member.join(cargo::MANIFEST)),
+        "what cargo is run over is the directory's own manifest"
+    );
+    assert_eq!(
+        said.profiles,
+        Some(root.join(cargo::MANIFEST)),
+        "the profile is the root's, and that is the file the offer edits"
+    );
+    // From the root's table, release carrying no lines by default: the other way round
+    // this would be false.
+    assert!(said.debug_lines);
+    assert_eq!(said.edit_refused, None, "nothing was refused");
+
+    // And the same read again is no change, which is what keeps the hook from writing
+    // ([`write_if`]): the value is compared whole.
+    let mut state = Builds::default();
+    assert!(state.read(said.clone()));
+    assert!(!state.read(said));
+}

@@ -539,12 +539,19 @@ there is no build there to ask about. When that file is not the project's own, t
 it, beside the manifest cargo is run over: the offer edits a file outside the project, and a write
 the reader was not told about is the one thing it must not be.
 
+**What a read of the manifest said is one value** (`Manifest`), the same one from the worker's
+answer through `Builds` to the rows: which file cargo is run over, which file the profile comes
+from, whether that profile carries lines, and what refused the last edit. The first two are both
+`Option<PathBuf>` and the view names both, so passed one by one they were a pair a caller could
+cross in silence. Carried whole, the pairing is the struct's, and the compare is whole too -- which
+is all `Builds::read` now is. A fifth thing the manifest says is one field rather than four places.
+
 **A write that fails says so under the offer.** The edit answers with the manifest read back, so a
 refusal -- a read-only file, a `[profile]` that is not a table -- leaves the row saying exactly what
 it said before the press, and without the words that refused it the button does nothing for no
-reason. They travel back with that read (`BuildAnswer::Read`'s `refused`), are held beside what it
-said (`Builds::edit_refused`), and the next read clears them, being by then about a file as it no
-longer is. Drawn in the invalid colour, as cargo's own refusal of a build already is.
+reason. They travel back inside that read (`Manifest::edit_refused`), and the next read clears them,
+being by then about a file as it no longer is. Drawn in the invalid colour, as cargo's own refusal
+of a build already is.
 
 **A project switch is a close and a restore, through the same functions.** `switch_project` is
 `project::switch` (flush, re-point, remember), then `clear_project`, then `enter_project`.
