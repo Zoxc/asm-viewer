@@ -646,6 +646,25 @@ fn a_slice_of_nothing_is_refused() {
     assert_eq!(slice_of("", 0..0), None);
 }
 
+/// The walk both conversions are made of, on its own: it says where the column is *and*
+/// whether the line has that column at all, and a policy is which of the two it keeps.
+/// The byte alone cannot say which, so a walk answering only the byte would let
+/// `slice_of` cut from inside a character, or past the end of the line.
+#[test]
+fn a_column_says_whether_it_is_a_place_in_the_line() {
+    // On a boundary, including the end of the line.
+    assert_eq!(byte_of_column(WIDE, 3), Ok(3));
+    assert_eq!(byte_of_column(WIDE, 5), Ok(7));
+    assert_eq!(byte_of_column(WIDE, 12), Ok(WIDE.len()));
+    assert_eq!(byte_of_column("", 0), Ok(0));
+    // Inside the crab: its start, and not a boundary.
+    assert_eq!(byte_of_column(WIDE, 4), Err(3));
+    // Past the end: the line's length, and not a boundary either. There is no character
+    // there, so the only honest answer is the one a cut can refuse.
+    assert_eq!(byte_of_column(WIDE, 13), Err(WIDE.len()));
+    assert_eq!(byte_of_column("", 1), Err(0));
+}
+
 /// The nth character, in bytes: where an elision cuts, and the string's own length when
 /// there is nothing to cut. The crab is one character and four bytes, so the count and the
 /// offset part company at it.

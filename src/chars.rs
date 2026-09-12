@@ -342,8 +342,10 @@ pub fn columns_of(line: &str, bytes: Range<usize>) -> Range<usize> {
 /// The byte range of the UTF-16 columns `columns` in `line`: the other way round, and the
 /// same rounding -- a column inside a character two units wide is that character's start.
 pub fn bytes_of(line: &str, columns: Range<usize>) -> Range<usize> {
-    let start = byte_at(line, columns.start);
-    start..byte_at(line, columns.end).max(start)
+    // Round down: the byte `byte_of_column` names, boundary or not.
+    let at = |column| byte_of_column(line, column).unwrap_or_else(|rounded| rounded);
+    let start = at(columns.start);
+    start..at(columns.end).max(start)
 }
 
 /// The text of `line` between the UTF-16 offsets `units`, and `None` where either end
@@ -356,24 +358,9 @@ pub fn bytes_of(line: &str, columns: Range<usize>) -> Range<usize> {
 /// piece taken from inside a character would shift what the row draws without saying so;
 /// refusing lets the caller keep the span whole.
 pub fn slice_of(line: &str, units: Range<usize>) -> Option<&str> {
-    let (mut from, mut to) = (None, None);
-    let mut seen = 0;
-    for (at, character) in line.char_indices() {
-        if seen == units.start {
-            from = Some(at);
-        }
-        if seen == units.end {
-            to = Some(at);
-        }
-        seen += character.len_utf16();
-    }
-    if seen == units.start {
-        from = Some(line.len());
-    }
-    if seen == units.end {
-        to = Some(line.len());
-    }
-    let (from, to) = (from?, to?);
+    // Refuse: only a boundary, never a byte `byte_of_column` had to round to.
+    let from = byte_of_column(line, units.start).ok()?;
+    let to = byte_of_column(line, units.end).ok()?;
     (from < to).then(|| &line[from..to])
 }
 
@@ -401,17 +388,31 @@ fn boundary(line: &str, byte: usize) -> usize {
     at
 }
 
-/// Where UTF-16 column `column` is in `line`'s bytes: the start of the character it is
-/// in, and the line's length for a column past its end.
-fn byte_at(line: &str, column: usize) -> usize {
-    let mut units = 0;
+/// Where UTF-16 column `column` falls in `line`'s bytes: `Ok` where the column is a place
+/// in the line, `Err` where it is not -- the start of the character it is inside, or the
+/// line's length for a column past the end.
+///
+/// **The one walk both conversions are made of**, and the two answers are what a policy
+/// chooses between. [`bytes_of`] takes the byte either way, which rounds a column down;
+/// [`slice_of`] keeps only the `Ok`, which refuses a cut. Each is one line at its own
+/// caller, so a third policy is another line and not another walk.
+fn byte_of_column(line: &str, column: usize) -> Result<usize, usize> {
+    let mut seen = 0;
     for (at, character) in line.char_indices() {
-        if units + character.len_utf16() > column {
-            return at;
+        if seen == column {
+            return Ok(at);
         }
-        units += character.len_utf16();
+        if seen + character.len_utf16() > column {
+            return Err(at);
+        }
+        seen += character.len_utf16();
     }
-    line.len()
+    // The end of the line is a place in it; anything past that is not.
+    if seen == column {
+        Ok(line.len())
+    } else {
+        Err(line.len())
+    }
 }
 
 /// Where the one-based `line` and `column` **rustc** counts in is in `text`, as a UTF-16
