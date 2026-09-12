@@ -138,36 +138,44 @@ fn both_build_panes_say_the_same_line_about_the_same_build() {
     /// The pad holding one build, `PadState`'s own fields not all being this module's.
     fn pad_holding(build: Build) -> PadState {
         let mut pad = PadState::default();
-        pad.built = Some(build);
+        pad.built = Some(Ok(build));
         pad
     }
 
-    for run in [
-        built(&["target/debug/viewer"]),
-        cargo::Run::Rejected {
-            diagnostics: Vec::new(),
-            message: "no matching package".to_owned(),
-        },
+    // The executable beside each run is what `build_in` would have named for it: a pad
+    // whose build made nothing has a line of its own and is not this comparison.
+    for (run, executable) in [
+        (
+            built(&["target/debug/viewer"]),
+            Some(PathBuf::from("target/debug/viewer")),
+        ),
+        (
+            cargo::Run::Rejected {
+                diagnostics: Vec::new(),
+                message: "no matching package".to_owned(),
+            },
+            None,
+        ),
     ] {
         let project = Builds {
             built: Some(run.clone()),
             ..Builds::default()
         };
-        let pad = pad_holding(Build::Ran {
-            run,
-            executable: None,
-        });
+        let pad = pad_holding(Build { run, executable });
         assert_eq!(project.verdict(), pad.verdict());
         assert_eq!(project.refusal(), pad.refusal());
     }
 
-    // A cargo that would not start, which the pad holds as a failure of its own and the
-    // project as cargo's answer: one sentence all the same, and it names what stopped it.
+    // A cargo that would not start, which both hold as cargo's own answer: one sentence,
+    // and it names what stopped it.
     let project = Builds {
         built: Some(cargo::Run::NoCargo("not found".to_owned())),
         ..Builds::default()
     };
-    let pad = pad_holding(Build::Unavailable(Failure::NoCargo("not found".to_owned())));
+    let pad = pad_holding(Build {
+        run: cargo::Run::NoCargo("not found".to_owned()),
+        executable: None,
+    });
     assert_eq!(project.verdict(), pad.verdict());
     assert_eq!(
         project.verdict().expect("a verdict").text,

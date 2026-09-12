@@ -320,7 +320,7 @@ impl Pads {
     fn built(
         &mut self,
         name: &PadId,
-        build: Build,
+        build: Result<Build, Failure>,
         program: Option<Program>,
         store: Option<&Store>,
     ) -> Option<PathBuf> {
@@ -330,22 +330,22 @@ impl Pads {
         // its program rather than on nothing. Only a build that produced one replaces it,
         // which is what leaves a failed build showing the program before it -- and what
         // keeps the package naming an artifact that is still there.
-        if let (Some(executable), Some(program)) = (build.executable(), &program) {
+        let made = build
+            .as_ref()
+            .ok()
+            .and_then(|build| build.executable.as_deref());
+        if let (Some(executable), Some(program)) = (made, &program) {
             state.scratchpad.built = Some(crate::scratchpad::Built {
                 path: executable.to_path_buf(),
                 digest: program.built_from.clone(),
             });
         }
+        // A build writes the package on its way, so the disk is behind the screen only
+        // where that write was refused -- which is what an `Err` is and all it is.
+        state.unsaved = build.as_ref().err().cloned();
         state.built = Some(build);
         if program.is_some() {
             state.program = program;
-        }
-        // A build writes the package on its way.
-        if !matches!(
-            state.built,
-            Some(Build::Unavailable(Failure::Dependencies(_)))
-        ) {
-            state.unsaved = None;
         }
         store.map(|store| state.scratchpad.directory(store))
     }
@@ -463,9 +463,10 @@ pub(crate) struct PadState {
     /// once": a second job queued behind the first would build bytes the reader has since
     /// changed.
     pub(crate) building: bool,
-    /// What the last build came back with. Not remembered across runs: it describes bytes
-    /// the next `cargo build` will replace.
-    pub(crate) built: Option<Build>,
+    /// What the last build came back with: cargo's answer, or why the package was never
+    /// written for it. Not remembered across runs: it describes bytes the next
+    /// `cargo build` will replace.
+    pub(crate) built: Option<Result<Build, Failure>>,
     /// The program the last build made, read. Kept across a build that **failed**: only a
     /// build that produced one replaces it, which is what leaves the pane showing the
     /// program before a build that would not compile.
@@ -527,17 +528,22 @@ impl PadState {
         (disk != &self.scratchpad).then_some(&self.scratchpad)
     }
 
+    /// The last build cargo ran. `None` where there has been no build, and where the
+    /// package would not write, which cargo never saw.
+    fn ran(&self) -> Option<&Build> {
+        self.built.as_ref()?.as_ref().ok()
+    }
+
     /// What the compiler said about the last build.
     pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
-        self.built
-            .as_ref()
-            .map(Build::diagnostics)
+        self.ran()
+            .map(|build| build.run.diagnostics())
             .unwrap_or_default()
     }
 
     /// cargo's own words, when they are about the dependency rows.
     pub(crate) fn refusal(&self) -> Option<&str> {
-        self.built.as_ref().and_then(Build::refusal)
+        self.ran().and_then(|build| build.run.refusal())
     }
 
     /// The one line over the pane saying where the last build got to. The Project view's
@@ -545,13 +551,16 @@ impl PadState {
     pub(crate) fn verdict(&self) -> Option<Verdict> {
         match self.building {
             true => Some(Verdict::plain(cargo::BUILDING)),
-            false => self.built.as_ref().map(Build::verdict),
+            false => self.built.as_ref().map(|build| match build {
+                Ok(build) => build.verdict(),
+                Err(failure) => Verdict::bad_news(failure.to_string()),
+            }),
         }
     }
 
     /// What the last build made, and so what there is to run.
     pub(crate) fn executable(&self) -> Option<&Path> {
-        self.built.as_ref().and_then(Build::executable)
+        self.ran().and_then(|build| build.executable.as_deref())
     }
 
     /// Whether what is on screen has moved on from the program that is: an edit since the
@@ -680,7 +689,9 @@ pub(crate) enum PadAnswer {
     },
     Built {
         pad: PadId,
-        build: Build,
+        /// What cargo said, or why the package was never written for it to say anything
+        /// about.
+        build: Result<Build, Failure>,
         /// What the build made, read on the way back. `None` for a build that made
         /// nothing, and for one whose artifact could not be parsed.
         program: Option<Program>,
@@ -789,7 +800,7 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
         PadJob::Build(scratchpad) => {
             let build = match &store {
                 Some(store) => scratchpad.build_in(&scratchpad.directory(store)),
-                None => Build::Unavailable(Failure::NoDirectory),
+                None => Err(Failure::NoDirectory),
             };
             // Read here and not in a job of its own, so what the pane holds and the
             // program it describes cannot disagree: there is no pass in which the pad has
@@ -797,7 +808,9 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
             // behind the same flag, so it delays nothing the build was not delaying
             // already.
             let program = build
-                .executable()
+                .as_ref()
+                .ok()
+                .and_then(|build| build.executable.as_deref())
                 .and_then(|executable| read_program(executable, scratchpad.compiled().digest()));
             PadAnswer::Built {
                 pad: scratchpad.id().clone(),

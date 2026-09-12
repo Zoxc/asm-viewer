@@ -138,15 +138,9 @@ impl Run {
                 "Not built{}",
                 count(Level::Error, "error", "errors")
             )),
-            Run::NoCargo(error) => Verdict::bad_news(no_cargo(error)),
+            Run::NoCargo(error) => Verdict::bad_news(format!("could not run cargo: {error}")),
         }
     }
-}
-
-/// What a cargo that would not start is said as, wherever it is said: here for a
-/// workspace, and through `Failure::NoCargo` for a scratchpad.
-pub fn no_cargo(error: &str) -> String {
-    format!("could not run cargo: {error}")
 }
 
 /// What every pane says while a build is going. A build is one at a time, so this is a

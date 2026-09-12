@@ -14516,10 +14516,10 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
     pump(&mut test, || !pad.peek().state().building);
     assert!(matches!(
         pad.peek().state().built,
-        Some(Build::Ran {
+        Some(Ok(Build {
             executable: Some(_),
             ..
-        })
+        }))
     ));
 
     assert_eq!(
@@ -14900,10 +14900,10 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
     pump(&mut test, || {
         matches!(
             pad.peek().state().built,
-            Some(Build::Ran {
+            Some(Ok(Build {
                 executable: None,
                 ..
-            })
+            }))
         )
     });
     let after = pad
@@ -15510,8 +15510,8 @@ fn already_built(mut pad: State<Pads>, executable: PathBuf) {
 
 /// A build cargo ran and made `executable` from, as [`Scratchpad::build_in`] answers one:
 /// the artifact it named, and that same path as the pad's one binary.
-fn pad_built(executable: PathBuf, diagnostics: Vec<Diagnostic>) -> Build {
-    Build::Ran {
+fn pad_built(executable: PathBuf, diagnostics: Vec<Diagnostic>) -> Result<Build, Failure> {
+    Ok(Build {
         run: cargo::Run::Built {
             artifacts: vec![cargo::Artifact {
                 path: executable.clone(),
@@ -15521,18 +15521,18 @@ fn pad_built(executable: PathBuf, diagnostics: Vec<Diagnostic>) -> Build {
             diagnostics,
         },
         executable: Some(executable),
-    }
+    })
 }
 
 /// A build cargo refused, which made nothing.
-fn pad_rejected(diagnostics: Vec<Diagnostic>, message: String) -> Build {
-    Build::Ran {
+fn pad_rejected(diagnostics: Vec<Diagnostic>, message: String) -> Result<Build, Failure> {
+    Ok(Build {
         run: cargo::Run::Rejected {
             diagnostics,
             message,
         },
         executable: None,
-    }
+    })
 }
 
 /// A program that will not start is a sentence, not a pane that sits on "Starting..."

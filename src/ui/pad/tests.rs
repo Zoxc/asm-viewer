@@ -105,7 +105,7 @@ fn nothing_is_owed_to_the_disk_before_it_has_been_read() {
 fn a_build_answered_for_a_pad_that_asked_for_none_is_not_taken() {
     let mut pads = Pads::default();
     pads.show(id("pad-a"));
-    let build = Build::Unavailable(Failure::NoDirectory);
+    let build: Result<Build, Failure> = Err(Failure::NoDirectory);
     // Named, not written: `built` only asks the store where the package would be.
     let store = Store::at("/nowhere");
 
@@ -138,4 +138,43 @@ fn a_program_that_would_not_start_is_said_only_for_the_run_that_asked() {
     );
     pads.started(&id("pad-a"), 2, Err(Failure::NoDirectory));
     assert!(matches!(pads.state().run_state, RunState::Over(_)));
+}
+
+/// A build writes the package on its way, so it is what says whether the disk has caught
+/// up with the screen. `Err` is that write refused and nothing else, whatever refused it:
+/// a bad dependency row, a directory that would not take the file, nowhere to write at
+/// all.
+#[test]
+fn only_a_build_that_wrote_the_package_clears_the_unsaved_marker() {
+    let refused = [
+        Failure::Dependencies(Vec::new()),
+        Failure::Write("read-only".to_owned()),
+        Failure::NoDirectory,
+    ];
+    for failure in refused {
+        let mut pads = Pads::default();
+        pads.show(id("pad-a"));
+        pads.state_mut().building = true;
+        pads.built(&id("pad-a"), Err(failure.clone()), None, None);
+        assert_eq!(
+            pads.state().unsaved,
+            Some(failure),
+            "a build that never wrote the package took the marker with it"
+        );
+    }
+
+    // And one cargo answered, however it answered, wrote it first.
+    let mut pads = Pads::default();
+    pads.show(id("pad-a"));
+    pads.state_mut().building = true;
+    pads.state_mut().unsaved = Some(Failure::Write("read-only".to_owned()));
+    let refused_by_cargo = Build {
+        run: cargo::Run::Rejected {
+            diagnostics: Vec::new(),
+            message: String::new(),
+        },
+        executable: None,
+    };
+    pads.built(&id("pad-a"), Ok(refused_by_cargo), None, None);
+    assert_eq!(pads.state().unsaved, None);
 }

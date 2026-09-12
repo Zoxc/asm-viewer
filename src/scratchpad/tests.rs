@@ -172,8 +172,9 @@ fn a_scratchpad_with_a_bad_row_will_not_write() {
     // And nothing was written on the way to refusing.
     assert!(!directory.exists());
 
-    // A build refuses in the same terms rather than in cargo's.
-    assert_eq!(scratchpad.build_in(&directory), Build::Unavailable(failure));
+    // A build refuses in the same terms rather than in cargo's, and says as much by
+    // answering nothing cargo said.
+    assert_eq!(scratchpad.build_in(&directory), Err(failure));
     assert!(!directory.exists());
 }
 
