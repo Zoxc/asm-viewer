@@ -115,6 +115,26 @@ impl Remarks {
             None => !self.working,
         }
     }
+
+    /// Take a remark: write the field it names, and answer whether that moved anything.
+    ///
+    /// The one place a note is turned into what is held of it, so a new `lsp::Note`
+    /// variant is an arm here and not a second writer with the same two guards in front
+    /// of it ([`Language::remarked`]).
+    fn take(&mut self, note: &lsp::Note) -> bool {
+        match *note {
+            lsp::Note::Busy(working) => {
+                let moved = self.working != working;
+                self.working = working;
+                moved
+            }
+            lsp::Note::Settled(settled) => {
+                let moved = self.settled != Some(settled);
+                self.settled = Some(settled);
+                moved
+            }
+        }
+    }
 }
 
 impl Lsp {
@@ -243,42 +263,23 @@ impl Language {
         }
     }
 
-    /// A remark from run `run`'s server: whether it is reading the project rather than
-    /// answering about it. Whether anything changed, so the caller writes only then
-    /// ([`write_if`]) -- and so that a server reporting the same thing twice costs no
-    /// render.
+    /// A remark from run `run`'s server, written on what the app holds of that server:
+    /// whether it is reading the project, or whether it has settled. Which field a
+    /// remark writes is [`Remarks::take`]'s; the two guards here are every remark's.
+    ///
+    /// Answers whether anything changed, so the caller writes only then ([`write_if`]) --
+    /// and so that a server reporting the same thing twice costs no render.
     ///
     /// A remark from a server that has been stopped, or that stopped answering, is about
     /// nothing the control still says: the state it would be written on is gone.
-    fn noted(&mut self, run: u64, working: bool) -> bool {
+    fn remarked(&mut self, run: u64, note: &lsp::Note) -> bool {
         if self.run != run {
             return false;
         }
         let Some(said) = self.state.said_mut() else {
             return false;
         };
-        if said.working == working {
-            return false;
-        }
-        said.working = working;
-        true
-    }
-
-    /// Run `run`'s server says whether it has settled -- read the project and ready to
-    /// answer about it. [`Language::noted`]'s rules: whether anything changed, and a
-    /// remark from a server that has been stopped says nothing.
-    fn noted_settled(&mut self, run: u64, settled: bool) -> bool {
-        if self.run != run {
-            return false;
-        }
-        let Some(said) = self.state.said_mut() else {
-            return false;
-        };
-        if said.settled == Some(settled) {
-            return false;
-        }
-        said.settled = Some(settled);
-        true
+        said.take(note)
     }
 
     /// Run `run`'s process exists, and `handle` is what ends it. Held from this moment
@@ -876,30 +877,28 @@ pub(crate) fn use_language_with(
         let (told, notes) = async_channel::bounded::<(u64, lsp::Note)>(64);
         spawn(async move {
             while let Ok((run, note)) = notes.recv().await {
+                // Every remark is written the same way. The match is only what each
+                // one then means for a question already asked.
+                let noted = write_if(language, |held| held.remarked(run, &note));
                 match note {
-                    lsp::Note::Busy(working) => {
-                        let noted = write_if(language, |held| held.noted(run, working));
-                        // A server that has gone quiet has read more of the project than
-                        // it had when it refused a question about a file's names, so that
-                        // question is put again. Here and not on every word it says: a
-                        // server that goes on refusing would otherwise be asked in a tight
-                        // loop. A server that says when it has settled says so below
-                        // instead, and better.
-                        if noted && !working {
-                            write_if(linked, |waiting| waiting.forget_refusal());
-                        }
+                    // A server that has gone quiet has read more of the project than it
+                    // had when it refused a question about a file's names, so that
+                    // question is put again. Here and not on every word it says: a server
+                    // that goes on refusing would otherwise be asked in a tight loop. A
+                    // server that says when it has settled says so below instead, and
+                    // better.
+                    lsp::Note::Busy(working) if noted && !working => {
+                        write_if(linked, |waiting| waiting.forget_refusal());
                     }
-                    lsp::Note::Settled(settled) => {
-                        let noted = write_if(language, |held| held.noted_settled(run, settled));
-                        // Everything asked before this was asked of a server still reading
-                        // the project, and what it answered about a file's names was as
-                        // far as it had got: fewer names, and some of them the wrong kind.
-                        // So the answer is dropped and the question put again, which is
-                        // the whole reason this notification is asked for.
-                        if noted && settled {
-                            write_if(linked, |waiting| waiting.forget_answer());
-                        }
+                    // Everything asked before this was asked of a server still reading
+                    // the project, and what it answered about a file's names was as far
+                    // as it had got: fewer names, and some of them the wrong kind. So the
+                    // answer is dropped and the question put again, which is the whole
+                    // reason this notification is asked for.
+                    lsp::Note::Settled(settled) if noted && settled => {
+                        write_if(linked, |waiting| waiting.forget_answer());
                     }
+                    _ => {}
                 }
             }
         });

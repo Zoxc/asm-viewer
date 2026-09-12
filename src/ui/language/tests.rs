@@ -45,10 +45,47 @@ fn a_remark_from_a_stopped_server_says_nothing_about_the_one_that_is_on() {
         run: 4,
         ..Language::default()
     };
-    assert!(!state.noted(3, true), "an older run's word is nobody's");
+    let busy = lsp::Note::Busy(true);
+    assert!(!state.remarked(3, &busy), "an older run's word is nobody's");
     assert!(!state.busy(), "nothing of it was written down");
-    assert!(state.noted(4, true));
-    assert!(!state.noted(4, true), "and saying it twice costs no render");
+    assert!(state.remarked(4, &busy));
+    assert!(
+        !state.remarked(4, &busy),
+        "and saying it twice costs no render"
+    );
+}
+
+/// One writer takes every remark, so what each one is about has to stay its own field.
+/// The two are not the same thing either way round: a server reports progress after it
+/// has said it settled, and going quiet is not the same as saying so.
+#[test]
+fn each_remark_is_written_on_the_field_it_is_about_and_no_other() {
+    let mut state = Language {
+        state: Lsp::running_to_nothing(),
+        run: 1,
+        ..Language::default()
+    };
+    assert!(state.remarked(1, &lsp::Note::Busy(true)));
+    assert!(state.remarked(1, &lsp::Note::Settled(true)));
+    assert!(state.working(), "settling ended the progress it reports");
+    assert!(
+        state.ready(),
+        "what it said about settling beats its progress"
+    );
+    assert!(state.remarked(1, &lsp::Note::Busy(false)));
+    assert!(state.remarked(1, &lsp::Note::Settled(false)));
+    assert!(
+        !state.ready(),
+        "a quiet server that says it has not settled is not ready"
+    );
+    assert!(
+        !state.remarked(1, &lsp::Note::Settled(false)),
+        "saying it twice costs no render either"
+    );
+    assert!(
+        !state.working(),
+        "a remark about settling was written on the progress"
+    );
 }
 
 #[test]
