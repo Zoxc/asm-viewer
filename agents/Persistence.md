@@ -420,35 +420,40 @@ list a view draws: `recents.toml`'s order, each row described by reading *that p
 with an id whose directory has gone dropped here. The list never prunes itself on load, and this is
 the point of use where the repair is free.
 
-Startup reopens the **last project**: `project::reopen`, the front of `recents.toml`, both halves of
-it. `use_restore_on_startup` knows nothing about where they came from, which is what keeps a project
-picker out of it. The binaries stream in the way any other open does, so the sidebar fills in behind
-them, but the **session waits for the whole load**: a tab, a selection or a history entry is
-resolved against the objects by name, and resolving one against a half-filled list would drop the
-tabs whose object had not landed yet. The **pages go back before any of that and synchronously**, at the
-places they had in the bar and with the one that was on screen raised: a page resolves against no
-object, so a session whose only tab was Settings has nothing to wait for and a project with no
-binaries at all still comes back as it was left. The documents are then restored. **The visits, the
-tabs and the active document are one question and are answered as one**, by `Session::restore`: it
-walks the saved digests once and resolves all three under that one `Rebuilt`, so a tab and the
-active document cannot be read against two different answers about which binaries have changed, and
-a caller cannot take one and forget the others. `Session::pages` and `shown_page` stay outside it,
-being the synchronous half. `restore_project` sets the visits, then for each restored tab opens its
-trail whole (`Docs::open_trail`, temporal flag and all), calls `place_entries` and puts the tab in
-the bar at the place it had -- counted over what survived, so the tabs that resolved keep their
-order around the pages already there -- and then opens the active document with `Reach::NewTab`,
-which raises the tab already showing it and, for one that degraded, opens a tab. Two orderings are
-load-bearing. The **rows go into the `Positions` maps, and the driven line into `Driven`, per entry
-and before the tab is shown**: those maps are the one thing the restore writes directly, which is
-why the writes have a name of their own (`place_entries`), and a pane puts its view back when it
-notices the place it is showing has changed, so a row arriving after the tab is on screen arrives
-after the only moment anything looks at it. And tabs go before the active document, because
-`open_document` opens what it cannot find and would otherwise put it beside whichever tab was on
-screen instead of finding it in place. The saved order is stated outright rather than reproduced by
-opening each tab beside the one before it. A place that no longer
-resolves is **dropped** off its trail, like a visit, and a tab left with none is dropped. A
-source-driven place is never resolved at all, so a file that has been deleted comes back as a tab
-over the pane's own "Source file not found" rather than silently vanishing.
+Startup reopens the **last project**: `project::reopen`, the front of `recents.toml`, both halves
+of it. `use_restore_on_startup` knows nothing about where they came from, which is what keeps a
+project picker out of it. The binaries stream in the way any other open does, so the sidebar fills
+in behind them, but the **session waits for the whole load**: an object or symbol tab, a selection
+or a history entry is resolved against the objects by name, and resolving one against a half-filled
+list would drop the tabs whose object had not landed yet. The **pages go back before any of that
+and synchronously**, at the places they had in the bar and with the one that was on screen raised:
+a page resolves against no object, so a session whose only tab was Settings has nothing to wait
+for. The documents follow, in `restore_documents`: after the load where there are binaries, and
+**at once where there are none**. A source place resolves against no object as a page does, so a
+project with no binaries -- one opened by its directory and read in the Files view, or one whose
+binaries have all been deleted -- still comes back with the files the reader had open. Whatever the
+objects list holds, the tabs naming an object that is not there are dropped and the rest put back.
+**The visits, the tabs and the active document are one question and are answered as one**, by
+`Session::restore`: it walks the saved digests once and resolves all three under that one
+`Rebuilt`, so a tab and the active document cannot be read against two different answers about
+which binaries have changed, and a caller cannot take one and forget the others. `Session::pages`
+and `shown_page` stay outside it, being the pages' half and going back first either way.
+`restore_documents` sets the visits, then for each restored tab opens its trail whole
+(`Docs::open_trail`, temporal flag and all), calls `place_entries` and puts the tab in the bar at
+the place it had -- counted over what survived, so the tabs that resolved keep their order around
+the pages already there -- and then opens the active document with `Reach::NewTab`, which raises
+the tab already showing it and, for one that degraded, opens a tab. Two orderings are load-bearing.
+The **rows go into the `Positions` maps, and the driven line into `Driven`, per entry and before
+the tab is shown**: those maps are the one thing the restore writes directly, which is why the
+writes have a name of their own (`place_entries`), and a pane puts its view back when it notices
+the place it is showing has changed, so a row arriving after the tab is on screen arrives after the
+only moment anything looks at it. And tabs go before the active document, because `open_document`
+opens what it cannot find and would otherwise put it beside whichever tab was on screen instead of
+finding it in place. The saved order is stated outright rather than reproduced by opening each tab
+beside the one before it. A place that no longer resolves is **dropped** off its trail, like a
+visit, and a tab left with none is dropped. A source-driven place is never resolved at all, so a
+file that has been deleted comes back as a tab over the pane's own "Source file not found" rather
+than silently vanishing.
 
 **The settings are a file of their own, above the projects** (`src/settings.rs`, `settings.toml` at
 the top of the state directory beside `recents.toml`, since a setting is the user's and not any one

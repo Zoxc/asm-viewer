@@ -2578,6 +2578,42 @@ fn a_saved_page_comes_back_with_no_binaries() {
     assert_eq!(strip.active(), Some(Tab::Page(Page::Settings)));
 }
 
+/// A source place resolves against no object either, so a session's **source tabs come
+/// back with no binaries**: a project opened by its directory and read in the Files view,
+/// or one whose only binary has since been deleted. The restore put the pages back and
+/// returned when the binaries list was empty, leaving the tabs, the visits and the active
+/// document to a load that never came.
+#[test]
+fn a_saved_source_tab_comes_back_with_no_binaries() {
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let session: Session = toml::from_str(
+        "[active.Source]\npath = \"/src/main.rs\"\n\n[[tabs]]\n\n[[tabs.entries]]\n[tabs.entries.document.Source]\npath = \"/src/main.rs\"\n",
+    )
+    .expect("a session naming one source tab");
+
+    restore_project(states, Project::default(), session);
+    test.sync_and_update();
+
+    let file = Document::Source(Arc::from("/src/main.rs"));
+    assert!(
+        open_documents(states.open) == [file.clone()],
+        "the source tab did not come back"
+    );
+    assert!(
+        states.open.active() == Some(file.clone()),
+        "the app did not land on the file it was left on"
+    );
+    assert!(
+        states.visits.peek().entries() == [file],
+        "the record of visits did not come back"
+    );
+}
+
 /// Whether the row below is still drawn; its own press decides.
 #[derive(Clone, Copy)]
 struct Gone(State<bool>);

@@ -196,8 +196,12 @@ fn enter_project(states: ProjectStates, file: PathBuf, project: Project, session
 /// step degrades silently, and a project with nothing saved restores nothing.
 ///
 /// The **pages go back first and synchronously**: one resolves against no object, so a
-/// session whose only tab was Settings has nothing to wait for, and a project with no
-/// binaries at all still comes back as the reader left it.
+/// session whose only tab was Settings has nothing to wait for.
+///
+/// The documents follow, through [`restore_documents`]: after the load where there are
+/// binaries, and **at once where there are none**. What waits for a load is resolving a
+/// tab against the objects by name, and only object and symbol tabs do that -- so a
+/// project with no binaries still comes back with the source files the reader had open.
 ///
 /// Two orderings are load-bearing among the documents. **Tabs before the active
 /// document**: `open_document` opens what it cannot find, so restoring the active one
@@ -207,13 +211,13 @@ fn enter_project(states: ProjectStates, file: PathBuf, project: Project, session
 /// only moment anything looks at it. A tab's trail is opened whole and its rows go in per
 /// entry, so Back after a restart comes back to the rows that were left.
 pub(crate) fn restore_project(states: ProjectStates, project: Project, session: Session) {
-    // How the window was arranged. Before everything else and outside the early return
-    // below: it is about the window and not about what is open in it, so a project with no
-    // binaries left still comes back arranged the way it was left.
+    // How the window was arranged. Before everything else: it is about the window and not
+    // about what is open in it, so a project with no binaries left still comes back
+    // arranged the way it was left.
     restore_ui(states.arranged, session.ui.as_ref());
 
-    // What the last build produced, which the next build replaces. Set before the early
-    // return below: a project whose binaries are all gone still knows what it built.
+    // What the last build produced, which the next build replaces. A project whose
+    // binaries are all gone still knows what it built.
     let mut build = states.build;
     let mut next = build.peek().clone();
     next.previous = session
@@ -227,13 +231,11 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         objects,
         loading,
         open,
-        places,
-        visits,
         ..
     } = states;
 
     // The pages, at the places they had in the bar, and the one that was on screen.
-    // Before the two returns below, both of which are about binaries.
+    // Before the documents, whose own count of places steps over theirs.
     {
         let mut strip = open.strip;
         let mut strip = strip.write();
@@ -245,7 +247,9 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         }
     }
 
+    // Nothing to load, so nothing to wait for.
     if project.binaries.is_empty() {
+        restore_documents(states, &session);
         return;
     }
 
@@ -255,61 +259,76 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
     // would be dropped before its first poll.
     spawn_forever(async move {
         // The objects arrive as they are parsed, but the *session* waits for the whole
-        // load: a tab is resolved against the objects by name, and resolving one against
-        // a half-filled list would drop the tabs whose object had not landed yet.
+        // load: an object or a symbol tab is resolved against the objects by name, and
+        // resolving one against a half-filled list would drop the tabs whose object had
+        // not landed yet.
         open_binaries(objects, loading, project.binaries.clone()).await;
-
-        let (objects, mut visits) = (objects, visits);
-        // Nothing opened: leave the app empty *and* leave the file alone.
-        if objects.peek().is_empty() {
-            return;
-        }
-
-        // Resolved against everything now loaded rather than just what this load
-        // produced, and in one call: the visits, the tabs and the active document are one
-        // question. Answered before any of it is set, so no read guard is live when
-        // anything is notified.
-        let restored = {
-            let loaded = objects.read();
-            session.restore(&loaded)
-        };
-
-        // The record first, so the opening below finds the active place already at its
-        // top and records nothing over it.
-        visits.set(restored.visits);
-        // Where in the bar the next tab goes. Counted over what survived rather than read
-        // off the saved list, so the tabs that resolved keep their order around the pages
-        // already put back.
-        let mut position = 0;
-        for tab in restored.tabs {
-            let RestoredTab::Document {
-                temporal,
-                trail,
-                entries,
-            } = tab
-            else {
-                // A page is in the bar already, put there before the load; what it owes
-                // the count is its place.
-                position += 1;
-                continue;
-            };
-            // The trail whole, with the maps filled before the chip goes in the bar.
-            // Reopening a tab is not visiting it. Put at the place it had rather than
-            // beside the tab on screen: the saved order is stated outright.
-            let opened = open.insert_tab(trail, temporal, position, |id| {
-                place_entries(places, id, entries)
-            });
-            if opened.is_none() {
-                continue;
-            }
-            position += 1;
-        }
-        // The document the app lands on is a place it went: the tab showing it is
-        // raised, or -- degraded to its object, say -- it opens in a tab of its own.
-        if let Some(active) = restored.active {
-            open_document(open, visits, active, Reach::NewTab);
-        }
+        restore_documents(states, &session);
     });
+}
+
+/// The visits, the tabs and the active document, against every object now loaded.
+///
+/// **Called whatever that list holds.** A load that produced nothing and a project with
+/// no binaries at all are the same case: `Session::restore` drops the tabs naming an
+/// object that is not there, and a source place resolves against nothing and so cannot
+/// fail, so what comes back is what the reader can still be shown.
+///
+/// Peeked and not read: with no binaries this runs during a render, where a read would
+/// subscribe the rendering scope to every object that lands later. The peek is released
+/// before anything is set either way, so no guard is live when a write notifies.
+fn restore_documents(states: ProjectStates, session: &Session) {
+    let ProjectStates {
+        objects,
+        open,
+        places,
+        mut visits,
+        ..
+    } = states;
+
+    // The visits, the tabs and the active document in one call: they are one question,
+    // and resolving them apart would let a tab and the active document be read against
+    // two different answers about which binaries have changed.
+    let restored = {
+        let loaded = objects.peek();
+        session.restore(&loaded)
+    };
+
+    // The record first, so the opening below finds the active place already at its top
+    // and records nothing over it.
+    visits.set(restored.visits);
+    // Where in the bar the next tab goes. Counted over what survived rather than read off
+    // the saved list, so the tabs that resolved keep their order around the pages already
+    // put back.
+    let mut position = 0;
+    for tab in restored.tabs {
+        let RestoredTab::Document {
+            temporal,
+            trail,
+            entries,
+        } = tab
+        else {
+            // A page is in the bar already, put there first; what it owes the count is
+            // its place.
+            position += 1;
+            continue;
+        };
+        // The trail whole, with the maps filled before the chip goes in the bar.
+        // Reopening a tab is not visiting it. Put at the place it had rather than beside
+        // the tab on screen: the saved order is stated outright.
+        let opened = open.insert_tab(trail, temporal, position, |id| {
+            place_entries(places, id, entries)
+        });
+        if opened.is_none() {
+            continue;
+        }
+        position += 1;
+    }
+    // The document the app lands on is a place it went: the tab showing it is raised, or
+    // -- degraded to its object, say -- it opens in a tab of its own.
+    if let Some(active) = restored.active {
+        open_document(open, visits, active, Reach::NewTab);
+    }
 }
 
 /// Where each side of every place on one restored tab was left, and what drove it, into
@@ -317,7 +336,7 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
 ///
 /// **Those maps are the one thing a restore writes directly**, everything else it does
 /// going through `Open` and `open_document`, so the writes have a name rather than
-/// sitting four levels deep in the loop above. This is what `Open::insert_tab` is handed:
+/// sitting three levels deep in the loop above. This is what `Open::insert_tab` is handed:
 /// it runs before the tab is put in the bar, since a pane puts its view back when it
 /// notices the place it is showing has changed, so a row arriving after the tab is on
 /// screen arrives after the only moment anything looks at it.
