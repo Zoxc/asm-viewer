@@ -254,8 +254,10 @@ until a binding exists, that list being what the reader is told the app answers 
 **The window's own keys are answered in one function** (`root_key_down`, `src/ui.rs`), and
 each of them is a second door onto something the app already has rather than behaviour of its
 own. The tab keys go through `close_showing`, `step_tab` and `show_nth` (`ui/documents.rs`),
-which are `close_tab`, `close_page` and `raise_tab` with the bar asked first which tab they are
-about -- a page's close is not a document's, and neither key is a way round the doors. The
+which are `close` and `raise_tab` with the bar asked first which tab they are about, and neither
+key is a way round the doors. `close` is the match from a `Tab` onto `close_tab` or `close_page`
+-- a page's close is not a document's, which is a reason for two functions and not for a match
+per caller, so the × on a chip and the tab menu's Close row press the same one. The
 trail keys are the `navigate` the mouse's side buttons and the toolbar's two chevrons already
 call. The two pages are `Strip::show`, what the pages menu's row does, so one opens beside the
 tab on screen and one already open is raised. And the server chord is `toggle_server`
@@ -366,9 +368,9 @@ cannot be broken from the UI, every change to what is open going through one of 
 second -- a tab and its trail are made and closed together -- is `Open`'s, held by the three methods
 above. What `open_document`, `raise`, `raise_tab`, `navigate`, `close_tab`, `close_others` and
 `close_binary` hold is the rest: they are the only functions that open or close a document tab or
-change what one shows, and the methods are what they write through rather than a door of their own
--- the restore is the one other caller, and it puts back tabs the reader already
-had. **Every** site that would *open* a document calls
+change what one shows -- `close` chooses between two of them by kind of tab and is nothing beside
+them -- and the methods are what they write through rather than a door of their own -- the restore
+is the one other caller, and it puts back tabs the reader already had. **Every** site that would *open* a document calls
 `open_document` with a `Reach`, which is what the click that opened it says and nothing about the
 state can. **`InPlace`** is from inside the tab on screen (a link in either pane, the companion
 header), pushed onto that tab's trail so the place left is one Back away. **`NewTab`** is beside the tab on
@@ -377,7 +379,14 @@ panes (a sidebar row), into the one temporal tab, pushed onto its trail so Back 
 rows clicked, or into a new temporal tab where there is none. **Ctrl says one thing everywhere**: a
 tab of its own. Which two functions on `Reach` write down, since neither belongs to any one list:
 `Reach::outside` is what a press *outside* the panes means (`Preview`, or `NewTab` with Ctrl), and
-`Reach::inside` what a press on a link *inside* one means (`InPlace`, or `NewTab` with Ctrl).
+`Reach::inside` what a press on a link *inside* one means (`InPlace`, or `NewTab` with Ctrl). Each
+is one rule with more than one way of reading the Ctrl, and the readers sit on the enum with it
+rather than restating it: `outside_keyed` takes the modifiers off a key event, a freya pointer
+event carrying none (`agents/Finding.md`), and `inside_with` a Ctrl already read, for a press that
+works out where it is going before it goes there (`Door::opens`, `agents/Panes.md`). Outside the
+panes the rule and the answer that follows it are written together once more, in `picks::opened`:
+every list row that opens a document calls it, so a row cannot be written with a reach of its own
+or forget to hand the tab the keyboard (`agents/Sidebar.md`).
 
 Under every reach a tab already showing the place is **raised** instead, the one on screen
 preferred where two show it -- one branch above the match, since the raise is the same whichever

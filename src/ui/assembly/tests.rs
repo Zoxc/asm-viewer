@@ -337,8 +337,12 @@ fn a_planted_address_lands_on_the_instruction_holding_it() {
 }
 
 /// **One answer for what a press on a link does**, over the two modifiers and the listing
-/// the link is drawn in. A press that is no door is left to the row -- and a label with
-/// Ctrl held is a door that opens nothing, so the row does not get that one either.
+/// the link is drawn in, and the whole of it: where the target opens as well as which
+/// target it is. A press that is no door is left to the row -- and a label with Ctrl held
+/// is a door that opens nothing, so the row does not get that one either.
+///
+/// The reach is the half `Opens::go` used to decide, from a second read of the same key,
+/// which left "Ctrl opens a tab of its own" untestable here.
 #[test]
 fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
     let path =
@@ -365,10 +369,12 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
         code_tab: false,
     };
     let address = Door::Address {
-        object,
+        object: object.clone(),
         address: 0x2000,
     };
-    let label = Door::Label { symbol };
+    let label = Door::Label {
+        symbol: symbol.clone(),
+    };
     let row = Door::Row {
         to: 12,
         at: Some(LinePos {
@@ -397,22 +403,47 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
         in_code.opens(false, false),
         Some(Opens::InCode { placed, .. }) if placed == target.placed(target.address)
     ));
-    assert!(matches!(in_code.opens(false, true), Some(Opens::Symbol(_))));
-    // In a symbol's own listing there is nowhere to move to, with Ctrl or without.
-    assert!(matches!(alone.opens(false, false), Some(Opens::Symbol(_))));
-    assert!(matches!(alone.opens(false, true), Some(Opens::Symbol(_))));
+    // With Ctrl either door is the symbol on its own, in a tab that stays: the two
+    // listings differ in where a plain press goes and not in what Ctrl means.
+    for door in [&in_code, &alone] {
+        assert!(
+            door.opens(false, true) == Some(Opens::Symbol(symbol.clone(), Reach::NewTab)),
+            "Ctrl on a name opens the symbol in a tab of its own"
+        );
+    }
+    // In a symbol's own listing there is nowhere to move to, so a plain press follows the
+    // name in place, the way a browser follows a link.
+    assert!(alone.opens(false, false) == Some(Opens::Symbol(symbol.clone(), Reach::InPlace)));
 
-    assert!(matches!(
-        address.opens(false, false),
-        Some(Opens::Code {
-            address: 0x2000,
-            ..
-        })
-    ));
-    assert!(matches!(
-        row.opens(false, false),
-        Some(Opens::Row { to: 12, at: Some(at) }) if at.line == 3
-    ));
+    // A bare address is the object's code, in place or in a tab of its own by the same
+    // rule.
+    assert!(
+        address.opens(false, false)
+            == Some(Opens::Code {
+                object: object.clone(),
+                address: 0x2000,
+                reach: Reach::InPlace,
+            })
+    );
+    assert!(
+        address.opens(false, true)
+            == Some(Opens::Code {
+                object,
+                address: 0x2000,
+                reach: Reach::NewTab,
+            })
+    );
+
+    // A row of the listing on screen is no document at all, so no modifier moves it.
+    let to_the_row = Some(Opens::Row {
+        to: 12,
+        at: Some(LinePos {
+            file: Arc::from("now.c"),
+            line: 3,
+        }),
+    });
+    assert!(row.opens(false, false) == to_the_row);
+    assert!(row.opens(false, true) == to_the_row);
 }
 
 /// **Every field of the three listing props takes part in its comparison.** A field left

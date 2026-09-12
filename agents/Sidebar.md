@@ -661,7 +661,10 @@ on screen is reading it, so the next key is answered there and not in the list b
 pick left behind goes grey saying so. Which is why acting on a row answers with a `Pressed`: a row
 that only folded a group opened nothing and keeps the keyboard, as does a press with Alt held, which
 opens nothing at all -- and those are what leave a list holding the keyboard for its arrows and its
-Enter to be used in.
+Enter to be used in. The two halves of that are written together in `picks::opened`, which every
+row and every `ListKeys::open` that opens a document calls: the door every row outside the panes
+takes (`Reach::outside`), and the `Pressed::Opened` that hands the tab the keyboard. A rule stated
+on the enum and then applied at each row is one a new row can be written without.
 
 **Tooltips** are how a cut row is read, so `cut_tooltip` mounts nothing where the name fitted: a
 tooltip repeating what is already on screen is noise the pointer drags down the list. What decides

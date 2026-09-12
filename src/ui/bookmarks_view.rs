@@ -26,10 +26,9 @@ impl Component for BookmarkRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
-        let doors = use_doors();
         // Consumed and not read: a row hands the list an index back and draws nothing of
         // it that the tab has not already handed it.
-        let (open, visits) = (doors.open, doors.visits);
+        let doors = use_doors();
         let ctrl = use_consume::<Ctrl>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let picking = use_picking(Panel::Bookmarks);
@@ -64,10 +63,7 @@ impl Component for BookmarkRow {
             Some(live) => {
                 let live = live.clone();
                 list_row(hovering, picking.drawn(&pick, false)).on_press(move |_| {
-                    picking.press(pick.clone(), at, || {
-                        open_document(open, visits, live.clone(), Reach::outside(ctrl));
-                        Pressed::Opened
-                    });
+                    picking.press(pick.clone(), at, || opened(doors, ctrl, live.clone()));
                 })
             }
             None => dead_list_row(),
@@ -145,7 +141,6 @@ impl Component for BookmarksPanel {
         // What Enter on a row reaches through, consumed here because the handler that
         // uses them runs no hook.
         let doors = use_doors();
-        let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
         let matcher = filter.read().matcher();
 
@@ -200,10 +195,7 @@ impl Component for BookmarksPanel {
                 }),
                 open: Box::new(move |at| {
                     match listed.get(at).and_then(|(_, _, live)| live.clone()) {
-                        Some(live) => {
-                            open_document(open, visits, live, Reach::outside(ctrl));
-                            Pressed::Opened
-                        }
+                        Some(live) => opened(doors, ctrl, live),
                         None => Pressed::Folded,
                     }
                 }),

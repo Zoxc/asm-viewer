@@ -37,10 +37,7 @@ pub(crate) fn tab_menu(
     Menu::new()
         .child(
             MenuButton::new()
-                .on_press(move |_| match keep {
-                    Tab::Document(id) => close_tab(open, places, id),
-                    Tab::Page(page) => close_page(open, page),
-                })
+                .on_press(move |_| close(open, places, keep))
                 .child(menu_label(
                     "Close",
                     showing.then_some(shortcuts::key!(CloseTab)),

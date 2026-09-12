@@ -151,6 +151,22 @@ pub(crate) enum Pressed {
     Folded,
 }
 
+/// What a list row does when it opens a document: it goes through the door every row
+/// outside the panes takes ([`Reach::outside`]) and answers with the keyboard handed over.
+///
+/// Two halves of one contract, so they are written together and once. A row that opens a
+/// document is a preview, or a tab of its own with Ctrl, and no row is anything else: a
+/// rule stated on the enum and then applied at nine call sites is a rule the tenth row
+/// can be written without.
+///
+/// Not a hook, and it consumes nothing: the row's render has already taken [`Doors`] and
+/// the [`Ctrl`] state, so a press handler and a [`ListKeys::open`] closure can both call
+/// this.
+pub(crate) fn opened(doors: Doors, ctrl: State<bool>, document: Document) -> Pressed {
+    open_document(doors.open, doors.visits, document, Reach::outside(ctrl));
+    Pressed::Opened
+}
+
 /// What a list answers the arrows and Enter with: how many rows it is drawing, the row at
 /// a place in it, and what opening one does.
 ///

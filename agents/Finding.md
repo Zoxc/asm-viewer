@@ -169,10 +169,11 @@ the preview tab, or, with Ctrl held, a tab of its own that stays. It used to ope
 was held, on the grounds that typing a path out is choosing a file where walking a sidebar list is
 browsing one. What that cost was the one thing Ctrl means everywhere else in the app: the finder
 answered Enter and Ctrl+Enter with the same tab while every list beside it answered them with two.
-So the rule is the shared one, and it is one rule for both doors -- the key reads the modifiers off
-the event, the row reads the `Ctrl` state, a freya pointer event carrying none. Otherwise it is the
-Files row's door exactly, `open_source_file` (`ui/documents.rs`): the same guard on what the source
-pane would refuse, and the same uncanonicalised spelling of the path.
+So the rule is the shared one, and it is one rule for both doors and one function on `Reach`, read
+two ways: `Reach::outside_keyed` takes the modifiers off the key event and `Reach::outside` the
+`Ctrl` state for the row, a freya pointer event carrying none. Otherwise it is the Files row's door
+exactly, `open_source_file` (`ui/documents.rs`): the same guard on what the source pane would
+refuse, and the same uncanonicalised spelling of the path.
 
 **The chord is answered at the root**, in `root_key_down`, which stays the window's one
 `on_global_key_down` — a second one would replace it and take the modifier tracking with it,

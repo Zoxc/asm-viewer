@@ -866,7 +866,7 @@ fn press_location(
     let press = chosen(&open.docs.peek(), at, subject);
     match press {
         Chosen::Alone => {
-            open_document(open, doors.visits, symbol_tab, Reach::outside(ctrl));
+            opened(doors, ctrl, symbol_tab);
         }
         // The choice is that entry's, and the entry is driven from the line the question
         // was asked from, so the tab's assembly side becomes this symbol -- for an

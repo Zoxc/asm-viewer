@@ -422,7 +422,10 @@ impl PartialEq for Door {
 }
 
 /// Where a press on a link goes, once the door and the modifiers have been asked
-/// ([`Door::opens`]): the decision, which [`Opens::go`] carries out.
+/// ([`Door::opens`]): the **whole** decision, which [`Opens::go`] carries out and adds
+/// nothing to. Which is why the two variants that open a document carry the [`Reach`]
+/// they open with: read a second time in `go`, whether Ctrl makes a tab of its own would
+/// be decided there, and a test of `opens` could not see it.
 enum Opens {
     /// The target's own rows, further down the listing already on screen: moved to, which
     /// is a scroll and a caret and neither a tab nor a visit, since `land` plants an
@@ -431,39 +434,94 @@ enum Opens {
     InCode { object: Arc<Object>, placed: u64 },
     /// The target as a listing of its own: followed in place, the way a browser follows a
     /// link, so the function left is one Back away -- or, with Ctrl, in a tab of its own.
-    Symbol(Symbol),
+    Symbol(Symbol, Reach),
     /// The object's code at an address: moved to where this listing is that code already,
     /// opened in place from a symbol's own listing, and in a tab of its own with Ctrl.
-    Code { object: Arc<Object>, address: u64 },
+    Code {
+        object: Arc<Object>,
+        address: u64,
+        reach: Reach,
+    },
     /// A row of the listing on screen, with the place it names for the source pane.
     Row { to: usize, at: Option<LinePos> },
     /// Nothing, the press being the door's all the same. See [`Door::opens`].
     Nothing,
 }
 
+impl PartialEq for Opens {
+    /// Pointer identity for the objects, as everywhere in the UI, and the rest as they
+    /// compare themselves. Hand-written and not derived because an `Object` has no
+    /// `PartialEq` of its own. Here so a test can hold a whole decision against what the
+    /// press should have made of it.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Opens::InCode { object, placed },
+                Opens::InCode {
+                    object: other_object,
+                    placed: other_placed,
+                },
+            ) => Arc::ptr_eq(object, other_object) && placed == other_placed,
+            (Opens::Symbol(symbol, reach), Opens::Symbol(other_symbol, other_reach)) => {
+                symbol == other_symbol && reach == other_reach
+            }
+            (
+                Opens::Code {
+                    object,
+                    address,
+                    reach,
+                },
+                Opens::Code {
+                    object: other_object,
+                    address: other_address,
+                    reach: other_reach,
+                },
+            ) => {
+                Arc::ptr_eq(object, other_object)
+                    && address == other_address
+                    && reach == other_reach
+            }
+            (
+                Opens::Row { to, at },
+                Opens::Row {
+                    to: other_to,
+                    at: other_at,
+                },
+            ) => to == other_to && at == other_at,
+            (Opens::Nothing, Opens::Nothing) => true,
+            _ => false,
+        }
+    }
+}
+
 impl Opens {
-    /// Go there: the four ways of carrying the decision out, apart from making it.
+    /// Go there: the four ways of carrying the decision out, apart from making it. No
+    /// modifier is read here -- what they said is in the decision.
     ///
     /// `listing` is the list's own scroll and box, read at the press rather than at the
     /// render that drew the label, so a row moved to is a row of the listing on screen
     /// now.
-    fn go(self, doors: Doors, places: Places, listing: &Listing, ctrl: State<bool>) {
+    fn go(self, doors: Doors, places: Places, listing: &Listing) {
         match self {
             Opens::InCode { object, placed } => {
                 show_in_code(doors, places, object, placed, None, Reach::InPlace);
             }
-            Opens::Symbol(symbol) => {
+            Opens::Symbol(symbol, reach) => {
                 open_document(
                     doors.open,
                     doors.visits,
                     Document::Assembly(Selection::Symbol(symbol)),
-                    Reach::inside(ctrl),
+                    reach,
                 );
             }
             // `show_in_code` leaves the move to `land` where this listing is that code
             // already.
-            Opens::Code { object, address } => {
-                show_in_code(doors, places, object, address, None, Reach::inside(ctrl));
+            Opens::Code {
+                object,
+                address,
+                reach,
+            } => {
+                show_in_code(doors, places, object, address, None, reach);
             }
             Opens::Nothing => {}
             Opens::Row { to, at } => {
@@ -515,6 +573,9 @@ impl Door {
         if alt || !self.open_now(|| ctrl) {
             return None;
         }
+        // Where a door that opens a document opens it: in place, or, with Ctrl, in a tab
+        // of its own -- the rule every link inside a pane follows (`Reach::inside`).
+        let reach = Reach::inside_with(ctrl);
         Some(match self {
             // In the unified view the target is further down this same listing: moved to,
             // at the address that listing draws it at, which is the placed one.
@@ -522,10 +583,11 @@ impl Door {
                 object: symbol.object.clone(),
                 placed: symbol.data.placed(symbol.data.address),
             },
-            Door::Symbol { symbol, .. } => Opens::Symbol(symbol.clone()),
+            Door::Symbol { symbol, .. } => Opens::Symbol(symbol.clone(), reach),
             Door::Address { object, address } => Opens::Code {
                 object: object.clone(),
                 address: *address,
+                reach,
             },
             Door::Label { .. } => Opens::Nothing,
             Door::Row { to, at } => Opens::Row {
@@ -610,7 +672,7 @@ impl Component for DoorLabel {
                 // Or the press bubbles into the row, which would pin the line the
                 // instruction being left came from.
                 e.stop_propagation();
-                opens.go(doors, places, &listing, ctrl);
+                opens.go(doors, places, &listing);
             })
             .child(label().text(self.text.clone()).max_lines(1).color(if lit {
                 lit_fg

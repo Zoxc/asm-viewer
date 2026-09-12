@@ -13,8 +13,9 @@
 //!
 //! The window's tab keys are answered here too, and each of them is one of those doors
 //! and not a second way round it: [`step_tab`] and [`show_nth`] work out which tab the
-//! bar names and hand it to [`raise_tab`], and [`close_showing`] sends the tab on screen
-//! to whichever of [`close_tab`] and [`close_page`] it belongs to.
+//! bar names and hand it to [`raise_tab`], and [`close_showing`] hands the tab on screen
+//! to [`close`], which is the one match from a [`Tab`] onto whichever of [`close_tab`]
+//! and [`close_page`] it belongs to.
 
 use super::*;
 
@@ -48,7 +49,13 @@ impl Reach {
     /// code row -- an operand naming a symbol, the bare address of a call, a name in the
     /// source -- and none of them owns it. Peeked, this being asked in a press handler.
     pub(crate) fn inside(ctrl: State<bool>) -> Reach {
-        if *ctrl.peek() {
+        Self::inside_with(*ctrl.peek())
+    }
+
+    /// The same rule from a Ctrl already read: what a press that works out where it is
+    /// going before it goes there asks ([`Door::opens`], `ui/assembly.rs`).
+    pub(crate) fn inside_with(ctrl: bool) -> Reach {
+        if ctrl {
             Reach::NewTab
         } else {
             Reach::InPlace
@@ -63,7 +70,22 @@ impl Reach {
     /// -- and none of them owns it. Between the two, Ctrl says one thing everywhere: a tab
     /// of its own. Peeked, this being asked in a press handler.
     pub(crate) fn outside(ctrl: State<bool>) -> Reach {
-        if *ctrl.peek() {
+        Self::outside_with(*ctrl.peek())
+    }
+
+    /// The same rule off a key event, which carries its own modifiers where a press
+    /// carries none: what the file finder's Enter opens with.
+    ///
+    /// The finder once had a rule of its own here, and what it cost was the one thing
+    /// Ctrl means everywhere else (`agents/Finding.md`). So both readers go through the
+    /// one function below.
+    pub(crate) fn outside_keyed(modifiers: Modifiers) -> Reach {
+        Self::outside_with(held(modifiers).contains(Modifiers::ctrl_or_meta()))
+    }
+
+    /// The rule itself, whichever way the Ctrl was read.
+    fn outside_with(ctrl: bool) -> Reach {
+        if ctrl {
             Reach::NewTab
         } else {
             Reach::Preview
@@ -255,19 +277,29 @@ pub(crate) fn close_page(open: Open, page: Page) {
     strip.write().close(|tab| *tab == Tab::Page(page));
 }
 
-/// Close the tab on screen, whichever kind it is: what the × on its chip does, and what
-/// the window's close key does from wherever the keyboard is. Nothing on screen is
-/// nothing to close.
+/// Close `tab`, whichever kind it is: a document through [`close_tab`], a page through
+/// [`close_page`].
 ///
 /// Two doors and not one, because a page's close is not a document's: a page has no
 /// trail and nothing kept per place, so [`close_page`] is the whole of what it is owed.
+/// That is a reason for two functions and not for a match per caller, so the choice
+/// between them is written here: the × on a chip, the tab menu's Close row and the
+/// window's close key all press this, and a fourth caller adds no fourth copy. No door
+/// beside the two -- everything it does, one of them does.
+pub(crate) fn close(open: Open, places: Places, tab: Tab) {
+    match tab {
+        Tab::Document(id) => close_tab(open, places, id),
+        Tab::Page(page) => close_page(open, page),
+    }
+}
+
+/// Close the tab on screen, whichever kind it is: what the window's close key does from
+/// wherever the keyboard is. Nothing on screen is nothing to close.
 pub(crate) fn close_showing(open: Open, places: Places) {
-    // Bound in a statement of its own: both closes write the state this read.
+    // Bound in a statement of its own: the close writes the state this read.
     let showing = open.strip.peek().active();
-    match showing {
-        Some(Tab::Document(id)) => close_tab(open, places, id),
-        Some(Tab::Page(page)) => close_page(open, page),
-        None => {}
+    if let Some(tab) = showing {
+        close(open, places, tab);
     }
 }
 

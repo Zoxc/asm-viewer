@@ -447,7 +447,9 @@ feature there with the substitute, so a release that brings it is noticed.
   `raise`, `navigate`, `close_tab`, `close_others` and `close_binary` are the only six functions
   that open or close a **document** tab, or change what one shows. A page's chip goes in and
   comes out on its own, through `Strip::show` and `close_page`: a page draws state held at the
-  root, so it has no trail to keep in step and closing one loses nothing.
+  root, so it has no trail to keep in step and closing one loses nothing. `close` is no seventh
+  function: it is the one match from a `Tab` onto whichever of the two closes it belongs to,
+  which every caller holding a tab rather than an id goes through.
 - **Identity in the UI is `Arc` pointer identity**, never names or indices: list keys are
   `Arc::as_ptr(..).addr()` and prop `PartialEq`s are hand-written with `Arc::ptr_eq`. A list
   of rows is a `Shared` (`src/shared.rs`), which is that rule written once, and an optional

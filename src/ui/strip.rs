@@ -189,10 +189,7 @@ impl Component for TabClose {
             // close first switches to the tab it is closing.
             .on_press(move |e: Event<PressEventData>| {
                 e.stop_propagation();
-                match tab {
-                    Tab::Document(id) => close_tab(open, places, id),
-                    Tab::Page(page) => close_page(open, page),
-                }
+                close(open, places, tab);
             })
             .child(
                 label()

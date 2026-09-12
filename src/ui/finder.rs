@@ -713,7 +713,13 @@ fn finder_key(
             // Bound before the write below, so the read guard is gone by then.
             let at = clamped(rows, finder.peek().selected());
             if let Some(path) = listed.path(at) {
-                open_found(finder, states, keyboard, &path, reach_of(modifiers));
+                open_found(
+                    finder,
+                    states,
+                    keyboard,
+                    &path,
+                    Reach::outside_keyed(modifiers),
+                );
             }
         }
         _ => {}
@@ -729,18 +735,6 @@ fn finder_key(
 /// the layout what this told it.
 fn page_of(rows: usize) -> isize {
     rows.min(FINDER_ROWS) as isize
-}
-
-/// Which tab a file the finder opens lands in: the rule every row that opens something
-/// from outside the panes follows ([`Reach::outside`]), read off the key rather than off
-/// the modifier states, since a key event carries its own modifiers where a press carries
-/// none.
-fn reach_of(modifiers: Modifiers) -> Reach {
-    if held(modifiers).contains(Modifiers::ctrl_or_meta()) {
-        Reach::NewTab
-    } else {
-        Reach::Preview
-    }
 }
 
 /// Move the keyboard `by` rows of a list `rows` long, and remember what the box said when

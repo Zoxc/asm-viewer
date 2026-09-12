@@ -224,7 +224,7 @@ impl Component for ObjectRow {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
         let states = use_project_states();
-        let (open, visits) = (states.open, states.visits);
+        let doors = use_doors();
         let ctrl = use_consume::<Ctrl>().0;
         let picking = use_picking(Panel::Objects);
         let pick = Pick::Object(self.object.clone());
@@ -249,13 +249,7 @@ impl Component for ObjectRow {
                 // Ctrl. With Alt it opens nothing and the row is only picked out.
                 .on_press(move |_| {
                     picking.press(pick.clone(), at, || {
-                        open_document(
-                            open,
-                            visits,
-                            Document::Code(object.clone()),
-                            Reach::outside(ctrl),
-                        );
-                        Pressed::Opened
+                        opened(doors, ctrl, Document::Code(object.clone()))
                     });
                 })
                 // A lone object *is* the file it came out of, so it closes like one. A
@@ -308,7 +302,6 @@ impl Component for SymbolRow {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
         let doors = use_doors();
-        let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
         // Consumed, never read: 115k rows subscribed to the bookmarks would re-render the
         // whole list on every bookmark made.
@@ -328,10 +321,7 @@ impl Component for SymbolRow {
                 .on_press({
                     let document = document.clone();
                     move |_| {
-                        picking.press(pick.clone(), at, || {
-                            open_document(open, visits, document.clone(), Reach::outside(ctrl));
-                            Pressed::Opened
-                        });
+                        picking.press(pick.clone(), at, || opened(doors, ctrl, document.clone()));
                     }
                 })
                 .on_secondary_down(move |e: Event<PressEventData>| {
@@ -370,10 +360,9 @@ impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
-        let doors = use_doors();
         // Consuming does not subscribe -- only reading would, and this row only records
         // into it.
-        let (open, visits) = (doors.open, doors.visits);
+        let doors = use_doors();
         let ctrl = use_consume::<Ctrl>().0;
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
@@ -394,10 +383,7 @@ impl Component for HistoryRow {
             tooltip,
             list_row(hovering, picking.drawn(&pick, self.current))
                 .on_press(move |_| {
-                    picking.press(pick.clone(), at, || {
-                        open_document(open, visits, target.clone(), Reach::outside(ctrl));
-                        Pressed::Opened
-                    });
+                    picking.press(pick.clone(), at, || opened(doors, ctrl, target.clone()));
                 })
                 .on_secondary_down(move |e: Event<PressEventData>| {
                     ContextMenu::open_from_event(
@@ -471,7 +457,6 @@ impl Component for ObjectsPanel {
         // What Enter on a row reaches through, consumed here because the handler that
         // uses them runs no hook.
         let doors = use_doors();
-        let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
         // Which files the reader has folded open: a view of a list and not part of the
         // session, so a `use_state` here. The set holds group keys, which are `Arc`
@@ -537,13 +522,7 @@ impl Component for ObjectsPanel {
                     // Nothing under it to fold and nothing behind it to open.
                     TreeRow::Pending { .. } => Pressed::Folded,
                     TreeRow::Object { object, .. } => {
-                        open_document(
-                            open,
-                            visits,
-                            Document::Code(object.clone()),
-                            Reach::outside(ctrl),
-                        );
-                        Pressed::Opened
+                        opened(doors, ctrl, Document::Code(object.clone()))
                     }
                 }
             }),
@@ -656,7 +635,6 @@ impl Component for SymbolsPanel {
         // What Enter on a row reaches through, consumed here because the handler that
         // uses them runs no hook.
         let doors = use_doors();
-        let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
         // The one list where the filtering has to be a memo: 115k names on
         // `viewer-sample`, and the `VirtualScrollView` has to be told its length before it
@@ -691,15 +669,7 @@ impl Component for SymbolsPanel {
             length,
             at: Box::new(move |at| symbol_at(&stepped, at).map(Pick::Symbol)),
             open: Box::new(move |at| match symbol_at(&rows, at) {
-                Some(symbol) => {
-                    open_document(
-                        open,
-                        visits,
-                        Document::Assembly(Selection::Symbol(symbol)),
-                        Reach::outside(ctrl),
-                    );
-                    Pressed::Opened
-                }
+                Some(symbol) => opened(doors, ctrl, Document::Assembly(Selection::Symbol(symbol))),
                 None => Pressed::Folded,
             }),
             fold: ListKeys::flat(),
@@ -747,7 +717,11 @@ pub(crate) struct HistoryPanel;
 
 impl Component for HistoryPanel {
     fn render(&self) -> impl IntoElement {
-        let visits = use_project_states().visits;
+        // What Enter on a row reaches through, consumed here because the handler that
+        // uses them runs no hook. The record the rows are built from is the one it
+        // carries.
+        let doors = use_doors();
+        let visits = doors.visits;
         // The place the tab on screen shows is the row marked, the way the Symbols list
         // marks its symbol: the record itself has no cursor, the tabs having theirs.
         let current = use_consume::<Active>()
@@ -757,9 +731,6 @@ impl Component for HistoryPanel {
             .map(|(_, stop)| stop.document);
         let filter = use_state(Filter::default);
         let pane = use_list_pane(Panel::History);
-        // What Enter on a row reaches through, consumed here because the handler that
-        // uses them runs no hook.
-        let open = use_open();
         let ctrl = use_consume::<Ctrl>().0;
         // A session's record is a couple of hundred places at most, so it is filtered
         // where the rows are built rather than through a memo.
@@ -810,10 +781,7 @@ impl Component for HistoryPanel {
                 length: listed.len(),
                 at: Box::new(move |at| stepped.get(at).cloned().map(Pick::Visit)),
                 open: Box::new(move |at| match listed.get(at) {
-                    Some(entry) => {
-                        open_document(open, visits, entry.clone(), Reach::outside(ctrl));
-                        Pressed::Opened
-                    }
+                    Some(entry) => opened(doors, ctrl, entry.clone()),
                     None => Pressed::Folded,
                 }),
                 fold: ListKeys::flat(),
