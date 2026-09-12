@@ -66,6 +66,14 @@ impl Searchable {
     }
 }
 
+/// By the pointer, as everything else in the UI with an `Arc` behind it is: a listing holds
+/// a file's bytes or a symbol's, and comparing those by value would walk the whole file.
+impl PartialEq for Searchable {
+    fn eq(&self, other: &Self) -> bool {
+        self.id() == other.id()
+    }
+}
+
 /// Every hit in `listed`, in the rows the pane draws. The whole of the work, and it
 /// touches no UI state.
 pub(crate) fn look(listed: &Searchable, filter: &Filter) -> Vec<Hit> {
@@ -102,7 +110,7 @@ pub(crate) fn look(listed: &Searchable, filter: &Filter) -> Vec<Hit> {
 /// object's code.
 ///
 /// One field and not two, so a listing cannot be both: it is searched whole or walked.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 enum Sought {
     /// Neither: nothing has answered, and no walk has been asked for.
     #[default]
@@ -116,7 +124,7 @@ enum Sought {
 
 /// One pane's find bar: what is typed, what the worker said about it, and where the pane
 /// has got to in the answer.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct Find {
     /// The box and its three toggles.
     pub(crate) filter: Filter,
@@ -209,7 +217,15 @@ impl Find {
 ///
 /// Keyed by the **tab** and not by a place on its trail, so a step Back leaves the bar as
 /// the reader left it: what was typed lasts as long as the tab is open.
-#[derive(Clone, Default)]
+///
+/// **Written only where it changed.** A `set` notifies whether or not it changed anything,
+/// and this is the state a keystroke in a find box writes: every mounted listing's rows
+/// wear the matcher [`use_marking`] compiles, and the memo makes a fresh `Rc` each time it
+/// recomputes, so a write for nothing redraws every row of every listing open. Hence the
+/// `PartialEq` -- cheap, a bar being patterns, pointers and flags -- and hence a writer
+/// that can leave the table as it was ending in `set_if_modified`. It is the rule
+/// `marks::update` and `write_if` (`ui/worker.rs`) state, for a state the reader writes.
+#[derive(Clone, Default, PartialEq)]
 pub(crate) struct Finds {
     bars: HashMap<Where, Find>,
     /// Where a write for a bar that has gone goes.
@@ -290,7 +306,7 @@ pub(crate) fn open_find(
         }
     }
     bar.focus = true;
-    finds.set(next);
+    finds.set_if_modified(next);
 }
 
 /// Close it, and with it the marks: nothing is left to draw them from.
@@ -308,7 +324,7 @@ pub(crate) fn edit_find(mut finds: State<Finds>, at: Where, edit: impl FnOnce(&m
         return;
     }
     edit(next.get_mut(&at));
-    finds.set(next);
+    finds.set_if_modified(next);
 }
 
 /// Claim `searchable` as what `at`'s bar searches, for as long as this scope is mounted:

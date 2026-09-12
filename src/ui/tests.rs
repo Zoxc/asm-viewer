@@ -23651,6 +23651,88 @@ fn find_answered(test: &mut TestingRunner, finds: State<Finds>, at: Where, patte
     });
 }
 
+/// How many times the row below has been drawn, in a context of its own so the component
+/// can count its own renders.
+#[derive(Clone)]
+struct Drawn(Arc<std::sync::atomic::AtomicUsize>);
+
+/// The bar [`MarkedRow`] wears the marks of.
+fn marking_at() -> Where {
+    (Placing::Tab(DocId::unfiled()), Pane::Assembly)
+}
+
+/// A row as every code listing's rows are: it asks the bar over its pane for the compiled
+/// matcher and draws nothing else, so the one thing that can re-render it is that matcher
+/// changing.
+#[derive(PartialEq)]
+struct MarkedRow;
+
+impl Component for MarkedRow {
+    fn render(&self) -> impl IntoElement {
+        let _marking = use_marking(marking_at());
+        use_consume::<Drawn>()
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        rect().expanded()
+    }
+}
+
+fn marking_harness() -> impl IntoElement {
+    rect().expanded().child(MarkedRow)
+}
+
+/// **A write to `Finds` that changed nothing redraws nothing.** Every mounted listing's
+/// rows wear the matcher `use_marking` compiles, and a fresh one is a fresh `Rc`, which is
+/// not equal to the last: a notification for a write that left the table as it was redraws
+/// every row of every listing open in the app. Both no-op writes are the reader's ordinary
+/// ones -- `edit_find`'s is what the bar's box writes back on the render it mounts in, and
+/// `open_find`'s is a Ctrl+F over a bar already open.
+#[test]
+fn a_find_write_that_changed_nothing_redraws_nothing() {
+    let drawn = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = || drawn.load(std::sync::atomic::Ordering::Relaxed);
+    let (mut test, roots) = TestingRunner::new(
+        marking_harness,
+        (200., 200.).into(),
+        {
+            let drawn = drawn.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || Drawn(drawn));
+                runner.provide_root_context(test_roots)
+            }
+        },
+        1.,
+    );
+    let finds = roots.finds;
+    let at = marking_at();
+    let listing = Searchable::Code(fixture_symbols()[0].object.clone());
+    settle(&mut test);
+
+    open_find(finds, at, Some("sum".to_owned()), listing.clone());
+    settle(&mut test);
+    assert!(finds.peek().open(&at), "the bar never opened");
+    let opened = counted();
+
+    // A Ctrl+F over a bar already open with nothing to seed it: the bar is left as it was.
+    open_find(finds, at, None, listing);
+    settle(&mut test);
+    assert_eq!(counted(), opened, "an opening that changed nothing redrew");
+
+    // The box writing back what the bar already holds, which is what its typed effect
+    // does on the render it mounts in.
+    edit_find(finds, at, |_| {});
+    settle(&mut test);
+    assert_eq!(counted(), opened, "an edit that changed nothing redrew");
+
+    // And the row is still wired to the bar: a pattern that did change redraws it.
+    edit_find(finds, at, |bar| bar.filter.pattern = "to".to_owned());
+    settle(&mut test);
+    assert!(
+        counted() > opened,
+        "the row was not drawn again for a new pattern"
+    );
+}
+
 /// **Ctrl+F in a code pane opens the bar over that pane**, which is the chord's one
 /// meaning there: the sidebar's lists answer it on their rows and a code pane on its own
 /// box, so the bar a reader opens is the one they were reading. Fails on a binding at the

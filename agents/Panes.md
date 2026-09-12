@@ -1213,6 +1213,16 @@ only thing an object's code could answer at all, a line there having text only o
 The count and the steps come from the worker's answer; the two cannot disagree, being the same
 matcher over the same line.
 
+**A write to `Finds` that changed nothing is not made.** That memo recomputes on every write to the
+table, not on every write that moved a pattern, and each recompute is a fresh `Rc`, which is not
+equal to the last: one write for nothing redraws every row of every listing open. The table is
+written on each keystroke in a find box, and two of its writers could leave it as it was --
+`edit_find`, whose closure returns early when the box writes back what the bar already holds, and
+`open_find`, for a Ctrl+F over a bar already open with nothing to seed it. So `Finds` is compared,
+which is cheap, a bar being patterns, pointers and flags, and those two end in `set_if_modified`.
+It is `marks::update` and `write_if` (`agents/Worker.md`) again, for a state the reader writes
+rather than a worker.
+
 **A hit is columns, and a match is drawn as rects and never as split spans.** `find::hits_in` matches
 each run of adjacent `Piece::Text` whole -- an assembly line is pushed one span at a time, so
 `mov rax` crosses three of them -- and treats a `Piece::Inline` as one unit, which is what it is to
