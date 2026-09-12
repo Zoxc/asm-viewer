@@ -1427,12 +1427,7 @@ impl Component for TrustPrompt {
             return rect().into_element();
         };
 
-        rect()
-            .width(Size::fill())
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .content(Content::Flex)
-            .spacing(8.0)
+        wide_row()
             .padding(Gaps::new_symmetric(6.0, 12.0))
             .background(palette().prompt_bg)
             .border(bottom_hairline())

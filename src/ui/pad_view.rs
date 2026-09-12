@@ -33,10 +33,9 @@ const VERSION_FLEX: f32 = 1.0;
 ///
 /// **Only a span in the pad's own source is a target.** cargo names a file in a dependency
 /// as readily as it names `src/main.rs`, and there is nowhere to put a cursor in one: the
-/// editor holds the pad's source and this app opens no other file for editing. So those
-/// keep the plain label they always had, with no wash, no pointer and no press. A target
-/// that did nothing when pressed would be the worse of the two answers — the hover is a
-/// promise, and one that is kept for `src/main.rs` and broken for everything else is worse
+/// editor holds the pad's source and this app opens no other file for editing. So those get
+/// no press, which [`PlaceTarget`] draws as the plain line it would have been — the hover is
+/// a promise, and one that is kept for `src/main.rs` and broken for everything else is worse
 /// than never making it.
 ///
 /// `text` is the pad's buffers, consumed by the pane and handed down: a hook may only be
@@ -51,21 +50,14 @@ fn pad_place(text: State<PadBuffers>, pad: &PadId, diagnostic: &Diagnostic) -> O
         false => diagnostic_place_by_name(span),
     };
 
-    Some(match own {
-        true => {
-            let (pad, span) = (pad.clone(), span.clone());
-            PlaceTarget {
-                text: place,
-                press: EventHandler::new(move |_| jump_to_span(text, &pad, &span)),
-            }
-            .into_element()
+    let (pad, span) = (pad.clone(), span.clone());
+    Some(
+        PlaceTarget {
+            text: place,
+            press: own.then(|| EventHandler::new(move |_| jump_to_span(text, &pad, &span))),
         }
-        false => label()
-            .text(place)
-            .color(palette().address_fg)
-            .max_lines(1)
-            .into_element(),
-    })
+        .into_element(),
+    )
 }
 
 /// One `[dependencies]` row: the crate, the version required of it, and the × that drops

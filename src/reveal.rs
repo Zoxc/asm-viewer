@@ -79,30 +79,35 @@ fn tell(path: &Path) {
     .show();
 }
 
+/// What a program's finishing says about whether it worked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Judged {
+    /// A zero exit is success and anything else is not, which is what all but one of these
+    /// programs mean by it.
+    ByStatus,
+    /// Starting is all there is to go on: Windows' `explorer` exits 1 whether or not it
+    /// showed the file.
+    ///
+    /// Only Windows has such a program, so on the other platforms nothing makes one. An
+    /// `allow` and not a `cfg` on the variant, so the whole of what a finish can mean is
+    /// compiled everywhere and an edit on one platform cannot break the arm another reads.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    ByStarting,
+}
+
 /// One program to run, with what its finishing means.
 struct Attempt {
     program: &'static str,
     args: Vec<OsString>,
-    /// Whether a zero exit is what "it worked" means. Windows' `explorer` exits 1 either
-    /// way, so for that one starting is all there is to go on.
-    by_status: bool,
+    judged: Judged,
 }
 
 impl Attempt {
-    fn new(program: &'static str, args: Vec<OsString>) -> Attempt {
+    fn new(program: &'static str, args: Vec<OsString>, judged: Judged) -> Attempt {
         Attempt {
             program,
             args,
-            by_status: true,
-        }
-    }
-
-    /// The same, for a program whose exit status says nothing.
-    #[cfg(windows)]
-    fn regardless(self) -> Attempt {
-        Attempt {
-            by_status: false,
-            ..self
+            judged,
         }
     }
 }
@@ -122,9 +127,9 @@ fn run(attempt: &Attempt) -> bool {
     // Waited for, always: nothing else here would reap it, and each of these programs
     // hands the file to the desktop and exits rather than being the file manager.
     let finished = child.wait();
-    match attempt.by_status {
-        true => finished.is_ok_and(|status| status.success()),
-        false => true,
+    match attempt.judged {
+        Judged::ByStatus => finished.is_ok_and(|status| status.success()),
+        Judged::ByStarting => true,
     }
 }
 
@@ -195,6 +200,7 @@ fn attempts(path: &Path, folder: bool) -> Vec<Attempt> {
                 format!("['{uri}']").into(),
                 "''".into(),
             ],
+            Judged::ByStatus,
         ),
         Attempt::new(
             "dbus-send",
@@ -211,8 +217,9 @@ fn attempts(path: &Path, folder: bool) -> Vec<Attempt> {
                 // the empty string.
                 "string:".into(),
             ],
+            Judged::ByStatus,
         ),
-        Attempt::new("xdg-open", vec![opened]),
+        Attempt::new("xdg-open", vec![opened], Judged::ByStatus),
     ]
 }
 
@@ -229,7 +236,7 @@ fn attempts(path: &Path, folder: bool) -> Vec<Attempt> {
     }
     args.push(path.as_os_str().to_owned());
 
-    vec![Attempt::new("open", args)]
+    vec![Attempt::new("open", args, Judged::ByStatus)]
 }
 
 /// Windows has one too, and it is the shell itself: `explorer /select,` opens the
@@ -265,7 +272,7 @@ fn attempts(path: &Path, folder: bool) -> Vec<Attempt> {
     select.push("\\".repeat(trailing));
     select.push("\"");
 
-    vec![Attempt::new("explorer", vec![select]).regardless()]
+    vec![Attempt::new("explorer", vec![select], Judged::ByStarting)]
 }
 
 /// Somewhere that is neither: nothing to call, so the reader is told.

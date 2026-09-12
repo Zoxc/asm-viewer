@@ -229,12 +229,7 @@ fn row_children<T: Place>(row: &Row<T>) -> Vec<Element> {
         } => vec![
             disclosure(Some(!*folded)),
             tree_name(name.to_string(), false, &[]).into_element(),
-            label()
-                .text(count.to_string())
-                .margin(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))
-                .color(palette().address_fg)
-                .max_lines(1)
-                .into_element(),
+            count_column(Some(*count)),
         ],
         Row::Item { item, .. } => vec![
             label()

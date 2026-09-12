@@ -56,6 +56,9 @@ use freya::elements::paragraph::ParagraphHolderInner;
 use freya::engine::prelude::{RectHeightStyle, RectWidthStyle};
 
 use super::*;
+// Named here and not in the prelude: `chords.rs` has a `Stroke` of its own, and a glob
+// carrying this one into every `ui` module would put two of them in scope.
+use crate::pixels::Stroke;
 
 thread_local! {
     /// The icon last set from a row, so a move that changes nothing sends nothing.
@@ -669,6 +672,18 @@ impl RowCells {
         Some(self.text_x.get() - self.row_x.get() - ROW_PAD + x)
     }
 
+    /// The device pixel span columns `from..to` of a row `units` long cover, once the
+    /// paragraph is laid out: [`None`] before that, and for a span that covers nothing.
+    ///
+    /// The one place the rule for a box over a run of a row's own text is written -- the
+    /// selection's, the lit link's and every find hit's -- so all three are on the grid the
+    /// same way and all three answer nothing before layout.
+    fn span(&self, grid: Grid, from: usize, to: usize, units: usize) -> Option<Stroke> {
+        let (from, to) = (from.min(units), to.min(units));
+        let (left, right) = (self.column_x(from, units)?, self.column_x(to, units)?);
+        (right > left).then(|| grid.span(left, right))
+    }
+
     /// Lend the row's paragraph to the list, for a sweep that has left the rows to ask
     /// this row where a column is. A row with no text lends nothing.
     fn lend(&self, listing: &Listing, row: usize) {
@@ -912,6 +927,20 @@ fn tell_hover(cells: &RowCells, named: Tell) -> Rc<dyn Fn(Option<usize>)> {
     })
 }
 
+/// A box of the row's own over `span`, from `top` down `height`: what the selection, the
+/// caret, the lit link and a find hit are each drawn as. Absolutely placed inside the row
+/// and answering no pointer, a mark being a picture and not a control.
+///
+/// The colour is the caller's, the lit link taking [`link_chrome`]'s rather than one of its
+/// own.
+fn box_over(span: Stroke, top: f32, height: f32) -> Rect {
+    rect()
+        .interactive(false)
+        .position(Position::new_absolute().left(span.near).top(top))
+        .width(Size::px(span.thick))
+        .height(Size::px(height))
+}
+
 /// The two marks a row draws around its text: the selection's, painted under it, and the
 /// caret's, over it. Both are always drawn -- [`nothing`] where there is no mark -- since
 /// freya matches siblings by position (see the children at the foot of [`row`]).
@@ -927,28 +956,18 @@ fn marks(
     // The highlight: a rect of the row's own from the first column's x to the last's, the
     // row's whole height, on the grid -- so one row's meets the next's on a pixel edge. An
     // empty row inside the run shows as a stub, or the run would read as broken there.
-    let selected = chars
-        .highlight
-        .map(|(from, to)| (from.min(units), to.min(units)))
-        .and_then(|(from, to)| {
-            let (left, right) = (cells.column_x(from, units)?, cells.column_x(to, units)?);
-            let right = if right > left {
-                right
-            } else if units == 0 {
-                left + code_row_height() / 4.0
-            } else {
-                return None;
-            };
-            let span = grid.span(left, right);
-            Some(
-                rect()
-                    .interactive(false)
-                    .position(Position::new_absolute().left(span.near).top(0.0))
-                    .width(Size::px(span.thick))
-                    .height(Size::px(code_row_height()))
-                    .background(palette().text_select_bg),
-            )
-        });
+    let selected = chars.highlight.and_then(|(from, to)| {
+        // The stub is this mark's own rule and the only thing it does not share with the
+        // other two: an empty row has one column, so `span` answers nothing for it.
+        let span = match units == 0 {
+            true => {
+                let left = cells.column_x(0, units)?;
+                grid.span(left, left + code_row_height() / 4.0)
+            }
+            false => cells.span(grid, from, to, units)?,
+        };
+        Some(box_over(span, 0.0, code_row_height()).background(palette().text_select_bg))
+    });
 
     // The caret, where the run's lead is on this row and no sweep has picked characters
     // out: a stroke of the row's own, on the device pixel grid, where the engine's would
@@ -961,12 +980,7 @@ fn marks(
     let caret = at.map(|x| {
         // From the column rightward, so a caret on column 0 starts where the text does.
         let stroke = grid.span(x, x + CARET_WIDTH);
-        rect()
-            .interactive(false)
-            .position(Position::new_absolute().left(stroke.near).top(0.0))
-            .width(Size::px(stroke.thick))
-            .height(Size::px(code_row_height()))
-            .background(palette().caret_fg)
+        box_over(stroke, 0.0, code_row_height()).background(palette().caret_fg)
     });
 
     (
@@ -1022,20 +1036,11 @@ fn lit_box(cells: &RowCells, grid: Grid, columns: Option<&Range<usize>>, units: 
     let Some(columns) = columns else {
         return nothing();
     };
-    let (from, to) = (columns.start.min(units), columns.end.min(units));
-    let (Some(left), Some(right)) = (cells.column_x(from, units), cells.column_x(to, units)) else {
+    let Some(span) = cells.span(grid, columns.start, columns.end, units) else {
         return nothing();
     };
-    if right <= left {
-        return nothing();
-    }
-    let span = grid.span(left, right);
     link_chrome(
-        rect()
-            .interactive(false)
-            .position(Position::new_absolute().left(span.near).top(LINK_BOX_INSET))
-            .width(Size::px(span.thick))
-            .height(Size::px(link_box_height())),
+        box_over(span, LINK_BOX_INSET, link_box_height()),
         Some(palette().name_hover_fg),
     )
 }
@@ -1050,22 +1055,11 @@ fn lit_box(cells: &RowCells, grid: Grid, columns: Option<&Range<usize>>, units: 
 fn found(cells: &RowCells, grid: Grid, finds: &[Range<usize>], units: usize) -> Rect {
     let washes: Vec<Element> = finds
         .iter()
-        .filter_map(|columns| {
-            let (from, to) = (columns.start.min(units), columns.end.min(units));
-            let (left, right) = (cells.column_x(from, units)?, cells.column_x(to, units)?);
-            if right <= left {
-                return None;
-            }
-            let span = grid.span(left, right);
-            Some(
-                rect()
-                    .interactive(false)
-                    .position(Position::new_absolute().left(span.near).top(0.0))
-                    .width(Size::px(span.thick))
-                    .height(Size::px(code_row_height()))
-                    .background(palette().find_bg)
-                    .into_element(),
-            )
+        .filter_map(|columns| cells.span(grid, columns.start, columns.end, units))
+        .map(|span| {
+            box_over(span, 0.0, code_row_height())
+                .background(palette().find_bg)
+                .into_element()
         })
         .collect();
     nothing().children(washes)

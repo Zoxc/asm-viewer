@@ -18,43 +18,49 @@ use super::*;
 /// compares equal, so this re-renders whenever the pane does; one label and one hover flag
 /// is what that costs.
 ///
-/// **Only a place the pane can actually reach is drawn as one.** Where it cannot, the
-/// caller draws a plain label instead: a target that did nothing when pressed is the worse
-/// of the two answers, a hover being a promise.
+/// **Only a place the pane can actually reach is drawn as one**, and that rule is here
+/// rather than in the callers: a place with nowhere to go is drawn as the plain dim line it
+/// would have been, in the same colour and with no hover. A target that did nothing when
+/// pressed is the worse of the two answers, a hover being a promise.
 #[derive(Clone, PartialEq)]
 pub(crate) struct PlaceTarget {
     /// What it reads: the file, the line and the column.
     pub(crate) text: String,
-    /// Where pressing it goes. The press has already been stopped from propagating.
-    pub(crate) press: EventHandler<Event<PressEventData>>,
+    /// Where pressing it goes, or [`None`] where the pane cannot reach the place. The press
+    /// has already been stopped from propagating.
+    pub(crate) press: Option<EventHandler<Event<PressEventData>>>,
 }
 
 impl Component for PlaceTarget {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
-        let press = self.press.clone();
+        let Some(press) = self.press.clone() else {
+            return dim_line(self.text.clone()).into_element();
+        };
 
-        CursorArea::new().child(
-            rect()
-                .maybe(hovering(), |rect| link_chrome(rect, None))
-                .on_pointer_over(move |_| hovering.set_if_modified(true))
-                .on_pointer_out(move |_| hovering.set_if_modified(false))
-                .on_press(move |e: Event<PressEventData>| {
-                    // Both panes draw these inside a `ScrollView` that drags to scroll,
-                    // and a press that reached it would be the start of one.
-                    e.stop_propagation();
+        CursorArea::new()
+            .child(
+                rect()
+                    .maybe(hovering(), |rect| link_chrome(rect, None))
+                    .on_pointer_over(move |_| hovering.set_if_modified(true))
+                    .on_pointer_out(move |_| hovering.set_if_modified(false))
+                    .on_press(move |e: Event<PressEventData>| {
+                        // Both panes draw these inside a `ScrollView` that drags to scroll,
+                        // and a press that reached it would be the start of one.
+                        e.stop_propagation();
 
-                    press.call(e);
-                })
-                .child(
-                    label()
-                        .text(self.text.clone())
-                        .max_lines(1)
-                        .color(match hovering() {
-                            true => palette().name_hover_fg,
-                            false => palette().address_fg,
-                        }),
-                ),
-        )
+                        press.call(e);
+                    })
+                    .child(
+                        label()
+                            .text(self.text.clone())
+                            .max_lines(1)
+                            .color(match hovering() {
+                                true => palette().name_hover_fg,
+                                false => palette().address_fg,
+                            }),
+                    ),
+            )
+            .into_element()
     }
 }

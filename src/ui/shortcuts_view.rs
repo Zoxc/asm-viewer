@@ -83,12 +83,7 @@ impl Component for GestureRow {
         cut_tooltip(
             fitted.cut(),
             does.clone(),
-            rect()
-                .width(Size::fill())
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .content(Content::Flex)
-                .spacing(8.0)
+            wide_row()
                 .child(tree_name_fitted(fitted, does, false, &[]))
                 .child(
                     // Clipped, which is `field_row`'s lesson: a label given a width paints

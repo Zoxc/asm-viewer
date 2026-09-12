@@ -96,8 +96,8 @@ impl Component for ArchiveRow {
         // How many objects came out of this file, which under a filter is how many of them
         // matched. A file that has produced nothing yet shows no count rather than a zero.
         let count = match folds.map_or(0, |folds| folds.members) {
-            0 => String::new(),
-            members => members.to_string(),
+            0 => None,
+            members => Some(members),
         };
 
         extra_tooltip(
@@ -121,16 +121,9 @@ impl Component for ArchiveRow {
                 .child(tag_label(tag))
                 .child(tree_name(self.name.clone(), self.loading, &self.marks))
                 // The count -- the one thing about an archive that is not visible while it
-                // is folded shut -- in a column of its own, `COUNT_GUTTER` and all, rather
-                // than a label at the end of the row: the count is measured whole before
-                // the name is handed what the columns leave, so a sidebar dragged narrow
-                // ellipsises the name and never eats the digits, and the ellipsis never
-                // runs into them. Every row keeps the column, empty or not.
-                .child(
-                    rect()
-                        .padding(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))
-                        .child(dim_line(count).font_size(TAG_FONT_SIZE)),
-                ),
+                // is folded shut -- in the column `count_column` draws, which every row of
+                // a list that counts anything keeps, empty or not.
+                .child(count_column(count)),
         )
     }
 

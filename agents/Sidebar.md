@@ -101,17 +101,20 @@ nothing in Lucide's 1640 icons names an object format.
 **A tree row is four columns and one of them is elastic.** The triangle and the format tag are fixed
 widths every row keeps whether or not it has one, so the tags and the names line up down the list.
 The triangle itself is `parts::chevron`, one glyph, one width and one colour for every list in the
-app that folds.
-An archive's member count is a column of its own, its digits and a `COUNT_GUTTER` beside them. The
-name is the row's single `flex` child, which torin only works out under `Content::Flex`. The order
-that follows is the whole of `Goals.md`'s "the count should survive a narrow sidebar": the fixed
-columns and the count are measured whole and the name gets what is left, so a sidebar dragged narrow
-takes from the name, which ellipsises, and never from the count. Without the flex the name takes the
-remainder *before* the count is placed and the digits land past the row's edge, where its own
-`Overflow::Clip` eats them. Without the gutter the name grows right up against them and the ellipsis
-looks like part of the number. The headless test compares a 150px pane against a 300px one rather
-than against an absolute width, because text is really shaped under the runner and a digit measures
-whatever fonts the machine has.
+app that folds. An archive's member count is a column of its own, its digits and a `COUNT_GUTTER`
+beside them -- `parts::count_column`, which the Search and Locations panels' file rows draw theirs
+with too, so the same kind of number is the same size and the same column in all three. It was two
+spellings, one with the gutter as padding and the tag's font size and one with the gutter as a
+margin and no size at all, which drew a Search file row's count at the interface size and had torin
+work the column's width out two ways. The name is the row's single `flex` child, which torin only
+works out under `Content::Flex`. The order that follows is the whole of `Goals.md`'s "the count
+should survive a narrow sidebar": the fixed columns and the count are measured whole and the name
+gets what is left, so a sidebar dragged narrow takes from the name, which ellipsises, and never from
+the count. Without the flex the name takes the remainder *before* the count is placed and the digits
+land past the row's edge, where its own `Overflow::Clip` eats them. Without the gutter the name
+grows right up against them and the ellipsis looks like part of the number. The headless test
+compares a 150px pane against a 300px one rather than against an absolute width, because text is
+really shaped under the runner and a digit measures whatever fonts the machine has.
 
 **The triangle is an icon**, the Lucide chevron `disclosure` (`src/ui/parts.rs`) draws, which the
 Files tree, the Search and Locations panels and the symbol bar all take from the same place. It was
@@ -119,10 +122,14 @@ Files tree, the Search and Locations panels and the symbol bar all take from the
 desktop's rather than the app's -- the last small mark here drawn as text. It follows the font
 anyway, and so does its column: `chevron_size` is half a list row and `chevron_width` is that and a
 pixel either side, which at the app's own interface font is the 14 the column was fixed at. A
-`const` would be a mark a reader at 21pt has to hunt for, `field_label_width`'s reasoning. What an
-icon cannot say is which one it is -- an `SvgViewer` rasterises to an image -- so open or shut is
-carried as accessibility's own `expanded` on the column, which is both what a screen reader reads
-and what the headless tests find a triangle by (`disclosures`, `src/ui/tests.rs`).
+`const` would be a mark a reader at 21pt has to hunt for, `field_label_width`'s reasoning. **The
+format tag follows the font the same way**: `tag_font_size` is the interface size a sixth smaller
+and `tag_width` is fitted to the tag rather than to the row, four capitals of `MACH` at that size,
+which is the 34 the column was fixed at. The size was the last font size in the app written as a
+literal, and at 21pt it drew a tag a third the height of the name beside it. What an icon cannot say
+is which one it is -- an `SvgViewer` rasterises to an image -- so open or shut is carried as
+accessibility's own `expanded` on the column, which is both what a screen reader reads and what the
+headless tests find a triangle by (`disclosures`, `src/ui/tests.rs`).
 
 **A file being read is a row before it has an object**, which is `notes/specs/Sidebar.md`'s file
 still being read. The state is on the **file**, not on an object, because an object that has not
@@ -523,15 +530,15 @@ rule survive a restart (`agents/Persistence.md`). A finished build also forgets 
 the sources under the project's directory, which nothing else in the app ever re-reads
 (`forget_source_under`, `agents/Panes.md`).
 
-**Which of a build's places can be opened is worked out beside the build.** cargo spells a
-file relative to where it ran, so a diagnostic's place is the project's directory joined
-with it, and it is drawn as a target where that file is under the directory and the source
-cache would read it; a place in a dependency stays a plain label, a target that did nothing
-when pressed being worse than never offering one. Both questions are the worker's
-(`openable`), asked once per distinct file and carried back beside the run as
-`Builds::sources`. Asked at the row instead they were a `stat` per diagnostic per frame,
-for as long as the section was on screen, and a build says two hundred things as readily as
-two.
+**Which of a build's places can be opened is worked out beside the build.** cargo spells a file
+relative to where it ran, so a diagnostic's place is the project's directory joined with it, and it
+is drawn as a target where that file is under the directory and the source cache would read it; a
+place in a dependency gets no press, which `PlaceTarget` draws as the plain dim line it would have
+been (`agents/Scratchpad.md`), a target that did nothing when pressed being worse than never
+offering one. Both questions are the worker's (`openable`), asked once per distinct file and carried
+back beside the run as `Builds::sources`. Asked at the row instead they were a `stat` per diagnostic
+per frame, for as long as the section was on screen, and a build says two hundred things as readily
+as two.
 
 **How a place is spelled is a separate question**, and the row's own: a file under the
 directory is a short path as cargo named it and is drawn whole, and a path from outside is a

@@ -164,7 +164,7 @@ fn explorer_is_given_the_switch_and_the_path_as_one_quoted_argument() {
 #[test]
 fn explorer_is_not_judged_by_its_exit_status() {
     let plan = plan(Path::new(r"C:\x.rs"), false);
-    assert!(!plan[0].by_status);
+    assert_eq!(plan[0].judged, Judged::ByStarting);
 }
 
 /// A folder is opened and not selected: the switch would show its parent. Its trailing

@@ -150,17 +150,21 @@ costs nothing but the column.
 
 **The row's own fact, where the source side's is the file's.** A row is marked when the debug info
 names any line for it — the file the pane is showing or another — so an instruction inlined from
-elsewhere is marked and a prologue is not. The two marks therefore do not predict each other: a
-line marked on the source side can sit beside rows none of which are marked, its code being in a
-function the pane is not showing. Every other row of both listings gives the column up, marked or
-not — a separator, a label, a section header, the rule over a stretch, the bytes no symbol claims —
-or the addresses and the arrows stop lining up between row kinds. The rows an undecoded stretch is
-guessed to take draw nothing at all and so need nothing, and `EmptyRow` has neither gutter nor
-address but takes the column anyway, so its rule and a separator's stay the distance apart they
-were. **The gutter's column and the address column are one function each** — `gutter_column` and
-`address_label` in `src/ui/assembly.rs` — asked by every row that takes either. A row drawing its
-branches hands its arrows in; a row that only gives the column up hands none, and gets a blank of
-the same width.
+elsewhere is marked and a prologue is not. The two marks therefore do not predict each other: a line
+marked on the source side can sit beside rows none of which are marked, its code being in a function
+the pane is not showing. Every other row of both listings gives the column up, marked or not — a
+separator, a label, a section header, the rule over a stretch, the bytes no symbol claims — or the
+addresses and the arrows stop lining up between row kinds. The rows an undecoded stretch is guessed
+to take draw nothing at all and so need nothing, and `EmptyRow` has neither gutter nor address but
+takes the column anyway, so its rule and a separator's stay the distance apart they were. **The
+gutter's column and the address column are one function each** — `gutter_column` and `address_label`
+in `src/ui/assembly.rs` — asked by every row that takes either. A row drawing its branches hands its
+arrows in; a row that only gives the column up hands none, and gets a blank of the same width. The
+column's *text* is one function too, `address_column`: sixteen upper-case hex digits and a space,
+which the label, `asm_line` and `row_line` all spell through it, so what is drawn and what is copied
+cannot come to disagree and a change to the width is one edit. What the address *is* is
+`AsmData::drawn_address` for the same reason: the instruction's own plus the listing's bias is where
+the two address spaces meet, and it was three sites each restating which one it wanted.
 
 **The Assembly pane has a bar naming what it is drawing**, in both spellings: the demangled name
 over the mangled original, `src/ui/symbol_bar.rs`. It names **the drawn symbol and never the
@@ -907,15 +911,20 @@ sits over it. The engine's own highlight is the glyphs' tight box, which is shor
 whatever the line's fonts and the link's placeholder add to it, and left a seam between one row's
 and the next's. Both are drawn from the render after the paragraph's first layout, which is when the
 holder can say where a column is; an empty row inside a run shows a stub a quarter of a row wide, or
-the run would look broken there. Both marks are `interactive(false)`, and **both slots are always
-there**, empty rects when there is nothing to mark: freya matches siblings by position
-(`notes/upstream/freya.md`), so a highlight appearing before the paragraph on the press would move
-the paragraph along one and remount it, link and all, between the down and the up, and the press
-meant for the link would never fire. The gutter is a child of the row, so a sideways scroll carries
-it with the addresses, by a whole number of pixels, the scroll offset being an `i32`, and the
-strokes stay on the grid. The rule a separator row draws goes on the grid the same way and from the
-same answer (`Grid::stroke` over the middle of a row), so a rule and a horizontal run crossing one
-row sit in the same device pixels rather than half a pixel apart.
+the run would look broken there. The four boxes a row draws over its own text — the highlight, the
+caret, the lit link's box and every find hit's wash — come out of one `RowCells::span` and one
+`box_over` (`src/ui/code_row.rs`): the clamp to the row's length, the two `column_x` questions and
+`Grid::span` are written once, so the grid rule and the "nothing before layout" rule cannot hold for
+three of the four. The stub is the highlight's own and stays there. Both marks are
+`interactive(false)`, and **both slots are always there**, empty rects when there is nothing to
+mark: freya matches siblings by position (`notes/upstream/freya.md`), so a highlight appearing
+before the paragraph on the press would move the paragraph along one and remount it, link and all,
+between the down and the up, and the press meant for the link would never fire. The gutter is a
+child of the row, so a sideways scroll carries it with the addresses, by a whole number of pixels,
+the scroll offset being an `i32`, and the strokes stay on the grid. The rule a separator row draws
+goes on the grid the same way and from the same answer (`Grid::stroke` over the middle of a row), so
+a rule and a horizontal run crossing one row sit in the same device pixels rather than half a pixel
+apart.
 
 **A row a branch lands on starts a block**, and the listing says so with a `SeparatorRow` above it,
 a **row of its own** and not a border on the row below, so a block reads as separated from the one

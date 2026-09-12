@@ -443,12 +443,17 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         mut plant,
     } = doors;
     let stop = stop_of(&landing);
-    if open.active().as_ref() == Some(&landing.tab) {
+    // One question of the strip and the table, and not two: the id and the document come
+    // back together, where asking for each in turn took four peeks in a handler that then
+    // writes both.
+    let on_top = open
+        .now()
+        .filter(|(_, current)| current.document == landing.tab);
+    if let Some((id, _)) = on_top {
         // The document is already on top, so nothing is opened and `open_stop` never
         // runs: the push here is the only record that the reader was somewhere else in
         // it a moment ago.
-        let id = open.now().map(|(id, _)| id);
-        let moved = id.is_some_and(|id| moved_to(open, id, &stop));
+        let moved = moved_to(open, id, &stop);
         // A move inside the document is a change of place, and every change of place is
         // `use_land`'s: it keeps the runs of the place being left and gives the arriving
         // place its own. So a landing that moves the tab is left for it, as one that opens
@@ -458,7 +463,7 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         // the columns the door named or the scroll it owed.
         if moved {
             land_at.set(Some(landing));
-            return id;
+            return Some(id);
         }
         // The same place again, or a stop naming the document alone: nothing changes, so
         // no effect runs and the line and the instruction are put here.
@@ -471,7 +476,7 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
                 address,
             }));
         }
-        return id;
+        return Some(id);
     }
 
     land_at.set(Some(landing));

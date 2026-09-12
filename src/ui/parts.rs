@@ -490,12 +490,26 @@ pub(crate) fn glyph_in(icon: impl Into<ImageSource>, colour: Color) -> Element {
 /// The short tag saying what kind of file a row is, in the column every row of the objects
 /// tree keeps for it.
 pub(crate) fn tag_label(tag: &str) -> impl IntoElement {
-    label()
-        .text(tag.to_owned())
-        .width(Size::px(TAG_WIDTH))
-        .font_size(TAG_FONT_SIZE)
-        .color(palette().address_fg)
-        .max_lines(1)
+    dim_line(tag.to_owned())
+        .width(Size::px(tag_width()))
+        .font_size(tag_font_size())
+}
+
+/// The column a folding row counts what is under it in: the digits at [`tag_font_size`],
+/// a [`COUNT_GUTTER`] before them, and nothing at all for a row with nothing to count --
+/// a file that has produced no objects yet. Every row of a list that has such a column
+/// keeps it, so the names line up down the list.
+///
+/// A column of its own and not a label at the end of the row: the count is measured whole
+/// before the name is handed what the columns leave, so a sidebar dragged narrow
+/// ellipsises the name and never eats the digits (`agents/Sidebar.md`).
+pub(crate) fn count_column(count: Option<usize>) -> Element {
+    rect()
+        .padding(Gaps::new(0.0, 0.0, 0.0, COUNT_GUTTER))
+        .map(count, |column, count| {
+            column.child(dim_line(count.to_string()).font_size(tag_font_size()))
+        })
+        .into_element()
 }
 
 /// Whether the one line of text a row draws fitted the room it was given.
@@ -795,6 +809,60 @@ pub(crate) fn headed(heading: Element, list: Element) -> Rect {
         )
 }
 
+/// The cell a field's value is laid out in, where the value is more than one thing: a box
+/// and the button that fills it, a label and the button that undoes it, a stepper's two
+/// buttons round its number. As wide as the cell [`field_row`] gives it, so a box inside
+/// takes the width that is left rather than the width of its own text.
+pub(crate) fn value_row() -> Rect {
+    flex_row(Size::flex(1.0))
+}
+
+/// The same across a whole pane rather than inside a field's cell: [`field_row_in`] itself,
+/// the two prompt bands, a Debug page row, a gesture row. [`Size::fill`] and not
+/// [`Size::flex`], there being no cell around it to take a share of.
+pub(crate) fn wide_row() -> Rect {
+    flex_row(Size::fill())
+}
+
+/// What the two share: one line of things a fixed width apart, laid out under
+/// [`Content::Flex`] so whichever of them is the row's `flex` child gets what the others
+/// leave.
+fn flex_row(width: Size) -> Rect {
+    rect()
+        .width(width)
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .content(Content::Flex)
+        .spacing(ROW_GAP)
+}
+
+/// A choice between a handful of named options, written into wherever `choose` puts it: the
+/// theme on the Settings page and the cargo profile on the Project view.
+///
+/// Keyed by the option's own text, so a segment is diffed by which option it is. The
+/// options are borrowed and the labels are `'static`, being written out at the call site;
+/// what crosses into the handlers is the option itself, which is [`Copy`].
+pub(crate) fn choice<C: Copy + PartialEq + 'static>(
+    options: &[(C, &'static str)],
+    current: C,
+    choose: impl FnMut(C) + Clone + 'static,
+) -> SegmentedButton {
+    SegmentedButton::new().children(
+        options
+            .iter()
+            .map(|&(option, text)| {
+                let mut choose = choose.clone();
+                ButtonSegment::new()
+                    .key(text)
+                    .selected(current == option)
+                    .on_press(move |_| choose(option))
+                    .child(text)
+                    .into()
+            })
+            .collect::<Vec<Element>>(),
+    )
+}
+
 /// One labelled field: what it is on the left in a fixed column, what it says on the right
 /// taking the rest. A `flex` row, so a text box in the value position takes the width that
 /// is left rather than the width of its contents.
@@ -812,12 +880,7 @@ pub(crate) fn field_row(name: &str, value: impl IntoElement) -> impl IntoElement
 /// The same row with the name's colour handed in: what a field whose name says something
 /// by its colour is built on, the settings page's being dim while the value is inherited.
 pub(crate) fn field_row_in(name: &str, colour: Color, value: impl IntoElement) -> impl IntoElement {
-    rect()
-        .width(Size::fill())
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .content(Content::Flex)
-        .spacing(8.0)
+    wide_row()
         .child(
             rect()
                 .width(Size::px(field_label_width()))
@@ -858,9 +921,9 @@ pub(crate) fn text_block(text: &str) -> Element {
 ///
 /// `place` is drawn by whoever calls this, because what a place can be *pressed* to reach
 /// differs between the two panes that draw diagnostics: the scratchpad's puts its editor's
-/// cursor on the line, the project's opens the file. Both agree that a place they cannot
-/// reach is a plain label — [`diagnostic_place`] is that label, and a target that did
-/// nothing when pressed would be the worse of the two answers.
+/// cursor on the line, the project's opens the file. Both hand it to `PlaceTarget`
+/// (`src/ui/place_target.rs`), which draws a place neither can reach as the plain line it
+/// would have been.
 pub(crate) fn diagnostic_block(diagnostic: &Diagnostic, place: Option<Element>) -> Element {
     // An error is the red every invalid thing wears, a warning the one warm hue in the
     // palette, and a note recedes.

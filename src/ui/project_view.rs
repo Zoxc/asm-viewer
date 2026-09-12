@@ -222,9 +222,9 @@ impl Component for ArtifactRow {
 /// cargo spells the file relative to where it ran, so the place is the project's directory
 /// joined with it, and which of those files may be opened is [`Builds::sources`], picked
 /// out on the worker beside the build. A file it does not name -- a dependency's, out of
-/// the registry, or one the source cache would refuse -- keeps the plain label it would
-/// have had: a target that did nothing when pressed would be worse than never offering
-/// one.
+/// the registry, or one the source cache would refuse -- gets no press, which
+/// [`PlaceTarget`] draws as the plain line it would have been: a target that did nothing
+/// when pressed would be worse than never offering one.
 ///
 /// The set is asked and never the filesystem. Deciding it here cost a `stat` per row per
 /// frame, and a build says two hundred things as readily as two.
@@ -252,14 +252,14 @@ fn source_place(
         false => diagnostic_place_by_name(span),
     };
     let target = under.filter(|file| build.shows(file));
+    let line = span.line as u32;
 
-    Some(match target {
-        Some(file) => {
-            let file: Arc<str> = Arc::from(&*file.to_string_lossy());
-            let line = span.line as u32;
-            PlaceTarget {
-                text,
-                press: EventHandler::new(move |_| {
+    Some(
+        PlaceTarget {
+            text,
+            press: target.map(|file| {
+                let file: Arc<str> = Arc::from(&*file.to_string_lossy());
+                EventHandler::new(move |_| {
                     land(
                         doors,
                         Landing {
@@ -273,12 +273,11 @@ fn source_place(
                         },
                         Reach::outside(ctrl),
                     );
-                }),
-            }
-            .into_element()
+                })
+            }),
         }
-        None => dim_line(text).into_element(),
-    })
+        .into_element(),
+    )
 }
 
 /// One project in the recent list. Pressing it opens this one in place of the one on
@@ -350,12 +349,7 @@ impl Component for IdentitySection {
             // save observer sees and the project file is written at once.
             .child(field_row(
                 "Directory",
-                rect()
-                    .width(Size::flex(1.0))
-                    .horizontal()
-                    .cross_align(Alignment::Center)
-                    .content(Content::Flex)
-                    .spacing(6.0)
+                value_row()
                     .child(
                         Input::new(
                             proj.into_writable()
@@ -519,22 +513,12 @@ impl Component for CargoSection {
                     }))
                     .child(field_row(
                         "Profile",
-                        SegmentedButton::new().children(
-                            [(Profile::Debug, "Debug"), (Profile::Release, "Release")].map(
-                                |(choice, text)| {
-                                    ButtonSegment::new()
-                                        .key(text)
-                                        .selected(profile == choice)
-                                        // Straight into `Proj`, so the save observer
-                                        // sees it like a rename and `project.toml` is
-                                        // written at once.
-                                        .on_press(move |_| {
-                                            proj.write().profile = choice;
-                                        })
-                                        .child(text)
-                                        .into()
-                                },
-                            ),
+                        choice(
+                            &[(Profile::Debug, "Debug"), (Profile::Release, "Release")],
+                            profile,
+                            // Straight into `Proj`, so the save observer sees it like a
+                            // rename and `project.toml` is written at once.
+                            move |chosen| proj.write().profile = chosen,
                         ),
                     ))
                     // What a binary with no line information costs is the whole source
@@ -545,12 +529,7 @@ impl Component for CargoSection {
                         let directory = directory.clone();
                         let row = field_row(
                             "Debug lines",
-                            rect()
-                                .width(Size::flex(1.0))
-                                .horizontal()
-                                .cross_align(Alignment::Center)
-                                .content(Content::Flex)
-                                .spacing(6.0)
+                            value_row()
                                 .child(
                                     label()
                                         .text("Off, so there is no source side")
@@ -673,12 +652,7 @@ impl Component for LanguageSection {
         .maybe_child(directory.is_some().then(|| {
             field_row(
                 "Directory",
-                rect()
-                    .width(Size::fill())
-                    .horizontal()
-                    .cross_align(Alignment::Center)
-                    .content(Content::Flex)
-                    .spacing(8.0)
+                wide_row()
                     .child(
                         dim_line(match open.trusted {
                             true => "Agreed to".to_owned(),

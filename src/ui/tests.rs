@@ -4476,6 +4476,46 @@ fn a_narrow_sidebar_ellipsises_the_name_and_keeps_the_count() {
     );
 }
 
+/// **One count column, whichever list draws it.** An archive row's member count and a
+/// Search file row's hit count are the same number in the same column, and they were drawn
+/// at two sizes: the archive's at `tag_font_size`, the file row's at the interface size,
+/// that one having spelled the column out for itself and left the size off. `count_column`
+/// is now the one spelling, so the digits measure the same in either list.
+///
+/// Two mounts, the two panels being two panes, and the areas compared against each other
+/// and never against a number: text is really shaped here.
+#[test]
+fn a_search_file_row_counts_in_the_column_an_archive_row_does() {
+    let (_path, objects) = fixture_objects(3);
+    let (_, archive) = archive_row(300.0, &objects);
+
+    let (mut test, states, directory, _dock) = search_over(line!(), |_query, _emit| {});
+    let path = directory.join("x.c");
+    let mut searched = states.searched;
+    searched.write().asked = Some(SearchQuery {
+        root: directory.to_path_buf(),
+        filter: Filter {
+            pattern: "y".to_owned(),
+            ..Filter::default()
+        },
+    });
+    // Lines past ten, so the only `3` on the panel is the count itself.
+    for line in [11, 12, 13] {
+        searched
+            .write()
+            .hits
+            .push(&Arc::from(path.as_path()), hit_at(line, "int y;"));
+    }
+    settle(&mut test);
+
+    let hits = label_area(&test, "3").expect("the file row says how many hits it holds");
+    assert_eq!(
+        (hits.width(), hits.height()),
+        (archive.width(), archive.height()),
+        "the two lists drew the same digits in two sizes"
+    );
+}
+
 /// **A second file arriving leaves the rows already on the Objects list alone.** A sidebar
 /// row's props are compared field by field, by the derive, which compares the two the
 /// hand-written impls left out: the fold state and the row's own key. Both are stable --
@@ -14158,6 +14198,40 @@ fn a_field_names_column_follows_the_interface_font() {
         label_area(&test, "Debug lines").expect("the name").width(),
         168.0,
         "the row was built from a number the font no longer agrees with"
+    );
+
+    set_fonts(fixed_fonts(9.0, 10.5));
+}
+
+/// **The format tag and the column it sits in follow the interface font.** The size was
+/// the one font size in the app written as a literal, 10 px beside whatever the reader set
+/// the interface font to, and the column was a `const` 34 fitted to it: at 21 pt a row drew
+/// 28 px names beside a tag a third their size. Asserted through a real `tag_label`, since
+/// the numbers are only worth anything if the row is built from them.
+#[test]
+fn the_format_tags_column_follows_the_interface_font() {
+    set_fonts(fixed_fonts(9.0, 10.5));
+
+    let (mut test, ()) = TestingRunner::new(
+        || rect().expanded().child(tag_label("MACH")),
+        (400., 100.).into(),
+        |_| (),
+        1.,
+    );
+    test.sync_and_update();
+
+    // 9pt is 12 logical pixels, which gives the 10 and the 34 the tag was fixed at.
+    assert_eq!((tag_font_size(), tag_width()), (10.0, 34.0));
+    assert_eq!(label_area(&test, "MACH").expect("the tag").width(), 34.0);
+
+    // 21pt is 28, and both go with it rather than leaving a tag the name dwarfs.
+    set_fonts(fixed_fonts(21.0, 10.5));
+    test.sync_and_update();
+    assert_eq!((tag_font_size(), tag_width()), (23.0, 78.0));
+    assert_eq!(
+        label_area(&test, "MACH").expect("the tag").width(),
+        78.0,
+        "the tag was drawn in a column the font no longer agrees with"
     );
 
     set_fonts(fixed_fonts(9.0, 10.5));

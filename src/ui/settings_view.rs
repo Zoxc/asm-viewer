@@ -94,15 +94,10 @@ fn setting_row(
             true => palette().text_fg,
             false => palette().address_fg,
         },
-        rect()
-            .width(Size::flex(1.0))
+        value_row()
             // Taller than a plain field row: what these rows hold is a box to type in or
             // a stepper, either of which is taller than a line of text.
             .height(Size::px(text_box_height()))
-            .horizontal()
-            .cross_align(Alignment::Center)
-            .content(Content::Flex)
-            .spacing(8.0)
             .child(value)
             .child(
                 rect()
@@ -248,11 +243,7 @@ fn font_section(half: FontHalf) -> Element {
         .child(setting_row(
             "Size",
             edited.size.is_some(),
-            rect()
-                .width(Size::flex(1.0))
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .spacing(6.0)
+            value_row()
                 .child(
                     Button::new()
                         .compact()
@@ -329,16 +320,9 @@ impl Component for SettingsTab {
                     section("Appearance", None)
                         .child(field_row(
                             "Theme",
-                            SegmentedButton::new().children(themes.map(|(choice, text)| {
-                                ButtonSegment::new()
-                                    .key(text)
-                                    .selected(edited.theme == choice)
-                                    .on_press(move |_| {
-                                        prefs.write().theme = choice;
-                                    })
-                                    .child(text)
-                                    .into()
-                            })),
+                            choice(&themes, edited.theme, move |theme| {
+                                prefs.write().theme = theme;
+                            }),
                         ))
                         .maybe_child(following),
                 )

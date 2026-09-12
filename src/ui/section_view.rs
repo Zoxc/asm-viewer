@@ -288,7 +288,7 @@ pub(crate) fn stretch_texts(
 pub(crate) fn row_line(rows: &Rows, row: usize) -> String {
     let line = code_line(rows, row).to_string();
     match rows.address_of(row) {
-        Some(address) if !line.is_empty() => format!("{address:016X} {line}"),
+        Some(address) if !line.is_empty() => format!("{}{line}", address_column(address)),
         _ => line,
     }
 }
@@ -900,9 +900,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             let Some(asm) = data.asm_data(stretch) else {
                 return blank();
             };
-            let address = asm.assembly().instructions[index]
-                .address
-                .wrapping_add(asm.bias());
+            let address = asm.drawn_address(index);
             // The rows either side, where they are instructions of this same stretch:
             // a label, a header or a separator is nobody's pair.
             let paired_at = |row: usize| match rows.row(row) {
@@ -930,9 +928,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             let Some(asm) = data.asm_data(stretch) else {
                 return blank();
             };
-            let address = asm.assembly().instructions[below]
-                .address
-                .wrapping_add(asm.bias());
+            let address = asm.drawn_address(below);
             SeparatorRow::over(&asm, below, i, data.chars, touching(stretch))
                 .key(RowKey::of(rows, i, at, Some(address)))
                 .into_element()

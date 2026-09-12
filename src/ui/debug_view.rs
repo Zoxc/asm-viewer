@@ -65,12 +65,7 @@ impl Component for DebugTab {
 /// the room that is left and is cut with an ellipsis where there is not enough, which is
 /// [`tree_name`]'s arrangement and for the same reason.
 fn panic_row(name: &str, press: impl FnMut(Event<PressEventData>) + 'static) -> impl IntoElement {
-    rect()
-        .width(Size::fill())
-        .horizontal()
-        .cross_align(Alignment::Center)
-        .content(Content::Flex)
-        .spacing(8.0)
+    wide_row()
         .child(tree_name(name.to_owned(), false, &[]))
         .child(Button::new().on_press(press).child("Panic"))
 }

@@ -389,10 +389,12 @@ it there during exactly that run.
 **One answer, three spellings and no more.** `active_tab(&Strip, &Docs)` is the rule itself, over
 borrowed guards so the caller says what asking costs; `Active` is that over two reads, held at the
 root; `Open::now` is it over two peeks, for a handler. All three answer `Option<Entry>`, so a call
-site moved from one to another is a change of freshness and of nothing else. `Open::active` is
-`now` without the id, the half most callers want and the only projection with a name; the rest
-`.map` for theirs. A test opens a tab and asks the peek and the memo in the same breath, which
-pins the peek as the fresher (`the_peeked_active_tab_is_ahead_of_the_memo`).
+site moved from one to another is a change of freshness and of nothing else. `Open::active` is `now`
+without the id, the half most callers want and the only projection with a name; the rest `.map` for
+theirs, and a caller wanting **both** halves takes both out of the one answer -- `land` asked for
+each in turn, which is four peeks in a handler that then writes both states. A test opens a tab and
+asks the peek and the memo in the same breath, which pins the peek as the fresher
+(`the_peeked_active_tab_is_ahead_of_the_memo`).
 
 `Active` being `None` means two things and deliberately does not distinguish them: nothing is open,
 or **the tab on screen is a page**. Making Settings the tab on screen therefore

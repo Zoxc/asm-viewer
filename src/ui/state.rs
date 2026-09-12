@@ -140,8 +140,13 @@ impl Open {
     /// [`Active`] to catch up. `peek`, so asking subscribes nothing.
     ///
     /// The whole entry, id and place, as [`Active`] holds one: a caller wanting one
-    /// half `.map`s for it. Only the document has a name of its own ([`Open::active`]),
-    /// being asked for far more often than the rest.
+    /// half `.map`s for it, and a caller wanting both takes both from the one answer rather
+    /// than asking twice. Only the document has a name of its own ([`Open::active`]), being
+    /// asked for far more often than the rest.
+    ///
+    /// [`None`] where [`active_tab`] is: nothing open, **or a page on screen**. A page has
+    /// no id here, which is what every caller wants -- `navigate` must do nothing on one,
+    /// and the rest compare against document ids.
     pub(crate) fn now(&self) -> Option<Entry> {
         let (strip, docs) = (self.strip.peek(), self.docs.peek());
         active_tab(&strip, &docs)

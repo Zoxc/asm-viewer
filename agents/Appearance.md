@@ -189,23 +189,24 @@ in `ui/metrics.rs` reads a thread-local `State<Arc<Fonts>>` exactly as `palette(
 appearance, so *asking for a font is what subscribes a scope to it*. `set_fonts` is the one writer,
 and unlike `set_appearance` it has nothing to invalidate beside it, since a cached `SyntaxBlocks`
 carries colours and no font. The readers are the two row heights, `icon_size`, `chevron_size` and
-the column it decides, `FontExt::assembly_font`, the root rect's own `.font(&fonts().ui)`, the line
-of sample text each half of the settings page ends with, and the tooltip's `font_size` in the root's
-`Theme`. That last one is the only place a change has to be *carried* rather than picked up, freya's
-theme sheet being a value, so the root rebuilds the sheet in an effect. Two things wake that effect
-and each carries what the other does not: its deps, which hold the appearance and the interface
-size, and the `palette()` and `fonts()` reads `interface_theme` makes *inside* it, which is how a
-fixed-width size change gets there -- a read inside an effect subscribes it. `ROW_HEIGHT` went the
-same way and became a function: one font's size plus `ROW_LEADING` (12, which is exactly what the
-old constant's 26 was over the 14px fixed-width default). The alternative, a page offering a 20pt
-assembly font and drawing it clipped inside a 26px row, was worse than the work. It is safe because
-the scroll view's `item_size` and its rows' own height are read in the **same render pass**, so they
-cannot see different numbers, and because the per-tab positions saved are *rows* rather than pixel
-offsets. The floor (`MIN_ROW_HEIGHT`) is against a hand-edited `settings.toml`, where a size of 0.1
-is positive enough to pass `FontSetting::size` and would make `item_size` a fraction of a pixel.
-`link_box_height` is that rule once more: the box a code row draws round a lit run of its own text
-is the row less `LINK_BOX_INSET` at each edge, so it is a function beside the height it comes from
-and never a number kept anywhere.
+the column it decides, `tag_font_size` and the column *it* decides, `FontExt::assembly_font`, the
+root rect's own `.font(&fonts().ui)`, the line of sample text each half of the settings page ends
+with, and the tooltip's `font_size` in the root's `Theme`. That last one is the only place a change
+has to be *carried* rather than picked up, freya's theme sheet being a value, so the root rebuilds
+the sheet in an effect. Two things wake that effect and each carries what the other does not: its
+deps, which hold the appearance and the interface size, and the `palette()` and `fonts()` reads
+`interface_theme` makes *inside* it, which is how a fixed-width size change gets there -- a read
+inside an effect subscribes it. `ROW_HEIGHT` went the same way and became a function: one font's
+size plus `ROW_LEADING` (12, which is exactly what the old constant's 26 was over the 14px
+fixed-width default). The alternative, a page offering a 20pt assembly font and drawing it clipped
+inside a 26px row, was worse than the work. It is safe because the scroll view's `item_size` and its
+rows' own height are read in the **same render pass**, so they cannot see different numbers, and
+because the per-tab positions saved are *rows* rather than pixel offsets. The floor
+(`MIN_ROW_HEIGHT`) is against a hand-edited `settings.toml`, where a size of 0.1 is positive enough
+to pass `FontSetting::size` and would make `item_size` a fraction of a pixel. `link_box_height` is
+that rule once more: the box a code row draws round a lit run of its own text is the row less
+`LINK_BOX_INSET` at each edge, so it is a function beside the height it comes from and never a
+number kept anywhere.
 
 **`FONTS` starts at the app's own fonts, and `app` writes the real pair before anything draws.**
 The thread-local initialises from `fonts::defaults()` -- the platform families at 9pt and 10.5pt,
@@ -307,10 +308,17 @@ only when there is something to clear, which is also the only way back to unspec
 can be emptied, a stepper cannot.
 
 The row itself is `parts::field_row_in` -- `field_row` with the name's colour handed in -- so the
-theme row above and the font rows below line up in one column and move together when it changes.
-All `setting_row` draws of its own is the cell on the right, `CLEAR_CELL_WIDTH` so the value boxes
-end at the same x whether the cell holds the button or the word "inherited". That number and the
-column the size is written in between the stepper's two buttons (`SIZE_READOUT_WIDTH`) sit in
-`ui/metrics.rs`, beside `field_label_width` -- the same page's other column -- as `const`s and not
-functions of the font: six times the size *is* the label column's 72, where 76 and 52 are no whole
-share of the 12 px the interface font starts at.
+theme row above and the font rows below line up in one column and move together when it changes. A
+value that is more than one thing -- a box and the button that fills it, a stepper's buttons round
+its number -- sits in `parts::value_row`, and `parts::wide_row` is that across a whole pane
+(`field_row_in` itself, the two prompt bands, a Debug page row, a gesture row); both are one
+`ROW_GAP` apart. The eight sites were written out one at a time with the gap spelled 6 in three of
+them and 8 in five, which is how far a value stood from the button beside it depending on which row
+was written first. The theme choice is `parts::choice`, which the cargo profile on the Project view
+is too: a segmented button per option, keyed by its own word, writing the chosen one wherever the
+caller says. All `setting_row` draws of its own is the cell on the right, `CLEAR_CELL_WIDTH` so the
+value boxes end at the same x whether the cell holds the button or the word "inherited". That number
+and the column the size is written in between the stepper's two buttons (`SIZE_READOUT_WIDTH`) sit
+in `ui/metrics.rs`, beside `field_label_width` -- the same page's other column -- as `const`s and
+not functions of the font: six times the size *is* the label column's 72, where 76 and 52 are no
+whole share of the 12 px the interface font starts at.

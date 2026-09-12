@@ -227,8 +227,8 @@ pub(crate) const NOTICE_PAD: f32 = 8.0;
 /// A `const` and not a function of the font, unlike [`field_label_width`] above it:
 /// six times the size *is* that column's 72, where this is 76 and the one under it 52,
 /// neither of which is a whole share of the 12 px the interface font starts at. They are
-/// fitted to what is drawn in them, the way [`LINE_NUMBER_WIDTH`] and [`TAG_WIDTH`] are,
-/// so a multiplier here would be invented rather than read off.
+/// fitted to what is drawn in them, the way [`LINE_NUMBER_WIDTH`] is, so a multiplier here
+/// would be invented rather than read off.
 pub(crate) const CLEAR_CELL_WIDTH: f32 = 76.0;
 
 /// The column the font size is written in, between the stepper's two buttons. Fixed, so
@@ -262,18 +262,43 @@ pub(crate) const PAD_LIST_WIDTH: f32 = 150.0;
 /// at the same x whether the number has two digits or five.
 pub(crate) const LINE_NUMBER_WIDTH: f32 = 38.0;
 
-/// The column the short format tag is written in. Fixed, so the names to the right of it
-/// start at the same x whatever the tag says.
-pub(crate) const TAG_WIDTH: f32 = 34.0;
+/// The size the short format tag is drawn at: the interface font, a sixth smaller, so the
+/// tag recedes behind the name beside it.
+///
+/// A function of the font and not a `const`, [`field_label_width`]'s reasoning: it was the
+/// one font size in the app written as a literal, so a reader at 16 pt had 16 px names
+/// beside 10 px tags -- under two thirds of them, where a tag is meant to be a step smaller
+/// and not another kind of text. Ten at the 12 px the interface font starts at, which is
+/// what it was fixed at.
+pub(crate) fn tag_font_size() -> f32 {
+    (fonts().ui.size() * 0.83).round()
+}
 
-/// The tag is written smaller than the row's own text.
-pub(crate) const TAG_FONT_SIZE: f32 = 10.0;
+/// The column the tag is written in, so the names to the right of it start at the same x
+/// whatever the tag says.
+///
+/// Fitted to the tag and so a share of [`tag_font_size`] rather than of the interface font:
+/// the longest of them is `MACH`, and four capitals of a proportional face take a little
+/// under three and a half times its size. That is the 34 the column was fixed at, at the
+/// app's own font.
+pub(crate) fn tag_width() -> f32 {
+    (tag_font_size() * 3.4).round()
+}
 
-/// The air an archive row's member count keeps to its left. Part of the count's own
-/// column and not of the name's: the name is the row's flex child, so whatever the count
-/// does not claim is what the name grows into, and without the gutter a sidebar dragged
-/// narrow runs the ellipsis straight into the digits.
+/// The air a folding row's count keeps to its left (`count_column`, `src/ui/parts.rs`).
+/// Part of the count's own column and not of the name's: the name is the row's flex child,
+/// so whatever the count does not claim is what the name grows into, and without the gutter
+/// a sidebar dragged narrow runs the ellipsis straight into the digits.
 pub(crate) const COUNT_GUTTER: f32 = 6.0;
+
+/// The gap between one thing on a row and the next, wherever a row is laid out by hand
+/// rather than by [`list_row_height`]'s frame: a field's name and its value, a value and
+/// the button beside it, a gesture and what it does, a prompt and the button that answers
+/// it.
+///
+/// One number, because it was eight sites written as 6 or 8 with nothing deciding which:
+/// the two widths a value cell came in were an accident of which row was written first.
+pub(crate) const ROW_GAP: f32 = 8.0;
 
 /// How long the tooltip saying the rest of a cut text waits before it appears. Zero,
 /// against `TooltipContainer`'s 500ms default: what it holds is the rest of what the

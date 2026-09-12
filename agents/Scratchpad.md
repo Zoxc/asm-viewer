@@ -506,7 +506,10 @@ own diagnostics use too -- the same hover, the same colours, the same stopped pr
 different places, so **the press is handed in** as an `EventHandler`: the contexts it needs are
 consumed by the pane while *that* renders, `use_consume` being a hook. An `EventHandler` never
 compares equal, so a target re-renders whenever its pane does; a label and a hover flag is the whole
-cost.
+cost. And the press is an `Option`, which is how the **plain-label rule is the component's**: a
+place with nowhere to go is drawn as the dim line it would have been. Both panes used to write that
+line out for themselves, four identical lines and the `match` around them, so the rule the doc
+states held only while the two agreed.
 
 What the jump **cannot** do is scroll the editor to the line, for the reason the paragraph on the
 editor gives: its scroll is private and there is no controller to hand in. So the jump *marks* the

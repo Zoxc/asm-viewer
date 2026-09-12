@@ -12,6 +12,16 @@
 
 use super::*;
 
+/// The address column, as every row of every listing draws it and copies it: sixteen
+/// upper-case hex digits and the space after them.
+///
+/// One spelling, so a change to the column's width -- or to how a 32-bit object's addresses
+/// are shown -- is one edit and cannot leave the drawn column and the copied one disagreeing.
+/// How wide the column is *drawn* is [`ADDRESS_WIDTH`], a floor the digits sit inside.
+pub(crate) fn address_column(address: u64) -> String {
+    format!("{address:016X} ")
+}
+
 /// One instruction as one line of text, which is what a copy of the row has to be: the
 /// address column, then [`instruction_line`]'s own text. The gutter is left out, being a
 /// picture of the branches. `bias` is what the listing adds to every address it draws
@@ -22,8 +32,8 @@ use super::*;
 pub(crate) fn asm_line(instruction: &Instruction, bias: u64) -> String {
     let (head, link, tail) = split(instruction, false);
     format!(
-        "{:016X} {}",
-        instruction.address.wrapping_add(bias),
+        "{}{}",
+        address_column(instruction.address.wrapping_add(bias)),
         line_of(head, link, tail)
     )
 }
@@ -256,6 +266,15 @@ impl AsmData {
             In::Alone { .. } => 0,
             In::Code { bias, .. } => bias,
         }
+    }
+
+    /// The address the row of instruction `index` draws and copies: the instruction's own,
+    /// plus the [`bias`](Self::bias) this listing adds. **The one place the two address
+    /// spaces meet**, so no row has to state which of them it wanted.
+    pub(crate) fn drawn_address(&self, index: usize) -> u64 {
+        self.assembly().instructions[index]
+            .address
+            .wrapping_add(self.bias())
     }
 
     /// How many lanes the gutter is drawn with: the symbol's own on its own, and
@@ -851,10 +870,7 @@ pub(crate) fn gutter_column(width: usize, arrows: Option<RowArrows>) -> Option<E
 /// the same.
 pub(crate) fn address_label(address: Option<u64>) -> Element {
     label()
-        .text(match address {
-            Some(address) => format!("{address:016X} "),
-            None => String::new(),
-        })
+        .text(address.map(address_column).unwrap_or_default())
         .min_width(Size::px(ADDRESS_WIDTH))
         .color(palette().address_fg)
         .max_lines(1)
@@ -1285,11 +1301,7 @@ impl Component for InstructionRow {
         // Where this row points on the source side. Worked out once here rather than in
         // each of the handlers, which all need the same answer.
         let at = self.data.position(self.index);
-        // The address as the listing draws it: the symbol's own, plus where the listing
-        // has placed the symbol's section.
-        let address = self.data.assembly().instructions[self.index]
-            .address
-            .wrapping_add(self.data.bias());
+        let address = self.data.drawn_address(self.index);
 
         // Before the text: the mark, saying whether the debug info places this
         // instruction anywhere at all; the arrow gutter; and the address, which is gutter
@@ -1498,11 +1510,12 @@ impl Component for InstructionList {
             ListingText {
                 line: Rc::new({
                     let (assembly, lanes) = (data.assembly().clone(), data.lanes().clone());
+                    let bias = data.bias();
                     move |row| {
                         lanes
                             .instruction_at(row)
                             .and_then(|index| assembly.instructions.get(index))
-                            .map(|instruction| asm_line(instruction, 0))
+                            .map(|instruction| asm_line(instruction, bias))
                             .unwrap_or_default()
                     }
                 }),
