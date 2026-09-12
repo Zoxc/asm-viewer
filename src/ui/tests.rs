@@ -26333,6 +26333,13 @@ fn nothing_pressed(asks: &async_channel::Receiver<AskedOfServer>) -> bool {
     std::iter::from_fn(|| asks.try_recv().ok()).all(|asked| matches!(asked, AskedOfServer::Read(_)))
 }
 
+/// The directory the tests around here put a project over, as [`Language::words`] and
+/// [`Language::verdict`] are asked about one: with none they answer only that, and these
+/// are past it.
+fn a_directory() -> Option<&'static Path> {
+    Some(Path::new("/p"))
+}
+
 /// The middle of the control, which is the only thing in its harness.
 fn the_control() -> (f64, f64) {
     let side = toggle_size();
@@ -26568,13 +26575,45 @@ fn a_server_that_will_not_start_leaves_the_reason_on_the_control() {
     // said. The tooltip itself is half a second of real time away (`agents/Headless.md`),
     // so what is asserted is the words it would be given.
     assert!(
-        language.read().words().contains("not found"),
+        language
+            .read()
+            .words("rust-analyzer", a_directory())
+            .contains("not found"),
         "the control would say nothing about why"
     );
 
     // And leaving the project takes the reason with it: it was about that project.
     with_a_directory(&mut test, &states, "/elsewhere");
     assert_eq!(language.read().state, Lsp::Off);
+}
+
+/// The control names the program the project is read with, and not the one this app is
+/// written in: a reader who named `clangd` is not offered a rust-analyzer to start.
+///
+/// The one test here that waits for the tooltip rather than asserting the words it would
+/// be given, since handing the program to it is the whole of this.
+#[test]
+fn the_control_names_the_program_the_project_named() {
+    let (mut test, roots, _asking, _asks) = mount_server_over(
+        |_: LspJob| None,
+        OpenProject {
+            language_server: "clangd".to_owned(),
+            ..OpenProject::default()
+        },
+    );
+    with_a_directory(&mut test, &roots.states, "/p");
+
+    // Half a second of real time under the runner (`agents/Headless.md`), so it is
+    // polled for rather than settled for.
+    test.move_cursor(the_control());
+    let said = |test: &TestingRunner| labels(test).iter().any(|drawn| drawn == "Start clangd");
+    for _ in 0..40 {
+        test.poll_n(Duration::from_millis(20), 1);
+        if said(&test) {
+            break;
+        }
+    }
+    assert!(said(&test), "{:?}", labels(&test));
 }
 
 /// An answer about a server nobody is waiting for any more is dropped -- and the handle it
@@ -27070,12 +27109,9 @@ fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
     // What the control draws a turning loader for instead of its icon, and what both
     // places say in words.
     assert!(held.busy());
-    assert!(
-        held.words().contains("reading the project"),
-        "{}",
-        held.words()
-    );
-    assert_eq!(held.verdict(true).text, "Reading the project...");
+    let words = held.words("rust-analyzer", a_directory());
+    assert!(words.contains("reading the project"), "{words}");
+    assert_eq!(held.verdict(a_directory()).text, "Reading the project...");
 
     // And it is still running: working is what it is doing, not a state of its own.
     assert!(control_is_lit(&test), "a working server is not lit");
@@ -30846,7 +30882,7 @@ fn the_server_chord_starts_the_server_and_stops_it() {
     assert!(
         language.peek().started(),
         "the chord started nothing: {:?}",
-        language.peek().words()
+        language.peek().words("rust-analyzer", a_directory())
     );
 
     chord(&mut test, Chord::Server);

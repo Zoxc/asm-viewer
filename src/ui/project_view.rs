@@ -55,13 +55,27 @@ impl OpenProject {
         given(&self.workspace_text).map(PathBuf::from)
     }
 
-    /// The program to read this project with: what the reader named, or the one the
-    /// language this app is written for is read with (`source::Language::server`).
+    /// The program to read this project with: what the reader named, or
+    /// [`OpenProject::default_server`].
     pub(crate) fn server(&self) -> String {
         given(&self.language_server)
-            .or_else(|| source::Language::Rust.server())
-            .unwrap_or_default()
+            .unwrap_or_else(|| OpenProject::default_server())
             .to_owned()
+    }
+
+    /// The program a project that names none is read with: the one the language this app
+    /// is written for is read with (`source::Language::server`). Its own function because
+    /// the Program box draws it as the placeholder, and two spellings of the default could
+    /// come to disagree.
+    pub(crate) fn default_server() -> &'static str {
+        source::Language::Rust.server().unwrap_or_default()
+    }
+
+    /// Whether the reader named a server of their own rather than leaving the app's. What
+    /// the Files box asks: a project that named its own server is asked about whatever it
+    /// opens, that being the reader's business.
+    pub(crate) fn names_server(&self) -> bool {
+        given(&self.language_server).is_some()
     }
 
     /// The extensions the reader named for that server, as they wrote them and in that
@@ -694,7 +708,7 @@ impl Component for LanguageSection {
                     |open| &open.language_server,
                     |open| &mut open.language_server,
                 ))
-                .placeholder(source::Language::Rust.server().unwrap_or_default())
+                .placeholder(OpenProject::default_server())
                 .width(Size::fill()),
             ))
             // Which of the project's files that server is for. A server answers about a
@@ -707,9 +721,9 @@ impl Component for LanguageSection {
                     proj.into_writable()
                         .map(|open| &open.language_files, |open| &mut open.language_files),
                 )
-                .placeholder(match given(&open.language_server) {
-                    Some(_) => "every file opened",
-                    None => source::Language::Rust.spoken(),
+                .placeholder(match open.names_server() {
+                    true => "every file opened",
+                    false => source::Language::Rust.spoken(),
                 })
                 .width(Size::fill()),
             ))
@@ -746,7 +760,7 @@ impl Component for LanguageSection {
                 )
                 .into_element()
             }))
-            .child(verdict_line(spoken.verdict(directory.is_some())).into_element())
+            .child(verdict_line(spoken.verdict(directory.as_deref())).into_element())
             // What the project's own settings file gave the server, so a reader can see
             // what theirs is being told; and why it could not be used, in the colour the
             // failure above is in, since that file is the one thing that stops a start

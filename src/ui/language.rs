@@ -210,10 +210,10 @@ impl Language {
 
     /// What the Project view says about it.
     ///
-    /// `directory` is whether the project has one to run a server over, which is the
-    /// state's own answer to nothing and the reason there is no server all the same.
-    pub(crate) fn verdict(&self, directory: bool) -> Verdict {
-        if !directory {
+    /// `directory` is the one a server would be run over, which the state knows nothing
+    /// of and which is the reason there is none all the same.
+    pub(crate) fn verdict(&self, directory: Option<&Path>) -> Verdict {
+        if directory.is_none() {
             return Verdict::plain("No directory");
         }
         match &self.state {
@@ -435,14 +435,23 @@ impl Language {
 
     /// What the control says on hover: the state, in words, and the reason when there is
     /// one.
-    pub(crate) fn words(&self) -> String {
+    ///
+    /// `program` is the server the project named ([`OpenProject::server`]): the control
+    /// says only `LSP`, so the tooltip is where the program is spelled out, and a project
+    /// on a toolchain of its own must not be told to start Rust's. `directory` is the one
+    /// it would be run over, as in [`Language::verdict`]; with none there is nothing to
+    /// press.
+    pub(crate) fn words(&self, program: &str, directory: Option<&Path>) -> String {
+        if directory.is_none() {
+            return "The project has no directory".to_owned();
+        }
         match &self.state {
-            Lsp::Off => "Start rust-analyzer".to_owned(),
-            Lsp::Starting { .. } => "Starting rust-analyzer".to_owned(),
+            Lsp::Off => format!("Start {program}"),
+            Lsp::Starting { .. } => format!("Starting {program}"),
             Lsp::Running { said, .. } if said.working => {
-                "rust-analyzer is reading the project".to_owned()
+                format!("{program} is reading the project")
             }
-            Lsp::Running { .. } => "Stop rust-analyzer".to_owned(),
+            Lsp::Running { .. } => format!("Stop {program}"),
             Lsp::Failed(why) => why.clone(),
         }
     }
@@ -1299,10 +1308,7 @@ impl Component for ServerButton {
 
         // With no directory there is nothing to run a server over.
         let live = directory.is_some();
-        let tooltip = match live {
-            true => held.words(),
-            false => "The project has no directory".to_owned(),
-        };
+        let tooltip = held.words(&open.server(), directory.as_deref());
 
         let (side, square) = (toggle_size(), icon_size());
         // Dim only where a press would do nothing. Off is a control the reader is meant
