@@ -72,41 +72,6 @@ pub fn own_source<'a>(files: impl IntoIterator<Item = &'a str>) -> Option<&'a st
     files.into_iter().find(|file| ends_in_source_file(file))
 }
 
-/// What a build was *of*: the parts of a scratchpad that decide the program.
-///
-/// The **name is not one of them**. It lives in `[package.metadata]`, which cargo compiles
-/// nothing from, so a rename must not make a program out of date -- the same separation of
-/// the id from the name that makes a rename a value changing and not a directory moving.
-/// The dependency rows *are*: a row changed is a different program, whatever the source
-/// says.
-///
-/// A value and not a counter, so a reader who types a character and takes it back is
-/// building the same program and is told so.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Compiled {
-    source: String,
-    dependencies: Vec<Dependency>,
-}
-
-impl Compiled {
-    /// This, as the sixteen hex digits a build writes down beside its artifact.
-    ///
-    /// The bytes hashed are the source and then each row's two halves, every one of them
-    /// ended by a byte that cannot appear in what it follows, so no two different lists
-    /// hash the same by running together.
-    pub fn digest(&self) -> String {
-        let mut bytes = self.source.clone().into_bytes();
-        bytes.push(0);
-        for dependency in &self.dependencies {
-            bytes.extend_from_slice(dependency.name.as_bytes());
-            bytes.push(0);
-            bytes.extend_from_slice(dependency.version.as_bytes());
-            bytes.push(0);
-        }
-        analysis::FileDigest::of(&bytes).to_string()
-    }
-}
-
 /// Pinned rather than left to cargo's default, so a scratchpad written today still
 /// compiles the way it did when a later cargo changes what a new package gets.
 const EDITION: &str = "2021";
@@ -124,8 +89,8 @@ const MAX_NAME: usize = 64;
 const NEW_STEM: &str = "pad";
 
 /// The id of the pad a first run opens, and so the directory it lives in. Checked against
-/// [`check_name`] by a test, which is what lets [`Scratchpad::default`] hand it out without
-/// an `Option`.
+/// [`check_name`] by a test, which is what lets [`PadId::default`] hand it out without an
+/// `Option`.
 pub const DEFAULT_ID: &str = "pad";
 
 /// What a new scratchpad starts with. `#[inline(never)]` because the point of a scratchpad
@@ -170,6 +135,13 @@ impl<'de> Deserialize<'de> for PadId {
     }
 }
 
+/// [`DEFAULT_ID`]: the pad a first run opens, and the one the last delete comes back to.
+impl Default for PadId {
+    fn default() -> PadId {
+        PadId::new(DEFAULT_ID).expect("DEFAULT_ID is a crate name")
+    }
+}
+
 impl PadId {
     /// The id this text spells, or `None` when it is not one. An `Option` and not a
     /// [`Problem`], where a dependency row's name gets one: nobody types an id, so there is
@@ -199,7 +171,7 @@ impl PadId {
 /// [`PadId`] is the identity and `name` is free text — so two pads may be called the same
 /// thing, a rename moves nothing, and a name may be empty, hold spaces or be written in any
 /// alphabet at all.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Scratchpad {
     id: PadId,
     /// What the reader calls this pad. Raw text out of a box, so it is trimmed at the
@@ -251,6 +223,41 @@ impl PartialEq for Scratchpad {
 
 impl Eq for Scratchpad {}
 
+impl Clone for Scratchpad {
+    /// Hand-written only to count. A scratchpad holds the reader's own file, so a copy of
+    /// one is the biggest thing a press can cost; [`copies`] is what says a request made
+    /// none.
+    fn clone(&self) -> Scratchpad {
+        #[cfg(test)]
+        COPIES.with(|copies| copies.set(copies.get() + 1));
+        Scratchpad {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            source: self.source.clone(),
+            dependencies: self.dependencies.clone(),
+            next_row: self.next_row,
+            gone: self.gone.clone(),
+            built: self.built.clone(),
+        }
+    }
+}
+
+/// Test-only: how many scratchpads this thread has copied.
+///
+/// [`crate::grouped::copies`]'s shape and its reason. A thread-local, because
+/// `freya-testing` runs the whole app on the test's own thread, which makes this the one
+/// thing that can settle that a request copied nothing. Nothing resets it -- a test takes
+/// the count before and after what it is about.
+#[cfg(test)]
+pub fn copies() -> usize {
+    COPIES.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// What a build left behind: where cargo put it, and what it was a build *of*.
 ///
 /// The digest and not the source itself: the source is already in the package a line away,
@@ -294,7 +301,8 @@ const NO_ROW: RowId = RowId(0);
 ///
 /// **Two rows are equal when they ask for the same crate at the same version.** The id
 /// names the row's boxes and says nothing about what the row asks for, so it is no part of
-/// what a build is *of* ([`Compiled`]) or of whether the disk copy is out of date.
+/// what a build is *of* ([`Scratchpad::digest`]) or of whether the disk copy is out of
+/// date.
 #[derive(Clone, Debug, Eq)]
 pub struct Dependency {
     pub id: RowId,
@@ -412,11 +420,14 @@ impl Dependency {
 
 impl Default for Scratchpad {
     fn default() -> Scratchpad {
-        Scratchpad::new(DEFAULT_ID).expect("DEFAULT_ID is a crate name")
+        Scratchpad::of(PadId::default())
     }
 }
 
 impl Scratchpad {
+    /// A pad under the id this text spells, or `None` when it spells none. Test-only: the
+    /// app always names a pad by a [`PadId`] it already has.
+    #[cfg(test)]
     pub fn new(id: impl Into<String>) -> Option<Scratchpad> {
         Some(Scratchpad::of(PadId::new(id)?))
     }
@@ -511,13 +522,31 @@ impl Scratchpad {
         problems
     }
 
-    /// What building this scratchpad now would be a build *of*, to be compared against what
-    /// a build already made ([`Compiled`]).
-    pub fn compiled(&self) -> Compiled {
-        Compiled {
-            source: self.source.clone(),
-            dependencies: self.dependencies.clone(),
+    /// What building this scratchpad now would be a build *of*, as the sixteen hex digits a
+    /// build writes down beside its artifact.
+    ///
+    /// The **name is no part of it**. It lives in `[package.metadata]`, which cargo compiles
+    /// nothing from, so a rename must not make a program out of date -- the same separation
+    /// of the id from the name that makes a rename a value changing and not a directory
+    /// moving. The dependency rows *are*: a row changed is a different program, whatever the
+    /// source says.
+    ///
+    /// A digest of what is there and not a counter of changes, so a reader who types a
+    /// character and takes it back is building the same program and is told so. The bytes
+    /// hashed are the source and then each row's two halves, every one of them ended by a
+    /// byte that cannot appear in what it follows, so no two different lists hash the same
+    /// by running together.
+    pub fn digest(&self) -> String {
+        let mut bytes = Vec::with_capacity(self.source.len() + 1);
+        bytes.extend_from_slice(self.source.as_bytes());
+        bytes.push(0);
+        for dependency in &self.dependencies {
+            bytes.extend_from_slice(dependency.name.as_bytes());
+            bytes.push(0);
+            bytes.extend_from_slice(dependency.version.as_bytes());
+            bytes.push(0);
         }
+        analysis::FileDigest::of(&bytes).to_string()
     }
 
     /// The `Cargo.toml` this scratchpad generates, as text. The empty `[workspace]` makes

@@ -15237,7 +15237,7 @@ fn a_run_does_not_stand_in_for_the_save_in_front_of_it() {
 
     let mut queue = VecDeque::from([PadJob::Run {
         run: 1,
-        scratchpad: scratchpad.clone(),
+        pad: scratchpad.id().clone(),
         executable: PathBuf::from("/nowhere/one"),
         emit: Box::new(|_| {}),
     }]);
@@ -15384,6 +15384,55 @@ fn a_pad_that_will_not_load_is_not_built_over_either() {
     assert!(asks.is_empty(), "a pad that would not load was built over");
 }
 
+/// **A bare cursor move copies nothing.** The editor writes through its `Writable` for a
+/// cursor move as much as for an edit -- which is what `use_driving_cursor` relies on -- so
+/// the mirror runs either way, and what keeps a move free is the comparison. It compares the
+/// rope where it sits: a copy taken to compare would be the reader's whole file allocated
+/// and thrown away per arrow key, click and drag.
+#[test]
+fn the_mirror_copies_the_editor_only_where_it_has_changed() {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+    let pad = roots.pad;
+    let text = roots.pad_text;
+
+    pump(&mut test, || pad.peek().state().opened());
+    settle(&mut test);
+
+    // An edit: the one copy is the text that is stored.
+    let before = super::pad::mirrored();
+    edit_shown(text, pad, |editor| editor.rope.insert(0, "// typed\n"));
+    pump(&mut test, || {
+        pad.peek().state().scratchpad.source.starts_with("// typed")
+    });
+    settle(&mut test);
+    assert_eq!(super::pad::mirrored() - before, 1);
+
+    // A cursor move: the mirror runs and finds the two the same.
+    let before = super::pad::mirrored();
+    edit_shown(text, pad, |editor| editor.move_cursor_to(4));
+    settle(&mut test);
+    assert_eq!(
+        super::pad::mirrored() - before,
+        0,
+        "a cursor move copied the editor's text"
+    );
+}
+
 /// An edit is written out, and a row that cannot be written says so against itself. The
 /// refusal counts the bad rows and no more: which rows they are is `Scratchpad::problems`'
 /// answer, live, so a mark follows what is typed now.
@@ -15527,7 +15576,7 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
                 build: pad_built(built.clone(), Vec::new()),
                 // What the worker does with a real build's artifact, over the committed
                 // fixture: a real parse of real DWARF, with no compiler in sight.
-                program: read_program(&built, scratchpad.compiled().digest()),
+                program: read_program(&built, scratchpad.digest()),
                 directory: None,
             },
             PadJob::Run { .. } => unreachable!("this test never runs"),
@@ -15636,7 +15685,7 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
             PadJob::Build(scratchpad) => PadAnswer::Built {
                 pad: scratchpad.id().clone(),
                 build: pad_built(built.clone(), Vec::new()),
-                program: read_program(&built, scratchpad.compiled().digest()),
+                program: read_program(&built, scratchpad.digest()),
                 directory: None,
             },
             _ => unreachable!("this test only lists, opens, saves and builds"),
@@ -15770,7 +15819,7 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
             PadJob::Build(scratchpad) => PadAnswer::Built {
                 pad: scratchpad.id().clone(),
                 build: pad_built(built.clone(), Vec::new()),
-                program: read_program(&built, scratchpad.compiled().digest()),
+                program: read_program(&built, scratchpad.digest()),
                 directory: None,
             },
             _ => unreachable!("this test only lists, opens, saves and builds"),
@@ -15894,7 +15943,7 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
                     false => PadAnswer::Built {
                         pad,
                         build: pad_built(built.clone(), Vec::new()),
-                        program: read_program(&built, scratchpad.compiled().digest()),
+                        program: read_program(&built, scratchpad.digest()),
                         directory: None,
                     },
                 }
@@ -15983,7 +16032,7 @@ fn a_pad_built_in_an_earlier_run_opens_on_its_program() {
         let mut pad = Scratchpad::new(crate::scratchpad::DEFAULT_ID).expect("a valid id");
         pad.built = Some(crate::scratchpad::Built {
             path: built.clone(),
-            digest: pad.compiled().digest(),
+            digest: pad.digest(),
         });
         pad
     };
@@ -16065,7 +16114,7 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
                 PadAnswer::Built {
                     pad: scratchpad.id().clone(),
                     build: pad_built(fixture_artifact(), Vec::new()),
-                    program: read_program(&fixture_artifact(), scratchpad.compiled().digest()),
+                    program: read_program(&fixture_artifact(), scratchpad.digest()),
                     directory: None,
                 }
             }
@@ -16617,10 +16666,8 @@ fn a_run_that_cannot_start_says_why() {
                 pad: scratchpad.id().clone(),
                 failure: None,
             },
-            PadJob::Run {
-                run, scratchpad, ..
-            } => PadAnswer::Started {
-                pad: scratchpad.id().clone(),
+            PadJob::Run { run, pad, .. } => PadAnswer::Started {
+                pad,
                 run,
                 started: Err(Failure::NoProgram("No such file or directory".to_owned())),
             },
@@ -16643,6 +16690,58 @@ fn a_run_that_cannot_start_says_why() {
         verdict.text
     );
     assert!(verdict.bad);
+}
+
+/// **A request copies no more of the pad than it sends.** `request_build` puts what is on
+/// screen on the job, so one copy is the whole of what it is for; `request_run` starts what
+/// the last build already made and wants a path, a number and an id, none of which is the
+/// reader's file. Reading those out of a whole `PadState` would copy the source twice over,
+/// its disk baseline behind it, to look at a flag.
+#[test]
+fn a_request_copies_no_more_of_the_pad_than_it_sends() {
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            // Neither request is answered for what it asked: the counts below are the
+            // request's own, and an answer landing would make copies of its own.
+            PadJob::Build(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Run { pad, .. } => PadAnswer::Saved { pad, failure: None },
+        });
+    let pad = roots.pad;
+
+    pump(&mut test, || pad.peek().state().opened());
+    already_built(pad, fixture_artifact());
+    test.sync_and_update();
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+
+    let before = crate::scratchpad::copies();
+    request_run(pad, &jobs);
+    assert_eq!(
+        crate::scratchpad::copies() - before,
+        0,
+        "a run copied the pad to read a path and an id"
+    );
+
+    let before = crate::scratchpad::copies();
+    request_build(pad, &jobs);
+    assert_eq!(
+        crate::scratchpad::copies() - before,
+        1,
+        "a build copied the pad more than the once it sends"
+    );
 }
 
 /// Every line of a pad's own output, oldest first.
@@ -16691,16 +16790,11 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
                 failure: None,
             },
             PadJob::Build(_) => unreachable!("this test never builds"),
-            PadJob::Run {
-                scratchpad, emit, ..
-            } => {
+            PadJob::Run { pad, emit, .. } => {
                 handed.lock().expect("the emitters").push(emit);
                 // No `Started`, for the reason above: this answers as a save does,
                 // which says nothing about the run and leaves the pad `Starting`.
-                PadAnswer::Saved {
-                    pad: scratchpad.id().clone(),
-                    failure: None,
-                }
+                PadAnswer::Saved { pad, failure: None }
             }
         });
     let pad = roots.pad;
@@ -16787,10 +16881,7 @@ fn a_run_asked_for_during_a_build_starts_nothing() {
             },
             // Asserted on below rather than here: a panic on the worker thread would say
             // less than the assertion the run reached it at all.
-            PadJob::Run { scratchpad, .. } => PadAnswer::Saved {
-                pad: scratchpad.id().clone(),
-                failure: None,
-            },
+            PadJob::Run { pad, .. } => PadAnswer::Saved { pad, failure: None },
         });
     let pad = roots.pad;
 
@@ -16848,10 +16939,7 @@ fn the_pads_build_chord_is_refused_while_a_build_is_on() {
             },
             // Asserted on below rather than here: a panic on the worker thread would say
             // less than the assertion the run reached it at all.
-            PadJob::Run { scratchpad, .. } => PadAnswer::Saved {
-                pad: scratchpad.id().clone(),
-                failure: None,
-            },
+            PadJob::Run { pad, .. } => PadAnswer::Saved { pad, failure: None },
         });
     let pad = roots.pad;
 
@@ -16921,10 +17009,7 @@ fn the_pads_run_and_new_chords_press_its_buttons() {
             PadJob::Build(_) => unreachable!("this test never builds"),
             // The run is never answered, so the pad stays `Starting` and Shift+F5 below is
             // pressed on a run that is going as far as the app is concerned.
-            PadJob::Run { scratchpad, .. } => PadAnswer::Saved {
-                pad: scratchpad.id().clone(),
-                failure: None,
-            },
+            PadJob::Run { pad, .. } => PadAnswer::Saved { pad, failure: None },
         });
     let pad = roots.pad;
 

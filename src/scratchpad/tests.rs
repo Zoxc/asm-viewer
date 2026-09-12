@@ -607,27 +607,6 @@ fn the_pads_own_file_is_the_one_ending_in_it() {
     assert_eq!(own_source([]), None);
 }
 
-/// What a build was of is the source and the crates, and **not** the name: cargo compiles
-/// nothing from `[package.metadata]`, so a rename must not make a program out of date.
-#[test]
-fn what_a_build_was_of_is_the_source_and_the_crates() {
-    let mut pad = Scratchpad::new("pad-1").expect("a valid id");
-    pad.source = "fn main() {}".to_owned();
-    let built = pad.compiled();
-
-    let mut renamed = pad.clone();
-    renamed.name = "something else".to_owned();
-    assert_eq!(renamed.compiled(), built, "a rename is not an edit");
-
-    let mut edited = pad.clone();
-    edited.source.push('\n');
-    assert_ne!(edited.compiled(), built, "an edit is one");
-
-    let mut crated = pad.clone();
-    crated.add_dependency("rand", "0.8");
-    assert_ne!(crated.compiled(), built, "a crate row is one too");
-}
-
 /// What a build made goes into the package, so a later run opens the pad on its program
 /// rather than on nothing -- and comes back out of it exactly as it went in, `load_from`
 /// being `write_to`'s inverse.
@@ -637,7 +616,7 @@ fn what_the_last_build_made_is_written_and_read_back() {
     let mut pad = Scratchpad::new("pad-1").expect("a valid id");
     pad.built = Some(Built {
         path: PathBuf::from("/elsewhere/target/debug/pad-1"),
-        digest: pad.compiled().digest(),
+        digest: pad.digest(),
     });
     pad.write_to(&directory).expect("the package is written");
 
@@ -659,27 +638,30 @@ fn what_the_last_build_made_is_written_and_read_back() {
     );
 }
 
-/// The digest is of what a build compiles and nothing else, and it is the written form the
-/// package keeps: sixteen lowercase hex digits, compared as text.
+/// The digest is of what a build compiles and nothing else -- the source and the dependency
+/// rows, and **not** the name, which lives in `[package.metadata]` and compiles nothing. It
+/// is the written form the package keeps: sixteen lowercase hex digits, compared as text.
+///
+/// **The bytes hashed are pinned**, here and by the packages already on readers' disks: a
+/// digest that changed would say every pad they have is out of date.
 #[test]
 fn the_digest_says_what_a_build_was_of() {
     let mut pad = Scratchpad::new("pad-1").expect("a valid id");
     pad.source = "fn main() {}".to_owned();
-    let digest = pad.compiled().digest();
-    assert_eq!(digest.len(), 16);
-    assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+    let digest = pad.digest();
+    assert_eq!(digest, "eaf9a20ec31f55b7");
 
     let mut renamed = pad.clone();
     renamed.name = "something else".to_owned();
-    assert_eq!(
-        renamed.compiled().digest(),
-        digest,
-        "a rename is not an edit"
-    );
+    assert_eq!(renamed.digest(), digest, "a rename is not an edit");
 
     let mut edited = pad.clone();
     edited.source.push(' ');
-    assert_ne!(edited.compiled().digest(), digest);
+    assert_ne!(edited.digest(), digest, "an edit is one");
+
+    let mut crated = pad.clone();
+    crated.add_dependency("rand", "0.8");
+    assert_ne!(crated.digest(), digest, "a crate row is one too");
 
     // The rows are ended one by one, so two lists that would run together as one string
     // are still two.
@@ -687,7 +669,7 @@ fn the_digest_says_what_a_build_was_of() {
     dependencies(&mut one, [("ab", "1"), ("c", "2")]);
     let mut other = pad.clone();
     dependencies(&mut other, [("a", "bc"), ("1", "2")]);
-    assert_ne!(one.compiled().digest(), other.compiled().digest());
+    assert_ne!(one.digest(), other.digest());
 }
 
 /// **A row that has gone is still somewhere to write.** The boxes of a deleted row go on

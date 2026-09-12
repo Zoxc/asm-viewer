@@ -251,9 +251,11 @@ never say it again. That comparison is also what makes typing along one line wri
 **An edit since the build says so over the listing**, the Source pane's checksum row in a second
 place -- and exact where that one is a guess, since the app wrote the source this program was
 built from and kept it beside the program. What a build was *of* is the source and the dependency
-rows (`Compiled`), and deliberately **not** the name: it lives in `[package.metadata]`, which cargo
-compiles nothing from, so a rename must not make a listing out of date. A value and not a counter,
-so a reader who types a character and takes it back is building the same program and is told so.
+rows (`Scratchpad::digest`, which hashes them where they sit rather than gathering them into a
+value of its own first), and deliberately **not** the name: it lives in `[package.metadata]`, which
+cargo compiles nothing from, so a rename must not make a listing out of date. A digest of what is
+there and not a counter of changes, so a reader who types a character and takes it back is building
+the same program and is told so.
 `built_from` is taken from the scratchpad the **job** carried, never from what is on screen when
 the answer lands, so a build the reader typed during says it is out of date the moment it arrives.
 

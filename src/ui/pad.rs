@@ -186,8 +186,8 @@ impl Pads {
     }
 
     pub(crate) fn state_mut(&mut self) -> &mut PadState {
-        let shown = self.shown.clone();
-        self.pads.get_mut(&shown).expect("the shown pad")
+        let Pads { shown, pads, .. } = self;
+        pads.get_mut(shown).expect("the shown pad")
     }
 
     /// Hold a pad the listing named, so the panel can draw a name for one that has never
@@ -405,7 +405,7 @@ impl Pads {
             Some(next) => next.clone(),
             // The last pad. `show` holds a state for the default one, which is what
             // `Pads::default` starts with.
-            None => Scratchpad::default().id().clone(),
+            None => PadId::default(),
         };
         self.show(next);
         (!self.state().opened()).then(|| self.state().scratchpad.clone())
@@ -499,8 +499,9 @@ pub(crate) struct PadState {
     /// would land in the second's output.
     run: u64,
     pub(crate) run_state: RunState,
-    /// What the running program has written. Behind an `Arc` because this struct is cloned
-    /// on every render and the deque under it holds thousands of lines.
+    /// What the running program has written. Behind an `Arc` because the deque under it
+    /// holds thousands of lines and the pane draws them by that pointer: a batch of
+    /// arriving lines is one `Arc::make_mut` and nothing else copies them.
     pub(crate) output: Arc<RunOutput>,
 }
 
@@ -586,7 +587,7 @@ impl PadState {
     pub(crate) fn out_of_date(&self) -> bool {
         self.program
             .as_ref()
-            .is_some_and(|program| program.built_from != self.scratchpad.compiled().digest())
+            .is_some_and(|program| program.built_from != self.scratchpad.digest())
     }
 
     /// Whether a program is on its way up or already going.
@@ -630,20 +631,22 @@ pub(crate) enum PadJob {
     List,
     /// Make a pad nobody has named yet and write its package.
     New,
-    /// Take a pad's package off the disk. An id and not a whole scratchpad like the rest:
-    /// the app has already let the pad go, and what is deleted is the directory the id
-    /// names.
+    /// Take a pad's package off the disk. An id and not a whole scratchpad: the app has
+    /// already let the pad go, and what is deleted is the directory the id names.
     Delete(PadId),
     Open(Scratchpad),
     Save(Scratchpad),
     Build(Scratchpad),
     /// Start what the last build made. It goes to the worker because it *forks* and
     /// because the directory it hands the program is that thread's, not because it blocks.
+    ///
+    /// An id and not a whole scratchpad, like [`PadJob::Delete`]: all the worker wants of
+    /// it is the directory to fork in, which the id alone says.
     Run {
         /// Which run this is, so a handle arriving after the reader has moved on can be
         /// recognised and stopped rather than stored. See [`PadState::run`].
         run: u64,
-        scratchpad: Scratchpad,
+        pad: PadId,
         executable: PathBuf,
         /// Where each line goes as it is written. A boxed callback rather than a channel,
         /// so `scratchpad.rs` never learns what the app carries its values in.
@@ -653,24 +656,22 @@ pub(crate) enum PadJob {
 
 impl PadJob {
     /// Which pad this job is about, or `None` for the two that are about the set of them
-    /// rather than about one. Every job that names a pad carries the whole scratchpad, so
-    /// the name is already in hand; what reads it is the supersede rule, which is per pad.
+    /// rather than about one. What reads it is the supersede rule, which is per pad.
     pub(crate) fn pad(&self) -> Option<&PadId> {
         match self {
             PadJob::List | PadJob::New => None,
-            PadJob::Delete(pad) => Some(pad),
-            PadJob::Open(scratchpad)
-            | PadJob::Save(scratchpad)
-            | PadJob::Build(scratchpad)
-            | PadJob::Run { scratchpad, .. } => Some(scratchpad.id()),
+            PadJob::Delete(pad) | PadJob::Run { pad, .. } => Some(pad),
+            PadJob::Open(scratchpad) | PadJob::Save(scratchpad) | PadJob::Build(scratchpad) => {
+                Some(scratchpad.id())
+            }
         }
     }
 }
 
 /// What it answers with.
 ///
-/// Every answer says which pad it is about, where a job says it by carrying the whole
-/// scratchpad. It has to: an answer can land long after the reader has moved to another
+/// Every answer says which pad it is about, as a job does by carrying the scratchpad or
+/// the id. It has to: an answer can land long after the reader has moved to another
 /// pad, and it belongs to the pad that asked and to no other. The exception is
 /// [`PadAnswer::Deleted`], which is about a pad the app let go of before it asked.
 pub(crate) enum PadAnswer {
@@ -835,7 +836,7 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
                 .as_ref()
                 .ok()
                 .and_then(|build| build.executable.as_deref())
-                .and_then(|executable| read_program(executable, scratchpad.compiled().digest()));
+                .and_then(|executable| read_program(executable, scratchpad.digest()));
             PadAnswer::Built {
                 pad: scratchpad.id().clone(),
                 build,
@@ -845,17 +846,16 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
         }
         PadJob::Run {
             run,
-            scratchpad,
+            pad,
             executable,
             emit,
-        } => PadAnswer::Started {
-            pad: scratchpad.id().clone(),
-            run,
-            started: match &store {
-                Some(store) => run_in(&executable, &scratchpad.id().directory_in(store), emit),
+        } => {
+            let started = match &store {
+                Some(store) => run_in(&executable, &pad.directory_in(store), emit),
                 None => Err(Failure::NoDirectory),
-            },
-        },
+            };
+            PadAnswer::Started { pad, run, started }
+        }
     }
 }
 
@@ -1018,17 +1018,26 @@ pub(crate) fn use_scratchpad_with(
     // the comparison is what makes a bare cursor move free. The **shown** pad and no other,
     // because it is the only buffer anything can be typed into -- and because a buffer that
     // is not on screen cannot have changed since it was last mirrored.
+    //
+    // The rope is compared where it sits and copied only where the two differ. The editor
+    // writes through its `Writable` for a cursor move as much as for an edit -- which is
+    // what `use_driving_cursor` in `pad_view.rs` relies on -- so a copy taken to compare
+    // would be the reader's whole file allocated and dropped per arrow key.
     use_side_effect(move || {
         let buffers = text.read();
         let shown = pad.peek().shown().clone();
         if !buffers.holds(&shown) {
             return;
         }
-        let typed = buffers.get(&shown).rope.to_string();
+        let editor = buffers.get(&shown);
+        let typed = (editor.rope != pad.peek().state().scratchpad.source).then(|| {
+            #[cfg(test)]
+            MIRRORED.with(|copies| copies.set(copies.get() + 1));
+            editor.rope.to_string()
+        });
         drop(buffers);
 
-        let changed = pad.peek().state().scratchpad.source != typed;
-        if changed {
+        if let Some(typed) = typed {
             pad.write().state_mut().scratchpad.source = typed;
         }
     });
@@ -1230,10 +1239,16 @@ pub(crate) fn superseded(
 /// read would put the default manifest and source over the reader's own two files -- the
 /// loss leaving such a pad unopened is there to prevent, one deliberate press away.
 pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
-    let state = pad.peek().state().clone();
-    if state.building || !state.opened() {
+    // The scratchpad is copied only on the path that sends it: the two guards read a flag
+    // each.
+    let asked = {
+        let pads = pad.peek();
+        let state = pads.state();
+        (!state.building && state.opened()).then(|| state.scratchpad.clone())
+    };
+    let Some(scratchpad) = asked else {
         return;
-    }
+    };
 
     // A rebuild stops what **this** pad started: cargo is about to write over the very file
     // that process is running. Another pad's program is about another executable and goes
@@ -1241,7 +1256,7 @@ pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
     stop_run(pad);
 
     pad.write().state_mut().building = true;
-    jobs.jobs.send(PadJob::Build(state.scratchpad));
+    jobs.jobs.send(PadJob::Build(scratchpad));
 }
 
 /// Run what the last build made. Nothing happens without an executable, and nothing
@@ -1253,21 +1268,30 @@ pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
 /// Whatever was running is stopped first: two generations of output arriving into one list
 /// is a pane with no answer to "what is this".
 pub(crate) fn request_run(mut pad: State<Pads>, jobs: &PadJobs) {
-    let state = pad.peek().state().clone();
-    if state.building {
-        return;
-    }
-    let Some(executable) = state.executable().map(Path::to_path_buf) else {
+    // The output starts empty and the run is numbered, so everything still on its way from
+    // the run before this one is for a number nobody is listening to. The number is this
+    // pad's own, which is enough because an event carries the pad beside it. The executable
+    // and the id are read here too, so starting a program copies no part of the pad.
+    let asked = {
+        let pads = pad.peek();
+        let state = pads.state();
+        state
+            .executable()
+            .filter(|_| !state.building)
+            .map(|executable| {
+                (
+                    executable.to_path_buf(),
+                    state.run + 1,
+                    state.scratchpad.id().clone(),
+                )
+            })
+    };
+    let Some((executable, run, name)) = asked else {
         return;
     };
 
     stop_run(pad);
 
-    // The output starts empty and the run is numbered, so everything still on its way from
-    // the run before this one is for a number nobody is listening to. The number is this
-    // pad's own, which is enough because an event carries the pad beside it.
-    let run = state.run + 1;
-    let name = state.scratchpad.id().clone();
     let mut pads = pad.write();
     let shown = pads.state_mut();
     shown.run = run;
@@ -1278,7 +1302,7 @@ pub(crate) fn request_run(mut pad: State<Pads>, jobs: &PadJobs) {
     let events = jobs.events.clone();
     jobs.jobs.send(PadJob::Run {
         run,
-        scratchpad: state.scratchpad,
+        pad: name.clone(),
         executable,
         // `send_blocking` and not `try_send`: a full channel has to *stop* the thread
         // reading the pipe, which is what puts the brakes on the program itself.
@@ -1317,6 +1341,22 @@ fn stop_run_of(mut pad: State<Pads>, name: &PadId) {
         }
         None | Some(RunState::Idle | RunState::Over(_)) => {}
     }
+}
+
+/// Test-only: how many times the mirror above has copied the editor's text.
+///
+/// [`crate::grouped::copies`]'s shape and its reason. A thread-local, because
+/// `freya-testing` runs the whole app on the test's own thread, which makes this the one
+/// thing that can settle that a cursor move copied nothing. Nothing resets it -- a test
+/// takes the count before and after what it is about.
+#[cfg(test)]
+pub(crate) fn mirrored() -> usize {
+    MIRRORED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static MIRRORED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
