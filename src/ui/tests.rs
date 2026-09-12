@@ -15248,7 +15248,7 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
 /// The pane says what there is before a build, rather than an empty half.
 #[test]
 fn the_scratchpad_says_there_is_nothing_built_yet() {
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, _asking, _asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
@@ -15336,7 +15336,7 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
 /// the editor having none.
 #[test]
 fn the_scratchpads_listing_can_be_put_away() {
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, _asking, _asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
@@ -15640,7 +15640,7 @@ fn a_pad_built_in_an_earlier_run_opens_on_its_program() {
     };
     let restored = opened.clone();
 
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, _asking, _asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             // What the worker does for a pad whose package names a build.
@@ -15971,7 +15971,7 @@ fn label_centre(test: &TestingRunner, text: &str) -> Option<(f64, f64)> {
 /// artifact as a binary on its way past; what is under test is the pane.
 #[test]
 fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, _asking, _asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
@@ -16058,7 +16058,7 @@ fn washed(test: &TestingRunner) -> usize {
 /// promise a press, and no press. An affordance that did nothing would be the worse answer.
 #[test]
 fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, _asking, _asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
@@ -16137,7 +16137,7 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
 /// over the path rather than a `cfg` buys.
 #[test]
 fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, _asking, _asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
@@ -16750,7 +16750,7 @@ fn label_boxes(test: &TestingRunner, prefix: &str) -> Vec<Area> {
 /// label no wider than the window that is several lines tall is a label that wrapped.
 #[test]
 fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, _asking, _asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
@@ -31324,7 +31324,7 @@ fn the_finder_chord_is_declined_by_a_filter_box() {
 /// event standing, the editor's tail cancelling the one it keeps.
 #[test]
 fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, _asking, _asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
