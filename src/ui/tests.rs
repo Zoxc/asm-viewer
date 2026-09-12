@@ -14023,9 +14023,7 @@ fn scratchpad_wiring() {
     let text = use_consume::<PadText>().0;
     let work = use_consume::<Working>().0;
     let mut asking = use_consume::<Asking>().0;
-    let store = use_consume::<Storage>().0;
-
-    let jobs = use_scratchpad_with(pad, text, store, move |job| work(job));
+    let jobs = use_scratchpad_with(pad, text, move |job| work(job));
     use_hook(move || asking.set(Some(jobs)));
 }
 
@@ -15292,6 +15290,7 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
                 // What the worker does with a real build's artifact, over the committed
                 // fixture: a real parse of real DWARF, with no compiler in sight.
                 program: read_program(&built, scratchpad.compiled().digest()),
+                directory: None,
             },
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
@@ -15400,6 +15399,7 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
                 pad: scratchpad.id().clone(),
                 build: pad_built(built.clone(), Vec::new()),
                 program: read_program(&built, scratchpad.compiled().digest()),
+                directory: None,
             },
             _ => unreachable!("this test only lists, opens, saves and builds"),
         });
@@ -15533,6 +15533,7 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
                 pad: scratchpad.id().clone(),
                 build: pad_built(built.clone(), Vec::new()),
                 program: read_program(&built, scratchpad.compiled().digest()),
+                directory: None,
             },
             _ => unreachable!("this test only lists, opens, saves and builds"),
         });
@@ -15650,11 +15651,13 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
                         pad,
                         build: pad_rejected(Vec::new(), "refused".to_owned()),
                         program: None,
+                        directory: None,
                     },
                     false => PadAnswer::Built {
                         pad,
                         build: pad_built(built.clone(), Vec::new()),
                         program: read_program(&built, scratchpad.compiled().digest()),
+                        directory: None,
                     },
                 }
             }
@@ -15825,6 +15828,7 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
                     pad: scratchpad.id().clone(),
                     build: pad_built(fixture_artifact(), Vec::new()),
                     program: read_program(&fixture_artifact(), scratchpad.compiled().digest()),
+                    directory: None,
                 }
             }
             PadJob::Run { .. } => unreachable!("this test never runs"),
@@ -15870,20 +15874,23 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
 
 /// A pad's package is written to the same `src/main.rs` on every build, so a build that
 /// forgot nothing would leave every pane on the artifact drawing the pad as it was two
-/// builds ago. The root a build forgets is the pad's own package directory.
+/// builds ago. The root a build forgets is **the one the worker says it built in**: the
+/// answer carries it, and nothing here asks a second [`Store`] where the package would
+/// be. So the directory below is this test's own, not the one the app's store names.
 #[test]
-fn a_finished_pad_build_forgets_the_pad_package() {
-    // The entry that stands for the pad's source. A file of this test's own, filed under a
-    // name inside the package: the pad's directory is the reader's own, and a test goes
-    // nowhere near it.
+fn a_finished_pad_build_forgets_the_directory_it_built_in() {
+    // Standing in for the package the build wrote: a directory of this test's own, since
+    // the pad's real one is the reader's and a test goes nowhere near it.
     let directory = Seeded::directory("pad-build");
     let stand_in = source_text(&directory.file("stand-in.rs", "fn main() {}\n")).expect("the file");
+    let source = directory.join("src").join("main.rs");
 
+    let built_in = directory.to_path_buf();
     let (mut test, roots, asking, _asks) =
-        mount_scratchpad(scratchpad_harness, |job: PadJob| match job {
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::Open(scratchpad) => PadAnswer::Opened {
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             // Rejected and not built: a build that the compiler refused wrote the package
@@ -15893,20 +15900,13 @@ fn a_finished_pad_build_forgets_the_pad_package() {
                 build: pad_rejected(Vec::new(), "refused".to_owned()),
                 // A build that made nothing leaves the program before it.
                 program: None,
+                directory: Some(built_in.clone()),
             },
             _ => unreachable!("this test only opens and builds"),
         });
-    let states = roots.states;
     let pad = roots.pad;
 
     pump(&mut test, || pad.peek().state().opened());
-    let store = states
-        .store
-        .peek()
-        .clone()
-        .expect("a store to keep pads in");
-    let package = pad.peek().state().scratchpad.id().directory_in(&store);
-    let source = package.join("src").join("main.rs");
     highlighted().insert(source.clone(), Some(stand_in.0.clone()));
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
@@ -15917,8 +15917,6 @@ fn a_finished_pad_build_forgets_the_pad_package() {
         !highlighted().contains_key(&source),
         "the build left the pad's source as it was read before it"
     );
-
-    forget_source_under(&directory);
 }
 
 /// The crate each dependency row is asking for, in the order the rows are drawn.

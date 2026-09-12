@@ -325,9 +325,8 @@ impl Pads {
         Some(scratchpad)
     }
 
-    /// The build the worker ran and the program it made, read. Answers with the pad's
-    /// directory when it is one whose source the app has read, since a build writes the
-    /// package on its way and what a pane has read of it is the version before.
+    /// The build the worker ran and the program it made, read. Answers whether the pad
+    /// took it: only then has the package on the disk moved under what the panes read.
     ///
     /// A pad that asked for no build takes nothing: its id was handed out again after a
     /// delete -- [`Pads::forget`] comes back to the default pad -- and the answer belongs
@@ -337,9 +336,10 @@ impl Pads {
         name: &PadId,
         build: Result<Build, Failure>,
         program: Option<Program>,
-        store: Option<&Store>,
-    ) -> Option<PathBuf> {
-        let state = self.get_mut(name).filter(|state| state.building)?;
+    ) -> bool {
+        let Some(state) = self.get_mut(name).filter(|state| state.building) else {
+            return false;
+        };
         state.building = false;
         // What the build made, written into the package so a later run opens the pad on
         // its program rather than on nothing. Only a build that produced one replaces it,
@@ -362,7 +362,7 @@ impl Pads {
         if program.is_some() {
             state.program = program;
         }
-        store.map(|store| state.scratchpad.id().directory_in(store))
+        true
     }
 
     /// The handle to a started program, or why there is none.
@@ -709,6 +709,11 @@ pub(crate) enum PadAnswer {
         /// What the build made, read on the way back. `None` for a build that made
         /// nothing, and for one whose artifact could not be parsed.
         program: Option<Program>,
+        /// The directory the build ran in, said by the thread that wrote it, so the
+        /// taker forgets what the panes read of these very files rather than asking a
+        /// second [`Store`] where they would be. `None` where there was no store:
+        /// nothing was written and nothing needs forgetting.
+        directory: Option<PathBuf>,
     },
     /// The handle to a started program, or why there is none. What the program then *says*
     /// arrives on the other channel.
@@ -814,8 +819,11 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
             },
         },
         PadJob::Build(scratchpad) => {
-            let build = match &store {
-                Some(store) => scratchpad.build_in(&scratchpad.id().directory_in(store)),
+            let directory = store
+                .as_ref()
+                .map(|store| scratchpad.id().directory_in(store));
+            let build = match &directory {
+                Some(directory) => scratchpad.build_in(directory),
                 None => Err(Failure::NoDirectory),
             };
             // Read here and not in a job of its own, so what the pane holds and the
@@ -832,6 +840,7 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
                 pad: scratchpad.id().clone(),
                 build,
                 program,
+                directory,
             }
         }
         PadJob::Run {
@@ -855,12 +864,11 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
 /// syntax blocks. See this file's header for why the worker is one thread, why saves
 /// supersede, and why a run and a stop do not go through it.
 ///
-/// The work and the store are handed in, so a test can drive the wiring without writing to
-/// the machine's own state directory or waiting on a compiler.
+/// The work is handed in, so a test can drive the wiring without writing to the machine's
+/// own state directory or waiting on a compiler.
 pub(crate) fn use_scratchpad_with(
     mut pad: State<Pads>,
     mut text: State<PadBuffers>,
-    store: State<Option<Store>>,
     work: impl Fn(PadJob) -> PadAnswer + Send + 'static,
 ) -> PadJobs {
     // What a running program is saying, on a channel of the app's own and taken by a task
@@ -971,13 +979,13 @@ pub(crate) fn use_scratchpad_with(
                 pad: name,
                 build,
                 program,
+                directory,
             } => {
-                let store_now = store.peek().clone();
-                let directory = pad.write().built(&name, build, program, store_now.as_ref());
+                let taken = pad.write().built(&name, build, program);
                 // The build wrote the package on its way, to the same `src/main.rs` as
                 // last time, so what a pane has read of this pad is the version before
-                // it.
-                if let Some(directory) = directory {
+                // it. The directory is the one the build ran in.
+                if let (true, Some(directory)) = (taken, directory) {
                     forget_source_under(&directory);
                 }
             }

@@ -106,20 +106,15 @@ fn a_build_answered_for_a_pad_that_asked_for_none_is_not_taken() {
     let mut pads = Pads::default();
     pads.show(id("pad-a"));
     let build: Result<Build, Failure> = Err(Failure::NoDirectory);
-    // Named, not written: `built` only asks the store where the package would be.
-    let store = Store::at("/nowhere");
 
     assert!(
-        pads.built(&id("pad-a"), build.clone(), None, Some(&store))
-            .is_none(),
+        !pads.built(&id("pad-a"), build.clone(), None),
         "the pad that asked has gone, and its id was handed out again"
     );
     assert!(pads.get(&id("pad-a")).expect("held").built.is_none());
 
     pads.state_mut().building = true;
-    assert!(pads
-        .built(&id("pad-a"), build, None, Some(&store))
-        .is_some());
+    assert!(pads.built(&id("pad-a"), build, None));
     let state = pads.get(&id("pad-a")).expect("held");
     assert!(!state.building && state.built.is_some());
 }
@@ -155,7 +150,7 @@ fn only_a_build_that_wrote_the_package_clears_the_unsaved_marker() {
         let mut pads = Pads::default();
         pads.show(id("pad-a"));
         pads.state_mut().building = true;
-        pads.built(&id("pad-a"), Err(failure.clone()), None, None);
+        pads.built(&id("pad-a"), Err(failure.clone()), None);
         assert_eq!(
             pads.state().unsaved,
             Some(failure),
@@ -175,6 +170,6 @@ fn only_a_build_that_wrote_the_package_clears_the_unsaved_marker() {
         },
         executable: None,
     };
-    pads.built(&id("pad-a"), Ok(refused_by_cargo), None, None);
+    pads.built(&id("pad-a"), Ok(refused_by_cargo), None);
     assert_eq!(pads.state().unsaved, None);
 }
