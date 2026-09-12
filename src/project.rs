@@ -191,14 +191,14 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl Project {
-    /// The half of this that is what the user said.
-    fn details(&self) -> Details {
-        Details {
-            directory: self.directory.clone(),
-            language_server: self.language_server.clone(),
-            language_files: self.language_files.clone(),
-            cargo: self.cargo.clone(),
-        }
+    /// Whether what the user said about this project is already what `details` says.
+    /// Field by field, so neither side is cloned to be compared: this is asked on every
+    /// state change and answers "no change" almost every time.
+    fn is_about(&self, details: &Details) -> bool {
+        self.directory == details.directory
+            && self.language_server == details.language_server
+            && self.language_files == details.language_files
+            && self.cargo == details.cargo
     }
 
     /// Turn every path in this project the way `spelling` says, against the directory the
@@ -1269,12 +1269,23 @@ impl SavedEntry {
 /// keyed by the tab and the place it belongs to.
 ///
 /// One bundle rather than four arguments handed down, since a saved place wants all
-/// four and wants them keyed the same way.
-struct LeftAt<'a> {
-    asm_rows: &'a Positions<Entry>,
-    src_rows: &'a Positions<Entry>,
-    places: &'a Positions<Entry, Spot>,
-    driven: &'a Driven,
+/// four and wants them keyed the same way. Built by the caller, and by name: three of the
+/// four are `&Positions` of near-identical type, so a field name says which is which
+/// where a position could not.
+pub struct LeftAt<'a> {
+    pub asm_rows: &'a Positions<Entry>,
+    pub src_rows: &'a Positions<Entry>,
+    pub places: &'a Positions<Entry, Spot>,
+    pub driven: &'a Driven,
+}
+
+/// What the app noticed that is not a place, as [`Session::from_state`] is handed it: the
+/// agreement to run a language server, what the last build produced, and how the window
+/// was arranged.
+pub struct Noticed<'a> {
+    pub trusted: bool,
+    pub artifacts: &'a [PathBuf],
+    pub ui: SavedUi,
 }
 
 impl LeftAt<'_> {
@@ -1328,27 +1339,20 @@ impl Session {
     /// app's state is turned into what would be saved, [`binaries`] being the other half
     /// of it for the other file. `tabs` is each open tab in strip order: its id, its
     /// trail, and whether it is the temporal one; the four maps under it are where each
-    /// place was left ([`LeftAt`]).
-    #[allow(clippy::too_many_arguments)]
+    /// place was left ([`LeftAt`]), and the rest of what the app noticed is [`Noticed`].
     pub fn from_state(
         objects: &[Arc<Object>],
         tabs: &[SavingTab<'_>],
-        asm_rows: &Positions<Entry>,
-        src_rows: &Positions<Entry>,
-        places: &Positions<Entry, Spot>,
-        driven: &Driven,
+        left: &LeftAt<'_>,
         shown: OnScreen<'_>,
         visits: &Visits,
-        artifacts: &[PathBuf],
-        trusted: bool,
-        ui: SavedUi,
+        noticed: Noticed<'_>,
     ) -> Session {
-        let left = LeftAt {
-            asm_rows,
-            src_rows,
-            places,
-            driven,
-        };
+        let Noticed {
+            trusted,
+            artifacts,
+            ui,
+        } = noticed;
         Session {
             // Absent here and stamped by [`Saves::record`]: which project this is belongs
             // to the save policy, not to the state the app is in.
@@ -1625,68 +1629,67 @@ impl Saves {
     /// and is set here as ever: it is what has not been written.
     fn record(
         &mut self,
-        details: Details,
-        binaries: Vec<PathBuf>,
+        details: &Details,
+        binaries: &[PathBuf],
         loading: bool,
-        bookmarks: Vec<Bookmark>,
+        bookmarks: &[Bookmark],
         session: Session,
     ) -> Option<Recorded> {
         // Stamped here rather than by the caller: which project this is belongs to the
         // policy and not to the UI, and stamping before the comparison is what keeps the
-        // baseline and what arrives comparable.
+        // baseline and what arrives comparable. The only stamp: the writes take both
+        // halves as this hands them back.
         let session = Session {
             id: self.written.id,
             ..session
         };
         let binaries_changed = !loading && self.binaries != binaries;
-        let details_changed = self.written.details() != details;
+        let details_changed = !self.written.is_about(details);
         let bookmarks_changed = self.written.bookmarks != bookmarks;
         let session_changed = !loading && *self.latest() != session;
 
-        if !binaries_changed && !details_changed && !bookmarks_changed {
-            if session_changed {
-                self.pending = Some(session);
+        // A binaries change carries the session to disk with it; anything else leaves it
+        // pending. Decided here, once, so the two ways out below say nothing about it.
+        let carried = match binaries_changed {
+            true => Some(session),
+            false => {
+                if session_changed {
+                    self.pending = Some(session);
+                }
+                None
             }
+        };
+
+        if !binaries_changed && !details_changed && !bookmarks_changed {
             return None;
         }
 
-        let project = Project {
-            id: self.written.id,
-            directory: details.directory,
-            language_server: details.language_server,
-            language_files: details.language_files,
-            // A write that is not about the binaries keeps the ones already in the file;
-            // see [`Saves::binaries`].
-            binaries: match binaries_changed {
-                true => binaries,
-                false => self.written.binaries.clone(),
-            },
-            cargo: details.cargo,
-            bookmarks,
-        };
-
-        if binaries_changed {
-            return Some(Recorded {
-                project,
-                binaries_changed,
-                session: Some(session),
-            });
-        }
-
-        if session_changed {
-            self.pending = Some(session);
-        }
         Some(Recorded {
-            project,
+            project: Project {
+                id: self.written.id,
+                directory: details.directory.clone(),
+                language_server: details.language_server.clone(),
+                language_files: details.language_files.clone(),
+                // A write that is not about the binaries keeps the ones already in the
+                // file; see [`Saves::binaries`].
+                binaries: match binaries_changed {
+                    true => binaries.to_vec(),
+                    false => self.written.binaries.clone(),
+                },
+                cargo: details.cargo.clone(),
+                bookmarks: bookmarks.to_vec(),
+            },
             binaries_changed,
-            session: None,
+            session: carried,
         })
     }
 
-    /// Whatever was recorded but not written, or `None` when the two already agree. Left
-    /// pending until [`Saves::wrote_session`] says it reached the disk.
-    fn owing(&self) -> Option<Session> {
-        self.pending.clone()
+    /// Take whatever was recorded but not written, or `None` when the two already agree.
+    /// Taken rather than cloned: the caller either notes it written
+    /// ([`Saves::wrote_session`]) or hands it back ([`Saves::owes_session`]), so a copy
+    /// left behind would only be dropped.
+    fn take_owing(&mut self) -> Option<Session> {
+        self.pending.take()
     }
 
     /// Note that `project` reached `project.toml`: it is now what the file holds. The
@@ -1753,15 +1756,6 @@ fn saves() -> MutexGuard<'static, Saves> {
     // save into a crashed app.
     SAVES.lock().unwrap_or_else(|error| error.into_inner())
 }
-
-/// The project file everything is written into, or `None` when there is no project open.
-///
-/// **It creates nothing.** It used to claim a file for an unsaved project on the first write
-/// that had anything to say, which was how "opening files with no project makes one" worked
-/// — but with no project the reader can still arrange the window and open Settings, and a
-/// lazy claim turns any of that into a project appearing on disk behind their back. A
-/// project is made where the reader asks for one ([`start_new`], reached from the menu), and
-/// with none open the two write paths do nothing at all.
 
 /// Take `path` out of `recents.toml`, writing the file only when it was there. What a
 /// project deleted, or moved somewhere else, leaves behind.
@@ -2008,10 +2002,10 @@ pub fn delete() -> bool {
 /// every state change. `loading` says the binaries are still arriving, which is what
 /// keeps a half-read list off the disk.
 pub fn record(
-    details: Details,
-    binaries: Vec<PathBuf>,
+    details: &Details,
+    binaries: &[PathBuf],
     loading: bool,
-    bookmarks: Vec<Bookmark>,
+    bookmarks: &[Bookmark],
     session: Session,
 ) {
     // The write happens under the lock, so two writes can never reach the file out of
@@ -2028,21 +2022,12 @@ pub fn record(
         }
         return;
     };
-    // The id is only minted when the file is claimed, so a project that was not open when
-    // the record was decided has one now and both halves take it.
-    let project = Project {
-        id: saves.written.id,
-        ..recorded.project
-    };
+    let project = recorded.project;
 
     if write_or_warn(&file, |path| project.save_to(&store, path)) {
         saves.wrote_project(&project, recorded.binaries_changed);
     }
     if let Some(session) = recorded.session {
-        let session = Session {
-            id: saves.written.id,
-            ..session
-        };
         match write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {
             true => saves.wrote_session(session),
             false => saves.owes_session(session),
@@ -2054,19 +2039,17 @@ pub fn record(
 /// which is what makes it safe to call on a timer.
 pub fn flush() {
     let mut saves = saves();
-    let Some(session) = saves.owing() else {
+    let Some(session) = saves.take_owing() else {
         return;
     };
     let Some((store, file)) = writing_into(&saves) else {
         log::warn!("no state directory to save the session in");
+        saves.owes_session(session);
         return;
     };
-    let session = Session {
-        id: saves.written.id,
-        ..session
-    };
-    if write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {
-        saves.wrote_session(session);
+    match write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {
+        true => saves.wrote_session(session),
+        false => saves.owes_session(session),
     }
 }
 

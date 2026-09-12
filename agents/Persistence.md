@@ -214,11 +214,14 @@ seconds. The session takes the project file's whole name and not its stem, so th
 and one ignore rule reaches both -- which is the point of the naming, a project file being something
 a reader may check in.
 
-**The id is stamped by the policy and not by the caller.** The id of `Saves::written` is which
-project the open file holds; `Saves::record` puts it on the session before comparing it against the
-baseline, so the stamp cannot read as a change, and `record` puts it on both halves again after
-`writing_into`, since a project that was not open when the record was decided has only just been
-given an id. Nothing in the UI knows the id, which is why nothing in the UI can get it wrong.
+**The id is stamped by the policy and not by the caller, once.** The id of `Saves::written` is
+which project the open file holds; `Saves::record` puts it on the session before comparing it
+against the baseline, so the stamp cannot read as a change, and builds the `Project` with it. The
+writes take both halves as it handed them back. They used to stamp each again, for a project whose
+file was claimed by the first write and given its id then; ids are minted in `start_new` and
+`put_in` now, and `saves` is held under one lock from the decision to the write, so a second stamp
+could only put back what the first one wrote. Nothing in the UI knows the id, which is why nothing
+in the UI can get it wrong.
 
 **Building puts a `[cargo]` section in each file, and which file each half goes in is that same
 line.** The profile is what the reader chose, so it is the project file's and is written the moment
@@ -389,8 +392,12 @@ which is what `Visits::record` and `History::push` are.
 
 **When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
 two of the three things driving it sit outside the component tree.
-`record(details, binaries, loading, bookmarks, session)` is called on every state change and
-compares each against its baseline. A change to the `binaries` writes **both files immediately**.
+`record(&details, &binaries, loading, &bookmarks, session)` is called on every state change and
+compares each against its baseline. By reference, all but the session: on the ordinary run nothing
+about `project.toml` has changed and everything handed in is dropped, so only the write path clones,
+and `Project::is_about` compares the four user-given fields without building a `Details` of the
+baseline to compare with. The session is the exception -- it has to be built to be compared, and it
+is kept when it differs. A change to the `binaries` writes **both files immediately**.
 A change to the user-given `details` (the directory, the server, the profile) or to the
 `bookmarks` writes **the project file alone**, since neither lets go of a binary and so neither
 can leave the two files disagreeing. A change to only the session marks it **pending**: a tab is
@@ -404,10 +411,12 @@ timer and from the window's close hook, which is the one exit hook freya 0.4 has
 why the policy is a static).
 
 **A baseline is what the file holds, so it moves with the write and not with the decision to write
-it.** `record` and `owing` only hand back what to write; the caller moves the baselines afterwards,
-through `wrote_project` and `wrote_session` and only where `write_or_warn` answered that the file
-was written. A failure leaves the change for the next `record` to see again and the session pending
-for the next `flush`. Advancing first meant that a disk full for one tick left the app believing a
+it.** `record` and `take_owing` only hand back what to write; the caller moves the baselines
+afterwards, through `wrote_project` and `wrote_session` and only where `write_or_warn` answered that
+the file was written. A failure leaves the change for the next `record` to see again and hands the
+session back to `owes_session`, which is pending again for the next `flush`. `take_owing` empties
+pending rather than copying it for that reason: what it hands out is either written or handed back.
+Advancing first meant that a disk full for one tick left the app believing a
 file held a session that never reached it: nothing marked the session pending again, so the close
 hook's flush found nothing to do and the reader kept the one from before, for one warning in a log a
 windowed app never shows. Which baselines a project-file write moves is the

@@ -129,18 +129,22 @@ fn session_of(
     Session::from_state(
         objects,
         &trails,
-        &asm_rows,
-        &src_rows,
-        &spots,
-        &driven,
+        &LeftAt {
+            asm_rows: &asm_rows,
+            src_rows: &src_rows,
+            places: &spots,
+            driven: &driven,
+        },
         match active {
             Some(document) => OnScreen::Document(document),
             None => OnScreen::Nothing,
         },
         visits,
-        &[],
-        false,
-        SavedUi::default(),
+        Noticed {
+            trusted: false,
+            artifacts: &[],
+            ui: SavedUi::default(),
+        },
     )
 }
 
@@ -509,15 +513,19 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
                 trail: docs.trail(id).expect("open"),
                 temporal: false,
             }],
-            &asm,
-            &src,
-            &Positions::default(),
-            &Driven::default(),
+            &LeftAt {
+                asm_rows: &asm,
+                src_rows: &src,
+                places: &Positions::default(),
+                driven: &Driven::default(),
+            },
             OnScreen::Document(&current),
             &Visits::default(),
-            &[],
-            false,
-            SavedUi::default(),
+            Noticed {
+                trusted: false,
+                artifacts: &[],
+                ui: SavedUi::default(),
+            },
         );
         // Newest first, so a cursor `back` steps from the newest is at index `back`.
         assert_eq!(session.tabs[0].cursor, back);
@@ -543,6 +551,40 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
         // What the restore raises is the tab showing the restored active document.
         assert!(session.restore(&objects).active.as_ref() == Some(&current));
     }
+}
+
+/// Which of [`LeftAt`]'s four maps each field of a saved place comes out of. Three of the
+/// four are `&Positions` of near-identical type and a row is a number in any of them, so
+/// two swapped would type-check and read back as a place left somewhere else entirely.
+/// The four values here are distinct, which is what makes a swap show.
+#[test]
+fn each_map_a_place_was_left_in_lands_in_its_own_saved_field() {
+    let objects = objects();
+    let document = places(&objects)[0].clone();
+    let spot = Spot {
+        address: 0x40,
+        rows: 3,
+    };
+    let session = session_of(
+        &objects,
+        std::slice::from_ref(&document),
+        &[(&document, 7)],
+        &[(&document, 11)],
+        &[(&document, spot)],
+        &[(&document, 23)],
+        Some(&document),
+        &Visits::default(),
+    );
+
+    let saved = &session.tabs[0].entries[0];
+    assert_eq!(saved.asm_row, 7, "the assembly side's row");
+    assert_eq!(saved.src_row, 11, "the source side's row");
+    assert_eq!(
+        saved.asm_address,
+        Some(0x40),
+        "the address it was scrolled to"
+    );
+    assert_eq!(saved.line, Some(23), "the line it was driven from");
 }
 
 /// A place that no longer resolves is dropped from its trail, the cursor carried to the
@@ -1077,15 +1119,19 @@ fn the_bar_saves_its_pages_where_they_stand() {
     let session = Session::from_state(
         &objects,
         &saving,
-        &Positions::default(),
-        &Positions::default(),
-        &Positions::default(),
-        &Driven::default(),
+        &LeftAt {
+            asm_rows: &Positions::default(),
+            src_rows: &Positions::default(),
+            places: &Positions::default(),
+            driven: &Driven::default(),
+        },
         OnScreen::Page(Page::Settings),
         &Visits::default(),
-        &[],
-        false,
-        SavedUi::default(),
+        Noticed {
+            trusted: false,
+            artifacts: &[],
+            ui: SavedUi::default(),
+        },
     );
 
     // The page on screen is written instead of an active document, never beside one.
@@ -1410,6 +1456,18 @@ fn session_with(selection: Option<&str>) -> Session {
     }
 }
 
+/// The half of a project that is what the user said. `Saves::record` compares the two
+/// field by field ([`Project::is_about`]) rather than building this, so these tests are
+/// the only place it is put together.
+fn details_of(project: &Project) -> Details {
+    Details {
+        directory: project.directory.clone(),
+        language_server: project.language_server.clone(),
+        language_files: project.language_files.clone(),
+        cargo: project.cargo.clone(),
+    }
+}
+
 /// The writes landing, which is what the caller does once `write_or_warn` has answered:
 /// the baselines move with the files and not before. Every test but the ones about a
 /// write that fails goes through this.
@@ -1424,7 +1482,7 @@ fn landed(saves: &mut Saves, recorded: Option<Recorded>) -> Option<(Project, Opt
 
 /// The same for the session a flush writes.
 fn flushed(saves: &mut Saves) -> Option<Session> {
-    let session = saves.owing()?;
+    let session = saves.take_owing()?;
     saves.wrote_session(session.clone());
     Some(session)
 }
@@ -1437,9 +1495,9 @@ fn recorded(
     binaries: Vec<PathBuf>,
     session: Session,
 ) -> Option<(Project, Option<Session>)> {
-    let unchanged = saves.written.details();
+    let unchanged = details_of(&saves.written);
     let bookmarks = saves.written.bookmarks.clone();
-    let decided = saves.record(unchanged, binaries, false, bookmarks, session);
+    let decided = saves.record(&unchanged, &binaries, false, &bookmarks, session);
     landed(saves, decided)
 }
 
@@ -1458,9 +1516,9 @@ fn mid_load(
     binaries: &[&str],
     session: Session,
 ) -> Option<(Project, Option<Session>)> {
-    let unchanged = saves.written.details();
+    let unchanged = details_of(&saves.written);
     let bookmarks = saves.written.bookmarks.clone();
-    let decided = saves.record(unchanged, paths(binaries), true, bookmarks, session);
+    let decided = saves.record(&unchanged, &paths(binaries), true, &bookmarks, session);
     landed(saves, decided)
 }
 
@@ -1764,13 +1822,13 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
     // still being read.
     let named = Details {
         directory: Some(PathBuf::from("/src/kernel")),
-        ..saves.written.details()
+        ..details_of(&saves.written)
     };
     let decided = saves.record(
-        named,
-        paths(&["/tmp/lib.a", "/tmp/some.dll"]),
+        &named,
+        &paths(&["/tmp/lib.a", "/tmp/some.dll"]),
         true,
-        Vec::new(),
+        &[],
         Session::default(),
     );
     let (project, session) = landed(&mut saves, decided).expect("a write");
@@ -1809,10 +1867,10 @@ fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
         cargo: None,
     };
     let decided = saves.record(
-        named.clone(),
-        paths(&["/tmp/lib.a"]),
+        &named.clone(),
+        &paths(&["/tmp/lib.a"]),
         false,
-        Vec::new(),
+        &[],
         session_with(Some("a.o")),
     );
     let written = landed(&mut saves, decided).expect("a write");
@@ -1834,10 +1892,10 @@ fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
 
     // And the same directory recorded again is not a second write.
     let decided = saves.record(
-        named,
-        paths(&["/tmp/lib.a"]),
+        &named,
+        &paths(&["/tmp/lib.a"]),
         false,
-        Vec::new(),
+        &[],
         session_with(Some("a.o")),
     );
     assert_eq!(landed(&mut saves, decided), None);
@@ -1859,13 +1917,7 @@ fn clearing_a_detail_is_a_change_too() {
         &Session::default(),
     );
 
-    let decided = saves.record(
-        Details::default(),
-        Vec::new(),
-        false,
-        Vec::new(),
-        Session::default(),
-    );
+    let decided = saves.record(&Details::default(), &[], false, &[], Session::default());
     let written = landed(&mut saves, decided).expect("a write");
     assert_eq!(written.0.directory, None);
     assert_eq!(written.1, None);
@@ -1899,7 +1951,7 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
         language_files: None,
         cargo: None,
     };
-    let decided = saves.record(named, Vec::new(), true, Vec::new(), Session::default());
+    let decided = saves.record(&named, &[], true, &[], Session::default());
     let written = landed(&mut saves, decided).expect("a write");
     assert_eq!(written.0.directory, Some(PathBuf::from("/src/kernel")));
     assert_eq!(written.0.binaries, loaded.binaries);
@@ -1907,10 +1959,10 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
     // Once the parse lands the write *is* about the binaries, which is the one kind that
     // may replace the list.
     let decided = saves.record(
-        saves.written.details(),
-        paths(&["/tmp/vmlinux"]),
+        &details_of(&saves.written),
+        &paths(&["/tmp/vmlinux"]),
         false,
-        Vec::new(),
+        &[],
         Session::default(),
     );
     let written = landed(&mut saves, decided).expect("a write");
@@ -1931,10 +1983,10 @@ fn a_write_that_failed_is_recorded_again() {
     // A binaries change, written at once -- and neither file reaches the disk, so
     // nothing is noted as written and the session is owed.
     let decided = saves.record(
-        saves.written.details(),
-        paths(&["/tmp/lib.a"]),
+        &details_of(&saves.written),
+        &paths(&["/tmp/lib.a"]),
         false,
-        Vec::new(),
+        &[],
         session_with(Some("a.o")),
     );
     let failed = decided.expect("a write");
@@ -1954,6 +2006,49 @@ fn a_write_that_failed_is_recorded_again() {
     assert_eq!(flushed(&mut saves), None);
 }
 
+/// **The id is stamped once**, and by the policy: every half `Saves::record` hands back
+/// already carries the open project's id, and so does the session a flush takes out. The
+/// writes used to stamp both again for a project whose file was claimed by the first
+/// write -- a mechanism that is gone, ids now being minted in `start_new` and `put_in`.
+#[test]
+fn the_project_id_is_stamped_once_and_both_halves_come_back_with_it() {
+    let mut saves = Saves::default();
+    let open = a_project();
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("kernel-1"),
+        &open,
+        &Session::default(),
+    );
+
+    // A binaries change: both halves at once, and both stamped.
+    let decided = saves
+        .record(
+            &details_of(&open),
+            &paths(&["/tmp/lib.a"]),
+            false,
+            &[],
+            session_with(Some("a.o")),
+        )
+        .expect("a write");
+    assert_eq!(decided.project.id, open.id);
+    let carried = decided.session.clone().expect("the session went with it");
+    assert_eq!(carried.id, open.id);
+    landed(&mut saves, Some(decided));
+
+    // And a session-only change, which waits for a flush: stamped before it is compared
+    // against the baseline, so it is stamped by the time it is taken out again.
+    let decided = saves.record(
+        &details_of(&open),
+        &paths(&["/tmp/lib.a"]),
+        false,
+        &[],
+        session_with(Some("b.o")),
+    );
+    assert!(decided.is_none(), "the session alone waits");
+    assert_eq!(saves.take_owing().map(|owed| owed.id), Some(open.id));
+}
+
 /// The same for the session a flush writes. The tick that fails is the ordinary case, and
 /// the close hook's flush is the one that must not then find nothing to do.
 #[test]
@@ -1963,14 +2058,51 @@ fn a_session_whose_write_failed_is_still_owed() {
     // A selection, pending as ever.
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
 
-    // The 30 s tick, and the write fails.
-    let owed = saves.owing().expect("a session to write");
+    // The 30 s tick, and the write fails: taken out and handed straight back.
+    let owed = saves.take_owing().expect("a session to write");
+    assert_eq!(owed, session_with(Some("a.o")));
     saves.owes_session(owed.clone());
 
     // The window is closed, and the hook's flush still has it.
-    assert_eq!(saves.owing(), Some(owed));
-    assert_eq!(flushed(&mut saves), Some(session_with(Some("a.o"))));
+    assert_eq!(flushed(&mut saves), Some(owed));
     assert_eq!(flushed(&mut saves), None);
+}
+
+/// The user-given half of a project is compared **field by field**, so a change to any
+/// one of the four is a write of `project.toml` on its own and the same details again are
+/// no write at all. A field left out of the comparison would read as "nothing changed"
+/// and be lost until something else was written.
+#[test]
+fn a_change_to_any_one_detail_is_written_and_the_same_one_again_is_not() {
+    for change in [
+        Details {
+            directory: Some(PathBuf::from("/src/kernel")),
+            ..Details::default()
+        },
+        Details {
+            language_server: Some("ra-multiplex".into()),
+            ..Details::default()
+        },
+        Details {
+            language_files: Some("c h".into()),
+            ..Details::default()
+        },
+        Details {
+            cargo: Some(Cargo {
+                profile: Profile::Debug,
+            }),
+            ..Details::default()
+        },
+    ] {
+        let mut saves = Saves::default();
+        let decided = saves.record(&change, &[], false, &[], Session::default());
+        let (project, session) = landed(&mut saves, decided).expect("a write");
+        assert!(project.is_about(&change), "{change:?}");
+        assert_eq!(session, None, "the project file alone: {change:?}");
+
+        let again = saves.record(&change, &[], false, &[], Session::default());
+        assert_eq!(landed(&mut saves, again), None, "written twice: {change:?}");
+    }
 }
 
 /// Entering another project empties every baseline, the app being about to be emptied: a
@@ -1997,15 +2129,15 @@ fn entering_a_project_empties_every_baseline() {
     // The state a switch leaves the app in: nothing open, nothing selected, and the
     // directory of the project just entered — every one of them the baseline.
     let decided = saves.record(
-        Details {
+        &Details {
             directory: entered.directory.clone(),
             language_server: None,
             language_files: None,
             cargo: None,
         },
-        Vec::new(),
+        &[],
         false,
-        Vec::new(),
+        &[],
         Session::default(),
     );
     assert_eq!(landed(&mut saves, decided), None);
@@ -2387,10 +2519,10 @@ fn putting_a_project_somewhere_carries_the_id_and_the_session() {
 
     // A session worth carrying across, left pending until the flush inside `put_in`.
     record(
-        Details::default(),
-        Vec::new(),
+        &Details::default(),
+        &[],
         false,
-        Vec::new(),
+        &[],
         session_with(Some("a.o")),
     );
 
@@ -2435,13 +2567,13 @@ fn no_project_open_means_nothing_is_written_and_nothing_is_made() {
 
     // A change the app would otherwise write at once, and a session that would go pending.
     let decided = saves.record(
-        Details {
+        &Details {
             directory: Some(PathBuf::from("/src/kernel")),
             ..Details::default()
         },
-        paths(&["/tmp/lib.a"]),
+        &paths(&["/tmp/lib.a"]),
         false,
-        Vec::new(),
+        &[],
         session_with(Some("a.o")),
     );
     assert!(decided.is_some(), "the change was noticed");
@@ -2871,15 +3003,19 @@ fn a_source_places_line_is_written_before_its_document_and_comes_back() {
             trail: docs.trail(id).expect("open"),
             temporal: false,
         }],
-        &Positions::default(),
-        &Positions::default(),
-        &Positions::default(),
-        &Driven::default(),
+        &LeftAt {
+            asm_rows: &Positions::default(),
+            src_rows: &Positions::default(),
+            places: &Positions::default(),
+            driven: &Driven::default(),
+        },
         OnScreen::Nothing,
         &Visits::default(),
-        &[],
-        false,
-        SavedUi::default(),
+        Noticed {
+            trusted: false,
+            artifacts: &[],
+            ui: SavedUi::default(),
+        },
     );
     assert_eq!(session.tabs[0].entries[0].src_line, Some(42));
 
@@ -2985,15 +3121,19 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
             trail: docs.trail(id).expect("open"),
             temporal: false,
         }],
-        &Positions::default(),
-        &Positions::default(),
-        &spots,
-        &Driven::default(),
+        &LeftAt {
+            asm_rows: &Positions::default(),
+            src_rows: &Positions::default(),
+            places: &spots,
+            driven: &Driven::default(),
+        },
         OnScreen::Document(&code),
         &Visits::default(),
-        &[],
-        false,
-        SavedUi::default(),
+        Noticed {
+            trusted: false,
+            artifacts: &[],
+            ui: SavedUi::default(),
+        },
     );
     assert_eq!(session.tabs[0].entries.len(), 2, "the places collapsed");
     // Newest first, and each states its place apart from its scroll.
@@ -3290,10 +3430,10 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
 
     // Seeded: the same bookmarks are no change, while the parse has yet to land.
     let unchanged = saves.record(
-        saves.written.details(),
-        Vec::new(),
+        &details_of(&saves.written),
+        &[],
         false,
-        reopened.bookmarks.clone(),
+        &reopened.bookmarks.clone(),
         Session::default(),
     );
     assert!(unchanged.is_none());
@@ -3304,10 +3444,10 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         document: saved_symbol("a.o", "target", 6),
     });
     let decided = saves.record(
-        saves.written.details(),
-        Vec::new(),
+        &details_of(&saves.written),
+        &[],
         false,
-        added.clone(),
+        &added.clone(),
         Session::default(),
     );
     let (project, session) = landed(&mut saves, decided).expect("a write");
@@ -3320,10 +3460,10 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
 
     // Removing them all is a change too, written as an absent key.
     let decided = saves.record(
-        saves.written.details(),
-        Vec::new(),
+        &details_of(&saves.written),
+        &[],
         false,
-        Vec::new(),
+        &[],
         Session::default(),
     );
     let (project, _) = landed(&mut saves, decided).expect("a write");
@@ -3440,15 +3580,19 @@ fn the_session_records_what_the_last_build_produced() {
     let session = Session::from_state(
         &objects,
         &[],
-        &Positions::default(),
-        &Positions::default(),
-        &Positions::default(),
-        &Driven::default(),
+        &LeftAt {
+            asm_rows: &Positions::default(),
+            src_rows: &Positions::default(),
+            places: &Positions::default(),
+            driven: &Driven::default(),
+        },
         OnScreen::Nothing,
         &Visits::default(),
-        &built,
-        false,
-        SavedUi::default(),
+        Noticed {
+            trusted: false,
+            artifacts: &built,
+            ui: SavedUi::default(),
+        },
     );
     assert_eq!(
         session.cargo.as_ref().map(|cargo| cargo.artifacts.clone()),

@@ -68,10 +68,10 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         // file and the agreement goes in the session.
         let about = proj.read().clone();
         project::record(
-            about.details(),
-            project::binaries(&objects),
+            &about.details(),
+            &project::binaries(&objects),
             loading,
-            bookmarks.read().entries().to_vec(),
+            bookmarks.read().entries(),
             {
                 // The dock and the table rather than `Active`, which is a memo and so a
                 // beat behind.
@@ -101,22 +101,27 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                 Session::from_state(
                     &objects,
                     &tabs,
-                    // What each place had picked out (`places.marks_at`) is a view of its
-                    // tab, and not saved.
-                    &places.asm_at.read(),
-                    &places.src_at.read(),
-                    &places.code_at.read(),
-                    &places.driven.read(),
+                    // By name, the three maps being of near-identical type. What each
+                    // place had picked out (`places.marks_at`) is a view of its tab, and
+                    // not saved.
+                    &LeftAt {
+                        asm_rows: &places.asm_at.read(),
+                        src_rows: &places.src_at.read(),
+                        places: &places.code_at.read(),
+                        driven: &places.driven.read(),
+                    },
                     shown,
                     &visits.read(),
-                    &build.read().previous,
-                    about.trusted,
-                    // Reading these three is what subscribes the observer to a panel being
-                    // dragged and to either handle being moved.
-                    SavedUi {
-                        sidebar: Some(*arranged.sidebar.read()),
-                        split: Some(*arranged.split.read()),
-                        dock: Some(arranged.dock.read().saved()),
+                    Noticed {
+                        trusted: about.trusted,
+                        artifacts: &build.read().previous,
+                        // Reading these three is what subscribes the observer to a panel
+                        // being dragged and to either handle being moved.
+                        ui: SavedUi {
+                            sidebar: Some(*arranged.sidebar.read()),
+                            split: Some(*arranged.split.read()),
+                            dock: Some(arranged.dock.read().saved()),
+                        },
                     },
                 )
             },
