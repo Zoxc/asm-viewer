@@ -230,7 +230,7 @@ pub(crate) fn follow_name(
     let Some(ticket) = asked else {
         return;
     };
-    let tab = open.active_id();
+    let tab = open.now().map(|(id, _)| id);
     let asked = Asked {
         ticket,
         at,
@@ -261,7 +261,7 @@ pub(crate) fn use_follow(mut follow: State<Follow>, doors: Doors, places: Places
         // about is showing. The asking tab is raised to take it instead. An answer to a
         // tab that has closed is an answer to nobody: a tab of its own would be a place
         // nothing is waiting for.
-        let asking = tab.filter(|_| reach == Reach::InPlace && tab != open.active_id());
+        let asking = tab.filter(|_| reach == Reach::InPlace && tab != open.now().map(|(id, _)| id));
         if let Some(tab) = asking {
             // Bound before the raise below, which writes the state this read.
             let still_open = open.strip.peek().contains(Tab::Document(tab));

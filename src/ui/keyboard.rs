@@ -144,7 +144,7 @@ pub(crate) fn use_keyboard_asked(mut keyboard: State<Keys>, open: Open, marked: 
         // the reader asked to see, and the one `DocumentBody` draws first.
         let leads = {
             let (strip, docs) = (open.strip.read(), open.docs.read());
-            active_document(&strip, &docs).map(|document| document.driven_from())
+            active_tab(&strip, &docs).map(|(_, at)| at.document.driven_from())
         };
         // **An ask is kept until there is somewhere to spend it.** A tab opened from a
         // list has nothing to focus in the pass that opened it: its assembly side draws a

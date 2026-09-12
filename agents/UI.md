@@ -318,7 +318,7 @@ tab's `DocId`, every place the tab has shown, newest first, with a cursor on the
 trail and not a document: a link followed inside it pushes onto the trail, Back and Forward move its
 cursor, and what the tab shows is `Docs::get`, the entry under the cursor. There is no second list.
 The active tab is the strip's own, read through the table, which is the whole of `active_tab`, and
-`open_ids` is the strip's documents in order. `Docs` holds no order at all; membership is the one
+`Open::ids` is the strip's documents in order. `Docs` holds no order at all; membership is the one
 thing the two share, and it is **`Open`'s own invariant** rather than a convention its callers keep:
 its three methods are the only way a document tab joins the bar or leaves it, and each does both
 halves, so a tab and its trail are made together and closed together whatever the caller does. A
@@ -345,6 +345,14 @@ closers and the save observer call `active_tab` on the states directly and never
 `use_kept_position` asks `Docs` for the same reason: it decides whether to write a row down for a
 place that may have just been closed or dropped off its trail, and a memo could still be reporting
 it there during exactly that run.
+
+**One answer, three spellings and no more.** `active_tab(&Strip, &Docs)` is the rule itself, over
+borrowed guards so the caller says what asking costs; `Active` is that over two reads, held at the
+root; `Open::now` is it over two peeks, for a handler. All three answer `Option<Entry>`, so a call
+site moved from one to another is a change of freshness and of nothing else. `Open::active` is
+`now` without the id, the half most callers want and the only projection with a name; the rest
+`.map` for theirs. A test opens a tab and asks the peek and the memo in the same breath, which
+pins the peek as the fresher (`the_peeked_active_tab_is_ahead_of_the_memo`).
 
 `Active` being `None` means two things and deliberately does not distinguish them: nothing is open,
 or **the tab on screen is a page**. Making Settings the tab on screen therefore

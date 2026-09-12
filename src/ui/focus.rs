@@ -904,10 +904,9 @@ fn take_landing(
     let names_this = asked.as_ref().is_some_and(|asked| {
         Some(&asked.tab) == step.active.as_ref().map(|(_, stop)| &stop.document)
     });
-    let waiting = asked.as_ref().is_some_and(|asked| {
-        !names_this
-            && active_document(&open.strip.peek(), &open.docs.peek()).as_ref() == Some(&asked.tab)
-    });
+    let waiting = asked
+        .as_ref()
+        .is_some_and(|asked| !names_this && open.active().as_ref() == Some(&asked.tab));
     if asked.is_some() && !waiting {
         landing.set(None);
     }

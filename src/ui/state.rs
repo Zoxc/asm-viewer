@@ -86,12 +86,11 @@ pub(crate) struct Open {
     pub(crate) docs: State<Docs>,
 }
 
-/// Every open document tab's id, in the order the reader's tabs are in.
-pub(crate) fn open_ids(strip: &Strip) -> Vec<DocId> {
-    strip.documents().collect()
-}
-
 /// The active tab and what it shows: the tab on screen, when that tab is a document.
+///
+/// **The one rule**, over borrowed guards so the caller says what asking costs: `read`
+/// in a component, which subscribes it, and `peek` in an event handler, which does not.
+/// [`Open::now`] is this over two peeks and [`Active`] this over two reads.
 pub(crate) fn active_tab(strip: &Strip, docs: &Docs) -> Option<Entry> {
     match strip.active()? {
         Tab::Document(id) => docs.current(id).cloned().map(|stop| (id, stop)),
@@ -99,38 +98,26 @@ pub(crate) fn active_tab(strip: &Strip, docs: &Docs) -> Option<Entry> {
     }
 }
 
-/// The active document alone.
-pub(crate) fn active_document(strip: &Strip, docs: &Docs) -> Option<Document> {
-    active_tab(strip, docs).map(|(_, stop)| stop.document)
-}
-
 impl Open {
-    /// The active document as of *now*, for the event handlers that cannot wait a beat
-    /// for [`Active`] to catch up. `peek`, so asking subscribes nothing.
-    pub(crate) fn active(&self) -> Option<Document> {
-        self.active_stop().map(|(_, stop)| stop.document)
-    }
-
-    /// The active tab and the place on its trail it is at, as of now. The document is
-    /// what most callers want ([`Open::active`]); this is for the few that key by place.
-    pub(crate) fn active_stop(&self) -> Option<Entry> {
+    /// The active tab as of *now*, for the event handlers that cannot wait a beat for
+    /// [`Active`] to catch up. `peek`, so asking subscribes nothing.
+    ///
+    /// The whole entry, id and place, as [`Active`] holds one: a caller wanting one
+    /// half `.map`s for it. Only the document has a name of its own ([`Open::active`]),
+    /// being asked for far more often than the rest.
+    pub(crate) fn now(&self) -> Option<Entry> {
         let (strip, docs) = (self.strip.peek(), self.docs.peek());
         active_tab(&strip, &docs)
     }
 
-    /// The active tab as of now, with the document it shows. `peek`, for the same reason.
-    pub(crate) fn active_tab(&self) -> Option<(DocId, Document)> {
-        self.active_stop().map(|(id, stop)| (id, stop.document))
+    /// The active document as of now: the half of [`Open::now`] most callers want.
+    pub(crate) fn active(&self) -> Option<Document> {
+        self.now().map(|(_, stop)| stop.document)
     }
 
-    /// The active tab's id as of now, a document or not.
-    pub(crate) fn active_id(&self) -> Option<DocId> {
-        self.active_tab().map(|(id, _)| id)
-    }
-
-    /// Every open document tab's id as of now, in tab order.
+    /// Every open document tab's id as of now, in the reader's tab order.
     pub(crate) fn ids(&self) -> Vec<DocId> {
-        open_ids(&self.strip.peek())
+        self.strip.peek().documents().collect()
     }
 
     /// Make a tab showing `stop` alone, temporal or not, and show it beside the tab on

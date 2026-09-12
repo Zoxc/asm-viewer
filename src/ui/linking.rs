@@ -270,8 +270,8 @@ fn spoken_as(chosen: &[String], program: &str, path: &Path) -> Option<String> {
 fn shown(open: Open, chosen: &[String], program: &str) -> Vec<(Arc<str>, String)> {
     let strip = open.strip.read();
     let docs = open.docs.read();
-    open_ids(&strip)
-        .into_iter()
+    strip
+        .documents()
         .filter_map(|id| docs.get(id))
         .filter_map(|document| match document {
             Document::Source(file) => Some(file.clone()),

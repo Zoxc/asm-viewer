@@ -92,7 +92,7 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
                     .collect();
                 // What was on screen: a page, a document, or neither. Bound before the
                 // borrow below it, the document being read out of the two states.
-                let shown_document = active_document(&strip, &docs);
+                let shown_document = active_tab(&strip, &docs).map(|(_, at)| at.document);
                 let shown = match (strip.active(), &shown_document) {
                     (Some(Tab::Page(page)), _) => OnScreen::Page(page),
                     (_, Some(document)) => OnScreen::Document(document),

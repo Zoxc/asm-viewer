@@ -132,9 +132,9 @@ pub(crate) fn open_stop(
 
     // The tab on screen and the tab showing the target, the tab on screen preferred when
     // it is one of several: two tabs can show one place.
-    let active = open.active_tab();
+    let active = open.now();
     let showing = match &active {
-        Some((id, current)) if *current == target => Some(*id),
+        Some((id, at)) if at.document == target => Some(*id),
         _ => docs.peek().showing(&target),
     };
     let temporal = docs.peek().temporal();
@@ -157,11 +157,11 @@ pub(crate) fn open_stop(
     // Nothing left to raise: what each reach opens, or the trail the place goes on.
     match reach {
         Reach::InPlace if active.is_some() => {
-            let (id, current) = active?;
+            let (id, at) = active?;
             // Already showing the document: only a place inside it is a move, and only
             // a different one. Otherwise nothing is pushed, and a write would wake every
             // header.
-            let moved = match current != target {
+            let moved = match at.document != target {
                 true => docs.write().push(id, stop),
                 false => moved_to(open, id, &stop),
             };
@@ -387,7 +387,7 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         // The document is already on top, so nothing is opened and `open_stop` never
         // runs: the push here is the only record that the reader was somewhere else in
         // it a moment ago.
-        let id = open.active_id();
+        let id = open.now().map(|(id, _)| id);
         let moved = id.is_some_and(|id| moved_to(open, id, &stop));
         // A move inside the document is a change of place, and every change of place is
         // `use_land`'s: it keeps the runs of the place being left and gives the arriving
@@ -489,7 +489,7 @@ pub(crate) fn land_on(doors: Doors, id: DocId, at: LinePos) {
         land: mut landing,
         ..
     } = doors;
-    if open.active_id() == Some(id) {
+    if open.now().is_some_and(|(active, _)| active == id) {
         mark_line(marked, at.file, at.line, None, Owed::BOTH);
         return;
     }
@@ -549,7 +549,7 @@ impl Nav {
 /// put back what that place was left with.
 pub(crate) fn navigate(open: Open, nav: Nav) {
     let mut docs = open.docs;
-    let Some(id) = open.active_id() else {
+    let Some((id, _)) = open.now() else {
         return;
     };
     // Asked before writing: `State::write` notifies whether or not the value changes, and

@@ -16,7 +16,7 @@ use freya_testing::{TestingNode, TestingRunner};
 
 /// Every open tab's document, in the reader's tab order. Pages are skipped: they are tabs
 /// in the same bar but they are not documents. The app itself asks for the ids
-/// (`open_ids`), a tab being a trail and not what it shows.
+/// (`Open::ids`), a tab being a trail and not what it shows.
 ///
 /// `peek`, so asking subscribes nothing.
 fn open_documents(open: Open) -> Vec<Document> {
@@ -1159,7 +1159,7 @@ fn raise_document(states: &ProjectStates, document: &Document) {
 
 /// Where the active tab's trail cursor is.
 fn cursor_of(states: &ProjectStates) -> Option<usize> {
-    let id = states.open.active_id()?;
+    let id = states.open.now().map(|(id, _)| id)?;
     states.open.docs.peek().trail(id)?.cursor()
 }
 
@@ -5749,7 +5749,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
         (Caret { row: 1, col: 12 }, Caret { row: 1, col: 18 }),
         "the name was not selected"
     );
-    let id = states.open.active_id().expect("a tab");
+    let id = states.open.now().map(|(id, _)| id).expect("a tab");
     assert_eq!(
         states
             .places
@@ -6287,12 +6287,12 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     navigate(states.open, Nav::Back);
     settle(&mut test);
     assert!(
-        states.open.active_stop().map(|(_, stop)| stop) == Some(Stop::on(file_of(&document), 20)),
+        states.open.now().map(|(_, stop)| stop) == Some(Stop::on(file_of(&document), 20)),
         "Back left the file it was inside"
     );
     navigate(states.open, Nav::Back);
     settle(&mut test);
-    assert!(states.open.active_stop().map(|(_, stop)| stop) == Some(Stop::whole(document)));
+    assert!(states.open.now().map(|(_, stop)| stop) == Some(Stop::whole(document)));
 }
 
 /// A door into the document already on top lands through the change of *place* it makes,
@@ -7358,12 +7358,12 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
         "the answer opened nothing"
     );
     assert!(
-        states.open.active_stop().map(|(_, stop)| stop.line()) == Some(Some(1)),
+        states.open.now().map(|(_, stop)| stop.line()) == Some(Some(1)),
         "the place is the file and not the line in it"
     );
     // The assembly side follows that line, which is what a source-driven tab is driven
     // from -- and it is written under the place, not the file.
-    let id = states.open.active_id().expect("a tab");
+    let id = states.open.now().map(|(id, _)| id).expect("a tab");
     let entry = (id, Stop::on(file_of(&document), 1));
     assert_eq!(
         roots
@@ -7815,7 +7815,7 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
     // And the reader moves on while it is in flight.
     raise_document(&states, &elsewhere);
     settle(&mut test);
-    assert!(states.open.active_id() == Some(other));
+    assert!(states.open.now().map(|(id, _)| id) == Some(other));
 
     let _ = release.send_blocking(());
     pump(&mut test, || {
@@ -7824,7 +7824,7 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
 
     let opened = Document::Source(Arc::from(defined.to_str().expect("a utf-8 path")));
     assert!(
-        states.open.active_id() == Some(asking),
+        states.open.now().map(|(id, _)| id) == Some(asking),
         "the answer landed in a tab the press was not made in"
     );
     assert!(
@@ -8606,7 +8606,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
     pump(&mut test, || {
         states
             .open
-            .active_stop()
+            .now()
             .is_some_and(|(_, stop)| stop.line().is_some())
     });
 
@@ -8615,7 +8615,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
         "the answer's spelling opened a file the reader already had open"
     );
     assert_eq!(
-        states.open.active_stop().map(|(_, stop)| stop.line()),
+        states.open.now().map(|(_, stop)| stop.line()),
         Some(Some(1)),
         "the tab did not move to the line the answer named"
     );
@@ -8684,7 +8684,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
     pump(&mut test, || {
         states
             .open
-            .active_stop()
+            .now()
             .is_some_and(|(_, stop)| stop.line().is_some())
     });
 
@@ -8693,7 +8693,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
         "the answer's spelling opened a file the reader already had open"
     );
     assert_eq!(
-        states.open.active_stop().map(|(_, stop)| stop.line()),
+        states.open.now().map(|(_, stop)| stop.line()),
         Some(Some(1)),
         "the tab did not move to the line the answer named"
     );
@@ -8901,7 +8901,7 @@ fn the_server_is_told_which_files_the_reader_has_open() {
     );
 
     // And the tab goes.
-    let id = states.open.active_id().expect("a tab");
+    let id = states.open.now().map(|(id, _)| id).expect("a tab");
     close_tab(states.open, states.places, id);
     for _ in 0..20 {
         settle(&mut test);
@@ -9242,7 +9242,7 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
     settle(&mut test);
     serving(&mut test, &mut language);
 
-    let tab = states.open.active_tab().expect("a tab").0;
+    let tab = states.open.now().expect("a tab").0;
     let before = stops_of(&states, tab).len();
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -12370,7 +12370,9 @@ fn panes_harness() -> impl IntoElement {
     // activated, and `Active` is a memo and a beat behind.
     let id = {
         let (strip, docs) = (open.strip.read(), open.docs.read());
-        active_document(&strip, &docs).and_then(|document| docs.showing(&document))
+        active_tab(&strip, &docs)
+            .map(|(_, at)| at.document)
+            .and_then(|document| docs.showing(&document))
     };
 
     rect()
@@ -19397,7 +19399,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     settle(&mut test);
     settle(&mut test);
     assert!(
-        states.open.active_stop().map(|(_, stop)| stop) == Some(Stop::whole(code.clone())),
+        states.open.now().map(|(_, stop)| stop) == Some(Stop::whole(code.clone())),
         "the step did not go back"
     );
     assert_eq!(
@@ -20062,7 +20064,8 @@ fn doors_harness() -> impl IntoElement {
 
     let entry = {
         let (strip, docs) = (open.strip.read(), open.docs.read());
-        active_document(&strip, &docs)
+        active_tab(&strip, &docs)
+            .map(|(_, at)| at.document)
             .and_then(|document| Some((docs.showing(&document)?, document)))
     };
     rect()
@@ -20087,7 +20090,9 @@ fn door_panes_harness() -> impl IntoElement {
 
     let id = {
         let (strip, docs) = (open.strip.read(), open.docs.read());
-        active_document(&strip, &docs).and_then(|document| docs.showing(&document))
+        active_tab(&strip, &docs)
+            .map(|(_, at)| at.document)
+            .and_then(|document| docs.showing(&document))
     };
     rect()
         .expanded()
@@ -20679,7 +20684,8 @@ fn switched_code_harness() -> impl IntoElement {
 
     let entry = {
         let (strip, docs) = (open.strip.read(), open.docs.read());
-        active_document(&strip, &docs)
+        active_tab(&strip, &docs)
+            .map(|(_, at)| at.document)
             .and_then(|document| Some((docs.showing(&document)?, document)))
     };
     rect()
@@ -23723,6 +23729,54 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     assert!(states.visits.peek().entries() == walked);
 }
 
+/// **`Open::now` is the strip as it stands and `Active` is the strip a beat ago.** Both
+/// answer with the same `Entry`, out of the same `active_tab`, and differ only in what
+/// asking costs and how fresh the answer is: the memo is recomputed by a task woken on a
+/// notify, so inside the handler that has just written the strip it still names the tab
+/// that was there before. That is why the doors and the closers peek and never read the
+/// memo, and it is the whole of what keeps the two from being folded into one.
+#[test]
+fn the_peeked_active_tab_is_ahead_of_the_memo() {
+    let (mut test, roots) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let states = roots.states;
+    let active = roots.active;
+    let document = |name: &str| Document::Source(Arc::from(name));
+
+    let first = document("/src/one.rs");
+    open_document(states.open, states.visits, first.clone(), Reach::NewTab);
+    settle(&mut test);
+    let settled = active.peek().clone();
+    assert!(
+        settled.map(|(_, at)| at.document) == Some(first.clone()),
+        "the memo never caught up with the first tab"
+    );
+
+    // No settle: the states are written and the memo's task has not run.
+    let second = document("/src/two.rs");
+    let id = open_document(states.open, states.visits, second.clone(), Reach::NewTab)
+        .expect("a second tab");
+    assert_eq!(
+        states.open.now().map(|(id, _)| id),
+        Some(id),
+        "the peek is behind the strip it peeked"
+    );
+    assert!(
+        active.peek().clone().map(|(_, at)| at.document) == Some(first),
+        "the memo answered for a tab that was opened after it last ran"
+    );
+
+    settle(&mut test);
+    assert!(
+        active.peek().clone().map(|(_, at)| at.document) == Some(second),
+        "the memo never caught up with the second tab"
+    );
+}
+
 /// A link followed with no document tab on screen has nothing to replace, so it lands the
 /// way Ctrl does: a tab already showing the place is raised and promoted where it was the
 /// temporal one, and a place no tab shows opens a tab of its own.
@@ -23762,7 +23816,7 @@ fn a_link_followed_with_a_page_on_screen_lands_in_a_tab_of_its_own() {
     };
     show_page();
     test.sync_and_update();
-    assert!(states.open.active_tab().is_none());
+    assert!(states.open.now().is_none());
 
     // The place a tab already shows: that tab, raised, and promoted as Ctrl would.
     let landed = open_document(
@@ -23772,7 +23826,7 @@ fn a_link_followed_with_a_page_on_screen_lands_in_a_tab_of_its_own() {
         Reach::InPlace,
     );
     assert_eq!(landed, Some(preview), "a link opened a second tab");
-    assert_eq!(states.open.active_id(), Some(preview));
+    assert_eq!(states.open.now().map(|(id, _)| id), Some(preview));
     assert_eq!(
         states.open.docs.peek().temporal(),
         None,
@@ -23839,7 +23893,7 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
     .expect("a document panel");
     assert_ne!(kept, preview);
     assert_eq!(states.open.docs.peek().temporal(), Some(preview));
-    assert_eq!(states.open.active_id(), Some(preview));
+    assert_eq!(states.open.now().map(|(id, _)| id), Some(preview));
 
     let again = open_document(
         states.open,
@@ -23859,7 +23913,7 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
         Reach::Preview,
     );
     assert_eq!(raised, Some(kept));
-    assert_eq!(states.open.active_id(), Some(kept));
+    assert_eq!(states.open.now().map(|(id, _)| id), Some(kept));
     assert_eq!(states.open.docs.peek().temporal(), Some(preview));
     let raised = open_document(
         states.open,
@@ -24028,7 +24082,7 @@ fn a_temporal_tab_is_promoted_by_ctrl_and_by_a_link_followed_in_it_and_not_by_ba
     // A link followed inside it: reading in it, so it stays.
     open_document(states.open, states.visits, source.clone(), Reach::InPlace);
     assert_eq!(states.open.docs.peek().temporal(), None);
-    assert_eq!(states.open.active_id(), Some(second));
+    assert_eq!(states.open.now().map(|(id, _)| id), Some(second));
 
     let third = open_document(
         states.open,
@@ -26431,7 +26485,11 @@ fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
     settle(&mut test);
 
     let document = Document::Source(Arc::from(&*path.to_string_lossy()));
-    let id = states.open.active_id().expect("the hit opened a tab");
+    let id = states
+        .open
+        .now()
+        .map(|(id, _)| id)
+        .expect("the hit opened a tab");
     assert_eq!(
         states
             .places
