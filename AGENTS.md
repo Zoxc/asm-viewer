@@ -172,8 +172,8 @@ command.
 - `src/temporary.rs` — test-only: a path under the system temporary directory that a test
   owns, removed when the test ends.
 - `src/shared.rs` — a list built once and passed on by its pointer, equal only to the same
-  build: what every list of rows the UI draws is; and the same identity for an `Arc` a
-  field may not have.
+  build: what every list of rows the UI draws is; and the same identity for one `Arc`,
+  whether or not a field has it.
 - `src/filter.rs` — what a filter bar is asking for, the matcher it compiles to, and what
   it leaves of a list: the ranked index every filtered list is drawn from.
 - `src/fuzzy.rs` — characters in order: what the file finder's box asks of a path, where it
@@ -459,8 +459,8 @@ feature there with the substitute, so a release that brings it is noticed.
   which every caller holding a tab rather than an id goes through.
 - **Identity in the UI is `Arc` pointer identity**, never names or indices: list keys are
   `Arc::as_ptr(..).addr()` and prop `PartialEq`s are hand-written with `Arc::ptr_eq`. A list
-  of rows is a `Shared` (`src/shared.rs`), which is that rule written once, and an optional
-  `Arc` is `same_arc` beside it.
+  of rows is a `Shared` (`src/shared.rs`), which is that rule written once; an optional
+  `Arc` is `same_arc` beside it, and one handed to a hook that keys on `PartialEq` is `ByPtr`.
 - **Asking for a colour or a font is what subscribes a scope to it** (`palette()`, `fonts()`);
   `set_appearance` and `set_fonts` are the only writers. Never write a literal colour or row height.
 - **Persisted formats need no backward compatibility** yet: a stale file is ignored, not migrated.

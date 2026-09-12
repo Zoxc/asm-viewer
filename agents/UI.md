@@ -79,6 +79,16 @@ same `Arc` and the prop is a pointer compare. **A memo's callback is built once*
 `use_hook`, so a prop it reads goes through `use_reactive` and never into the closure -- the
 rule `use_side_effect_with_deps` is written for, and the same trap.
 
+**An effect's callback runs inside a `ReactiveContext`, so every `.read()` it makes at any depth
+subscribes it** -- the deps are one more subscription and not the whole of what wakes it. Where an
+effect has to tell a change from its own mount, `use_on_change` (`src/ui/state.rs`) is the one hook
+for it: it takes a closure answering the deps -- read inside the effect, which is what a `Memo`
+source needs so the effect follows it and the scope that mounted the hook does not -- and hands the
+callback what the last run saw beside what it sees now, `None` on the mount. A wake that left the
+deps where they were calls nothing, so a read the callback makes for its own reasons cannot be
+mistaken for a change. Two mechanisms kept that bookkeeping themselves, in two different
+containers, before it was written once (`agents/Lsp.md`, `agents/Sidebar.md`).
+
 **`prevent_default` cancels the events an event derives; `stop_propagation` stops it bubbling.** One
 platform event becomes a queue of tree events, and a handler calling `prevent_default` makes the
 executor drop from the rest of that queue everything the emitted event names as cancellable
@@ -942,9 +952,11 @@ pointer. The Files, Search, Locations and Objects lists, the flattened symbol li
 rows, a find bar's hits and a file's links are all one, and `Filtered` (`src/filter.rs`) is two of
 them: the list it filters and the indices it kept. An `Arc` a field may not have compares by
 `same_arc` beside it, so no `PartialEq` writes that truth table out again. A **required** `Arc`
-gets no helper of its own: `same_arc` earns its name from the four-arm match, whose `_ => false`
-is the easy arm to mistype, while a bare `Arc::ptr_eq` has nothing to get wrong. Nor do the
-three structs that are one `Arc` and nothing else -- `SourceText`, `OutputRows` and
+in a field gets no helper: `same_arc` earns its name from the four-arm match, whose `_ => false`
+is the easy arm to mistype, while a bare `Arc::ptr_eq` has nothing to get wrong. The one place it
+cannot be written is a hook that keys on `PartialEq` -- an effect's deps -- and `ByPtr` is such an
+`Arc` wrapped for those: `use_window` takes the pane's object through it (`agents/Panes.md`).
+Nor do the three structs that are one `Arc` and nothing else -- `SourceText`, `OutputRows` and
 `process::Handle` -- which keep their own `PartialEq`: a newtype over one value would cost each
 of them its name and the reason it states for comparing by pointer.
 

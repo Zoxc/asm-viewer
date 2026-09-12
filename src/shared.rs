@@ -1,5 +1,5 @@
 //! A list built once and passed on by its pointer: what every list of rows the UI draws
-//! is, and the same identity for an `Arc` that may be absent. Framework-free.
+//! is, and the same identity for one `Arc`, present or absent. Framework-free.
 
 use std::{fmt, ops::Deref, sync::Arc};
 
@@ -50,6 +50,25 @@ impl<T> Deref for Shared<T> {
 impl<T: fmt::Debug> fmt::Debug for Shared<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
+    }
+}
+
+/// One `Arc` compared by its pointer: two are equal exactly when they are the same build.
+///
+/// [`Shared`]'s rule for an `Arc` that is not a list. It is for handing one to a hook that
+/// keys on `PartialEq` -- an effect's deps -- where a bare `Arc::ptr_eq` cannot be written
+/// and the value's own `PartialEq` would walk everything it holds, or is not there at all.
+pub(crate) struct ByPtr<T>(pub(crate) Arc<T>);
+
+impl<T> Clone for ByPtr<T> {
+    fn clone(&self) -> Self {
+        ByPtr(self.0.clone())
+    }
+}
+
+impl<T> PartialEq for ByPtr<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 

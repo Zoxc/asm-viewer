@@ -780,21 +780,20 @@ impl Component for RecentsSection {
         // Read here at the first render rather than by the effect below, which runs a beat
         // later and would draw "No other projects" for one frame.
         let store = states.store;
-        let file = states.proj.read().file.clone();
-        let read_for = file.clone();
+        let proj = states.proj;
+        let file = proj.read().file.clone();
         let mut recents = use_state(move || recents_of(store));
-        // Which project that list was read for. The effect runs on the mount as well as on
-        // a change, and without something to compare against it would read the file, and a
-        // small read of every project named in it, a second time at the first render.
-        let mut over = use_state(move || read_for);
-        use_side_effect_with_deps(&file, move |file: &Option<PathBuf>| {
-            let changed = *over.peek() != *file;
-            if !changed {
-                return;
-            }
-            over.set(file.clone());
-            recents.set(recents_of(store));
-        });
+        // Read again whenever another project is opened, and not on the mount: the list
+        // above was read for this one already, and reading it again is the recents file
+        // and a small read of every project named in it.
+        use_on_change(
+            move || proj.read().file.clone(),
+            move |before, _| {
+                if before.is_some() {
+                    recents.set(recents_of(store));
+                }
+            },
+        );
 
         let others: Vec<Element> = recents
             .read()

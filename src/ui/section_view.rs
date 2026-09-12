@@ -591,19 +591,6 @@ impl Component for SectionList {
         let rows = sectioned.rows;
 
         let object = self.object.clone();
-        // The object as `use_window`'s effect reads it. That effect's closure is built on
-        // the first render and never again, and the strip moving between two objects'
-        // code tabs **re-renders this scope rather than remounting it**: freya keeps a
-        // same-key component's hooks and only replaces its props. An object captured in
-        // the closure would stay the first one, every run after the switch would find the
-        // reading about something else, and the second tab would draw an empty listing
-        // for as long as it was open. Written here by pointer identity, and read in the
-        // effect, which is what wakes it on another object.
-        let mut current = use_state(|| object.clone());
-        let moved = !Arc::ptr_eq(&current.peek(), &object);
-        if moved {
-            current.set(object.clone());
-        }
         let generation = reading.is_about(&object).then_some(reading.generation);
         // The place on the trail this listing is showing, which is what its position and
         // its runs are kept under: two stops in one object's code are two places, and
@@ -650,7 +637,7 @@ impl Component for SectionList {
             &stop,
             generation,
         );
-        use_window(sectioned, controller, viewport, current);
+        use_window(sectioned, controller, viewport, &object);
 
         // No skeleton yet means no rows, and a list of none: mounted all the same, see
         // `SectionRows::rows`. Reading them is also what redraws this as a window lands.
@@ -1513,51 +1500,60 @@ fn use_window(
     sectioned: Sectioned,
     controller: ScrollController,
     viewport: State<f32>,
-    object: State<Arc<Object>>,
+    object: &Arc<Object>,
 ) {
     let (reading, mut window, rows) = (sectioned.reading, sectioned.window, sectioned.rows);
-    use_side_effect(move || {
-        // The five inputs a scroll, a resize, an answer, a change of reading or another
-        // object brings. The reading is **read**, so the effect follows it: the pane
-        // mounts a beat before the reading becomes its own -- `Active` is a memo and
-        // `use_reading_of` runs off it -- and a run that found the reading about something
-        // else asked for nothing, and nothing woke it until the pane was resized. The
-        // object is read and never captured, for the reason in the pane. Reading them
-        // cannot loop: the one thing written here is the window, and only when it changed.
-        let (_, offset) = <(i32, i32)>::from(controller);
-        let viewport = *viewport.read();
-        let rows = rows.read().clone();
-        let object = object.read().clone();
-        let reading = reading.read();
-        if !reading.is_about(&object) {
-            return;
-        }
-        let Some(rows) = rows else {
-            // The skeleton, and nothing decoded with it yet.
-            let ask = reading.code.is_none().then(|| CodeAsk {
+    // The object is a **dep** and never captured: the effect's closure is built on the
+    // first render and never again, while the strip moving between two objects' code tabs
+    // re-renders the pane rather than remounting it (freya keeps a same-key component's
+    // hooks and replaces its props). A closure holding the first object went on asking for
+    // nothing after the switch, and the second tab drew an empty listing for as long as it
+    // was open. Through [`ByPtr`]: an `Object` has no `PartialEq`, and pointer identity is
+    // what one is told from another by everywhere else in the UI.
+    use_side_effect_with_deps(
+        &ByPtr(object.clone()),
+        move |ByPtr(object): &ByPtr<Object>| {
+            // The four other inputs a scroll, a resize, an answer or a change of reading
+            // brings. The reading is **read**, so the effect follows it: the pane mounts a
+            // beat before the reading becomes its own -- `Active` is a memo and
+            // `use_reading_of` runs off it -- and a run that found the reading about
+            // something else asked for nothing, and nothing woke it until the pane was
+            // resized. Reading them cannot loop: the one thing written here is the window,
+            // and only when it changed.
+            let (_, offset) = <(i32, i32)>::from(controller);
+            let viewport = *viewport.read();
+            let rows = rows.read().clone();
+            let reading = reading.read();
+            if !reading.is_about(object) {
+                return;
+            }
+            let Some(rows) = rows else {
+                // The skeleton, and nothing decoded with it yet.
+                let ask = reading.code.is_none().then(|| CodeAsk {
+                    object: object.clone(),
+                    code: None,
+                    window: Vec::new(),
+                });
+                window.set_if_modified(ask);
+                return;
+            };
+            let height = code_row_height();
+            let top = ((-offset).max(0) as f32 / height) as usize;
+            let screen = (viewport / height).ceil().max(1.0) as usize;
+            let view = top..top.saturating_add(screen);
+            let buffer = (BUFFER * screen as f32) as usize;
+            let wanted = rows.window(
+                view,
+                buffer,
+                |flat| reading.held.contains_key(&flat),
+                WINDOW,
+            );
+            let ask = (!wanted.is_empty()).then(|| CodeAsk {
                 object: object.clone(),
-                code: None,
-                window: Vec::new(),
+                code: Some(rows.code().clone()),
+                window: wanted,
             });
             window.set_if_modified(ask);
-            return;
-        };
-        let height = code_row_height();
-        let top = ((-offset).max(0) as f32 / height) as usize;
-        let screen = (viewport / height).ceil().max(1.0) as usize;
-        let view = top..top.saturating_add(screen);
-        let buffer = (BUFFER * screen as f32) as usize;
-        let wanted = rows.window(
-            view,
-            buffer,
-            |flat| reading.held.contains_key(&flat),
-            WINDOW,
-        );
-        let ask = (!wanted.is_empty()).then(|| CodeAsk {
-            object: object.clone(),
-            code: Some(rows.code().clone()),
-            window: wanted,
-        });
-        window.set_if_modified(ask);
-    });
+        },
+    );
 }

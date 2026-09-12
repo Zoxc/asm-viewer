@@ -296,26 +296,30 @@ impl Language {
         true
     }
 
-    /// The handshake with run `run`'s server is over: it is answering, or `server` says
-    /// why there is none. [`Language::spawned`]'s rule for a run that has moved on, for
-    /// its reason -- this is the first moment anything in the app holds the handle.
+    /// The handshake with run `run`'s server is over: it is answering, or `started` says
+    /// why there is none. Nothing to stop for a run that has moved on --
+    /// [`Language::spawned`] holds the only handle and its rule covers it.
+    ///
+    /// The handle is the one [`Language::spawned`] wrote, which is there by now: both
+    /// answers come down the one channel and that one is sent first. Without it there is
+    /// a process nothing in the app can ever end, so the reading that says so is the one
+    /// taken.
     ///
     /// What the server has already said about itself is kept: the handshake's answer and
     /// its first `$/progress` are two messages, and either can be taken first.
-    fn running(&mut self, run: u64, server: Result<process::Handle, lsp::Failure>) -> bool {
+    fn running(&mut self, run: u64, started: Result<(), lsp::Failure>) -> bool {
         if self.run != run {
-            if let Ok(handle) = server {
-                handle.stop();
-            }
             return false;
         }
         let said = self.state.said().cloned().unwrap_or_default();
-        self.state = match server {
-            Ok(handle) => Lsp::Running {
-                server: handle,
-                said,
-            },
-            Err(failure) => Lsp::Failed(failure.to_string()),
+        let handle = match &mut self.state {
+            Lsp::Starting { server, .. } => server.take(),
+            _ => None,
+        };
+        self.state = match (started, handle) {
+            (Ok(()), Some(server)) => Lsp::Running { server, said },
+            (Ok(()), None) => Lsp::Failed("it started with no handle to end it".to_owned()),
+            (Err(failure), _) => Lsp::Failed(failure.to_string()),
         };
         true
     }
@@ -549,9 +553,12 @@ pub(crate) enum LspAnswer {
     /// which is what puts the handle where a stop can reach it: until this the worker is
     /// in a read that only the pipes closing ends, and the pipes close with the process.
     Spawned { run: u64, handle: process::Handle },
+    /// The handshake is over: it is answering, or `started` says why there is none. No
+    /// handle of its own -- [`LspAnswer::Spawned`] carried the one there is, down this
+    /// same channel and before this.
     Started {
         run: u64,
-        server: Result<process::Handle, lsp::Failure>,
+        started: Result<(), lsp::Failure>,
     },
     /// What one question about a place came back with. Which question it was is the
     /// [`Reply`]'s to say; the ticket is the [`LspJob::Ask`]'s, carried through untouched.
@@ -674,14 +681,14 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                             handle: handle.clone(),
                         });
                     });
-                let server = match started {
-                    Ok((server, handle)) => {
+                let started = match started {
+                    Ok(server) => {
                         *talking = Some(server);
-                        Ok(handle)
+                        Ok(())
                     }
                     Err(failure) => Err(failure),
                 };
-                Some(LspAnswer::Started { run, server })
+                Some(LspAnswer::Started { run, started })
             }
             LspJob::Ask { ticket, at, want } => {
                 // One reader for the whole answer: the columns come back off the wire
@@ -947,8 +954,8 @@ pub(crate) fn use_language_with(
             LspAnswer::Spawned { run, handle } => {
                 write_if(language, |held| held.spawned(run, handle));
             }
-            LspAnswer::Started { run, server } => {
-                write_if(language, |held| held.running(run, server));
+            LspAnswer::Started { run, started } => {
+                write_if(language, |held| held.running(run, started));
             }
             LspAnswer::Settings {
                 directory,
@@ -1084,25 +1091,24 @@ pub(crate) fn use_language_with(
         let open = proj.read();
         (open.file.clone(), open.workspace())
     });
-    // What the effect last saw, so that it can tell the two changes apart. A directory
-    // typed into the box is the reader pointing *this* project somewhere else, and the
-    // agreement was to the old place; a project arriving is another project's answer
-    // arriving with it, and that answer is its own to give. The mount is neither: what it
-    // mounts with is the reopened project, the restore being an earlier hook of the same
-    // render, so an agreement read out of `project.toml` survives the launch that read it.
-    let seen: Rc<RefCell<Option<(Option<PathBuf>, Option<PathBuf>)>>> =
-        use_hook(|| Rc::new(RefCell::new(None)));
     // Leaving a project ends its server and takes the reader's agreement with it: it is
     // the project's directory the server was started over and the directory they agreed
     // to, and a directory typed into the Project view is a different project's on both
     // counts.
-    use_side_effect({
+    //
+    // `before` is what tells the two changes apart. A directory typed into the box is the
+    // reader pointing *this* project somewhere else, and the agreement was to the old
+    // place; a project arriving is another project's answer arriving with it, and that
+    // answer is its own to give. The mount is neither: what it mounts with is the reopened
+    // project, the restore being an earlier hook of the same render, so an agreement read
+    // out of `project.toml` survives the launch that read it.
+    //
+    // The memo is read **in the deps and not in the render**, which is what subscribes the
+    // effect to the two paths and leaves the root subscribed to neither: the box the
+    // directory is typed into writes `Proj` on every keystroke.
+    use_on_change(move || places.read().clone(), {
         let jobs = jobs.clone();
-        move || {
-            // Reading the memo is what subscribes this effect to the two paths. Cloned
-            // out so the guard ends with the statement: what follows writes the state
-            // this effect is about, and `Proj` itself.
-            let (file, directory) = places.read().clone();
+        move |before, (file, directory): &(Option<PathBuf>, Option<PathBuf>)| {
             stop_server(language, &jobs);
             // And the settings go with it: they were another project's. Read again here,
             // where a project arrives, so the answer is in hand before either press can
@@ -1112,7 +1118,6 @@ pub(crate) fn use_language_with(
             if let Some(directory) = directory.clone() {
                 jobs.send(LspJob::ReadSettings { directory });
             }
-            let before = seen.replace(Some((file.clone(), directory.clone())));
             let moved = before.is_some_and(|(was_file, was_directory)| {
                 was_file == file && was_directory != directory
             });

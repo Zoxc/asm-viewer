@@ -53,17 +53,17 @@ and the agreement was to the old place, so it goes. A project *arriving* brings 
 answer with it, out of its own session, and taking that off it would not only ask again but
 write the `false` straight back into the session it was read from, since the open project is
 saved as it changes. And the mount is neither: the deps it mounts with are already the
-reopened project's, the restore being an earlier hook of the same render. So the effect
-remembers the id and directory it last saw, and clears only where the id stayed and the
-directory moved. The server still stops for all three: it belonged to the project that is
-being left.
+reopened project's, the restore being an earlier hook of the same render. So the effect is
+handed what it last saw beside what it sees now (`use_on_change`, `agents/UI.md`), and
+clears only where the id stayed and the directory moved. The server still stops for all
+three: it belonged to the project that is being left.
 
 It sees those two paths through a **memo** rather than reading the project at the root.
 The hook is called from `app()`, and the Project view's boxes write the open project on
 every keystroke, so a read there would rebuild the whole window for each character -- the
-cost `WindowBody` is a component of its own to avoid (`agents/UI.md`). The memo is
-subscribed to the project and the effect to the memo, so a keystroke that leaves the file
-and the directory alone wakes neither.
+cost `WindowBody` is a component of its own to avoid (`agents/UI.md`). The memo is read in
+the hook's deps, which run inside the effect, so the effect is subscribed to it and the root
+to nothing: a keystroke that leaves the file and the directory alone wakes neither.
 
 The gate is in `start_server`, which both presses go through, and `run_server` is the half
 that actually starts one; so neither the top bar's control nor the Project view's button can
@@ -145,8 +145,11 @@ is how a server is told there is nothing more coming and what lets the reader th
 `Talk` is generic over its two streams, so the whole conversation is tested against a fake
 server over `std::io::pipe()` and only starting one needs a program. That is also why
 `Server` is not simply a `Talk<ChildStdin>`: what it adds is the process -- the handle that
-ends it, and the stderr where a program that would not run says why. `write_message` and
-`read_message` are the wire format on their own, tested over `Cursor`s.
+ends it, and the stderr where a program that would not run says why. It **derefs** to its
+`Talk` rather than forwarding each question, so a question added to the conversation is
+askable of a server with nothing written here; the rest of `Talk` is private, the wire
+format and the raw conversation being nobody's outside this file. `write_message` and
+`read_message` are that wire format on their own, tested over `Cursor`s.
 
 Things learned from rust-analyzer's own transport, each of which is a test:
 
@@ -453,7 +456,10 @@ read ends instead of waiting on a server that will never answer. That is why the
 UI thread and the worker is only told afterwards -- and why the handle reaches the app at the spawn
 rather than at the handshake, the handshake being one of the reads a worker can be parked in.
 `lsp::start` is the spawn and the handshake in one call, and it takes a `spawned` callback for
-that reason alone: it hands the handle over between the two.
+that reason alone: it hands the handle over between the two. That callback is the only place
+it hands one out. `start` answers with the `Server`, which answers for its own handle
+(`Server::handle`), because dropping the server stops the process: the two are not
+separable, and a signature that returned them side by side said they were.
 
 A handshake that failed asks the process how it ended, waiting `ENDING` for it to finish doing so,
 and that is what tells a program that would not start from a server that stopped answering. A
@@ -482,15 +488,18 @@ Two things say which server an answer is about, and they are not the same thing:
   has nothing else to kill: a program that takes the pipe and answers nothing -- a wrapper
   pointed at a daemon that is not there, a name that is no language server -- would
   otherwise hold the worker in that read for the life of the app, with every later start
-  queued behind it and the control saying "starting" for ever. A `Spawned` or a `Started`
-  arriving for a dead run is **stopped**, not dropped: a handle dropped instead of stopped
-  is a server nothing can ever find again (`pad.rs` has the same rule for a run's
-  process). It is also what closes the race the other way -- a stop pressed before the
-  worker has even spawned finds nothing, and the `Spawned` that follows it is for a run
-  that has moved, so the kill happens there. The handle is a field of the state that has
-  it and not one beside the state, so "there is a server" is written down once: `Lsp::Off`
-  and `Lsp::Failed` have none to hold, and a `Spawned` that finds one of them stops what
-  it was handed.
+  queued behind it and the control saying "starting" for ever. **`Spawned` is the only
+  answer carrying one**, so there is one rule and not two: a `Spawned` arriving for a dead
+  run is **stopped**, not dropped -- a handle dropped instead of stopped is a server
+  nothing can ever find again (`pad.rs` has the same rule for a run's process). It is also
+  what closes the race the other way: a stop pressed before the worker has even spawned
+  finds nothing, and the `Spawned` that follows it is for a run that has moved, so the kill
+  happens there. `Started` then says only whether the handshake succeeded, and the handle it
+  turns `Lsp::Starting` into `Lsp::Running` with is the one already written there -- both
+  answers come down the one channel and `Spawned` is sent first. The handle is a field of
+  the state that has it and not one beside the state, so "there is a server" is written
+  down once: `Lsp::Off` and `Lsp::Failed` have none to hold, and a `Spawned` that finds one
+  of them stops what it was handed.
 
 Which **question** an answer is to is a third thing, and the run cannot stand in for it: a
 run lasts as long as the server, so two questions inside one is the ordinary case. The two

@@ -51,6 +51,39 @@ pub(crate) fn recents_of(store: State<Option<Store>>) -> Vec<Recent> {
         .unwrap_or_default()
 }
 
+/// `f(before, now)` whenever the deps `now()` answers change, `before` being what the last
+/// run saw and [`None`] on the mount -- which `f` may return early on, a mount not being a
+/// change.
+///
+/// **What wakes the effect is what `now()` reads**, and every other `.read()` `f` makes at
+/// any depth: `use_side_effect` runs its closure inside a `ReactiveContext`, so a read is a
+/// subscription wherever it is written. The deps are what a wake is *judged* by, and one
+/// that finds them unmoved calls nothing. They are read inside the effect and not in the
+/// render, which is what a [`Memo`] source needs: the effect follows it, and the scope that
+/// called this follows nothing.
+///
+/// `now` hands back an owned value, so a read guard it took is over before `f` runs -- and
+/// `f` may write the very state the deps came out of.
+///
+/// The one hook for "not on the mount", which two mechanisms each kept bookkeeping of their
+/// own for ([`use_language`], `RecentsSection`).
+pub(crate) fn use_on_change<D: PartialEq + 'static>(
+    mut now: impl FnMut() -> D + 'static,
+    mut f: impl FnMut(Option<&D>, &D) + 'static,
+) {
+    // A plain captured value and not an `Rc<RefCell>` or a `State`: the closure is `FnMut`
+    // and owns it, and nothing but the effect ever looks at it.
+    let mut seen: Option<D> = None;
+    use_side_effect(move || {
+        let now = now();
+        if seen.as_ref() == Some(&now) {
+            return;
+        }
+        f(seen.as_ref(), &now);
+        seen = Some(now);
+    });
+}
+
 /// The active tab and the document it shows, shared through context.
 ///
 /// **A derivation and not a state**: the strip's active tab, read through [`Docs`] -- see

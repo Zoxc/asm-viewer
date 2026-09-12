@@ -316,10 +316,11 @@ pub struct Token {
 
 /// A started server: the conversation, and the process it is with.
 ///
-/// Not a [`Talk<ChildStdin>`](Talk) itself because the process is the other half of it: the
-/// handle that ends it, and the stderr where a program that would not run says why. `Talk`
-/// is generic over its two streams and knows nothing of a process, which is what lets the
-/// whole conversation be tested over a pipe with no program anywhere on the machine.
+/// A [`Talk<ChildStdin>`](Talk) plus the process -- the handle that ends it, and the
+/// stderr where a program that would not run says why -- and it derefs to that `Talk`, so
+/// what is asked of a server is asked of the conversation directly. `Talk` is generic over
+/// its two streams and knows nothing of a process, which is what lets the whole
+/// conversation be tested over a pipe with no program anywhere on the machine.
 pub struct Server {
     talk: Talk<ChildStdin>,
     /// What ends it, which is also what says whether it has ended by itself.
@@ -335,11 +336,13 @@ pub struct Server {
 }
 
 /// Start rust-analyzer over `directory`, shake hands with it, and hand back the
-/// conversation and a handle that can end it.
+/// conversation.
 ///
-/// The handle is registered by [`process::start`], so [`process::stop_all`] reaches a
-/// server whose [`Server`] has been lost -- the window's close hook can read no UI state
-/// and has only this.
+/// The handle that ends it is the server's own ([`Server::handle`]), and it is handed out
+/// once: dropping the server stops the process, so the two are never apart. It is
+/// registered by [`process::start`] besides, so [`process::stop_all`] reaches a server
+/// whose [`Server`] has been lost -- the window's close hook can read no UI state and has
+/// only this.
 ///
 /// `spawned` is called with that handle the moment the process exists, which is **before**
 /// the handshake: a program that reads its input and answers nothing never returns from
@@ -351,11 +354,11 @@ pub fn start(
     options: &Value,
     told: impl FnMut(Note) + Send + 'static,
     spawned: impl FnOnce(&Handle),
-) -> Result<(Server, Handle), Failure> {
-    let (mut server, handle) = start_in(program, directory, told)?;
-    spawned(&handle);
+) -> Result<Server, Failure> {
+    let mut server = start_in(program, directory, told)?;
+    spawned(server.handle());
     server.initialize(directory, options)?;
-    Ok((server, handle))
+    Ok(server)
 }
 
 /// The spawn on its own, which is what lets the failing half of a start be tested without
@@ -364,7 +367,7 @@ fn start_in(
     program: &str,
     directory: &Path,
     told: impl FnMut(Note) + Send + 'static,
-) -> Result<(Server, Handle), Failure> {
+) -> Result<Server, Failure> {
     let mut command = Command::new(program);
     command
         .current_dir(directory)
@@ -388,13 +391,12 @@ fn start_in(
         return Err(Failure::NoServer("it has no pipes".to_owned()));
     };
 
-    let server = Server {
+    Ok(Server {
         talk: Talk::over(to, BufReader::new(from), told),
-        handle: handle.clone(),
+        handle,
         said,
         stderr,
-    };
-    Ok((server, handle))
+    })
 }
 
 /// Read the program's stderr on a thread of its own, keeping the first [`MAX_SAID`] bytes
@@ -468,48 +470,25 @@ impl Server {
         })
     }
 
-    /// Put `question` about what is at `at`, in the app's own units ([`Lookup`]).
-    ///
-    /// `lines` is the answer's own reader and belongs to the caller, so that whatever
-    /// counts the answer into the units a pane draws counts it off the same text
-    /// ([`Lines`]).
-    pub fn places(
-        &mut self,
-        question: Question,
-        at: &Lookup,
-        lines: &mut Lines,
-    ) -> Result<Vec<Place>, Failure> {
-        self.talk.places(question, at, lines)
+    /// What ends it: the same handle [`start`] gave `spawned`.
+    pub fn handle(&self) -> &Handle {
+        &self.handle
     }
+}
 
-    /// Every name in `file`, as the server classifies them.
-    pub fn semantic_tokens(&mut self, file: &Path) -> Result<Vec<Token>, Failure> {
-        self.talk.semantic_tokens(file)
+/// The conversation is the server's, so a question is put straight to it and a question
+/// added to [`Talk`] needs nothing here to be askable.
+impl std::ops::Deref for Server {
+    type Target = Talk<ChildStdin>;
+
+    fn deref(&self) -> &Talk<ChildStdin> {
+        &self.talk
     }
+}
 
-    /// What it said it would spell those with.
-    pub fn legend(&self) -> &Legend {
-        self.talk.legend()
-    }
-
-    /// What the name at `at` is, in the same units.
-    pub fn hover(&mut self, at: &Lookup) -> Result<Option<Hovered>, Failure> {
-        self.talk.hover(at)
-    }
-
-    /// Tell it the app is showing `file`, and that it is not any more.
-    pub fn opened(&mut self, file: &Path, language: &str, text: &str) -> Result<(), Failure> {
-        self.talk.opened(file, language, text)
-    }
-
-    pub fn closed(&mut self, file: &Path) -> Result<(), Failure> {
-        self.talk.closed(file)
-    }
-
-    /// Whether it takes documents at all, so a file it would never hear about is not read
-    /// off the disk for nothing.
-    pub fn opens(&self) -> bool {
-        self.talk.opens()
+impl std::ops::DerefMut for Server {
+    fn deref_mut(&mut self) -> &mut Talk<ChildStdin> {
+        &mut self.talk
     }
 }
 
@@ -577,7 +556,7 @@ pub struct Talk<W> {
 impl<W: Write + Send + 'static> Talk<W> {
     /// A conversation over two streams that are already connected to a server, with `told`
     /// called for whatever the server says that nobody asked for.
-    pub fn over(
+    fn over(
         to: W,
         from: impl BufRead + Send + 'static,
         told: impl FnMut(Note) + Send + 'static,
@@ -638,7 +617,7 @@ impl<W: Write + Send + 'static> Talk<W> {
     /// is not there -- which a server reports through `window/showMessage` and this
     /// client only logs, leaving a control that says it is running and every question
     /// answering nothing.
-    pub fn initialize(&mut self, directory: &Path, options: &Value) -> Result<(), Failure> {
+    fn initialize(&mut self, directory: &Path, options: &Value) -> Result<(), Failure> {
         let directory = rooted(directory);
         let root = uri_of(&directory);
         let name = directory
@@ -1047,7 +1026,7 @@ fn read_from<W: Write + Send + 'static>(
     let closed = answered.clone();
     let reading =
         process::read_on_thread("the language server's answers", from, move |mut from| {
-            let mut working = std::collections::HashSet::new();
+            let mut progress = Progress::default();
             loop {
                 let message = match read_message(&mut from) {
                     Ok(message) => message,
@@ -1072,7 +1051,7 @@ fn read_from<W: Write + Send + 'static>(
                             }
                         }
                         None => {
-                            for note in noted(&method, &message, &mut working) {
+                            if let Some(note) = progress.noted(&method, &message) {
                                 told(note);
                             }
                         }
@@ -1091,69 +1070,67 @@ fn read_from<W: Write + Send + 'static>(
     }
 }
 
-/// What one notification says about the server itself, and nothing for one that says
-/// nothing.
-fn noted(
-    method: &str,
-    message: &Value,
-    working: &mut std::collections::HashSet<String>,
-) -> Vec<Note> {
-    // The one notification a client with no capabilities of its own is told when the
-    // server cannot make sense of the project. Every definition after it will be empty,
-    // and this is the only place it is said.
-    if method == "window/showMessage" {
-        log::warn!("the language server said: {message}");
-        return Vec::new();
-    }
-    // rust-analyzer's own account of itself, asked for in the handshake and sent by
-    // nothing else. `quiescent` is the whole of what is wanted: it has read what it is
-    // going to read, and an answer now is the answer it will keep giving.
-    if method == SETTLED {
-        let settled = message
-            .get("params")
-            .and_then(|params| params.get("quiescent"))
-            .and_then(Value::as_bool);
-        return settled.map(Note::Settled).into_iter().collect();
-    }
-    busy_after(method, message, working)
-        .map(Note::Busy)
-        .into_iter()
-        .collect()
+/// What the reader thread keeps between notifications: the progress tokens the server has
+/// open right now.
+#[derive(Default)]
+struct Progress {
+    working: std::collections::HashSet<String>,
 }
 
-/// Whether the server is working, if this notification changed the answer.
-///
-/// Progress arrives as a token that begins and ends, and several are open at once while
-/// rust-analyzer reads a project -- so what is kept is the set of them, and what is said is
-/// only that it went from empty to not or back.
-///
-/// **Not readiness.** The gaps between those tokens are not the server being done: a small
-/// crate's start has nine of them in four seconds, and the file asked about in one comes
-/// back with fewer names than the same file a moment later. [`Note::Settled`] is what
-/// says done, where the server says it at all.
-fn busy_after(
-    method: &str,
-    message: &Value,
-    working: &mut std::collections::HashSet<String>,
-) -> Option<bool> {
-    if method != "$/progress" {
-        return None;
+impl Progress {
+    /// What one notification says about the server itself, and nothing for one that says
+    /// nothing. At most one thing: no notification is two remarks.
+    fn noted(&mut self, method: &str, message: &Value) -> Option<Note> {
+        // The one notification a client with no capabilities of its own is told when the
+        // server cannot make sense of the project. Every definition after it will be
+        // empty, and this is the only place it is said.
+        if method == "window/showMessage" {
+            log::warn!("the language server said: {message}");
+            return None;
+        }
+        // rust-analyzer's own account of itself, asked for in the handshake and sent by
+        // nothing else. `quiescent` is the whole of what is wanted: it has read what it is
+        // going to read, and an answer now is the answer it will keep giving.
+        if method == SETTLED {
+            return message
+                .get("params")?
+                .get("quiescent")?
+                .as_bool()
+                .map(Note::Settled);
+        }
+        self.busy_after(method, message).map(Note::Busy)
     }
 
-    let params = message.get("params")?;
-    let token = match params.get("token")? {
-        Value::String(token) => token.clone(),
-        token => token.to_string(),
-    };
-    let was = !working.is_empty();
-    match params.get("value")?.get("kind")?.as_str()? {
-        "begin" => working.insert(token),
-        "end" => working.remove(&token),
-        // A report is progress within a token that has already begun.
-        _ => false,
-    };
-    let now = !working.is_empty();
-    (was != now).then_some(now)
+    /// Whether the server is working, if this notification changed the answer.
+    ///
+    /// Progress arrives as a token that begins and ends, and several are open at once while
+    /// rust-analyzer reads a project -- so what is kept is the set of them, and what is said
+    /// is only that it went from empty to not or back.
+    ///
+    /// **Not readiness.** The gaps between those tokens are not the server being done: a
+    /// small crate's start has nine of them in four seconds, and the file asked about in one
+    /// comes back with fewer names than the same file a moment later. [`Note::Settled`] is
+    /// what says done, where the server says it at all.
+    fn busy_after(&mut self, method: &str, message: &Value) -> Option<bool> {
+        if method != "$/progress" {
+            return None;
+        }
+
+        let params = message.get("params")?;
+        let token = match params.get("token")? {
+            Value::String(token) => token.clone(),
+            token => token.to_string(),
+        };
+        let was = !self.working.is_empty();
+        match params.get("value")?.get("kind")?.as_str()? {
+            "begin" => self.working.insert(token),
+            "end" => self.working.remove(&token),
+            // A report is progress within a token that has already begun.
+            _ => false,
+        };
+        let now = !self.working.is_empty();
+        (was != now).then_some(now)
+    }
 }
 
 /// What this app asks of a language server whatever the project: the options it sends at
@@ -1793,7 +1770,7 @@ impl<W> Drop for Talk<W> {
 }
 
 /// Write one message: the header the protocol frames with, and the body.
-pub fn write_message(to: &mut impl Write, body: &Value) -> io::Result<()> {
+fn write_message(to: &mut impl Write, body: &Value) -> io::Result<()> {
     let body = serde_json::to_vec(body)?;
     let mut message = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
     message.extend_from_slice(&body);
@@ -1803,7 +1780,7 @@ pub fn write_message(to: &mut impl Write, body: &Value) -> io::Result<()> {
 }
 
 /// Read one message. The headers up to the blank line, then exactly the length they said.
-pub fn read_message(from: &mut impl BufRead) -> Result<Value, Failure> {
+fn read_message(from: &mut impl BufRead) -> Result<Value, Failure> {
     let mut length = None;
     loop {
         let mut header = String::new();

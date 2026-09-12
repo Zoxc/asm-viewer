@@ -678,6 +678,81 @@ fn test_roots() -> Roots {
     roots(Some(Store::at(test_store())), &Settings::default())
 }
 
+/// The deps [`use_on_change_harness`] watches, and the unrelated state its callback reads.
+#[derive(Clone, Copy)]
+struct Watched(State<u32>);
+#[derive(Clone, Copy)]
+struct Unrelated(State<u32>);
+/// Every `(before, now)` the callback was handed, in order.
+#[derive(Clone)]
+struct Changes(Rc<RefCell<Vec<(Option<u32>, u32)>>>);
+
+/// One [`use_on_change`] over a state, whose callback also reads a state that is no dep of
+/// it -- which is what subscribes the effect to that one as well.
+fn use_on_change_harness() -> impl IntoElement {
+    let watched = use_consume::<Watched>().0;
+    let unrelated = use_consume::<Unrelated>().0;
+    let changes = use_consume::<Changes>().0;
+    use_on_change(
+        move || *watched.read(),
+        move |before, now| {
+            let _ = *unrelated.read();
+            changes.borrow_mut().push((before.copied(), *now));
+        },
+    );
+    rect().expanded()
+}
+
+/// What the hook every "not on the mount" effect is written over promises: the callback is
+/// handed what the last run saw, `None` on the mount, and it is **not called at all** for a
+/// wake that left the deps where they were.
+///
+/// The second half is the one that has to be said out loud. An effect's callback runs
+/// inside a reactive context, so every `.read()` it makes at any depth subscribes it and
+/// the deps are not the only thing that wakes it -- the hook judges a wake by the deps
+/// rather than trusting the wake.
+#[test]
+fn a_change_hook_skips_the_mount_and_a_wake_that_moved_nothing() {
+    let changes = Changes(Rc::new(RefCell::new(Vec::new())));
+    let (mut test, (mut watched, mut unrelated)) = TestingRunner::new(
+        use_on_change_harness,
+        (100., 100.).into(),
+        {
+            let changes = changes.clone();
+            move |runner: &mut _| {
+                let watched = runner.provide_root_context(|| Watched(State::create(0))).0;
+                let unrelated = runner
+                    .provide_root_context(|| Unrelated(State::create(0)))
+                    .0;
+                runner.provide_root_context(move || changes.clone());
+                (watched, unrelated)
+            }
+        },
+        1.,
+    );
+    settle(&mut test);
+    let seen = || changes.0.borrow().clone();
+
+    assert_eq!(
+        seen(),
+        [(None, 0)],
+        "the mount is a run with nothing before"
+    );
+
+    // A write of the same value is no change at all, and neither is a wake from the state
+    // the callback reads that is no dep of it.
+    watched.set(0);
+    settle(&mut test);
+    unrelated.set(1);
+    settle(&mut test);
+    assert_eq!(seen(), [(None, 0)], "a wake that moved no dep called back");
+
+    // And a change is handed both what it was and what it is.
+    watched.set(7);
+    settle(&mut test);
+    assert_eq!(seen(), [(None, 0), (Some(0), 7)]);
+}
+
 /// With no project open the window is the top bar and one screen: no tab bar, no sidebar,
 /// no panes. The three are what a project brings, and each of them would go on drawing over
 /// a project that is not there -- the sidebar's lists empty, the bar's placeholder saying
@@ -9036,12 +9111,14 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
         move |job: LspJob| match job {
             // A real start, since what puts the question again is the server's own
             // account of itself, and it arrives on the channel a start hands over.
-            LspJob::Start { run, notes, .. } => {
+            LspJob::Start {
+                run,
+                notes,
+                spawned,
+                ..
+            } => {
                 let _ = told.send_blocking(notes);
-                Some(LspAnswer::Started {
-                    run,
-                    server: Ok(handle.clone()),
-                })
+                server_started(run, &spawned, handle.clone())
             }
             _ => None,
         },
@@ -9372,12 +9449,14 @@ fn what_a_server_said_before_it_settled_is_asked_again_once_it_has() {
         move |job: LspJob| match job {
             // A real start, since what puts the question again is the server's own
             // account of itself, and it arrives on the channel a start hands over.
-            LspJob::Start { run, notes, .. } => {
+            LspJob::Start {
+                run,
+                notes,
+                spawned,
+                ..
+            } => {
                 let _ = told.send_blocking(notes);
-                Some(LspAnswer::Started {
-                    run,
-                    server: Ok(handle.clone()),
-                })
+                server_started(run, &spawned, handle.clone())
             }
             _ => None,
         },
@@ -27630,10 +27709,9 @@ fn project_view_harness() -> Element {
                 settings: lsp::settings_in(&directory),
                 directory,
             }),
-            LspJob::Start { run, .. } => Some(LspAnswer::Started {
-                run,
-                server: Ok(process::Handle::to_nothing()),
-            }),
+            LspJob::Start { run, spawned, .. } => {
+                server_started(run, &spawned, process::Handle::to_nothing())
+            }
             _ => None,
         },
     );
@@ -28740,6 +28818,23 @@ fn server_harness() -> Element {
         .into_element()
 }
 
+/// A start answered the way the worker answers one: the handle first, down the channel the
+/// job carries, and the handshake's own answer after it.
+///
+/// Two answers for one job, and a fake that sends only the second is not a start: the
+/// handle the app ends the server by is [`LspAnswer::Spawned`]'s alone.
+fn server_started(
+    run: u64,
+    spawned: &async_channel::Sender<LspAnswer>,
+    handle: process::Handle,
+) -> Option<LspAnswer> {
+    let _ = spawned.send_blocking(LspAnswer::Spawned { run, handle });
+    Some(LspAnswer::Started {
+        run,
+        started: Ok(()),
+    })
+}
+
 /// Mount the control over a worker that records every job and answers from `answer`.
 fn mount_server(
     answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
@@ -28918,10 +29013,7 @@ fn the_control_starts_a_server_and_lights_when_it_answers() {
     let (mut test, roots, _asking, asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
-            LspJob::Start { run, .. } => Some(LspAnswer::Started {
-                run,
-                server: Ok(handle.clone()),
-            }),
+            LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
             _ => None,
         }
     });
@@ -28951,7 +29043,7 @@ fn the_control_is_named_and_bordered_in_the_state_it_is_in() {
     let (mut test, roots, _asking, _asks) = mount_server(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
-            server: Err(lsp::Failure::NoServer("not found".to_owned())),
+            started: Err(lsp::Failure::NoServer("not found".to_owned())),
         }),
         _ => None,
     });
@@ -29000,10 +29092,7 @@ fn the_next_press_stops_the_server() {
     let (mut test, roots, _asking, asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
-            LspJob::Start { run, .. } => Some(LspAnswer::Started {
-                run,
-                server: Ok(handle.clone()),
-            }),
+            LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
             _ => None,
         }
     });
@@ -29038,7 +29127,7 @@ fn a_server_that_will_not_start_leaves_the_reason_on_the_control() {
     let (mut test, roots, _asking, _asks) = mount_server(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
-            server: Err(lsp::Failure::NoServer("not found".to_owned())),
+            started: Err(lsp::Failure::NoServer("not found".to_owned())),
         }),
         _ => None,
     });
@@ -29106,7 +29195,8 @@ fn the_control_names_the_program_the_project_named() {
 }
 
 /// An answer about a server nobody is waiting for any more is dropped -- and the handle it
-/// carries is stopped rather than dropped, this being the first moment the app holds it.
+/// carries is stopped rather than dropped, this being the only moment the app is handed
+/// one.
 #[test]
 fn an_answer_for_a_server_that_was_stopped_is_dropped() {
     let late = process::Handle::to_nothing();
@@ -29115,10 +29205,13 @@ fn an_answer_for_a_server_that_was_stopped_is_dropped() {
         move |job: LspJob| match job {
             // An answer for the run before this one, which is what a start that was
             // stopped while it was starting looks like from here.
-            LspJob::Start { run, .. } => Some(LspAnswer::Started {
-                run: run.saturating_sub(1),
-                server: Ok(late.clone()),
-            }),
+            LspJob::Start { run, spawned, .. } => {
+                let _ = spawned.send_blocking(LspAnswer::Spawned {
+                    run: run.saturating_sub(1),
+                    handle: late.clone(),
+                });
+                None
+            }
             _ => None,
         }
     });
@@ -29209,10 +29302,7 @@ fn changing_the_project_stops_the_server() {
     let (mut test, roots, _asking, asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
-            LspJob::Start { run, .. } => Some(LspAnswer::Started {
-                run,
-                server: Ok(handle.clone()),
-            }),
+            LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
             _ => None,
         }
     });
@@ -29245,7 +29335,7 @@ fn a_question_asked_with_no_server_running_asks_nobody() {
     let (mut test, roots, asking, asks) = mount_server(|job: LspJob| match job {
         LspJob::Start { run, .. } => Some(LspAnswer::Started {
             run,
-            server: Err(lsp::Failure::NoServer("not found".to_owned())),
+            started: Err(lsp::Failure::NoServer("not found".to_owned())),
         }),
         _ => None,
     });
@@ -29304,10 +29394,9 @@ fn a_question_asked_with_no_server_running_asks_nobody() {
 #[test]
 fn a_hover_question_is_asked_under_the_running_servers_run() {
     let (mut test, roots, asking, asks) = mount_server(|job: LspJob| match job {
-        LspJob::Start { run, .. } => Some(LspAnswer::Started {
-            run,
-            server: Ok(process::Handle::to_nothing()),
-        }),
+        LspJob::Start { run, spawned, .. } => {
+            server_started(run, &spawned, process::Handle::to_nothing())
+        }
         _ => None,
     });
     let states = roots.states;
@@ -29576,13 +29665,15 @@ fn a_server_reading_the_project_says_so_and_the_control_shows_it() {
     let (mut test, roots, _asking, _asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
-            LspJob::Start { run, notes, .. } => {
+            LspJob::Start {
+                run,
+                notes,
+                spawned,
+                ..
+            } => {
                 // What the server's own reader thread does when `$/progress` arrives.
                 let _ = notes.send_blocking((run, lsp::Note::Busy(true)));
-                Some(LspAnswer::Started {
-                    run,
-                    server: Ok(handle.clone()),
-                })
+                server_started(run, &spawned, handle.clone())
             }
             _ => None,
         }
@@ -29675,12 +29766,14 @@ fn a_start_carries_the_projects_own_settings() {
                 settings: Ok(read.clone()),
                 directory,
             }),
-            LspJob::Start { run, settings, .. } => {
+            LspJob::Start {
+                run,
+                settings,
+                spawned,
+                ..
+            } => {
                 let _ = sent.send_blocking(settings.options().to_string());
-                Some(LspAnswer::Started {
-                    run,
-                    server: Ok(process::Handle::to_nothing()),
-                })
+                server_started(run, &spawned, process::Handle::to_nothing())
             }
             _ => None,
         }
@@ -29710,10 +29803,9 @@ fn a_settings_file_that_could_not_be_read_starts_nothing() {
             settings: Err(lsp::Unreadable::NotAnObject),
             directory,
         }),
-        LspJob::Start { run, .. } => Some(LspAnswer::Started {
-            run,
-            server: Ok(process::Handle::to_nothing()),
-        }),
+        LspJob::Start { run, spawned, .. } => {
+            server_started(run, &spawned, process::Handle::to_nothing())
+        }
         _ => None,
     });
     let states = roots.states;
@@ -29859,10 +29951,9 @@ fn a_question_about_references_does_not_cancel_one_about_a_definition() {
 #[test]
 fn a_press_over_a_directory_nobody_agreed_to_asks_before_it_starts() {
     let (mut test, roots, _asking, asks) = mount_server(|job: LspJob| match job {
-        LspJob::Start { run, .. } => Some(LspAnswer::Started {
-            run,
-            server: Ok(process::Handle::to_nothing()),
-        }),
+        LspJob::Start { run, spawned, .. } => {
+            server_started(run, &spawned, process::Handle::to_nothing())
+        }
         _ => None,
     });
     let states = roots.states;
@@ -29921,10 +30012,7 @@ fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
     let (mut test, roots, _asking, asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
-            LspJob::Start { run, .. } => Some(LspAnswer::Started {
-                run,
-                server: Ok(handle.clone()),
-            }),
+            LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
             _ => None,
         }
     });
@@ -29958,10 +30046,9 @@ fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
 #[test]
 fn declining_starts_nothing_and_is_not_remembered() {
     let (mut test, roots, _asking, asks) = mount_server(|job: LspJob| match job {
-        LspJob::Start { run, .. } => Some(LspAnswer::Started {
-            run,
-            server: Ok(process::Handle::to_nothing()),
-        }),
+        LspJob::Start { run, spawned, .. } => {
+            server_started(run, &spawned, process::Handle::to_nothing())
+        }
         _ => None,
     });
     let states = roots.states;
@@ -30002,10 +30089,7 @@ fn a_project_that_agreed_before_the_app_opened_is_not_asked_again() {
         {
             let handle = handle.clone();
             move |job: LspJob| match job {
-                LspJob::Start { run, .. } => Some(LspAnswer::Started {
-                    run,
-                    server: Ok(handle.clone()),
-                }),
+                LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
                 _ => None,
             }
         },
@@ -30047,10 +30131,7 @@ fn changing_the_directory_asks_about_the_new_one() {
     let (mut test, roots, _asking, _asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
-            LspJob::Start { run, .. } => Some(LspAnswer::Started {
-                run,
-                server: Ok(handle.clone()),
-            }),
+            LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
             _ => None,
         }
     });
@@ -30225,10 +30306,7 @@ fn switching_projects_keeps_the_answer_the_new_one_brought() {
     let (mut test, roots, _asking, _asks) = mount_server({
         let handle = handle.clone();
         move |job: LspJob| match job {
-            LspJob::Start { run, .. } => Some(LspAnswer::Started {
-                run,
-                server: Ok(handle.clone()),
-            }),
+            LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
             _ => None,
         }
     });

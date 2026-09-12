@@ -1213,6 +1213,56 @@ fn what_the_server_says_unasked_is_whether_it_is_working() {
     assert_eq!(notes, [Note::Busy(true), Note::Busy(false)]);
 }
 
+/// One notification is **at most one remark**, whatever it says. The reader passes on what
+/// it answers and nothing else, so a token that opens under a name already open, a report
+/// inside one, an `end` for a token that never began and a `$/progress` with no `params`
+/// at all are each nothing to say -- and a token the server spells as a number is a token.
+#[test]
+fn one_notification_says_at_most_one_thing_about_the_server() {
+    let progress = |token: Value, kind: &str| json!({ "params": { "token": token, "value": { "kind": kind } } });
+    let mut reader = Progress::default();
+    let mut noted = |method: &str, message: Value| reader.noted(method, &message);
+
+    // What the server says of the project is logged and is not a remark.
+    assert_eq!(noted("window/showMessage", json!({})), None);
+    // The first token open is the one thing that changed.
+    assert_eq!(
+        noted(
+            "$/progress",
+            progress(json!("rustAnalyzer/Indexing"), "begin")
+        ),
+        Some(Note::Busy(true))
+    );
+    // A second, a report inside the first, and a token spelled as a number: still working.
+    assert_eq!(
+        noted("$/progress", progress(json!("rustAnalyzer/Roots"), "begin")),
+        None
+    );
+    assert_eq!(
+        noted(
+            "$/progress",
+            progress(json!("rustAnalyzer/Indexing"), "report")
+        ),
+        None
+    );
+    assert_eq!(noted("$/progress", progress(json!(7), "begin")), None);
+    // Nothing a malformed notification can say, and nothing it can panic on.
+    assert_eq!(noted("$/progress", json!({})), None);
+    assert_eq!(noted("$/progress", json!({ "params": {} })), None);
+    assert_eq!(
+        noted("$/progress", progress(json!("never/opened"), "end")),
+        None
+    );
+    // The three open ones closed, and only the last of them is the answer changing.
+    for token in [json!("rustAnalyzer/Indexing"), json!("rustAnalyzer/Roots")] {
+        assert_eq!(noted("$/progress", progress(token, "end")), None);
+    }
+    assert_eq!(
+        noted("$/progress", progress(json!(7), "end")),
+        Some(Note::Busy(false))
+    );
+}
+
 /// The other thing a server may say about itself, which no specification has: that it has
 /// settled. Progress says nothing about this -- the tokens above open and close all
 /// through a start -- so the two are told apart and both are passed on.
@@ -1436,16 +1486,43 @@ fn what_a_program_said_on_its_way_out_is_waited_for() {
         line!(),
     );
     let program = directory.join("server");
-    let (mut server, handle) =
-        start_in(&program.to_string_lossy(), Path::new("."), |_| ()).expect("spawned");
+    let mut server = start_in(&program.to_string_lossy(), Path::new("."), |_| ()).expect("spawned");
 
     let failure = server
         .initialize(Path::new("."), &wanted())
         .err()
         .expect("no server");
-    handle.stop();
+    server.handle().stop();
 
     assert_eq!(failure, Failure::NoServer(said.to_owned()));
+}
+
+/// A start hands the handle out **once**. `spawned` is given the server's own, which is
+/// the only one there is: what a caller holds after the handshake it asks the server for,
+/// and it ends the same process.
+#[test]
+#[cfg(unix)]
+fn the_handle_a_start_hands_over_is_the_servers_own() {
+    // A program that takes the pipe and answers nothing, so the handshake never returns
+    // and the only way out is the handle.
+    let directory = program_that("sleep 30", line!());
+    let program = directory.join("server");
+    let server = start_in(&program.to_string_lossy(), Path::new("."), |_| ()).expect("spawned");
+
+    assert!(
+        !server.handle().finished(),
+        "the server was over before anything asked it anything"
+    );
+    // And the conversation is reached through the server itself, with no forwarder in the
+    // way: nothing has been asked yet, so it takes no documents and has no legend.
+    assert!(!server.opens());
+    assert_eq!(server.legend(), &Legend::default());
+
+    server.handle().stop();
+    assert!(
+        server.handle().finished(),
+        "the handle the server answers with did not end it"
+    );
 }
 
 /// The whole of it against a real program: one that exits at once is a server that would
