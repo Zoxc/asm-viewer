@@ -149,6 +149,20 @@ impl Run {
 /// state and not a step of one.
 pub const BUILDING: &str = "Building...";
 
+/// The one line a pane says about a build: "Building..." while one is going, and the
+/// verdict of the build before otherwise. `None` before anything has been built.
+///
+/// Both panes that report a build say it this way (`agents/Scratchpad.md`), so the rule is
+/// written here and not in either of them. `last` is a closure because a build going is the
+/// whole line: the one before is not asked for, and working out a verdict counts a build's
+/// diagnostics, of which there can be hundreds.
+pub fn status(building: bool, last: impl FnOnce() -> Option<Verdict>) -> Option<Verdict> {
+    match building {
+        true => Some(Verdict::plain(BUILDING)),
+        false => last(),
+    }
+}
+
 /// One thing the compiler said, flattened out of cargo's JSON.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {

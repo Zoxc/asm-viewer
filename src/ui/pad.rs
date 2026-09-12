@@ -535,9 +535,7 @@ impl PadState {
 
     /// What the compiler said about the last build.
     pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
-        self.ran()
-            .map(|build| build.run.diagnostics())
-            .unwrap_or_default()
+        self.ran().map_or(&[], |build| build.run.diagnostics())
     }
 
     /// cargo's own words, when they are about the dependency rows.
@@ -545,16 +543,17 @@ impl PadState {
         self.ran().and_then(|build| build.run.refusal())
     }
 
-    /// The one line over the pane saying where the last build got to. The Project view's
-    /// is the same line ([`Builds::verdict`]).
+    /// The one line over the pane saying where the last build got to. Said by
+    /// [`cargo::status`], the rule the Project view's line follows too ([`Builds::verdict`]).
+    /// What is added here is the build the package was never written for, which cargo never
+    /// saw.
     pub(crate) fn verdict(&self) -> Option<Verdict> {
-        match self.building {
-            true => Some(Verdict::plain(cargo::BUILDING)),
-            false => self.built.as_ref().map(|build| match build {
+        cargo::status(self.building, || {
+            self.built.as_ref().map(|build| match build {
                 Ok(build) => build.verdict(),
                 Err(failure) => Verdict::bad_news(failure.to_string()),
-            }),
-        }
+            })
+        })
     }
 
     /// What the last build made, and so what there is to run.

@@ -129,9 +129,10 @@ rather than picking a variant out of a failure that could be anything. A cargo t
 stays inside `Run`, worded once for both panes. What a pane says about a build is
 `cargo::Run::verdict`, so the pad and the Project view cannot report the same build differently;
 `Build::verdict` adds only what cargo cannot know -- the generated package has one binary, so a
-build naming none made nothing to open -- and `PadState` and `Builds` each add only "Building..."
-and pass the rest on. It was two copies of the summary, down to the wording, and the two had
-already drifted over a cargo that would not start.
+build naming none made nothing to open. The one rule left is `cargo::status`: a build going says
+"Building..." and nothing of the one before. `PadState::verdict` and `Builds::verdict` are that
+call and no rule of their own. It was two copies of the summary, down to the wording, and the two
+had already drifted over a cargo that would not start.
 
 **Running is the artifact and not `cargo run`.** `run_in` spawns the executable `build_in` already
 asked cargo to name, in the scratchpad's own directory with a null stdin. Re-entering cargo would

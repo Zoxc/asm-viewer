@@ -65,10 +65,7 @@ impl Builds {
 
     /// What the compiler said about the last build.
     pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
-        self.built
-            .as_deref()
-            .map(cargo::Run::diagnostics)
-            .unwrap_or_default()
+        self.built.as_deref().map_or(&[], cargo::Run::diagnostics)
     }
 
     /// Whether `file` is one the pane may offer as a target: [`Builds::sources`] asked,
@@ -149,13 +146,12 @@ impl Builds {
             .collect()
     }
 
-    /// The one line under the button saying where the last build got to. The scratchpad's
-    /// is the same line ([`PadState::verdict`]).
+    /// The one line under the button saying where the last build got to. Said by
+    /// [`cargo::status`], the rule the scratchpad's line follows too ([`PadState::verdict`]).
     pub(crate) fn verdict(&self) -> Option<Verdict> {
-        match self.building {
-            true => Some(Verdict::plain(cargo::BUILDING)),
-            false => self.built.as_deref().map(cargo::Run::verdict),
-        }
+        cargo::status(self.building, || {
+            self.built.as_deref().map(cargo::Run::verdict)
+        })
     }
 }
 

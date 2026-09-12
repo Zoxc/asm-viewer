@@ -228,11 +228,19 @@ fn both_build_panes_say_the_same_line_about_the_same_build() {
     assert_eq!(project.refusal(), None);
     assert_eq!(pad.refusal(), None);
 
-    // And while one is going, which is neither's build to describe.
-    let mut pad = PadState::default();
+    // And while one is going, which is neither's build to describe. Said with a build
+    // already held: the rule is "Building..." and nothing of the build before, and a pane
+    // that fell through to the last verdict would report a finished build over one still
+    // going.
+    let last = built(&["target/debug/viewer"]);
+    let mut pad = pad_holding(Build {
+        run: last.clone(),
+        executable: Some(PathBuf::from("target/debug/viewer")),
+    });
     pad.building = true;
     let project = Builds {
         building: true,
+        built: Some(Arc::new(last)),
         ..Builds::default()
     };
     assert_eq!(project.verdict(), pad.verdict());
