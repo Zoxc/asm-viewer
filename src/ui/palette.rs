@@ -491,10 +491,7 @@ const DISABLED_ALPHA: u8 = 100;
 /// name in. Derived, as [`dimmed`] is, so it follows the text colour of both palettes with
 /// no second value to keep in step.
 pub(crate) fn faded(color: Color, surface: Color) -> Color {
-    blend(
-        Color::from_argb(IDLE_ALPHA, color.r(), color.g(), color.b()),
-        surface,
-    )
+    toward(color, surface, IDLE_ALPHA)
 }
 
 /// A control that is drawn but cannot be used: the colour it has when it is live, faded
@@ -505,8 +502,15 @@ pub(crate) fn faded(color: Color, surface: Color) -> Color {
 /// to keep in step with the first -- and `blend` is already the rule for "this colour over
 /// that ground", so the dimmed state is that rule applied to a foreground.
 pub(crate) fn dimmed(color: Color, surface: Color) -> Color {
+    toward(color, surface, DISABLED_ALPHA)
+}
+
+/// The rule both are: `alpha` of `color` over `surface`, and the ground showing through
+/// the rest. Two names over it and not one, because the two strengths mean different
+/// things and each doc says which.
+fn toward(color: Color, surface: Color, alpha: u8) -> Color {
     blend(
-        Color::from_argb(DISABLED_ALPHA, color.r(), color.g(), color.b()),
+        Color::from_argb(alpha, color.r(), color.g(), color.b()),
         surface,
     )
 }

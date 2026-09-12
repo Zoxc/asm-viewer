@@ -52,6 +52,22 @@ fn a_row_past_the_end_clamps_to_the_last_one() {
     assert_eq!(positions.at(&"a".to_owned()), Some(900));
 }
 
+/// The question asked before the write, so a caller with nothing to drop does not
+/// re-render every reader of the map. Same predicate as [`Positions::forgetting`], and
+/// the two agree about the empty map.
+#[test]
+fn would_forget_answers_before_the_write() {
+    let empty = positions(&[]);
+    assert!(!empty.would_forget(|_| false));
+
+    let mut positions = positions(&[("a", 1), ("b", 2)]);
+    assert!(!positions.would_forget(|tab| tab == "a" || tab == "b"));
+    assert!(positions.would_forget(|tab| tab != "a"));
+
+    positions.forgetting(|tab| tab != "a");
+    assert!(!positions.would_forget(|tab| tab != "a"));
+}
+
 #[test]
 fn forgetting_a_tab_leaves_the_others() {
     let mut positions = positions(&[("a", 1), ("b", 2)]);

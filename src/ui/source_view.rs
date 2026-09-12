@@ -194,7 +194,7 @@ impl Named {
         let server = self.server.clone()?;
         let named = self.clone();
         Some(TextLinks {
-            columns: links::Links::followed(on_line)
+            columns: links::followed(on_line)
                 .map(|columns| self.drawn(columns))
                 .collect(),
             // Always a door: nothing here is a link until the server has said the name is

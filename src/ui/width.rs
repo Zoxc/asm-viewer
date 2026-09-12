@@ -62,11 +62,9 @@ impl Widest {
         hasher.finish()
     }
 
-    /// The width every row of `listing` is at least: the widest drawn so far, or nothing
-    /// for a listing no row has reported yet, which [`Widest::row_width`] turns into the
-    /// pane's own width. A read, so the row asking is re-rendered when the answer grows.
-    pub(crate) fn floor(&self, listing: u64) -> f32 {
-        let (key, width) = *self.0.read();
+    /// The width held for `listing`, out of the pair the state holds, and nothing for
+    /// any other listing -- the reset, written once for both readers below.
+    fn under(listing: u64, (key, width): (u64, f32)) -> f32 {
         if key == listing {
             width
         } else {
@@ -74,15 +72,20 @@ impl Widest {
         }
     }
 
-    /// The widest row of `listing` as a handler asks it, subscribing nothing: what the
-    /// list can be scrolled sideways over.
+    /// The width every row of `listing` is at least: the widest drawn so far, or nothing
+    /// for a listing no row has reported yet, which [`Widest::row_width`] turns into the
+    /// pane's own width. A **read**, so the row asking is re-rendered when the answer
+    /// grows -- which is the whole of how a row widens.
+    pub(crate) fn floor(&self, listing: u64) -> f32 {
+        Self::under(listing, *self.0.read())
+    }
+
+    /// The widest row of `listing` as a handler asks it: what the list can be scrolled
+    /// sideways over. A **peek**, because a handler is not a render and has no scope to
+    /// subscribe -- and the list must not be re-rendered by a wheel asking how far it
+    /// may go.
     pub(crate) fn extent(&self, listing: u64) -> f32 {
-        let (key, width) = *self.0.peek();
-        if key == listing {
-            width
-        } else {
-            0.0
-        }
+        Self::under(listing, *self.0.peek())
     }
 
     /// A row of `listing` measured `natural` wide: kept if it is the widest so far, or the

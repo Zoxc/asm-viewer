@@ -79,20 +79,6 @@ impl Links {
         links.into()
     }
 
-    /// The columns of the names among `on_line` that can be followed, in the order they
-    /// are drawn: what a row draws as links, once the pane has counted them in its own
-    /// units. Borrowed rather than collected: a row asks on every render.
-    ///
-    /// Takes what [`Links::on_line`] found rather than looking the line up itself: a row
-    /// draws these and hit-tests every name on the line beside them, so the two searches
-    /// are made once and both rules read the answer.
-    pub fn followed(on_line: &[Link]) -> impl Iterator<Item = &Range<u32>> + '_ {
-        on_line
-            .iter()
-            .filter(|link| link.asks.is_some())
-            .map(|link| &link.columns)
-    }
-
     /// Every name on `line`, 1-based, in the order they are drawn.
     pub fn on_line(&self, line: u32) -> &[Link] {
         let from = self.partition_point(|link| link.line < line);
@@ -108,6 +94,24 @@ impl Links {
             .iter()
             .find(|link| link.columns.contains(&column))
     }
+}
+
+/// The columns of the names among `on_line` that can be followed, in the order they are
+/// drawn: what a row draws as links, once the pane has counted them in its own units.
+/// Borrowed rather than collected: a row asks on every render.
+///
+/// Takes what [`Links::on_line`] found rather than looking the line up itself: a row draws
+/// these and hit-tests every name on the line beside them, so the two searches are made
+/// once and both rules read the answer.
+///
+/// A function over the slice and not a method: the answer is a run of names in the order
+/// they are drawn, which no single [`Link`] can say, and nothing here is about a whole
+/// [`Links`] either.
+pub fn followed(on_line: &[Link]) -> impl Iterator<Item = &Range<u32>> + '_ {
+    on_line
+        .iter()
+        .filter(|link| link.asks.is_some())
+        .map(|link| &link.columns)
 }
 
 /// The token types that are a **name** -- something the reader can put a question to the

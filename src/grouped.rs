@@ -71,6 +71,19 @@ struct InFile<T> {
     folded: bool,
 }
 
+impl<T> InFile<T> {
+    /// A file and the items found in it, unfolded. The one place a name is taken off a
+    /// path, and the one place an item is put under its `Arc`.
+    fn new(path: Arc<Path>, items: impl IntoIterator<Item = T>) -> InFile<T> {
+        InFile {
+            name: crate::source::name_of(&path).into(),
+            path,
+            items: items.into_iter().map(Arc::new).collect(),
+            folded: false,
+        }
+    }
+}
+
 impl<T> Default for Grouped<T> {
     /// Hand-written: a derived one would ask `T` to be [`Default`] too, and neither a
     /// hit nor a reference has an empty value.
@@ -94,16 +107,16 @@ impl<T> Grouped<T> {
     ) -> Grouped<T> {
         let mut grouped = Grouped::default();
         for (path, items) in files {
-            let path = path.into();
-            grouped.count += items.len();
-            grouped.files.push(InFile {
-                name: crate::source::name_of(&path).into(),
-                path,
-                items: items.into_iter().map(Arc::new).collect(),
-                folded: false,
-            });
+            grouped.add_file(InFile::new(path.into(), items));
         }
         grouped
+    }
+
+    /// A new file at the end, with `count` kept in step: the one place a whole file is
+    /// added, so nothing can add one and forget the count.
+    fn add_file(&mut self, file: InFile<T>) {
+        self.count += file.items.len();
+        self.files.push(file);
     }
 
     /// Add an item under `path`: the last file when it is the same one, and a new one
@@ -115,20 +128,14 @@ impl<T> Grouped<T> {
     /// every item after a file's first skips comparing the paths. That is a shortcut and
     /// not the rule -- two `Arc`s spelling the same path are still the same file.
     pub fn push(&mut self, path: &Arc<Path>, item: T) {
-        self.count += 1;
-        let item = Arc::new(item);
         if let Some(last) = self.files.last_mut() {
             if Arc::ptr_eq(&last.path, path) || *last.path == **path {
-                last.items.push(item);
+                last.items.push(Arc::new(item));
+                self.count += 1;
                 return;
             }
         }
-        self.files.push(InFile {
-            name: crate::source::name_of(path).into(),
-            path: path.clone(),
-            items: vec![item],
-            folded: false,
-        });
+        self.add_file(InFile::new(path.clone(), [item]));
     }
 
     /// Fold the file at `path`, or unfold it. Whether anything changed, so the caller

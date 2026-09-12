@@ -909,9 +909,10 @@ impl Component for TabBar {
         // costs the reveal nothing: the tab on screen is one of these.
         use_side_effect_with_deps(&tabs, move |tabs: &Vec<Tab>| {
             let mut places = bar.places;
-            let closed = places.peek().keys().any(|tab| !tabs.contains(tab));
+            let keep = |tab: &Tab| tabs.contains(tab);
+            let closed = places.peek().would_forget(&keep);
             if closed {
-                places.write().forgetting(|tab| tabs.contains(tab));
+                places.write().forgetting(&keep);
             }
         });
 

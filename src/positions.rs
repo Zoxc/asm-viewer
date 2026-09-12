@@ -56,11 +56,20 @@ impl<T: Clone + PartialEq, V: Clone + PartialEq> Positions<T, V> {
         }
     }
 
-    /// Every tab a position is held for, in the order they were first remembered: what a
-    /// caller reads to tell whether a [`forgetting`](Positions::forgetting) would drop
-    /// anything, so that it can skip a write.
+    /// Test-only: every tab a position is held for, in the order they were first
+    /// remembered.
+    #[cfg(test)]
     pub fn keys(&self) -> impl Iterator<Item = &T> {
         self.at.iter().map(|(open, _)| open)
+    }
+
+    /// Whether [`forgetting`](Positions::forgetting) would drop anything, asked before
+    /// the write: a `State::write` re-renders every reader whether or not it changed the
+    /// map. The half of a pair the other models here all have -- `Order::would_touch`,
+    /// `History::would_push`, `Strip::would_raise` -- so a caller writes its predicate
+    /// once and hands it to both.
+    pub fn would_forget(&self, keep: impl Fn(&T) -> bool) -> bool {
+        self.at.iter().any(|(open, _)| !keep(open))
     }
 
     /// Forget every position `keep` answers false for: a closing tab's, or a closing

@@ -668,6 +668,13 @@ pub(crate) fn text_block(text: &str) -> Element {
 /// reach is a plain label — [`diagnostic_place`] is that label, and a target that did
 /// nothing when pressed would be the worse of the two answers.
 pub(crate) fn diagnostic_block(diagnostic: &Diagnostic, place: Option<Element>) -> Element {
+    // An error is the red every invalid thing wears, a warning the one warm hue in the
+    // palette, and a note recedes.
+    let (word, colour) = match diagnostic.level {
+        Level::Error => ("error", palette().invalid_fg),
+        Level::Warning => ("warning", palette().string_fg),
+        Level::Note => ("note", palette().address_fg),
+    };
     rect()
         .width(Size::fill())
         .padding(Gaps::new(2.0, 0.0, 6.0, 0.0))
@@ -685,22 +692,7 @@ pub(crate) fn diagnostic_block(diagnostic: &Diagnostic, place: Option<Element>) 
                 .cross_align(Alignment::Start)
                 .spacing(6.0)
                 .content(Content::Flex)
-                .child(
-                    label()
-                        .text(match diagnostic.level {
-                            Level::Error => "error",
-                            Level::Warning => "warning",
-                            Level::Note => "note",
-                        })
-                        // An error is the red every invalid thing wears, a warning the one
-                        // warm hue in the palette, and a note recedes.
-                        .color(match diagnostic.level {
-                            Level::Error => palette().invalid_fg,
-                            Level::Warning => palette().string_fg,
-                            Level::Note => palette().address_fg,
-                        })
-                        .max_lines(1),
-                )
+                .child(label().text(word).color(colour).max_lines(1))
                 .maybe_child(place)
                 // The sentence rustc wrote, wrapping rather than cut at the pane's edge.
                 .child(

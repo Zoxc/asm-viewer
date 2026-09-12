@@ -15,7 +15,7 @@ every foreground on the surface it is really drawn on: 3.0, not WCAG's 4.5, beca
 palette's address column and its comments are meant to recede and sit between 3 and 3.5. It includes
 the × on a tab, whose surface is its own wash composited over whichever of two grounds the tab is
 on, and the name of a tab that is not the one on screen: `faded`, which is `dimmed`'s rule at a much
-higher alpha (185 against 100), because a tab off screen is a name the reader reads their way along
+higher alpha (150 against 100), because a tab off screen is a name the reader reads their way along
 where a disabled control is one they are told not to press. It is held to WCAG's own 4.5 and
 required to be quieter than the name of the tab that is on screen. It also includes a picked-out
 list row, whose surface is the selection composited over the pane, held to the floor the code takes

@@ -232,7 +232,7 @@ fn a_name_with_nothing_to_follow_is_kept_and_is_not_drawn_as_a_link() {
 
     assert_eq!(links.on_line(1).len(), 2);
     assert_eq!(
-        Links::followed(links.on_line(1))
+        followed(links.on_line(1))
             .cloned()
             .collect::<Vec<Range<u32>>>(),
         vec![8..12]

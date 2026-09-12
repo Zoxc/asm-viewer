@@ -16355,6 +16355,41 @@ fn label_centre(test: &TestingRunner, text: &str) -> Option<(f64, f64)> {
     })
 }
 
+/// The three levels drawn at once, one block each, so a test reads all three words and
+/// all three colours out of one render. Nothing rendered, so the blocks say nothing but
+/// their level.
+fn every_level_harness() -> impl IntoElement {
+    let said = |level: Level| Diagnostic {
+        level,
+        message: "said".to_owned(),
+        rendered: String::new(),
+        span: None,
+    };
+    rect()
+        .child(diagnostic_block(&said(Level::Error), None))
+        .child(diagnostic_block(&said(Level::Warning), None))
+        .child(diagnostic_block(&said(Level::Note), None))
+}
+
+/// **A level's word and its colour are one decision.** The word says which level it is
+/// and the colour says how bad it is, so a block that said `warning` in the error red
+/// would be two answers to one question. One `match` gives both.
+#[test]
+fn each_diagnostic_level_wears_its_own_colour() {
+    let (mut test, _states) = TestingRunner::new(
+        every_level_harness,
+        (400., 400.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    settle(&mut test);
+
+    let word = |text: &str| label_colour(&test, text).expect("the level is drawn");
+    assert_eq!(word("error"), Fill::Color(palette().invalid_fg));
+    assert_eq!(word("warning"), Fill::Color(palette().string_fg));
+    assert_eq!(word("note"), Fill::Color(palette().address_fg));
+}
+
 /// **A diagnostic's span is a target.** rustc says where an error is and the editor has a
 /// cursor that can be put there, so the place under the message is pressed rather than
 /// counted to: the press puts the cursor on that line and that column, in the pad's own
@@ -23027,6 +23062,37 @@ struct SweptScroll(State<i32>);
 const SWEPT_WIDTH: f32 = 5_000.0;
 
 /// A code pane as far as a sweep past its edge is concerned: the box a sweep is measured
+/// One [`Widest`] with a row of listing 1 noted at 120, drawing what both its readers
+/// answer for the listing it holds and for one it does not.
+fn widest_harness() -> impl IntoElement {
+    let widest = use_widest();
+    use_hook(move || widest.note(1, 120.0));
+    rect().child(label().text(format!(
+        "{} {} {} {}",
+        widest.floor(1),
+        widest.floor(2),
+        widest.extent(1),
+        widest.extent(2)
+    )))
+}
+
+/// **A width is held for one listing and is nothing for any other.** That is the reset a
+/// listing change makes, with no effect to make it: the rows of the listing before fall
+/// back to the pane's own width on the first render of the new one and report again as
+/// they are laid out. Both readers say so -- the row's `floor` and the handler's
+/// `extent` -- because both are the one rule.
+#[test]
+fn the_width_held_is_nothing_for_another_listing() {
+    let (mut test, ()) = TestingRunner::new(widest_harness, (400., 400.).into(), |_| (), 1.);
+    settle(&mut test);
+
+    assert!(
+        labels(&test).iter().any(|row| row == "120 0 120 0"),
+        "{:?}",
+        labels(&test)
+    );
+}
+
 /// against, a `Listing` for its rows and its handler to share, and a listing whose key
 /// the test changes without the pane being mounted again.
 fn sweeping_harness() -> impl IntoElement {
