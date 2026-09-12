@@ -714,8 +714,9 @@ the address half of a `Landing` goes on as a `Planting` (`Doors::plant`) naming 
 It is left by `use_land` in the same run that plants the line, never before it, which is what makes
 the order safe: `use_land` resets both panes' runs as a place arrives, and a caret planted ahead of
 that would be reset with them. Or it is left by `land` itself where the door moves the tab nowhere
--- the same place again -- since nothing is woken there to leave it. Two listings spend it, each
-reading the state so a door opened over the tab on top wakes it. **In an object's code**
+-- the same place again -- since nothing is woken there to leave it. Two listings spend it, both
+through `take_planting` (`focus.rs`), which reads the state so a door opened over the tab on top
+wakes the caller and spends it before the row is looked for. **In an object's code**
 `use_kept_place` plants it in the first run that has rows and finds a planting naming its document,
 over the kept run: on the row **holding the byte** (`Rows::body_row_for`, `row_for` past a
 stretch's header and labels, since the view is better shown the label over a function and a caret
@@ -735,7 +736,7 @@ derived one. **In a symbol's listing**
 document, since the pane draws the listing being left until the worker answers), plants it on the
 row of the instruction at or below the address and owes the pane the reveal, `Owed::by(Assembly)`,
 which `use_kept_position` pays first and over the kept row as it pays any reveal; there the reveal
-is authoritative, a symbol's tab having no place by address. Either listing spends the planting
+is authoritative, a symbol's tab having no place by address. So either listing spends the planting
 whether or not it could answer it (an address in no stretch, or before the first instruction, is
 dropped, not left owed), and `use_land` drops it on every arrival besides, so a listing that never
 came leaves no caret for a document opened later.

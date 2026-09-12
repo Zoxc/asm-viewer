@@ -19873,6 +19873,92 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     );
 }
 
+/// A listing spends the planting it is given whether or not it found a row for it, and
+/// leaves alone one naming another document. The address before the listing's first
+/// instruction is the one no row can be found for: no caret is planted, and the planting
+/// is gone all the same, so nothing is left owed to a listing drawn later. Headless
+/// because the spending is the listing's own effect, woken by the write, and only the
+/// runner can say it ran.
+#[test]
+fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
+    let symbols = fixture_symbols();
+    let named = |name: &str| {
+        symbols
+            .iter()
+            .find(|symbol| symbol.data.name == name)
+            .expect("the fixture holds the symbol")
+            .clone()
+    };
+    // `twice` is the fixture's second function, so its listing starts above zero and
+    // there is an address before its first instruction.
+    let (shown, elsewhere) = (named("twice"), named("sum_to"));
+    let studied = Studied::new(shown.clone());
+    let first = studied
+        .assembly
+        .clone()
+        .expect("twice decodes")
+        .instructions[0]
+        .address;
+    let before = first.checked_sub(1).expect("twice starts above zero");
+
+    let (mut test, roots) = TestingRunner::new(
+        doors_harness,
+        (600., 400.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let (doors, states) = (roots.doors, roots.states);
+    settle(&mut test);
+
+    let tab = Document::Assembly(Selection::Symbol(shown.clone()));
+    open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
+    let mut analysis = roots.analysis;
+    analysis.set(Analyzed {
+        shown: Some(Shown {
+            ask: Ask::Symbol(shown),
+            studied,
+        }),
+        ..Analyzed::default()
+    });
+    settle(&mut test);
+    settle(&mut test);
+
+    // A planting for another document, over the listing on screen: not this listing's to
+    // spend, and not this listing's to plant.
+    let mut plant = doors.plant;
+    let other = Planting {
+        tab: Document::Assembly(Selection::Symbol(elsewhere)),
+        address: first,
+    };
+    plant.set(Some(other.clone()));
+    settle(&mut test);
+    settle(&mut test);
+    assert!(
+        doors.plant.peek().as_ref() == Some(&other),
+        "the listing spent a planting left for another document"
+    );
+    assert!(
+        doors.marked.peek().assembly.is_none(),
+        "another document's planting planted a caret here"
+    );
+
+    // Its own, at an address no row holds: spent all the same.
+    plant.set(Some(Planting {
+        tab,
+        address: before,
+    }));
+    settle(&mut test);
+    settle(&mut test);
+    assert!(
+        doors.plant.peek().is_none(),
+        "a planting no row could be found for was left lying"
+    );
+    assert!(
+        doors.marked.peek().assembly.is_none(),
+        "a caret was planted for an address before the first instruction"
+    );
+}
+
 /// The Assembly pane over an object's code as `app()` mounts it: the pane first, and the
 /// reading following the active document a beat later through `use_reading_of`.
 fn app_like_code_harness() -> impl IntoElement {

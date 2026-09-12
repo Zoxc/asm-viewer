@@ -63,15 +63,33 @@ pub(crate) struct Landing {
 /// arrive after the document does -- a symbol's from the worker, an object's code's as
 /// the skeleton and then as the stretch decodes. Left by `use_land` as it plants the
 /// other half, or by `land` for a tab already on top, and spent by the listing drawing
-/// the document it names: `use_kept_place` for an object's code, which puts the caret on
-/// the row at or below the address and keeps the address with it so a decode re-places it
-/// on the instruction itself; `InstructionList`'s planting effect for a symbol's. Spent
-/// by `use_land` on every change of document besides, so one left lying -- a listing that
-/// never arrived -- plants nothing in a listing opened for some other reason later.
+/// the document it names through [`take_planting`]: `use_kept_place` for an object's
+/// code, which puts the caret on the row at or below the address and keeps the address
+/// with it so a decode re-places it on the instruction itself; `InstructionList`'s
+/// planting effect for a symbol's. Spent by `use_land` on every change of document
+/// besides, so one left lying -- a listing that never arrived -- plants nothing in a
+/// listing opened for some other reason later.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Planting {
     pub(crate) tab: Document,
     pub(crate) address: u64,
+}
+
+/// The address a planting left for `document`, taken: [`None`] where there is none, or
+/// where it names another document, whose listing is left to spend it.
+///
+/// **Read and not peeked**, so a door opened over the tab already on top wakes the
+/// caller; the read is a statement of its own, since a read guard held across the write
+/// would panic. **Spent before the caller looks for a row**, so an address the listing
+/// cannot place is dropped rather than left owed to a listing drawn later.
+pub(crate) fn take_planting(
+    mut plant: State<Option<Planting>>,
+    document: &Document,
+) -> Option<u64> {
+    let planting = plant.read().clone();
+    let planting = planting.filter(|planting| planting.tab == *document)?;
+    plant.set(None);
+    Some(planting.address)
 }
 
 /// What a place keeps of its two runs while its tab shows something else, or another tab

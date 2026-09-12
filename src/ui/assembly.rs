@@ -1328,24 +1328,18 @@ impl Component for InstructionList {
         // listing is the document it names -- which is the drawn answer's document and
         // not the tab's, since the pane draws the listing being left until the worker
         // answers. On the row of the instruction at or below the address, the symbol's
-        // own; an address before the first is dropped, not left. The planting is read
-        // and not peeked, being written a beat after the pane mounts: `use_land` leaves
-        // it as the document arrives, and `land` leaves it for a tab already on top. The
-        // pane owes the caret its reveal, as it owes a click from outside, and the reveal
-        // wins over the kept row in `use_kept_position`, as a reveal does.
+        // own; `take_planting` has spent the planting by then, so an address before the
+        // first is dropped rather than left. The pane owes the caret its reveal, as it
+        // owes a click from outside, and the reveal wins over the kept row in
+        // `use_kept_position`, as a reveal does.
         let plant = doors.plant;
         use_side_effect_with_deps(&entry, {
             let data = data.clone();
-            let mut plant = plant;
             move |(_, stop): &Entry| {
-                let planting = plant.read().clone();
-                let Some(planting) = planting.filter(|planting| planting.tab == stop.document)
-                else {
+                let Some(address) = take_planting(plant, &stop.document) else {
                     return;
                 };
-                plant.set(None);
-                let Some(index) = planted_index(&data.assembly().instructions, planting.address)
-                else {
+                let Some(index) = planted_index(&data.assembly().instructions, address) else {
                     return;
                 };
                 let file = data.position(index).map(|at| at.file);
