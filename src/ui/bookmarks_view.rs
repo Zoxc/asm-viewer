@@ -142,7 +142,11 @@ impl Component for BookmarksPanel {
         // uses them runs no hook.
         let doors = use_doors();
         let ctrl = use_consume::<Ctrl>().0;
-        let matcher = filter.read().matcher();
+        // A handful of rows, so the filter is applied where they are built -- but the one
+        // compiled filter all the same, so the bar's error is what these rows were kept by.
+        let marking = use_list_marking(filter);
+        let marking = marking.read().clone();
+        let matcher = marking.matcher();
 
         // Resolved where the rows are built, against the objects as they are now: reading
         // both is what re-resolves every row when a binary is opened or closed, which is
@@ -184,29 +188,20 @@ impl Component for BookmarksPanel {
                 .collect();
             (rows, listed, !entries.is_empty())
         };
-        let keys = {
-            let stepped = listed.clone();
-            ListKeys {
-                length: listed.len(),
-                at: Box::new(move |at| {
-                    stepped
-                        .get(at)
-                        .map(|(_, bookmark, _)| Pick::Bookmark(bookmark.clone()))
-                }),
-                open: Box::new(move |at| {
-                    match listed.get(at).and_then(|(_, _, live)| live.clone()) {
-                        Some(live) => opened(doors, ctrl, live),
-                        None => Pressed::Folded,
-                    }
-                }),
-                fold: ListKeys::flat(),
-            }
-        };
+        let keys = ListKeys::over(
+            listed,
+            |(_, bookmark, _): &Listed| Pick::Bookmark(bookmark.clone()),
+            move |(_, _, live): &Listed| match live {
+                Some(live) => opened(doors, ctrl, live.clone()),
+                None => Pressed::Folded,
+            },
+        );
 
         pane.filtered(
             filter,
+            &marking,
             keys,
-            short_list(pane.controller, rows, any, "No bookmarks"),
+            pane.short_list(rows, any, "No bookmarks"),
         )
     }
 }

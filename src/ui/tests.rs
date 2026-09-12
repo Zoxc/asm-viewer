@@ -31168,6 +31168,106 @@ fn the_list_keys_reach_both_ends_and_step_a_screen() {
     );
 }
 
+/// **A pick the list has moved out from under is asked at a place the list no longer
+/// has**, and every one of the three closures must say so rather than index past its
+/// own rows: End puts the pick on the last row, a pattern typed after it leaves a list
+/// shorter than that, and Enter, Left and Right are then all asked at the stale place.
+///
+/// The one out-of-bounds question the keys really get, and where a panel writing its own
+/// bounds idiom pays: `ListKeys::over` is what answers it, once for every list.
+#[test]
+fn a_pick_past_the_end_of_a_narrowed_list_answers_nothing() {
+    let (mut test, states, picks, alt, _ctrl, length) = a_long_list(1);
+    pick_the_first_row(&mut test, alt);
+    key_with(&mut test, Key::Named(NamedKey::End), Modifiers::empty());
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(length - 1));
+
+    // A pattern that leaves one row of the list, with the pick remembering a place past
+    // its end.
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum_to");
+    settle(&mut test);
+    assert!(
+        length > 1 && label_area(&test, "sum_to").is_some(),
+        "the filter did not leave a list shorter than the pick's place"
+    );
+
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    assert!(
+        states.open.active().is_none(),
+        "Enter opened a row the filter had taken away"
+    );
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowRight),
+        Modifiers::empty(),
+    );
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowLeft),
+        Modifiers::empty(),
+    );
+    assert_eq!(
+        picked_place(picks, Panel::Symbols),
+        Some(length - 1),
+        "a fold moved the pick"
+    );
+
+    // And the next arrow starts again from the end it came from, over the list that is
+    // there now: the row it lands on is the row Enter opens.
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    assert_eq!(picked_place(picks, Panel::Symbols), Some(0));
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    let open = states.open.active().expect("Enter opened nothing");
+    let wanted = collect_symbols(&states.objects)
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture's symbol");
+    assert!(
+        open == Document::Assembly(Selection::Symbol(wanted)),
+        "the arrows and Enter were over two different lists"
+    );
+}
+
+/// **A pattern that will not compile is said under the box, and the list refuses it.**
+/// The two are one answer: the panel compiles its filter once, narrows its list with the
+/// result and hands the same `Marking` to its bar, so the reason printed is the reason
+/// the rows are gone. Matching everything would hide the mistake and matching nothing in
+/// silence would read as an empty list.
+#[test]
+fn a_pattern_that_will_not_compile_is_said_under_the_box() {
+    let (mut test, _states, _picks, alt, _ctrl, _length) = a_long_list(1);
+    pick_the_first_row(&mut test, alt);
+    key_with(&mut test, Key::Character("f".into()), Modifiers::CONTROL);
+    test.write_text("sum_to(");
+    // Read as a regex: escaped, a bare `(` is a character like any other.
+    press_toggle_chord(&mut test, Chord::Regex);
+    settle(&mut test);
+
+    let said = Filter {
+        pattern: "sum_to(".to_owned(),
+        regex: true,
+        ..Filter::default()
+    }
+    .matcher()
+    .error()
+    .expect("the pattern compiles after all")
+    .to_owned();
+    let labels = labels(&test);
+    assert!(
+        labels.contains(&said),
+        "the box says nothing about a pattern it cannot read: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|label| label == "No matches"),
+        "the list kept its rows under a pattern it could not read: {labels:?}"
+    );
+}
+
 /// **Ctrl+Enter opens the pick in a tab that stays**, which is what Ctrl+click on the row
 /// asks for: the next row opened plainly makes a tab of its own rather than reusing it.
 ///

@@ -7,7 +7,7 @@
 //! is drawn against (`ui/picks.rs`).
 
 use super::*;
-use crate::grouped::{Row, Rows};
+use crate::grouped::Row;
 use crate::search::Hit;
 
 /// What a row of a grouped answer draws, and where a press on it goes: one place in a
@@ -109,7 +109,8 @@ pub(crate) struct PlaceRow<T> {
 }
 
 /// What a row is picked out as: a file row is its path, and a place is what it opens --
-/// the file and the line together.
+/// the file and the line together. What both grouped panels hand [`ListKeys::over`] to
+/// answer the arrows with.
 ///
 /// The path is copied here and not shared on, though the row holds it under an `Arc`
 /// (`src/grouped.rs`, and `src/files.rs` for the Files tree's rows). A pick is minted per
@@ -121,12 +122,6 @@ pub(crate) fn place_pick<T: Place>(row: &Row<T>) -> Pick {
         Row::File { path, .. } => Pick::Path(path.to_path_buf()),
         Row::Item { path, item } => Pick::Place(path.to_path_buf(), item.line()),
     }
-}
-
-/// The pick at each place in a grouped answer: what both panels hand `ListKeys` to answer
-/// the arrows with. The closure holds the rows by their `Arc`, so it copies none of them.
-pub(crate) fn place_picks<T: Place>(rows: Rows<T>) -> Box<dyn Fn(usize) -> Option<Pick>> {
-    Box::new(move |at| rows.get(at).map(place_pick))
 }
 
 /// What pressing a row does: a file row folds its places away, and a place opens its file

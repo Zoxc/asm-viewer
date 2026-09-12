@@ -167,13 +167,68 @@ pub(crate) fn opened(doors: Doors, ctrl: State<bool>, document: Document) -> Pre
     Pressed::Opened
 }
 
+/// A list of rows as the keys step it: how many there are, and the row at a place.
+///
+/// The three shapes a panel's rows come in -- a [`Shared`] slice, a [`Filtered`] and a
+/// plain `Vec` -- so that [`ListKeys::over`] writes the past-the-end answer once instead
+/// of each panel writing its own.
+///
+/// `count` and `row` rather than `len` and `get`: a trait method wins over an inherent
+/// one reached through `Deref`, so a `len` here would quietly become what `rows.len()`
+/// means on every `Shared` and every `Vec` in the UI.
+pub(crate) trait Stepped {
+    type Row;
+
+    fn count(&self) -> usize;
+
+    /// The row at `at`, or nothing past the end -- which is where a keyboard step off the
+    /// last row asks.
+    fn row(&self, at: usize) -> Option<&Self::Row>;
+}
+
+impl<T> Stepped for Shared<T> {
+    type Row = T;
+
+    fn count(&self) -> usize {
+        self.len()
+    }
+
+    fn row(&self, at: usize) -> Option<&T> {
+        self.get(at)
+    }
+}
+
+impl<T> Stepped for Filtered<T> {
+    type Row = T;
+
+    fn count(&self) -> usize {
+        self.len()
+    }
+
+    fn row(&self, at: usize) -> Option<&T> {
+        self.at(at)
+    }
+}
+
+impl<T> Stepped for Vec<T> {
+    type Row = T;
+
+    fn count(&self) -> usize {
+        self.len()
+    }
+
+    fn row(&self, at: usize) -> Option<&T> {
+        self.get(at)
+    }
+}
+
 /// What a list answers the arrows and Enter with: how many rows it is drawing, the row at
 /// a place in it, and what opening one does.
 ///
 /// Built by the panel, which is the only thing that knows its rows, and asked by the box
-/// they are drawn in (`ListPane`, `ui/filter_bar.rs`). Two closures rather than a
-/// `Vec<Pick>`: the Symbols list is 115k rows, and building that vector every render is
-/// what this side of the app is written to avoid.
+/// they are drawn in (`ListPane`, `ui/filter_bar.rs`). Closures rather than a `Vec<Pick>`:
+/// the Symbols list is 115k rows, and building that vector every render is what this side
+/// of the app is written to avoid.
 pub(crate) struct ListKeys {
     pub(crate) length: usize,
     /// Which row is drawn at a place, for the arrows to pick out.
@@ -185,7 +240,7 @@ pub(crate) struct ListKeys {
     /// What Left and Right do to the row at a place: `false` folds the group under it
     /// away and `true` opens it. A row already the way the key asks, and a row with
     /// nothing under it at all, is left alone -- which is the two keys in a flat list,
-    /// where every row is one ([`ListKeys::flat`]).
+    /// where every row is one ([`ListKeys::over`]).
     ///
     /// Its own closure and not [`ListKeys::open`] under another name: a press *toggles*,
     /// and these two say which way, so what a panel writes here is the same fold with
@@ -205,8 +260,64 @@ impl ListKeys {
         }
     }
 
+    /// The keys over a flat list: `pick` says what a row is and `open` what pressing one
+    /// does, each asked of the row itself. Which list the three closures index is settled
+    /// here, and so is what they answer past its end.
+    ///
+    /// One [`Rc`] of the rows, shared by all three: the arrows ask what a row is, Enter
+    /// asks what pressing one does, and Left and Right ask which way it folds, and all
+    /// three are the list the panel is drawing rather than one worked out again.
+    pub(crate) fn over<L: Stepped + 'static>(
+        rows: L,
+        pick: impl Fn(&L::Row) -> Pick + 'static,
+        open: impl Fn(&L::Row) -> Pressed + 'static,
+    ) -> Self {
+        Self::keys(Rc::new(rows), pick, open, ListKeys::flat())
+    }
+
+    /// The same over a tree: `fold` is what Left and Right do to a row, and it is called
+    /// only for a row that is there.
+    pub(crate) fn folding<L: Stepped + 'static>(
+        rows: L,
+        pick: impl Fn(&L::Row) -> Pick + 'static,
+        open: impl Fn(&L::Row) -> Pressed + 'static,
+        fold: impl Fn(&L::Row, bool) + 'static,
+    ) -> Self {
+        let rows = Rc::new(rows);
+        let folded = rows.clone();
+        Self::keys(
+            rows,
+            pick,
+            open,
+            Box::new(move |at, unfold| {
+                if let Some(row) = folded.row(at) {
+                    fold(row, unfold);
+                }
+            }),
+        )
+    }
+
+    /// The bounds check both constructors share, written once.
+    fn keys<L: Stepped + 'static>(
+        rows: Rc<L>,
+        pick: impl Fn(&L::Row) -> Pick + 'static,
+        open: impl Fn(&L::Row) -> Pressed + 'static,
+        fold: Box<dyn Fn(usize, bool)>,
+    ) -> Self {
+        let stepped = rows.clone();
+        ListKeys {
+            length: rows.count(),
+            at: Box::new(move |at| stepped.row(at).map(&pick)),
+            open: Box::new(move |at| match rows.row(at) {
+                Some(row) => open(row),
+                None => Pressed::Folded,
+            }),
+            fold,
+        }
+    }
+
     /// A list with nothing to fold: every list but the Objects tree and the Files tree.
-    pub(crate) fn flat() -> Box<dyn Fn(usize, bool)> {
+    fn flat() -> Box<dyn Fn(usize, bool)> {
         Box::new(|_, _| {})
     }
 

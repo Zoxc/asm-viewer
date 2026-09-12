@@ -462,15 +462,19 @@ impl Component for ObjectsPanel {
         // session, so a `use_state` here. The set holds group keys, which are `Arc`
         // pointers, so an entry left behind by a closed file is harmless.
         let expanded = use_state(HashSet::<usize>::new);
+        // The one compiled filter: what narrows the tree below, what the rows mark with,
+        // and what the bar prints for a pattern that will not compile.
+        let marking = use_list_marking(filter);
         // A memo, not a walk per row: the `VirtualScrollView` has to be told how many rows
         // there are before it builds any of them. Reading `loading` here is what puts a
         // file on screen the moment it is asked for and takes the indicator off it when
         // the last of its objects has landed.
         let tree = use_memo(move || {
+            let marking = marking.read();
             ObjectTree::new(
                 &objects.read(),
                 &loading.read(),
-                &filter.read().matcher(),
+                marking.matcher(),
                 &expanded.read(),
             )
         });
@@ -489,52 +493,34 @@ impl Component for ObjectsPanel {
             _ => None,
         };
         let length = tree.len();
-        // What the rows mark in the names they draw, memoized on the filter beside the
-        // tree above, which compiles one of its own to narrow the list with.
-        let marking = use_list_marking(filter);
-        // One more clone of the rows, shared by the three closures the keys are: the
-        // arrows ask what a row is, Enter asks what pressing one does and Left and Right
-        // ask which way it folds, and all three are the tree the panel is drawing and not
-        // one worked out again.
-        let rows = Rc::new(tree.clone());
-        let folded = rows.clone();
-        let keys = ListKeys {
-            length,
-            at: {
-                let rows = rows.clone();
-                Box::new(move |at| {
-                    (at < rows.len()).then(|| match &rows[at] {
-                        TreeRow::File { path, .. } | TreeRow::Pending { path, .. } => {
-                            Pick::Path(path.clone())
-                        }
-                        TreeRow::Object { object, .. } => Pick::Object(object.clone()),
-                    })
-                })
+        let marking = marking.read().clone();
+        let keys = ListKeys::folding(
+            tree.clone(),
+            |row| match row {
+                TreeRow::File { path, .. } | TreeRow::Pending { path, .. } => {
+                    Pick::Path(path.clone())
+                }
+                TreeRow::Object { object, .. } => Pick::Object(object.clone()),
             },
-            open: Box::new(move |at| {
-                if at >= rows.len() {
-                    return Pressed::Folded;
+            move |row| match row {
+                TreeRow::File {
+                    group, expansion, ..
+                } => fold_archive(expanded, *group, *expansion),
+                // Nothing under it to fold and nothing behind it to open.
+                TreeRow::Pending { .. } => Pressed::Folded,
+                TreeRow::Object { object, .. } => {
+                    opened(doors, ctrl, Document::Code(object.clone()))
                 }
-                match &rows[at] {
-                    TreeRow::File {
-                        group, expansion, ..
-                    } => fold_archive(expanded, *group, *expansion),
-                    // Nothing under it to fold and nothing behind it to open.
-                    TreeRow::Pending { .. } => Pressed::Folded,
-                    TreeRow::Object { object, .. } => {
-                        opened(doors, ctrl, Document::Code(object.clone()))
-                    }
-                }
-            }),
+            },
             // Only a file row has anything under it: an object's row is a leaf, and so is
             // a file still being read, which has no members yet. A row already folded the
             // way the key asks is left alone, and so is one the filter is holding open --
             // `fold_archive`'s own rule, folding it away would hide the matches it points
             // at.
-            fold: Box::new(move |at, unfold| {
-                let Some(TreeRow::File {
+            move |row, unfold| {
+                let TreeRow::File {
                     group, expansion, ..
-                }) = (at < folded.len()).then(|| &folded[at])
+                } = row
                 else {
                     return;
                 };
@@ -542,16 +528,16 @@ impl Component for ObjectsPanel {
                     return;
                 }
                 fold_archive(expanded, *group, *expansion);
-            }),
-        };
+            },
+        );
 
         let pane = pane.filtered(
             filter,
+            &marking,
             keys,
-            // `new_with_data`, never a capture: the builder closure is not compared across
-            // renders.
-            VirtualScrollView::new_with_data(
-                (tree, selected, expanded, marking),
+            pane.virtual_rows(
+                length,
+                (tree, selected, expanded, marking.clone()),
                 |row,
                  (tree, selected, expanded, marking): &(
                     ObjectTree,
@@ -604,10 +590,7 @@ impl Component for ObjectsPanel {
                         .into(),
                     }
                 },
-            )
-            .length(length)
-            .item_size(list_row_height())
-            .scroll_controller(pane.controller),
+            ),
         );
 
         rect()
@@ -636,14 +619,16 @@ impl Component for SymbolsPanel {
         // uses them runs no hook.
         let doors = use_doors();
         let ctrl = use_consume::<Ctrl>().0;
+        // The one compiled filter: what narrows the list below, what the rows mark with,
+        // and what the bar prints for a pattern that will not compile.
+        let marking = use_list_marking(filter);
         // The one list where the filtering has to be a memo: 115k names on
         // `viewer-sample`, and the `VirtualScrollView` has to be told its length before it
         // builds any row.
         let filtered = use_memo(move || {
             let symbols = symbols.read().clone();
-            Filtered::new(symbols, &filter.read().matcher(), |symbol| {
-                symbol.data.display()
-            })
+            let marking = marking.read();
+            Filtered::new(symbols, marking.matcher(), |symbol| symbol.data.display())
         });
         let filtered = filtered.read().clone();
         let selected = match &*use_consume::<Active>().0.read() {
@@ -657,36 +642,33 @@ impl Component for SymbolsPanel {
             _ => None,
         };
         let length = filtered.len();
-        // What the rows mark in the names they draw, memoized on the filter beside the
-        // list above.
-        let marking = use_list_marking(filter);
-        // Cheap to hand to both closures: a `Filtered` is the list behind an `Arc` and
-        // the indices the filter kept.
-        let rows = Rc::new(filtered.clone());
-        let symbol_at = move |rows: &Filtered<Symbol>, at: usize| rows.at(at).cloned();
-        let stepped = rows.clone();
-        let keys = ListKeys {
-            length,
-            at: Box::new(move |at| symbol_at(&stepped, at).map(Pick::Symbol)),
-            open: Box::new(move |at| match symbol_at(&rows, at) {
-                Some(symbol) => opened(doors, ctrl, Document::Assembly(Selection::Symbol(symbol))),
-                None => Pressed::Folded,
-            }),
-            fold: ListKeys::flat(),
-        };
+        let marking = marking.read().clone();
+        let keys = ListKeys::over(
+            filtered.clone(),
+            |symbol: &Symbol| Pick::Symbol(symbol.clone()),
+            move |symbol: &Symbol| {
+                opened(
+                    doors,
+                    ctrl,
+                    Document::Assembly(Selection::Symbol(symbol.clone())),
+                )
+            },
+        );
 
         // An empty list means the same two things here as in `short_list`, and the whole
         // list says which: no symbols at all draws the empty view, a filter that left
         // nothing of them says so.
         if length == 0 && !filtered.list().is_empty() {
-            return pane.filtered(filter, keys, placeholder("No matches"));
+            return pane.filtered(filter, &marking, keys, placeholder("No matches"));
         }
 
         pane.filtered(
             filter,
+            &marking,
             keys,
-            VirtualScrollView::new_with_data(
-                (filtered, selected, marking),
+            pane.virtual_rows(
+                length,
+                (filtered, selected, marking.clone()),
                 |row, (filtered, selected, marking): &(Filtered<Symbol>, Option<Symbol>, Marking)| {
                     // The row's place in the filtered list is not the symbol's place in the
                     // list it was filtered out of, and everything below is about the
@@ -704,10 +686,7 @@ impl Component for SymbolsPanel {
                     .key(Arc::as_ptr(&symbol.data).addr())
                     .into()
                 },
-            )
-            .length(length)
-            .item_size(list_row_height())
-            .scroll_controller(pane.controller),
+            ),
         )
     }
 }
@@ -733,8 +712,11 @@ impl Component for HistoryPanel {
         let pane = use_list_pane(Panel::History);
         let ctrl = use_consume::<Ctrl>().0;
         // A session's record is a couple of hundred places at most, so it is filtered
-        // where the rows are built rather than through a memo.
-        let matcher = filter.read().matcher();
+        // where the rows are built rather than through a memo. The one compiled filter all
+        // the same, so the bar's error is what these rows were kept by.
+        let marking = use_list_marking(filter);
+        let marking = marking.read().clone();
+        let matcher = marking.matcher();
 
         // `visited` is asked of the whole record and not of the rows: no rows means
         // either of the two things `short_list` has a word for.
@@ -775,23 +757,17 @@ impl Component for HistoryPanel {
 
             (rows, listed, visited)
         };
-        let keys = {
-            let stepped = listed.clone();
-            ListKeys {
-                length: listed.len(),
-                at: Box::new(move |at| stepped.get(at).cloned().map(Pick::Visit)),
-                open: Box::new(move |at| match listed.get(at) {
-                    Some(entry) => opened(doors, ctrl, entry.clone()),
-                    None => Pressed::Folded,
-                }),
-                fold: ListKeys::flat(),
-            }
-        };
+        let keys = ListKeys::over(
+            listed,
+            |entry: &Document| Pick::Visit(entry.clone()),
+            move |entry: &Document| opened(doors, ctrl, entry.clone()),
+        );
 
         pane.filtered(
             filter,
+            &marking,
             keys,
-            short_list(pane.controller, rows, visited, "Nothing visited yet"),
+            pane.short_list(rows, visited, "Nothing visited yet"),
         )
     }
 }

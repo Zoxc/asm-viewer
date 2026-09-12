@@ -143,18 +143,24 @@ struct FilterBar {
     /// a callback: a `Callback` is never equal to another, so a bar holding one would
     /// re-render on every render of whatever holds it.
     submits: Option<State<u64>>,
+    /// What is wrong with the pattern, out of the one [`Marking`] the panel narrowed its
+    /// list with. A prop and not compiled here: the reason the bar prints has to be the
+    /// reason the list refused.
+    error: Option<String>,
 }
 
 /// Written out because neither state can be compared: a `State` compares by the box it is
 /// and never by what is in it, so a derive would put two lines there that read as
 /// comparisons and are not. What makes the bar draw again is reading the filter in
 /// `render`, which is what subscribes it. Whether there is a `submits` at all is a real
-/// difference and is still compared.
+/// difference and is still compared, and so is the error, which is what the box is
+/// coloured by.
 impl PartialEq for FilterBar {
     fn eq(&self, other: &Self) -> bool {
         self.a11y == other.a11y
             && self.placeholder == other.placeholder
             && self.submits.is_some() == other.submits.is_some()
+            && self.error == other.error
     }
 }
 
@@ -163,11 +169,11 @@ impl Component for FilterBar {
         let filter = self.filter;
         let a11y = self.a11y;
         let submits = self.submits;
-        // Reading subscribes the bar to the filter.
+        // Reading subscribes the bar to the filter, which is what draws the toggles
+        // again. The pattern is not compiled here: `error` is the panel's own
+        // [`Marking`], so the bar and the list cannot disagree about a bad pattern.
         let current = filter.read().clone();
-        // Compiled here as well as wherever the list is filtered: a `Regex` is not
-        // `PartialEq`, so the two cannot share one through a `State`.
-        let error = current.matcher().error().map(str::to_owned);
+        let error = self.error.clone();
 
         rect()
             .width(Size::fill())
@@ -255,8 +261,9 @@ pub(crate) struct ListPane {
     rows: AccessibilityId,
     /// The filter box over them, where the pane has one.
     box_id: AccessibilityId,
-    /// The scroll the arrows move, handed to the panel's own scroll view.
-    pub(crate) controller: ScrollController,
+    /// The scroll the arrows move. Private: every list of this pane's is drawn through
+    /// [`ListPane::virtual_rows`] or [`ListPane::short_list`], which are what hand it over.
+    controller: ScrollController,
     /// How tall the rows' box is, which is what says whether the row an arrow moved to is
     /// on screen at all. A `VirtualScrollView` measures itself but keeps the answer, so
     /// the box around it is what is measured -- [`ListBox`]'s own reason.
@@ -285,26 +292,30 @@ pub(crate) fn use_list_pane(panel: Panel) -> ListPane {
     }
 }
 
-/// A handful of rows under a filter, or the reason there are none: `empty` when the list
-/// has nothing in it at all, "No matches" when the filter left nothing of it. Which of
-/// the two it is has to be asked of the whole list: the rows are only what the filter
-/// left of it.
-///
-/// A plain `ScrollView` and not a `VirtualScrollView`: the lists drawn this way are a few
-/// one-label rows, built straight from the state rather than routed through
-/// `new_with_data`.
-pub(crate) fn short_list(
-    controller: ScrollController,
-    rows: Vec<Element>,
-    any: bool,
-    empty: &str,
-) -> Element {
-    match (any, rows.is_empty()) {
-        (false, _) => placeholder(empty),
-        (true, true) => placeholder("No matches"),
-        (true, false) => ScrollView::new_controlled(controller)
-            .child(rect().width(Size::fill()).children(rows).into_element())
-            .into_element(),
+/// The bar over a list, where it has one: the state it edits, what the empty box says it
+/// is for, whether Enter submits, and what is wrong with the pattern.
+struct Bar {
+    filter: State<Filter>,
+    placeholder: &'static str,
+    submits: Option<State<u64>>,
+    error: Option<String>,
+}
+
+impl Bar {
+    /// The bar, with its error taken off the [`Marking`] the panel's list was narrowed
+    /// with rather than compiled again here.
+    fn new(
+        filter: State<Filter>,
+        placeholder: &'static str,
+        submits: Option<State<u64>>,
+        marking: &Marking,
+    ) -> Self {
+        Bar {
+            filter,
+            placeholder,
+            submits,
+            error: marking.matcher().error().map(str::to_owned),
+        }
     }
 }
 
@@ -312,13 +323,17 @@ impl ListPane {
     /// A list under its own filter bar. The bar takes its height off the top of the pane
     /// rather than out of the list, so a `VirtualScrollView` inside still starts at a row
     /// boundary however tall the bar turns out to be -- it grows a line for a bad pattern.
+    ///
+    /// `marking` is the compiled filter the panel narrowed its list with, handed over so
+    /// that the reason the bar prints is the reason the list refused.
     pub(crate) fn filtered(
         &self,
         filter: State<Filter>,
+        marking: &Marking,
         keys: ListKeys,
         list: impl IntoElement,
     ) -> Element {
-        self.boxed(Some((filter, "Filter", None)), keys, list)
+        self.boxed(Some(Bar::new(filter, "Filter", None, marking)), keys, list)
     }
 
     /// The Search panel's list under its own box: [`ListPane::filtered`] where Enter asks a
@@ -327,10 +342,15 @@ impl ListPane {
         &self,
         filter: State<Filter>,
         submits: State<u64>,
+        marking: &Marking,
         keys: ListKeys,
         list: impl IntoElement,
     ) -> Element {
-        self.boxed(Some((filter, "Search", Some(submits))), keys, list)
+        self.boxed(
+            Some(Bar::new(filter, "Search", Some(submits), marking)),
+            keys,
+            list,
+        )
     }
 
     /// A list with no bar over it: the Files tree, which has nothing to filter by. Ctrl+F
@@ -339,56 +359,88 @@ impl ListPane {
         self.boxed(None, keys, list)
     }
 
+    /// A handful of rows under a filter, or the reason there are none: `empty` when the
+    /// list has nothing in it at all, "No matches" when the filter left nothing of it.
+    /// Which of the two it is has to be asked of the whole list: the rows are only what
+    /// the filter left of it.
+    ///
+    /// A plain `ScrollView` and not a `VirtualScrollView`: the lists drawn this way are a
+    /// few one-label rows, built straight from the state rather than routed through
+    /// `new_with_data`. The scroll is the pane's own all the same, so the arrows reach a
+    /// row below the fold.
+    pub(crate) fn short_list(&self, rows: Vec<Element>, any: bool, empty: &str) -> Element {
+        match (any, rows.is_empty()) {
+            (false, _) => placeholder(empty),
+            (true, true) => placeholder("No matches"),
+            (true, false) => ScrollView::new_controlled(self.controller)
+                .child(rect().width(Size::fill()).children(rows).into_element())
+                .into_element(),
+        }
+    }
+
+    /// The rows of a long list, drawn through a `VirtualScrollView`.
+    ///
+    /// **The one place a sidebar list's `item_size` and its scroll are written.** A row's
+    /// height must equal the `item_size` over it or the scrolling misaligns, and there are
+    /// two heights (`AGENTS.md`): a panel spelling `code_row_height` here would draw its
+    /// rows one height and scroll them by another. The controller is the pane's for the
+    /// arrows' sake -- a pick they moved off screen is a row Enter opens unnamed.
+    ///
+    /// `data` and never a capture: the builder closure is not compared across renders, so
+    /// what the rows depend on has to reach them through `new_with_data`.
+    pub(crate) fn virtual_rows<D: PartialEq + 'static>(
+        &self,
+        length: usize,
+        data: D,
+        row: impl Fn(usize, &D) -> Element + 'static,
+    ) -> Element {
+        VirtualScrollView::new_with_data(data, row)
+            .length(length)
+            .item_size(list_row_height())
+            .scroll_controller(self.controller)
+            .into_element()
+    }
+
     /// All three: the pane on the one ground every panel is drawn on, the bar where there
     /// is one, and the rows under it.
-    fn boxed(
-        &self,
-        bar: Option<(State<Filter>, &'static str, Option<State<u64>>)>,
-        keys: ListKeys,
-        list: impl IntoElement,
-    ) -> Element {
+    fn boxed(&self, bar: Option<Bar>, keys: ListKeys, list: impl IntoElement) -> Element {
         // One list's keys, answered in two places: on the rows, and over the box for the
         // keys it hands on. An `Rc` and not two `ListKeys`, the closures being the
         // panel's own rows.
         let keys = Rc::new(keys);
-        let over_the_box = keys.clone();
-        let (rows, picking) = (self.rows, self.picking);
-        let (controller, viewport) = (self.controller, self.viewport);
         rect()
             .expanded()
             .content(Content::Flex)
             .background(palette().pane_bg)
-            .maybe(bar.is_some(), move |pane| {
-                let (filter, placeholder, submits) = bar.expect("the bar is there");
-                pane.child(
-                    // A rect around the bar and not the bar itself: the keys below arrive
-                    // by bubbling out of the box, and only an **ancestor** of the box is
-                    // reached that way -- the rows are its sibling
-                    // (`notes/upstream/freya.md`). It is over the bar alone, so a key
-                    // answered on the rows is not answered again here.
-                    rect()
-                        .width(Size::fill())
-                        .on_key_down(move |e: Event<KeyboardEventData>| {
-                            handed(
-                                picking,
-                                &over_the_box,
-                                controller,
-                                viewport,
-                                rows,
-                                filter,
-                                submits.is_none(),
-                                &e,
-                            );
-                        })
-                        .child(FilterBar {
-                            filter,
-                            a11y: self.box_id,
-                            placeholder,
-                            submits,
-                        }),
-                )
-            })
+            .maybe_child(bar.map(|bar| self.barred(bar, keys.clone())))
             .child(self.rows(keys, list))
+            .into()
+    }
+
+    /// The bar, in a rect of its own: the keys the box hands on arrive by bubbling out of
+    /// it, and only an **ancestor** of the box is reached that way -- the rows are its
+    /// sibling (`notes/upstream/freya.md`). It is over the bar alone, so a key answered on
+    /// the rows is not answered again here.
+    fn barred(&self, bar: Bar, keys: Rc<ListKeys>) -> Element {
+        let pane = *self;
+        let Bar {
+            filter,
+            placeholder,
+            submits,
+            error,
+        } = bar;
+        rect()
+            .width(Size::fill())
+            .on_key_down(move |e: Event<KeyboardEventData>| {
+                pane.handed(&keys, filter, submits.is_none(), &e);
+            })
+            .child(FilterBar {
+                filter,
+                a11y: self.box_id,
+                placeholder,
+                submits,
+                error,
+            })
             .into()
     }
 
@@ -406,9 +458,9 @@ impl ListPane {
     /// bubbling to an ancestor's handler comes after that, and never happens when the
     /// focused node has no handler of its own (`notes/upstream/freya.md`).
     fn rows(&self, keys: Rc<ListKeys>, list: impl IntoElement) -> Rect {
-        let (rows, box_id, picking) = (self.rows, self.box_id, self.picking);
-        let (controller, viewport) = (self.controller, self.viewport);
-        let mut measured = viewport;
+        let pane = *self;
+        let (rows, picking) = (self.rows, self.picking);
+        let mut measured = self.viewport;
         rect()
             .width(Size::fill())
             .height(Size::flex(1.0))
@@ -422,112 +474,102 @@ impl ListPane {
                 measured.set_if_modified(e.area.height());
             })
             .on_key_down(move |e: Event<KeyboardEventData>| {
-                answer(picking, &keys, controller, viewport, box_id, &e);
+                pane.answer(&keys, &e);
             })
             .child(list)
     }
-}
 
-/// What a focused list does with a key: the chord to its box, the pick moved over its
-/// rows, a tree row folded, Enter on the row the pick was left on, and Escape back to the
-/// tab on screen.
-///
-/// The scroll follows for the finder's reason: the panel is a screenful of rows and the
-/// keys walk past it, so a pick nobody can see is a row Enter opens unnamed.
-///
-/// **Each key answers under its own modifiers and no others**, which is the code panes'
-/// rule (`on_listing_key`, `ui/marks.rs`) and is what keeps the window's keys the
-/// window's: Alt+Left is a step back along the tab's trail and must not fold a row. Enter
-/// is the one exception, and the whole of what Ctrl+Enter is -- **a tab that stays** comes
-/// from the Ctrl every row already reads as it opens (`Reach::outside`), so the key opens
-/// the pick exactly as a Ctrl+click on it would.
-fn answer(
-    picking: Picking,
-    keys: &ListKeys,
-    controller: ScrollController,
-    viewport: State<f32>,
-    box_id: AccessibilityId,
-    e: &Event<KeyboardEventData>,
-) {
-    if Chord::Find.is(&e.key, e.modifiers) {
-        box_id.request_focus();
-        return;
+    /// What a focused list does with a key: the chord to its box, the pick moved over
+    /// its rows, a tree row folded, Enter on the row the pick was left on, and Escape
+    /// back to the tab on screen.
+    ///
+    /// The scroll follows for the finder's reason: the panel is a screenful of rows and
+    /// the keys walk past it, so a pick nobody can see is a row Enter opens unnamed.
+    ///
+    /// **Each key answers under its own modifiers and no others**, which is the code
+    /// panes' rule (`on_listing_key`, `ui/marks.rs`) and is what keeps the window's keys
+    /// the window's: Alt+Left is a step back along the tab's trail and must not fold a
+    /// row. Enter is the one exception, and the whole of what Ctrl+Enter is -- **a tab
+    /// that stays** comes from the Ctrl every row already reads as it opens
+    /// (`Reach::outside`), so the key opens the pick exactly as a Ctrl+click on it would.
+    fn answer(&self, keys: &ListKeys, e: &Event<KeyboardEventData>) {
+        let picking = self.picking;
+        if Chord::Find.is(&e.key, e.modifiers) {
+            self.box_id.request_focus();
+            return;
+        }
+        let modifiers = chords::held(e.modifiers);
+        let plain = modifiers.is_empty();
+        let command = modifiers == Modifiers::ctrl_or_meta();
+        // A screen is the rows the box shows whole, as a code pane works its page out.
+        let page = (*self.viewport.peek() / list_row_height()).floor().max(0.0) as isize;
+        let moved = match &e.key {
+            // The way out, and the far end of the way in: a chord puts the keyboard in
+            // a panel, Escape in its box puts it on the rows, and Escape here hands it
+            // back to the tab. The pick stays where it was and goes grey, saying the
+            // list is still where the reader left it.
+            Key::Named(NamedKey::Escape) if plain => return picking.to_the_tab(),
+            Key::Named(NamedKey::Enter) if plain || command => return picking.entered(keys),
+            Key::Named(NamedKey::ArrowLeft) if plain => return picking.folded(keys, false),
+            Key::Named(NamedKey::ArrowRight) if plain => return picking.folded(keys, true),
+            Key::Named(NamedKey::ArrowDown) if plain => picking.stepped(keys, 1),
+            Key::Named(NamedKey::ArrowUp) if plain => picking.stepped(keys, -1),
+            Key::Named(NamedKey::PageDown) if plain => picking.stepped(keys, page),
+            Key::Named(NamedKey::PageUp) if plain => picking.stepped(keys, -page),
+            Key::Named(NamedKey::Home) if plain => picking.jumped(keys, 0),
+            Key::Named(NamedKey::End) if plain => picking.jumped(keys, usize::MAX),
+            _ => return,
+        };
+        self.followed(keys.length, moved);
     }
-    let modifiers = chords::held(e.modifiers);
-    let plain = modifiers.is_empty();
-    let command = modifiers == Modifiers::ctrl_or_meta();
-    // A screen is the rows the box shows whole, as a code pane works its page out.
-    let page = (*viewport.peek() / list_row_height()).floor().max(0.0) as isize;
-    let moved = match &e.key {
-        // The way out, and the far end of the way in: a chord puts the keyboard in a
-        // panel, Escape in its box puts it on the rows, and Escape here hands it back to
-        // the tab. The pick stays where it was and goes grey, saying the list is still
-        // where the reader left it.
-        Key::Named(NamedKey::Escape) if plain => return picking.to_the_tab(),
-        Key::Named(NamedKey::Enter) if plain || command => return picking.entered(keys),
-        Key::Named(NamedKey::ArrowLeft) if plain => return picking.folded(keys, false),
-        Key::Named(NamedKey::ArrowRight) if plain => return picking.folded(keys, true),
-        Key::Named(NamedKey::ArrowDown) if plain => picking.stepped(keys, 1),
-        Key::Named(NamedKey::ArrowUp) if plain => picking.stepped(keys, -1),
-        Key::Named(NamedKey::PageDown) if plain => picking.stepped(keys, page),
-        Key::Named(NamedKey::PageUp) if plain => picking.stepped(keys, -page),
-        Key::Named(NamedKey::Home) if plain => picking.jumped(keys, 0),
-        Key::Named(NamedKey::End) if plain => picking.jumped(keys, usize::MAX),
-        _ => return,
-    };
-    followed(controller, viewport, keys.length, moved);
-}
 
-/// What a filter box hands on to the list under it: the arrows and Enter, so a reader can
-/// type, pick and open without a hand leaving the box, Escape to put the keyboard back on
-/// the rows with what was typed still in the box, and the three chords the toggles beside
-/// the box are pressed by.
-///
-/// Answered here and not on the rows because **a key event reaches the focused node's own
-/// listeners and then its ancestors**, and the rows are the box's sibling
-/// (`notes/upstream/freya.md`). The box declines each of these so that it neither types
-/// them nor cancels them (`box_keys`, `ui/chords.rs`).
-///
-/// `opens` is whether Enter is the list's here: in a bar that submits -- the Search
-/// panel's -- Enter asks the question and only Ctrl+Enter opens the pick.
-#[allow(clippy::too_many_arguments)]
-fn handed(
-    picking: Picking,
-    keys: &ListKeys,
-    controller: ScrollController,
-    viewport: State<f32>,
-    rows: AccessibilityId,
-    mut filter: State<Filter>,
-    opens: bool,
-    e: &Event<KeyboardEventData>,
-) {
-    if let Some(toggle) = Toggle::pressed(&e.key, e.modifiers) {
-        return toggle.flip(&mut filter.write());
+    /// What a filter box hands on to the list under it: the arrows and Enter, so a
+    /// reader can type, pick and open without a hand leaving the box, Escape to put the
+    /// keyboard back on the rows with what was typed still in the box, and the three
+    /// chords the toggles beside the box are pressed by.
+    ///
+    /// Answered here and not on the rows because **a key event reaches the focused
+    /// node's own listeners and then its ancestors**, and the rows are the box's sibling
+    /// (`notes/upstream/freya.md`). The box declines each of these so that it neither
+    /// types them nor cancels them (`box_keys`, `ui/chords.rs`).
+    ///
+    /// `opens` is whether Enter is the list's here: in a bar that submits -- the Search
+    /// panel's -- Enter asks the question and only Ctrl+Enter opens the pick.
+    fn handed(
+        &self,
+        keys: &ListKeys,
+        mut filter: State<Filter>,
+        opens: bool,
+        e: &Event<KeyboardEventData>,
+    ) {
+        let picking = self.picking;
+        if let Some(toggle) = Toggle::pressed(&e.key, e.modifiers) {
+            return toggle.flip(&mut filter.write());
+        }
+        let modifiers = chords::held(e.modifiers);
+        let plain = modifiers.is_empty();
+        let command = modifiers == Modifiers::ctrl_or_meta();
+        let moved = match &e.key {
+            Key::Named(NamedKey::Escape) => return self.rows.request_focus(),
+            Key::Named(NamedKey::Enter) if command || (plain && opens) => {
+                return picking.entered(keys)
+            }
+            Key::Named(NamedKey::ArrowDown) if plain => picking.stepped(keys, 1),
+            Key::Named(NamedKey::ArrowUp) if plain => picking.stepped(keys, -1),
+            _ => return,
+        };
+        self.followed(keys.length, moved);
     }
-    let modifiers = chords::held(e.modifiers);
-    let plain = modifiers.is_empty();
-    let command = modifiers == Modifiers::ctrl_or_meta();
-    let moved = match &e.key {
-        Key::Named(NamedKey::Escape) => return rows.request_focus(),
-        Key::Named(NamedKey::Enter) if command || (plain && opens) => return picking.entered(keys),
-        Key::Named(NamedKey::ArrowDown) if plain => picking.stepped(keys, 1),
-        Key::Named(NamedKey::ArrowUp) if plain => picking.stepped(keys, -1),
-        _ => return,
-    };
-    followed(controller, viewport, keys.length, moved);
-}
 
-/// The list scrolled to the row a key moved the pick to, where one did.
-fn followed(
-    mut controller: ScrollController,
-    viewport: State<f32>,
-    length: usize,
-    at: Option<usize>,
-) {
-    if let Some(at) = at {
+    /// The list scrolled to the row a key moved the pick to, where one did.
+    fn followed(&self, length: usize, at: Option<usize>) {
+        let Some(at) = at else {
+            return;
+        };
+        let mut controller = self.controller;
         reveal_caret(
             &mut controller,
-            *viewport.peek(),
+            *self.viewport.peek(),
             list_row_height(),
             length,
             at,
@@ -556,6 +598,13 @@ impl Marking {
         Self(Rc::new(matcher))
     }
 
+    /// The compiled filter itself: what a panel narrows its list with, and what the bar
+    /// over it takes its error from. The one compile per pattern, so the list and the bar
+    /// cannot say different things about a half-typed `(`.
+    pub(crate) fn matcher(&self) -> &Matcher {
+        &self.0
+    }
+
     /// Where the filter matched in `text`, for the row to mark.
     pub(crate) fn marks(&self, text: &str) -> Vec<Range<usize>> {
         self.0.marks(text)
@@ -569,13 +618,17 @@ impl Marking {
     }
 }
 
-/// The [`Marking`] a sidebar panel hands its rows, out of the panel's own filter state.
+/// The one compiled filter a sidebar panel has: what it narrows its list with, what its
+/// rows mark with, and what its bar prints when the pattern will not compile.
 ///
 /// A memo, so the regex is compiled when the pattern changes and not when the list does.
 /// A panel redraws most while its box is being typed in, which is exactly when compiling
 /// is not free. [`use_marking`] is the same hook for a find bar, whose filter is held in
 /// a context rather than a state.
-pub(crate) fn use_list_marking(filter: State<Filter>) -> Marking {
-    let marking = use_memo(move || Marking::new(filter.read().matcher()));
-    marking.read().clone()
+///
+/// The memo and not the [`Marking`] in it: a panel narrows its list in a memo of its own,
+/// and a memo reading a plain value captured from an earlier render would never see the
+/// pattern change. The value is one `read` away where a panel wants it.
+pub(crate) fn use_list_marking(filter: State<Filter>) -> Memo<Marking> {
+    use_memo(move || Marking::new(filter.read().matcher()))
 }

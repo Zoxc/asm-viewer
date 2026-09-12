@@ -218,6 +218,10 @@ impl Component for SearchPanel {
                 .unwrap_or_default()
         });
         let submits = use_state(|| 0u64);
+        // The box filters nothing here -- Enter asks the question instead -- so the one
+        // compiled filter is only what the bar prints a bad pattern from.
+        let marking = use_list_marking(filter);
+        let marking = marking.read().clone();
         let directory = proj.read().workspace();
 
         let rows = use_memo(move || searched.read().hits.rows(&Matcher::Everything));
@@ -254,19 +258,11 @@ impl Component for SearchPanel {
             );
         });
 
-        // The rows the arrows step and Enter presses, shared by the two closures: a
-        // `SearchRows` is the rows behind an `Arc`, so this is a pointer each.
-        let listed = rows.clone();
-        let keys = ListKeys {
-            length: rows.len(),
-            at: place_picks(listed.clone()),
-            open: Box::new(move |at| match listed.get(at) {
-                Some(row) => press_place(doors, places, ctrl, Folding::Hits(searched), row),
-                None => Pressed::Folded,
-            }),
-            fold: ListKeys::flat(),
-        };
-
+        // The rows the arrows step and Enter presses: a `SearchRows` is the rows behind an
+        // `Arc`, so handing them over is a pointer.
+        let keys = ListKeys::over(rows.clone(), place_pick, move |row| {
+            press_place(doors, places, ctrl, Folding::Hits(searched), row)
+        });
         let body: Element = match (&directory, &asked) {
             (None, _) => placeholder("No project directory. Set one in the Project view."),
             (Some(_), None) => placeholder("Nothing searched for yet."),
@@ -282,26 +278,22 @@ impl Component for SearchPanel {
                     .expanded()
                     .content(Content::Flex)
                     .child(section_heading(&heading(summary), None))
-                    .child(
-                        rect().width(Size::fill()).height(Size::flex(1.0)).child(
-                            VirtualScrollView::new_with_data(
-                                (rows, searched),
-                                |index, (rows, searched): &(SearchRows, State<Searched>)| {
-                                    PlaceRow {
-                                        row: rows[index].clone(),
-                                        folding: Folding::Hits(*searched),
-                                        at: index,
-                                        key: DiffKey::None,
-                                    }
-                                    .key(&index)
-                                    .into()
-                                },
-                            )
-                            .length(length)
-                            .item_size(list_row_height())
-                            .scroll_controller(pane.controller),
+                    .child(rect().width(Size::fill()).height(Size::flex(1.0)).child(
+                        pane.virtual_rows(
+                            length,
+                            (rows, searched),
+                            |index, (rows, searched): &(SearchRows, State<Searched>)| {
+                                PlaceRow {
+                                    row: rows[index].clone(),
+                                    folding: Folding::Hits(*searched),
+                                    at: index,
+                                    key: DiffKey::None,
+                                }
+                                .key(&index)
+                                .into()
+                            },
                         ),
-                    )
+                    ))
                     .into_element()
             }
         };
@@ -309,7 +301,7 @@ impl Component for SearchPanel {
         // The caret Ctrl+Shift+F asks for is not asked for here: the box was registered
         // as this panel's by `use_list_pane`, and the one ask every chord and every
         // opened row leaves is spent on it at the root (`ui/keyboard.rs`).
-        pane.searched(filter, submits, keys, body)
+        pane.searched(filter, submits, &marking, keys, body)
     }
 }
 

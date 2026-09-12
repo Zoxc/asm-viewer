@@ -194,30 +194,14 @@ impl Component for FilesPanel {
             }
             (Some(_), Some(rows)) => {
                 let length = rows.len();
-                // The rows the arrows step and Enter presses: the tree as it is drawn,
-                // shared by both closures rather than walked again.
-                let listed = rows.clone();
-                let stepped = listed.clone();
-                let folded = listed.clone();
-                keys = ListKeys {
-                    length,
-                    at: Box::new(move |at| {
-                        (at < stepped.len()).then(|| Pick::Path(stepped[at].path.to_path_buf()))
-                    }),
-                    open: Box::new(move |at| match at < listed.len() {
-                        true => {
-                            let row = &listed[at];
-                            press_entry(states, tree, ctrl, row.fold, &row.path)
-                        }
-                        false => Pressed::Folded,
-                    }),
+                keys = ListKeys::folding(
+                    rows.clone(),
+                    |row: &FileRow| Pick::Path(row.path.to_path_buf()),
+                    move |row: &FileRow| press_entry(states, tree, ctrl, row.fold, &row.path),
                     // A file row has nothing under it, and a directory already the way
                     // the key asks is left alone. A read that failed counts as folded, so
                     // Right tries it again -- which is what a press on it does.
-                    fold: Box::new(move |at, unfold| {
-                        let Some(row) = (at < folded.len()).then(|| &folded[at]) else {
-                            return;
-                        };
+                    move |row: &FileRow, unfold| {
                         let Some(fold) = row.fold else {
                             return;
                         };
@@ -225,11 +209,10 @@ impl Component for FilesPanel {
                             return;
                         }
                         toggle_directory(tree, &row.path);
-                    }),
-                };
-                // `new_with_data`, never a capture: the builder closure is not compared
-                // across renders.
-                VirtualScrollView::new_with_data(
+                    },
+                );
+                pane.virtual_rows(
+                    length,
                     (rows, tree),
                     |index, (rows, tree): &(FileRows, State<Option<FileTree>>)| {
                         let row = &rows[index];
@@ -243,10 +226,6 @@ impl Component for FilesPanel {
                         .into()
                     },
                 )
-                .length(length)
-                .item_size(list_row_height())
-                .scroll_controller(pane.controller)
-                .into_element()
             }
         };
 

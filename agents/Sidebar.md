@@ -12,14 +12,20 @@ case (so a pattern's own `(?i)` still wins for the part it covers), `\b(?:…)\b
 non-capturing group is load-bearing), and escaping on the way in for the third. That is also the
 faster answer: 3 ms against `str::contains`'s 3.7 ms over 151k names. A pattern that does not
 compile is `Matcher::Invalid`, a third answer that matches nothing *and* prints the reason, because
-matching everything hides a half-typed `(`. The toggles call `prevent_default` on their press, or an
+matching everything hides a half-typed `(`. **A panel compiles its pattern once**: one
+`use_list_marking` memo per panel, which narrows the list, marks the rows and hands the bar the
+error, so the reason printed is the reason the rows are gone. It was compiled three times -- the
+list memo, the marking memo and the bar -- with the bar's error coming from the third, and the two
+could only agree because all three read the same state in the same render. The hook returns the
+memo and not the `Marking` in it: a narrowing memo reading a plain value captured from an earlier
+render would never see the pattern change. The toggles call `prevent_default` on their press, or an
 `Input` gives up its keyboard focus mid-word. Only the Symbols list needs a memo (`Filtered`,
 holding indices, and `None` for the unfiltered case so it costs what it did before there was a
 filter); Objects, History and Bookmarks filter where their rows are built. A History row draws the
 shortened name (`entry_text`) and is filtered on the whole one (`entry_name`), so a generic argument
 the row has no room for can still be searched for. The two short lists, History and Bookmarks, draw
-what the filter left through one `short_list` (`src/ui/filter_bar.rs`): a plain `ScrollView` of the
-rows, or the word for why there are none. An empty list means two things -- nothing has been added
+what the filter left through one `ListPane::short_list` (`src/ui/filter_bar.rs`): a plain
+`ScrollView` of the rows on the pane's own scroll, or the word for why there are none. An empty list means two things -- nothing has been added
 to it, or the filter left nothing of it -- and they are worth different words, so which of the two
 it is has to be asked of the whole list rather than of the rows. The Symbols list is too long for
 `short_list` and draws its rows through a `VirtualScrollView`, but it answers the same question the
@@ -232,8 +238,9 @@ is a lazily read tree of every entry, the other a flat streamed answer that skip
 
 **Enter asks; typing does not.** A filter bar edits live because its list is already in memory; a
 search reads every file under the project directory, so a pattern is asked for once it is finished.
-The box is `FilterBar` with two more props -- a placeholder, and a `State<u64>` Enter bumps -- and
-`use_search_pane` beside `use_filter_pane` over one builder, so the toggles are the same three. A **counter and not a callback**: freya's `Callback` is never equal to another, so a bar
+The box is `FilterBar` with three more props -- a placeholder, a `State<u64>` Enter bumps, and the
+error off the panel's one compiled filter -- gathered into a `Bar` that `ListPane::filtered` and
+`ListPane::searched` each fill in a line, so the toggles are the same three. A **counter and not a callback**: freya's `Callback` is never equal to another, so a bar
 holding one would re-render on every render of the panel, which for a streaming answer is every
 batch. The pattern itself is `filter::Filter`, and the expression it compiles to is
 `Filter::expression`, factored out of `Filter::matcher` so the two searches cannot disagree about
@@ -339,10 +346,9 @@ span carries a colour and a weight and no fill of its own. It was a bold orange 
 which made a match a thing of its own rather than a place in a line and cut the row's text into
 three pieces to carry it; the wash leaves the text one piece and says the same thing over a
 picked-out row as over a plain one. **A filtered list marks the same way**: `Matcher::marks` hands
-back where the pattern is in a name, the panel compiles the filter once per pattern -- a memo of
-its own, `use_list_marking`, beside the one that narrows the list -- and shares it with the rows it
-builds (`Marking`), and each row washes what matched in the name it draws, which is what says why a
-row is in a list that has been narrowed. The marks are byte ranges everywhere outside the text
+back where the pattern is in a name, the panel compiles the filter once per pattern
+(`use_list_marking`) and shares that one `Marking` with the rows it builds, and each row washes what
+matched in the name it draws, which is what says why a row is in a list that has been narrowed. The marks are byte ranges everywhere outside the text
 engine and UTF-16 units inside it, `marked_units` being the one place the two meet.
 
 **Four chords reach a panel**: Ctrl+Shift+F, Ctrl+Shift+E, Ctrl+Shift+O and Ctrl+T raise Search,
@@ -594,7 +600,9 @@ portal it is not modal to the window, the app keeps taking input while it is up,
 raised another tab meanwhile got the directory they had before and nothing to say why.
 
 **Every list row is one frame.** `list_row` (`src/ui/parts.rs`) is the chrome the thirteen
-sidebar-style rows open with: the height the scroll view over them uses as its `item_size`, the
+sidebar-style rows open with: the height the scroll view over them uses as its `item_size` --
+written on the view's side by `ListPane::virtual_rows` and nowhere else, since there are two heights
+and a panel reaching for the code panes' would draw its rows one and scroll them by the other -- the
 padding and the spacing their columns are laid on, and the three-way background -- picked out, under
 the pointer, or nothing. A row appends its own press, its menu and its children, and keeps its own
 hover state, since a hook may not run in a plain function and there is no `.hover()` pseudo-state to
@@ -652,10 +660,18 @@ at a place, what pressing the row at a place does, and which way it folds -- bui
 since the panel is the only thing that knows its rows, and answered once on the box they are drawn
 in. Three closures and not a `Vec<Pick>`: the Symbols list is 115k rows. The fold is its own closure
 and not the press under another name, a press *toggling* where Left and Right each say a direction;
-only the two trees have one (`src/tree.rs`, `src/files.rs`) and every other list hands over
-`ListKeys::flat`, which is what makes the two keys nothing at all on a row with nothing under it. The place a pick was made at is remembered with it for the same
-reason, finding one again being a walk of the whole list per keystroke; a place goes stale when the
-list moves under it, which the keys notice and start again from the end the arrow came from.
+only the two trees have one (`src/tree.rs`, `src/files.rs`) and every other list takes
+`ListKeys::over` instead of `ListKeys::folding`, which is what makes the two keys nothing at all on
+a row with nothing under it. **A panel writes the rules and not the plumbing.** The three closures
+have to walk one list and answer the same way past its end, and nothing enforced either but the
+author cloning the same `Rc` three times; seven panels each wrote their own bounds idiom, and the
+Objects tree wrote three in one function. `ListKeys::over` and `ListKeys::folding` take the list and
+a rule per key: `Stepped` (`ui/picks.rs`) is what the three shapes a panel's rows come in -- a
+`Shared` slice, a `Filtered`, a plain `Vec` -- answer as one, and the past-the-end answer is written
+there once. It is not a defensive check: the place a pick was made at is remembered with it,
+finding one again being a walk of the whole list per keystroke, and a place goes stale when the list
+moves under it -- so `ListKeys::held` asks for a row that is no longer there whenever a filter is
+typed after End. The keys notice and start again from the end the arrow came from.
 **Opening a tab hands it the keyboard**, however the row was opened: a reader who has put a listing
 on screen is reading it, so the next key is answered there and not in the list behind it, and the
 pick left behind goes grey saying so. Which is why acting on a row answers with a `Pressed`: a row

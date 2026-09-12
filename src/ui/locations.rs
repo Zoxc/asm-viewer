@@ -624,6 +624,9 @@ impl Component for LocationsPanel {
         let located = use_consume::<Locations>().0;
         let filter = use_state(Filter::default);
         let pane = use_list_pane(Panel::Locations);
+        // The one compiled filter: what narrows both lists below, what the rows mark with,
+        // and what the bar prints for a pattern that will not compile.
+        let marking = use_list_marking(filter);
         let filtered = use_memo(move || {
             let symbols = match &located.read().found {
                 Some(Found {
@@ -632,9 +635,8 @@ impl Component for LocationsPanel {
                 }) => symbols.clone(),
                 _ => Shared::default(),
             };
-            Filtered::new(symbols, &filter.read().matcher(), |symbol| {
-                symbol.data.display()
-            })
+            let marking = marking.read();
+            Filtered::new(symbols, marking.matcher(), |symbol| symbol.data.display())
         });
         let filtered = filtered.read().clone();
         // A references answer is tens of rows where a line's symbols are thousands, so the
@@ -645,7 +647,7 @@ impl Component for LocationsPanel {
             Some(Found {
                 what: What::Places(places),
                 ..
-            }) => places.rows(&filter.read().matcher()),
+            }) => places.rows(marking.read().matcher()),
             _ => ReferenceRows::default(),
         });
         let used = used.read().clone();
@@ -676,9 +678,7 @@ impl Component for LocationsPanel {
         // is opened the way both grouped panels open one (`ui/place_row.rs`).
         let places = use_places();
 
-        // What the rows mark in the text they draw, memoized on the filter beside the
-        // two lists above, which compile one of their own to narrow themselves with.
-        let marking = use_list_marking(filter);
+        let marking = marking.read().clone();
 
         let mut keys = ListKeys::none();
         let body: Element = match (&asked, pending, answer) {
@@ -696,23 +696,15 @@ impl Component for LocationsPanel {
             (Some(query), false, Some(Answer::Places(count))) => {
                 let length = used.len();
                 // The rows the arrows step and Enter presses: a `ReferenceRows` is the
-                // rows behind an `Arc`, so this is a pointer each.
-                let listed = used.clone();
-                keys = ListKeys {
-                    length,
-                    at: place_picks(listed.clone()),
-                    open: Box::new(move |at| match listed.get(at) {
-                        Some(row) => {
-                            press_place(to.doors, places, to.ctrl, Folding::Places(located), row)
-                        }
-                        None => Pressed::Folded,
-                    }),
-                    fold: ListKeys::flat(),
-                };
+                // rows behind an `Arc`, so handing them over is a pointer.
+                keys = ListKeys::over(used.clone(), place_pick, move |row| {
+                    press_place(to.doors, places, to.ctrl, Folding::Places(located), row)
+                });
                 headed(
                     query,
                     count,
-                    VirtualScrollView::new_with_data(
+                    pane.virtual_rows(
+                        length,
                         (used, located),
                         |row, (used, located): &(ReferenceRows, State<Located>)| {
                             PlaceRow {
@@ -723,11 +715,7 @@ impl Component for LocationsPanel {
                             }
                             .into()
                         },
-                    )
-                    .length(length)
-                    .item_size(list_row_height())
-                    .scroll_controller(pane.controller)
-                    .into(),
+                    ),
                 )
             }
             (Some(query), false, Some(Answer::Symbols(0))) => {
@@ -737,26 +725,20 @@ impl Component for LocationsPanel {
                 let length = filtered.len();
                 // The rows the arrows step and Enter presses: a `Filtered` is the list
                 // behind an `Arc` and the indices the filter kept.
-                let rows = Rc::new(filtered.clone());
-                let symbol_at = move |rows: &Filtered<Symbol>, at: usize| rows.at(at).cloned();
-                let stepped = rows.clone();
                 let (at_asked, subject) = (asked_at.clone(), subject.clone());
-                keys = ListKeys {
-                    length,
-                    at: Box::new(move |at| symbol_at(&stepped, at).map(Pick::Symbol)),
-                    open: Box::new(move |at| match symbol_at(&rows, at) {
-                        Some(symbol) => {
-                            press_location(to, at_asked.clone(), subject.clone(), symbol)
-                        }
-                        None => Pressed::Folded,
-                    }),
-                    fold: ListKeys::flat(),
-                };
+                keys = ListKeys::over(
+                    filtered.clone(),
+                    |symbol: &Symbol| Pick::Symbol(symbol.clone()),
+                    move |symbol: &Symbol| {
+                        press_location(to, at_asked.clone(), subject.clone(), symbol.clone())
+                    },
+                );
                 headed(
                     query,
                     count,
-                    VirtualScrollView::new_with_data(
-                        (filtered, selected, marking),
+                    pane.virtual_rows(
+                        length,
+                        (filtered, selected, marking.clone()),
                         |row,
                          (filtered, selected, marking): &(
                             Filtered<Symbol>,
@@ -781,16 +763,12 @@ impl Component for LocationsPanel {
                             ))
                             .into()
                         },
-                    )
-                    .length(length)
-                    .item_size(list_row_height())
-                    .scroll_controller(pane.controller)
-                    .into(),
+                    ),
                 )
             }
         };
 
-        pane.filtered(filter, keys, body)
+        pane.filtered(filter, &marking, keys, body)
     }
 }
 
