@@ -6840,7 +6840,7 @@ fn linking_harness() -> impl IntoElement {
         .expanded()
         // As the app's root does it, and for the same reason each is one handler there.
         .on_global_key_down(move |e: Event<KeyboardEventData>| hover_struck(hover, &e.key))
-        .on_global_pointer_down(move |_| hover_pressed(hover))
+        .on_global_pointer_down(move |_| hover_gone(hover))
         .child(ContextMenuViewer::new())
         // Mounted where `app` mounts it: over everything and outside the pane, and drawn
         // as nothing at all until the server has said something about a name.
@@ -7606,20 +7606,12 @@ fn the_box_goes_above_the_name_wherever_it_fits_and_stays_in_the_window() {
 /// waited out being real seconds either way.
 #[test]
 fn a_move_inside_the_name_puts_the_wait_back_to_the_beginning() {
-    let named = |column: u32| Pointed {
-        at: Lookup {
-            file: PathBuf::from("/p/src/main.rs"),
-            line: 1,
-            column,
-        },
-        drawn: Area::new((10.0, 20.0).into(), Size2D::new(40.0, 16.0)),
-    };
     let mut hover = Hover::default();
 
-    hover.enter(named(3));
+    hover.enter(hovered_name(3));
     let first = hover.until().expect("a wait");
     // The same name, drawn where it was: the pointer moved inside it.
-    hover.enter(named(3));
+    hover.enter(hovered_name(3));
     let again = hover.until().expect("a wait");
     assert!(
         again > first,
@@ -7628,15 +7620,79 @@ fn a_move_inside_the_name_puts_the_wait_back_to_the_beginning() {
 
     // And an answer stops the pushing: the box is up, and a pointer moving about inside
     // the name it is about does not write it afresh.
-    assert!(hover.asking(1, 1, named(3).at));
+    assert!(hover.asking(1, 1, hovered_name(3).at));
     assert!(hover.answer(1, 1, Some("what it is".to_owned())));
     let answered = hover.until();
-    hover.enter(named(3));
+    hover.enter(hovered_name(3));
     assert_eq!(
         hover.until(),
         answered,
         "the wait was put back under a box already drawn"
     );
+}
+
+/// **Every `Hover` method answers whether anything changed**, and only then is it written.
+/// That is what lets each of its writers be one `write_if` (`src/ui/worker.rs`), and it is
+/// what keeps a pointer resting on a name from writing the state on every move it makes: a
+/// judge that said "changed" whatever it was handed would redraw the source pane at every
+/// press, every key and every pixel.
+#[test]
+fn hover_says_whether_a_write_is_owed() {
+    let mut hover = Hover::default();
+
+    // Nothing hovered is nothing to take away, whatever asks. A press and a key both end
+    // in `gone`, and neither may write where no box is up.
+    assert!(!hover.gone(), "an empty state had something to take away");
+    assert!(
+        !hover.over_box(true),
+        "a box was entered with no name under it"
+    );
+    assert!(
+        !hover.resting_on(hovered_name(3).at),
+        "a wait began for a name the pointer is not on"
+    );
+
+    hover.enter(hovered_name(3));
+    assert!(hover.resting_on(hovered_name(3).at), "no wait began");
+    assert!(
+        !hover.resting_on(hovered_name(3).at),
+        "the same wait began twice"
+    );
+    assert!(
+        !hover.resting_on(hovered_name(5).at),
+        "a wait began for another name than the one hovered"
+    );
+
+    assert!(hover.over_box(true), "the pointer did not reach the box");
+    assert!(!hover.over_box(true), "the pointer reached the box twice");
+    assert!(hover.over_box(false), "the pointer did not leave the box");
+    assert!(hover.left_name(), "the pointer did not leave the name");
+    assert!(!hover.left_name(), "the pointer left the name twice");
+
+    assert!(
+        hover.asking(1, 1, hovered_name(3).at),
+        "the question was not written down"
+    );
+    assert!(
+        !hover.asking(1, 1, hovered_name(3).at),
+        "the same question was written down twice"
+    );
+
+    assert!(hover.gone(), "a hovered name was nothing to take away");
+    assert!(!hover.gone(), "an emptied state still held something");
+}
+
+/// A name for the pointer to be on: the same place drawn in the same box, so two calls
+/// with the same column are the same name.
+fn hovered_name(column: u32) -> Pointed {
+    Pointed {
+        at: Lookup {
+            file: PathBuf::from("/p/src/main.rs"),
+            line: 1,
+            column,
+        },
+        drawn: Area::new((10.0, 20.0).into(), Size2D::new(40.0, 16.0)),
+    }
 }
 
 /// **The pointer rests before anything is asked.** A pointer crossing a line of code

@@ -125,6 +125,15 @@ impl Follow {
         true
     }
 
+    /// The question has gone out. Whether anything changed, so the caller writes only
+    /// then -- always, [`ask_where`] minting an id per question. An answer that has
+    /// landed and not yet been taken stays: it is the last press's, and this question is
+    /// not answered yet.
+    fn asking(&mut self, asked: Asked) -> bool {
+        self.asked = Some(asked);
+        true
+    }
+
     /// Give up on the question this is waiting for: the server refused it, or is gone.
     pub(crate) fn give_up(&mut self, run: u64, id: u64) -> bool {
         let waiting = self
@@ -225,21 +234,16 @@ pub(crate) fn follow_name(
     let Some((run, id)) = asked else {
         return;
     };
-    // Bound before the write, the reads above being of other states.
     let tab = open.active_id();
-    let mut follow = server.follow;
-    let held = follow.peek().clone();
-    follow.set(Follow {
-        asked: Some(Asked {
-            run,
-            id,
-            at,
-            want,
-            reach,
-            tab,
-        }),
-        ..held
-    });
+    let asked = Asked {
+        run,
+        id,
+        at,
+        want,
+        reach,
+        tab,
+    };
+    write_if(server.follow, |follow| follow.asking(asked));
 }
 
 /// Open what the answer named. Called once, at the root, beside `use_land`.

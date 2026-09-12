@@ -865,9 +865,11 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         // mouse's back/forward buttons work wherever the cursor is and no child can
         // swallow them by stopping propagation.
         .on_global_pointer_down(move |e: Event<PointerEventData>| {
-            // Inside this handler and not beside it: an element keeps one handler per
-            // event, and a second `on_global_pointer_down` would silently replace this.
-            hover_pressed(hover);
+            // The box goes wherever the press landed: the reader is doing something
+            // else now, and the box is over what they pressed. Inside this handler and
+            // not beside it: an element keeps one handler per event, and a second
+            // `on_global_pointer_down` would silently replace this.
+            hover_gone(hover);
             match e.button() {
                 Some(MouseButton::Back) => navigate(open, Nav::Back),
                 Some(MouseButton::Forward) => navigate(open, Nav::Forward),

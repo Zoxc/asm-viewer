@@ -65,7 +65,7 @@ pub(crate) struct HoverBox;
 
 impl Component for HoverBox {
     fn render(&self) -> impl IntoElement {
-        let mut hover = use_consume::<Hovering>().0;
+        let hover = use_consume::<Hovering>().0;
         let marked = use_consume::<Marked>().0;
         // How tall the answer is when nothing is holding it in, which is what says
         // whether there is anything to scroll. Measured rather than asked for: a scroll
@@ -124,16 +124,10 @@ impl Component for HoverBox {
             )
             .padding(HOVER_PAD)
             .on_pointer_over(move |_| {
-                let mut waiting = hover.peek().clone();
-                if waiting.over_box(true) {
-                    hover.set(waiting);
-                }
+                write_if(hover, |waiting| waiting.over_box(true));
             })
             .on_pointer_out(move |_| {
-                let mut waiting = hover.peek().clone();
-                if waiting.over_box(false) {
-                    hover.set(waiting);
-                }
+                write_if(hover, |waiting| waiting.over_box(false));
             })
             .child(
                 // An answer taller than the box scrolls inside it, which is what the

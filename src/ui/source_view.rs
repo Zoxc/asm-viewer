@@ -511,11 +511,7 @@ impl Component for SourceRow {
             on_hover: hover.map(|hover| {
                 let named = named.clone();
                 Rc::new(move |under: Under| {
-                    let mut hover = hover;
-                    let mut waiting = hover.peek().clone();
-                    if named.pointed(&mut waiting, under) {
-                        hover.set(waiting);
-                    }
+                    write_if(hover, |waiting| named.pointed(waiting, under));
                 }) as Rc<dyn Fn(Under)>
             }),
         };

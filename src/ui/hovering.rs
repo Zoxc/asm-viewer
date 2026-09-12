@@ -231,23 +231,10 @@ impl Hover {
 }
 
 /// The box goes, and the question and the answer with it. Nothing is written where there
-/// was nothing to take away, so an occasion may call this on every press and every key.
-///
-/// Peek, clone, change, set -- and not read and write. A `State`'s read hands back a
-/// guard, and holding one across the write panics the moment it runs (`AGENTS.md`);
-/// `gone` needs `&mut` besides. So the value is taken out, changed, and put back, and
-/// only where it changed.
-pub(crate) fn hover_gone(mut hover: State<Hover>) {
-    let mut waiting = hover.peek().clone();
-    if waiting.gone() {
-        hover.set(waiting);
-    }
-}
-
-/// Something was pressed: the box goes, wherever the press landed. The reader is doing
-/// something else now, and the box is over what they pressed.
-pub(crate) fn hover_pressed(hover: State<Hover>) {
-    hover_gone(hover);
+/// was nothing to take away, so an occasion may call this on every press and every key:
+/// [`Hover::gone`] says whether there was, and [`write_if`] writes only where it says so.
+pub(crate) fn hover_gone(hover: State<Hover>) {
+    write_if(hover, Hover::gone);
 }
 
 /// A key was struck: the box goes, unless the key is a bare modifier.
@@ -296,11 +283,7 @@ pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs:
         // The wait, and the question after it. Armed before the task, so a pointer moving
         // inside the one name arms one wait and not one per move; the task is what asks,
         // and only where the pointer is still on the name it was armed for.
-        let mut hover = hover;
-        let mut waiting = hover.peek().clone();
-        if waiting.resting_on(at.clone()) {
-            hover.set(waiting);
-        }
+        write_if(hover, |waiting| waiting.resting_on(at.clone()));
         let jobs = jobs.clone();
         spawn(async move {
             // Waited out rather than slept through: every move of the pointer pushes the
@@ -323,11 +306,8 @@ pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs:
             let Some((run, id)) = ask_hover(language, &jobs, at.clone()) else {
                 return;
             };
-            // Written after the send and bound before the write, as ever.
-            let mut waiting = hover.peek().clone();
-            if waiting.asking(run, id, at) {
-                hover.set(waiting);
-            }
+            // Written after the send, which is what mints the id.
+            write_if(hover, |waiting| waiting.asking(run, id, at));
         });
     });
 }
