@@ -851,8 +851,7 @@ impl Component for SourceList {
         rect()
             .width(Size::fill())
             .height(Size::flex(1.0))
-            .padding(5.0)
-            .child(list.render(
+            .child(listing_inset(list.render(
                 marked,
                 length,
                 on_key_down,
@@ -886,7 +885,7 @@ impl Component for SourceList {
                     .key(i)
                     .into()
                 },
-            ))
+            )))
     }
 }
 

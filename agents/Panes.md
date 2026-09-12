@@ -158,8 +158,11 @@ object's *code*, are the two selections no listing is ever worked out for (`ask`
 both), so there the bar falls back to the document and names the object; everything else gets no bar
 rather than an empty one. The pane is a `Content::Flex` column like the Source pane: the bar takes
 its own height, the listing takes the rest, and the listing's five pixels of inset are the listing's
-own, so the header runs the full width of the pane. The four answers the pane can give are each a
-`return` in `AssemblyPane::body`, since a header cannot be drawn above a return.
+own, so the header runs the full width of the pane. **That inset is `parts::listing_inset`**, the one
+box every listing is drawn in -- this pane's two, the Source pane's and the Scratchpad's -- so the
+flex box is each pane's own column rule and the inset is the listing's, written once and pinned
+across the four by `every_pane_insets_its_listing_by_the_same_five_pixels`. The four answers the pane
+can give are each a `return` in `AssemblyPane::body`, since a header cannot be drawn above a return.
 
 Each name is **one line however long the name is**, ellipsised, never wrapped. This repo's own
 samples reach 1038 bytes mangled, which is fifteen wrapped lines at this pane's width, and a bar

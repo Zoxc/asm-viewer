@@ -877,12 +877,10 @@ impl Component for PadAssembly {
                 rect()
                     .width(Size::fill())
                     .height(Size::flex(1.0))
-                    // The listing's own inset, the assembly pane's exactly.
-                    .padding(5.0)
-                    .child(SectionList {
+                    .child(listing_inset(SectionList {
                         place: Placing::Pad,
                         object: self.object.clone(),
-                    }),
+                    })),
             )
             // Last, so the listing above is given what is left: the code makes room for
             // the find bar rather than being covered by it, as a document's pane does.

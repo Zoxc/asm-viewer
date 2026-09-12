@@ -21692,6 +21692,124 @@ fn a_listings_rows_sit_on_whole_device_pixels_wherever_it_is_laid_out() {
     assert_eq!(carets[0].height(), first.height());
 }
 
+/// The Scratchpad's assembly side over the object the test seeded, and nothing else of
+/// that page: the fourth of the four panes that draw a code listing.
+fn pad_listing_harness() -> impl IntoElement {
+    let reading = use_consume::<Sections>().0;
+    let object = reading.read().object.clone();
+    match object {
+        Some(object) => rect().expanded().child(PadAssembly {
+            object,
+            opening: None,
+            // No file, so the drive off the editor's cursor declines: what is under test
+            // is the box, and this page has no editor mounted to drive it from.
+            file: None,
+            pad: PadId::new("inset").expect("a scratchpad id"),
+            stale: false,
+        }),
+        None => rect().expanded(),
+    }
+}
+
+/// The gap on each side -- left, top, right, bottom -- between a code listing's box and
+/// the box the pane it is in gives it. The listing is the focusable box the rows are
+/// drawn in (`ListBox::render`), so this is the pane's inset and nothing else.
+fn listing_insets(test: &TestingRunner) -> Vec<[f32; 4]> {
+    test.find_many(|node, _element| {
+        let listing = node
+            .children()
+            .into_iter()
+            .find(|child| child.element().accessibility().a11y_focusable.is_enabled())?
+            .layout()
+            .area;
+        let around = node.layout().area;
+        Some([
+            listing.min_x() - around.min_x(),
+            listing.min_y() - around.min_y(),
+            around.max_x() - listing.max_x(),
+            around.max_y() - listing.max_y(),
+        ])
+    })
+}
+
+/// **The four panes that draw a code listing inset it by the same five pixels**: the
+/// Assembly pane over a symbol and over an object's code, the Source pane, and the
+/// Scratchpad's assembly side. The inset is the listing's own and not the pane's, so the
+/// bar above runs the pane's full width; and a page of rows, a reveal and a sweep are
+/// each measured in the height inside it, which is a number the four cannot disagree
+/// about.
+#[test]
+fn every_pane_insets_its_listing_by_the_same_five_pixels() {
+    const INSET: [f32; 4] = [5.0; 4];
+    let window = (600., 400.).into();
+
+    // The Assembly pane over one symbol's disassembly.
+    let shown = shown_sum_to();
+    let (mut test, _roots) = TestingRunner::new(
+        listing_harness,
+        window,
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    settle(&mut test);
+    assert_eq!(listing_insets(&test), [INSET], "the assembly pane");
+
+    // The same pane over a whole object's code.
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, _roots) = TestingRunner::new(
+        code_harness,
+        window,
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    settle(&mut test);
+    assert_eq!(listing_insets(&test), [INSET], "a code tab");
+
+    // The Scratchpad's, over the same object as the program a pad built.
+    let reading = reading_of(&object, &[]);
+    let (mut test, _roots) = TestingRunner::new(
+        pad_listing_harness,
+        window,
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    settle(&mut test);
+    assert_eq!(listing_insets(&test), [INSET], "the scratchpad");
+
+    // The Source pane, over a file of this test's own: the pane draws a placeholder and
+    // no listing at all without one.
+    let directory = Seeded::directory("inset");
+    let text: String = (1..=40).map(|n| format!("int line_{n}(void);\n")).collect();
+    let file = directory.named("inset.c", &text);
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let mut studied = Studied::new(sum_to.clone());
+    studied.lines.file = Some(file);
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to),
+        studied,
+    };
+    let (mut test, _roots) = TestingRunner::new(
+        source_pane_harness,
+        window,
+        move |runner: &mut _| {
+            runner.provide_root_context(|| Mounted(State::create(true)));
+            runner.provide_root_context(move || listing_states(shown))
+        },
+        1.,
+    );
+    // Long enough for the pane to ask the reader for the file and mount its list over
+    // what came back.
+    for _ in 0..20 {
+        test.sync_and_update();
+    }
+    assert_eq!(listing_insets(&test), [INSET], "the source pane");
+}
+
 /// A sweep carries on once the pointer has left the rows -- the pane, or the window: the
 /// platform keeps reporting the pointer while the button is held and freya forwards every
 /// move to the listing's global handler, which reaches the row on screen nearest the

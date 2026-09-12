@@ -1533,14 +1533,11 @@ impl AssemblyPane {
         // An object's code is its own listing, read in windows, and asks the analysis
         // nothing: `src/ui/section_view.rs`.
         if let Document::Code(object) = &self.document {
-            return rect()
-                .expanded()
-                .padding(5.0)
-                .child(SectionList {
-                    place: Placing::Tab(self.tab),
-                    object: object.clone(),
-                })
-                .into();
+            return listing_inset(SectionList {
+                place: Placing::Tab(self.tab),
+                object: object.clone(),
+            })
+            .into();
         }
         let shown = match analysis.showing(&self.document) {
             Showing::Listing(shown) => shown,
@@ -1576,18 +1573,13 @@ impl AssemblyPane {
             );
         }
 
-        rect()
-            .expanded()
-            // The listing's own inset, which is on it and not on the pane: the bar above
-            // runs the full width of the pane the way a header does.
-            .padding(5.0)
-            .child(InstructionList {
-                tab: self.tab,
-                data,
-                // The question the *drawn* answer answers, never the one being asked.
-                asked: shown.ask.clone(),
-            })
-            .into()
+        listing_inset(InstructionList {
+            tab: self.tab,
+            data,
+            // The question the *drawn* answer answers, never the one being asked.
+            asked: shown.ask.clone(),
+        })
+        .into()
     }
 }
 

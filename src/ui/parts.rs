@@ -157,6 +157,17 @@ pub(crate) fn blank_pane(background: Color) -> Element {
     rect().expanded().background(background).into()
 }
 
+/// The inset a code listing is drawn with, filling the box its pane gives it.
+///
+/// The inset is the listing's own and not the pane's, so the bar above runs the pane's
+/// full width the way a header does. All four listings take it -- the instruction list,
+/// the source list, an object's code on a tab and the same in the Scratchpad -- and the
+/// four have to agree: a page of rows, a reveal and a sweep are each measured in the
+/// height inside it.
+pub(crate) fn listing_inset(listing: impl IntoElement) -> Rect {
+    rect().expanded().padding(5.0).child(listing)
+}
+
 /// One row over a code listing saying what the reader is looking at is out of date, in
 /// the header's own colours: a notice about the listing, drawn where the listing is
 /// named. The Source pane draws [`STALE_SOURCE`] over a file whose bytes are not the ones
