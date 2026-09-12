@@ -428,11 +428,6 @@ pub(crate) struct PadSplit(pub(crate) State<f32>);
 #[derive(Clone, Copy)]
 pub(crate) struct PadSplits(pub(crate) State<ResizableContext>);
 
-/// Whether the Scratchpad's listing is up, which its toggle writes. One flag and not one
-/// per pad: the reader is arranging the window rather than saying something about a pad.
-#[derive(Clone, Copy)]
-pub(crate) struct PadFollows(pub(crate) State<bool>);
-
 /// The program a pad's build made, read.
 ///
 /// **The pad's own and not the project's.** It is deliberately not in `Objects`, so it is
@@ -930,7 +925,7 @@ pub(crate) fn use_scratchpad_with(
         "the scratchpad worker",
         // A job the supersede rule may not step over -- a save of another pad -- is
         // handed back rather than dropped, and is done in its turn.
-        |job, take, hold| vec![superseded(job, take, hold)],
+        |job, queued| vec![superseded(job, queued)],
         move |job| Some(work(job)),
         // Each answer is the state's to take, and what a taken one leaves the task to do
         // -- a pad to open, a buffer to make, a directory whose source is now stale -- is
@@ -1198,19 +1193,15 @@ pub(crate) fn request_delete_pad(
 /// A save is superseded only by a job for the **same** pad that writes or removes its
 /// package: a newer save, a build, which writes the package itself, or a delete, which is
 /// about to take the package away and has nothing to want from a write. Everything else
-/// goes to `hold` rather than being allowed to drop this save on the floor -- which is what
-/// a rule that took whatever was next would do, leaving the package quietly behind what is
-/// on screen. That is a job for another pad, which says nothing about this pad's disk copy;
-/// and a run or an open of this one, neither of which writes anything. Anything that is not
-/// a save supersedes nothing and is handed straight back.
-pub(crate) fn superseded(
-    job: PadJob,
-    mut take: impl FnMut() -> Option<PadJob>,
-    mut hold: impl FnMut(PadJob),
-) -> PadJob {
+/// is held ([`Queued::hold`]) rather than being allowed to drop this save on the floor,
+/// which is what a rule that took whatever was next would do, leaving the package quietly
+/// behind what is on screen. That is a job for another pad, which says nothing about this
+/// pad's disk copy; and a run or an open of this one, neither of which writes anything.
+/// Anything that is not a save supersedes nothing and is handed straight back.
+pub(crate) fn superseded(job: PadJob, queued: &mut Queued<'_, PadJob>) -> PadJob {
     let mut job = job;
     while matches!(job, PadJob::Save(_)) {
-        match take() {
+        match queued.next() {
             Some(newer)
                 if newer.pad() == job.pad()
                     && matches!(
@@ -1221,7 +1212,7 @@ pub(crate) fn superseded(
                 job = newer
             }
             Some(newer) => {
-                hold(newer);
+                queued.hold(newer);
                 break;
             }
             None => break,

@@ -91,8 +91,13 @@ would wait on a file nobody is reading.
 
 Two things the shape does not swallow. A drain policy may hand a job **back** rather than drop it,
 which is the scratchpad's rule -- a save may not be stepped over by a job for another pad -- so the
-queue of what has been taken off the channel and not done is the mechanism's, and the policy stays
-a closure over it. And the finder's walk is a named thread of its own rather than a `stream`: what
+queue of what has been taken off the channel and not done is the mechanism's. It is `Queued`: the
+one thing a policy is handed beside the job, an iterator over what is still on the channel with a
+`hold` that puts a job back **ahead** of it, so a job that has waited its turn is not put behind
+whatever has arrived since. An iterator because that is what a policy does with it -- the newest of
+each kind, the last of them, the lot. It was two `&mut dyn FnMut` arguments instead, written out in
+both hook variants, and three of the six wrapped one of them in `iter::from_fn` again at the call.
+And the finder's walk is a named thread of its own rather than a `stream`: what
 it finds goes to the finder's own ranking worker, over the one channel that worker blocks on, so
 there is no receiver here whose dropping could stop it and the walk number does that instead
 (`agents/Finding.md`).

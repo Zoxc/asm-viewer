@@ -1233,7 +1233,12 @@ impl Component for ScratchpadTab {
 
         let ratio = use_consume::<PadSplit>().0;
         let splits = use_consume::<PadSplits>().0;
-        let following = *use_consume::<PadFollows>().0.read();
+        // The pad's listing is filed under `Placing::Pad`, the key its toggle writes and
+        // the one its find bar and its place are kept under. One flag and not one per
+        // pad: the reader is arranging the window rather than saying something about a
+        // pad.
+        let said = use_consume::<Follows>().0;
+        let following = following(Placing::Pad, None, &said.read());
         // Where the reader left the handle, written back as they drag it, and read back
         // with a `peek` for the reason `use_dragged_size` gives.
         use_dragged_size(splits, ratio);

@@ -136,10 +136,11 @@ build naming none made nothing to open. The one rule left is `cargo::status`: a 
 call and no rule of their own. It was two copies of the summary, down to the wording, and the two
 had already drifted over a cargo that would not start.
 
-**Running is the artifact and not `cargo run`.** `run_in` spawns the executable `build_in` already
-asked cargo to name, in the scratchpad's own directory with a null stdin. Re-entering cargo would
-redo resolution to arrive back at that same path, or could arrive at a *different* one (the reader
-has usually typed since, so what ran would not be what the diagnostics describe). It would
+**Running is the artifact and not `cargo run`.** `run_in` builds a `Command` for the executable
+`build_in` already asked cargo to name, in the scratchpad's own directory with a null stdin, and
+hands it to `process::run`. Re-entering cargo would redo resolution to arrive back at that same
+path, or could arrive at a *different* one (the reader has usually typed since, so what ran would
+not be what the diagnostics describe). It would
 interleave cargo's progress into the stream the reader is reading as their program's output, and it
 would make stopping meaningless, since killing a `cargo run` kills cargo and leaves its child with
 nothing holding it. What the app is handed back is a `process::Handle`, whose one job is to stop the
@@ -148,16 +149,15 @@ group's kill, is `agents/Process.md`.
 
 **Output is streamed, not collected**, which is the whole difference from `build_in`'s
 run-it-and-return-the-output shape: a program that prints and then loops for ever has said
-something, and a value returned at exit would never say it. Two threads, one per pipe, hand each
-line to a callback as it arrives; whichever finishes last reaps the process and emits the one
-`Ended`. So a run is over when both pipes are at the end **and** the process is reaped. A program
-that hands its output to a grandchild outliving it shows as still running, which is the honest
-answer, since the output is still coming. The reap `try_wait`s on a poll rather than `wait`ing,
-because holding the `Child` is exactly what would make a stop wait for the process it is killing.
-**A reader that will not start is a reader that has finished**, and the two bounds on what a
-program writes are `agents/Process.md`'s along with the rest of the reading. The third bound is the
-app's own: a `RUN_EVENTS`-bounded channel, which is backpressure that reaches the program itself,
-since a full channel blocks the pipe thread, which fills the pipe, which blocks the writer.
+something, and a value returned at exit would never say it. How that is done is `process::run`'s
+and not this file's: two threads, one per pipe, each line to a callback as it arrives, and the last
+reader reaping the process and saying the one `Ended`. Nothing about it is a scratchpad's, and the
+invariant it keeps is stated where it is kept (`agents/Process.md`). What the pad takes from it is
+that a run is over when both pipes are at the end **and** the process is reaped, so a program that
+hands its output to a grandchild outliving it shows as still running -- the honest answer, since
+the output is still coming. The one bound that is the app's own is a `RUN_EVENTS`-bounded channel,
+which is backpressure that reaches the program itself: a full channel blocks the pipe thread, which
+fills the pipe, which blocks the writer.
 
 
 ## The Scratchpad view

@@ -941,7 +941,7 @@ pub(crate) fn use_language_with(
     let (requests, spawning) = use_worker_answering(
         "the language server's worker",
         // Only the last question of each consumer, which is what `worth_doing` is.
-        |job, queued, _| worth_doing(job, std::iter::from_fn(queued)),
+        |job, queued| worth_doing(job, queued),
         work,
         move |answer, _| match answer {
             LspAnswer::Spawned { run, handle } => {

@@ -9,21 +9,16 @@
 
 use std::{
     collections::{BTreeMap, HashSet},
-    fmt, fs,
-    io::{self, BufReader, Read},
+    fmt, fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
 };
 
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::cargo;
 use crate::order::Order;
-use crate::process::{self, RunEvent, Stream};
+use crate::process::{self, RunEvent};
 use crate::store::{write_atomically, Store, RECENTS_FILE};
 use crate::verdict::Verdict;
 
@@ -869,112 +864,21 @@ pub fn delete_pad(store: &Store, id: &PadId) -> Result<(), Failure> {
 /// The artifact is run, not `cargo run`: re-entering cargo would rebuild to a path that
 /// may differ from the one the diagnostics on screen are about, interleave cargo's own
 /// progress into the program's output, and make stopping meaningless -- killing a
-/// `cargo run` leaves its child running. Not blocking: it forks, wires up two threads to
-/// the process's two pipes, and returns.
+/// `cargo run` leaves its child running.
 ///
-/// What comes back is a [`process::Handle`], whose one job is to stop the program and
-/// everything it forked (`agents/Process.md`).
+/// The command is the whole of what is a scratchpad's here: the executable, its own
+/// directory, and a null stdin. Reading both pipes, reaping the process and saying the one
+/// [`RunEvent::Ended`] are [`process::run`]'s, along with the [`process::Handle`] that
+/// comes back (`agents/Process.md`).
 pub fn run_in(
     executable: &Path,
     directory: &Path,
     emit: impl FnMut(RunEvent) + Send + 'static,
 ) -> Result<process::Handle, Failure> {
     let mut command = Command::new(executable);
-    command
-        .current_dir(directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let (running, pipes) =
-        process::start(&mut command).map_err(|error| Failure::NoProgram(error.to_string()))?;
-
-    // One `emit` behind one lock, so the two streams interleave in the order the program
-    // wrote them. Holding it across the call is deliberate: a consumer that has fallen
-    // behind blocks a reader thread, which fills a pipe, which blocks the program itself --
-    // the only backpressure there is against a program printing in a tight loop.
-    let emit: Emit = Arc::new(Mutex::new(Box::new(emit)));
-
-    // A run is over when both pipes have reached the end **and** the process has been
-    // reaped, and the last pipe to finish says so. A program that hands its output to a
-    // grandchild outliving it therefore reads as still running, which is honest: the
-    // output is still coming.
-    let unfinished = Arc::new(AtomicUsize::new(2));
-    pipe_thread(pipes.stdout, Stream::Out, &emit, &unfinished, &running);
-    pipe_thread(pipes.stderr, Stream::Err, &emit, &unfinished, &running);
-
-    Ok(running)
-}
-
-/// One boxed callback behind one lock: what both pipe threads write a line through.
-type Emit = Arc<Mutex<Box<dyn FnMut(RunEvent) + Send>>>;
-
-/// Read one of the process's pipes on a thread of its own, and let the last of the two to
-/// finish say the run is over.
-fn pipe_thread<R: Read + Send + 'static>(
-    pipe: Option<R>,
-    stream: Stream,
-    emit: &Emit,
-    unfinished: &Arc<AtomicUsize>,
-    running: &process::Handle,
-) {
-    match pipe {
-        Some(pipe) => reading(pipe, stream, emit, unfinished, running),
-        // A pipe that is not there is a pipe with nothing on it. Still a thread of its
-        // own, so the count reaches zero and the reap happens off the caller's.
-        None => reading(io::empty(), stream, emit, unfinished, running),
-    }
-}
-
-/// The whole of the above with a pipe in hand.
-///
-/// A thread that will not start is a reader that has finished with nothing, and the run is
-/// stopped rather than left with a stream nobody is reading.
-fn reading<R: Read + Send + 'static>(
-    pipe: R,
-    stream: Stream,
-    emit: &Emit,
-    unfinished: &Arc<AtomicUsize>,
-    running: &process::Handle,
-) {
-    let started = process::read_on_thread("a scratchpad's output reader", pipe, {
-        let (emit, unfinished, running) = (emit.clone(), unfinished.clone(), running.clone());
-        move |pipe| {
-            process::stream_lines(BufReader::new(pipe), stream, |line| {
-                let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
-                emit(RunEvent::Wrote(line));
-            });
-
-            reader_finished(&emit, &unfinished, &running);
-        }
-    });
-    if let Err(error) = started {
-        log::warn!("a scratchpad's output reader could not be started: {error}");
-        // The pipe went with the closure that could not be started, so nothing will read
-        // that stream and the program's own writes to it can only fail. End the run: the
-        // count has to reach zero however a reader ends, or the process is never reaped,
-        // the one `Ended` is never said, and the pad reads "Running" for ever over a
-        // zombie. The stop also bounds the reap below, which is this thread's when the
-        // other reader has already finished.
-        running.stop();
-        reader_finished(emit, unfinished, running);
-    }
-}
-
-/// One reader is done with its pipe. The last of the two reaps the process and says how it
-/// ended.
-///
-/// A process no longer under its lock was taken by a stop, which waited for it, so that is
-/// what [`process::Handle::ended`] reads as [`process::Ended::Stopped`] -- and the reap
-/// is also
-/// what takes the run off the list a shutdown walks.
-fn reader_finished(emit: &Emit, unfinished: &AtomicUsize, running: &process::Handle) {
-    if unfinished.fetch_sub(1, Ordering::SeqCst) != 1 {
-        return;
-    }
-
-    let ended = running.ended();
-    let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
-    emit(RunEvent::Ended(ended));
+    command.current_dir(directory).stdin(Stdio::null());
+    process::run("a scratchpad's output reader", &mut command, emit)
+        .map_err(|error| Failure::NoProgram(error.to_string()))
 }
 
 /// The generated manifest, as a serializable shape. **Field order is load-bearing**: TOML

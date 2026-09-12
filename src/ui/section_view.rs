@@ -618,10 +618,15 @@ impl Component for SectionList {
         // so a step re-renders this pane and the hook sees the switch.
         let document = Document::Code(self.object.clone());
         let place = self.place;
-        let entry = match place {
-            Placing::Tab(tab) => (tab, place_at(&docs.read(), tab, &document)),
-            // An entry nothing is filed under, so nothing has to forget it.
-            Placing::Pad => (DocId::unfiled(), Stop::whole(document.clone())),
+        // The tab, where this listing is on one at all: the Scratchpad's is no tab, has
+        // no id, and so is filed nowhere and forgotten by nobody.
+        let tab = match place {
+            Placing::Tab(tab) => Some(tab),
+            Placing::Pad => None,
+        };
+        let stop = match tab {
+            Some(tab) => place_at(&docs.read(), tab, &document),
+            None => Stop::whole(document.clone()),
         };
         use_kept_place(
             doors,
@@ -648,7 +653,8 @@ impl Component for SectionList {
             reading_state,
             rows,
             controller,
-            &entry,
+            tab,
+            &stop,
             generation,
         );
         use_window(reading_state, window, rows, controller, viewport, current);
@@ -901,7 +907,10 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
 /// What the place-keeping effect remembers between runs, none of it rendered from.
 #[derive(Default)]
 struct Held {
-    tab: Option<Entry>,
+    /// What the last run was for: the tab, where there was one, and the stop it was
+    /// showing. Both, since two tabs can show one stop.
+    tab: Option<DocId>,
+    stop: Option<Stop>,
     built: Option<u64>,
     /// The place last derived from the offset, to tell a scroll from a write made
     /// from outside.
@@ -956,7 +965,12 @@ impl Move {
 /// One run of the effect as its stages share it: what the run is about, and what the
 /// stages before have found.
 struct Step<'a> {
-    tab: &'a Entry,
+    /// The place this run keeps things under: the tab and the stop it is showing.
+    /// [`None`] for the Scratchpad's listing, which is no tab and has nothing to file a
+    /// place, a run or a driven line under.
+    tab: Option<Entry>,
+    /// What the listing is showing, tab or no tab: what a planting names.
+    stop: &'a Stop,
     /// The reading generation the rows are counted at.
     generation: u64,
     /// The rows are counted afresh this run, the generation having changed.
@@ -1007,7 +1021,7 @@ impl At {
     ) -> At {
         let scrolled = (top / height) as usize;
         let row = scrolled.min(built.len().saturating_sub(1));
-        let known = places.read().at(step.tab);
+        let known = step.tab.as_ref().and_then(|tab| places.read().at(tab));
         At {
             scrolled,
             row,
@@ -1038,9 +1052,11 @@ impl At {
 /// stage is a function over the [`Step`] they share -- what one stage tells the next is a
 /// field of it -- and the rule a stage keeps is written on the stage.
 ///
-/// `docs` says whether the place is still open, which is what a write down here is
-/// allowed for, and is asked of the state itself for the reason [`use_kept_position`]
-/// gives.
+/// `tab` is [`None`] for a listing that is no tab -- the Scratchpad's -- which has
+/// nothing to file a place or a run under and so has none written for it; `stop` is what
+/// the listing is showing either way. `docs` says whether the place is still open, which
+/// is what a write down here is allowed for, and is asked of the state itself for the
+/// reason [`use_kept_position`] gives.
 fn use_kept_place(
     doors: Doors,
     places: Places,
@@ -1049,7 +1065,8 @@ fn use_kept_place(
     reading: State<Reading>,
     mut rows: State<Option<Arc<Built>>>,
     mut controller: ScrollController,
-    tab: &Entry,
+    tab: Option<DocId>,
+    stop: &Stop,
     generation: Option<u64>,
 ) {
     let (marked, plant) = (doors.marked, doors.plant);
@@ -1057,8 +1074,8 @@ fn use_kept_place(
     let held = use_hook(|| Rc::new(RefCell::new(Held::default())));
 
     use_side_effect_with_deps(
-        &(tab.clone(), generation),
-        move |(tab, generation): &(Entry, Option<u64>)| {
+        &(tab, stop.clone(), generation),
+        move |(tab, stop, generation): &(Option<DocId>, Stop, Option<u64>)| {
             // Subscribes this effect to the pane's scroll, so it comes before any return.
             let (_, offset) = <(i32, i32)>::from(controller);
             // In `f64`: a listing of a large binary is millions of rows, tens of millions
@@ -1078,13 +1095,16 @@ fn use_kept_place(
             };
 
             let mut state = held.borrow_mut();
+            // The place the maps are keyed by, where this listing is a tab's at all.
+            let entry = tab.map(|tab| (tab, stop.clone()));
             let mut step = Step {
-                tab,
                 generation,
                 rebuilt: state.built != Some(generation),
-                switching: state.tab.as_ref() != Some(tab),
+                switching: state.tab != *tab || state.stop.as_ref() != Some(stop),
                 before: rows.peek().clone(),
-                kept: marks_at.peek().at(tab),
+                kept: entry.as_ref().and_then(|tab| marks_at.peek().at(tab)),
+                tab: entry,
+                stop,
                 carried: false,
             };
 
@@ -1093,9 +1113,8 @@ fn use_kept_place(
             };
             let planted = plant_caret(&mut step, &built, plant, marked);
             name_run(&built, marked);
-            // Whether the entry is still on an open tab's trail. The Scratchpad's listing
-            // is under `DocId::unfiled`, which no tab holds, so it is never open and the
-            // pad keeps no place.
+            // Whether the entry is still on an open tab's trail, which is the one
+            // question it answers: a listing that is no tab has no entry to ask it of.
             let is_open = |(id, stop): &Entry| docs.peek().contains(*id, stop);
             keep_spots(&step, &built, planted, marked, marks_at, &is_open);
 
@@ -1121,7 +1140,8 @@ fn use_kept_place(
             let target = target_of(&state, &step, &at, code_at, &is_open);
 
             if step.switching {
-                state.tab = Some(tab.clone());
+                state.tab = *tab;
+                state.stop = Some(stop.clone());
             }
             state.derived = at.derived;
             if step.rebuilt {
@@ -1236,7 +1256,7 @@ fn plant_caret(
     plant: State<Option<Planting>>,
     marked: State<Marks>,
 ) -> Option<(usize, Spot)> {
-    let address = take_planting(plant, &step.tab.1.document)?;
+    let address = take_planting(plant, &step.stop.document)?;
     let row = built.body_row_for(address)?;
     land_row(marked, file_at(built, row), row, Owed::by(Pane::Assembly));
     let first = built.row_for(address).unwrap_or(row);
@@ -1301,9 +1321,14 @@ fn keep_spots(
     mut marks_at: State<Positions<Entry, Kept>>,
     is_open: &dyn Fn(&Entry) -> bool,
 ) {
-    if (step.switching && !step.carried) || !is_open(step.tab) {
+    if step.switching && !step.carried {
         return;
     }
+    // A listing that is no tab keeps nothing, and neither does a tab this place has
+    // already left.
+    let Some(tab) = step.tab.as_ref().filter(|tab| is_open(tab)) else {
+        return;
+    };
     let spots = Kept::spots_of(marked.peek().assembly.as_ref(), |row| {
         planted
             .filter(|(at, _)| *at == row)
@@ -1325,7 +1350,7 @@ fn keep_spots(
         marks: was.map(|was| was.marks.clone()).unwrap_or_default(),
     };
     if was != Some(&kept) {
-        marks_at.write().remember(step.tab.clone(), kept);
+        marks_at.write().remember(tab.clone(), kept);
     }
 }
 
@@ -1358,9 +1383,11 @@ fn target_of(
     }
     if at.derived != held.derived && at.known != at.derived {
         // A scroll: write it down, for a tab that is still open. The run after a close is
-        // still holding the tab and would put it straight back.
-        if let Some(derived) = at.derived.filter(|_| is_open(step.tab)) {
-            places.write().remember(step.tab.clone(), derived);
+        // still holding the tab and would put it straight back, and a listing that is no
+        // tab has nowhere to put it.
+        let tab = step.tab.as_ref().filter(|tab| is_open(tab));
+        if let (Some(tab), Some(derived)) = (tab, at.derived) {
+            places.write().remember(tab.clone(), derived);
         }
         return None;
     }

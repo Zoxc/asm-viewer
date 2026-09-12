@@ -7,8 +7,12 @@
 
 use super::*;
 
-/// Whether the pane a tab is not driven from is up: what the reader last said about this
-/// tab, and where they have said nothing, what its document opens with.
+/// Whether the pane a place is not driven from is up: what the reader last said about
+/// this place, and where they have said nothing, what it opens with.
+///
+/// `document` is what a tab is showing, and [`None`] for the Scratchpad's pane, which is
+/// no tab: its editor is the side it is driven from and the listing beside it is up until
+/// the reader says otherwise.
 ///
 /// **Only a source-driven tab opens with one pane**, and only on a file in no compiled
 /// language: a `Cargo.toml` or a `.json` is read and never disassembled, so the pane
@@ -17,10 +21,17 @@ use super::*;
 /// and an extension it does not know is answered no -- an assembly side is offered for
 /// the languages the app can say become machine code, and a file it cannot place opens
 /// as source until the reader asks for one.
-pub(crate) fn following(tab: DocId, document: &Document, said: &HashMap<DocId, bool>) -> bool {
-    match said.get(&tab) {
-        Some(&said) => said,
-        None => document.driven_from() != Pane::Source || source::compiled(document.file()),
+pub(crate) fn following(
+    of: Placing,
+    document: Option<&Document>,
+    said: &HashMap<Placing, bool>,
+) -> bool {
+    match (said.get(&of), document) {
+        (Some(&said), _) => said,
+        (None, Some(document)) => {
+            document.driven_from() != Pane::Source || source::compiled(document.file())
+        }
+        (None, None) => true,
     }
 }
 
@@ -52,34 +63,24 @@ pub(crate) fn use_dragged_size(splits: State<ResizableContext>, mut size: State<
 /// wherever it is made. The control on the bar ([`PaneToggle`]) and the window's key
 /// (`Chord::OtherPane`) both call this, so the two cannot come to mean different things.
 ///
-/// Which flag it writes is [`Placing`]'s question -- a tab's under its id, the
-/// Scratchpad's the one flag at the root -- and what it flips is what [`following`] says
-/// is up **now**, read here rather than handed in: a gesture answers for the tab as it
-/// stands rather than for the render it was drawn in.
+/// One insert under the [`Placing`] the gesture was made at -- a tab's id, or the
+/// Scratchpad's pane -- and what it flips is what [`following`] says is up **now**, read
+/// here rather than handed in: a gesture answers for the place as it stands rather than
+/// for the render it was drawn in.
 ///
 /// A tab whose document has left the table is nothing to flip: a menu or a key answered
 /// after the tab closed.
-pub(crate) fn toggle_pane(
-    of: Placing,
-    open: Open,
-    mut said: State<HashMap<DocId, bool>>,
-    mut pad_said: State<bool>,
-) {
-    match of {
-        Placing::Tab(tab) => {
-            // Both bound before the write: a read guard held across one panics.
-            let document = open.docs.peek().get(tab).cloned();
-            let Some(document) = document else {
-                return;
-            };
-            let up = following(tab, &document, &said.peek());
-            said.write().insert(tab, !up);
-        }
-        Placing::Pad => {
-            let up = *pad_said.peek();
-            pad_said.set(!up);
-        }
-    }
+pub(crate) fn toggle_pane(of: Placing, open: Open, mut said: State<HashMap<Placing, bool>>) {
+    // Bound before the write: a read guard held across one panics.
+    let document = match of {
+        Placing::Tab(tab) => match open.docs.peek().get(tab).cloned() {
+            Some(document) => Some(document),
+            None => return,
+        },
+        Placing::Pad => None,
+    };
+    let up = following(of, document.as_ref(), &said.peek());
+    said.write().insert(of, !up);
 }
 
 /// The control on the leading pane's bar that puts the pane the tab is not driven from
@@ -87,8 +88,7 @@ pub(crate) fn toggle_pane(
 ///
 /// **One control and not two**, wherever a following pane can be put away: the icon, the
 /// tooltip, the hover box and the rule about where it sits are written once, and what
-/// differs is only where the flag lives -- under a [`DocId`] for a tab, and at the root
-/// for the Scratchpad, which has none.
+/// differs is only the [`Placing`] the flag is filed under.
 ///
 /// **On the leading bar alone.** It names the following pane, which is always the
 /// right-hand half of the split, so the control sits on the half that is always up and
@@ -109,7 +109,6 @@ impl Component for PaneToggle {
         let open = use_open();
         let docs = open.docs;
         let said = use_consume::<Follows>().0;
-        let pad_said = use_consume::<PadFollows>().0;
         let mut hovering = use_state(|| false);
         // Not hit while a sweep is under way, as the names beside it are not: the pointer
         // dragging a selection up past the bar would otherwise arm this tooltip.
@@ -129,11 +128,11 @@ impl Component for PaneToggle {
                     Pane::Source => "assembly",
                     Pane::Assembly => "source",
                 };
-                (name, following(tab, &document, &said.read()))
+                (name, following(self.of, Some(&document), &said.read()))
             }
             // The pad's editor is the side it is driven from, so the side that follows is
             // always the assembly.
-            Placing::Pad => ("assembly", *pad_said.read()),
+            Placing::Pad => ("assembly", following(self.of, None, &said.read())),
         };
         let (icon, tip) = match up {
             true => (
@@ -170,7 +169,7 @@ impl Component for PaneToggle {
                         .on_pointer_out(move |_| hovering.set_if_modified(false))
                         // The press writes nothing itself: which flag it is and the rule
                         // for flipping it are `toggle_pane`'s, which the key calls too.
-                        .on_press(move |_| toggle_pane(of, open, said, pad_said))
+                        .on_press(move |_| toggle_pane(of, open, said))
                         .child(glyph(icon)),
                 ),
             ))
@@ -232,7 +231,7 @@ impl Component for DocumentBody {
         let tab = self.id;
         // Bound before the panes are built, which take the document: reading it here is
         // also what subscribes this tab to its own toggle.
-        let showing = following(tab, &document, &said.read());
+        let showing = following(Placing::Tab(tab), Some(&document), &said.read());
 
         // Which pane leads is the *document's* question and not the panels': the sizes
         // stay with the two places, the reader's side and the side that follows it, so

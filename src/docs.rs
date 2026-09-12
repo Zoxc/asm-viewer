@@ -168,10 +168,10 @@ impl Docs {
 
 impl DocId {
     /// An id no tab is ever given: `next` counts up from 0 and a table this large is a
-    /// table no run reaches. What it is for is a pane that is **not** a tab -- the
-    /// Scratchpad's listing -- and a pane a test mounts with no tab behind it. Nothing is
-    /// ever filed under it: `Docs::contains` answers false for an id it does not hold, so
-    /// a place named by one is a place nothing keeps.
+    /// table no run reaches. A **test harness's** and nothing the app has, for a pane
+    /// mounted with no tab behind it; a pane that is no tab has no id at all, and says so
+    /// by having none ([`crate::ui::state::Placing`]).
+    #[cfg(test)]
     pub fn unfiled() -> DocId {
         DocId(u32::MAX)
     }

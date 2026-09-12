@@ -6,7 +6,9 @@
 //! server (`src/lsp.rs`) -- and they ask a process the same things, so neither has a copy
 //! of any of this. [`start`] is the one spawn, [`Handle`] the one thing that ends what it
 //! made, [`stop_all`] what the shutdown calls, and [`read_on_thread`] the one place a
-//! child's pipe is put on a thread.
+//! child's pipe is put on a thread. [`run`] is the two together for a program whose output
+//! is all the app wants of it: both pipes read, and the one [`RunEvent::Ended`] said when
+//! they are both at their end and the process is reaped.
 //!
 //! **A stop is a kill, and it reaches the whole group.** Without a group, a stop kills the
 //! process this app has a handle for and leaves everything it forked running with nothing
@@ -18,10 +20,10 @@
 //! `agents/Process.md` is the reasoning.
 
 use std::collections::VecDeque;
-use std::io::{self, BufRead, Read};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
+use std::io::{self, BufRead, BufReader, Read};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use std::thread;
@@ -511,6 +513,128 @@ fn output_line(stream: Stream, text: &[u8]) -> OutputLine {
         stream,
         text: Arc::from(String::from_utf8_lossy(text).as_ref()),
     }
+}
+
+/// Start `command` with both its output pipes read on threads of their own, handing every
+/// line and then the one [`RunEvent::Ended`] to `emit`. `name` is what those threads are
+/// called, so a panic on one says which run died (`crate::panics`).
+///
+/// Not blocking: it forks, wires the two threads up and returns. What comes back is the
+/// [`Handle`], whose one job is to stop the program and everything it forked.
+///
+/// The two pipes are set here rather than asked of the caller, so a caller cannot forget
+/// one and leave a stream nothing reads; everything else about the program -- what it is,
+/// where it runs, what it is given on stdin -- is the caller's.
+pub fn run(
+    name: &'static str,
+    command: &mut Command,
+    emit: impl FnMut(RunEvent) + Send + 'static,
+) -> io::Result<Handle> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let (running, pipes) = start(command)?;
+
+    // One `emit` behind one lock, so the two streams interleave in the order the program
+    // wrote them. Holding it across the call is deliberate: a consumer that has fallen
+    // behind blocks a reader thread, which fills a pipe, which blocks the program itself --
+    // the only backpressure there is against a program printing in a tight loop.
+    let emit: Emit = Arc::new(Mutex::new(Box::new(emit)));
+
+    // A run is over when both pipes have reached the end **and** the process has been
+    // reaped, and the last pipe to finish says so. A program that hands its output to a
+    // grandchild outliving it therefore reads as still running, which is honest: the
+    // output is still coming.
+    let unfinished = Arc::new(AtomicUsize::new(2));
+    pipe_thread(
+        name,
+        pipes.stdout,
+        Stream::Out,
+        &emit,
+        &unfinished,
+        &running,
+    );
+    pipe_thread(
+        name,
+        pipes.stderr,
+        Stream::Err,
+        &emit,
+        &unfinished,
+        &running,
+    );
+
+    Ok(running)
+}
+
+/// One boxed callback behind one lock: what both pipe threads write a line through.
+type Emit = Arc<Mutex<Box<dyn FnMut(RunEvent) + Send>>>;
+
+/// Read one of the process's pipes on a thread of its own, and let the last of the two to
+/// finish say the run is over.
+fn pipe_thread<R: Read + Send + 'static>(
+    name: &'static str,
+    pipe: Option<R>,
+    stream: Stream,
+    emit: &Emit,
+    unfinished: &Arc<AtomicUsize>,
+    running: &Handle,
+) {
+    match pipe {
+        Some(pipe) => reading(name, pipe, stream, emit, unfinished, running),
+        // A pipe that is not there is a pipe with nothing on it. Still a thread of its
+        // own, so the count reaches zero and the reap happens off the caller's.
+        None => reading(name, io::empty(), stream, emit, unfinished, running),
+    }
+}
+
+/// The whole of the above with a pipe in hand.
+///
+/// A thread that will not start is a reader that has finished with nothing, and the run is
+/// stopped rather than left with a stream nobody is reading.
+fn reading<R: Read + Send + 'static>(
+    name: &'static str,
+    pipe: R,
+    stream: Stream,
+    emit: &Emit,
+    unfinished: &Arc<AtomicUsize>,
+    running: &Handle,
+) {
+    let started = read_on_thread(name, pipe, {
+        let (emit, unfinished, running) = (emit.clone(), unfinished.clone(), running.clone());
+        move |pipe| {
+            stream_lines(BufReader::new(pipe), stream, |line| {
+                let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
+                emit(RunEvent::Wrote(line));
+            });
+
+            reader_finished(&emit, &unfinished, &running);
+        }
+    });
+    if let Err(error) = started {
+        log::warn!("{name} could not be started: {error}");
+        // The pipe went with the closure that could not be started, so nothing will read
+        // that stream and the program's own writes to it can only fail. End the run: the
+        // count has to reach zero however a reader ends, or the process is never reaped,
+        // the one `Ended` is never said, and the caller reads "running" for ever over a
+        // zombie. The stop also bounds the reap below, which is this thread's when the
+        // other reader has already finished.
+        running.stop();
+        reader_finished(emit, unfinished, running);
+    }
+}
+
+/// One reader is done with its pipe. The last of the two reaps the process and says how it
+/// ended, which is the one place [`RunEvent::Ended`] is said.
+///
+/// A process no longer under its lock was taken by a stop, which waited for it, so that is
+/// what [`Handle::ended`] reads as [`Ended::Stopped`] -- and the reap is also what takes
+/// the run off the list a shutdown walks.
+fn reader_finished(emit: &Emit, unfinished: &AtomicUsize, running: &Handle) {
+    if unfinished.fetch_sub(1, Ordering::SeqCst) != 1 {
+        return;
+    }
+
+    let ended = running.ended();
+    let mut emit = emit.lock().unwrap_or_else(|held| held.into_inner());
+    emit(RunEvent::Ended(ended));
 }
 
 #[cfg(test)]

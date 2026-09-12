@@ -15284,17 +15284,19 @@ fn a_save_is_superseded_only_by_a_job_for_the_same_pad() {
         scratchpad
     };
 
-    let mut queue = VecDeque::from([
+    let (queue, jobs) = async_channel::unbounded::<PadJob>();
+    for job in [
         PadJob::Save(pad("one", "second")),
         PadJob::Save(pad("two", "other pad")),
         PadJob::Save(pad("one", "third")),
-    ]);
-    let mut held = Vec::new();
+    ] {
+        queue.try_send(job).expect("an unbounded queue");
+    }
+    let mut held = VecDeque::new();
 
     let job = superseded(
         PadJob::Save(pad("one", "first")),
-        || queue.pop_front(),
-        |newer| held.push(newer),
+        &mut Queued::new(&jobs, &mut held),
     );
 
     // The two saves of `one` collapsed into the newer of them, and the save of `two`
@@ -15305,11 +15307,16 @@ fn a_save_is_superseded_only_by_a_job_for_the_same_pad() {
     assert_eq!(scratchpad.id().as_str(), "one");
     assert_eq!(scratchpad.source, "second");
 
+    // Held ahead of the channel, so it is done in its turn rather than behind whatever
+    // arrives next.
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].pad().map(PadId::as_str), Some("two"));
     // And what was behind it is still queued, in order.
-    assert_eq!(queue.len(), 1);
-    assert_eq!(queue[0].pad().map(PadId::as_str), Some("one"));
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(
+        jobs.try_recv().ok().and_then(|job| job.pad().cloned()),
+        Some(PadId::new("one").expect("an id"))
+    );
 }
 
 /// A run writes nothing, so it may not stand in for the save it is queued behind. The
@@ -15322,26 +15329,128 @@ fn a_run_does_not_stand_in_for_the_save_in_front_of_it() {
     let mut scratchpad = Scratchpad::new("one").expect("an id");
     scratchpad.source = "typed".to_owned();
 
-    let mut queue = VecDeque::from([PadJob::Run {
-        run: 1,
-        pad: scratchpad.id().clone(),
-        executable: PathBuf::from("/nowhere/one"),
-        emit: Box::new(|_| {}),
-    }]);
-    let mut held = Vec::new();
+    let (queue, jobs) = async_channel::unbounded::<PadJob>();
+    queue
+        .try_send(PadJob::Run {
+            run: 1,
+            pad: scratchpad.id().clone(),
+            executable: PathBuf::from("/nowhere/one"),
+            emit: Box::new(|_| {}),
+        })
+        .expect("an unbounded queue");
+    let mut held = VecDeque::new();
 
-    let job = superseded(
-        PadJob::Save(scratchpad),
-        || queue.pop_front(),
-        |newer| held.push(newer),
-    );
+    let job = superseded(PadJob::Save(scratchpad), &mut Queued::new(&jobs, &mut held));
 
     let PadJob::Save(scratchpad) = &job else {
         panic!("the save is done first");
     };
     assert_eq!(scratchpad.source, "typed");
     // And the run is still to come, behind it.
-    assert!(matches!(held.as_slice(), [PadJob::Run { .. }]));
+    assert!(matches!(held.front(), Some(PadJob::Run { .. })));
+    assert_eq!(held.len(), 1);
+}
+
+/// What a `use_worker` thread's gated work is wired with: where it says it has started a
+/// job, and the gate it waits on before finishing one.
+#[derive(Clone)]
+struct Gates {
+    started: async_channel::Sender<u32>,
+    gate: async_channel::Receiver<()>,
+}
+
+/// Those two, into the harness.
+#[derive(Clone)]
+struct Gated(Gates);
+
+/// The way to ask the worker, back out of it.
+#[derive(Clone, Copy)]
+struct Gating(State<Option<Requests<u32>>>);
+
+/// A worker whose drain hands one job back every time and whose work stops on a gate, so a
+/// test can say when each job is done and watch what the thread takes next.
+fn held_job_harness() -> impl IntoElement {
+    let gates = use_consume::<Gated>().0;
+    let mut asks = use_consume::<Gating>().0;
+    let requests = use_worker(
+        "the held job test worker",
+        // One job off the channel and straight back: what is held is what has to be done
+        // next.
+        |job, queued: &mut Queued<'_, u32>| {
+            if let Some(next) = queued.next() {
+                queued.hold(next);
+            }
+            vec![job]
+        },
+        move |job| {
+            let _ = gates.started.send_blocking(job);
+            let _ = gates.gate.recv_blocking();
+            Some(job)
+        },
+        |_answer: u32, _| {},
+    );
+    use_hook(move || asks.set(Some(requests)));
+
+    rect()
+}
+
+/// **A job handed back is done in its turn, not behind whatever has arrived since.** The
+/// queue a drain hands one back to is held ahead of the channel, which is the whole of
+/// what `Queued::hold` is for: the scratchpad's rule declines to step over a save of
+/// another pad, and a hand-back that went to the end of the channel would put that save
+/// behind every keystroke made in the meantime instead.
+#[test]
+fn a_job_handed_back_is_done_before_what_arrived_after_it() {
+    let (started, starts) = async_channel::unbounded::<u32>();
+    let (release, gate) = async_channel::unbounded::<()>();
+    let (mut test, asks) = TestingRunner::new(
+        held_job_harness,
+        (100., 100.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context(move || Gated(Gates { started, gate }));
+            runner
+                .provide_root_context(|| Gating(State::create(None)))
+                .0
+        },
+        1.,
+    );
+    test.sync_and_update();
+    let requests = asks.peek().clone().expect("the harness handed one back");
+
+    // The next job the thread says it has started. Polled rather than blocked on, so a
+    // worker that takes the wrong one fails the test instead of hanging the suite.
+    let next = |what: &str| {
+        for _ in 0..2000 {
+            if let Ok(job) = starts.try_recv() {
+                return job;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("the worker started nothing while waiting for {what}");
+    };
+    let go = || release.try_send(()).expect("an unbounded gate");
+
+    // One job, held at the gate: whatever is sent now is queued behind it.
+    requests.send(1);
+    assert_eq!(next("the first job"), 1);
+    requests.send(2);
+    requests.send(3);
+    go();
+
+    // The drain took 3 off the channel and handed it back, so 3 is waiting on nothing but
+    // this job finishing -- and 4 arrives while it is still going.
+    assert_eq!(next("the second job"), 2);
+    requests.send(4);
+    go();
+
+    assert_eq!(
+        next("the job that was handed back"),
+        3,
+        "the held job was put behind what arrived after it"
+    );
+    go();
+    assert_eq!(next("the last job"), 4);
+    go();
 }
 
 /// The scratchpad on disk is what the app opens on, and **nothing is written until it has
@@ -15811,6 +15920,62 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
         std::thread::sleep(Duration::from_millis(2));
     }
     assert!(drawn, "the pane drew no row of the program it built");
+}
+
+/// **The Scratchpad's listing is filed nowhere.** It is no tab, so it has no `Entry` to
+/// keep a place or a run under -- and every one of those maps is keyed by an entry and
+/// emptied by the three closers, which close *tabs*. An id made up for it would be filed
+/// under and never forgotten, holding the program's bytes for as long as the app ran. The
+/// listing has no id at all, so there is nothing for a writer here to file it under,
+/// filtered or not.
+#[test]
+fn the_scratchpads_listing_leaves_nothing_in_the_maps_a_closer_walks() {
+    let built = fixture_artifact();
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_listing_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(scratchpad) => PadAnswer::Built {
+                pad: scratchpad.id().clone(),
+                build: pad_built(built.clone(), Vec::new()),
+                program: read_program(&built, scratchpad.digest()),
+                directory: None,
+            },
+            _ => unreachable!("this test only lists, opens, saves and builds"),
+        });
+    let pad = roots.pad;
+
+    pump(&mut test, || pad.peek().state().opened());
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_build(pad, &jobs);
+    pump(&mut test, || pad.peek().state().program.is_some());
+
+    // Every pass the listing takes: the skeleton, the stretch that decodes under it, and
+    // the run each of them wakes. The first of those passes is where a place would be
+    // written down, the view having moved from nowhere to the top of the rows.
+    for _ in 0..200 {
+        test.sync_and_update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let places = roots.states.places;
+    assert_eq!(
+        places.code_at.peek().keys().count(),
+        0,
+        "the pad's listing was filed a place of its own"
+    );
+    assert_eq!(
+        places.marks_at.peek().keys().count(),
+        0,
+        "the pad's listing was filed a run of its own"
+    );
 }
 
 /// The listing can be put away, as a document's following pane can, and the reader's own
@@ -27212,7 +27377,6 @@ fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
             held.language,
             &held.jobs,
             held.follows,
-            held.pad_follows,
             &key,
             modifiers,
         )
@@ -31718,7 +31882,6 @@ fn press_finder_chord(
         root_key_states().language,
         &root_key_states().jobs,
         root_key_states().follows,
-        root_key_states().pad_follows,
         &key,
         modifiers,
     );
@@ -32838,10 +33001,9 @@ struct RootStates {
     unopened: State<Option<project::Failure>>,
     language: State<Language>,
     jobs: LspJobs,
-    /// Whether each tab's following pane is up, and whether the Scratchpad's is: what
-    /// `Ctrl+\` writes, and what a test reads it back out of.
-    follows: State<HashMap<DocId, bool>>,
-    pad_follows: State<bool>,
+    /// Whether each place's following pane is up -- a tab's and the Scratchpad's alike:
+    /// what `Ctrl+\` writes, and what a test reads it back out of.
+    follows: State<HashMap<Placing, bool>>,
 }
 
 /// Mount those states the way `app()` mounts them, over a server worker that answers
@@ -32860,7 +33022,6 @@ fn use_root_key_states() {
     let hover = use_consume::<Hovering>().0;
     let jobs = use_language_with(language, follow, located, linked, hover, proj, |_| None);
     let follows = use_consume::<Follows>().0;
-    let pad_follows = use_consume::<PadFollows>().0;
     use_hook(move || {
         ROOT_STATES.with_borrow_mut(|held| {
             *held = Some(RootStates {
@@ -32870,7 +33031,6 @@ fn use_root_key_states() {
                 language,
                 jobs,
                 follows,
-                pad_follows,
             })
         })
     });
@@ -32916,7 +33076,6 @@ impl Component for ChordKeys {
                 language,
                 jobs,
                 follows,
-                pad_follows,
             } = root_key_states();
             root_key_down(
                 keys,
@@ -32928,7 +33087,6 @@ impl Component for ChordKeys {
                 language,
                 &jobs,
                 follows,
-                pad_follows,
                 &e.key,
                 e.modifiers,
             );
@@ -33412,25 +33570,31 @@ fn the_other_pane_key_puts_the_following_pane_away_and_brings_it_back() {
     );
 }
 
-/// **The Scratchpad's is the same key over the one flag its own listing follows.** The
+/// **The Scratchpad's is the same key over the same map, under a key of its own.** The
 /// pad is no tab and has no id to file a flag under, so what the key writes there is the
-/// flag at the root that `PadFollows` is.
+/// entry `Placing::Pad` names -- in the one map a tab's flag is in, and never under a
+/// tab's id.
 #[test]
 fn the_other_pane_key_on_the_scratchpad_writes_the_pads_own_flag() {
     let (mut test, states) = mount_chords();
-    let pad_follows = root_key_states().pad_follows;
+    let follows = root_key_states().follows;
+    let up = move || following(Placing::Pad, None, &follows.peek());
     let mut strip = states.open.strip;
     strip.write().show(Tab::Page(Page::Scratchpad));
     settle(&mut test);
-    assert!(*pad_follows.peek(), "the pad's listing starts up");
+    assert!(up(), "the pad's listing starts up");
 
     chord(&mut test, Chord::OtherPane);
-    assert!(!*pad_follows.peek(), "Ctrl+\\ left the pad's listing up");
-    chord(&mut test, Chord::OtherPane);
+    assert!(!up(), "Ctrl+\\ left the pad's listing up");
+    let said = follows.peek();
     assert!(
-        *pad_follows.peek(),
-        "the second press did not bring it back"
+        said.len() == 1 && said.contains_key(&Placing::Pad),
+        "the key wrote a flag that is not the pad's own"
     );
+    drop(said);
+
+    chord(&mut test, Chord::OtherPane);
+    assert!(up(), "the second press did not bring it back");
 }
 
 /// **A page with one side has no other pane to put away.** Settings is drawn whole and
@@ -33448,11 +33612,7 @@ fn the_other_pane_key_on_a_page_with_one_side_does_nothing() {
     chord(&mut test, Chord::OtherPane);
     assert!(
         held.follows.peek().is_empty(),
-        "the page's key put a document tab's pane away"
-    );
-    assert!(
-        *held.pad_follows.peek(),
-        "the page's key put the Scratchpad's listing away"
+        "the page's key put a pane away -- a document tab's, or the Scratchpad's"
     );
 }
 
@@ -33534,7 +33694,6 @@ fn reaching_harness() -> impl IntoElement {
                 root.language,
                 &root.jobs,
                 root.follows,
-                root.pad_follows,
                 &e.key,
                 e.modifiers,
             );

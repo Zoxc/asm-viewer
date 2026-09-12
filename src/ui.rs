@@ -328,8 +328,8 @@ fn toolbar() -> impl IntoElement {
 /// doors want, and a parameter per key would grow this list by one on every binding
 /// added. What is passed by hand is what belongs to no bundle: where the keyboard can be
 /// put, the finder, the two windows a project that would not open puts up, the language
-/// server with the worker it is spoken to through, and the two flags saying whether a
-/// following pane is up.
+/// server with the worker it is spoken to through, and the flags saying whether each
+/// place's following pane is up.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn root_key_down(
     keys: ModifierKeys,
@@ -340,8 +340,7 @@ pub(crate) fn root_key_down(
     unopened: State<Option<project::Failure>>,
     language: State<Language>,
     jobs: &LspJobs,
-    follows: State<HashMap<DocId, bool>>,
-    pad_follows: State<bool>,
+    follows: State<HashMap<Placing, bool>>,
     key: &Key,
     modifiers: Modifiers,
 ) {
@@ -411,9 +410,9 @@ pub(crate) fn root_key_down(
         }
 
         // The pane that follows the one on screen, put away or brought back: the toggle on
-        // the leading bar, pressed by key. A document tab writes its own flag and the
-        // Scratchpad page the one at the root; every other page has no second pane and
-        // does nothing.
+        // the leading bar, pressed by key. A document tab and the Scratchpad page each
+        // write the flag under their own `Placing`; every other page has no second pane
+        // and does nothing.
         Chord::OtherPane => {
             let showing = strip.peek().active();
             let of = match showing {
@@ -422,7 +421,7 @@ pub(crate) fn root_key_down(
                 Some(Tab::Page(_)) | None => None,
             };
             if let Some(of) = of {
-                toggle_pane(of, open, follows, pad_follows);
+                toggle_pane(of, open, follows);
             }
         }
 
@@ -441,7 +440,7 @@ pub(crate) struct Roots {
     pub(crate) prefs: State<EditedSettings>,
     pub(crate) active: Memo<Option<Entry>>,
     pub(crate) keyboard: State<Keys>,
-    pub(crate) follows: State<HashMap<DocId, bool>>,
+    pub(crate) follows: State<HashMap<Placing, bool>>,
     pub(crate) states: ProjectStates,
     pub(crate) doors: Doors,
     pub(crate) code_rows: State<Option<Arc<Built>>>,
@@ -461,7 +460,6 @@ pub(crate) struct Roots {
     pub(crate) sourced: State<Sourced>,
     pub(crate) showing: State<Option<Arc<str>>>,
     pub(crate) finds: State<Finds>,
-    pub(crate) pad_follows: State<bool>,
     pub(crate) pad: State<Pads>,
     pub(crate) pad_text: State<PadBuffers>,
     pub(crate) opened: State<Opened>,
@@ -632,7 +630,6 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         direction: Direction::Horizontal,
         ..Default::default()
     })));
-    let pad_follows = provide(PadFollows(State::create(true))).0;
     let pad = provide(Pad(State::create(Pads::default()))).0;
     let pad_text = provide(PadText(State::create(PadBuffers::default()))).0;
 
@@ -675,7 +672,6 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         sourced,
         showing,
         finds,
-        pad_follows,
         pad,
         pad_text,
         opened,
@@ -729,7 +725,6 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         sourced,
         showing,
         finds,
-        pad_follows,
         pad,
         pad_text,
         opened,
@@ -888,7 +883,6 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
                 language,
                 &jobs,
                 follows,
-                pad_follows,
                 &e.key,
                 e.modifiers,
             )

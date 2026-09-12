@@ -456,7 +456,7 @@ pub(crate) fn use_source_reading_with(
         // Everything the reader moved past while the last file was read, dropped without
         // being started rather than after the fact. One kind of question, so the newest
         // is the last of them.
-        |ask, queued, _| vec![std::iter::from_fn(queued).last().unwrap_or(ask)],
+        |ask, queued| vec![queued.last().unwrap_or(ask)],
         move |ask| {
             work(&ask);
             Some(())

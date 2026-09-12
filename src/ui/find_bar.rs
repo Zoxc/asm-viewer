@@ -449,9 +449,9 @@ pub(crate) fn use_find_with(
 ) {
     let requests = use_worker(
         "the find worker",
-        |first: FindAsk, queued, _| {
+        |first: FindAsk, queued| {
             let mut newest: Vec<FindAsk> = vec![first];
-            while let Some(ask) = queued() {
+            for ask in queued.by_ref() {
                 match newest.iter_mut().find(|kept| kept.at == ask.at) {
                     Some(kept) => *kept = ask,
                     None => newest.push(ask),

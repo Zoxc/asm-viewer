@@ -289,7 +289,7 @@ pub(crate) fn use_building_with(
         "the build worker",
         // Nothing supersedes: a build takes seconds and is asked for by a press, and the
         // two manifest jobs are cheap and each of them is the answer to the one after it.
-        |job, _, _| vec![job],
+        |job, _| vec![job],
         move |job| Some(work(job)),
         move |answer, _| match answer {
             BuildAnswer::Read(said) => {

@@ -354,19 +354,22 @@ pub(crate) struct SidebarSplits(pub(crate) State<ResizableContext>);
 #[derive(Clone, Copy)]
 pub(crate) struct Expanded(pub(crate) State<HashSet<DocId>>);
 
-/// What the reader has said about each tab's following pane -- the one it is not driven
-/// from: `true` where they brought it back, `false` where they put it away. A tab with
-/// nothing here has said nothing, and opens as its document says ([`following`]).
+/// What the reader has said about each code pane's following pane -- the one its place is
+/// not driven from: `true` where they brought it back, `false` where they put it away. A
+/// place with nothing here has said nothing, and opens as its document says
+/// ([`following`]).
 ///
-/// A `bool` per tab and not the set [`Expanded`] is, because there is no one default to
+/// A `bool` per place and not the set [`Expanded`] is, because there is no one default to
 /// be absent from: a source-driven tab on a `Cargo.toml` opens with its assembly side
 /// away and every other tab opens with both panes.
 ///
-/// Keyed by [`DocId`] alone and never saved, for [`Expanded`]'s reasons: an id is
-/// `Copy + Hash`, holds no `Arc<Object>` and is never handed out twice, so a closed tab
-/// leaves a byte behind that no other tab can be given, and this is a view of a tab.
+/// Keyed by [`Placing`] and never saved: the Scratchpad's pane has a following pane and
+/// no [`DocId`], and one map with two kinds of key is one write for the gesture wherever
+/// it is made ([`toggle_pane`]). A tab's key holds no `Arc<Object>` and is never handed
+/// out twice, so a closed tab leaves a byte behind that no other tab can be given, and
+/// this is a view of a place.
 #[derive(Clone, Copy)]
-pub(crate) struct Follows(pub(crate) State<HashMap<DocId, bool>>);
+pub(crate) struct Follows(pub(crate) State<HashMap<Placing, bool>>);
 
 /// Where the reader chose to be able to come back to: the project's bookmarks, in their
 /// saved shape and nothing more. Whether one is live is asked of [`Objects`] where it is

@@ -22,11 +22,13 @@ wider. The question is `source::compiled`, off the same extension list the gramm
 extension it does not know is answered no: the assembly side is offered for the languages the app can
 say become machine code, and a file it cannot place opens as source until the reader asks for one.
 That is only what a tab opens with: the toggle on the leading bar puts the following
-pane away and brings it back, and what it says is kept per tab in `Follows`, which `following` reads
+pane away and brings it back, and what it says is kept in `Follows`, which `following` reads
 before it asks the file. A tab left with one pane has no handle, so the app's one split width is
 untouched and comes back as the reader left it when a tab that has two is next up. `Follows` is a
-`bool` per tab and not a set, because there is no one default to be absent from, and it is not saved:
-a view of a tab, like the symbol bar's section.
+`bool` per place and not a set, because there is no one default to be absent from, and it is not
+saved: a view of a place, like the symbol bar's section. It is keyed by `Placing` and not by
+`DocId`, so the Scratchpad's pane -- which has a following pane and no tab -- is an entry in the
+same map rather than a flag of its own with a `match` in front of every reader of both.
 
 **The Source pane draws the active tab's source side**, and `source_side` is the one place either
 pane decides what that is, so the pane and the effect that drops its selected rows cannot disagree
@@ -200,7 +202,7 @@ one -- what it writes is filed under the tab anyway, and a `Document` prop would
 in a control every open tab draws. The id reaches it as a `Placing`, the same key the find bars and
 the section listings are told where they are by (`src/ui/state.rs`): the Scratchpad's pane carries
 this control too and has no `DocId`, and one control for both is one icon, one tooltip and one rule
-about where it sits, with only the flag it writes differing. The toggle rides on a bar, so a pane
+about where it sits, over the one flag that key names. The toggle rides on a bar, so a pane
 drawn without one has none: an assembly side the worker has not answered for yet draws no bar, and
 the control arrives with the listing.
 
@@ -208,8 +210,9 @@ the control arrives with the listing.
 `Ctrl+\` is the same gesture from the keyboard (`root_key_down`, which asks the strip which
 `Placing` the tab on screen is -- a document's id, the Scratchpad's pad, or nothing for a page with
 no second pane). It flips what `following` says is up *now* rather than what a render was drawn
-with, so a press answers for the tab as it stands. A second copy of that rule in the control is
-what would drift: the button is on a bar the key is answered without.
+with, so a press answers for the place as it stands, and it is one insert under that place's key:
+a third kind of pane would be a third key and no third state. A second copy of that rule in the
+control is what would drift: the button is on a bar the key is answered without.
 
 **Open or shut is the tab's and not the pane's**, which is `Expanded` at the root: both panes are
 mounted afresh for every document, so a `use_state` here would shut the section every time the
@@ -222,8 +225,8 @@ so an entry a closed tab left behind is four bytes of dead weight and can never 
 tab's; a reopened tab correctly comes up shut. It follows that the section stays open or shut along
 the whole of a tab's trail, a fact about the tab and not about any one place on it. It is not
 persisted: a view of a tab, like a filter. The pane takes its tab's id as a prop from
-`DocumentBody`; a headless harness mounting one with no tab behind it hands it an unfiled id
-(`DocId::unfiled`), under which nothing is ever kept.
+`DocumentBody`; a headless harness mounting one with no tab behind it hands it `DocId::unfiled`,
+which is a test's id and nothing the app has.
 
 **A click in a source-driven tab's own file is the only writer of `Driven` inside the panes.** A
 click in a companion file selects the line and nothing more, and a click in the *assembly* pane
@@ -977,9 +980,12 @@ place
 (`agents/UI.md`, `Places::code_at`), plants a door's caret once there are rows to plant it in (the planting
 paragraph above), and rebuilds the rows whenever the reading's generation changes, in the one run
 that also moves the controller to where the place now is. **Which place, and whether it is kept at
-all, is the listing's `Placing`**: a tab's is an entry on its trail, and the Scratchpad's is an
-entry nothing is ever filed under -- the page has no `DocId`, and an entry under a made-up one
-would hold the `Arc<Object>` its document points into with none of the three closers to forget it.
+all, is the listing's `Placing`**: a tab's is an entry on its trail, and the Scratchpad's is no
+entry at all. The page has no `DocId`, so the hook is handed `None` and has nothing to file
+anything under. Under a made-up id it would hold the `Arc<Object>` its document points into with
+none of the three closers to forget it, and every writer of every entry-keyed map would have to
+know to filter it out again -- which one of them did, by asking `Docs::contains`, so that one
+question was answering two.
 Nothing is lost by that: what carries the reader's place across a recount is the place derived from
 the offset, which is the hook's own and not the map's, and the pad's listing opens where a planting
 puts it (`agents/Scratchpad.md`). What it produces is the rows **and the

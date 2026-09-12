@@ -857,7 +857,7 @@ pub(crate) fn use_analysis_with(
         "the analysis worker",
         // Everything the reader clicked past while the last job ran, dropped without
         // being started rather than after the fact.
-        |question, queued, _| newest(question, std::iter::from_fn(queued)),
+        |question, queued| newest(question, queued),
         move |question| Some(work(question)),
         // Each answer is judged by the state it lands in and written only where that
         // state says it changed something: the rules are the four types' and not this

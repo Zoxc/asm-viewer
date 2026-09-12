@@ -109,3 +109,106 @@ fn output_keeps_the_newest_and_counts_what_it_dropped() {
     );
     assert_eq!(output.line(MAX_OUTPUT_LINES), None);
 }
+
+/// Every event a run said, in order, once both its pipes are at their end, with `handle`
+/// what the caller does to the running program. The `Ended` is the last thing any run
+/// says, so it is what the wait is on.
+#[cfg(unix)]
+fn events_of(command: &mut Command, handle: impl FnOnce(&Handle)) -> (Handle, Vec<RunEvent>) {
+    let said = Arc::new(Mutex::new(Vec::new()));
+    let running = run("a test run's output reader", command, {
+        let said = said.clone();
+        move |event| {
+            said.lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .push(event)
+        }
+    })
+    .expect("/bin/sh started");
+    handle(&running);
+
+    // Polled rather than joined: the two reader threads are the run's own and nothing
+    // hands them back. Half a minute is a build machine under load, not a program that is
+    // slow to print.
+    for _ in 0..30_000 {
+        let held = said.lock().unwrap_or_else(|held| held.into_inner());
+        if held.iter().any(|event| matches!(event, RunEvent::Ended(_))) {
+            return (running.clone(), held.clone());
+        }
+        drop(held);
+        thread::sleep(Duration::from_millis(1));
+    }
+    running.stop();
+    panic!("the run never ended");
+}
+
+/// **`Ended` is said exactly once**, after both pipes have reached their end. Two reader
+/// threads count one process down, and either of them saying it on its own -- or a count
+/// no pipe ever reaches -- is a pad that reads "Running" for ever, or one whose verdict is
+/// written twice.
+#[cfg(unix)]
+#[test]
+fn a_run_says_it_ended_once_and_last() {
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("echo out; echo err 1>&2; exit 3")
+        .stdin(Stdio::null());
+    let (_handle, said) = events_of(&mut command, |_| {});
+
+    let endings: Vec<&Ended> = said
+        .iter()
+        .filter_map(|event| match event {
+            RunEvent::Ended(ended) => Some(ended),
+            RunEvent::Wrote(_) => None,
+        })
+        .collect();
+    assert_eq!(endings.len(), 1, "what the run said: {said:?}");
+    assert_eq!(endings[0], &Ended::Exited(Some(3)));
+    assert!(
+        matches!(said.last(), Some(RunEvent::Ended(_))),
+        "a line arrived after the end: {said:?}"
+    );
+
+    // Both pipes were read, and each line arrived before the end.
+    let lines: Vec<(Stream, &str)> = said
+        .iter()
+        .filter_map(|event| match event {
+            RunEvent::Wrote(line) => Some((line.stream, &*line.text)),
+            RunEvent::Ended(_) => None,
+        })
+        .collect();
+    assert!(lines.contains(&(Stream::Out, "out")), "{lines:?}");
+    assert!(lines.contains(&(Stream::Err, "err")), "{lines:?}");
+}
+
+/// A program with nothing to say on either pipe still ends, once. It is the same count,
+/// reached without a line going through it.
+#[cfg(unix)]
+#[test]
+fn a_run_that_writes_nothing_still_says_it_ended() {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg("exit 0").stdin(Stdio::null());
+    let (_handle, said) = events_of(&mut command, |_| {});
+
+    assert_eq!(said, vec![RunEvent::Ended(Ended::Exited(Some(0)))]);
+}
+
+/// **A run this app stopped ends once too, and comes off the list a shutdown walks.** A
+/// stop is no special path through the count: the pipes close with the process, both
+/// readers finish, and the last of them reaps what the stop already waited for. A run left
+/// on the list is a `stop_all` signalling a pid the system is free to have handed on.
+#[cfg(unix)]
+#[test]
+fn a_stopped_run_says_it_ended_once_and_leaves_the_list() {
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg("sleep 30").stdin(Stdio::null());
+    let (handle, said) = events_of(&mut command, |running| running.stop());
+
+    assert_eq!(said, vec![RunEvent::Ended(Ended::Stopped)]);
+    let list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
+    assert!(
+        !list.iter().any(|other| *other == handle),
+        "the reaped run is still on the list a shutdown walks"
+    );
+}

@@ -5,7 +5,7 @@
 //! on the UI thread taking what comes back.
 //!
 //! [`use_worker`] is the **request/answer** shape: one thread for the app's lifetime, fed
-//! jobs and answering them one at a time. What is queued behind the job in hand is the
+//! jobs and answering them one at a time. What is [`Queued`] behind the job in hand is the
 //! `drain` policy's, which is where superseding lives and is per worker -- the analysis
 //! keeps the newest question of each kind, the source reader the newest of the one kind it
 //! has, the build drops nothing, the scratchpad supersedes a save only by a job writing the
@@ -58,22 +58,59 @@ pub(crate) fn thread(name: &'static str, body: impl FnOnce() + Send + 'static) {
     }
 }
 
+/// What is queued behind the job in hand, as a `drain` policy sees it: the jobs still on
+/// the channel, taken in order, and the way to hand one back.
+///
+/// An iterator, because that is what a policy does with it: the newest question of each
+/// kind, the last of them, the lot. It never blocks -- [`None`] is "nothing waiting
+/// *now*", and a job sent a moment later is the next one the worker takes off the channel
+/// rather than one this missed.
+pub(crate) struct Queued<'a, J> {
+    jobs: &'a async_channel::Receiver<J>,
+    held: &'a mut VecDeque<J>,
+}
+
+impl<'a, J> Queued<'a, J> {
+    pub(crate) fn new(jobs: &'a async_channel::Receiver<J>, held: &'a mut VecDeque<J>) -> Self {
+        Queued { jobs, held }
+    }
+
+    /// Hand `later` back to be done in its turn: taken off the channel and not done, so it
+    /// is kept **ahead** of the channel and a job that has waited its turn is not put
+    /// behind whatever has arrived since.
+    ///
+    /// The scratchpad's is the one policy that needs it: a save of one pad may not be
+    /// stepped over by a job for another, so the job that stopped the drain is held rather
+    /// than dropped (`src/ui/pad.rs`).
+    pub(crate) fn hold(&mut self, later: J) {
+        self.held.push_back(later);
+    }
+}
+
+impl<J> Iterator for Queued<'_, J> {
+    type Item = J;
+
+    fn next(&mut self) -> Option<J> {
+        self.jobs.try_recv().ok()
+    }
+}
+
 /// The request/answer worker: a named thread fed jobs over one channel and answering over
 /// another, with the task that takes those answers on the UI thread. Started once, in a
 /// [`use_hook`].
 ///
-/// `drain` is handed the job taken off the queue, a way to take what is queued behind it,
-/// and a way to hand one back to be done in its turn; what it returns is worked, in order,
-/// before anything else is taken. `work` answering [`None`] is a job with nothing to say.
-/// `take` is handed each answer on the UI thread, and the way to ask for more with it: an
-/// answer can be a question, as the scratchpad's listing is.
+/// `drain` is handed the job taken off the queue and everything queued behind it
+/// ([`Queued`]); what it returns is worked, in order, before anything else is taken.
+/// `work` answering [`None`] is a job with nothing to say. `take` is handed each answer on
+/// the UI thread, and the way to ask for more with it: an answer can be a question, as the
+/// scratchpad's listing is.
 ///
 /// The work is an argument rather than a call, on every worker, because it is the seam the
 /// headless tests substitute a worker of their own through: superseding is a race by
 /// construction and cannot be asserted against work that answers as fast as it is asked.
 pub(crate) fn use_worker<J: Send + 'static, A: Send + 'static>(
     name: &'static str,
-    drain: impl FnMut(J, &mut dyn FnMut() -> Option<J>, &mut dyn FnMut(J)) -> Vec<J> + Send + 'static,
+    drain: impl FnMut(J, &mut Queued<'_, J>) -> Vec<J> + Send + 'static,
     work: impl Fn(J) -> Option<A> + Send + 'static,
     take: impl FnMut(A, &Requests<J>) + 'static,
 ) -> Requests<J> {
@@ -88,9 +125,7 @@ pub(crate) fn use_worker<J: Send + 'static, A: Send + 'static>(
 /// comes back from that handshake, and what ends it is the app dropping the handle.
 pub(crate) fn use_worker_answering<J: Send + 'static, A: Send + 'static>(
     name: &'static str,
-    mut drain: impl FnMut(J, &mut dyn FnMut() -> Option<J>, &mut dyn FnMut(J)) -> Vec<J>
-        + Send
-        + 'static,
+    mut drain: impl FnMut(J, &mut Queued<'_, J>) -> Vec<J> + Send + 'static,
     work: impl Fn(J) -> Option<A> + Send + 'static,
     mut take: impl FnMut(A, &Requests<J>) + 'static,
 ) -> (Requests<J>, async_channel::Sender<A>) {
@@ -105,17 +140,13 @@ pub(crate) fn use_worker_answering<J: Send + 'static, A: Send + 'static>(
         thread(name, {
             let answered = answered.clone();
             move || {
-                // Taken off the queue and not done yet, because `drain` handed it back:
-                // ahead of the channel, so a job that has waited its turn is not put
-                // behind whatever has arrived since.
+                // What `drain` handed back, kept ahead of the channel (`Queued::hold`).
                 let mut held = VecDeque::<J>::new();
                 loop {
                     let Some(job) = held.pop_front().or_else(|| jobs.recv_blocking().ok()) else {
                         return;
                     };
-                    let doing = drain(job, &mut || jobs.try_recv().ok(), &mut |later| {
-                        held.push_back(later)
-                    });
+                    let doing = drain(job, &mut Queued::new(&jobs, &mut held));
                     for job in doing {
                         let Some(answer) = work(job) else {
                             continue;

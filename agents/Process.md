@@ -92,10 +92,19 @@ back an `io::Result` so a thread that would not start is an answer. What a reade
 reads is its own: lines for a run, the first few kilobytes for a program's last words, whole
 messages for a conversation.
 
+**A run's two readers are made here**, by `run`: the spawn, both pipes on threads of their own,
+the lock the two of them share so the streams interleave in the order the program wrote them, and
+the count that says when the run is over. Only the `Command` is the caller's -- what the program
+is, where it runs, what it is given on stdin -- and `run` sets the two output pipes itself so a
+caller cannot forget one. It lived in `src/scratchpad.rs`, which meant the invariant this file
+states -- `Ended` said exactly once -- was kept in a file about cargo packages. The language server
+does its own end-of-pipe accounting, and a third program the app started would have been a second
+copy of the run's.
+
 **A reader that will not start is a reader that has finished.** The run's count of pipes still open
 has to reach zero however a thread ends, or the process is never reaped, the one `Ended` is never
-said, and the pad reads "Running" for ever over a zombie. The pipe went with the closure that could
-not be spawned, so nothing would read that stream either: the run is stopped rather than left
+said, and the caller reads "running" for ever over a zombie. The pipe went with the closure that
+could not be spawned, so nothing would read that stream either: the run is stopped rather than left
 half-read, which also bounds the reap when the failing side is the last one. The server's reader is
 the same shape: nobody will read it, so the conversation is over before it began and the closed
 channel is what says so, rather than a wait with no end to it.
@@ -103,12 +112,13 @@ channel is what says so, rather than a wait with no end to it.
 ## What a run's output is cut into
 
 `Stream`, `OutputLine`, `RunOutput`, `RunEvent` and `Ended` are the run-shaped reading of a pipe,
-and they live here beside the reader rather than in the scratchpad, being about a program's output
-and not about a scratchpad. **Two bounds, and each is a different failure.** `MAX_LINE` (4 KiB) cuts
-a line with no newline in it, so a program writing megabytes in one line is still *delivered* rather
-than accumulated. That cut falls **between characters**: a byte count lands wherever it lands, and a
-multi-byte character straddling it would be a replacement character on each of the two rows with the
-character itself on neither, so what is left of one is carried to the front of the next read. Only
+and they live here beside `run` and the reader it starts, being about a program's output and not
+about whatever asked for the program. **Two bounds, and each is a different failure.** `MAX_LINE`
+(4 KiB) cuts a line with no newline in it, so a program writing megabytes in one line is still
+*delivered* rather than accumulated. That cut falls **between characters**: a byte count lands
+wherever it lands, and a multi-byte character straddling it would be a replacement character on
+each of the two rows with the character itself on neither, so what is left of one is carried to the
+front of the next read. Only
 an incomplete sequence at the end is carried -- bytes that are genuinely invalid go through lossily,
 as what a program writes is not this app's to reject. `MAX_OUTPUT_LINES` (5000) is what is kept,
 oldest first out, with `RunOutput::dropped` so the view can say the story is missing its beginning;
@@ -118,7 +128,9 @@ the row count depend on how long the lines happened to be.
 ## What is not tested
 
 The two reaps are, against `/bin/sh`: a program that ends by itself is reaped with the status it
-left and comes off the list, and one this app stopped reads as stopped. Nothing short of a real
-program says whether a stop killed anything *else*, and building one means running cargo, which no
-test here does, so the group and what a stop reaches are judged by hand. The Windows half is judged
+left, and one this app stopped reads as stopped and comes off the list. Both go through `run`, so
+what those tests pin is the count as well -- `Ended` said exactly once and last, with nothing to
+say on either pipe as much as with both of them written to. Nothing short of a real program says
+whether a stop killed anything *else*, and building one means running cargo, which no test here
+does, so the group and what a stop reaches are judged by hand. The Windows half is judged
 by inspection: nothing in this repo runs there.
