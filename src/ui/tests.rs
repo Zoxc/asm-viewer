@@ -31254,3 +31254,75 @@ fn escape_walks_the_keyboard_out_of_a_panel_and_back_into_the_tab() {
     settle(&mut test);
     assert_eq!(keyboard_said(&test), "keyboard: the pane");
 }
+
+/// How many times the dock-reading row below has been drawn, in a context of its own so
+/// the component can count its own renders.
+#[derive(Clone)]
+struct DockDrawn(Arc<std::sync::atomic::AtomicUsize>);
+
+/// A row as a panel header is: it reads the dock and draws nothing else, so the one thing
+/// that can re-render it is a write to the dock.
+#[derive(PartialEq)]
+struct DockRow;
+
+impl Component for DockRow {
+    fn render(&self) -> impl IntoElement {
+        let dock = use_consume::<SidebarDock>().0;
+        let _active = dock.read().is_active(Panel::Search);
+        use_consume::<DockDrawn>()
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        rect().expanded()
+    }
+}
+
+fn dock_harness() -> impl IntoElement {
+    rect().expanded().child(DockRow)
+}
+
+/// **A raise of the panel already on top writes nothing.** `State::write` notifies whether
+/// or not the value changed, so a dock written for a panel that was showing already
+/// re-renders the docking area and every panel header for nothing -- and every search
+/// asked and every locations question comes through `raise_panel`, which after the first
+/// finds the panel on top. Fails on the unguarded `dock.write().show_panel(panel)`.
+#[test]
+fn raising_the_panel_already_on_top_redraws_nothing() {
+    let drawn = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = || drawn.load(std::sync::atomic::Ordering::Relaxed);
+    let (mut test, dock) = TestingRunner::new(
+        dock_harness,
+        (200., 200.).into(),
+        {
+            let drawn = drawn.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || DockDrawn(drawn));
+                runner.provide_root_context(|| {
+                    // Search behind Objects, so the first raise has something to change.
+                    let mut dock = test_roots().states.arranged.dock;
+                    dock.set(DockArea::column(vec![vec![Panel::Objects, Panel::Search]]));
+                    dock
+                })
+            }
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    raise_panel(dock, Panel::Search);
+    settle(&mut test);
+    assert!(dock.peek().is_active(Panel::Search), "nothing was raised");
+    let raised = counted();
+
+    // The same panel again, which is what a second search asked does.
+    raise_panel(dock, Panel::Search);
+    settle(&mut test);
+    assert_eq!(counted(), raised, "a raise that changed nothing redrew");
+
+    // And the row is still wired to the dock: a raise that does change it redraws.
+    raise_panel(dock, Panel::Objects);
+    settle(&mut test);
+    assert!(
+        counted() > raised,
+        "the row was not drawn again for a raise"
+    );
+}

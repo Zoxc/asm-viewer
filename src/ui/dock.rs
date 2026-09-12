@@ -147,14 +147,23 @@ impl Panel {
 
 /// Bring `panel` to the front of whichever group holds it: what a panel that answers a
 /// question asked somewhere else does before it answers.
+///
+/// Asked before it is written, as `raise_tab` asks [`Strip::would_raise`]: `State::write`
+/// notifies whether or not the value changed, and a dock write re-renders the docking
+/// area and every panel header. Every search and every locations question comes through
+/// here, and after the first the panel it names is already on top.
 pub(crate) fn raise_panel(mut dock: State<DockArea>, panel: Panel) {
-    dock.write().show_panel(panel);
+    // Bound in a statement of its own: the write below is to the state this read.
+    let raising = !dock.peek().is_active(panel);
+    if raising {
+        dock.write().show_panel(panel);
+    }
 }
 
 /// Bring `panel` to the front **and put the keyboard in it**: what each of the four
 /// panel chords does, from wherever the keyboard is. Both halves, and not a choice
 /// between them: a panel behind another in its group is not there to be typed in until it
-/// is raised, and one already on top is raised by a write that changes nothing.
+/// is raised, and a chord for one already on top raises nothing and still focuses.
 ///
 /// The focus is asked for and not taken here, because only the panel on top in a group is
 /// mounted: the box to put the keyboard in does not exist until the raise above has been

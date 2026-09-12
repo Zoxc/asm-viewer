@@ -342,9 +342,15 @@ rarely.
 
 **A chord raises and focuses, both** (`reach_panel`, `ui/dock.rs`). A panel behind another in its
 group is not somewhere to type until it is raised, and raising without focusing would leave the
-hand on the mouse; a chord for a panel already on top is a raise that changes nothing. It cannot
+hand on the mouse; a chord for a panel already on top raises nothing and still focuses. It cannot
 take the focus itself, an inactive dock tab being unmounted -- the box has no node until the raise
 has been drawn -- so it leaves an ask behind it.
+
+**A raise that would change nothing is not written.** `raise_panel` asks `DockArea::is_active`
+first, as `raise_tab` asks `Strip::would_raise`: a write notifies whether or not the value changed,
+and a dock write re-renders the docking area and every panel header. That is not the chords, which
+a reader presses by hand, but the questions -- every Enter in the Search box and every Alt+F12 goes
+through `raise_panel`, and after the first the panel it names is already on top.
 
 **"The panel the keyboard is in" is the box that panel registered.** The sidebar is arrangeable,
 so nothing about where a panel sits can be relied on; what can is that only the panel on top in a
