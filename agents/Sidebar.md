@@ -586,7 +586,11 @@ is not its dock tab's is unmounted. **The keyboard picks the colour**: the list 
 pick in `text_select_bg`, the code panes' own selection, and every other list draws its in
 `selected_bg`'s grey, so what the next key would act on is the one thing in blue. What answers for a
 list is the focusable rows box its pane already mints for Ctrl+F, handed down as `RowsBox`; the
-Files tree, which has no filter bar to mint one, grew one of its own. The hover is a grey too, and
+Files tree, which has no filter bar to mint one, grew one of its own. **The row asks as it draws,
+and not the pane**: `is_focused` reads the platform's own state, so asking is what subscribes, and a
+pane that asked would have every mounted panel re-rendered by a focus move anywhere in the app -- a
+click into a code pane or a filter box -- for rows that wake on their own.
+The hover is a grey too, and
 the palette test holds it fainter than either -- the pointer passing over a row must not read as the
 reader having chosen it. The file finder is not a panel and keeps its own pick, its keyboard row
 being one already: an Alt+press there moves the arrows' row and leaves the panel up. **The pick is

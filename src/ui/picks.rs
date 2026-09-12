@@ -212,18 +212,20 @@ pub(crate) struct Picking {
     alt: State<bool>,
     keyboard: State<Keys>,
     panel: Panel,
-    focused: bool,
 }
 
 /// The pick of the panel a row is in. Called in the row's own render, as every
 /// context-consuming function must be.
+///
+/// Nothing here is read, only consumed, so a pane that calls this for its handlers
+/// ([`use_list_pane`]) subscribes to nothing. Whether the keyboard is in the list is
+/// asked in [`Picking::drawn`] for that reason.
 pub(crate) fn use_picking(panel: Panel) -> Picking {
     Picking {
         picks: use_consume::<Picks>().0,
         alt: use_consume::<Alt>().0,
         keyboard: use_consume::<Keyboard>().0,
         panel,
-        focused: keyboard_in_list(),
     }
 }
 
@@ -231,13 +233,18 @@ impl Picking {
     /// How this row is drawn: against the list's own pick where it has one, and against
     /// `shown` -- whether this row is what the tab on screen is showing -- where it has
     /// not. A list with no document behind its rows passes `false`.
+    ///
+    /// Called only while a row renders, which is why [`keyboard_in_list`] is asked here
+    /// and not in [`use_picking`]: the read subscribes the scope asking, and the pane
+    /// draws nothing from the answer. Asked there, a focus move anywhere in the app would
+    /// re-render every mounted panel for rows that wake on their own.
     pub(crate) fn drawn(&self, pick: &Pick, shown: bool) -> Chosen {
         let picks = self.picks.read();
         let selected = match picks.get(&self.panel) {
             Some(picked) => &picked.pick == pick,
             None => shown,
         };
-        chosen(selected, self.focused)
+        chosen(selected, keyboard_in_list())
     }
 
     /// A press on the row, which is `at` in the list as it is drawn: pick it out, and then

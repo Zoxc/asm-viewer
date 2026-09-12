@@ -27863,6 +27863,92 @@ fn the_list_with_the_keyboard_draws_its_pick_live_and_the_other_grey() {
     assert_eq!(drawn_at(&test, history_top), Chosen::Live);
 }
 
+/// How many times the pane below has rendered. In a context because the harness is a
+/// plain function, with nowhere to hand one in.
+#[derive(Clone)]
+struct PaneRenders(Arc<std::sync::atomic::AtomicUsize>);
+
+/// A panel's pane and nothing more: the one call every panel makes, with this scope's
+/// renders counted. It takes no props and reads nothing a press moves, so a second render
+/// can only be something [`use_list_pane`] subscribed it to.
+#[derive(Clone, PartialEq)]
+struct CountedPane;
+
+impl Component for CountedPane {
+    fn render(&self) -> impl IntoElement {
+        let renders = use_consume::<PaneRenders>().0;
+        let _pane = use_list_pane(Panel::Symbols);
+        renders.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        label().text("the pane")
+    }
+}
+
+/// That pane beside two boxes the keyboard is moved between, neither of them its own.
+fn pane_focus_harness() -> impl IntoElement {
+    let (one, two) = (use_a11y(), use_a11y());
+    let focusable = |a11y: AccessibilityId, name: &'static str| {
+        rect()
+            .width(Size::fill())
+            .height(Size::px(20.0))
+            .a11y_id(a11y)
+            .a11y_focusable(true)
+            .on_pointer_down(move |_| a11y.request_focus())
+            .child(label().text(name))
+    };
+
+    rect()
+        .expanded()
+        .child(CountedPane)
+        .child(focusable(one, "one"))
+        .child(focusable(two, "two"))
+}
+
+/// **A focus move wakes the rows and not the pane they are drawn in.** `use_list_pane`
+/// mints the boxes and the pick a panel's handlers work through; whether the keyboard is
+/// in the list is the row's question, asked in the row's own render. Asked in the pane
+/// instead, every mounted panel -- Objects, the 115k-row Symbols, Files, Search,
+/// Locations, History, Bookmarks -- is re-rendered by a click into a code pane or a filter
+/// box, for rows that would have woken on their own.
+///
+/// Headless because a subscription shows nowhere else: the pane draws the same thing
+/// either way, and only a count of its renders says which scope read the focus.
+#[test]
+fn a_focus_move_leaves_a_panels_pane_alone() {
+    let (mut test, renders) = TestingRunner::new(
+        pane_focus_harness,
+        (200., 200.).into(),
+        |runner: &mut _| {
+            runner.provide_root_context(|| {
+                let _roots = test_roots();
+                let renders = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                provide(PaneRenders(renders)).0
+            })
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    let counted = || renders.load(std::sync::atomic::Ordering::Relaxed);
+    let before = counted();
+    assert!(before > 0, "the pane never rendered");
+
+    // Two moves, neither of them into the pane's own rows: the focus arriving somewhere
+    // and then leaving it again.
+    let one = centre_of(&test, "one");
+    press_at(&mut test, one);
+    settle(&mut test);
+    let two = centre_of(&test, "two");
+    press_at(&mut test, two);
+    settle(&mut test);
+
+    assert_eq!(
+        counted(),
+        before,
+        "the pane was re-rendered by a focus move it draws nothing from"
+    );
+}
+
 /// Every paragraph drawn with something washed in it: the text it holds, and the runs of
 /// that text the wash is over, in the UTF-16 units freya takes them in.
 fn marked_runs(test: &TestingRunner) -> Vec<(String, Vec<(usize, usize)>)> {
