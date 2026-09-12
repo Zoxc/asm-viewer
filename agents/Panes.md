@@ -382,6 +382,14 @@ So the assembly side pairs a row by asking the row's own `Studied::position` aga
 and lines, and the source side pairs a line by turning the run's rows into positions
 (`Studied::places` for a symbol's listing, `code_places` over the held stretches for an object's
 code, through the rows the section view shares as `CodeRows`) and keeping the lines of its own file.
+**That set is a memo and not a render's work.** `Marks` holds both panes' runs, so the source pane
+renders for every move of a sweep of its own, and again for a scroll that widens the listing and
+for every answer about the file; the walk over the line info is owed to none of them. Two memos do
+it: one over the other pane's run, which hands the same run back where a write left it alone, and
+one over that run, the drawn listing and the file. The set is the same `Arc` where the lines come
+out the same, so the rows compare it by pointer, where they used to compare a rebuilt set by
+contents. The file and the document reach the memo through `use_reactive`: a memo's callback is
+built once, so a captured prop would stay the first render's.
 **The rule is written once**, in `Studied::paired`, with `first_paired` the instruction a pane
 owing a scroll reveals: both listings light rows with it and both scroll by it, and a second
 spelling would light one row and scroll to another. `AsmData` holds the worker's `Studied` whole

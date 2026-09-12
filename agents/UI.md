@@ -58,10 +58,18 @@ dependency rows arrange (`agents/Scratchpad.md`), and never by handing it a new 
 render.** The child reads the same state the parent did and is woken with it, so the work moves
 without shrinking. Measured when a pane was cut up for exactly that reason, and every piece went
 on redrawing together. What would cut it is a `use_memo` between the state and the component, so
-the component subscribes to the part it draws rather than to the state it came out of. There is
-no such memo anywhere in the app, and no pane has yet been slow enough to want one -- so a split
-done for a render count is a split that buys nothing, and the reason to make one is that the
-pieces read better.
+the component subscribes to the part it draws rather than to the state it came out of. No pane
+has yet been slow enough to want one -- so a split done for a render count is a split that buys
+nothing, and the reason to make one is that the pieces read better.
+
+**A memo inside a component cuts the work of a render rather than the render.** The source pane
+still wakes for every write to `Marks`, its own run being in there, but what the pair costs is a
+walk over the drawn listing's line info, and a memo over the other pane's run spares it every
+wake that left that run alone (`agents/Panes.md`). It buys the rows something else: a memo hands
+the same value back where the new one compares equal, so a set that came out as it was is the
+same `Arc` and the prop is a pointer compare. **A memo's callback is built once**, in a
+`use_hook`, so a prop it reads goes through `use_reactive` and never into the closure -- the
+rule `use_side_effect_with_deps` is written for, and the same trap.
 
 **`prevent_default` cancels the events an event derives; `stop_propagation` stops it bubbling.** One
 platform event becomes a queue of tree events, and a handler calling `prevent_default` makes the

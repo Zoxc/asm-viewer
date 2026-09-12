@@ -24,6 +24,8 @@ struct SourceData {
     source: SourceText,
     file: Arc<str>,
     /// The lines of this file the assembly pane's run was compiled from: its pair here.
+    /// Out of a memo, so an unchanged set is the same `Arc` and the rows compare it by
+    /// pointer.
     pairs: Arc<HashSet<u32>>,
     /// The lines of this file the listing beside it has instructions for at all: what the
     /// gutter marks.
@@ -52,9 +54,9 @@ impl PartialEq for SourceData {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source
             && Arc::ptr_eq(&self.file, &other.file)
-            // By contents: the set is rebuilt whenever a run in either pane changes, and
-            // most of those leave it as it was.
-            && self.pairs == other.pairs
+            && Arc::ptr_eq(&self.pairs, &other.pairs)
+            // By contents: the pane makes an empty set of its own for a file nothing has
+            // answered about yet, so there is no pointer to compare.
             && self.compiled == other.compiled
             && self.chars == other.chars
             && self.drives == other.drives
@@ -654,17 +656,35 @@ impl Component for SourceList {
     fn render(&self) -> impl IntoElement {
         let marked = use_consume::<Marked>().0;
         let chars = chars_of(marked, Pane::Source);
-        // The assembly pane's run, and the lines of this file it was compiled from.
-        let pair = pair_of(marked, Pane::Source);
         let analysis = use_consume::<Analysis>().0;
         let code_rows = use_consume::<CodeRows>().0;
-        let pairs = Arc::new(paired_lines(
-            &self.document,
-            &self.file,
-            pair.as_ref(),
-            &analysis.read(),
-            code_rows.read().as_deref(),
-        ));
+        // The assembly pane's run, in a memo of its own: `Marks` holds both panes' runs,
+        // so a sweep in *this* pane writes the state the other's is read from. The memo
+        // hands the same run back where the write left it alone, which is what spares
+        // the walk below.
+        let pair = use_memo(move || pair_of(marked, Pane::Source));
+        // The lines of this file that run was compiled from, worked out only when the
+        // run, the listing or the file changes. The pane renders for a good deal else --
+        // every move of a sweep here, every scroll that widens the listing, every answer
+        // about the file -- and each of those walked the line info again for a set that
+        // came out as it was. The memo keeps the set it has where the lines come out the
+        // same, so the rows compare it by pointer.
+        //
+        // The file and the document go through `use_reactive`: a memo's callback is built
+        // once in a `use_hook`, so a captured one would stay the first render's.
+        let showing = use_reactive(&(self.document.clone(), self.file.clone()));
+        let pairs = use_memo(move || {
+            let showing = showing.read();
+            let (document, file) = &*showing;
+            Arc::new(paired_lines(
+                document,
+                file,
+                pair.read().as_ref(),
+                &analysis.read(),
+                code_rows.read().as_deref(),
+            ))
+        });
+        let pairs = pairs.read().clone();
         // The gutter's marks: which lines of this file produced code at all, whether
         // anything is picked out and whether or not a listing is up. Asking is the pane's
         // ([`asks_for`]); this reads whatever has been answered.
@@ -1008,6 +1028,8 @@ fn paired_lines(
     analysis: &Analyzed,
     built: Option<&Built>,
 ) -> HashSet<u32> {
+    #[cfg(test)]
+    PAIRINGS.with(|count| count.set(count.get() + 1));
     let Some(pair) = pair else {
         return HashSet::new();
     };
@@ -1016,6 +1038,21 @@ fn paired_lines(
         .filter(|at| at.file == *file)
         .map(|at| at.line)
         .collect()
+}
+
+/// Test-only: how many times this thread has worked out a source pane's paired lines.
+///
+/// A thread-local, `freya-testing` running the whole app on the test's own thread, which
+/// makes this the one way to settle that a render made no such walk. Nothing resets it --
+/// a test takes the count before and after what it is about.
+#[cfg(test)]
+pub(crate) fn pairings() -> usize {
+    PAIRINGS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PAIRINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Write `file` into the `wanted` of one of the three states a pane asks through, and

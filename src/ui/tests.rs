@@ -16654,6 +16654,135 @@ fn a_picked_out_instruction_lights_its_line() {
     );
 }
 
+/// The paired lines are worked out when the pair changes, and not merely because the pane
+/// rendered again. A sweep in the source pane writes `Marks`, which is the state the
+/// assembly pane's run is read out of, so every move of one had the pane walking the
+/// listing's line info for a set that came out the same as before.
+///
+/// Headless because the question is what a render does: `pairings` counts the walks made
+/// on the thread `freya-testing` draws on.
+#[test]
+fn a_sweep_in_the_source_pane_does_not_work_its_pair_out_again() {
+    use analysis::{LineInfo, LineRow};
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let directory = Seeded::directory("pairs-memo");
+    let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
+    let file = directory.named("pairs.c", &text);
+
+    let mut studied = Studied::new(sum_to.clone());
+    let first = studied
+        .assembly
+        .as_ref()
+        .expect("sum_to decodes")
+        .instructions[0]
+        .address;
+    // The first instruction on line 5, and nothing else placed anywhere.
+    studied.lines.info = LineInfo::new(
+        vec![LineRow {
+            range: first..first + 1,
+            file: Some(0),
+            line: Some(5),
+            column: None,
+        }],
+        vec![(file.clone(), None)],
+    )
+    .map(Arc::new);
+    studied.lines.file = Some(file.clone());
+    studied.lines.line = Some(5);
+    let placed = studied.lanes.row_of(0);
+    let unplaced = studied.lanes.row_of(1);
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let document = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let (mut test, (states, marked)) = TestingRunner::new(
+        source_pane_harness,
+        (500., 600.).into(),
+        |runner| {
+            runner.provide_root_context(|| Mounted(State::create(true)));
+            let roots = runner.provide_root_context(move || listing_states(shown));
+            (roots.states, roots.doors.marked)
+        },
+        1.,
+    );
+    let mut marked = marked;
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    settle(&mut test);
+    settle(&mut test);
+
+    // How many rows wear a colour, the pair's green among them.
+    let wearing = |test: &TestingRunner, colour: Color| -> usize {
+        test.find_many(|_node, element| {
+            (element.style().background == Fill::Color(colour)).then_some(())
+        })
+        .len()
+    };
+
+    marked.set(Marks {
+        assembly: Some(picked_row(placed, &file, Owed::default())),
+        source: None,
+    });
+    settle(&mut test);
+    assert_eq!(
+        wearing(&test, palette().pair_bg),
+        1,
+        "the instruction's line is not lit, so there is no pair to keep"
+    );
+
+    // A sweep over rows the pair is not on: a press and three moves, each a write of the
+    // state the pane reads the other run out of.
+    let walks = source_view::pairings();
+    mark_press(
+        marked,
+        false,
+        Pane::Source,
+        Some(file.clone()),
+        8,
+        Some(Press::At(0)),
+    );
+    settle(&mut test);
+    for row in 9..=11 {
+        mark_drag(marked, Pane::Source, row, Some(2));
+        settle(&mut test);
+    }
+    assert!(
+        wearing(&test, palette().text_select_bg) > 0,
+        "the sweep picked nothing out, so the pane never rendered for it"
+    );
+    assert_eq!(
+        wearing(&test, palette().pair_bg),
+        1,
+        "the sweep lost the pair"
+    );
+    assert_eq!(
+        source_view::pairings(),
+        walks,
+        "the pane worked its paired lines out again for a sweep of its own"
+    );
+
+    // And the walk is still made when the pair itself moves: an instruction placed
+    // nowhere lights no line.
+    marked.set(Marks {
+        assembly: Some(picked_row(unplaced, &file, Owed::default())),
+        source: None,
+    });
+    settle(&mut test);
+    assert_eq!(
+        wearing(&test, palette().pair_bg),
+        0,
+        "the line stayed lit for an instruction placed nowhere"
+    );
+    assert!(
+        source_view::pairings() > walks,
+        "the pair changed and the lines were not worked out again"
+    );
+}
+
 /// The Source pane's gutter marks every line of the file that produced code, and nothing
 /// else: a reader scanning it can tell those from the lines that produced none without
 /// picking anything out. The set is the file's own, answered for the whole file, so it is
