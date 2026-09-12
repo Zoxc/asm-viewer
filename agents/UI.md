@@ -958,7 +958,7 @@ distinct, and `#[derive(PartialEq)]` on an `Arc<T>` field would deep-compare on 
 render. A prop holding no `Arc` of its own **derives** instead: the pointer rule is inside its
 fields already, and an impl that only spells the derive out is one more place to forget a new
 field -- a prop that stops re-rendering for it. Most rows are that shape (`ArchiveRow`,
-`SymbolRow`, `HistoryRow`, `BookmarkRow`, `EntryRow`, `LocationRow`, `TabHeader`,
+`SymbolRow`, `HistoryRow`, `BookmarkRow`, `EntryRow`, `TabHeader`,
 `InstructionRow`, `AsmData`), and the derive compares two things the hand-written impls left
 out: the row's `key`, and the states it holds -- one of its own, or a bundle of them. Neither
 changes what is drawn. A key is a function of the row's other fields, a `State` compares by the box

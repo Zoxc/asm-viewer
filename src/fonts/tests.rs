@@ -1,5 +1,5 @@
-use super::desktop::{order, parse_kde, parse_pango, Desktop};
-use super::windows::font_spec;
+use super::desktop_parse::{kde, order, pango, Desktop};
+use super::windows_parse::logfont;
 use super::*;
 
 fn spec(family: &str, points: Option<f32>) -> Option<Spec> {
@@ -12,24 +12,24 @@ fn spec(family: &str, points: Option<f32>) -> Option<Spec> {
 #[test]
 fn a_kde_spec_is_a_family_and_a_size_in_a_list() {
     assert_eq!(
-        parse_kde("Noto Sans Mono,10,-1,5,50,0,0,0,0,0"),
+        kde("Noto Sans Mono,10,-1,5,50,0,0,0,0,0"),
         spec("Noto Sans Mono", Some(10.0))
     );
 }
 
 #[test]
 fn a_kde_size_that_says_nothing_leaves_the_family() {
-    assert_eq!(parse_kde("Noto Sans"), spec("Noto Sans", None));
-    assert_eq!(parse_kde("Noto Sans,0,-1"), spec("Noto Sans", None));
-    assert_eq!(parse_kde("Noto Sans,,-1"), spec("Noto Sans", None));
+    assert_eq!(kde("Noto Sans"), spec("Noto Sans", None));
+    assert_eq!(kde("Noto Sans,0,-1"), spec("Noto Sans", None));
+    assert_eq!(kde("Noto Sans,,-1"), spec("Noto Sans", None));
 }
 
 #[test]
 fn a_pango_description_is_quoted_and_ends_in_its_size() {
-    assert_eq!(parse_pango("'Cantarell 11'"), spec("Cantarell", Some(11.0)));
+    assert_eq!(pango("'Cantarell 11'"), spec("Cantarell", Some(11.0)));
     // Unquoted and fractional: `gsettings` is the only thing that quotes, and Pango
     // sizes are not integers.
-    assert_eq!(parse_pango("Cantarell 11.5"), spec("Cantarell", Some(11.5)));
+    assert_eq!(pango("Cantarell 11.5"), spec("Cantarell", Some(11.5)));
 }
 
 /// The one thing that separates this spec from KDE's: the size is the last word, not
@@ -37,7 +37,7 @@ fn a_pango_description_is_quoted_and_ends_in_its_size() {
 #[test]
 fn a_pango_family_keeps_its_spaces() {
     assert_eq!(
-        parse_pango("'Source Code Pro 10'"),
+        pango("'Source Code Pro 10'"),
         spec("Source Code Pro", Some(10.0))
     );
 }
@@ -45,32 +45,32 @@ fn a_pango_family_keeps_its_spaces() {
 #[test]
 fn pango_style_words_are_not_part_of_the_family() {
     assert_eq!(
-        parse_pango("'Source Code Pro Semi-Bold 10'"),
+        pango("'Source Code Pro Semi-Bold 10'"),
         spec("Source Code Pro", Some(10.0))
     );
     // Several of them, and with no size behind them to find them by.
     assert_eq!(
-        parse_pango("'DejaVu Sans Condensed Bold Italic'"),
+        pango("'DejaVu Sans Condensed Bold Italic'"),
         spec("DejaVu Sans", None)
     );
     // A description of nothing else keeps one, rather than parsing to no family.
-    assert_eq!(parse_pango("Bold 11"), spec("Bold", Some(11.0)));
+    assert_eq!(pango("Bold 11"), spec("Bold", Some(11.0)));
 }
 
 #[test]
 fn a_pango_description_can_omit_its_size() {
-    assert_eq!(parse_pango("'Cantarell'"), spec("Cantarell", None));
+    assert_eq!(pango("'Cantarell'"), spec("Cantarell", None));
     // And a family whose last word merely looks like one is not a size.
-    assert_eq!(parse_pango("'M+ 1m'"), spec("M+ 1m", None));
+    assert_eq!(pango("'M+ 1m'"), spec("M+ 1m", None));
 }
 
 #[test]
 fn nothing_is_not_a_font() {
-    assert_eq!(parse_kde(""), None);
-    assert_eq!(parse_kde(",10"), None);
-    assert_eq!(parse_pango(""), None);
-    assert_eq!(parse_pango("''"), None);
-    assert_eq!(parse_pango("   "), None);
+    assert_eq!(kde(""), None);
+    assert_eq!(kde(",10"), None);
+    assert_eq!(pango(""), None);
+    assert_eq!(pango("''"), None);
+    assert_eq!(pango("   "), None);
 }
 
 fn setting(family: Option<&str>, size: Option<f32>) -> FontSetting {
@@ -235,23 +235,23 @@ fn face(name: &str) -> [u16; 32] {
 #[test]
 fn a_logfont_is_a_face_name_and_a_height_at_a_dpi() {
     assert_eq!(
-        font_spec(&face("Segoe UI"), -12, 96),
+        logfont(&face("Segoe UI"), -12, 96),
         spec("Segoe UI", Some(9.0))
     );
     // The same font on a 150% machine: the point size is what the two have in common,
     // which is why the DPI the metrics came back in is read beside them.
     assert_eq!(
-        font_spec(&face("Segoe UI"), -18, 144),
+        logfont(&face("Segoe UI"), -18, 144),
         spec("Segoe UI", Some(9.0))
     );
     // A positive height is the cell height, taken as it stands.
     assert_eq!(
-        font_spec(&face("Segoe UI"), 12, 96),
+        logfont(&face("Segoe UI"), 12, 96),
         spec("Segoe UI", Some(9.0))
     );
     // No DPI is the nominal one, not a division by zero.
     assert_eq!(
-        font_spec(&face("Segoe UI"), -12, 0),
+        logfont(&face("Segoe UI"), -12, 0),
         spec("Segoe UI", Some(9.0))
     );
 }
@@ -259,21 +259,21 @@ fn a_logfont_is_a_face_name_and_a_height_at_a_dpi() {
 #[test]
 fn a_face_name_runs_to_the_first_nul_or_to_the_end() {
     assert_eq!(
-        font_spec(&face("MS Shell Dlg 2"), -12, 96),
+        logfont(&face("MS Shell Dlg 2"), -12, 96),
         spec("MS Shell Dlg 2", Some(9.0))
     );
     // 32 units with no room left for a terminator: the whole array is the name.
     let full = "A".repeat(32);
-    assert_eq!(font_spec(&face(&full), -12, 96), spec(&full, Some(9.0)));
+    assert_eq!(logfont(&face(&full), -12, 96), spec(&full, Some(9.0)));
 }
 
 #[test]
 fn a_logfont_that_names_nothing_is_no_font() {
     // An all-NUL face name is a struct nobody filled in rather than a font.
-    assert_eq!(font_spec(&face(""), -12, 96), None);
+    assert_eq!(logfont(&face(""), -12, 96), None);
     // A height of zero asks for the font's default height, which is not a size this app
     // can use; the family still survives, with the app's own size behind it.
-    assert_eq!(font_spec(&face("Segoe UI"), 0, 96), spec("Segoe UI", None));
+    assert_eq!(logfont(&face("Segoe UI"), 0, 96), spec("Segoe UI", None));
 }
 
 /// Both halves of the `or_else` in [`resolve_font`] judge a size by the one rule, so a
@@ -292,7 +292,7 @@ fn a_size_out_of_range_is_refused_from_either_source() {
 
     // The desktop's, refused as the answer is parsed, so the family it named still
     // stands and only the size falls back.
-    let desktop = parse_pango(&format!("'Fira Code {huge}'"));
+    let desktop = pango(&format!("'Fira Code {huge}'"));
     assert_eq!(desktop, spec("Fira Code", None));
 
     let font = resolved(&setting(None, None), desktop);

@@ -28,9 +28,9 @@ fn a_run_s_panics_are_appended_to_one_file() {
     let base = base(line!());
     let store = Store::at(&base);
     let _ = fs::remove_dir_all(&base);
-    let file = Mutex::new(None);
+    let run = Run::new();
 
-    let first = write_to(&file, &store, &panic_at(1_757_000_000, "the first")).expect("written");
+    let first = write_to(&run, &store, &panic_at(1_757_000_000, "the first")).expect("written");
     assert_eq!(
         first,
         store.panics().join("2025-09-04-153320.txt"),
@@ -38,7 +38,7 @@ fn a_run_s_panics_are_appended_to_one_file() {
     );
 
     // A second panic, later and on the other side of a minute: the same file.
-    let second = write_to(&file, &store, &panic_at(1_757_000_100, "the second")).expect("written");
+    let second = write_to(&run, &store, &panic_at(1_757_000_100, "the second")).expect("written");
     assert_eq!(second, first);
     let directory: Vec<PathBuf> = fs::read_dir(store.panics())
         .expect("the directory was made")
@@ -114,11 +114,11 @@ fn a_directory_with_no_panics_in_it_lists_nothing() {
 fn only_a_panic_the_crate_does_not_guard_is_told_about() {
     for guarded in [true, false] {
         let (mut stored, mut told, mut stopped) = (0, 0, 0);
-        let stopping = AtomicBool::new(false);
+        let run = Run::new();
         handle(
+            &run,
             &panic_at(1_757_000_000, "a dependency's bug"),
             guarded,
-            &stopping,
             &mut |_| {
                 stored += 1;
                 Some(PathBuf::from("panics/one.txt"))
@@ -141,13 +141,13 @@ fn only_a_panic_the_crate_does_not_guard_is_told_about() {
 /// top of the one they had just closed. It is written down like any other and stops there.
 #[test]
 fn only_the_first_panic_is_told_about_and_the_rest_are_written_down() {
-    let stopping = AtomicBool::new(false);
+    let run = Run::new();
     let (mut stored, mut told, mut stopped) = (0, 0, 0);
     let mut again = |message: &str| {
         handle(
+            &run,
             &panic_at(1_757_000_000, message),
             false,
-            &stopping,
             &mut |_| {
                 stored += 1;
                 None

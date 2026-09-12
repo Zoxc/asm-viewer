@@ -392,7 +392,8 @@ fn start_in(
     };
 
     Ok(Server {
-        talk: Talk::over(to, BufReader::new(from), told),
+        // Read through the app's one rule for reading a source file.
+        talk: Talk::over(to, BufReader::new(from), told, crate::source::read_text),
         handle,
         said,
         stderr,
@@ -535,6 +536,10 @@ impl Drop for Server {
     }
 }
 
+/// How a file a conversion needs is read: the app's own [`source::read_text`], or a
+/// test's.
+pub(crate) type ReadText = fn(&Path) -> Option<String>;
+
 /// The conversation itself: what is written to the server, what is read back, and the
 /// messages this app knows how to say.
 ///
@@ -560,19 +565,24 @@ pub struct Talk<W> {
     /// Which way it counts a column, from the same reply. [`Encoding::Utf16`] until then,
     /// which is the protocol's default and the one that is converted.
     encoding: Encoding,
-    /// How a file a conversion needs is read. `source::read_text` outside the tests,
-    /// which hand over text rather than write a file for it. Never called at all where
-    /// the server took `utf-8`.
-    read: fn(&Path) -> Option<String>,
+    /// How a file a conversion needs is read, handed in at [`Talk::over`]. Never called at
+    /// all where the server took `utf-8`.
+    read: ReadText,
 }
 
 impl<W: Write + Send + 'static> Talk<W> {
     /// A conversation over two streams that are already connected to a server, with `told`
-    /// called for whatever the server says that nobody asked for.
+    /// called for whatever the server says that nobody asked for, and `read` for the files
+    /// a conversion needs.
+    ///
+    /// `read` is a parameter rather than this function's own choice so that a test can
+    /// hand over text instead of writing a file: [`source::read_text`] reads the disk, not
+    /// the cache a seeded file lands in.
     fn over(
         to: W,
         from: impl BufRead + Send + 'static,
         told: impl FnMut(Note) + Send + 'static,
+        read: ReadText,
     ) -> Self {
         let to = Arc::new(Mutex::new(Some(to)));
         let (answered, answers) = std::sync::mpsc::channel();
@@ -584,7 +594,7 @@ impl<W: Write + Send + 'static> Talk<W> {
             legend: Legend::default(),
             opens: false,
             encoding: Encoding::Utf16,
-            read: crate::source::read_text,
+            read,
         }
     }
 
@@ -919,7 +929,7 @@ impl<W: Write + Send + 'static> Talk<W> {
 /// one (`ui::language::language_work`): a file an answer names twenty times is read once,
 /// and both units are counted off the one text.
 pub(crate) struct Lines {
-    read: fn(&Path) -> Option<String>,
+    read: ReadText,
     /// What each file said, a miss included.
     files: BTreeMap<PathBuf, Option<Text>>,
 }
@@ -955,9 +965,9 @@ impl Text {
 }
 
 impl Lines {
-    /// A reader of whatever files one answer names. `read` is `source::read_text` outside
-    /// the tests, which hand over text rather than write a file for it.
-    pub(crate) fn reading(read: fn(&Path) -> Option<String>) -> Lines {
+    /// A reader of whatever files one answer names: the conversation's own
+    /// ([`Talk::over`]).
+    pub(crate) fn reading(read: ReadText) -> Lines {
         Lines {
             read,
             files: BTreeMap::new(),

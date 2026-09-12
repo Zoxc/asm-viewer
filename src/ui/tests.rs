@@ -22416,6 +22416,57 @@ fn a_symbol_row_bookmarks_its_symbol_from_its_menu() {
     assert!(bookmarks.peek().entries().is_empty());
 }
 
+/// **One row in two lists.** The Symbols panel and the Locations panel draw the same
+/// symbol row, and `SymbolPress` is the whole of what each says about its own: a location
+/// row names the object the symbol is in after the name -- the same name in two objects
+/// being two rows there -- and a Symbols row, which lists every object's symbols under one
+/// filter, does not.
+#[test]
+fn a_symbol_row_names_its_object_in_the_locations_list_and_not_in_the_symbols_list() {
+    let wanted = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let object = wanted.object.name.clone();
+
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![wanted.object.clone()]);
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"sum_to".to_owned()), "{drawn:?}");
+    assert!(
+        !drawn.contains(&object),
+        "the Symbols list named the object every one of its rows is in: {drawn:?}"
+    );
+
+    // The same symbol as one answer's one row.
+    let query = Query::line(a_line_of(&wanted));
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let mut located = roots.located;
+    located.write().asked = Some(query.clone());
+    located.write().found = Some(Found::new(query, vec![wanted]));
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"sum_to".to_owned()), "{drawn:?}");
+    assert!(
+        drawn.contains(&object),
+        "the row does not say which object the symbol is in: {drawn:?}"
+    );
+}
+
 /// A history row offers the same, for whatever kind of place it is: a file's row makes a
 /// bookmark of the file.
 #[test]

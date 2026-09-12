@@ -15,12 +15,6 @@ impl Legend {
     }
 }
 
-/// Read the files a conversion needs with `read` rather than off the disk: what a test
-/// hands over instead of writing one.
-fn reading<W>(talk: &mut Talk<W>, read: fn(&Path) -> Option<String>) {
-    talk.read = read;
-}
-
 /// A place in the file every question here is about, in the app's units: the line
 /// 1-based, as a [`Lookup`]'s is, and the column a byte offset into it.
 fn at(line: u32, column: u32) -> Lookup {
@@ -47,8 +41,9 @@ type Notes = Arc<Mutex<Vec<Note>>>;
 
 impl Fake {
     /// A conversation and the other end of it: what the client says is read with
-    /// `read_message`, and what `Fake::say` writes is what the client reads.
-    fn pair() -> (Talk<PipeWriter>, Fake, Notes) {
+    /// `read_message`, and what `Fake::say` writes is what the client reads. `read` is how
+    /// the conversation reads a file it needs the text of.
+    fn pair(read: ReadText) -> (Talk<PipeWriter>, Fake, Notes) {
         let (server_reads, client_writes) = std::io::pipe().expect("a pipe");
         let (client_reads, server_writes) = std::io::pipe().expect("a pipe");
         let notes: Notes = Arc::new(Mutex::new(Vec::new()));
@@ -62,7 +57,7 @@ impl Fake {
             }
         };
         (
-            Talk::over(client_writes, BufReader::new(client_reads), told),
+            Talk::over(client_writes, BufReader::new(client_reads), told, read),
             Fake {
                 to: server_writes,
                 from: BufReader::new(server_reads),
@@ -84,7 +79,17 @@ fn against<T>(
     answer: impl Fn(&mut Fake, &Value) + Send + 'static,
     ask: impl FnOnce(&mut Talk<PipeWriter>) -> T,
 ) -> (Vec<Value>, T, Notes) {
-    let (mut talk, mut fake, notes) = Fake::pair();
+    against_reading(|_| None, answer, ask)
+}
+
+/// The same over a conversation that reads the files it needs the text of with `read`:
+/// what the tests about a column hand over instead of writing a file.
+fn against_reading<T>(
+    read: ReadText,
+    answer: impl Fn(&mut Fake, &Value) + Send + 'static,
+    ask: impl FnOnce(&mut Talk<PipeWriter>) -> T,
+) -> (Vec<Value>, T, Notes) {
+    let (mut talk, mut fake, notes) = Fake::pair(read);
     let server = std::thread::spawn(move || {
         let mut heard = Vec::new();
         // Every message the client sends until it drops its end.
@@ -532,9 +537,10 @@ fn the_handshake_asks_for_bytes_and_believes_what_it_is_answered() {
 fn asked_over_wide_line(
     encoding: &'static str,
     columns: Range<u32>,
-    read: fn(&Path) -> Option<String>,
+    read: ReadText,
 ) -> (Value, Vec<Place>) {
-    let (said, found, _notes) = against(
+    let (said, found, _notes) = against_reading(
+        read,
         move |fake, message| {
             let result = match message["method"] == json!("initialize") {
                 true => json!({ "capabilities": { "positionEncoding": encoding } }),
@@ -553,7 +559,6 @@ fn asked_over_wide_line(
             }));
         },
         move |talk| {
-            reading(talk, read);
             talk.initialize(Path::new("/p"), &wanted())
                 .expect("a handshake");
             talk.places(
@@ -634,7 +639,8 @@ fn counts_answer_reads(path: &Path) -> Option<String> {
 fn one_answer_reads_each_file_it_names_once() {
     ANSWER_READS.store(0, Ordering::SeqCst);
     let mut lines = Lines::reading(counts_answer_reads);
-    let (_said, found, _notes) = against(
+    let (_said, found, _notes) = against_reading(
+        counts_answer_reads,
         |fake, message| {
             let result = match message["method"] == json!("initialize") {
                 true => json!({ "capabilities": { "positionEncoding": "utf-16" } }),
@@ -659,7 +665,6 @@ fn one_answer_reads_each_file_it_names_once() {
             }));
         },
         |talk| {
-            reading(talk, counts_answer_reads);
             talk.initialize(Path::new("/p"), &wanted())
                 .expect("a handshake");
             talk.places(Question::Listed(Listed::References), &at(1, 8), &mut lines)
@@ -1035,7 +1040,8 @@ fn reads_wide_lines(_: &Path) -> Option<String> {
 /// A token's columns are converted through its own line, the first line included.
 #[test]
 fn a_token_from_a_utf_16_server_is_converted_on_the_line_it_is_on() {
-    let (_said, found, _notes) = against(
+    let (_said, found, _notes) = against_reading(
+        reads_wide_lines,
         |fake, message| {
             let answer = match message["method"] == json!("initialize") {
                 true => json!({ "capabilities": {
@@ -1054,7 +1060,6 @@ fn a_token_from_a_utf_16_server_is_converted_on_the_line_it_is_on() {
             }));
         },
         |talk| {
-            reading(talk, reads_wide_lines);
             talk.initialize(Path::new("/p"), &wanted())
                 .expect("a handshake");
             talk.semantic_tokens(Path::new("/p/src/main.rs"))
@@ -1333,7 +1338,7 @@ fn any_other_error_is_the_failure_the_server_named() {
 
 #[test]
 fn a_server_that_stops_answering_ends_the_conversation() {
-    let (mut talk, fake, _notes) = Fake::pair();
+    let (mut talk, fake, _notes) = Fake::pair(|_| None);
     // The server's end goes away with nothing said, which is what a killed one looks
     // like from here.
     drop(fake);

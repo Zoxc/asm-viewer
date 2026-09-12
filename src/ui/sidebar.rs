@@ -7,6 +7,11 @@
 //! `Component` with its own hover state, there being no `.hover()` pseudo-state, and each
 //! is framed by [`list_row`] -- which is where a row and the view over it agree about
 //! [`list_row_height`], as they must or scrolling misaligns.
+//!
+//! The Symbols list is drawn in **two** panels: here, over every object's symbols, and in
+//! the Locations panel, over the ones a line was compiled into (`ui/locations.rs`). One
+//! [`SymbolRow`], one filtered list and one set of keys for both, with [`SymbolPress`] the
+//! whole of what a panel says about its own.
 
 use super::*;
 
@@ -224,6 +229,12 @@ impl Component for ObjectRow {
     }
 }
 
+/// One symbol in a filtered list: the name marked, and the object it is in after it
+/// where the list names one.
+///
+/// **Both lists of symbols are this row** -- the Symbols panel's of every object's, and
+/// the Locations panel's of the ones a line was compiled into -- with [`SymbolPress`] the
+/// whole of what differs between them.
 #[derive(Clone, PartialEq)]
 struct SymbolRow {
     symbols: Shared<Symbol>,
@@ -234,7 +245,65 @@ struct SymbolRow {
     at: usize,
     /// Where the filter matched in the name, for the row to mark.
     marks: Vec<Range<usize>>,
+    /// Which of the two lists this is a row of.
+    press: SymbolPress,
     key: DiffKey,
+}
+
+/// Which filtered symbol list a row is in: what pressing it does, which panel's pick it
+/// is drawn against, and what it draws after the name.
+///
+/// A prop and not a reading of anything, so a row and the panel's Enter are handed the
+/// same one and cannot open different places.
+#[derive(Clone, PartialEq)]
+pub(crate) enum SymbolPress {
+    /// The Symbols panel: the symbol opens as a tab of its own, and a right-click offers
+    /// to bookmark it.
+    Open,
+    /// The Locations panel: the symbol opens on the line the answer was about
+    /// ([`press_location`]), and the row draws the object it is in, since the same name in
+    /// two objects is two rows and the object is what tells them apart.
+    Located {
+        /// The answer's own line, and [`None`] where it named none: what a press opens the
+        /// symbol on.
+        asked_at: Option<LinePos>,
+        /// The source-driven tab the question was asked from, whose entry a press writes
+        /// the choice under.
+        subject: Option<Subject>,
+    },
+}
+
+impl SymbolPress {
+    /// Which panel's pick the row answers to.
+    fn panel(&self) -> Panel {
+        match self {
+            SymbolPress::Open => Panel::Symbols,
+            SymbolPress::Located { .. } => Panel::Locations,
+        }
+    }
+
+    /// Whether the row names the object the symbol is in after the name.
+    fn about(&self) -> bool {
+        matches!(self, SymbolPress::Located { .. })
+    }
+
+    /// Whether a right-click on the row offers to bookmark the symbol. A bookmark is a
+    /// place the reader means to come back to, which is the symbol itself; a location row
+    /// is one answer to a question about a line, and offers none.
+    fn bookmarks(&self) -> bool {
+        matches!(self, SymbolPress::Open)
+    }
+
+    /// What pressing the row for `symbol` does, which is what Enter on the row the arrows
+    /// left the pick on does.
+    fn goes(&self, to: Landings, symbol: Symbol) -> Pressed {
+        match self {
+            SymbolPress::Open => opened(to.doors, to.ctrl, Document::Symbol(symbol)),
+            SymbolPress::Located { asked_at, subject } => {
+                press_location(to, asked_at.clone(), subject.clone(), symbol)
+            }
+        }
+    }
 }
 
 keyed!(SymbolRow);
@@ -242,43 +311,141 @@ keyed!(SymbolRow);
 impl Component for SymbolRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
-        let fitted = use_fitted();
-        let doors = use_doors();
-        let ctrl = use_consume::<Ctrl>().0;
-        // Consumed, never read: 115k rows subscribed to the bookmarks would re-render the
-        // whole list on every bookmark made.
+        // The two texts a row can draw, each measured: the name, and the object it is in.
+        // The second is taken whatever the row draws, a hook having to be called every
+        // render, and nothing attaches to it where the row draws no object, so it never
+        // says it was cut.
+        let (named, about) = (use_fitted(), use_fitted());
+        // Every door a press of either list goes through, and the two states the menu
+        // needs. Consumed, never read: 115k rows subscribed to the bookmarks would
+        // re-render the whole list on every bookmark made.
+        let to = use_landings();
         let bookmarked = use_consume::<Bookmarked>().0;
         let objects = use_consume::<Objects>().0;
-        let picking = use_picking(Panel::Symbols);
+        let press = self.press.clone();
+        let picking = use_picking(press.panel());
         let at = self.at;
         let symbol = self.symbols[self.index].clone();
         let pick = Pick::Symbol(symbol.clone());
-        let text = symbol.data.display().to_owned();
-        let document = Document::Symbol(symbol);
+        let name = symbol.data.display().to_owned();
+        let object = symbol.object.name.clone();
+        let document = Document::Symbol(symbol.clone());
+        // One tooltip over both texts, so it is shown where either of them was cut.
+        let whole = match press.about() {
+            true => format!("{name} \u{2014} {object}"),
+            false => name.clone(),
+        };
 
         cut_tooltip(
-            fitted.cut(),
-            text.clone(),
+            named.cut() || about.cut(),
+            whole,
             list_row(hovering, picking.drawn(&pick, self.selected))
                 .on_press({
-                    let document = document.clone();
+                    let press = press.clone();
                     move |_| {
-                        picking.press(pick.clone(), at, || opened(doors, ctrl, document.clone()));
+                        let symbol = symbol.clone();
+                        picking.press(pick.clone(), at, || press.goes(to, symbol));
                     }
                 })
-                .on_secondary_down(move |e: Event<PressEventData>| {
-                    ContextMenu::open_from_event(
-                        &e,
-                        bookmark_menu(bookmarked, objects, document.clone()),
-                    );
+                .maybe(press.bookmarks(), move |row| {
+                    row.on_secondary_down(move |e: Event<PressEventData>| {
+                        ContextMenu::open_from_event(
+                            &e,
+                            bookmark_menu(bookmarked, objects, document.clone()),
+                        );
+                    })
                 })
-                .child(tree_name_fitted(fitted, text, false, &self.marks)),
+                .child(tree_name_fitted(named, name, false, &self.marks))
+                // Capped rather than measured, or a long member name would take the row
+                // and leave the symbol it is about with nothing.
+                .maybe_child(press.about().then(|| {
+                    rect()
+                        .max_width(Size::percent(45.0))
+                        .overflow(Overflow::Clip)
+                        .child(one_line_fitted(about, object).color(palette().address_fg))
+                        .into_element()
+                })),
         )
     }
 
     fn render_key(&self) -> DiffKey {
         self.keyed()
     }
+}
+
+/// The one filtered symbol list both panels narrow: `symbols` read under the filter, in a
+/// memo because the Symbols list is 115k names on `viewer-sample` and a
+/// `VirtualScrollView` has to be told its length before it builds a row.
+pub(crate) fn use_filtered_symbols(
+    marking: Memo<Marking>,
+    symbols: impl Fn() -> Shared<Symbol> + 'static,
+) -> Memo<Filtered<Symbol>> {
+    use_memo(move || {
+        let symbols = symbols();
+        let marking = marking.read();
+        Filtered::new(symbols, marking.matcher(), |symbol| symbol.data.display())
+    })
+}
+
+/// What the arrows and Enter do over a filtered symbol list: the rows the panel is
+/// drawing, and the door a press on one goes through, which is the row's own
+/// ([`SymbolPress::goes`]).
+pub(crate) fn symbol_keys(
+    filtered: Filtered<Symbol>,
+    to: Landings,
+    press: SymbolPress,
+) -> ListKeys {
+    ListKeys::over(
+        filtered,
+        |symbol: &Symbol| Pick::Symbol(symbol.clone()),
+        move |symbol: &Symbol| press.goes(to, symbol.clone()),
+    )
+}
+
+/// The rows themselves, in `pane`'s `VirtualScrollView`: `selected` is the symbol the row
+/// is lit for, and `marking` what it marks the name with.
+///
+/// Keyed by the symbol's data **and** its object, which is a [`Symbol`]'s own identity. A
+/// `SymbolData` is allocated by the parse it came out of and so belongs to one object,
+/// which is what makes the data pointer alone enough to key a list drawn from any number of
+/// them; the pair is what a `Symbol` is, and needs no such argument.
+pub(crate) fn symbol_rows(
+    pane: &ListPane,
+    filtered: Filtered<Symbol>,
+    selected: Option<Symbol>,
+    marking: Marking,
+    press: SymbolPress,
+) -> Element {
+    pane.virtual_rows(
+        filtered.len(),
+        (filtered, selected, marking, press),
+        |row,
+         (filtered, selected, marking, press): &(
+            Filtered<Symbol>,
+            Option<Symbol>,
+            Marking,
+            SymbolPress,
+        )| {
+            // The row's place in the filtered list is not the symbol's place in the list
+            // it was filtered out of, and everything below is about the symbol.
+            let index = filtered.index(row);
+            let symbol = &filtered.list()[index];
+            SymbolRow {
+                symbols: filtered.list().clone(),
+                index,
+                selected: selected.as_ref() == Some(symbol),
+                at: row,
+                marks: marking.marks(symbol.data.display()),
+                press: press.clone(),
+                key: DiffKey::None,
+            }
+            .key((
+                Arc::as_ptr(&symbol.object).addr(),
+                Arc::as_ptr(&symbol.data).addr(),
+            ))
+            .into()
+        },
+    )
 }
 
 /// One visited place in the History list. Clicking it is a click from outside the panes
@@ -544,21 +711,13 @@ impl Component for SymbolsPanel {
         let symbols = use_consume::<Symbols>().0;
         let filter = use_state(Filter::default);
         let pane = use_list_pane(Panel::Symbols);
-        // What Enter on a row reaches through, consumed here because the handler that
-        // uses them runs no hook.
-        let doors = use_doors();
-        let ctrl = use_consume::<Ctrl>().0;
+        // What a press and Enter on a row both reach through, consumed here because the
+        // handler that uses them runs no hook.
+        let to = use_landings();
         // The one compiled filter: what narrows the list below, what the rows mark with,
         // and what the bar prints for a pattern that will not compile.
         let marking = use_list_marking(filter);
-        // The one list where the filtering has to be a memo: 115k names on
-        // `viewer-sample`, and the `VirtualScrollView` has to be told its length before it
-        // builds any row.
-        let filtered = use_memo(move || {
-            let symbols = symbols.read().clone();
-            let marking = marking.read();
-            Filtered::new(symbols, marking.matcher(), |symbol| symbol.data.display())
-        });
+        let filtered = use_filtered_symbols(marking, move || symbols.read().clone());
         let filtered = filtered.read().clone();
         let selected = match &*use_consume::<Active>().0.read() {
             Some((
@@ -570,18 +729,13 @@ impl Component for SymbolsPanel {
             )) => Some(symbol.clone()),
             _ => None,
         };
-        let length = filtered.len();
         let marking = marking.read().clone();
-        let keys = ListKeys::over(
-            filtered.clone(),
-            |symbol: &Symbol| Pick::Symbol(symbol.clone()),
-            move |symbol: &Symbol| opened(doors, ctrl, Document::Symbol(symbol.clone())),
-        );
+        let keys = symbol_keys(filtered.clone(), to, SymbolPress::Open);
 
         // An empty list means the same two things here as in `short_list`, and the whole
         // list says which: no symbols at all draws the empty view, a filter that left
         // nothing of them says so.
-        if length == 0 && !filtered.list().is_empty() {
+        if filtered.len() == 0 && !filtered.list().is_empty() {
             return pane.filtered(filter, &marking, keys, placeholder("No matches"));
         }
 
@@ -589,26 +743,12 @@ impl Component for SymbolsPanel {
             filter,
             &marking,
             keys,
-            pane.virtual_rows(
-                length,
-                (filtered, selected, marking.clone()),
-                |row, (filtered, selected, marking): &(Filtered<Symbol>, Option<Symbol>, Marking)| {
-                    // The row's place in the filtered list is not the symbol's place in the
-                    // list it was filtered out of, and everything below is about the
-                    // symbol.
-                    let index = filtered.index(row);
-                    let symbol = &filtered.list()[index];
-                    SymbolRow {
-                        symbols: filtered.list().clone(),
-                        index,
-                        selected: selected.as_ref() == Some(symbol),
-                        at: row,
-                        marks: marking.marks(symbol.data.display()),
-                        key: DiffKey::None,
-                    }
-                    .key(Arc::as_ptr(&symbol.data).addr())
-                    .into()
-                },
+            symbol_rows(
+                &pane,
+                filtered,
+                selected,
+                marking.clone(),
+                SymbolPress::Open,
             ),
         )
     }

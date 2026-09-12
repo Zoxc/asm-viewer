@@ -51,21 +51,38 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-/// The file this run appends to, made on the first panic and kept for the rest: one file
-/// per launch, so a worker dying twenty thousand times over one bad file leaves one file
-/// behind and the panics of one run read in order.
-static FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-/// Whether the app is already on its way down.
+/// What one run of the app remembers across its panics.
 ///
-/// **The shutdown is asynchronous and the panic is not the end of the thread.** The hook
-/// runs before the unwind, so after it returns the panicking thread goes on unwinding --
-/// back into freya's render loop, on the UI thread -- while the shutdown thread is still
-/// saving. A render that panicked once panics again on the next pass, and the reader who
-/// pressed Close on the first box is handed a second. So the first unguarded panic is the
-/// one that is told about and the one that stops the app, and every panic after it is
-/// written down and nothing more, exactly as a guarded one is.
-static STOPPING: AtomicBool = AtomicBool::new(false);
+/// Handed to [`handle`] and [`write_to`] rather than read from [`RUN`] by them, so a test
+/// has a run of its own: that is one static and the tests share one process.
+struct Run {
+    /// The file this run appends to, made on the first panic and kept for the rest: one
+    /// file per launch, so a worker dying twenty thousand times over one bad file leaves
+    /// one file behind and the panics of one run read in order.
+    file: Mutex<Option<PathBuf>>,
+    /// Whether the app is already on its way down.
+    ///
+    /// **The shutdown is asynchronous and the panic is not the end of the thread.** The
+    /// hook runs before the unwind, so after it returns the panicking thread goes on
+    /// unwinding -- back into freya's render loop, on the UI thread -- while the shutdown
+    /// thread is still saving. A render that panicked once panics again on the next pass,
+    /// and the reader who pressed Close on the first box is handed a second. So the first
+    /// unguarded panic is the one that is told about and the one that stops the app, and
+    /// every panic after it is written down and nothing more, exactly as a guarded one is.
+    stopping: AtomicBool,
+}
+
+impl Run {
+    const fn new() -> Run {
+        Run {
+            file: Mutex::new(None),
+            stopping: AtomicBool::new(false),
+        }
+    }
+}
+
+/// The run the installed hook writes to.
+static RUN: Run = Run::new();
 
 /// One panic, as much of it as a hook can be sure of.
 struct Panic {
@@ -165,13 +182,13 @@ pub(crate) fn install(store: Option<Store>) {
         let panic = Panic::of(info);
         echo(std::io::stderr(), &panic);
         handle(
+            &RUN,
             &panic,
             analysis::guard::guarded(),
-            &STOPPING,
             &mut |panic| {
                 store
                     .as_ref()
-                    .and_then(|store| write_to(&FILE, store, panic))
+                    .and_then(|store| write_to(&RUN, store, panic))
             },
             &mut tell,
             &mut shut_down,
@@ -194,13 +211,10 @@ fn echo(mut out: impl Write, panic: &Panic) {
 /// in so a test can have the rule without a disk or a window: **every** panic is written
 /// down, and the **first** one the crate does not guard is told about and brings the app
 /// down after it.
-///
-/// `stopping` is [`STOPPING`], passed in for [`FILE`]'s reason: it is a static and the
-/// tests share one process.
 fn handle(
+    run: &Run,
     panic: &Panic,
     guarded: bool,
-    stopping: &AtomicBool,
     store: &mut impl FnMut(&Panic) -> Option<PathBuf>,
     tell: &mut impl FnMut(&Panic, Option<&Path>),
     stop: &mut impl FnMut(),
@@ -211,24 +225,21 @@ fn handle(
     }
     // Claimed here and not after the telling: the box is a blocking call, and a second
     // panic arrives while the reader is still looking at the first.
-    if stopping.swap(true, Ordering::SeqCst) {
+    if run.stopping.swap(true, Ordering::SeqCst) {
         return;
     }
     tell(panic, file.as_deref());
     stop();
 }
 
-/// Append `panic`'s record to the run's file `file` names, making it and the directory
-/// over it on the first panic, and answer where it went.
+/// Append `panic`'s record to the file `run` names, making it and the directory over it on
+/// the first panic, and answer where it went.
 ///
 /// Appended and not written atomically: the file grows a record at a time and a reader
 /// may be looking at it, where the app's other files are each replaced whole
 /// (`store::write_atomically`).
-///
-/// The cell is handed in rather than read from [`FILE`] so a test has a run of its own:
-/// that is one static and the tests share one process. The hook itself passes [`FILE`].
-fn write_to(file: &Mutex<Option<PathBuf>>, store: &Store, panic: &Panic) -> Option<PathBuf> {
-    let mut held = file.lock().unwrap_or_else(|held| held.into_inner());
+fn write_to(run: &Run, store: &Store, panic: &Panic) -> Option<PathBuf> {
+    let mut held = run.file.lock().unwrap_or_else(|held| held.into_inner());
     let path = match held.clone() {
         Some(path) => path,
         None => {

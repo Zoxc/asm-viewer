@@ -149,8 +149,13 @@ so naming one would turn "no font setting" into a process that will not start. w
 `GetProcAddress`es that family for the same reason. The pairing is also what makes it *correct*:
 both the metrics and the DC's DPI are virtualised into whatever DPI space the process is in, so they
 agree without this file knowing which that is. Windows stores no desktop-wide monospace font at all,
-so that half stays `Consolas`. Every per-font constant -- the platform's family, the app's own size
-and the key each desktop keeps it under -- is one row of a two-row table (`Facts`) that `Which`
+so that half stays `Consolas`. **What a desktop said is parsed apart from the asking**:
+`desktop_parse` and `windows_parse` hold the parsers, which read a `&str` and a `[u16; 32]` and
+touch nothing else, and `desktop` and `windows` hold the lookups that feed them. Each parse
+module is compiled where its lookup is *and* under test on every platform, so the other
+platform's parsers stay tested without its process spawning and its `user32` calls being
+compiled beside them and then silenced as dead. Every per-font constant -- the platform's
+family, the app's own size and the key each desktop keeps it under -- is one row of a two-row table (`Facts`) that `Which`
 indexes, so a third font is a row, not an arm in each of four matches. Only the reader's own setting
 stays a match, being no constant. Each font is then a *chain*: the desktop's answer in front of the
 platform's own (`Segoe UI`/`Consolas`, `.AppleSystemUIFont`/`Menlo`, else the generic

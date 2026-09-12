@@ -47,6 +47,19 @@ it orders by, generic over the element and asking only for the name each is draw
 Symbols and Locations panels rank alike by calling it. It is tested there, over a list of plain
 names, and not in the headless suite.
 
+**The Symbols list is drawn in two panels.** What the Locations panel answers a line with is a
+list of symbols under a filter, which is the Symbols list over a different list of them, so the
+two are one row, one memo and one set of keys (`SymbolRow`, `use_filtered_symbols`,
+`symbol_keys` and `symbol_rows`, all `ui/sidebar.rs`). `SymbolPress` is the whole of what a
+panel says about its own: which pick the rows answer to, whether the object a symbol is in is
+drawn after the name, whether a right-click offers a bookmark, and what a press opens -- a tab
+for the symbol, or the symbol on the line the question was asked from (`press_location`,
+`ui/locations.rs`). It is a prop, so a row and the panel's Enter cannot open different places.
+Both lists key a row by the symbol's data *and* its object, which is what a `Symbol` is. The
+data alone would do -- a `SymbolData` is allocated by the parse it came out of and belongs to
+that one object, so no two symbols share one -- and the pair says the same thing without the
+argument.
+
 **Ctrl+F puts the caret in the box over the list it is pressed in.** The binding is on the rows of
 `use_filter_pane` and not on the root, so it reaches the box of the list the reader is in and
 nothing else: the Objects box from the Objects list, and no box at all from a code pane, which
@@ -340,7 +353,11 @@ the tooltip over the heading, which is a difference in what a heading says and n
 list is laid out. The top is any element, so the Objects panel's "Add binaries..." button
 over its tree is the same frame and not a third copy of it. `Folding` is what is left of the
 difference -- which state a press on a file row writes its fold to, and which panel's pick
-the row is drawn against. The filter matches the file's path, applied where the rows are
+the row is drawn against. What is left of the *sameness* is a trait: the two answers hold two
+item structs (`search::Hit` and `references::Reference`, the same four fields but for a
+reference always having columns), so `Place` is four accessors over both and the row is generic
+over it. One struct would end the trait and every bound on it, and that is a change to the two
+models rather than to this seam. The filter matches the file's path, applied where the rows are
 built rather than through `Filtered`'s memo -- that is for the thousands a line's symbols
 can be, and a name's references are tens.
 

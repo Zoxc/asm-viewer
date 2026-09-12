@@ -257,10 +257,12 @@ word nobody said. Never a failure: a server is not broken for being older.
 file, and, for an answer, whatever file it named -- a definition in another crate, a
 reference in a file no tab shows. Each file once per answer, through `source::read_text`,
 the app's one rule for reading a source file; the read blocks, which is why every question
-here is a worker's. Where a file's lines are is found when it is read, so the nth is a
-lookup: an answer naming a name used a hundred times in one file would otherwise walk that
-file from the top a hundred times. `Lines` is asked with a 1-based
-line, like everything here but the wire, and counts it down itself: no caller does that
+here is a worker's. The reader is an argument to `Talk::over` and not a choice made inside
+it, so that a test hands over text instead of writing a file: `source::read_text` reads the
+disk, not the cache a seeded file lands in. Where a file's lines are is found when it is
+read, so the nth is a lookup: an answer naming a name used a hundred times in one file
+would otherwise walk that file from the top a hundred times. `Lines` is asked with a
+1-based line, like everything here but the wire, and counts it down itself: no caller does that
 for it. A file that will not read leaves the number alone, which is the right answer for a
 line of ASCII and the nearest one for the rest. **Where the server took `utf-8` nothing is
 read for the wire at all**: the numbers are already the app's. That is `Talk`'s rule and

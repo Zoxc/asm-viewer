@@ -153,25 +153,12 @@ impl Spec {
     }
 }
 
-/// The desktop lookups. Compiled on Windows too, but only so its parsers stay under test
-/// there.
+/// What a desktop's answer to a font question parses to, and nothing that asks one: pure,
+/// so it is compiled and tested on a platform that has no such desktop, and the whole of
+/// what [`desktop`] adds to it is the tools it spawns.
 #[cfg(any(not(target_os = "windows"), test))]
-#[cfg_attr(target_os = "windows", allow(dead_code))]
-mod desktop {
-    use super::{Spec, Which};
-    use std::{env, process::Command, sync::OnceLock};
-
-    /// Run a tool and take its stdout, trimmed. Everything that can go wrong -- the
-    /// binary is not installed, the key does not exist, the output is not text -- is one
-    /// `None`.
-    fn output(command: &mut Command) -> Option<String> {
-        let output = command.output().ok()?;
-
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
-    }
+mod desktop_parse {
+    use super::Spec;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Desktop {
@@ -206,78 +193,14 @@ mod desktop {
         }
     }
 
-    /// The first desktop that has an answer wins.
-    pub fn query(which: Which) -> Option<Spec> {
-        let current = env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-
-        order(&current)
-            .into_iter()
-            .find_map(|desktop| match desktop {
-                Desktop::Kde => kde(which),
-                Desktop::Gnome => gnome(which),
-            })
-    }
-
-    /// Ask KDE for a key in the `[General]` group of `kdeglobals`. Going through
-    /// `kreadconfig` rather than reading the file matters: neither `font` nor `fixed` is
-    /// written out until it is changed, and only KDE knows its own defaults.
-    fn kde(which: Which) -> Option<Spec> {
-        let key = which.facts().kde;
-
-        ["kreadconfig6", "kreadconfig5"]
-            .into_iter()
-            .find_map(|bin| {
-                let value = output(Command::new(bin).args(["--group", "General", "--key", key]))?;
-
-                parse_kde(&value)
-            })
-    }
-
     /// KDE's specs look like `Noto Sans Mono,10,-1,5,50,0,0,0,0,0`: the first two fields
     /// are the family and the point size, the rest are flags nothing here reads.
-    pub fn parse_kde(spec: &str) -> Option<Spec> {
+    pub fn kde(spec: &str) -> Option<Spec> {
         let mut parts = spec.split(',');
         let family = parts.next()?;
         let points = parts.next().and_then(|points| points.trim().parse().ok());
 
         Spec::new(family, points)
-    }
-
-    /// Ask Gnome, through the GTK schema every GTK desktop shares.
-    fn gnome(which: Which) -> Option<Spec> {
-        let mut spec = parse_pango(&gsettings(which.facts().gnome)?)?;
-
-        // `text-scaling-factor` is how Gnome says "make text bigger": `font-name` keeps
-        // its nominal size and the accessibility slider moves this instead. It multiplies
-        // the point size and nothing else, as GTK does -- the *window* scale is winit's,
-        // taken from the display, and multiplying that too would compound.
-        //
-        // The product is not judged again: the factor is bounded where it is read and
-        // the size it multiplies has been through `settings::points` already, so all a
-        // second look could refuse is a reader who asked for text this big on purpose.
-        if let Some(points) = spec.points.as_mut() {
-            *points *= text_scaling();
-        }
-
-        Some(spec)
-    }
-
-    fn gsettings(key: &str) -> Option<String> {
-        output(Command::new("gsettings").args(["get", "org.gnome.desktop.interface", key]))
-    }
-
-    /// Cached, because it is the same answer for both fonts and each call is a process.
-    /// Out-of-range values are ignored rather than clamped: honouring one would produce a
-    /// window nothing on screen fits in.
-    fn text_scaling() -> f32 {
-        static SCALING: OnceLock<f32> = OnceLock::new();
-
-        *SCALING.get_or_init(|| {
-            gsettings("text-scaling-factor")
-                .and_then(|value| value.trim().parse::<f32>().ok())
-                .filter(|scale| (0.5..=4.0).contains(scale))
-                .unwrap_or(1.0)
-        })
     }
 
     /// Gnome's specs are Pango font descriptions -- `Cantarell 11`, `Source Code Pro
@@ -286,7 +209,7 @@ mod desktop {
     /// last word is a number, and there may be no size at all. Style words are a weight
     /// to Pango rather than part of the name, so they are dropped -- except where they
     /// are all there is, since an empty family is no answer.
-    pub fn parse_pango(value: &str) -> Option<Spec> {
+    pub fn pango(value: &str) -> Option<Spec> {
         let mut words: Vec<&str> = unquote(value.trim()).split_whitespace().collect();
 
         let points = words.last().and_then(|last| last.parse::<f32>().ok());
@@ -363,17 +286,126 @@ mod desktop {
     }
 }
 
-/// Windows, asked through `user32`. Compiled on Linux too, but only so [`font_spec`] --
-/// the half that does not touch the API -- stays under test; everything that does sits
-/// behind a second `cfg` inside.
+/// The desktop lookups: the tools each is asked with, and what a running desktop adds to
+/// the parsers above.
+#[cfg(not(target_os = "windows"))]
+mod desktop {
+    use super::desktop_parse::{self, Desktop};
+    use super::{Spec, Which};
+    use std::{env, process::Command, sync::OnceLock};
+
+    /// Run a tool and take its stdout, trimmed. Everything that can go wrong -- the
+    /// binary is not installed, the key does not exist, the output is not text -- is one
+    /// `None`.
+    fn output(command: &mut Command) -> Option<String> {
+        let output = command.output().ok()?;
+
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
+
+    /// The first desktop that has an answer wins.
+    pub fn query(which: Which) -> Option<Spec> {
+        let current = env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+
+        desktop_parse::order(&current)
+            .into_iter()
+            .find_map(|desktop| match desktop {
+                Desktop::Kde => kde(which),
+                Desktop::Gnome => gnome(which),
+            })
+    }
+
+    /// Ask KDE for a key in the `[General]` group of `kdeglobals`. Going through
+    /// `kreadconfig` rather than reading the file matters: neither `font` nor `fixed` is
+    /// written out until it is changed, and only KDE knows its own defaults.
+    fn kde(which: Which) -> Option<Spec> {
+        let key = which.facts().kde;
+
+        ["kreadconfig6", "kreadconfig5"]
+            .into_iter()
+            .find_map(|bin| {
+                let value = output(Command::new(bin).args(["--group", "General", "--key", key]))?;
+
+                desktop_parse::kde(&value)
+            })
+    }
+
+    /// Ask Gnome, through the GTK schema every GTK desktop shares.
+    fn gnome(which: Which) -> Option<Spec> {
+        let mut spec = desktop_parse::pango(&gsettings(which.facts().gnome)?)?;
+
+        // `text-scaling-factor` is how Gnome says "make text bigger": `font-name` keeps
+        // its nominal size and the accessibility slider moves this instead. It multiplies
+        // the point size and nothing else, as GTK does -- the *window* scale is winit's,
+        // taken from the display, and multiplying that too would compound.
+        //
+        // The product is not judged again: the factor is bounded where it is read and
+        // the size it multiplies has been through `settings::points` already, so all a
+        // second look could refuse is a reader who asked for text this big on purpose.
+        if let Some(points) = spec.points.as_mut() {
+            *points *= text_scaling();
+        }
+
+        Some(spec)
+    }
+
+    fn gsettings(key: &str) -> Option<String> {
+        output(Command::new("gsettings").args(["get", "org.gnome.desktop.interface", key]))
+    }
+
+    /// Cached, because it is the same answer for both fonts and each call is a process.
+    /// Out-of-range values are ignored rather than clamped: honouring one would produce a
+    /// window nothing on screen fits in.
+    fn text_scaling() -> f32 {
+        static SCALING: OnceLock<f32> = OnceLock::new();
+
+        *SCALING.get_or_init(|| {
+            gsettings("text-scaling-factor")
+                .and_then(|value| value.trim().parse::<f32>().ok())
+                .filter(|scale| (0.5..=4.0).contains(scale))
+                .unwrap_or(1.0)
+        })
+    }
+}
+
+/// The one thing a `LOGFONTW` is read for here, and the DPI that reading needs: pure, so
+/// it is compiled and tested on a platform that has no `user32`, which is the whole reason
+/// it is not in [`windows`] beside its one caller.
 #[cfg(any(target_os = "windows", test))]
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-mod windows {
+mod windows_parse {
     use super::Spec;
 
-    #[cfg(target_os = "windows")]
-    use super::Which;
-    #[cfg(target_os = "windows")]
+    /// The DPI logical pixels are defined at, and so also the one to assume wherever the
+    /// real one cannot be had.
+    pub const NOMINAL_DPI: u32 = 96;
+
+    /// The family and the point size inside a `LOGFONTW`.
+    ///
+    /// `lfFaceName` is a fixed `[u16; 32]` and is NUL-terminated only when the name is
+    /// shorter than that, so the name runs to the first NUL *or* to the end of the array.
+    /// `lfHeight` is in logical units at `dpi`: negative for the character height and
+    /// positive for the cell height, and the sign is dropped rather than corrected for --
+    /// a point either way on a UI font, and every writer of it uses the negative form.
+    pub fn logfont(face: &[u16; 32], height: i32, dpi: u32) -> Option<Spec> {
+        let name: Vec<u16> = face.iter().copied().take_while(|unit| *unit != 0).collect();
+        let family = String::from_utf16(&name).ok()?;
+
+        let dpi = if dpi == 0 { NOMINAL_DPI } else { dpi };
+        let points = height.unsigned_abs() as f32 * 72.0 / dpi as f32;
+
+        Spec::new(&family, Some(points))
+    }
+}
+
+/// Windows, asked through `user32`.
+#[cfg(target_os = "windows")]
+mod windows {
+    use super::windows_parse::{logfont, NOMINAL_DPI};
+    use super::{Spec, Which};
+
     use windows_sys::Win32::{
         Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, LOGPIXELSY},
         UI::WindowsAndMessaging::{
@@ -381,14 +413,9 @@ mod windows {
         },
     };
 
-    /// The DPI logical pixels are defined at, and so also the one to assume wherever the
-    /// real one cannot be had.
-    const NOMINAL_DPI: u32 = 96;
-
     /// Windows stores no desktop-wide fixed-width font: the nearest thing is the console
     /// host's own `FaceName`, which is often a raster face and carries a pixel cell size,
     /// so `Consolas` stands.
-    #[cfg(target_os = "windows")]
     pub fn query(which: Which) -> Option<Spec> {
         match which {
             Which::Ui => message_font(),
@@ -398,7 +425,6 @@ mod windows {
 
     /// `lfMessageFont` is the font dialogs and message boxes use, which is what "the
     /// interface font" means on Windows.
-    #[cfg(target_os = "windows")]
     fn message_font() -> Option<Spec> {
         // `cbSize` is how `user32` tells the two layouts of this struct apart; a call
         // carrying neither returns `FALSE` having written nothing. `windows-sys` declares
@@ -429,7 +455,7 @@ mod windows {
 
         let font = metrics.lfMessageFont;
 
-        font_spec(&font.lfFaceName, font.lfHeight, metrics_dpi())
+        logfont(&font.lfFaceName, font.lfHeight, metrics_dpi())
     }
 
     /// The DPI the metrics just read are in. `SystemParametersInfoW` answers in whatever
@@ -441,7 +467,6 @@ mod windows {
     /// and `windows-sys` links its imports statically, so naming one would turn "no font
     /// setting" into a process that will not start. winit `GetProcAddress`es that family
     /// for the same reason.
-    #[cfg(target_os = "windows")]
     fn metrics_dpi() -> u32 {
         // SAFETY: `GetDC(null)` is the documented way to ask for the screen's own DC and
         // these three are the documented sequence; `GetDeviceCaps` only reads, and the DC
@@ -462,23 +487,6 @@ mod windows {
             .ok()
             .filter(|dpi| *dpi > 0)
             .unwrap_or(NOMINAL_DPI)
-    }
-
-    /// The family and the point size inside a `LOGFONTW`.
-    ///
-    /// `lfFaceName` is a fixed `[u16; 32]` and is NUL-terminated only when the name is
-    /// shorter than that, so the name runs to the first NUL *or* to the end of the array.
-    /// `lfHeight` is in logical units at `dpi`: negative for the character height and
-    /// positive for the cell height, and the sign is dropped rather than corrected for --
-    /// a point either way on a UI font, and every writer of it uses the negative form.
-    pub fn font_spec(face: &[u16; 32], height: i32, dpi: u32) -> Option<Spec> {
-        let name: Vec<u16> = face.iter().copied().take_while(|unit| *unit != 0).collect();
-        let family = String::from_utf16(&name).ok()?;
-
-        let dpi = if dpi == 0 { NOMINAL_DPI } else { dpi };
-        let points = height.unsigned_abs() as f32 * 72.0 / dpi as f32;
-
-        Spec::new(&family, Some(points))
     }
 }
 

@@ -546,7 +546,10 @@ not depend on `RUST_BACKTRACE` in whatever environment the app was launched from
 one record per panic to one file per launch, where every other file the app stores is replaced
 whole by `write_atomically`. A file per launch is what keeps a bad input honest: a guarded panic
 fires once per name, so a file that upsets the demangler is twenty thousand records in one file
-rather than twenty thousand files.
+rather than twenty thousand files. That file and whether the app is already on its way down are
+what a run remembers across its panics, and they are one `Run`: the installed hook keeps one
+static of it and hands it to the rule, so a test can have a run of its own, the tests sharing
+one process.
 
 Three things the hook's own position decides. It runs **before the unwind**, so it can ask
 `analysis::guard::guarded()` whether the panic is one the crate catches on purpose: those are
