@@ -262,6 +262,9 @@ command.
   it has asked the server, what came back, and why the asking waits until the server is
   ready; and which files the server has been told the reader has open, which is what makes
   it answer about them.
+- `src/ui/coded.rs` — which lines of the file the Source pane is showing produced code:
+  what the gutter marks, the objects that answer was worked out over, and the question
+  asked again whenever either changes.
 - `src/ui/keyboard.rs` — the boxes inside the tab on screen the keyboard can be in, and the
   ask a press on a chip makes for it to go there.
 - `src/ui/keys.rs` — whether Shift, Ctrl and Alt are held, kept by the root's global key
@@ -316,8 +319,8 @@ command.
   the hooks a list opens with and the rect it closes around its rows.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
-- `src/ui/source_view.rs` — the source side of one, the bar over it, which file it is showing,
-  and the lines of that file the gutter marks as having code.
+- `src/ui/source_view.rs` — the source side of one, the bar over it, and which file it is
+  showing: the one fact the reader, the gutter's marks and the links are each asked about.
 - `src/ui/split.rs` — one document drawn: which side leads, and which panes a tab has, with
   the control on the leading pane's bar that puts the other away.
 - `src/ui/debug_view.rs` — the Debug page: the panics that can be raised on purpose, so the

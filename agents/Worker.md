@@ -68,7 +68,7 @@ are asked about -- is read there, which is what subscribes the memo to it.
 
 **And that effect lives beside the state it asks for**: `use_code_asks` in `reading.rs`,
 `use_locate_asks` in `locations.rs`, which keeps the retain-open sweep beside it over the same
-`Objects`, and `use_mark_asks` in `source_view.rs` beside `Coded`. `use_analysis_with` starts the
+`Objects`, and `use_mark_asks` in `coded.rs` beside `Coded`. `use_analysis_with` starts the
 one thread and hands back the way to ask it; the root calls each of the three with that. What is
 left in `analyzed.rs` is the listing question, whose state is that module's own. The *taking* is
 not split the same way and should not be: one worker answers over one channel with one `Answer`, so
@@ -239,7 +239,7 @@ binary to take. It carries the `Ticket` it was asked under, since that is what a
 would otherwise leave the panel looking for ever.
 
 **A fourth kind is the Source gutter's marks** (`Question::Marks`, answered into `Coded` in
-`ui/source_view.rs`). The question is a file and the answer is the lines of it any open object has
+`ui/coded.rs`). The question is a file and the answer is the lines of it any open object has
 code from — `Object::lines_from_source`, which reads the same `SourceIndex` a locate does and hands
 back bare line numbers rather than symbols. It is a whole file at a time and not a query per row,
 and the Source pane asks it by writing the file it is drawing into `ShowingFile`, the way the

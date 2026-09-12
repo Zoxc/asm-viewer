@@ -86,6 +86,8 @@ mod chords;
 pub(crate) use chords::*;
 mod code_row;
 pub(crate) use code_row::*;
+mod coded;
+pub(crate) use coded::*;
 mod debug_view;
 pub(crate) use debug_view::*;
 mod dock;

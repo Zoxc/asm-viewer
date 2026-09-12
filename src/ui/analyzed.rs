@@ -12,7 +12,7 @@
 //! Only the listing is asked for here, the `Analyzed` it lands in being this module's.
 //! Each of the other three is asked beside the state it is about, on the worker this hook
 //! hands back: `use_code_asks` (`reading.rs`), `use_locate_asks` (`locations.rs`) and
-//! `use_mark_asks` (`source_view.rs`). Every answer is still taken in the one closure,
+//! `use_mark_asks` (`coded.rs`). Every answer is still taken in the one closure,
 //! there being one worker and one [`Answer`].
 
 use super::*;
