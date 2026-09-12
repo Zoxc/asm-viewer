@@ -183,11 +183,7 @@ impl<T: PartialEq> PartialEq for PlaceRow<T> {
     }
 }
 
-impl<T> KeyExt for PlaceRow<T> {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!([T: Place] PlaceRow<T>);
 
 impl<T: Place> Component for PlaceRow<T> {
     fn render(&self) -> impl IntoElement {
@@ -222,7 +218,7 @@ impl<T: Place> Component for PlaceRow<T> {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

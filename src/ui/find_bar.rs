@@ -511,11 +511,7 @@ pub(crate) struct FindBar {
     pub(crate) key: DiffKey,
 }
 
-impl KeyExt for FindBar {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(FindBar);
 
 impl Component for FindBar {
     fn render(&self) -> impl IntoElement {
@@ -643,6 +639,10 @@ impl Component for FindBar {
                     }),
             )
             .maybe_child(error.map(invalid_line))
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.keyed()
     }
 }
 

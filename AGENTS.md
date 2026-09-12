@@ -342,7 +342,8 @@ command.
 - `src/ui/parts.rs` — the small stateless pieces of drawing shared by unrelated panes,
   `verdict_line` among them: the one line a `Verdict` is drawn as, wherever one is. Also
   `glyph`, the one small icon every bar, header and row draws, and `given`: what a text
-  box says, or nothing.
+  box says, or nothing. And `keyed!`, which writes what a row needs to be diffed by the
+  key it is given.
 - `src/ui/picks.rs` — the row each list has picked out: what a pick is, the one per panel,
   the Alt that picks without opening, and which of two colours a picked row wears.
 - `src/ui/place_row.rs` — the row the Search and Locations panels both draw: a file, or one

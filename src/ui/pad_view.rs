@@ -89,11 +89,7 @@ struct DependencyRow {
     key: DiffKey,
 }
 
-impl KeyExt for DependencyRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(DependencyRow);
 
 /// Test-only: how many dependency rows this thread has drawn.
 ///
@@ -193,7 +189,7 @@ impl Component for DependencyRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -464,11 +460,7 @@ impl PartialEq for OutputPane {
     }
 }
 
-impl KeyExt for OutputPane {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(OutputPane);
 
 impl Component for OutputPane {
     fn render(&self) -> impl IntoElement {
@@ -537,7 +529,7 @@ impl Component for OutputPane {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -704,11 +696,7 @@ struct PadRow {
     key: DiffKey,
 }
 
-impl KeyExt for PadRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(PadRow);
 
 impl Component for PadRow {
     fn render(&self) -> impl IntoElement {
@@ -743,7 +731,7 @@ impl Component for PadRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

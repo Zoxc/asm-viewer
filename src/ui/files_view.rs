@@ -50,11 +50,7 @@ fn press_entry(
     }
 }
 
-impl KeyExt for EntryRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(EntryRow);
 
 impl Component for EntryRow {
     fn render(&self) -> impl IntoElement {
@@ -136,7 +132,7 @@ impl Component for EntryRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

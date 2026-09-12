@@ -65,11 +65,7 @@ impl PartialEq for ArchiveRow {
     }
 }
 
-impl KeyExt for ArchiveRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(ArchiveRow);
 
 impl Component for ArchiveRow {
     fn render(&self) -> impl IntoElement {
@@ -146,7 +142,7 @@ impl Component for ArchiveRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -166,11 +162,7 @@ struct PendingRow {
     key: DiffKey,
 }
 
-impl KeyExt for PendingRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(PendingRow);
 
 impl Component for PendingRow {
     fn render(&self) -> impl IntoElement {
@@ -207,7 +199,7 @@ impl Component for PendingRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -238,11 +230,7 @@ impl PartialEq for ObjectRow {
     }
 }
 
-impl KeyExt for ObjectRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(ObjectRow);
 
 impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
@@ -309,7 +297,7 @@ impl Component for ObjectRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -336,11 +324,7 @@ impl PartialEq for SymbolRow {
     }
 }
 
-impl KeyExt for SymbolRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(SymbolRow);
 
 impl Component for SymbolRow {
     fn render(&self) -> impl IntoElement {
@@ -384,7 +368,7 @@ impl Component for SymbolRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -412,11 +396,7 @@ impl PartialEq for HistoryRow {
     }
 }
 
-impl KeyExt for HistoryRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(HistoryRow);
 
 impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
@@ -463,7 +443,7 @@ impl Component for HistoryRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

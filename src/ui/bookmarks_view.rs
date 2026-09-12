@@ -30,11 +30,7 @@ impl PartialEq for BookmarkRow {
     }
 }
 
-impl KeyExt for BookmarkRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(BookmarkRow);
 
 impl Component for BookmarkRow {
     fn render(&self) -> impl IntoElement {
@@ -100,7 +96,7 @@ impl Component for BookmarkRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

@@ -344,11 +344,7 @@ pub(crate) fn dump_line(bytes: &[u8]) -> (&'static str, String) {
     (mark, format!("{:<width$} |{ascii}|", values.join(", ")))
 }
 
-impl KeyExt for TextRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(TextRow);
 
 impl Component for TextRow {
     fn render(&self) -> impl IntoElement {
@@ -448,7 +444,7 @@ impl Component for TextRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -474,11 +470,7 @@ struct EmptyRow {
     key: DiffKey,
 }
 
-impl KeyExt for EmptyRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(EmptyRow);
 
 impl Component for EmptyRow {
     fn render(&self) -> impl IntoElement {
@@ -502,7 +494,7 @@ impl Component for EmptyRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

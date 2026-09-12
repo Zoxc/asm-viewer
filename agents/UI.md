@@ -39,10 +39,18 @@ type's own key standing where a call site gives none. What goes into it is whate
 
 **All three parts are needed, and only `render_key` is read.** `KeyExt` alone takes the `.key(..)`
 call and stores it, so a component that leaves `render_key` out compiles, reads as keyed, and is
-not: freya asks for the key and gets `default_key`, the same one for every row of the list. Three
+not: freya asks for the key and gets `default_key`, the same one for every row of the list. Four
 components were written that way, and each row's `use_state` then stayed with the slot rather than
-with the file, the hit or the path it was drawn for. `an_artifact_rows_hover_goes_with_its_key_and_not_its_slot`
-is that mechanism pinned.
+with the file, the hit, the path or the pane it was drawn for.
+`an_artifact_rows_hover_goes_with_its_key_and_not_its_slot` and
+`a_find_bars_box_follows_the_pane_it_is_over` are that mechanism pinned.
+
+**So the first two parts are written by one macro** (`keyed!`, `ui/parts.rs`). It writes the
+`KeyExt` impl and a `keyed` method the `render_key` override calls, under a `deny(dead_code)`:
+leave the override out and nothing calls `keyed`, which is a compile error naming the row. Making
+the mistake hard to miss is the point; the six lines saved per row are not. It caught the fourth of
+those components on the first build -- `FindBar`, whose box had gone on holding the last pane's
+pattern since it was written.
 
 **A `Writable<T>` compares equal to every other one.** Its `eq` returns `true` outright
 (`freya-core`'s `lifecycle/writable.rs`), there being nothing to compare in the four closures it is.

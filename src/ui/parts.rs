@@ -1,6 +1,51 @@
-//! Small stateless pieces of drawing shared by panes that share nothing else.
+//! Small stateless pieces of drawing shared by panes that share nothing else, and the
+//! macro every keyed row is written with.
 
 use super::*;
+
+/// Two of the three parts a keyed component needs, written once: the `KeyExt` impl over
+/// its `key` field, so `.key(..)` has somewhere to go, and the `keyed` its `render_key`
+/// answers with.
+///
+/// **The third is the row's own**, one line inside its `impl Component`:
+///
+/// ```ignore
+/// fn render_key(&self) -> DiffKey {
+///     self.keyed()
+/// }
+/// ```
+///
+/// Only `render_key` is read. Without it a row takes the `.key(..)` call, stores it, and
+/// is diffed by position all the same, so each row's hover and state stay with the slot
+/// rather than with what was drawn in it (`agents/UI.md`). Nothing in the types said the
+/// three go together; now nothing calls the `keyed` this writes, and the `deny` makes that
+/// a compile error naming the row.
+///
+/// A row with generic parameters names them first, bounds and all:
+/// `keyed!([T: Place] PlaceRow<T>);`.
+macro_rules! keyed {
+    ($row:ident) => {
+        keyed!([] $row);
+    };
+    ([$($generic:tt)*] $row:ty) => {
+        impl<$($generic)*> KeyExt for $row {
+            fn write_key(&mut self) -> &mut DiffKey {
+                &mut self.key
+            }
+        }
+
+        #[deny(dead_code)]
+        impl<$($generic)*> $row {
+            /// The key this was built with, or the type's own where the call site gave
+            /// none.
+            fn keyed(&self) -> DiffKey {
+                self.key.clone().or(self.default_key())
+            }
+        }
+    };
+}
+
+pub(crate) use keyed;
 
 /// The rule between two surfaces, drawn by whichever of them owns the edge: the palette's
 /// hairline along the one side the caller names, and nothing along the other three.

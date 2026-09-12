@@ -900,11 +900,7 @@ struct FoundRow {
     key: DiffKey,
 }
 
-impl KeyExt for FoundRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(FoundRow);
 
 impl Component for FoundRow {
     fn render(&self) -> impl IntoElement {
@@ -961,7 +957,7 @@ impl Component for FoundRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

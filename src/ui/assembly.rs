@@ -828,11 +828,7 @@ pub(crate) struct SeparatorRow {
     pub(crate) key: DiffKey,
 }
 
-impl KeyExt for SeparatorRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(SeparatorRow);
 
 impl Component for SeparatorRow {
     fn render(&self) -> impl IntoElement {
@@ -863,7 +859,7 @@ impl Component for SeparatorRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -911,11 +907,7 @@ impl PartialEq for InstructionRow {
     }
 }
 
-impl KeyExt for InstructionRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(InstructionRow);
 
 /// The text instruction `index`'s row draws after its address, and the line that row
 /// copies.
@@ -1196,7 +1188,7 @@ impl Component for InstructionRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

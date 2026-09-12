@@ -561,3 +561,14 @@ converts each way as it draws and as it is pressed, and a followed definition re
 it lands on to count its caret's column (`src/ui/follow.rs`). The conversion is one function
 each way (`src/chars.rs`) and the cost is a walk of a short line, but it is a walk that a
 byte-offset hit test would remove.
+
+**A `Component` whose key needs saying once.** `KeyExt::key` writes a `DiffKey` and
+`Component::render_key` reads one, but nothing joins them: the built-in elements hold their
+key in the element and a component has nowhere to put one, so a keyed component holds the
+field, implements `KeyExt` over it and overrides `render_key` to read it back
+(`element.rs:345-359`, `extensions.rs:125-142`). Leave the override out and the type still
+takes `.key(..)`, stores it, and is diffed by position. **Cost:** two dozen components here
+repeat the three parts, and four were written without the third before anyone noticed. What
+the app does instead: `keyed!` (`src/ui/parts.rs`) writes the first two under a
+`deny(dead_code)`, which turns a missing override into a compile error. A blanket
+`render_key` reading `KeyExt`, or a derive, would do it.

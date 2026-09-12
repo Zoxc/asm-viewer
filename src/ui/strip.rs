@@ -746,11 +746,7 @@ impl PartialEq for TabHeader {
     }
 }
 
-impl KeyExt for TabHeader {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(TabHeader);
 
 impl Component for TabHeader {
     fn render(&self) -> impl IntoElement {
@@ -858,7 +854,7 @@ impl Component for TabHeader {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

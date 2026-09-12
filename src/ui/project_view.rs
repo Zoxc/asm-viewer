@@ -121,11 +121,7 @@ struct BinaryRow {
     key: DiffKey,
 }
 
-impl KeyExt for BinaryRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(BinaryRow);
 
 impl Component for BinaryRow {
     fn render(&self) -> impl IntoElement {
@@ -147,7 +143,7 @@ impl Component for BinaryRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -183,11 +179,7 @@ struct ArtifactRow {
     key: DiffKey,
 }
 
-impl KeyExt for ArtifactRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(ArtifactRow);
 
 impl Component for ArtifactRow {
     fn render(&self) -> impl IntoElement {
@@ -230,7 +222,7 @@ impl Component for ArtifactRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -306,11 +298,7 @@ pub(crate) struct RecentRow {
     pub(crate) key: DiffKey,
 }
 
-impl KeyExt for RecentRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(RecentRow);
 
 impl Component for RecentRow {
     fn render(&self) -> impl IntoElement {
@@ -342,7 +330,7 @@ impl Component for RecentRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

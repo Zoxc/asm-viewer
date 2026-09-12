@@ -108,11 +108,7 @@ impl PartialEq for SourceRow {
     }
 }
 
-impl KeyExt for SourceRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(SourceRow);
 
 /// The text of `columns` on row `index`, or `None` where they name nothing of it.
 ///
@@ -571,7 +567,7 @@ impl Component for SourceRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 

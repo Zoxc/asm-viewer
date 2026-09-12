@@ -22003,11 +22003,7 @@ struct LentRow {
     key: DiffKey,
 }
 
-impl KeyExt for LentRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(LentRow);
 
 impl Component for LentRow {
     fn render(&self) -> impl IntoElement {
@@ -22036,7 +22032,7 @@ impl Component for LentRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
@@ -24284,6 +24280,83 @@ fn ctrl_f_opens_the_find_bar_over_the_pane_the_keyboard_is_in() {
     assert!(
         drawn.iter().any(|label| label == "\u{2039}"),
         "the bar is missing its step buttons: {drawn:?}"
+    );
+}
+
+/// Which pane [`moving_bar_harness`] draws its find bar over.
+#[derive(Clone, Copy)]
+struct BarOver(State<Where>);
+
+/// One find bar and nothing else, over whichever pane [`BarOver`] names. The slot it is
+/// drawn in never moves, which is what a switch of tab does to a pane's bar: `DocumentBody`
+/// keys nothing, so the panes under it are handed the new tab's props rather than mounted
+/// again (`ui/split.rs`).
+fn moving_bar_harness() -> impl IntoElement {
+    let over = use_consume::<BarOver>().0;
+    let at = *over.read();
+    rect().expanded().maybe_child(find_bar_over(at))
+}
+
+/// **A find bar is keyed by the pane it is over**, so a bar that moves to another pane is
+/// mounted again and its box seeded from that pane's own bar. Unkeyed, the box goes on
+/// holding the pattern the last pane was searched for, and the next keystroke writes that
+/// over what this pane was searching.
+///
+/// The claim is `Component::render_key`. `FindBar` held a `DiffKey` and implemented
+/// `KeyExt` over it, so `.key(at)` compiled and stored a key nothing read: freya asked for
+/// `default_key`, which is the same for every `FindBar`, and never mounted a second one.
+/// Fails on a bar with the field and the `KeyExt` impl and no `render_key`, which is how
+/// this one was written.
+#[test]
+fn a_find_bars_box_follows_the_pane_it_is_over() {
+    let (_docs, one, two) = kept_tabs();
+    let (first, second) = (
+        (Placing::Tab(one.0), Pane::Assembly),
+        (Placing::Tab(two.0), Pane::Assembly),
+    );
+
+    let (mut test, (roots, mut over)) = TestingRunner::new(
+        moving_bar_harness,
+        (600., 200.).into(),
+        move |runner: &mut _| {
+            let roots = runner.provide_root_context(test_roots);
+            let over = runner
+                .provide_root_context(move || BarOver(State::create(first)))
+                .0;
+            (roots, over)
+        },
+        1.,
+    );
+
+    // A bar over each pane, each searched for something of its own. An object's code is
+    // the listing that is walked rather than passed over, so no worker is wanted here:
+    // what a bar holds is all this is about.
+    let object = fixture_symbols()[0].object.clone();
+    let finds = roots.finds;
+    let pattern = |text: &str| Some(text.to_owned());
+    open_find(
+        finds,
+        first,
+        pattern("alpha"),
+        Searchable::Code(object.clone()),
+    );
+    open_find(finds, second, pattern("beta"), Searchable::Code(object));
+    settle(&mut test);
+    assert!(
+        labels(&test).iter().any(|text| text == "alpha"),
+        "the box was not seeded from the pane's own bar"
+    );
+
+    over.set(second);
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "beta"),
+        "the box kept the last pane's pattern: {drawn:?}"
+    );
+    assert!(
+        !drawn.iter().any(|text| text == "alpha"),
+        "the box is still drawing the last pane's pattern: {drawn:?}"
     );
 }
 

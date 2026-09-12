@@ -765,11 +765,7 @@ impl PartialEq for LocationRow {
     }
 }
 
-impl KeyExt for LocationRow {
-    fn write_key(&mut self) -> &mut DiffKey {
-        &mut self.key
-    }
-}
+keyed!(LocationRow);
 
 /// Everything a location row's press reaches through: what a door is given, and the two
 /// states beyond it a chosen symbol is written to. A struct because both the row and the
@@ -918,7 +914,7 @@ impl Component for LocationRow {
     }
 
     fn render_key(&self) -> DiffKey {
-        self.key.clone().or(self.default_key())
+        self.keyed()
     }
 }
 
