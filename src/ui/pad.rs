@@ -78,7 +78,15 @@ impl PadBuffers {
         buffers.get_mut(pad).unwrap_or(gone)
     }
 
-    fn put(&mut self, pad: PadId, editor: CodeEditorData) {
+    /// The buffer for `pad`, over the source the worker read: a rope, the language the
+    /// pad's one source file is in, and the palette's syntax theme.
+    ///
+    /// Made once, when that source arrives, so there is no cursor and no undo history to
+    /// keep. A switch away and back leaves the buffer exactly as this made it.
+    fn make(&mut self, pad: PadId, source: &str) {
+        let mut editor =
+            CodeEditorData::new(Rope::from_str(source), language(Path::new(SOURCE_FILE)));
+        PadBuffers::refresh(&mut editor);
         self.buffers.insert(pad, editor);
     }
 
@@ -90,9 +98,17 @@ impl PadBuffers {
 
     fn theme(&mut self) {
         for editor in self.buffers.values_mut() {
-            editor.set_theme(palette().syntax());
-            editor.parse();
+            PadBuffers::refresh(editor);
         }
+    }
+
+    /// Give `editor` the palette's syntax theme and run the highlighter over it.
+    ///
+    /// The parse is not optional: `CodeEditorData::new` never runs the highlighter, and a
+    /// buffer with no blocks in it draws no lines at all.
+    fn refresh(editor: &mut CodeEditorData) {
+        editor.set_theme(palette().syntax());
+        editor.parse();
     }
 }
 
@@ -346,7 +362,7 @@ impl Pads {
         if program.is_some() {
             state.program = program;
         }
-        store.map(|store| state.scratchpad.directory(store))
+        store.map(|store| state.scratchpad.id().directory_in(store))
     }
 
     /// The handle to a started program, or why there is none.
@@ -754,7 +770,7 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
         }),
         PadJob::Open(scratchpad) => match &store {
             Some(store) => {
-                let directory = scratchpad.directory(store);
+                let directory = scratchpad.id().directory_in(store);
                 let pad = scratchpad.id().clone();
                 match scratchpad.opened_in(&directory) {
                     Ok(opened) => {
@@ -791,13 +807,15 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
         PadJob::Save(scratchpad) => PadAnswer::Saved {
             pad: scratchpad.id().clone(),
             failure: match &store {
-                Some(store) => scratchpad.write_to(&scratchpad.directory(store)).err(),
+                Some(store) => scratchpad
+                    .write_to(&scratchpad.id().directory_in(store))
+                    .err(),
                 None => Some(Failure::NoDirectory),
             },
         },
         PadJob::Build(scratchpad) => {
             let build = match &store {
-                Some(store) => scratchpad.build_in(&scratchpad.directory(store)),
+                Some(store) => scratchpad.build_in(&scratchpad.id().directory_in(store)),
                 None => Err(Failure::NoDirectory),
             };
             // Read here and not in a job of its own, so what the pane holds and the
@@ -825,7 +843,7 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
             pad: scratchpad.id().clone(),
             run,
             started: match &store {
-                Some(store) => run_in(&executable, &scratchpad.directory(store), emit),
+                Some(store) => run_in(&executable, &scratchpad.id().directory_in(store), emit),
                 None => Err(Failure::NoDirectory),
             },
         },
@@ -940,19 +958,8 @@ pub(crate) fn use_scratchpad_with(
                     return;
                 }
 
-                // The pad's own buffer, built once when its source arrives: this is the
-                // first thing that happens to it, so there is no cursor and no undo
-                // history to preserve. A later switch away and back leaves it exactly as
-                // it is here.
-                let mut editor = CodeEditorData::new(
-                    Rope::from_str(&scratchpad.source),
-                    language(Path::new(SOURCE_FILE)),
-                );
-                editor.set_theme(palette().syntax());
-                // Without this the editor has no blocks at all and draws no lines:
-                // `CodeEditorData::new` never runs the highlighter.
-                editor.parse();
-                text.write().put(scratchpad.id().clone(), editor);
+                text.write()
+                    .make(scratchpad.id().clone(), &scratchpad.source);
             }
             PadAnswer::Unopened { pad: name, failure } => {
                 pad.write().unopened(&name, failure);

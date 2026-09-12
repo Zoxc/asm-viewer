@@ -14705,6 +14705,56 @@ fn a_delete_is_asked_for_before_anything_goes() {
     assert!(asks.is_empty(), "cancelling deleted the pad");
 }
 
+/// The question says where the package it is about to destroy is, and it is the **asked
+/// about** pad's rather than the shown one's: any row can be right-clicked, and the path is
+/// where the reader would look for what is about to go.
+///
+/// The path is the id's and nothing else ([`PadId::directory_in`]), so the question needs no
+/// scratchpad of its own to draw it.
+#[test]
+fn the_delete_question_says_where_the_asked_about_pad_is() {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad: pad_on_disk(scratchpad),
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            _ => unreachable!("this test only lists, opens and saves"),
+        });
+    let pad = roots.pad;
+    let store = roots
+        .states
+        .store
+        .peek()
+        .clone()
+        .expect("a store to keep pads in");
+
+    pump(&mut test, || pad.peek().state().opened());
+
+    // The row of the pad that is not on screen.
+    let row = centre_of(&test, "<two>");
+    right_click(&mut test, row);
+    let entry = centre_of(&test, "Delete scratchpad");
+    test.move_cursor(entry);
+    test.press_cursor(entry);
+    test.release_cursor(entry);
+    settle(&mut test);
+
+    // The pane behind the question draws the shown pad's package, so what is asserted is
+    // that the asked-about pad's is on screen too.
+    let asked = pad_id("two").directory_in(&store);
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == &asked.to_string_lossy()),
+        "the question does not say where the asked-about pad is: {drawn:?}"
+    );
+}
+
 /// Confirming a delete does not take the editor down with the buffer it lets go of.
 ///
 /// One mouse-up is one batch of events, emitted against the tree freya measured before any
@@ -15853,7 +15903,7 @@ fn a_finished_pad_build_forgets_the_pad_package() {
         .peek()
         .clone()
         .expect("a store to keep pads in");
-    let package = pad.peek().state().scratchpad.directory(&store);
+    let package = pad.peek().state().scratchpad.id().directory_in(&store);
     let source = package.join("src").join("main.rs");
     highlighted().insert(source.clone(), Some(stand_in.0.clone()));
 

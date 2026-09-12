@@ -552,12 +552,13 @@ fn pad_label(id: &PadId, name: &str) -> String {
 /// Where a pad's package is, as the two places that draw it say so: the pane, under the
 /// name, and the delete question, over the buttons. The package cargo is handed **is** the
 /// storage, so this is the whole of what a pad is on disk.
-fn package_path(store: &Option<Store>, scratchpad: Option<&Scratchpad>) -> String {
-    match (store, scratchpad) {
-        (Some(store), Some(scratchpad)) => {
-            scratchpad.directory(store).to_string_lossy().into_owned()
-        }
-        _ => "nowhere to keep a scratchpad".to_owned(),
+///
+/// The id and not the pad: the path is the id's ([`PadId::directory_in`]), so neither
+/// caller has to have a [`Scratchpad`] in hand to draw it.
+fn package_path(store: &Option<Store>, id: &PadId) -> String {
+    match store {
+        Some(store) => id.directory_in(store).to_string_lossy().into_owned(),
+        None => "nowhere to keep a scratchpad".to_owned(),
     }
 }
 
@@ -612,16 +613,13 @@ impl Component for DeletePopup {
         // row can be right-clicked.
         let asking = {
             let pads = pad.read();
-            pads.confirming.clone().map(|id| {
-                let scratchpad = pads.get(&id).map(|state| state.scratchpad.clone());
-                PadToDelete {
-                    name: scratchpad
-                        .as_ref()
-                        .map(|scratchpad| scratchpad.name.clone())
-                        .unwrap_or_default(),
-                    package: package_path(&store.peek(), scratchpad.as_ref()),
-                    id,
-                }
+            pads.confirming.clone().map(|id| PadToDelete {
+                name: pads
+                    .get(&id)
+                    .map(|state| state.scratchpad.name.clone())
+                    .unwrap_or_default(),
+                package: package_path(&store.peek(), &id),
+                id,
             })
         };
 
@@ -1039,7 +1037,7 @@ impl Component for PadDetails {
             let state = pads.state();
             (
                 pads.shown().clone(),
-                package_path(&store.peek(), Some(&state.scratchpad)),
+                package_path(&store.peek(), pads.shown()),
                 state.verdict(),
             )
         };

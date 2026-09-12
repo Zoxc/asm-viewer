@@ -183,6 +183,14 @@ impl PadId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Where the pad filed under this id lives, under the store the pads are kept in.
+    ///
+    /// A property of the id and of nothing else, which is what lets a delete, a run or a
+    /// row that has only an id ask where the package is without a [`Scratchpad`] in hand.
+    pub fn directory_in(&self, store: &Store) -> PathBuf {
+        store.scratchpads().join(self.as_str())
+    }
 }
 
 /// One scratchpad: what the app files it under, what the reader calls it, the source it
@@ -543,11 +551,6 @@ impl Scratchpad {
         toml::to_string_pretty(&manifest).map_err(|error| Failure::Write(error.to_string()))
     }
 
-    /// Where this scratchpad lives, under the store the pads are kept in.
-    pub fn directory(&self, store: &Store) -> PathBuf {
-        pad_in(store, &self.id)
-    }
-
     /// Write the package into `directory`, creating it and its `src/`.
     ///
     /// Both files go down through `.tmp` + rename, which `src/main.rs` earns: it is the
@@ -643,10 +646,6 @@ impl Scratchpad {
     }
 }
 
-fn pad_in(store: &Store, id: &PadId) -> PathBuf {
-    store.scratchpads().join(id.as_str())
-}
-
 /// What the package in `directory` says it is, or `None` where there is no scratchpad
 /// there: the manifest read and parsed, with a source file beside it.
 ///
@@ -711,7 +710,7 @@ impl PadOrder {
 /// cut to what the file keeps and the log-and-swallow of a failure both live: losing an
 /// order is not losing a pad.
 pub fn remember(store: &Store, id: &PadId) {
-    if !pad_in(store, id).is_dir() {
+    if !id.directory_in(store).is_dir() {
         return;
     }
 
@@ -747,7 +746,7 @@ fn load_order(store: &Store) -> PadOrder {
 pub fn pads(store: &Store) -> Vec<PadListing> {
     let scratchpads = store.scratchpads();
     let listing = |id: PadId| {
-        let name = stated_in(&pad_in(store, &id))?
+        let name = stated_in(&id.directory_in(store))?
             .package
             .metadata
             .scratchpad
@@ -808,8 +807,8 @@ pub fn new_pad(store: &Store) -> Result<Scratchpad, Failure> {
 /// and the only thing here that destroys what the reader wrote — which is why the app asks
 /// before calling it.
 ///
-/// **The path is narrowed twice.** It is [`pad_in`]'s and nothing else, and an id is a
-/// checked crate name, so it can be neither `..`, nor a separator, nor an absolute path.
+/// **The path is narrowed twice.** It is [`PadId::directory_in`]'s and nothing else, and an id
+/// is a checked crate name, so it can be neither `..`, nor a separator, nor an absolute path.
 /// Then the directory must still be one [`stated_in`] answers for, so a `remove_dir_all`
 /// can only reach a directory holding a manifest this module wrote.
 /// [`fs::symlink_metadata`] is what makes that the directory itself rather than whatever a
@@ -818,7 +817,7 @@ pub fn new_pad(store: &Store) -> Result<Scratchpad, Failure> {
 /// A pad with no directory is already deleted and says so: the pad a first run holds has
 /// none until something is typed into it.
 pub fn delete_pad(store: &Store, id: &PadId) -> Result<(), Failure> {
-    let directory = pad_in(store, id);
+    let directory = id.directory_in(store);
     let entry = match fs::symlink_metadata(&directory) {
         Ok(entry) => entry,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),

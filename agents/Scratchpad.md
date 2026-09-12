@@ -22,24 +22,26 @@ than inside one, `Pad` is not one of the states a project switch closes, and a p
 project is the same pad in the next.
 
 **A pad is filed under an id, and the id is never shown.** `PadId` is what the directory, the order
-and the app's own table are keyed by; `Scratchpad::name` is what the reader calls it. The two are
-separate so that a rename is a value changing and not a directory moving. That separation is what
-buys everything below it: a name may be empty, hold spaces or be written in any alphabet, two pads
-may be called the same thing, and the name box is an ordinary bound box with nothing to apply,
-nothing to refuse and no gesture to discover. The id gets `ProjectId`'s treatment all the same: a
-newtype whose `Deserialize` goes through the checked constructor, because it is interpolated into a
-path *and* read back out of two files a user can edit, the order beside the pads and every pad's own
-`Cargo.toml`, where it is what `[package] name` says. `check_name` is the one check, and the
-crate-name rules it applies are strictly stronger than what a safe path component needs. It has no
-`Display`, deliberately. That is also what gives the enumeration its rule: the manifest read
-answers `None` for a crate name that is not an id, so **a directory whose manifest parses, with a
-source file beside it, is a pad and anything else is not**, repaired at the point of use and never
-on load. `stated_in` is that sentence, and it is all the questions short of opening a pad ask: the
-listing wants a name and a delete wants a yes or no, and neither is worth reading the reader's own
-document. `load_from` is `stated_in` and then that document, so what one answers for the other
-does -- bar the one case they part over on purpose. A `src/main.rs` that is there and is not text
-lists as a pad and refuses to open, which is what this module says about any package it cannot
-read; missing from the list, it would be a pad the reader cannot fix.
+and the app's own table are keyed by; `Scratchpad::name` is what the reader calls it. The directory
+is `PadId::directory_in` and nothing else, so a delete, a run or a row holding only an id can say
+where a pad's package is. The two are separate so that a rename is a value changing and not a
+directory moving. That separation is what buys everything below it: a name may be empty, hold spaces
+or be written in any alphabet, two pads may be called the same thing, and the name box is an
+ordinary bound box with nothing to apply, nothing to refuse and no gesture to discover. The id gets
+`ProjectId`'s treatment all the same: a newtype whose `Deserialize` goes through the checked
+constructor, because it is interpolated into a path *and* read back out of two files a user can
+edit, the order beside the pads and every pad's own `Cargo.toml`, where it is what `[package] name`
+says. `check_name` is the one check, and the crate-name rules it applies are strictly stronger than
+what a safe path component needs. It has no `Display`, deliberately. That is also what gives the
+enumeration its rule: the manifest read answers `None` for a crate name that is not an id, so **a
+directory whose manifest parses, with a source file beside it, is a pad and anything else is not**,
+repaired at the point of use and never on load. `stated_in` is that sentence, and it is all the
+questions short of opening a pad ask: the listing wants a name and a delete wants a yes or no, and
+neither is worth reading the reader's own document. `load_from` is `stated_in` and then that
+document, so what one answers for the other does -- bar the one case they part over on purpose. A
+`src/main.rs` that is there and is not text lists as a pad and refuses to open, which is what this
+module says about any package it cannot read; missing from the list, it would be a pad the reader
+cannot fix.
 
 **The name lives in the package, under `[package.metadata]`**, the one place cargo reserves for a
 tool of its own and ignores itself. So "the package is the storage" still holds: nothing describes a
