@@ -183,10 +183,9 @@ fn line_of(head: &[(String, SpanKind)], link: Option<Lifted>, tail: &[(String, S
 pub(crate) struct AsmData {
     /// What the worker made of the symbol: the listing, its gutter layout and its lines.
     pub(crate) studied: Studied,
-    /// The source-driven tab this listing is the assembly side of and the file it is
-    /// showing, or `None` for an assembly-driven tab's own listing. The file is compared
-    /// by text, as `LinePos` is.
-    pub(crate) subject: Option<(DocId, Arc<str>)>,
+    /// The source-driven tab this listing is the assembly side of, or `None` for an
+    /// assembly-driven tab's own listing.
+    pub(crate) subject: Option<Subject>,
     /// The listing row this symbol's first instruction row is drawn at: 0 in a listing
     /// that is one symbol, and where the symbol starts in a listing of a whole object's
     /// code. What `lanes` answers in rows is relative to the symbol, and this is what the
@@ -215,7 +214,7 @@ impl AsmData {
     /// answer rather than a question.
     pub(crate) fn of(
         studied: Studied,
-        subject: Option<(DocId, Arc<str>)>,
+        subject: Option<Subject>,
         base: usize,
         bias: u64,
         width: usize,
@@ -1565,7 +1564,10 @@ impl AssemblyPane {
         let data = AsmData::of(
             studied,
             match &shown.ask {
-                Ask::Source { at, .. } => Some((self.tab, at.file.clone())),
+                Ask::Source { at, .. } => Some(Subject {
+                    tab: self.tab,
+                    file: at.file.clone(),
+                }),
                 Ask::Symbol(_) => None,
             },
             0,

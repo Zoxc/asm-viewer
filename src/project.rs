@@ -676,17 +676,11 @@ pub struct RestoredEntry {
 impl RestoredEntry {
     /// The place this is, as a trail holds one ([`Stop`]).
     ///
-    /// **The one place the saved halves are paired back with the document they belong
-    /// to.** A file states them apart -- an address, a line and a document, each its own
-    /// value -- and can therefore state a pairing that means nothing, so a place whose
-    /// half does not belong to its document is the document itself and not a guess. Past
-    /// here nothing carries the halves.
+    /// The halves are paired back with the document by [`Stop::paired`], which is where
+    /// that rule lives: a file states them apart and can therefore state a pairing that
+    /// means nothing. Past here nothing carries the halves.
     pub fn stop(&self) -> Stop {
-        match (&self.document, self.code_address, self.src_line) {
-            (Document::Code(object), Some(address), _) => Stop::at(object.clone(), address),
-            (Document::Source(file), _, Some(line)) => Stop::on(file.clone(), line),
-            _ => Stop::whole(self.document.clone()),
-        }
+        Stop::paired(self.document.clone(), self.code_address, self.src_line)
     }
 }
 

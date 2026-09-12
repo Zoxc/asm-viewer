@@ -179,6 +179,31 @@ impl Query {
     }
 }
 
+/// The source-driven tab a line question was asked from, and the file it was showing.
+///
+/// A row of the answer is **chosen for that tab** -- its assembly side follows the symbol
+/// -- while the tab is still open on that file, and opens the symbol as a tab of its own
+/// once it has closed or moved off the file. The file is half of it: a tab handed another
+/// document is no longer the tab the question was asked from.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Subject {
+    pub(crate) tab: DocId,
+    pub(crate) file: Arc<str>,
+}
+
+impl Subject {
+    /// The entry a choice for this is written under, and [`None`] where the tab has
+    /// closed or moved off the file.
+    ///
+    /// The entry is **the place the tab is at** and not the file: a drive written under a
+    /// stop the trail does not hold is a drive nothing reads.
+    fn entry(&self, docs: &Docs) -> Option<Entry> {
+        let document = Document::Source(self.file.clone());
+        (docs.get(self.tab) == Some(&document))
+            .then(|| (self.tab, place_at(docs, self.tab, &document)))
+    }
+}
+
 /// What was asked, and what it came to.
 ///
 /// There is no `pending` field: a question is being looked for exactly while it is `asked`
@@ -187,12 +212,9 @@ impl Query {
 pub(crate) struct Located {
     /// The question whose symbols are wanted, or `None` until anything has been asked.
     pub(crate) asked: Option<Query>,
-    /// The source-driven tab the line was asked from and the file it was showing, when
-    /// it was asked from one: a row is then **chosen for that tab** -- its assembly side
-    /// follows the symbol -- rather than opened as a tab of its own. Asked from an
-    /// assembly-driven tab, or once that tab has closed or moved off the file, a row
-    /// opens the symbol.
-    pub(crate) subject: Option<(DocId, Arc<str>)>,
+    /// The source-driven tab the question was asked from, and `None` where it was asked
+    /// from an assembly-driven one.
+    pub(crate) subject: Option<Subject>,
     /// The last answer, whatever it answered with -- an empty list is an answer.
     pub(crate) found: Option<Found>,
 }
@@ -409,7 +431,7 @@ pub(crate) fn find_locations(
     mut located: State<Located>,
     dock: State<DockArea>,
     query: Query,
-    subject: Option<(DocId, Arc<str>)>,
+    subject: Option<Subject>,
 ) {
     let mut next = located.peek().clone();
     if next.found.as_ref().is_some_and(|found| found.of == query) {
@@ -533,7 +555,7 @@ pub(crate) fn locate_menu(
     located: State<Located>,
     dock: State<DockArea>,
     at: LinePos,
-    subject: Option<(DocId, Arc<str>)>,
+    subject: Option<Subject>,
     function: Option<Function>,
     named: Vec<MenuButton>,
     key: Option<&'static str>,
@@ -824,19 +846,13 @@ enum Chosen {
 }
 
 /// Which of the three a press on a location row is: `at` is the answer's own line, and
-/// `subject` the source-driven tab the question was asked from.
-///
-/// The subject is taken only while `docs` still has that tab open on that file, and the
-/// entry is **the place the tab is at** and not the file: a drive written under a stop the
-/// trail does not hold is a drive nothing reads.
-fn chosen(docs: &Docs, at: Option<LinePos>, subject: Option<(DocId, Arc<str>)>) -> Chosen {
+/// `subject` the source-driven tab the question was asked from, whose entry is the
+/// choice's ([`Subject::entry`]).
+fn chosen(docs: &Docs, at: Option<LinePos>, subject: Option<Subject>) -> Chosen {
     let Some(at) = at else {
         return Chosen::Alone;
     };
-    let subject = subject
-        .filter(|(id, file)| docs.get(*id) == Some(&Document::Source(file.clone())))
-        .map(|(id, file)| (id, place_at(docs, id, &Document::Source(file))));
-    match subject {
+    match subject.and_then(|subject| subject.entry(docs)) {
         Some(entry) => Chosen::Driving { entry, at },
         None => Chosen::Landing(at),
     }
@@ -852,7 +868,7 @@ fn chosen(docs: &Docs, at: Option<LinePos>, subject: Option<(DocId, Arc<str>)>) 
 fn press_location(
     to: Landings,
     at: Option<LinePos>,
-    subject: Option<(DocId, Arc<str>)>,
+    subject: Option<Subject>,
     symbol: Symbol,
 ) -> Pressed {
     let Landings {
@@ -887,9 +903,8 @@ fn press_location(
                 doors,
                 Landing {
                     tab: symbol_tab,
-                    at: Some(at),
+                    at: Some(Landed::line(at)),
                     address: None,
-                    columns: None,
                 },
                 Reach::outside(ctrl),
             );

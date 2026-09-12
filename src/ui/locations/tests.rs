@@ -113,7 +113,10 @@ fn which_door_a_location_row_presses_through() {
     let id = docs.open(Document::Source(file.clone()));
     // The tab has since been stepped to a line of its own, which is the place it is at.
     docs.push(id, Stop::on(file.clone(), 4));
-    let subject = Some((id, file.clone()));
+    let subject = Some(Subject {
+        tab: id,
+        file: file.clone(),
+    });
 
     assert!(
         matches!(chosen(&docs, None, subject.clone()), Chosen::Alone),
@@ -144,7 +147,14 @@ fn which_door_a_location_row_presses_through() {
     let elsewhere = docs.open(Document::Source(Arc::from("before.h")));
     assert!(
         matches!(
-            chosen(&docs, Some(at), Some((elsewhere, file))),
+            chosen(
+                &docs,
+                Some(at),
+                Some(Subject {
+                    tab: elsewhere,
+                    file
+                })
+            ),
             Chosen::Landing(_)
         ),
         "a tab that has moved off the file drives nothing"

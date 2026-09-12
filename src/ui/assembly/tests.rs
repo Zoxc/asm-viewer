@@ -294,7 +294,7 @@ fn the_row_a_reveal_goes_to_is_the_runs_own_or_the_paired_instructions() {
     // A listing of six instructions with a branch landing on the fourth, which is the
     // one separator: instruction 3 is drawn at row 4.
     let lanes = Lanes::new(&[BranchEdge { from: 0, to: 3 }], 6);
-    let pick = line_pick(Arc::from("now.c"), 7, None, Owed::default());
+    let pick = line_pick(Arc::from("now.c"), 7, None, Owed::default()).expect("line 7 is a row");
 
     assert_eq!(
         owed_listing_row(&Owing::Own(4..=6), &lanes, |_| panic!(
@@ -482,7 +482,10 @@ fn every_field_of_a_listing_prop_is_compared() {
         (
             "subject",
             AsmData {
-                subject: Some((DocId::unfiled(), Arc::from("main.rs"))),
+                subject: Some(Subject {
+                    tab: DocId::unfiled(),
+                    file: Arc::from("main.rs"),
+                }),
                 ..data.clone()
             },
         ),

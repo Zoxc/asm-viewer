@@ -312,14 +312,16 @@ pub(crate) fn open_source_place(
         doors,
         Landing {
             tab: document.clone(),
-            at: Some(LinePos {
-                file: file.clone(),
-                line,
+            at: Some(Landed {
+                pos: LinePos {
+                    file: file.clone(),
+                    line,
+                },
+                columns,
             }),
             // A file and a line: the compiler named no instruction here, and which symbol
             // the line is in is the assembly side's own question.
             address: None,
-            columns,
         },
         reach,
     );

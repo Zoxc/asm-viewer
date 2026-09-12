@@ -274,13 +274,12 @@ fn source_place(
                         doors,
                         Landing {
                             tab: Document::Source(file.clone()),
-                            at: Some(LinePos {
+                            at: Some(Landed::line(LinePos {
                                 file: file.clone(),
                                 line,
-                            }),
+                            })),
                             // A source file and no instruction: the compiler named a line.
                             address: None,
-                            columns: None,
                         },
                         Reach::outside(ctrl),
                     );

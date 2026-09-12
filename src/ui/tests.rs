@@ -295,12 +295,7 @@ fn revealing_harness() -> impl IntoElement {
         },
         // The landing's line as a row of these, as the source pane reads one. A test
         // without [`Doors`] has no landing on its way and this is never asked.
-        |asked: &Landing| {
-            asked
-                .at
-                .as_ref()
-                .and_then(|at| (at.line as usize).checked_sub(1))
-        },
+        |asked: &Landing| asked.at.as_ref().and_then(|at| at.pos.row()),
         controller,
         seen.unwrap_or(assumed),
         &showing,
@@ -455,12 +450,11 @@ fn a_landing_an_unmeasured_pane_could_not_go_to_is_not_counted_as_gone_to() {
     // The door: a landing on the 41st line, which is row 40 of what the pane draws.
     land.set(Some(Landing {
         tab: Document::Source(Arc::from("a.rs")),
-        at: Some(LinePos {
+        at: Some(Landed::line(LinePos {
             file: Arc::from("a.rs"),
             line: 41,
-        }),
+        })),
         address: None,
-        columns: None,
     }));
     assert_eq!(
         top_row(&mut test),
@@ -4495,17 +4489,17 @@ fn picked_row(row: usize, file: &str, owed: Owed) -> Picked {
 
 /// The same for the line `at`, as a landing plants it.
 fn picked_line(at: &LinePos, owed: Owed) -> Picked {
-    picked_row((at.line as usize).saturating_sub(1), &at.file, owed)
+    picked_row(at.row().expect("line 0 is no row"), &at.file, owed)
 }
 
 /// The line the source pane's run is of, where it is one row.
 fn source_line(marked: State<Marks>) -> Option<LinePos> {
     let marks = marked.peek();
     let picked = marks.source.as_ref()?;
-    Some(LinePos {
-        file: picked.file.clone()?,
-        line: picked.chars.anchor().row as u32 + 1,
-    })
+    Some(LinePos::of_row(
+        picked.file.clone()?,
+        picked.chars.anchor().row,
+    ))
 }
 
 /// Whether `pane` still owes a scroll to the other pane's run.
@@ -6299,12 +6293,14 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     // one part of it nothing else can put back.
     let at = |line: u32| Landing {
         tab: document.clone(),
-        at: Some(LinePos {
-            file: file.clone(),
-            line,
+        at: Some(Landed {
+            pos: LinePos {
+                file: file.clone(),
+                line,
+            },
+            columns: Some(3..7),
         }),
         address: None,
-        columns: Some(3..7),
     };
     let land_on_line = |test: &mut TestingRunner, line: u32| {
         land(roots.doors, at(line), Reach::InPlace);
@@ -6357,6 +6353,43 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     assert!(states.open.now().map(|(_, stop)| stop) == Some(Stop::whole(document)));
 }
 
+/// **A door onto line 0 picks nothing out.** Line 0 is no line of any file
+/// ([`LinePos::row_of`]): debug info writes it for instructions belonging to no source
+/// line, and a stored place can state it. Read as a row it used to be row 0, so a door
+/// that named no line at all sent the reader to the first line of the file.
+#[test]
+fn a_door_onto_line_0_picks_out_no_row() {
+    let file: Arc<str> = Arc::from("/src/main.rs");
+    let document = Document::Source(file.clone());
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab)
+        .expect("the file opens");
+    settle(&mut test);
+
+    land(
+        roots.doors,
+        Landing {
+            tab: document,
+            at: Some(Landed::line(LinePos { file, line: 0 })),
+            address: None,
+        },
+        Reach::InPlace,
+    );
+    settle(&mut test);
+    let (_, source) = runs_of(roots.doors.marked);
+    assert!(
+        source.is_none(),
+        "line 0 picked out the first line of the file"
+    );
+}
+
 /// A door into the document already on top lands through the change of *place* it makes,
 /// as one into another document lands through the change of document: the run is the
 /// arriving place's, so the columns the door named and the scroll it owes both panes
@@ -6386,12 +6419,14 @@ fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
             roots.doors,
             Landing {
                 tab: document.clone(),
-                at: Some(LinePos {
-                    file: file.clone(),
-                    line,
+                at: Some(Landed {
+                    pos: LinePos {
+                        file: file.clone(),
+                        line,
+                    },
+                    columns: Some(3..7),
                 }),
                 address: None,
-                columns: Some(3..7),
             },
             Reach::InPlace,
         );
@@ -6632,9 +6667,8 @@ fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
         roots.doors,
         Landing {
             tab: document.clone(),
-            at: Some(at.clone()),
+            at: Some(Landed::line(at.clone())),
             address: None,
-            columns: None,
         },
         Reach::NewTab,
     );
@@ -6828,7 +6862,10 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
     open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
     let entry = entry_of(&states, &tab);
     located.write().asked = Some(Query::line(at.clone()));
-    located.write().subject = Some((entry.0, at.file.clone()));
+    located.write().subject = Some(Subject {
+        tab: entry.0,
+        file: at.file.clone(),
+    });
     located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
     settle(&mut test);
 
@@ -6891,9 +6928,8 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
     let mut landing = roots.doors.land;
     landing.set(Some(Landing {
         tab: Document::Assembly(Selection::Symbol(symbols[0].clone())),
-        at: Some(at.clone()),
+        at: Some(Landed::line(at.clone())),
         address: None,
-        columns: None,
     }));
     open_document(
         states.open,
@@ -7146,7 +7182,7 @@ fn the_row_lit_is_the_symbol_drawn_and_not_the_active_document() {
 
 /// The file a source-driven tab is about, for [`source_menu_harness`].
 #[derive(Clone)]
-struct Subject(Arc<str>);
+struct SubjectFile(Arc<str>);
 
 /// The Source pane over a source-driven tab, with the viewer a context menu needs in an
 /// ancestor scope -- which `app()` mounts on the root and no other harness here does.
@@ -7154,7 +7190,7 @@ fn source_menu_harness() -> impl IntoElement {
     // The file the pane draws, read where this stands rather than on the reader's own
     // thread: what these tests are about is what the pane makes of a file it has.
     use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
-    let file = use_consume::<Subject>().0;
+    let file = use_consume::<SubjectFile>().0;
     rect().expanded().child(ContextMenuViewer::new()).child({
         let document = Document::Source(file);
         SourcePane {
@@ -7208,7 +7244,7 @@ fn linking_harness() -> impl IntoElement {
     use_land(doors, places, active, code_rows);
     use_follow(follow, doors, places);
 
-    let file = use_consume::<Subject>().0;
+    let file = use_consume::<SubjectFile>().0;
     let document = Document::Source(file);
     // The viewer a context menu is drawn into, which `app()` mounts at its root: what a
     // right-click on a link offers is one of the things asked of this harness.
@@ -7315,7 +7351,7 @@ fn mount_linking_classifying(
         move |runner: &mut _| {
             runner.provide_root_context(move || {
                 provide(ServerWorking(Arc::new(work)));
-                provide(Subject(file.clone()));
+                provide(SubjectFile(file.clone()));
                 (test_roots(), provide(ServerAsking(State::create(None))).0)
             })
         },
@@ -10122,7 +10158,7 @@ fn a_companions_line_opens_the_file_it_is_in() {
     let landed = landing.peek().clone().expect("the line is left to land");
     assert!(landed.tab == opened);
     assert!(
-        landed.at
+        landed.at.map(|at| at.pos)
             == Some(LinePos {
                 file: file.clone(),
                 line: 3,
@@ -10172,7 +10208,7 @@ fn a_source_row_inside_a_function_offers_its_instances() {
             let file = file.clone();
             move |runner: &mut _| {
                 runner.provide_root_context(move || {
-                    provide(Subject(file.clone()));
+                    provide(SubjectFile(file.clone()));
                     let roots = test_roots();
                     (roots.states, roots.located)
                 })
@@ -10226,7 +10262,7 @@ fn a_source_row_inside_a_function_offers_its_instances() {
             .peek()
             .subject
             .as_ref()
-            .map(|(_, subject)| &**subject)
+            .map(|subject| &*subject.file)
             == Some(&*file)
     );
     assert!(
@@ -12149,9 +12185,8 @@ fn a_landing_is_gone_to_once_and_does_not_drag_the_pane_back() {
     let mut landing = landing;
     landing.set(Some(Landing {
         tab: document,
-        at: Some(at),
+        at: Some(Landed::line(at)),
         address: None,
-        columns: None,
     }));
     settle(&mut test);
     let drawn = gutter_lines(&test);
@@ -19221,7 +19256,7 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
     );
     let landed = landing.peek().clone().expect("the line is left to land");
     assert!(landed.tab == code);
-    assert!(landed.at == Some(a_line_of(&sum_to)));
+    assert!(landed.at.map(|at| at.pos) == Some(a_line_of(&sum_to)));
     assert_eq!(
         landed.address,
         Some(first),
@@ -20475,7 +20510,7 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
         .clone()
         .expect("the row's line is left to land");
     assert!(landed.tab == symbol);
-    assert!(landed.at.as_ref().map(|at| &at.file) == Some(&a_line_of(&twice).file));
+    assert!(landed.at.as_ref().map(|at| &at.pos.file) == Some(&a_line_of(&twice).file));
     // The symbol's own address: the fixture places its one `.text` at 0, so the one
     // drawn is the one the listing alone will draw.
     assert_eq!(landed.address, Some(twice.data.address + 1));
@@ -20908,7 +20943,6 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
         tab: first_tab.clone(),
         at: None,
         address: Some(first.data.address),
-        columns: None,
     }));
     open_document(states.open, states.visits, first_tab.clone(), Reach::NewTab);
     settle(&mut test);
@@ -24847,9 +24881,8 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
         doors,
         Landing {
             tab: sum_to.clone(),
-            at: Some(at.clone()),
+            at: Some(Landed::line(at.clone())),
             address: None,
-            columns: None,
         },
         Reach::InPlace,
     );
@@ -24922,7 +24955,7 @@ fn a_standing_run_of_another_line_is_not_kept_over_the_driven_one() {
     states.places.driven.write().remember(entry, 12);
     marked.set(Marks {
         assembly: None,
-        source: Some(line_pick(file.clone(), 5, Some(4..9), Owed::default())),
+        source: line_pick(file.clone(), 5, Some(4..9), Owed::default()),
     });
     test.sync_and_update();
 
@@ -29936,12 +29969,11 @@ fn a_door_into_another_file_shows_the_line_it_landed_on() {
         roots.doors,
         Landing {
             tab: Document::Source(landed.clone()),
-            at: Some(LinePos {
+            at: Some(Landed::line(LinePos {
                 file: landed.clone(),
                 line: LINE,
-            }),
+            })),
             address: None,
-            columns: None,
         },
         Reach::InPlace,
     );
@@ -30051,12 +30083,11 @@ fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
             roots.doors,
             Landing {
                 tab: Document::Source(file.clone()),
-                at: Some(LinePos {
+                at: Some(Landed::line(LinePos {
                     file: file.clone(),
                     line,
-                }),
+                })),
                 address: None,
-                columns: None,
             },
             Reach::InPlace,
         );
@@ -30145,12 +30176,11 @@ fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
             roots.doors,
             Landing {
                 tab: Document::Source(file.clone()),
-                at: Some(LinePos {
+                at: Some(Landed::line(LinePos {
                     file: file.clone(),
                     line,
-                }),
+                })),
                 address: None,
-                columns: None,
             },
             Reach::InPlace,
         );

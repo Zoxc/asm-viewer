@@ -268,14 +268,11 @@ fn name_at_column(
     links: &links::Links,
     place: Caret,
 ) -> Option<NameAt> {
-    let line = u32::try_from(place.row).ok()?.checked_add(1)?;
+    let at = LinePos::of_row(file.clone(), place.row);
     let cut = source.0.text(place.row);
-    let link = links.at(line, byte_column(&cut.whole, place.col))?;
+    let link = links.at(at.line, byte_column(&cut.whole, place.col))?;
     Some(NameAt {
-        at: LinePos {
-            file: file.clone(),
-            line,
-        },
+        at,
         name: name_at(source, place.row, &link.columns)?,
         column: link.columns.start,
     })
@@ -307,7 +304,7 @@ fn caret_questions(
     located: State<Located>,
     dock: State<DockArea>,
     open: Open,
-    subject: Option<(DocId, Arc<str>)>,
+    subject: Option<Subject>,
     mut keys: impl FnMut(Event<KeyboardEventData>) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     move |e: Event<KeyboardEventData>| {
@@ -330,13 +327,7 @@ fn caret_questions(
             return;
         };
         if chord == Chord::AllLocations {
-            let Ok(row) = u32::try_from(caret.row) else {
-                return;
-            };
-            let at = LinePos {
-                file: file.clone(),
-                line: row.saturating_add(1),
-            };
+            let at = LinePos::of_row(file.clone(), caret.row);
             find_locations(located, dock, Query::line(at), subject.clone());
             return;
         }
@@ -386,7 +377,7 @@ fn source_menu(
     // The file this row is in, where the pane is showing it beside somebody else's tab. A
     // subject is that tab already and has nothing to open.
     let opens = drives.is_none().then(|| file.clone());
-    let subject = drives.map(|tab| (tab, file));
+    let subject = drives.map(|tab| Subject { tab, file });
     // Whom to ask about a name, where this row's names are links at all. A row drawing
     // none is a row over no server, and a question nobody could answer is not offered.
     let asking = (!named.links.is_empty())
@@ -465,10 +456,7 @@ impl Component for SourceRow {
         let cut = self.source.0.text(index);
         let line = Line::text(&*cut.whole);
         let named = Named {
-            at: LinePos {
-                file: self.file.clone(),
-                line: index as u32 + 1,
-            },
+            at: LinePos::of_row(self.file.clone(), index),
             text: cut.whole.clone(),
             links: self.links.clone(),
             server,
@@ -616,10 +604,7 @@ fn owed_file_row(
     places: impl FnOnce(&Picked) -> Vec<LinePos>,
 ) -> Option<usize> {
     owing
-        .row(|pair| {
-            let line = places(pair).into_iter().find(|at| at.file == *file)?.line;
-            (line as usize).checked_sub(1)
-        })
+        .row(|pair| places(pair).into_iter().find(|at| at.file == *file)?.row())
         .filter(|index| *index < length)
 }
 
@@ -634,10 +619,8 @@ fn landing_row(
     if asked.tab != *document {
         return None;
     }
-    let at = asked.at.as_ref().filter(|at| at.file == *file)?;
-    (at.line as usize)
-        .checked_sub(1)
-        .filter(|index| *index < length)
+    let at = asked.at.as_ref().filter(|at| at.pos.file == *file)?;
+    at.pos.row().filter(|index| *index < length)
 }
 
 impl Component for SourceList {
@@ -813,7 +796,10 @@ impl Component for SourceList {
             located,
             dock,
             open,
-            drives.map(|tab| (tab, self.file.clone())),
+            drives.map(|tab| Subject {
+                tab,
+                file: self.file.clone(),
+            }),
             keys,
         );
 
@@ -837,13 +823,13 @@ impl Component for SourceList {
                     marking,
                 },
                 |i, data: &SourceData| {
-                    let paired_at = |row: usize| data.pairs.contains(&(row as u32 + 1));
+                    let paired_at = |row: usize| data.pairs.contains(&LinePos::line_of(row));
                     SourceRow {
                         source: data.source.clone(),
                         file: data.file.clone(),
                         index: i,
                         paired: paired_at(i).then(|| Edges::of(i, paired_at)),
-                        compiled: data.compiled.contains(&(i as u32 + 1)),
+                        compiled: data.compiled.contains(&LinePos::line_of(i)),
                         wash: wash_of(data.chars, i),
                         chars: RowChars::of(data.chars, i),
                         drives: data.drives,
@@ -1035,7 +1021,7 @@ pub(crate) struct ShowingFile(pub(crate) State<Option<Arc<str>>>);
 /// **The top of the file where the side named no line**, which is what selecting a symbol
 /// used to do in every case.
 fn opening_row(line: Option<u32>) -> Option<usize> {
-    (line? as usize).checked_sub(1)
+    LinePos::row_of(line?)
 }
 
 /// What the Source pane says over a file whose bytes are not the ones the debug info's

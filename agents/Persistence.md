@@ -342,9 +342,11 @@ no place in particular back as the address it was scrolled to. It is a claim abo
 scroll is, so a rebuilt binary takes both, and the place comes back as the whole listing.
 The file states the halves apart and so can state a pairing that means nothing --
 a line of an object's code, an address in a file -- which a `history::Stop` cannot hold. So
-`RestoredEntry::stop` is where they are put back with the document each belongs to, and a half that
-does not belong to its document is the whole document rather than a guess. It is the last place the
-two are seen apart; nothing past it carries them. A restore answers with a `RestoredTab` per tab, a
+`RestoredEntry::stop` puts them back through `Stop::paired`, which is where that rule lives: the
+document says which half is its own, and a half that does not belong to it is the whole document
+rather than a guess. A door's landing states them apart too and is the other caller
+(`agents/Panes.md`), so the pairing is written once for both. This is the last place the two are
+seen apart; nothing past it carries them. A restore answers with a `RestoredTab` per tab, a
 page or a document, rather than a tuple, since the rows and the line no longer survive the same things: the live trail,
 `History::rebuilt` over the places that resolved with the saved cursor carried past the ones that
 did not, and a `RestoredEntry` per surviving place. A tab with nothing left on its trail is dropped

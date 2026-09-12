@@ -25,6 +25,40 @@ impl LinePos {
     pub(crate) fn spell(&self) -> String {
         format!("{}:{}", source::name_of(Path::new(&*self.file)), self.line)
     }
+
+    /// The position row `row` of `file` is.
+    pub(crate) fn of_row(file: Arc<str>, row: usize) -> LinePos {
+        LinePos {
+            file,
+            line: LinePos::line_of(row),
+        }
+    }
+
+    /// The row this line is, and [`None`] for line 0.
+    pub(crate) fn row(&self) -> Option<usize> {
+        LinePos::row_of(self.line)
+    }
+
+    /// The 1-based line row `row` is: **the one way up**, rows being counted from zero
+    /// and lines from one.
+    ///
+    /// Saturating, and no row the app draws reaches it: a source file is read only up to
+    /// [`source::MAX_SIZE`], so it has nothing like [`u32::MAX`] lines. Total so that no
+    /// caller has to invent a line for a row that has none.
+    pub(crate) fn line_of(row: usize) -> u32 {
+        u32::try_from(row).unwrap_or(u32::MAX).saturating_add(1)
+    }
+
+    /// The row line `line` is, and [`None`] for line 0: **the one way down**.
+    ///
+    /// **Line 0 is no line.** Debug info writes it for instructions belonging to no
+    /// source line, and a stored place or a compiler's own message can state it too, so
+    /// it arrives from a file and is not the app's to invent a row for. Read as row 0 it
+    /// would pick out the first line of the file, which is somewhere the reader was
+    /// never sent.
+    pub(crate) fn row_of(line: u32) -> Option<usize> {
+        (line as usize).checked_sub(1)
+    }
 }
 
 /// A place to pick out the moment `tab` becomes the active document: a line, an
@@ -44,18 +78,34 @@ pub(crate) struct Landing {
     /// The line to pick out in the source pane, where the door knew one: a Locations row
     /// names a line, and an instruction's door the line it was compiled from where it has
     /// one. `None` for the door an unnamed call's target opens, which knows an address
-    /// and no line.
-    pub(crate) at: Option<LinePos>,
+    /// and no line. The characters to select along it come with it ([`Landed`]).
+    pub(crate) at: Option<Landed>,
     /// The instruction to put the assembly pane's caret on, where the door was one, as an
     /// address in the space the tab's listing draws: **placed** (`AsmData::placed`) for
     /// an object's code, the symbol's own for a symbol's tab.
     pub(crate) address: Option<u64>,
-    /// The characters to select on `at`'s line, in the UTF-16 units a pane counts columns
-    /// in: a search hit picks out what it matched, and a definition an empty run at the
-    /// name's own column, which is a caret there and nothing selected. `None` for the
-    /// doors that pick out the row and leave the caret at its start. Means nothing
-    /// without `at`.
+}
+
+/// The line a landing names, and the characters on it where the door knew them.
+///
+/// The two travel together because a column is counted along a line: a door that named
+/// columns and no line would be naming characters of nowhere.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Landed {
+    pub(crate) pos: LinePos,
+    /// The characters to select on `pos`'s line, in the UTF-16 units a pane counts
+    /// columns in: a search hit picks out what it matched, and a definition an empty run
+    /// at the name's own column, which is a caret there and nothing selected. `None` for
+    /// the doors that pick out the row and leave the caret at its start.
     pub(crate) columns: Option<Range<usize>>,
+}
+
+impl Landed {
+    /// The line alone, for the doors that pick out the row and say nothing about where
+    /// along it the caret goes.
+    pub(crate) fn line(pos: LinePos) -> Landed {
+        Landed { pos, columns: None }
+    }
 }
 
 /// An instruction the assembly pane's caret is to be put on once the listing of `tab` is
@@ -949,7 +999,7 @@ fn source_run(step: &Step, driven: State<Driven>) -> Option<Picked> {
         (Some(landing), _) => landing
             .at
             .clone()
-            .map(|at| line_pick(at.file, at.line, landing.columns.clone(), Owed::BOTH)),
+            .and_then(|at| line_pick(at.pos.file, at.pos.line, at.columns, Owed::BOTH)),
         (None, Some(kept)) => kept.marks.source.clone(),
         (None, None) => None,
     };
@@ -974,12 +1024,10 @@ fn source_run(step: &Step, driven: State<Driven>) -> Option<Picked> {
     // Keeping it is what leaves the caret on the name a followed call was defined under,
     // the door onto the file already on top having marked it before this place woke the
     // effect.
-    Some(
-        step.standing
-            .clone()
-            .filter(|picked| picked.is_line(file, line))
-            .unwrap_or_else(|| line_pick(file.clone(), line, None, Owed::default())),
-    )
+    step.standing
+        .clone()
+        .filter(|picked| picked.is_line(file, line))
+        .or_else(|| line_pick(file.clone(), line, None, Owed::default()))
 }
 
 /// The run the assembly pane arrives with: the kept one, and none where a landing won --

@@ -462,3 +462,46 @@ fn retaining_nothing_is_the_empty_history() {
     assert!(history.behind().is_none());
     assert!(history.ahead().is_none());
 }
+
+/// A place stated as loose halves is paired back with the document each belongs to, and
+/// a half belonging to another kind of document is dropped rather than guessed at: what
+/// a saved place and a landing are both read through, neither being able to state a
+/// pairing that means nothing.
+#[test]
+fn a_half_that_does_not_belong_to_its_document_is_no_place_at_all() {
+    let code = Document::Code(object("code"));
+    let file: Arc<str> = Arc::from("main.rs");
+    let source = Document::Source(file.clone());
+
+    assert!(Stop::paired(code.clone(), Some(64), None).address() == Some(64));
+    assert!(Stop::paired(source.clone(), None, Some(7)).line() == Some(7));
+    assert!(
+        Stop::paired(code.clone(), None, Some(7)) == Stop::whole(code.clone()),
+        "a line of an object's code is no place"
+    );
+    assert!(
+        Stop::paired(source.clone(), Some(64), None) == Stop::whole(source.clone()),
+        "an address in a source file is no place"
+    );
+    assert!(
+        Stop::paired(code.clone(), Some(64), Some(7)) == Stop::at(object_of(&code), 64),
+        "the document says which half is its own"
+    );
+    assert!(
+        Stop::paired(source, Some(64), Some(7)) == Stop::on(file, 7),
+        "the document says which half is its own"
+    );
+    let symbol = selection("neither");
+    assert!(
+        Stop::paired(symbol.document.clone(), Some(64), Some(7)) == symbol,
+        "a symbol is the place, and carries neither half"
+    );
+}
+
+/// The object of a code document, for the test above.
+fn object_of(document: &Document) -> Arc<Object> {
+    match document {
+        Document::Code(object) => object.clone(),
+        _ => panic!("not an object's code"),
+    }
+}

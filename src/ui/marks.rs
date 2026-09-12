@@ -38,7 +38,9 @@ impl Picked {
     /// onto a line makes ([`line_pick`]). The caret it holds on that row is its own: it
     /// may be at a column, where a line alone says only the row.
     pub(crate) fn is_line(&self, file: &Arc<str>, line: u32) -> bool {
-        let row = (line as usize).saturating_sub(1);
+        let Some(row) = LinePos::row_of(line) else {
+            return false;
+        };
         self.file.as_ref() == Some(file) && self.chars.rows() == (row..=row)
     }
 }
@@ -322,6 +324,9 @@ pub(crate) fn mark_top(marked: State<Marks>, pane: Pane) {
 /// Pick out the one row `line` of `file` in the source pane, as a click from outside the
 /// panes does: a [`Landing`], or the line a source-driven tab is driven from. `owed`
 /// says which panes have yet to scroll to it.
+///
+/// **Line 0 picks out nothing** and leaves the run standing, as a door that named no line
+/// at all does: it is no line of any file ([`LinePos::row_of`]).
 pub(crate) fn mark_line(
     marked: State<Marks>,
     file: Arc<str>,
@@ -329,8 +334,11 @@ pub(crate) fn mark_line(
     columns: Option<Range<usize>>,
     owed: Owed,
 ) {
+    let Some(picked) = line_pick(file, line, columns, owed) else {
+        return;
+    };
     update(marked, |marks| {
-        marks.source = Some(line_pick(file, line, columns, owed));
+        marks.source = Some(picked);
     });
 }
 
@@ -339,13 +347,15 @@ pub(crate) fn mark_line(
 /// is what a search hit lands on. Copying then copies the match and not the line, since
 /// characters picked out are what `copy_text` prefers. An empty run is a caret at that
 /// column and nothing selected, which is where following a name lands.
+///
+/// [`None`] for line 0, which is no row of the file ([`LinePos::row_of`]).
 pub(crate) fn line_pick(
     file: Arc<str>,
     line: u32,
     columns: Option<Range<usize>>,
     owed: Owed,
-) -> Picked {
-    let row = (line as usize).saturating_sub(1);
+) -> Option<Picked> {
+    let row = LinePos::row_of(line)?;
     let chars = match columns {
         Some(columns) => CharSelection::between(
             Caret {
@@ -359,13 +369,13 @@ pub(crate) fn line_pick(
         ),
         None => CharSelection::at(Caret { row, col: 0 }),
     };
-    Picked {
+    Some(Picked {
         chars,
         dragging: false,
         by_rows: false,
         file: Some(file),
         owed,
-    }
+    })
 }
 
 /// Pick out a run of one row's characters in `pane`: what a find lands on, and the only

@@ -619,13 +619,7 @@ impl Component for SectionList {
         let document = Document::Code(self.object.clone());
         let place = self.place;
         let entry = match place {
-            Placing::Tab(tab) => (
-                tab,
-                docs.read()
-                    .current(tab)
-                    .cloned()
-                    .unwrap_or_else(|| Stop::whole(document.clone())),
-            ),
+            Placing::Tab(tab) => (tab, place_at(&docs.read(), tab, &document)),
             // An entry nothing is filed under, so nothing has to forget it.
             Placing::Pad => (DocId::unfiled(), Stop::whole(document.clone())),
         };
@@ -1413,9 +1407,8 @@ pub(crate) fn show_in_code(
         doors,
         Landing {
             tab: code.clone(),
-            at,
+            at: at.map(Landed::line),
             address: Some(address),
-            columns: None,
         },
         reach,
     );
@@ -1437,9 +1430,8 @@ pub(crate) fn open_as_symbol(doors: Doors, symbol: Symbol, address: u64, at: Opt
         doors,
         Landing {
             tab,
-            at,
+            at: at.map(Landed::line),
             address: Some(address),
-            columns: None,
         },
         Reach::NewTab,
     );

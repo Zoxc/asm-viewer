@@ -97,6 +97,22 @@ impl Stop {
         }
     }
 
+    /// `document` at whichever of the two halves belongs to it, and the document itself
+    /// where neither does.
+    ///
+    /// **The one place a document is paired with halves stated apart.** A saved place
+    /// and a landing each state them loose -- an address, a line and a document, each
+    /// its own value -- and can therefore state a pairing that means nothing, so a place
+    /// whose half does not belong to its document is the document itself and not a
+    /// guess.
+    pub fn paired(document: Document, address: Option<u64>, line: Option<u32>) -> Stop {
+        match (document, address, line) {
+            (Document::Code(object), Some(address), _) => Stop::at(object, address),
+            (Document::Source(file), _, Some(line)) => Stop::on(file, line),
+            (document, _, _) => Stop::whole(document),
+        }
+    }
+
     /// Where this is inside its document.
     pub fn place(&self) -> Place<'_> {
         match (&self.document, self.place) {

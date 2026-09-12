@@ -453,7 +453,13 @@ decoded it. There was a pin, and a hover; both went in one step (`notes/Goals.md
 hover said what the pointer already says and a pin was a second selection under another name, and
 one selection for the window meant selecting an instruction lost the run on the source side. Three
 things are load-bearing. **A position is a file and a line** (`LinePos`), since an inlined header's
-line 42 is not line 42 of the open file; it is the one `Arc` in the UI compared by *contents*. **A
+line 42 is not line 42 of the open file; it is the one `Arc` in the UI compared by *contents*.
+A row and a line meet there and nowhere else -- `LinePos::of_row` and `LinePos::row`, with
+`line_of` and `row_of` for the sites holding one loose -- one rule each way: up is saturating,
+which no file reaches (`source::MAX_SIZE` caps one at 16 MB), and down answers **nothing for
+line 0**, which is no line of any file. Debug info writes 0 for instructions belonging to no
+source line and a stored place can state it, so it arrives from a file; read as row 0, as the
+run a door makes used to read it, it sent the reader to the first line of the file. **A
 run is dropped only when its listing goes, or kept with its place**: the assembly's when the same
 place asks another question (a click on a line of a source-driven tab) or the rows are counted
 afresh, the source's when the pane moves *off the run's file* within one place (`use_clear_marks`,
@@ -514,6 +520,8 @@ row's is, or a `NewTab` with Ctrl held (`agents/UI.md` for the three reaches). T
 document that makes is exactly what `use_land` answers by giving the arriving place its own runs, so
 the row does not select anything itself. It leaves a `Landing` (`Doors::land`) naming the
 document, the line, and, where the click was a door out of a listing, the instruction's address.
+The line is a `Landed`, the position with the characters to select on it where the door knew them:
+columns are counted along a line, so a door cannot name them without one.
 That effect turns the line into the source pane's run when the document it names arrives, **over
 whatever the place had kept** (below): a click from outside named a place, and the run it makes is
 the only run in either pane, or the assembly pane would light its old run beside the pair of the
@@ -529,10 +537,11 @@ there instead left the arriving run on screen while the entry changed, which sav
 place being left and had the arrival wipe it back to the place's bare line, without the columns the
 door named or the scroll it owed. A door that moves nothing -- the same place again, or one naming
 only the document -- selects the line itself, no effect being woken to do it. A row answering a
-question asked from a source-driven tab chooses for that tab instead: `Located::subject` carries the
-tab's id beside its file, the choice is written under that entry while the tab still shows the file,
-and `land_on` raises the tab with the line left as a landing, a move and not a visit, the tab being
-open already. **Two doors join the two views** and both go through the same functions. A
+question asked from a source-driven tab chooses for that tab instead: `Located::subject` is a
+`Subject`, the tab's id beside its file, and `Subject::entry` is the rule -- the choice is written
+under that entry while the tab is still open on that file -- with `land_on` raising the tab and the
+line left as a landing, a move and not a visit, the tab being open already. **Two doors join the
+two views** and both go through the same functions. A
 **Ctrl**-press on a label in an object's code opens the symbol's own tab, a `NewTab` as Ctrl opens
 one everywhere; a plain press selects the row like any other, since a label is a row of the listing
 first, though a label's row is a row of no file. It is the one link Ctrl decides, and for want of

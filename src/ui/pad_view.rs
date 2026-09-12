@@ -815,7 +815,7 @@ fn use_driving_cursor(
             if !buffers.holds(pad) {
                 return;
             }
-            let line = buffers.get(pad).cursor_row() as u32 + 1;
+            let line = LinePos::line_of(buffers.get(pad).cursor_row());
             drop(buffers);
 
             // Bound to a `let` of its own before the write below, the read's guard living to

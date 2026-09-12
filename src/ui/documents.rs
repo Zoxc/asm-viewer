@@ -435,13 +435,7 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         // The same place again, or a stop naming the document alone: nothing changes, so
         // no effect runs and the line and the instruction are put here.
         if let Some(at) = landing.at {
-            mark_line(
-                marked,
-                at.file,
-                at.line,
-                landing.columns.clone(),
-                Owed::BOTH,
-            );
+            mark_line(marked, at.pos.file, at.pos.line, at.columns, Owed::BOTH);
         }
         if let Some(address) = landing.address {
             plant.set(Some(Planting {
@@ -479,15 +473,17 @@ pub(crate) fn place_at(docs: &Docs, tab: DocId, document: &Document) -> Stop {
 /// A door into an object's code at an address, or into a file at a line, opens *that
 /// place*, so the trail holds it and a later Back comes back to it. Each document says
 /// where in its own terms, and a symbol's landing is the one place its document is: an
-/// address there is a caret in it and a line is a row of the file beside it.
+/// address there is a caret in it and a line is a row of the file beside it. Which half
+/// goes with which document is [`Stop::paired`]'s.
 fn stop_of(landing: &Landing) -> Stop {
-    match (&landing.tab, landing.address, &landing.at) {
-        (Document::Code(object), Some(address), _) => Stop::at(object.clone(), address),
-        (Document::Source(file), _, Some(at)) if at.file == *file => {
-            Stop::on(file.clone(), at.line)
-        }
-        _ => Stop::whole(landing.tab.clone()),
-    }
+    // The line is the tab's own only while the landing names the file the tab is: a
+    // companion's line is a place in somebody else's file and no place on this trail.
+    let line = landing
+        .at
+        .as_ref()
+        .filter(|at| matches!(&landing.tab, Document::Source(file) if at.pos.file == *file))
+        .map(|at| at.pos.line);
+    Stop::paired(landing.tab.clone(), landing.address, line)
 }
 
 /// Put `stop` on the trail of `id`, a tab already showing its document, where it is a
@@ -532,9 +528,8 @@ pub(crate) fn land_on(doors: Doors, id: DocId, at: LinePos) {
     };
     landing.set(Some(Landing {
         tab,
-        at: Some(at),
+        at: Some(Landed::line(at)),
         address: None,
-        columns: None,
     }));
     raise(open, id);
 }

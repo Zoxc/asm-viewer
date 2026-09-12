@@ -6,12 +6,11 @@ use super::*;
 fn landing(file: &Arc<str>, line: u32) -> Landing {
     Landing {
         tab: Document::Source(file.clone()),
-        at: Some(LinePos {
+        at: Some(Landed::line(LinePos {
             file: file.clone(),
             line,
-        }),
+        })),
         address: None,
-        columns: None,
     }
 }
 
@@ -35,7 +34,8 @@ fn a_pane_reveals_the_first_row_of_its_own_run() {
 #[test]
 fn a_pane_reveals_the_line_the_other_panes_run_was_compiled_from() {
     let file: Arc<str> = Arc::from("now.c");
-    let pair = Owing::Pair(line_pick(file.clone(), 4, None, Owed::default()));
+    let pair =
+        Owing::Pair(line_pick(file.clone(), 4, None, Owed::default()).expect("line 4 is a row"));
     let at = |file: &str, line| LinePos {
         file: Arc::from(file),
         line,
