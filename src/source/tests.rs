@@ -20,10 +20,20 @@ fn write(name: &str, bytes: &[u8]) -> Temporary {
     path
 }
 
+/// A file `length` bytes long, made by its length alone: a sparse file costs no blocks and
+/// `symlink_metadata` reports the length, so a test about the cap need not write 16 MiB.
+fn sized(name: &str, length: u64) -> Temporary {
+    let path = temp_path(name);
+    fs::File::create(&path)
+        .and_then(|file| file.set_len(length))
+        .expect("the temp directory is writable");
+    path
+}
+
 #[test]
 fn reads_a_file_verbatim() {
     let path = write("lines.rs", b"fn main() {\r\n    let x = 1;\n}\n");
-    let file = SourceFile::read(&path, MAX_SIZE).expect("a readable file");
+    let file = SourceFile::read(&path).expect("a readable file");
 
     // Line endings included: what splits the text into lines is the highlighter, and it is
     // entitled to see the file as it is.
@@ -34,43 +44,51 @@ fn reads_a_file_verbatim() {
 #[test]
 fn invalid_utf8_is_read_lossily() {
     let path = write("latin1.c", b"/* caf\xe9 */\nint main(void) { return 0; }\n");
-    let file = SourceFile::read(&path, MAX_SIZE).expect("a readable file");
+    let file = SourceFile::read(&path).expect("a readable file");
 
     assert!(file.text() == "/* caf\u{fffd} */\nint main(void) { return 0; }\n");
 }
 
 #[test]
 fn a_file_over_the_cap_is_refused() {
-    let path = write("big.rs", b"fn main() {}\n");
-    assert!(SourceFile::read(&path, 4).is_none());
+    let path = sized("big.rs", MAX_SIZE + 1);
+    assert!(SourceFile::read(&path).is_none());
+
     // And the same file is fine once it fits, so it is the cap that refused it.
-    assert!(SourceFile::read(&path, MAX_SIZE).is_some());
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|file| file.set_len(MAX_SIZE))
+        .expect("the temp file can be shrunk");
+    assert!(SourceFile::read(&path).is_some());
 }
 
 #[test]
 fn a_directory_is_not_a_source_file() {
-    assert!(SourceFile::read(&std::env::temp_dir(), MAX_SIZE).is_none());
+    assert!(SourceFile::read(&std::env::temp_dir()).is_none());
 }
 
 /// The gate a press is put through, which is the read's own first step: a regular file
 /// within the bound, and nothing else.
 #[test]
 fn only_a_regular_file_within_the_bound_is_shown() {
-    let long = write("long.txt", &b"x".repeat(100));
+    let at_the_cap = sized("at-the-cap.txt", MAX_SIZE);
+    let over_it = sized("over-the-cap.txt", MAX_SIZE + 1);
     let empty = write("empty.rs", b"");
     let missing = std::env::temp_dir().join("viewer-source-nothing-here");
 
-    assert!(fits(&long, 100));
-    assert!(!fits(&long, 99));
-    // An empty file is within every bound, zero included.
-    assert!(fits(&empty, 0));
-    assert!(!fits(&std::env::temp_dir(), u64::MAX));
-    assert!(!fits(&missing, u64::MAX));
+    // The cap is inclusive, and one byte past it is not.
+    assert!(showable(&at_the_cap));
+    assert!(!showable(&over_it));
+    // An empty file is within it too.
+    assert!(showable(&empty));
+    assert!(!showable(&std::env::temp_dir()));
+    assert!(!showable(&missing));
 }
 
-/// The app follows no symlink. `fits` asks about the path itself, so a link to a file the
-/// pane would happily read is refused as the link it is -- the rule the walk and the Files
-/// view keep to as well, by listing no symlink.
+/// The app follows no symlink. `showable` asks about the path itself, so a link to a file
+/// the pane would happily read is refused as the link it is -- the rule the walk and the
+/// Files view keep to as well, by listing no symlink.
 ///
 /// The broken link and the pair pointing at each other are the other half: a link is file
 /// input, and the answer is no off one `lstat` rather than a chase or a panic.
@@ -83,20 +101,20 @@ fn a_symlink_is_not_shown_whatever_it_points_at() {
     let link = temp_path("link.rs");
     symlink(&*real, &*link).expect("the temp directory is writable");
 
-    assert!(fits(&real, MAX_SIZE));
-    assert!(!fits(&link, MAX_SIZE));
+    assert!(showable(&real));
+    assert!(!showable(&link));
     // And the read behind the gate, so a caller that skipped it gets the same answer.
     assert!(read_text(&link).is_none());
 
     let broken = temp_path("broken.rs");
     symlink(temp_path("nothing.rs").to_path_buf(), &*broken)
         .expect("the temp directory is writable");
-    assert!(!fits(&broken, MAX_SIZE));
+    assert!(!showable(&broken));
 
     let (first, second) = (temp_path("loop-a.rs"), temp_path("loop-b.rs"));
     symlink(second.to_path_buf(), &*first).expect("the temp directory is writable");
     symlink(first.to_path_buf(), &*second).expect("the temp directory is writable");
-    assert!(!fits(&first, MAX_SIZE));
+    assert!(!showable(&first));
 }
 
 /// `read_text` is the pane's rule without the cache, so what the pane refuses it refuses:
@@ -107,16 +125,10 @@ fn read_text_refuses_a_directory() {
 }
 
 /// And refuses a file past the cap, the point of the cap being that the bytes are never
-/// read. The file is made by its length alone, so nothing here writes 16 MB to say so.
+/// read.
 #[test]
 fn read_text_refuses_a_file_over_the_cap() {
-    let path = write("huge.rs", b"fn main() {}\n");
-    fs::File::options()
-        .write(true)
-        .open(&path)
-        .and_then(|file| file.set_len(MAX_SIZE + 1))
-        .expect("the temp file can be grown");
-
+    let path = sized("huge.rs", MAX_SIZE + 1);
     assert!(read_text(&path).is_none());
 }
 
@@ -198,7 +210,7 @@ fn a_seeded_file_is_forgotten_when_its_guard_goes() {
     drop(seeded);
     assert!(!cache().contains_key(&path));
     // Read rather than `load`, which would leave the miss in the cache it just left.
-    assert!(SourceFile::read(&path, MAX_SIZE).is_none());
+    assert!(SourceFile::read(&path).is_none());
 }
 
 /// The digests are of the bytes as read, so a file answers the checksum the compiler took
@@ -219,14 +231,14 @@ fn a_file_matches_the_checksum_of_its_own_bytes() {
     ));
 
     let path = write("abc.c", b"abc");
-    let file = SourceFile::read(&path, MAX_SIZE).expect("a readable file");
+    let file = SourceFile::read(&path).expect("a readable file");
     for hash in [md5, sha1, sha256] {
         assert!(file.matches(hash), "{hash:?}");
     }
     let _ = fs::remove_file(&path);
 
     let path = write("abd.c", b"abd");
-    let edited = SourceFile::read(&path, MAX_SIZE).expect("a readable file");
+    let edited = SourceFile::read(&path).expect("a readable file");
     for hash in [md5, sha1, sha256] {
         assert!(!edited.matches(hash), "{hash:?}");
     }

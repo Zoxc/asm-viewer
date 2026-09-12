@@ -968,7 +968,7 @@ fn paired_lines(
     built: Option<&Built>,
 ) -> HashSet<u32> {
     #[cfg(test)]
-    PAIRINGS.with(|count| count.set(count.get() + 1));
+    PAIRINGS.set(PAIRINGS.get() + 1);
     let Some(pair) = pair else {
         return HashSet::new();
     };
@@ -986,7 +986,7 @@ fn paired_lines(
 /// a test takes the count before and after what it is about.
 #[cfg(test)]
 pub(crate) fn pairings() -> usize {
-    PAIRINGS.with(std::cell::Cell::get)
+    PAIRINGS.get()
 }
 
 #[cfg(test)]

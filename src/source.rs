@@ -308,10 +308,8 @@ impl SourceFile {
 
     /// Read a file, or [`None`] for anything that is not a readable text-sized regular
     /// file: [`contents`]' rule, and the digests of the bytes it read.
-    ///
-    /// `max_size` is a parameter only so the tests can set a small one.
-    fn read(path: &Path, max_size: u64) -> Option<SourceFile> {
-        let (bytes, text) = contents(path, max_size)?;
+    fn read(path: &Path) -> Option<SourceFile> {
+        let (bytes, text) = contents(path)?;
         Some(SourceFile {
             path: path.to_path_buf(),
             digests: SourceDigests::of(&bytes),
@@ -329,7 +327,7 @@ impl SourceFile {
 /// draws that a list of references leaves blank, or a fifo a language server named opened
 /// on a worker that then never returns.
 pub fn read_text(path: &Path) -> Option<String> {
-    contents(path, MAX_SIZE).map(|(_, text)| text)
+    contents(path).map(|(_, text)| text)
 }
 
 /// Whether [`load`] would read `path`: a regular file within [`MAX_SIZE`], and not a
@@ -337,11 +335,6 @@ pub fn read_text(path: &Path) -> Option<String> {
 ///
 /// The gate the UI puts in front of opening a file as source, and [`contents`]' own first
 /// step, so the two cannot drift apart: a row opens because the reader would read it.
-pub fn showable(path: &Path) -> bool {
-    fits(path, MAX_SIZE)
-}
-
-/// [`showable`] with the bound as a parameter, so a test need not write 16 MiB.
 ///
 /// `is_file` is asked before the size, and both before any read: a directory opens happily
 /// on Linux and a fifo blocks the reader until someone writes to it, and neither may reach
@@ -354,22 +347,22 @@ pub fn showable(path: &Path) -> bool {
 /// file is offered by all three or by none. Not following also costs one `lstat` on a
 /// broken link or a loop, where following would chase the loop to the kernel's limit for
 /// the same answer.
-fn fits(path: &Path, max_size: u64) -> bool {
+pub fn showable(path: &Path) -> bool {
     #[cfg(test)]
-    TOUCHES.with(|touches| touches.set(touches.get() + 1));
+    TOUCHES.set(TOUCHES.get() + 1);
     fs::symlink_metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.len() <= max_size)
+        .map(|metadata| metadata.is_file() && metadata.len() <= MAX_SIZE)
         .unwrap_or(false)
 }
 
-/// The bytes of `path` and those bytes decoded, or [`None`] for anything that is not a
-/// readable regular file within `max_size`. **The one rule** for reading a source file by
-/// path; both readers above are this plus what they keep.
+/// The bytes of `path` and those bytes decoded, or [`None`] for anything [`showable`]
+/// refuses. **The one rule** for reading a source file by path; both readers above are
+/// this plus what they keep.
 ///
 /// The bytes come back beside the text because the digests are of the bytes as read: the
 /// compiler hashed those, and a lossy decode is not reversible.
-fn contents(path: &Path, max_size: u64) -> Option<(Vec<u8>, String)> {
-    if !fits(path, max_size) {
+fn contents(path: &Path) -> Option<(Vec<u8>, String)> {
+    if !showable(path) {
         return None;
     }
 
@@ -382,14 +375,14 @@ fn contents(path: &Path, max_size: u64) -> Option<(Vec<u8>, String)> {
 
 /// Test-only: how many times this thread has asked the filesystem about a source file.
 ///
-/// Every read and every gate above goes through [`fits`], so counting there counts them
-/// all. A thread-local because `freya-testing` runs the whole app on the test's own
+/// Every read and every gate above goes through [`showable`], so counting there counts
+/// them all. A thread-local because `freya-testing` runs the whole app on the test's own
 /// thread, which makes this the one thing that can settle what no other test here can:
 /// that a render or an effect made no filesystem call at all. Nothing resets it -- a test
 /// takes the count before and after what it is about.
 #[cfg(test)]
 pub fn touches() -> usize {
-    TOUCHES.with(std::cell::Cell::get)
+    TOUCHES.get()
 }
 
 #[cfg(test)]
@@ -481,7 +474,7 @@ pub fn load(path: &Path) -> Option<Arc<SourceFile>> {
     // on this file. The cost is that two callers racing for one path may both read it, and
     // the second's copy is dropped when it loses the insert.
     let at = forgotten();
-    let file = SourceFile::read(path, MAX_SIZE).map(Arc::new);
+    let file = SourceFile::read(path).map(Arc::new);
 
     let mut cache = cache();
     // Forgotten while it was being read: what came back is the file as it was before

@@ -104,7 +104,7 @@ keyed!(DependencyRow);
 /// thread. Nothing resets it: a test takes the count before and after what it is about.
 #[cfg(test)]
 pub(crate) fn rows_drawn() -> usize {
-    ROWS_DRAWN.with(Cell::get)
+    ROWS_DRAWN.get()
 }
 
 #[cfg(test)]
@@ -115,7 +115,7 @@ thread_local! {
 impl Component for DependencyRow {
     fn render(&self) -> impl IntoElement {
         #[cfg(test)]
-        ROWS_DRAWN.with(|drawn| drawn.set(drawn.get() + 1));
+        ROWS_DRAWN.set(ROWS_DRAWN.get() + 1);
 
         let mut pad = use_consume::<Pad>().0;
         let id = self.id;

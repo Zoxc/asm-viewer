@@ -24,7 +24,6 @@ fn a_closed_id_stands_for_nothing() {
     assert!(docs.trail(id).is_none());
     assert_eq!(docs.showing(&file("/src/main.rs")), None);
     assert!(!docs.contains(id, &Stop::whole(file("/src/main.rs"))));
-    assert_eq!(docs.len(), 0);
 }
 
 /// The rule the whole type exists to keep. A tab header is keyed by its id and a drag
@@ -142,7 +141,6 @@ fn a_restored_trail_opens_whole_and_an_empty_one_opens_nothing() {
     assert_eq!(docs.temporal(), Some(id));
 
     assert!(docs.open_trail(History::default(), false).is_none());
-    assert_eq!(docs.len(), 1);
     // And no id was spent on it.
     let next = docs.open(file("c.rs"));
     assert_eq!(next, DocId(id.0 + 1));

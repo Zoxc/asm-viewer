@@ -15,7 +15,7 @@ is matched against and taking a path apart per file per character is work the ma
 be doing. It never leaves that side: the finder's worker holds the walk, and only the rows a
 query picked out cross to the UI.
 
-**A symlink is not a project file.** `source::fits` asks `symlink_metadata` and refuses one, the
+**A symlink is not a project file.** `source::showable` asks `symlink_metadata` and refuses one, the
 walk does not follow one, and the Files view drops one from a level it reads (`agents/Sidebar.md`).
 One rule in three places rather than three rules: a symlinked source file used to be invisible to
 the finder and to Search and openable from a Files row, which is the app saying two things about

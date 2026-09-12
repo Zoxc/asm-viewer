@@ -1027,7 +1027,7 @@ pub(crate) fn use_scratchpad_with(
         let editor = buffers.get(&shown);
         let typed = (editor.rope != pad.peek().state().scratchpad.source).then(|| {
             #[cfg(test)]
-            MIRRORED.with(|copies| copies.set(copies.get() + 1));
+            MIRRORED.set(MIRRORED.get() + 1);
             editor.rope.to_string()
         });
         drop(buffers);
@@ -1342,7 +1342,7 @@ fn stop_run_of(mut pad: State<Pads>, name: &PadId) {
 /// takes the count before and after what it is about.
 #[cfg(test)]
 pub(crate) fn mirrored() -> usize {
-    MIRRORED.with(std::cell::Cell::get)
+    MIRRORED.get()
 }
 
 #[cfg(test)]

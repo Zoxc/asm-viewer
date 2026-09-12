@@ -3309,7 +3309,7 @@ fn a_press_beside_the_glyph_still_closes_the_tab() {
     // below is the target answering rather than any press anywhere.
     press(&mut test, (centre.0 + close_target() as f64, centre.1));
     assert_eq!(
-        states.open.docs.peek().len(),
+        open_documents(states.open).len(),
         1,
         "a press outside the × closed the tab"
     );
@@ -3319,9 +3319,8 @@ fn a_press_beside_the_glyph_still_closes_the_tab() {
         &mut test,
         (centre.0 - close_target() as f64 / 2.0 + 2.0, centre.1),
     );
-    assert_eq!(
-        states.open.docs.peek().len(),
-        0,
+    assert!(
+        open_documents(states.open).is_empty(),
         "a press in the × missed the glyph and did nothing"
     );
     assert_eq!(
@@ -3403,13 +3402,23 @@ fn the_panel_and_the_table_hold_the_same_documents() {
     let mut objects = states.objects;
     objects.write().push(object);
 
+    // Both ways. `open_documents` drops a chip the table has no trail for, so a list
+    // shorter than the strip is one; and the table holds a trail for nothing that has
+    // lost its chip.
     let agree = |states: &ProjectStates| {
         let open = open_documents(states.open);
         assert_eq!(
             open.len(),
-            states.open.docs.peek().len(),
-            "the panel and the table hold different numbers of documents"
+            states.open.strip.peek().documents().count(),
+            "a chip stands for a document the table has no trail for"
         );
+        let docs = states.open.docs.peek();
+        for gone in documents.iter().filter(|one| !open.contains(one)) {
+            assert!(
+                docs.showing(gone).is_none(),
+                "the table kept a trail for a document with no chip"
+            );
+        }
         open
     };
 
@@ -3461,7 +3470,7 @@ fn a_bulk_close_takes_the_trails_with_the_chips() {
     let mut objects = states.objects;
     objects.write().push(object);
 
-    // A page among them, which has no trail at all: what is counted below is the
+    // A page among them, which has no trail at all: what is asked about below is the
     // document tabs.
     {
         let mut strip = states.open.strip;
@@ -3474,20 +3483,38 @@ fn a_bulk_close_takes_the_trails_with_the_chips() {
     documents.iter().for_each(&mut went);
     test.sync_and_update();
 
-    let trails = || states.open.docs.peek().len();
-    assert_eq!(trails(), 3);
+    // Asked by id and not by document, so an emptied trail left under a closed tab's id
+    // is a trail left behind here too.
+    let id = |document: &Document| {
+        states
+            .open
+            .docs
+            .peek()
+            .showing(document)
+            .expect("an open tab")
+    };
+    let (file_tab, first, second) = (id(&source), id(&documents[0]), id(&documents[1]));
+    let trailed = |id: DocId| states.open.docs.peek().trail(id).is_some();
+    assert!([file_tab, first, second].into_iter().all(trailed));
 
     // Closed by file: the two tabs into the binary go and the file tab stands.
     close_binary(states, &path);
     test.sync_and_update();
     assert!(open_documents(states.open) == [source]);
-    assert_eq!(trails(), 1, "a closed binary's trails outlived its chips");
+    assert!(
+        ![first, second].into_iter().any(trailed),
+        "a closed binary's trails outlived its chips"
+    );
+    assert!(trailed(file_tab), "the tab that stood lost its trail");
 
     // And closed by tab, keeping the page: the last document's trail goes with it.
     close_others(states.open, states.places, Tab::Page(Page::Settings));
     test.sync_and_update();
     assert!(open_documents(states.open).is_empty());
-    assert_eq!(trails(), 0, "\"Close other tabs\" left a trail behind");
+    assert!(
+        !trailed(file_tab),
+        "\"Close other tabs\" left a trail behind"
+    );
 }
 
 /// What a bulk closer closed and what it lets go of are one list: `Open::close_tabs`
@@ -28321,35 +28348,59 @@ fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
     );
 }
 
-/// **One job, one walk up to the profile manifest.** Which file cargo takes `[profile.*]`
-/// from is an ancestor walk with a read and a parse per directory, and a manifest job asks
-/// about it twice over -- the answer names the file, and whether the profile carries lines
-/// is read out of it -- while an edit writes to it first. It is resolved once and handed to
-/// each, so a press costs one walk and not three.
+/// **One job, one profile manifest.** Which file cargo takes `[profile.*]` from is an
+/// ancestor walk, and a manifest job asks about it twice over -- the answer names the
+/// file, and whether the profile carries lines is read out of it -- while an edit writes
+/// to it first. The job resolves it once and hands the path to each, so all three are
+/// about the same file: the workspace root's, above the member the project is opened at.
 ///
-/// The real worker half, over a real directory: what it costs is filesystem work, which no
-/// canned answer would show.
+/// The real worker half, over a real directory: where the edit landed is filesystem work,
+/// which no canned answer would show.
 #[test]
-fn a_manifest_job_walks_to_the_profile_manifest_once() {
+fn a_manifest_job_reads_and_writes_the_root_manifest() {
     let root = Temporary::directory(std::env::temp_dir().join(format!(
         "assembly-viewer-profile-manifest-{}",
         std::process::id()
     )));
-    std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("a manifest");
+    let root_manifest = root.join("Cargo.toml");
+    std::fs::write(&root_manifest, "[workspace]\nmembers = [\"app\"]\n").expect("a manifest");
+    std::fs::create_dir_all(root.join("app")).expect("the member directory");
+    let member_manifest = root.join("app").join("Cargo.toml");
+    std::fs::write(&member_manifest, "[package]\nname = \"app\"\n").expect("a manifest");
+
     let job = |what| BuildJob {
-        directory: root.to_path_buf(),
+        directory: root.join("app"),
         profile: Profile::Release,
         what,
     };
+    let manifest = |answer| match answer {
+        BuildAnswer::Read(manifest) => manifest,
+        BuildAnswer::Done { .. } => panic!("a manifest job answered with a build"),
+    };
 
-    let before = cargo::resolutions();
-    build_work(job(BuildWhat::Read));
-    assert_eq!(cargo::resolutions() - before, 1, "the read walked twice");
+    let read = manifest(build_work(job(BuildWhat::Read)));
+    assert_eq!(read.path.as_ref(), Some(&member_manifest));
+    assert_eq!(
+        read.profiles.as_ref(),
+        Some(&root_manifest),
+        "the profiles were read from the member's own file"
+    );
+    assert!(!read.debug_lines);
 
     // The edit and the read back of what it wrote, which is one press.
-    let before = cargo::resolutions();
-    build_work(job(BuildWhat::AddDebugLines));
-    assert_eq!(cargo::resolutions() - before, 1, "the edit walked again");
+    let added = manifest(build_work(job(BuildWhat::AddDebugLines)));
+    assert_eq!(added.edit_refused, None);
+    assert_eq!(added.profiles.as_ref(), Some(&root_manifest));
+    assert!(
+        added.debug_lines,
+        "the read back missed what the edit wrote"
+    );
+    assert!(
+        !std::fs::read_to_string(&member_manifest)
+            .expect("the member manifest")
+            .contains("profile"),
+        "the edit went into the file cargo ignores"
+    );
 }
 
 /// A diagnostic's place is a target when this pane can reach it: cargo spells the file

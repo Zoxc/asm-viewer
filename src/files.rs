@@ -198,7 +198,7 @@ impl Node {
 /// row would open.
 fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
     #[cfg(test)]
-    READS.with(|reads| reads.set(reads.get() + 1));
+    READS.set(READS.get() + 1);
     let mut nodes: Vec<Node> = fs::read_dir(directory)?
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
@@ -232,7 +232,7 @@ fn read_level(directory: &Path) -> io::Result<Vec<Node>> {
 /// rebuild of the rows made none.
 fn hold(name: &str, path: PathBuf) -> (Arc<str>, Arc<Path>) {
     #[cfg(test)]
-    ALLOCATIONS.with(|made| made.set(made.get() + 1));
+    ALLOCATIONS.set(ALLOCATIONS.get() + 1);
     (Arc::from(name), Arc::from(path))
 }
 
@@ -243,7 +243,7 @@ fn hold(name: &str, path: PathBuf) -> (Arc<str>, Arc<Path>) {
 /// resets it -- a test takes the count before and after what it is about.
 #[cfg(test)]
 pub fn allocations() -> usize {
-    ALLOCATIONS.with(std::cell::Cell::get)
+    ALLOCATIONS.get()
 }
 
 #[cfg(test)]
@@ -259,7 +259,7 @@ thread_local! {
 /// resets it -- a test takes the count before and after what it is about.
 #[cfg(test)]
 pub fn reads() -> usize {
-    READS.with(std::cell::Cell::get)
+    READS.get()
 }
 
 #[cfg(test)]

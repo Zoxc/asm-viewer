@@ -351,8 +351,6 @@ pub fn manifest(directory: &Path) -> Option<PathBuf> {
 /// A read and a parse per directory, so the answer is resolved **once** per job and handed
 /// to [`debug_lines`] and [`add_debug_lines`] rather than worked out again by each.
 pub fn profile_manifest(directory: &Path) -> PathBuf {
-    #[cfg(test)]
-    RESOLUTIONS.with(|resolutions| resolutions.set(resolutions.get() + 1));
     let own = directory.join(MANIFEST);
     if let Some(manifest) = read_manifest(&own) {
         if manifest.contains_key("workspace") {
@@ -451,22 +449,6 @@ fn read_manifest(path: &Path) -> Option<toml::Table> {
     // a manifest is a whole document.
     let text = fs::read_to_string(path).ok()?;
     toml::from_str::<toml::Table>(&text).ok()
-}
-
-/// Test-only: how many times this thread has resolved a profile manifest.
-///
-/// Every resolution goes through [`profile_manifest`], which is an ancestor walk with a
-/// read and a parse per directory, so counting there counts what a press costs. A
-/// thread-local, as `files::reads` is: a test takes the count before and after the job it
-/// is about.
-#[cfg(test)]
-pub fn resolutions() -> usize {
-    RESOLUTIONS.with(std::cell::Cell::get)
-}
-
-#[cfg(test)]
-thread_local! {
-    static RESOLUTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The messages cargo emits, as much of each as this module reads. `#[serde(other)]` is

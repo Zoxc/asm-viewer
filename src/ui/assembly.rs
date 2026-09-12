@@ -31,7 +31,7 @@ pub(crate) fn asm_line(instruction: &Instruction, bias: u64) -> String {
 /// Which element an instruction row draws in place of one of the formatter's spans, or
 /// after them all.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Link {
+enum Link {
     /// The relocation target's name, in the operand the relocation applies to.
     Relocation,
     /// A branch's displacement, where the listing has the row it lands on.
@@ -52,9 +52,9 @@ pub(crate) enum Link {
 /// borrowed from the instruction, so nothing after [`split`] works out again what it
 /// chose.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct Lifted<'a> {
-    pub(crate) kind: Link,
-    pub(crate) text: &'a str,
+struct Lifted<'a> {
+    kind: Link,
+    text: &'a str,
 }
 
 /// How an instruction's text is drawn after its address: the formatter's spans up to the
@@ -67,7 +67,7 @@ pub(crate) struct Lifted<'a> {
 ///
 /// A relocation the formatter offered no operand for is a link all the same: it comes
 /// back as [`Link::Appended`] after every span, with an empty tail.
-pub(crate) fn split(
+fn split(
     instruction: &Instruction,
     linked: bool,
 ) -> (
@@ -125,7 +125,7 @@ pub(crate) fn split(
 /// it lands on, which is the same set the gutter draws an arrow for. An edge is only ever
 /// built for an [`Operand::Branch`], and one of those always has a span, so the edge is the
 /// whole question.
-pub(crate) fn linked(assembly: &Assembly, index: usize) -> bool {
+fn linked(assembly: &Assembly, index: usize) -> bool {
     assembly.edge_from(index).is_some()
 }
 

@@ -224,7 +224,7 @@ impl Clone for Scratchpad {
     /// none.
     fn clone(&self) -> Scratchpad {
         #[cfg(test)]
-        COPIES.with(|copies| copies.set(copies.get() + 1));
+        COPIES.set(COPIES.get() + 1);
         Scratchpad {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -245,7 +245,7 @@ impl Clone for Scratchpad {
 /// the count before and after what it is about.
 #[cfg(test)]
 pub fn copies() -> usize {
-    COPIES.with(std::cell::Cell::get)
+    COPIES.get()
 }
 
 #[cfg(test)]

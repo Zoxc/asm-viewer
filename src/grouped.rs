@@ -43,7 +43,7 @@ impl<T: Clone> Clone for Grouped<T> {
     /// answer unnecessary, and [`copies`] is what says a render made none.
     fn clone(&self) -> Grouped<T> {
         #[cfg(test)]
-        COPIES.with(|copies| copies.set(copies.get() + 1));
+        COPIES.set(COPIES.get() + 1);
         Grouped {
             files: self.files.clone(),
             count: self.count,
@@ -59,7 +59,7 @@ impl<T: Clone> Clone for Grouped<T> {
 /// the count before and after what it is about.
 #[cfg(test)]
 pub fn copies() -> usize {
-    COPIES.with(std::cell::Cell::get)
+    COPIES.get()
 }
 
 #[cfg(test)]
