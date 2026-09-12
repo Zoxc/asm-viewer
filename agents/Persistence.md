@@ -144,11 +144,14 @@ controller (`notes/upstream/freya.md`).
 
 **Startup opens what the app was given, or what it was last in.** `app()` takes the project
 named on the command line and `use_restore_on_startup` prefers it (`project::open_at`, which
-is `switch` without the flush, there being nothing to flush yet). `main` answers for a path
-that is not a project file *before* `launch`, on the command line it came from: a windowed
-program that starts and says nothing has said nothing. A path that **is** one and still will
-not open is the app's to answer, and it says so in a window (`Unopened`, which carries the
-`Failure` and not just the path), which is the whole of what is left to do -- the file is never
+is `switch` without the flush, there being nothing to flush yet). Both answer with the project
+and its session and nothing else: no path under them is canonicalised or reduced, so a caller
+keeps the one it already holds, and `reopen`, which held none, names the one it took out of the
+list. `main` answers for a path that is not a project file *before* `launch`, on the command
+line it came from: a windowed program that starts and says nothing has said nothing. A path
+that **is** one and still will not open is the app's to answer, and it says so in a window
+(`Unopened`, which carries the `Failure` and not just the path), which is the whole of what
+is left to do -- the file is never
 moved aside and nothing is written over it. `reopen` is the one open nobody asked for, and so
 the one that keeps quiet: a recent list naming a file that has **gone** is `None`, nothing to
 reopen rather than a failure, since the list never prunes itself and that is what an ordinary

@@ -46,15 +46,10 @@ pub struct Body {
 }
 
 impl Body {
-    fn instructions(&self) -> usize {
-        self.assembly
-            .as_ref()
-            .map_or(0, |assembly| assembly.instructions.len())
-    }
-
-    /// The instruction rows and the separators between them.
+    /// The instruction rows and the separators between them. The lanes were laid out over
+    /// this body's own assembly, so the count is theirs.
     fn listing_rows(&self) -> usize {
-        self.lanes.listing_rows(self.instructions())
+        self.lanes.listing_rows()
     }
 
     fn gap_rows(&self) -> usize {
@@ -135,7 +130,7 @@ impl BodyRows {
             let rows = Self::estimate(stretch_bytes(stretch), !stretch.symbols.is_empty());
             return BodyRows::Estimated(rows);
         };
-        if body.instructions() == 0 {
+        if body.listing_rows() == 0 {
             let end = body.gap.as_ref().map_or(stretch.range.end, |gap| gap.end);
             body.gap = Some(stretch.range.start..end);
         }

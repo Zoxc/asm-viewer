@@ -148,7 +148,12 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<Path
         // the reader's own file and is left exactly as it is.
         let store = states.store.peek().clone();
         let opened = match (store.as_ref(), &opening) {
-            (Some(store), Some(path)) => Some(project::open_at(store, path)),
+            (Some(store), Some(path)) => Some(
+                // The path the app was given, put beside the two halves so every branch
+                // here answers the same shape; `open_at` does not touch it.
+                project::open_at(store, path)
+                    .map(|(project, session)| (path.clone(), project, session)),
+            ),
             (Some(store), None) => project::reopen(store),
             // Nowhere to keep anything, so nothing opens. Only worth saying to a reader
             // who asked for a project; a startup that would have reopened one has the

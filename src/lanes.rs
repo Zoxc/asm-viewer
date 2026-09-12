@@ -125,16 +125,17 @@ impl Lanes {
         }
     }
 
-    /// How many rows the listing draws for `instructions` instructions: one each, plus the
-    /// separators.
+    /// How many rows the listing draws: one per instruction, plus the separators. The count
+    /// is the lanes' own, so this and the converters under it cannot disagree about how
+    /// long the listing is.
     ///
     /// The two index spaces this and the next two convert between are the whole cost of
     /// the separator being a row rather than a border: **an instruction index is what the
     /// gutter, the line info and the branch edges speak**, and a listing row is what the
     /// `VirtualScrollView`, the scroll and the picked-out run speak. Nothing else may
     /// confuse them.
-    pub fn listing_rows(&self, instructions: usize) -> usize {
-        instructions + self.separators.len()
+    pub fn listing_rows(&self) -> usize {
+        self.instructions + self.separators.len()
     }
 
     /// The listing row the instruction at `index` is drawn in: itself, plus every

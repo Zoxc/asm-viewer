@@ -898,7 +898,8 @@ inside freya (`notes/upstream/freya.md`).
 A `VirtualScrollView` is given one `item_size` for the whole listing, so the separator is
 `code_row_height()` like every other row and the rule is drawn *inside* it, across its middle. What
 that costs is **two index spaces**, and `Lanes` is the only thing allowed to convert between them:
-`listing_rows`, `row_of` and `instruction_at`. An **instruction index** is what `AsmData::position`,
+`listing_rows`, `row_of` and `instruction_at`, none of them told the instruction count, which the
+lanes were laid out over and hold. An **instruction index** is what `AsmData::position`,
 the gutter, `Lanes::touching_any` and the branch edges speak; a **listing row** is what the scroll
 (`reveal_row`, `use_kept_position`) and the selected run (`Marked`, `on_listing_key`) speak.
 `InstructionRow` carries both and never mixes them. A row is also told three things about the

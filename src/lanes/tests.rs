@@ -194,8 +194,8 @@ fn a_run_of_rows_lights_the_branches_of_the_instructions_it_holds() {
     assert_eq!(lanes.instructions_in(0..=3), Some(0..=3));
     // Past the end is no instruction, which a row asked about its neighbour below asks:
     // the arithmetic alone answered the next index, and the row drawn from it panicked.
-    assert_eq!(lanes.instruction_at(lanes.listing_rows(9)), None);
-    assert_eq!(lanes.instruction_at(lanes.listing_rows(9) + 5), None);
+    assert_eq!(lanes.instruction_at(lanes.listing_rows()), None);
+    assert_eq!(lanes.instruction_at(lanes.listing_rows() + 5), None);
     assert_eq!(lanes.instructions_in(10..=12), None);
     // The separator at row 5 opens the run: instruction 5 is inside.
     assert_eq!(lanes.instructions_in(5..=6), Some(5..=5));
@@ -235,7 +235,7 @@ fn a_separator_row_sits_above_every_row_a_branch_lands_on() {
     // The `sum_to` shape: a jump forward to row 4 and one back up to row 1, so rows 1 and
     // 4 begin a block and rows 0, 2, 3, 5 and 6 do not.
     let lanes = Lanes::new(&edges(&[(0, 4), (5, 1)]), 7);
-    assert_eq!(lanes.listing_rows(7), 9);
+    assert_eq!(lanes.listing_rows(), 9);
 
     // Instruction -> row, and the drift is one per separator already passed.
     let rows: Vec<usize> = (0..7).map(|index| lanes.row_of(index)).collect();
@@ -260,6 +260,37 @@ fn a_separator_row_sits_above_every_row_a_branch_lands_on() {
     );
 }
 
+/// The listing's length is the count the lanes were laid out over, so the converter that
+/// answers it cannot disagree with the three that walk it: every row under it draws an
+/// instruction or a separator, the last is the last instruction's, and nothing past it
+/// draws anything at all.
+#[test]
+fn the_listings_length_is_the_lanes_own_instruction_count() {
+    // Seven instructions, with branches landing on 1 and 4, so two separators.
+    let lanes = Lanes::new(&edges(&[(0, 4), (5, 1)]), 7);
+    let rows = lanes.listing_rows();
+
+    assert_eq!(
+        rows,
+        lanes.row_of(6) + 1,
+        "the last row is the last instruction's"
+    );
+    let drawn = (0..rows)
+        .filter_map(|row| lanes.instruction_at(row))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        drawn,
+        (0..7).collect::<Vec<_>>(),
+        "each instruction drawn once"
+    );
+    assert_eq!(lanes.instructions_in(0..=rows - 1), Some(0..=6));
+    // And the ends: the first row is the first instruction, the row past the last is
+    // nothing, and so is every row after that.
+    assert_eq!(lanes.instruction_at(0), Some(0));
+    assert_eq!(lanes.instruction_at(rows), None);
+    assert_eq!(lanes.instructions_in(rows..=rows + 5), None);
+}
+
 /// A symbol whose first instruction is branched to gets no separator over its head: a
 /// boundary above the top of a listing says nothing, and the row would be a gap the
 /// symbol opens with.
@@ -267,7 +298,7 @@ fn a_separator_row_sits_above_every_row_a_branch_lands_on() {
 fn the_first_row_never_gets_a_separator() {
     let lanes = Lanes::new(&edges(&[(3, 0)]), 5);
     assert_eq!(lanes.row(0).arrow, true, "the branch still lands there");
-    assert_eq!(lanes.listing_rows(5), 5);
+    assert_eq!(lanes.listing_rows(), 5);
     assert_eq!(lanes.row_of(0), 0);
     assert_eq!(
         (0..5)
@@ -282,7 +313,7 @@ fn the_first_row_never_gets_a_separator() {
 #[test]
 fn a_symbol_that_branches_nowhere_is_one_row_per_instruction() {
     let lanes = Lanes::new(&[], 4);
-    assert_eq!(lanes.listing_rows(4), 4);
+    assert_eq!(lanes.listing_rows(), 4);
     assert_eq!(lanes.row_of(3), 3);
     assert_eq!(lanes.instruction_at(3), Some(3));
     // And nothing past the last: with no branches there is no row table to bound the

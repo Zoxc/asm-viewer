@@ -2462,6 +2462,41 @@ fn the_last_project_is_the_one_reopened() {
     assert_eq!(restored, session);
 }
 
+/// A project opens under the path it was named by. Nothing on the way through
+/// canonicalises or reduces one, so a path the reader spelled the long way round is the
+/// path the project is opened and remembered under -- which is why [`open_at`] hands back
+/// the two halves and not the path it was given.
+#[test]
+fn a_project_opens_under_the_path_it_was_named_by() {
+    let base = directory(line!());
+    let store = Store::at(&base);
+    let path = base.join(format!("kernel.{PROJECT_EXTENSION}"));
+    let project = a_project();
+    store
+        .write_toml(&path, &project)
+        .expect("saving the project");
+
+    // The same file, named through a directory walked into and back out of: a spelling
+    // the system resolves and `canonicalize` would reduce.
+    fs::create_dir_all(base.join("sub")).expect("creating the test directory");
+    let named = base
+        .join("sub")
+        .join("..")
+        .join(format!("kernel.{PROJECT_EXTENSION}"));
+    assert_ne!(
+        named, path,
+        "the two spellings are the same file, not the same path"
+    );
+
+    let (opened, _) = open_at(&store, &named).expect("the project opens");
+    assert_eq!(opened, project);
+    assert_eq!(
+        load_recents(&store).first(),
+        Some(&named),
+        "the recent list holds a path the caller never gave"
+    );
+}
+
 /// Two ways for there to be nothing to reopen, both of them silence -- and the one way a
 /// startup does have something to say, which is the point of telling them apart. The
 /// recent list never prunes itself, so a name in it with nothing behind it is what an

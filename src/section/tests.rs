@@ -408,9 +408,7 @@ fn decoding_a_stretch_settles_its_rows_and_moves_none_above_it() {
         settled.start, middle.start,
         "the stretch starts where it did"
     );
-    let listing = body
-        .lanes
-        .listing_rows(body.assembly.as_ref().unwrap().instructions.len());
+    let listing = body.lanes.listing_rows();
     let gap = body.gap.as_ref().map_or(0, |gap| gap_rows(gap));
     // The rule over the stretch and its blank, its header, the blank under that, and
     // its label.

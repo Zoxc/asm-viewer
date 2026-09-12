@@ -1776,8 +1776,8 @@ fn write_recents(store: &Store, recents: Recents) {
 }
 
 /// Reopen the project the app was last in: the first entry of `recents.toml`. Hands back
-/// both halves for the caller to restore, and points the save policy at it — but seeds it
-/// with nothing else (see [`Saves::binaries`]).
+/// the path it picked and both halves for the caller to restore, and points the save policy
+/// at it — but seeds it with nothing else (see [`Saves::binaries`]).
 ///
 /// `None` when there is nothing to reopen, which is a first run and not a failure — and a
 /// project whose file has **gone** is one of those: the recent list never prunes itself, so
@@ -1787,7 +1787,8 @@ pub fn reopen(store: &Store) -> Option<Result<(PathBuf, Project, Session), Failu
     let path = load_recents(store).first()?.clone();
     match open_at(store, &path) {
         Err(failure) if failure.reason == Reason::Missing => None,
-        opened => Some(opened),
+        Err(failure) => Some(Err(failure)),
+        Ok((project, session)) => Some(Ok((path, project, session))),
     }
 }
 
@@ -1839,19 +1840,22 @@ fn load_project(store: &Store, path: &Path) -> Result<(Project, Session), Failur
 /// just entered. Emptying the app is the caller's half, the states being the UI's.
 pub fn switch(store: &Store, path: &Path) -> Result<(Project, Session), Failure> {
     flush();
-    let (_, project, session) = open_at(store, path)?;
+    let opened = open_at(store, path)?;
     log::debug!("switched to the project {}", path.display());
-    Ok((project, session))
+    Ok(opened)
 }
 
 /// Open the project the file at `path` holds without leaving one first: what a startup
 /// given a project file on the command line does, where there is nothing to flush.
 /// [`switch`] is this with the flush in front of it.
-pub fn open_at(store: &Store, path: &Path) -> Result<(PathBuf, Project, Session), Failure> {
+///
+/// The path is used as it was given: nothing here canonicalises or reduces it, so the
+/// caller's own path stays the project's name.
+pub fn open_at(store: &Store, path: &Path) -> Result<(Project, Session), Failure> {
     let (project, session) = load_project(store, path)?;
     remember(store, path);
     saves().opened(store, path.to_path_buf(), &project, &session);
-    Ok((path.to_path_buf(), project, session))
+    Ok((project, session))
 }
 
 /// Start a project the reader has not given a place and enter it: [`switch`] with nothing

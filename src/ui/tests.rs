@@ -12230,7 +12230,7 @@ fn a_block_rule_lands_on_whole_device_pixels() {
         .expect("the fixture disassembles sum_to")
         .instructions
         .len();
-    let separators = studied.lanes.listing_rows(instructions) - instructions;
+    let separators = studied.lanes.listing_rows() - instructions;
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
@@ -22795,11 +22795,7 @@ fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
     // Every row on screen at once, so the listing has nothing to scroll over: a sweep
     // held past an edge scrolls the view as well as reaching the run out, and a listing
     // moving under the assertions is not what this is about.
-    let rows = {
-        let studied = &shown.studied;
-        let assembly = studied.assembly.as_ref().expect("sum_to has bytes");
-        studied.lanes.listing_rows(assembly.instructions.len())
-    };
+    let rows = shown.studied.lanes.listing_rows();
     let (mut test, roots) = TestingRunner::new(
         listing_harness,
         (600., 900.).into(),
@@ -23609,7 +23605,7 @@ fn shift_and_a_key_reach_the_run_out_and_a_key_alone_collapses_it() {
 fn ctrl_end_goes_to_the_listings_end_and_the_pane_scrolls_to_it() {
     let shown = shown_sum_to();
     let instructions = &shown.studied.assembly.as_ref().unwrap().instructions;
-    let length = shown.studied.lanes.listing_rows(instructions.len());
+    let length = shown.studied.lanes.listing_rows();
     let first_address = format!("{:016X} ", instructions[0].address);
     let last_address = format!("{:016X} ", instructions.last().unwrap().address);
     let (mut test, roots) = TestingRunner::new(

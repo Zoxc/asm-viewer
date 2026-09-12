@@ -1252,9 +1252,7 @@ impl Component for InstructionList {
         // branch lands on. Everything below that scrolls, picks out or counts rows is in
         // this space; `AsmData::position`, the gutter and the edges are in the
         // instructions'. `Lanes` converts, and is the only thing that may.
-        let length = data
-            .lanes()
-            .listing_rows(data.assembly().instructions.len());
+        let length = data.lanes().listing_rows();
         // Where this tab was left, put back when it is switched to and written down as it
         // is scrolled -- and the scroll this pane owes a run, which wins over it.
         let docs = doors.open.docs;
