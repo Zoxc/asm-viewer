@@ -717,8 +717,7 @@ fn finder_key(
             // Bound before the write below, so the read guard is gone by then.
             let at = listed.clamp(finder.peek().selected());
             if let Some(path) = listed.path(at) {
-                open_found(states, keyboard, &path, reach_of(modifiers));
-                close_finder(finder);
+                open_found(finder, states, keyboard, &path, reach_of(modifiers));
             }
         }
         _ => {}
@@ -764,8 +763,9 @@ fn moved(finder: State<Finder>, listed: &Listed, by: isize) -> (usize, usize) {
     moved_to(finder, listed, at.saturating_add_signed(by))
 }
 
-/// The same to a row named outright, which is what Home and End are: the first row, and
-/// the last however many there are ([`usize::MAX`], the clamp doing the counting).
+/// The same to a row named outright: the first row and the last however many there are,
+/// which is what Home and End are ([`usize::MAX`], the clamp doing the counting), and the
+/// row under the pointer, which is what an Alt+press is.
 fn moved_to(mut finder: State<Finder>, listed: &Listed, to: usize) -> (usize, usize) {
     // Bound before the write, so the read guard is gone by then.
     let typed = finder.peek().typed.clone();
@@ -773,17 +773,6 @@ fn moved_to(mut finder: State<Finder>, listed: &Listed, to: usize) -> (usize, us
     state.at = listed.clamp(to);
     state.at_for = typed;
     (state.at, listed.len())
-}
-
-/// Put the keyboard on `index` and leave the finder open: what an Alt+press on a row
-/// does. The box's text is remembered with it, as [`moved`] remembers it, so the row is
-/// this list's as the query stands and not a row of the next one typed.
-fn pick_row(mut finder: State<Finder>, index: usize) {
-    // Bound before the write, so the read guard is gone by then.
-    let typed = finder.peek().typed.clone();
-    let mut state = finder.write();
-    state.at = index;
-    state.at_for = typed;
 }
 
 /// Scroll the list so the row the keyboard was moved to is one of the rows drawn: the
@@ -809,11 +798,19 @@ fn followed(mut list: ScrollController, (at, rows): (usize, usize)) {
 /// opens nothing at all.
 ///
 /// The keyboard goes with it, as it does out of every list a row is opened from
-/// (`ui/picks.rs`), and here it has nowhere else to be: the panel is closing and the box it
-/// was in goes with it.
-fn open_found(states: ProjectStates, keyboard: State<Keys>, path: &Path, reach: Reach) {
+/// (`ui/picks.rs`), and here it has nowhere else to be: the panel closes behind the file,
+/// which is the last thing this does, and the box it was in goes with it. Enter and a
+/// press are the same door, so the close is here and not at each of them.
+fn open_found(
+    finder: State<Finder>,
+    states: ProjectStates,
+    keyboard: State<Keys>,
+    path: &Path,
+    reach: Reach,
+) {
     open_source_file(states, path, reach);
     ask_for_keyboard(keyboard);
+    close_finder(finder);
 }
 
 /// The box at the top of the overlay.
@@ -901,6 +898,10 @@ impl Component for FoundRow {
             return rect().into_element();
         };
         let pressed = file.path.clone();
+        // The list this row is one of, which is what an Alt+press moves the keyboard
+        // against: the index is under its length by construction, the row having been
+        // drawn from it.
+        let listed = self.listed.clone();
 
         // Cut and not extra, though the strings differ: the row draws every part of the
         // path the tooltip holds, the name first and the directories after it.
@@ -915,11 +916,12 @@ impl Component for FoundRow {
                     // finder's pick *is* its keyboard row, so pointing at a row is
                     // moving the keyboard to it.
                     if *alt.peek() {
-                        pick_row(finder, index);
+                        // The row it moved to is dropped: the row is under the pointer,
+                        // so there is nothing for the list to scroll to.
+                        moved_to(finder, &listed, index);
                         return;
                     }
-                    open_found(states, keyboard, &pressed, Reach::outside(ctrl));
-                    close_finder(finder);
+                    open_found(finder, states, keyboard, &pressed, Reach::outside(ctrl));
                 })
                 .child({
                     let (spans, drawn, hits) = row_line(file, marks);

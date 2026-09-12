@@ -31041,6 +31041,77 @@ fn alt_in_the_finder_moves_to_the_row_and_opens_nothing() {
     );
 }
 
+/// The finder's pick and its doors land on one row: an Alt+press moves the keyboard to the
+/// row under the pointer, and the Enter after it opens **that** row. Either door out --
+/// Enter, or a plain press -- closes the panel behind the file it opened.
+///
+/// The press writes the row the arrows write it, through the one clamp against the drawn
+/// list, so a row pointed at is the row Enter opens: a press writing it any other way
+/// opens a file the reader never pointed at.
+#[test]
+fn a_pick_and_a_press_open_the_row_and_close_the_finder() {
+    let (mut test, states, finder, keys, directory, dock) =
+        finder_over(line!(), move |root, emit| {
+            let _ = emit(walked_file(root, "first.rs"));
+            let _ = emit(walked_file(root, "second.rs"));
+            let _ = emit(WalkEvent::Finished);
+        });
+    // The files have to be there: a file the source pane would refuse opens nothing.
+    for name in ["first.rs", "second.rs"] {
+        std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
+    }
+    let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
+    let centre_of_row = |at: Area| {
+        (
+            (at.origin.x + at.width() / 2.0) as f64,
+            (at.origin.y + at.height() / 2.0) as f64,
+        )
+    };
+
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+    type_into_finder(&mut test, finder, "rs");
+
+    // The row the keyboard is not on, so the Alt+press has somewhere to move it.
+    let on_row = finder_selected(&test).expect("the keyboard is on a row");
+    let wanted = finder_rows_drawn(&test)
+        .into_iter()
+        .find(|(row, _)| *row != on_row)
+        .expect("the walk found two files");
+
+    keys.down(&Key::Named(NamedKey::Alt), Modifiers::empty());
+    settle(&mut test);
+    press_at(&mut test, centre_of_row(wanted.1));
+    settle(&mut test);
+    keys.up(&Key::Named(NamedKey::Alt), Modifiers::empty());
+    settle(&mut test);
+
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    settle(&mut test);
+    assert!(
+        tab_showing(&states, &opened(&wanted.0)).is_some(),
+        "Enter opened a row other than the one the Alt+press picked"
+    );
+    assert!(!finder.peek().open, "Enter left the finder open");
+
+    // The other door, a plain press on a row: the same open and the same close behind it.
+    press_finder_chord(&states, finder, keys, dock);
+    pump(&mut test, || !finder.peek().walking);
+    type_into_finder(&mut test, finder, "rs");
+    let other = finder_rows_drawn(&test)
+        .into_iter()
+        .find(|(row, _)| *row != wanted.0)
+        .expect("the row under the one already opened");
+
+    press_at(&mut test, centre_of_row(other.1));
+    settle(&mut test);
+    assert!(
+        states.open.active() == Some(opened(&other.0)),
+        "the press opened a row other than the one pressed"
+    );
+    assert!(!finder.peek().open, "a press left the finder open");
+}
+
 /// A row is the file's name and then the directories above it, which is not the order the
 /// path is written in: a column of names all starting `src/ui/` says nothing.
 #[test]

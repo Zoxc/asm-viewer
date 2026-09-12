@@ -17,6 +17,16 @@ struct EntryRow {
     key: DiffKey,
 }
 
+/// Fold the directory at `path`, or read it: the one writer of the tree, for the press
+/// and for Left and Right alike.
+fn toggle_directory(tree: State<Option<FileTree>>, path: &Path) {
+    // `write_if`'s shape: a path that is not in the tree, or a file, changes nothing and
+    // wakes nothing.
+    write_if(tree, |tree| {
+        tree.as_mut().is_some_and(|tree| tree.toggle(path))
+    });
+}
+
 /// What pressing a row does: a folder folds, and a file opens as source. Shared by the
 /// press and by Enter on the row the arrows left the pick on.
 ///
@@ -25,16 +35,14 @@ struct EntryRow {
 /// so, which is `open_source_file`'s own guard.
 fn press_entry(
     states: ProjectStates,
-    mut tree: State<Option<FileTree>>,
+    tree: State<Option<FileTree>>,
     ctrl: State<bool>,
     fold: Option<Fold>,
     path: &Path,
 ) -> Pressed {
     match fold {
         Some(_) => {
-            if let Some(tree) = tree.write().as_mut() {
-                tree.toggle(path);
-            }
+            toggle_directory(tree, path);
             Pressed::Folded
         }
         None => {
@@ -216,10 +224,7 @@ impl Component for FilesPanel {
                         if unfold == (fold == Fold::Unfolded) {
                             return;
                         }
-                        let mut tree = tree;
-                        if let Some(tree) = tree.write().as_mut() {
-                            tree.toggle(&row.path);
-                        }
+                        toggle_directory(tree, &row.path);
                     }),
                 };
                 // `new_with_data`, never a capture: the builder closure is not compared
