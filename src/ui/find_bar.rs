@@ -20,7 +20,9 @@
 //! answer, a line there having text only once it has been read.
 
 use super::*;
-use crate::find::{self, Hit};
+// `Direction` by name as well as through the glob: here it is which way a step goes, and
+// freya's prelude has a layout `Direction` this file never asks for (`ui.rs` on `Panel`).
+use crate::find::{self, Direction, Hit};
 
 /// Which bar: the listing it is drawn in -- a tab, or the scratchpad's -- and which of the
 /// two panes.
@@ -161,7 +163,7 @@ pub(crate) struct Find {
     pub(crate) at: Option<usize>,
     /// A step the bar has asked for and the pane has not made yet, and which way. Spent
     /// by the list, which is what knows where its rows are and can scroll to one.
-    pub(crate) step: Option<bool>,
+    pub(crate) step: Option<Direction>,
     /// The caret the opening asked for, spent by the box once it is mounted.
     pub(crate) focus: bool,
 }
@@ -561,7 +563,7 @@ impl Component for FindBar {
         });
 
         let error = typed.matcher().error().map(str::to_owned);
-        let step = move |back: bool| edit_find(finds, at, move |bar| bar.step = Some(back));
+        let step = move |direction| edit_find(finds, at, move |bar| bar.step = Some(direction));
         let close = move || {
             close_find(finds, at);
             if let Some(pane) = pane_box(keyboard, at.1) {
@@ -610,7 +612,10 @@ impl Component for FindBar {
                             &[],
                             move |key, modifiers: Modifiers| match key {
                                 Key::Named(NamedKey::Enter) => {
-                                    step(modifiers.contains(Modifiers::SHIFT))
+                                    step(match modifiers.contains(Modifiers::SHIFT) {
+                                        true => Direction::Back,
+                                        false => Direction::Forward,
+                                    })
                                 }
                                 Key::Named(NamedKey::Escape) => close(),
                                 _ => {}
@@ -637,12 +642,12 @@ impl Component for FindBar {
                             .max_lines(1),
                     )
                     .child(StepButton {
-                        back: true,
-                        step: EventHandler::new(move |_| step(true)),
+                        direction: Direction::Back,
+                        step: EventHandler::new(move |_| step(Direction::Back)),
                     })
                     .child(StepButton {
-                        back: false,
-                        step: EventHandler::new(move |_| step(false)),
+                        direction: Direction::Forward,
+                        step: EventHandler::new(move |_| step(Direction::Forward)),
                     }),
             )
             .maybe_child(error.map(invalid_line))
@@ -687,7 +692,7 @@ fn counted(bar: &Find) -> String {
 /// One of the bar's two step buttons.
 #[derive(Clone, PartialEq)]
 struct StepButton {
-    back: bool,
+    direction: Direction,
     step: EventHandler<()>,
 }
 
@@ -695,9 +700,9 @@ impl Component for StepButton {
     fn render(&self) -> impl IntoElement {
         let mut hovering = use_state(|| false);
         let step = self.step.clone();
-        let (glyph, says) = match self.back {
-            true => ("\u{2039}", "Previous match"),
-            false => ("\u{203a}", "Next match"),
+        let (glyph, says) = match self.direction {
+            Direction::Back => ("\u{2039}", "Previous match"),
+            Direction::Forward => ("\u{203a}", "Next match"),
         };
 
         TooltipContainer::new(Tooltip::new(says)).child(
@@ -753,17 +758,17 @@ pub(crate) fn find_chord(
             open_find(finds, at, seed, listing.clone());
             return;
         }
-        let back = if Chord::FindNext.is(&e.key, e.modifiers) {
-            Some(false)
+        let direction = if Chord::FindNext.is(&e.key, e.modifiers) {
+            Some(Direction::Forward)
         } else if Chord::FindPrevious.is(&e.key, e.modifiers) {
-            Some(true)
+            Some(Direction::Back)
         } else {
             None
         };
-        let Some(back) = back else {
+        let Some(direction) = direction else {
             return keys(e);
         };
-        edit_find(finds, at, move |bar| bar.step = Some(back));
+        edit_find(finds, at, move |bar| bar.step = Some(direction));
     }
 }
 
@@ -809,7 +814,7 @@ pub(crate) fn use_find_steps(
         };
         // Bound before the write below, the read being a guard.
         let bar = finds.read().get(&at).clone();
-        let Some(back) = bar
+        let Some(direction) = bar
             .step
             .filter(|_| !bar.listing.as_ref().is_some_and(|listing| listing.walked()))
         else {
@@ -826,7 +831,7 @@ pub(crate) fn use_find_steps(
         let hits = bar.hits().cloned();
         let next = hits
             .as_ref()
-            .and_then(|hits| find::step(hits, bar.at, caret, back));
+            .and_then(|hits| find::step(hits, bar.at, caret, direction));
 
         let mut state = finds.peek().clone();
         let entry = state.get_mut(&at);
@@ -854,7 +859,7 @@ pub(crate) struct Hunt {
     /// newest one's events are taken.
     pub(crate) id: u64,
     pub(crate) filter: Filter,
-    pub(crate) back: bool,
+    pub(crate) direction: Direction,
     /// The address it started from, which is where the pane was.
     pub(crate) from: u64,
     /// Where it has got to.
@@ -892,8 +897,8 @@ pub(crate) enum Hunted {
 /// per function to a state the bar reads.
 const SAID_EVERY: usize = 64;
 
-/// Walk `object`'s code for the next match of `filter` from `from`, in the direction
-/// `back` says, and say how far it has got as it goes.
+/// Walk `object`'s code for the next match of `filter` from `from`, the way `direction`
+/// says, and say how far it has got as it goes.
 ///
 /// **Stretch by stretch, and nothing kept.** Each is decoded exactly as the view's own
 /// window ask decodes one (`answer`'s `Question::Code` arm) and thrown away again: what
@@ -909,7 +914,7 @@ pub(crate) fn hunt(
     code: &Arc<CodeListing>,
     filter: &Filter,
     from: u64,
-    back: bool,
+    direction: Direction,
     emit: &mut dyn FnMut(Hunted) -> ControlFlow<()>,
 ) {
     let matcher = filter.matcher();
@@ -924,9 +929,9 @@ pub(crate) fn hunt(
         .unwrap_or(0);
 
     for step in 0..total {
-        let flat = match back {
-            false => (first + step) % total,
-            true => (first + total - step % total) % total,
+        let flat = match direction {
+            Direction::Forward => (first + step) % total,
+            Direction::Back => (first + total - step % total) % total,
         };
         if step % SAID_EVERY == 0 {
             let through = step as f32 / total as f32;
@@ -939,23 +944,23 @@ pub(crate) fn hunt(
         // In the order the listing draws them, and backwards for a walk that way, so the
         // match found is the nearest one behind the reader and not the first of a stretch.
         lines.sort_by_key(|(address, _)| *address);
-        if back {
+        if direction == Direction::Back {
             lines.reverse();
         }
         for (address, line) in lines {
             // The stretch the walk started in holds the reader's own place: only what is
             // past it counts, or a step would find the match the pane is already on.
             if step == 0 || (step == last && flat == first) {
-                let past = match back {
-                    false => address > from,
-                    true => address < from,
+                let past = match direction {
+                    Direction::Forward => address > from,
+                    Direction::Back => address < from,
                 };
                 if !past {
                     continue;
                 }
             }
             let mut hits = find::hits_in(&line, &matcher);
-            if back {
+            if direction == Direction::Back {
                 hits.reverse();
             }
             if let Some(columns) = hits.into_iter().next() {
@@ -1041,7 +1046,7 @@ pub(crate) fn use_code_hunt(
             return;
         };
         let bar = finds.read().get(&at).clone();
-        let Some(back) = bar
+        let Some(direction) = bar
             .step
             .filter(|_| bar.listing.as_ref().is_some_and(|l| l.walked()))
         else {
@@ -1055,7 +1060,7 @@ pub(crate) fn use_code_hunt(
         entry.sought = Sought::Walk(Hunt {
             id,
             filter: bar.filter.clone(),
-            back,
+            direction,
             from: from(),
             walked: Walked::Walking(0.0),
         });
@@ -1070,23 +1075,26 @@ pub(crate) fn use_code_hunt(
         let bar = finds.read();
         let hunt = bar.get(&at).hunt()?;
         hunt.walking()
-            .then_some((hunt.id, hunt.filter.clone(), hunt.from, hunt.back))
+            .then_some((hunt.id, hunt.filter.clone(), hunt.from, hunt.direction))
     });
     let started = asked.read().clone();
-    use_side_effect_with_deps(&started, move |walk: &Option<(u64, Filter, u64, bool)>| {
-        let (Some((id, filter, from, back)), Some(finds)) = (walk.clone(), finds) else {
-            return;
-        };
-        let object = object.clone();
-        let code = code.clone();
-        let events = stream("the code search", Some(64), move |emit| {
-            // The skeleton the view already has, or one built here: it is free
-            // (`CodeListing`), and a walk asked for before the view has one must not wait.
-            let code = code.unwrap_or_else(|| Arc::new(CodeListing::new(&object)));
-            hunt(&object, &code, &filter, from, back, emit);
-        });
-        spawn(take_hunt(finds, at, id, events));
-    });
+    use_side_effect_with_deps(
+        &started,
+        move |walk: &Option<(u64, Filter, u64, Direction)>| {
+            let (Some((id, filter, from, direction)), Some(finds)) = (walk.clone(), finds) else {
+                return;
+            };
+            let object = object.clone();
+            let code = code.clone();
+            let events = stream("the code search", Some(64), move |emit| {
+                // The skeleton the view already has, or one built here: it is free
+                // (`CodeListing`), and a walk asked for before the view has one must not wait.
+                let code = code.unwrap_or_else(|| Arc::new(CodeListing::new(&object)));
+                hunt(&object, &code, &filter, from, direction, emit);
+            });
+            spawn(take_hunt(finds, at, id, events));
+        },
+    );
 
     // The match, landed once. The walk that found it is remembered, so an effect woken
     // again -- by the pane's own rows arriving, say -- does not land it a second time.

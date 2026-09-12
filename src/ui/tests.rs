@@ -25279,6 +25279,51 @@ fn f3_steps_the_find_bar_with_the_keyboard_still_in_the_pane() {
     assert_ne!(moved, landed, "the pane did not answer its own arrow key");
 }
 
+/// **The bar's two step buttons go opposite ways**, and the glyph says which: the one
+/// pointing left steps back and the one pointing right steps on. `Direction` (`src/find.rs`)
+/// names the way once, for the glyph, the tooltip and the ask a press writes, so the three
+/// cannot drift apart. Fails on a pair given the same direction, or the two swapped.
+#[test]
+fn the_find_bars_step_buttons_go_opposite_ways() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let (mut test, roots) = TestingRunner::new(
+        find_harness,
+        (600., 600.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    let mnemonic = drawn_twice(&test);
+
+    open_find_bar(&mut test);
+    test.write_text(&mnemonic);
+    let at = find_at(&states, &document);
+    let finds = states.places.finds;
+    find_answered(&mut test, finds, at, &mnemonic);
+
+    let press_step = |test: &mut TestingRunner, glyph: &str| {
+        let button = label_area(test, glyph).expect("a step button");
+        press_at(test, inside(button));
+        settle(test);
+        finds
+            .peek()
+            .get(&at)
+            .at
+            .expect("the button stepped to nothing")
+    };
+
+    let first = press_step(&mut test, "\u{203a}");
+    let second = press_step(&mut test, "\u{203a}");
+    assert_ne!(second, first, "the second press forward went nowhere");
+    assert_eq!(
+        press_step(&mut test, "\u{2039}"),
+        first,
+        "the back button did not step back"
+    );
+}
+
 /// **With no bar over the pane, F3 does nothing at all.** A step is an entry in the bar
 /// being written, and there is no entry: the key neither opens a bar nor moves the run.
 #[test]

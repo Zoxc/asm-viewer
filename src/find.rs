@@ -72,36 +72,46 @@ pub fn hits_in(line: &Line, matcher: &Matcher) -> Vec<Range<usize>> {
     hits
 }
 
-/// Which hit a step goes to: the one after `at`, or before it with `back`, wrapping at the
-/// ends. `None` where there is nothing to step to.
+/// Which way a step goes. Named here, beside the step itself, so the ask a bar holds, the
+/// buttons that write it and the walk through an object's code all say it the one way.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Direction {
+    /// On to the hit after the one the pane is on.
+    Forward,
+    /// Back to the one before it.
+    Back,
+}
+
+/// Which hit a step goes to: the one after `at`, or the one before it going back, wrapping
+/// at the ends. `None` where there is nothing to step to.
 ///
 /// **`at` is where the pane already is**, and it wins over the caret: once a step has
 /// landed the caret sits inside that hit, and asking the caret again would answer the hit
 /// the pane is on rather than the next one. The caret is what a *first* step reads --
 /// the bar just opened, or the reader has clicked since -- so a find starts from where
 /// they are looking and not from the top.
-pub fn step(hits: &[Hit], at: Option<usize>, from: Caret, back: bool) -> Option<usize> {
+pub fn step(hits: &[Hit], at: Option<usize>, from: Caret, direction: Direction) -> Option<usize> {
     let last = hits.len().checked_sub(1)?;
 
     if let Some(at) = at.filter(|at| *at <= last) {
-        return Some(match back {
-            true => at.checked_sub(1).unwrap_or(last),
-            false => (at + 1) % hits.len(),
+        return Some(match direction {
+            Direction::Back => at.checked_sub(1).unwrap_or(last),
+            Direction::Forward => (at + 1) % hits.len(),
         });
     }
 
     let place = |hit: &Hit| (hit.row, hit.columns.start);
     let caret = (from.row, from.col);
-    match back {
+    match direction {
         // The last hit that ends at or before the caret, so a caret sitting inside one
         // steps out of it rather than back onto it.
-        true => hits
+        Direction::Back => hits
             .iter()
             .rposition(|hit| (hit.row, hit.columns.end) <= caret)
             .or(Some(last)),
         // The first hit at or after the caret: a caret put at the start of a hit by a
         // click means that hit, which is what the reader pointed at.
-        false => hits.iter().position(|hit| place(hit) >= caret).or(Some(0)),
+        Direction::Forward => hits.iter().position(|hit| place(hit) >= caret).or(Some(0)),
     }
 }
 

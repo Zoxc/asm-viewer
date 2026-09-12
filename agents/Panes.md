@@ -1298,7 +1298,10 @@ it -- the box's Enter, or the pane's `F3`: it picks the hit out (`mark_columns`)
 `reveal_caret`, and owes the other pane no scroll -- stepping
 through matches would otherwise yank the pane beside it to each one in turn. Which hit a step goes to
 is `find::step`: the index the bar is on wins, and the caret is what a *first* step reads, so a find
-starts from where the reader is looking rather than from the top.
+starts from where the reader is looking rather than from the top. **Which way it goes is
+`find::Direction`**, not a `bool`: the ask the bar holds is an `Option<Direction>`, `None` for no step
+asked, and the two buttons, the `F3` pair and the walk through an object's code carry the same name.
+As an `Option<bool>` it left a reader at `Some(true)` to go and find out what true was.
 
 **An object's code is walked, not passed over.** It is read a piece at a time, so there is no
 listing to search whole and nothing to count: a step asks for the *next* match from where the pane
