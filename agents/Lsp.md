@@ -247,9 +247,11 @@ word nobody said. Never a failure: a server is not broken for being older.
 file, and, for an answer, whatever file it named -- a definition in another crate, a
 reference in a file no tab shows. Each file once per answer, through `source::read_text`,
 the app's one rule for reading a source file; the read blocks, which is why every question
-here is a worker's. A file that will not read leaves the number alone, which is the right
-answer for a line of ASCII and the nearest one for the rest. **Where the server took
-`utf-8` nothing is read at all**: the numbers are already the app's.
+here is a worker's. It is asked with a 1-based line, like everything here but the wire,
+and counts it down itself: no caller does that for it. A file that will not read leaves
+the number alone, which is the right answer for a line of ASCII and the nearest one for
+the rest. **Where the server took `utf-8` nothing is read at all**: the numbers are
+already the app's.
 
 The drawing side converts the other way, since skia is what wants units: the source pane
 counts a link's columns into the row it draws and a press back into a byte offset

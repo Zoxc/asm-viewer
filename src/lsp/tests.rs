@@ -912,6 +912,50 @@ fn the_tokens_of_a_file_are_asked_for_by_name() {
     assert_eq!(found[0].columns, 2..8);
 }
 
+/// The two lines a token's conversion is asserted over: `helper` is UTF-16 6..12 and
+/// bytes 8..14 on the first, 8..14 and bytes 12..18 on the second. Two crabs on the
+/// second, so a token converted against the first comes out wrong rather than the same.
+const WIDE_LINES: &str = "// \u{1f980} helper\n// \u{1f980}\u{1f980} helper\n";
+
+fn reads_wide_lines(_: &Path) -> Option<String> {
+    Some(WIDE_LINES.to_owned())
+}
+
+/// A token's columns are converted through its own line, the first line included.
+#[test]
+fn a_token_from_a_utf_16_server_is_converted_on_the_line_it_is_on() {
+    let (_said, found, _notes) = against(
+        |fake, message| {
+            let answer = match message["method"] == json!("initialize") {
+                true => json!({ "capabilities": {
+                    "positionEncoding": "utf-16",
+                    "semanticTokensProvider": { "legend": {
+                        "tokenTypes": ["method"], "tokenModifiers": [],
+                    } },
+                } }),
+                // `helper` on the first line, and `helper` on the second.
+                false => json!({ "data": [0, 6, 6, 0, 0, 1, 8, 6, 0, 0] }),
+            };
+            fake.say(json!({
+                "jsonrpc": "2.0",
+                "id": message["id"].clone(),
+                "result": answer,
+            }));
+        },
+        |talk| {
+            reading(talk, reads_wide_lines);
+            talk.initialize(Path::new("/p"), &wanted())
+                .expect("a handshake");
+            talk.semantic_tokens(Path::new("/p/src/main.rs"))
+                .expect("an answer")
+        },
+    );
+
+    assert_eq!(found.len(), 2);
+    assert_eq!((found[0].line, found[0].columns.clone()), (1, 8..14));
+    assert_eq!((found[1].line, found[1].columns.clone()), (2, 12..18));
+}
+
 #[test]
 fn implementations_are_asked_for_where_the_reader_pointed() {
     let (said, found, _notes) = against(

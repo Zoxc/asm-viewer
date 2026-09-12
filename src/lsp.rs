@@ -728,8 +728,7 @@ impl<W: Write + Send + 'static> Talk<W> {
             .map(|value| tokens(&value))?;
         let mut lines = self.lines();
         for token in &mut found {
-            let at = token.line.saturating_sub(1);
-            token.columns = lines.back(file, at, token.columns.clone());
+            token.columns = lines.back(file, token.line, token.columns.clone());
         }
         Ok(found)
     }
