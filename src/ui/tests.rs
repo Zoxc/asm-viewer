@@ -3497,6 +3497,92 @@ fn a_bulk_close_takes_the_trails_with_the_chips() {
     assert_eq!(trails(), 0, "\"Close other tabs\" left a trail behind");
 }
 
+/// What a bulk closer closed and what it lets go of are one list: `Open::close_tabs`
+/// answers the documents it took and `Places::forgetting` is handed that answer. A second
+/// walk over the bar could name a second set, and a place kept for a tab that has gone
+/// holds the `Arc<Object>` its document points into for the life of the app.
+///
+/// Asserted through the maps and both ways: nothing is kept for a tab that is not open,
+/// and every tab still open keeps what it had.
+#[test]
+fn a_bulk_close_forgets_the_tabs_it_closed_and_no_others() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let path = object.path.clone();
+    let documents = [
+        Document::Assembly(Selection::Symbol(symbols[0].clone())),
+        Document::Assembly(Selection::Symbol(symbols[1].clone())),
+        Document::Source(Arc::from("/src/main.rs")),
+        Document::Source(Arc::from("/src/lib.rs")),
+    ];
+
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object);
+
+    for document in &documents {
+        open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    }
+    test.sync_and_update();
+
+    // A row on both sides of every tab: the maps are the only thing that can say an
+    // entry is gone.
+    let (mut asm_at, mut src_at) = (states.places.asm_at, states.places.src_at);
+    for document in &documents {
+        let entry = entry_of(&states, document);
+        asm_at.write().remember(entry.clone(), 3);
+        src_at.write().remember(entry, 7);
+    }
+    test.sync_and_update();
+
+    // Every tab a place is still kept for, and every tab still in the bar.
+    let held = || {
+        let mut tabs: Vec<DocId> = states
+            .places
+            .asm_at
+            .peek()
+            .keys()
+            .map(|(tab, _)| *tab)
+            .collect();
+        tabs.extend(states.places.src_at.peek().keys().map(|(tab, _)| *tab));
+        tabs.sort();
+        tabs.dedup();
+        tabs
+    };
+    let standing = || {
+        let mut tabs = states.open.ids();
+        tabs.sort();
+        tabs
+    };
+    assert_eq!(held(), standing(), "the setup itself is not paired up");
+
+    // Closed by file: the two tabs into the binary go and the two file tabs stand.
+    close_binary(states, &path);
+    test.sync_and_update();
+    assert_eq!(
+        held(),
+        standing(),
+        "a closing binary forgot a set it had not closed"
+    );
+
+    // And closed by tab, which is the closer that walked the bar a second time.
+    let keep = tab_showing(&states, &documents[2]).expect("the file tab is open");
+    close_others(states.open, states.places, Tab::Document(keep));
+    test.sync_and_update();
+    assert_eq!(standing(), [keep]);
+    assert_eq!(
+        held(),
+        standing(),
+        "\"Close other tabs\" forgot a set it had not closed"
+    );
+}
+
 /// Closing a tab lands on the one to its right, where freya would land on the leftmost:
 /// `DockNode::remove_tab_except` sets the active tab to `tabs.first()`, so the removal is
 /// done by hand and the landing chosen with [`tabs::landing`].

@@ -238,9 +238,9 @@ impl Strip {
     /// Close every tab `closing` answers true for, landing on the neighbour when the tab
     /// on screen was one of them. Answers whether it removed anything.
     ///
-    /// Whether and not what: a caller that has to let go of what the closed tabs kept
-    /// works out which documents are going before the close, the bar being what it asks,
-    /// so a list handed back afterwards would be one nobody reads.
+    /// Whether and not what: it removes tabs of both kinds, and what a caller has to let
+    /// go of is kept per document. The ids are `Open::close_tabs`'s answer, worked out
+    /// before the close from this same bar.
     ///
     /// The landing is worked out before anything is removed, which is what [`landing`]
     /// asks of its caller, and the tab on screen is left alone when it survives.

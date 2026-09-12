@@ -135,8 +135,11 @@ and not a parameter threaded through every function of the group. Beside `Open` 
 each code tab's places were left, as addresses), `marks_at` (what each place had selected in
 each pane when it was last shown, put back with the place and never saved) and `driven` -- and
 `Places::forgetting` is the one write every closer ends with, so no closer can forget four of
-the five and leak the `Arc<Object>` a key holds. `Doors` (`focus.rs`) is what a door out of one
-place into another is given: `open`, `visits` (everywhere the reader has been), `marked`, `land`
+the five and leak the `Arc<Object>` a key holds. It is handed the ids `Open::close_tabs`
+answered, so what a closer forgets is what it closed; a closing binary's extra clause -- the
+entries it takes off the trails that stand -- is all a closer says itself.
+`Doors` (`focus.rs`) is what a door out of one place into another is given: `open`, `visits`
+(everywhere the reader has been), `marked`, `land`
 (a line and an instruction to select the moment a document arrives) and `plant` (the instruction
 half of that, left for the listing that draws the document, its rows coming after it).
 `ProjectStates` (`state.rs`) is what a project owns, since a project switch closes all of it and
@@ -324,7 +327,8 @@ trail from one stop, temporal or not, and shows its chip beside the tab on scree
 puts a saved trail back with its chip at the place it had, handing the new id to the caller before
 the chip goes in so the restore's own maps are filled by the time a pane looks at them; and
 `Open::close_tabs` takes the chips a predicate names and the trails behind them, landing where
-`tabs::landing` says. A test asserts it over both bulk closers. One tab may be the **temporal** one (`Docs::temporal`), the
+`tabs::landing` says, and answers which documents went. A test asserts it over both bulk
+closers. One tab may be the **temporal** one (`Docs::temporal`), the
 preview a sidebar row opens its place in and the next row reuses. It is a tab like any other with
 one flag on it, told apart by its name being italic.
 

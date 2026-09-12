@@ -177,15 +177,16 @@ impl Open {
     }
 
     /// Close every tab `closing` answers true for -- the chips and the trails behind them
-    /// -- landing on the neighbour when the tab on screen was one of them. Whether the
-    /// bar lost anything.
+    /// -- landing on the neighbour when the tab on screen was one of them. The documents
+    /// that went, empty when the bar lost none.
     ///
-    /// Whether and not what, as [`Strip::close`] answers: a caller that has to let go of
-    /// what the closed tabs kept works out which documents are going before the close,
-    /// the bar being what it asks.
+    /// What and not whether, where [`Strip::close`] answers whether: the ids are worked
+    /// out here anyway, to close the trails, and a closer needs the same list to let go
+    /// of what those tabs kept ([`Places::forgetting`]). Working them out a second time
+    /// is how a closer comes to close one set and forget another.
     ///
     /// For the three closers and nothing else -- see the type.
-    pub(crate) fn close_tabs(&self, closing: impl Fn(&Tab) -> bool) -> bool {
+    pub(crate) fn close_tabs(&self, closing: impl Fn(&Tab) -> bool) -> Vec<DocId> {
         let (mut strip, mut docs) = (self.strip, self.docs);
         // Which trails go, read before anything is removed and in a scope of its own, so
         // no read guard is alive when the writes start. Only the documents among them: a
@@ -197,16 +198,15 @@ impl Open {
                 .filter(|id| closing(&Tab::Document(*id)))
                 .collect()
         };
-        let closed = strip.write().close(closing);
-        if closed {
+        if strip.write().close(closing) {
             // One guard for however many tabs went: a write notifies whether or not it
             // changed anything.
             let mut docs = docs.write();
-            for id in going {
-                docs.close(id);
+            for id in &going {
+                docs.close(*id);
             }
         }
-        closed
+        going
     }
 }
 
@@ -276,13 +276,16 @@ impl Places {
         }
     }
 
-    /// Let go of every entry `keep` answers false for, and every find bar over a tab
-    /// `keeps` answers false for, in all six maps and under one write each. What every
-    /// closer ends with, and the whole of what it owes.
+    /// Let go of everything the tabs in `closed` kept -- their entries and their find
+    /// bars -- and of every entry `also` answers false for, in all six maps and under one
+    /// write each. What every closer ends with, and the whole of what it owes.
     ///
-    /// Two predicates because the bars are keyed by the tab alone: a closer knows which
-    /// tabs are going, and the two questions are that one asked of a place and of a tab.
-    pub(crate) fn forgetting(self, keep: impl Fn(&Entry) -> bool, keeps: impl Fn(&DocId) -> bool) {
+    /// The list and not a predicate, because it is the answer [`Open::close_tabs`] gave:
+    /// what a closer forgets is what it closed, and the two cannot drift. `also` is the
+    /// rest, which only a closing binary has -- the entries it takes off the trails of
+    /// the tabs that stand.
+    pub(crate) fn forgetting(self, closed: &[DocId], also: impl Fn(&Entry) -> bool) {
+        let keep = |entry: &Entry| !closed.contains(&entry.0) && also(entry);
         let Places {
             mut asm_at,
             mut src_at,
@@ -294,7 +297,7 @@ impl Places {
         // The scratchpad's listing is no tab and closes with the app, so it is kept
         // whatever a closer says about the tabs.
         finds.write().forgetting(|placing| match placing {
-            Placing::Tab(tab) => keeps(tab),
+            Placing::Tab(tab) => !closed.contains(tab),
             Placing::Pad => true,
         });
         asm_at.write().forgetting(&keep);

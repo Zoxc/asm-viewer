@@ -242,10 +242,10 @@ pub(crate) fn close_tab(open: Open, places: Places, id: DocId) {
     // while its tab closed -- and the trail and the positions below belong to whatever
     // holds the id now.
     let closed = open.close_tabs(|open| *open == tab);
-    if !closed {
+    if closed.is_empty() {
         return;
     }
-    places.forgetting(|(tab, _): &Entry| *tab != id, |tab| *tab != id);
+    places.forgetting(&closed, |_| true);
 }
 
 /// Close the page `page`, which is a tab leaving the bar and nothing else: what it was
@@ -281,32 +281,23 @@ pub(crate) fn close_showing(open: Open, places: Places) {
 /// than by calling [`close_tab`] in a loop: each of those would work out a landing of its
 /// own and walk the bar through every intermediate state.
 pub(crate) fn close_others(open: Open, places: Places, keep: Tab) {
-    // Which documents go, worked out before anything is removed and in a scope of its own,
-    // so no read guard is alive when the writes below start. A tab that is not in the bar
-    // any more keeps its neighbours: this is the menu of a tab that was closed while the
-    // menu was open. The pages closing need no working out -- a page is a tab and nothing
-    // else -- so the predicate below says "every tab but the kept one" and this says what
-    // has to be let go of.
-    let closing: Vec<DocId> = {
-        let strip = open.strip.peek();
-        if !strip.contains(keep) {
-            return;
-        }
-        strip
-            .documents()
-            .filter(|id| Tab::Document(*id) != keep)
-            .collect()
-    };
-
-    let closed = open.close_tabs(|tab| *tab != keep);
-    if !closed {
+    // A tab that is not in the bar any more keeps its neighbours: this is the menu of a
+    // tab that was closed while the menu was open. Bound in a statement of its own, so no
+    // read guard is alive when the writes below start.
+    let opened = open.strip.peek().contains(keep);
+    if !opened {
         return;
     }
 
-    places.forgetting(
-        |(tab, _): &Entry| !closing.contains(tab),
-        |tab| !closing.contains(tab),
-    );
+    // Which documents went is the close's own answer, so what is let go of below is what
+    // went and not a second walk over the bar. The pages need no working out -- a page is
+    // a tab and nothing else -- so the predicate says "every tab but the kept one".
+    let closed = open.close_tabs(|tab| *tab != keep);
+    if closed.is_empty() {
+        return;
+    }
+
+    places.forgetting(&closed, |_| true);
 }
 
 /// Let go of the binary at `path`: drop every [`Object`] it contributed and answer for
@@ -352,7 +343,7 @@ pub(crate) fn close_binary(states: ProjectStates, path: &Path) {
 
     // Every tab into the file, and only then everything the file was holding up: the
     // strip may have none of it, and the objects still go.
-    open.close_tabs(|tab| matches!(tab, Tab::Document(id) if closing.contains(id)));
+    let closed = open.close_tabs(|tab| matches!(tab, Tab::Document(id) if closing.contains(id)));
     // The surviving tabs' trails, thinned: every tab whose current entry is in the file
     // has just been closed, so no trail is left with nothing on it.
     docs.write()
@@ -360,10 +351,7 @@ pub(crate) fn close_binary(states: ProjectStates, path: &Path) {
 
     // Nothing kept by an entry can outlive the entry: not the closed tabs', and not the
     // ones a surviving trail just lost, which hold the file's bytes just the same.
-    places.forgetting(
-        |(tab, stop): &Entry| !closing.contains(tab) && !stop.document.in_file(path),
-        |tab| !closing.contains(tab),
-    );
+    places.forgetting(&closed, |(_, stop)| !stop.document.in_file(path));
     // A source-driven tab stands, but a symbol it chose out of this file is let go: the
     // line beside the choice is what survives a close, and the next ask answers out of
     // what is left. The one thing here that is not a forget.
