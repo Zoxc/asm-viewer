@@ -1522,12 +1522,16 @@ impl Saves {
     /// entry — only marks the session pending. Nothing here has to say which is which:
     /// which file a field lives in is what decides it.
     ///
-    /// While a load is in flight `binaries` is not the app's list but the part of it that
-    /// has landed, so it is neither compared nor written: a project naming only what has
-    /// arrived, and the session the app holds until a restore has resolved its tabs,
-    /// would otherwise go to disk over the good ones. Both baselines are left where they
-    /// were for the record that follows the load, which is the one that sees the change.
-    /// A binaries change the reader makes in that window waits for the same record.
+    /// While a load is in flight neither `binaries` nor `session` is the app's own: the
+    /// list is the part of it that has landed, and the session has no tabs until a
+    /// restore has resolved them. So neither is compared, written or marked pending: a
+    /// project naming only what has arrived, or a tabless session, would otherwise go to
+    /// disk over the good ones. The session needs the guard as much as the list, since
+    /// pending is what the next flush writes and a close, a switch or the timer can land
+    /// inside the load. A session left pending *before* the load began describes a real
+    /// state and stays. Both baselines are left where they were for the record that
+    /// follows the load, which is the one that sees the change. A binaries change the
+    /// reader makes in that window waits for the same record.
     ///
     /// **No baseline moves here**, since a baseline is what the *file* holds and the file
     /// has not been written yet. The caller moves them with [`Saves::wrote_project`] and
@@ -1552,9 +1556,10 @@ impl Saves {
         let binaries_changed = !loading && self.binaries != binaries;
         let details_changed = self.written.details() != details;
         let bookmarks_changed = self.written.bookmarks != bookmarks;
+        let session_changed = !loading && *self.latest() != session;
 
         if !binaries_changed && !details_changed && !bookmarks_changed {
-            if *self.latest() != session {
+            if session_changed {
                 self.pending = Some(session);
             }
             return None;
@@ -1583,7 +1588,7 @@ impl Saves {
             });
         }
 
-        if *self.latest() != session {
+        if session_changed {
             self.pending = Some(session);
         }
         Some(Recorded {

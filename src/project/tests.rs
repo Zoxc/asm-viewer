@@ -1619,6 +1619,50 @@ fn a_binary_landing_mid_load_is_not_written() {
     assert_eq!(session, Some(session_with(Some("a.o"))));
 }
 
+/// The session is held back mid-load for the binaries' reason and one more: a session is
+/// only ever marked pending, and whatever is pending is what the next flush writes. The
+/// app holds no tabs until the restore has resolved them, so a close, a switch or the
+/// timer landing inside the load would put that tabless session on disk over the good
+/// file.
+#[test]
+fn a_session_recorded_mid_load_is_not_left_pending() {
+    let mut saves = Saves::default();
+    let loaded = Project {
+        id: None,
+        directory: None,
+        language_server: None,
+        language_files: None,
+        binaries: paths(&["/tmp/vmlinux"]),
+        cargo: None,
+        bookmarks: Vec::new(),
+    };
+    saves.opened(&Store::at("/state"), kept_at("kernel-1"), &loaded, false);
+
+    // The save observer runs as the object lands. The app has the page it was on back,
+    // but no tabs and no active document: those wait for the load to end.
+    let half = Session {
+        active_page: Some(String::from("settings")),
+        ..Session::default()
+    };
+    assert_eq!(mid_load(&mut saves, &["/tmp/vmlinux"], half.clone()), None);
+    assert_eq!(
+        flushed(&mut saves),
+        None,
+        "a flush inside the load would write the tabless session over the good file"
+    );
+
+    // The restore resolves the tabs, and the record after the load is the one that sees
+    // the session -- whole.
+    let whole = Session {
+        active: Some(saved_object("a.o")),
+        ..half
+    };
+    let (project, session) =
+        recorded(&mut saves, loaded.binaries.clone(), whole.clone()).expect("a write");
+    assert_eq!(project, loaded);
+    assert_eq!(session, Some(whole));
+}
+
 /// A write that does go out mid-load -- a directory typed in, a bookmark -- must not take
 /// the half-read list for the baseline either, or the record after the load would see no
 /// change and the file would never learn the rest of it.

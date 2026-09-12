@@ -401,12 +401,15 @@ nothing to do with it.
 
 **A list still being read is not the app's list**, which is the `loading` flag. The objects arrive
 one at a time, so while a load is in flight `record` neither compares the binaries nor writes them:
-the first to land would otherwise put a project naming only itself on disk, and beside it the empty
-session the app holds until `restore_project` has resolved its tabs. Both baselines stay behind the
-streamed list, so the record that follows the load is the one that sees the change and writes both
-files -- the save observer reads `Loads` as well, which is what re-runs it when the load ends. The
-cost is that a binary opened or closed while another is being read waits for that same record
-instead of reaching the disk at once.
+the first to land would otherwise put a project naming only itself on disk. The session the app
+holds until `restore_project` has resolved its tabs is held back the same way, and for a further
+reason: a session is only ever marked pending, so marking that tabless one is already enough to
+lose the tabs -- the next flush writes whatever is pending, and the close hook, `switch`, `close`
+and the 30-second timer all flush. A session left pending *before* the load began describes a real
+state and is left alone. Both baselines stay behind the streamed list, so the record that follows
+the load is the one that sees the change and writes both files -- the save observer reads `Loads`
+as well, which is what re-runs it when the load ends. The cost is that a binary opened or closed
+while another is being read waits for that same record instead of reaching the disk at once.
 
 **Which project is open is `Saves`' too**, and changing it at runtime is `switch(id)` or
 `start_new()`. Both `flush` the project being left while the policy still points at it, `remember`
