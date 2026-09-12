@@ -944,7 +944,7 @@ pub(crate) fn hunt(
             }
         }
 
-        let mut lines = stretch_lines(object, &index, flat);
+        let mut lines = section_view::stretch_texts(object, &index, flat);
         // In the order the listing draws them, and backwards for a walk that way, so the
         // match found is the nearest one behind the reader and not the first of a stretch.
         lines.sort_by_key(|(address, _)| *address);
@@ -974,54 +974,6 @@ pub(crate) fn hunt(
         }
     }
     let _ = emit(Hunted::Through(1.0));
-}
-
-/// Every line stretch `flat` holds, as the pane draws them: the placed address each sits
-/// at and its text.
-///
-/// **The same text the pane draws**, through the same builders (`section_view.rs`): a
-/// search that built its own would find what the reader cannot see, or miss what they can.
-fn stretch_lines(object: &Object, index: &section::Flat, flat: usize) -> Vec<(u64, Line)> {
-    let Some((place, stretch)) = index.stretch(flat) else {
-        return Vec::new();
-    };
-    let Some(placed) = index.code().sections().get(place.section) else {
-        return Vec::new();
-    };
-
-    let start = placed.place(stretch.range.start);
-    let mut lines: Vec<(u64, Line)> = Vec::new();
-    // The section's own header stands over its first stretch.
-    if place.stretch == 0 {
-        lines.push((
-            placed.range().start,
-            Line::text(section_view::header_text(placed)),
-        ));
-    }
-    for symbol in &stretch.symbols {
-        lines.push((start, Line::text(section_view::label_text(symbol))));
-    }
-
-    let Some(decoded) = index.code().decode(object, place) else {
-        return lines;
-    };
-    if let Some(assembly) = &decoded.code {
-        for index in 0..assembly.instructions.len() {
-            let address = placed.place(assembly.instructions[index].address);
-            lines.push((address, instruction_line(assembly, index)));
-        }
-    }
-    if let Some(gap) = &decoded.gap {
-        for index in 0.. {
-            let Some((address, bytes)) = section_view::gap_row_bytes(placed, &gap.range, index)
-            else {
-                break;
-            };
-            let (mark, text) = section_view::dump_line(&bytes);
-            lines.push((address, section_view::text_line(Some(mark), &text)));
-        }
-    }
-    lines
 }
 
 /// The walk through an object's code that a step over one asks for: started here, taken

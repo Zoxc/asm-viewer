@@ -60,8 +60,8 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
 
 /// [`Session::from_state`] over a session whose only open tab is the active document and
 /// whose panes are at the top of what they show.
-fn from_state(objects: &[Arc<Object>], selection: Option<&Selection>, visits: &Visits) -> Session {
-    let document = selection.cloned().map(Document::Assembly);
+fn from_state(objects: &[Arc<Object>], document: Option<&Document>, visits: &Visits) -> Session {
+    let document = document.cloned();
     session_of(
         objects,
         document
@@ -160,15 +160,12 @@ fn as_document(tab: &RestoredTab) -> (bool, &History, &[RestoredEntry]) {
     }
 }
 
-/// The restored active document, as the selection inside it.
-fn resolve_selection(session: &Session, objects: &[Arc<Object>]) -> Option<Selection> {
+/// The restored active document, when it is a place in a binary.
+fn resolve_place(session: &Session, objects: &[Arc<Object>]) -> Option<Document> {
     session
         .restore(objects)
         .active
-        .and_then(|document| match document {
-            Document::Assembly(selection) => Some(selection),
-            Document::Source(_) | Document::Code(_) => None,
-        })
+        .filter(|document| matches!(document, Document::Object(_) | Document::Symbol(_)))
 }
 
 /// What `load_project` does with `session.toml`: a missing or corrupt file is `None`.
@@ -226,7 +223,7 @@ fn every_binary_is_counted_once_in_the_order_it_was_opened() {
 #[test]
 fn saves_and_resolves_a_symbol() {
     let objects = objects();
-    let selection = Selection::Symbol(Symbol {
+    let selection = Document::Symbol(Symbol {
         object: objects[1].clone(),
         data: objects[1].symbols_sorted[0].clone(),
     });
@@ -244,15 +241,15 @@ fn saves_and_resolves_a_symbol() {
     );
 
     // The duplicate `caller` in `a.o` must not win.
-    assert!(resolve_selection(&session, &objects) == Some(selection));
+    assert!(resolve_place(&session, &objects) == Some(selection));
 }
 
 #[test]
 fn saves_and_resolves_an_object() {
     let objects = objects();
-    let selection = Selection::Object(objects[0].clone());
+    let selection = Document::Object(objects[0].clone());
     let session = from_state(&objects, Some(&selection), &Visits::default());
-    assert!(resolve_selection(&session, &objects) == Some(selection));
+    assert!(resolve_place(&session, &objects) == Some(selection));
 }
 
 #[test]
@@ -260,7 +257,7 @@ fn no_selection_round_trips_as_none() {
     let objects = objects();
     let session = from_state(&objects, None, &Visits::default());
     assert_eq!(session.active, None);
-    assert!(resolve_selection(&session, &objects).is_none());
+    assert!(resolve_place(&session, &objects).is_none());
 }
 
 #[test]
@@ -276,7 +273,7 @@ fn a_missing_symbol_falls_back_to_its_object() {
         history: SavedHistory::default(),
         ..Session::default()
     };
-    assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
+    assert!(resolve_place(&session, &objects) == Some(Document::Object(objects[0].clone())));
 }
 
 #[test]
@@ -306,7 +303,7 @@ fn a_missing_object_falls_back_to_nothing() {
             history: SavedHistory::default(),
             ..Session::default()
         };
-        assert!(resolve_selection(&session, &objects).is_none());
+        assert!(resolve_place(&session, &objects).is_none());
     }
 }
 
@@ -398,12 +395,12 @@ fn visits(objects: &[Arc<Object>]) -> Visits {
 /// The three places [`visits`] records, oldest first.
 fn places(objects: &[Arc<Object>]) -> Vec<Document> {
     vec![
-        Document::Assembly(Selection::Object(objects[0].clone())),
-        Document::Assembly(Selection::Symbol(Symbol {
+        Document::Object(objects[0].clone()),
+        Document::Symbol(Symbol {
             object: objects[0].clone(),
             data: objects[0].symbols_sorted[1].clone(),
-        })),
-        Document::Assembly(Selection::Object(objects[1].clone())),
+        }),
+        Document::Object(objects[1].clone()),
     ]
 }
 
@@ -669,7 +666,7 @@ fn a_partial_file_still_loads() {
     assert!(session.digests.is_empty());
 
     let objects = objects();
-    assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
+    assert!(resolve_place(&session, &objects) == Some(Document::Object(objects[0].clone())));
     assert!(session.restore(&objects).visits.entries().is_empty());
     assert!(session.restore(&objects).tabs.is_empty());
 }
@@ -743,7 +740,7 @@ fn a_non_utf8_path_is_not_written_rather_than_mangled() {
 }
 
 fn tab(object: &Arc<Object>) -> Document {
-    Document::Assembly(Selection::Object(object.clone()))
+    Document::Object(object.clone())
 }
 
 fn file_tab(path: &str) -> Document {
@@ -828,10 +825,10 @@ fn saves_and_resolves_the_open_tabs() {
     let tabs = vec![
         tab(&objects[0]),
         file_tab("/src/main.rs"),
-        Document::Assembly(Selection::Symbol(Symbol {
+        Document::Symbol(Symbol {
             object: objects[0].clone(),
             data: objects[0].symbols_sorted[1].clone(),
-        })),
+        }),
         tab(&objects[1]),
     ];
 
@@ -1011,10 +1008,10 @@ fn a_full_session_round_trips_through_toml() {
     let objects = objects();
     let tabs = vec![
         tab(&objects[0]),
-        Document::Assembly(Selection::Symbol(Symbol {
+        Document::Symbol(Symbol {
             object: objects[0].clone(),
             data: objects[0].symbols_sorted[1].clone(),
-        })),
+        }),
         file_tab("/src/main.rs"),
     ];
     let session = session_of(
@@ -1293,8 +1290,8 @@ fn an_unchanged_binary_is_still_matched_on_the_address() {
         42,
     );
     assert!(
-        resolve_selection(&session, &objects)
-            == Some(Selection::Symbol(Symbol {
+        resolve_place(&session, &objects)
+            == Some(Document::Symbol(Symbol {
                 object: objects[0].clone(),
                 data: objects[0].symbols_sorted[1].clone(),
             }))
@@ -1311,7 +1308,7 @@ fn an_unchanged_binary_is_still_matched_on_the_address() {
         saved_symbol("a.o", "target", 999),
         42,
     );
-    assert!(resolve_selection(&moved, &objects) == Some(Selection::Object(objects[0].clone())));
+    assert!(resolve_place(&moved, &objects) == Some(Document::Object(objects[0].clone())));
     assert!(moved.restore(&objects).tabs.is_empty());
     assert!(moved.restore(&objects).visits.entries().is_empty());
 }
@@ -1337,14 +1334,13 @@ fn a_rebuilt_binary_matches_by_name_and_forgets_the_row() {
         42,
     );
 
-    let expected = Selection::Symbol(Symbol {
+    let expected = Document::Symbol(Symbol {
         object: objects[0].clone(),
         data: objects[0].symbols_sorted[1].clone(),
     });
-    assert!(resolve_selection(&session, &objects) == Some(expected.clone()));
-    let document = Document::Assembly(expected.clone());
-    assert!(session.restore(&objects).tabs == [restored(&document, 0, 0)]);
-    assert!(session.restore(&objects).visits.entries() == [document]);
+    assert!(resolve_place(&session, &objects) == Some(expected.clone()));
+    assert!(session.restore(&objects).tabs == [restored(&expected, 0, 0)]);
+    assert!(session.restore(&objects).visits.entries() == [expected]);
 }
 
 /// The refusal rather than the recovery: two symbols of one name in a rebuilt object and
@@ -1364,7 +1360,7 @@ fn a_rebuilt_binary_will_not_guess_between_two_symbols_of_one_name() {
         42,
     );
     // The selection degrades to the object; the tab and the history entry drop.
-    assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
+    assert!(resolve_place(&session, &objects) == Some(Document::Object(objects[0].clone())));
     assert!(session.restore(&objects).tabs.is_empty());
     assert!(session.restore(&objects).visits.entries().is_empty());
 
@@ -1375,8 +1371,8 @@ fn a_rebuilt_binary_will_not_guess_between_two_symbols_of_one_name() {
         42,
     );
     assert!(
-        resolve_selection(&exact, &objects)
-            == Some(Selection::Symbol(Symbol {
+        resolve_place(&exact, &objects)
+            == Some(Document::Symbol(Symbol {
                 object: objects[0].clone(),
                 data: objects[0].symbols_sorted[1].clone(),
             }))
@@ -1395,7 +1391,7 @@ fn a_binary_with_no_saved_digest_is_believed_exactly_as_before() {
     )];
 
     let session = saved_against(None, saved_symbol("a.o", "target", 6), 42);
-    assert!(resolve_selection(&session, &objects) == Some(Selection::Object(objects[0].clone())));
+    assert!(resolve_place(&session, &objects) == Some(Document::Object(objects[0].clone())));
     assert!(session.restore(&objects).tabs.is_empty());
 }
 
@@ -2928,7 +2924,7 @@ fn a_code_document_is_saved_by_its_object_and_found_again() {
         "the code document comes back"
     );
     assert!(
-        found != Some(Document::Assembly(Selection::Object(objects[1].clone()))),
+        found != Some(Document::Object(objects[1].clone())),
         "the object's code is not the object"
     );
 
@@ -2950,7 +2946,7 @@ fn a_code_document_is_saved_by_its_object_and_found_again() {
 fn an_objects_symbols_and_its_code_come_back_as_two_tabs() {
     let objects = objects();
     let tabs = [
-        Document::Assembly(Selection::Object(objects[0].clone())),
+        Document::Object(objects[0].clone()),
         Document::Code(objects[0].clone()),
     ];
     let session = session_of(
@@ -3229,10 +3225,10 @@ fn a_rebuilt_binary_takes_the_saved_address_with_it() {
 #[test]
 fn a_symbol_tab_saves_no_address() {
     let objects = objects();
-    let symbol = Document::Assembly(Selection::Symbol(Symbol {
+    let symbol = Document::Symbol(Symbol {
         object: objects[0].clone(),
         data: objects[0].symbols_sorted[0].clone(),
-    }));
+    });
     let session = session_of(
         &objects,
         &[symbol.clone()],
@@ -3359,10 +3355,10 @@ fn a_bookmark_on_a_made_up_name_outlives_its_spelling() {
     let found = structure.resolve_by_name(&objects).expect("the symbol");
     assert!(
         found
-            == Document::Assembly(Selection::Symbol(Symbol {
+            == Document::Symbol(Symbol {
                 object: objects[0].clone(),
                 data: objects[0].symbols_sorted[0].clone(),
-            }))
+            })
     );
     // And saving it again writes the structure back, not the name it was found under.
     assert!(SavedDocument::from_document(&found) == structure);
@@ -3489,10 +3485,10 @@ fn resolving_by_name_agrees_with_the_strict_rule_and_survives_a_rebuild() {
         &[("caller", 0), ("target", 96)],
         b"the second build",
     )];
-    let expected = Document::Assembly(Selection::Symbol(Symbol {
+    let expected = Document::Symbol(Symbol {
         object: rebuilt[0].clone(),
         data: rebuilt[0].symbols_sorted[1].clone(),
-    }));
+    });
     assert!(saved.resolve_by_name(&rebuilt) == Some(expected));
 
     // Two of one name, neither at the saved address: refused, as under a rebuild.

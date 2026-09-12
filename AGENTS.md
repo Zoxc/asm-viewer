@@ -210,11 +210,11 @@ command.
   cursor.
 - `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
   a stretch is decoded, the symbol's own after, and an address for every one.
-- `src/document.rs` — what the reader has open: a place in a binary, or a source file; and
-  `Selection`, the object or the symbol an assembly-driven one is about. What every tab,
-  trail, visit and bookmark is keyed by. Also `Pane`, the two sides a tab has, and which of
-  them a document is driven from; and `Kind`, the three kinds of place a document and a
-  `SavedDocument` both answer for, which is all a glyph needs of either.
+- `src/document.rs` — what the reader has open: an object, a symbol, a source file, or an
+  object's whole code, one flat enum. What every tab, trail, visit and bookmark is keyed
+  by. Also `Pane`, the two sides a tab has, and which of them a document is driven from;
+  and `Kind`, the three kinds of place a document and a `SavedDocument` both answer for,
+  which is all a glyph needs of either.
 - `src/docs.rs` — `Docs`, the table mapping a document tab's `DocId` to the trail behind it: every
   place the tab has shown with a cursor on the one it shows, and which tab is the temporal one.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.
@@ -296,7 +296,8 @@ command.
 - `src/ui/search_view.rs` — the Search panel: what was searched for, the hits as they arrive,
   and the one worker that finds them.
 - `src/ui/section_view.rs` — the section view: an object's code as one listing, its rows, the
-  place it keeps as an address, and the window it asks for.
+  place it keeps as an address, the window it asks for, and `stretch_texts`, the one
+  statement of what a stretch's rows say, which the search that walks the code reads too.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the pane its list is drawn in.
 - `src/ui/language.rs` — whether a language server is running, what the project's own
   settings said, the worker that talks to it, and the control in the top bar that starts and

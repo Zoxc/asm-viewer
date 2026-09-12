@@ -14,7 +14,8 @@
 
 use super::*;
 use crate::positions::Spot;
-use crate::section::{Kind, Row, Rows, GAP_BYTES_PER_ROW};
+use crate::section::{Body, Kind, Row, Rows, StretchRows, GAP_BYTES_PER_ROW};
+use analysis::Stretch;
 
 /// How many screens above and below the viewport are decoded ahead, so that a page up or
 /// down lands on rows already there and empty rows are seen only by a reader outrunning
@@ -117,11 +118,10 @@ impl SectionRows {
         // x.
         AsmData::of(
             studied.clone(),
-            None,
-            rows.body_start(flat)?,
-            rows.bias(flat)?,
-            lanes::MAX_LANES,
-            true,
+            In::Code {
+                base: rows.body_start(flat)?,
+                bias: rows.bias(flat)?,
+            },
         )
     }
 }
@@ -149,30 +149,31 @@ struct TextOf {
     opens: Option<Arc<SymbolData>>,
 }
 
-/// What text row `row` says -- and [`None`] for a row that is not text: an instruction, a
-/// blank, a separator, or one whose section or bytes are not there to be read, which
-/// draws and copies nothing.
+/// What the row of kind `kind` says in stretch `stretch` of section `placed`, `body`
+/// being what its rows are drawn from ([`StretchRows::body`]).
 ///
-/// The rows alone answer this: an instruction is the one row that is read out of the
-/// reading.
-fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
-    let Row { stretch, kind } = rows.row(row)?;
+/// [`None`] for a row that is not text -- an instruction, a rule, a blank, an empty row,
+/// a separator -- or one whose bytes are not there to be read, which draws and copies
+/// nothing.
+fn text_at(
+    placed: &analysis::Placed,
+    stretch: &Stretch,
+    body: Option<&Body>,
+    kind: Kind,
+) -> Option<TextOf> {
     match kind {
-        Kind::Header => {
-            let placed = rows.placed_of(stretch)?;
-            Some(TextOf {
-                address: Some(placed.range().start),
-                mark: None,
-                text: header_text(placed),
-                color: palette().text_fg,
-                bold: true,
-                opens: None,
-            })
-        }
+        Kind::Header => Some(TextOf {
+            address: Some(placed.range().start),
+            mark: None,
+            text: header_text(placed),
+            color: palette().text_fg,
+            bold: true,
+            opens: None,
+        }),
         Kind::Label(index) => {
-            let symbol = label_of(rows, stretch, index)?;
+            let symbol = stretch.symbols.get(index)?.clone();
             Some(TextOf {
-                address: Some(rows.address_of(row).unwrap_or(0)),
+                address: Some(placed.place(stretch.range.start)),
                 mark: None,
                 text: label_text(&symbol),
                 color: palette().name_fg,
@@ -181,7 +182,7 @@ fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
             })
         }
         Kind::Gap(index) => {
-            let (address, bytes) = gap_bytes(rows, stretch, index)?;
+            let (address, bytes) = gap_row_bytes(placed, body?.gap.as_ref()?, index)?;
             let (mark, values) = dump_line(&bytes);
             Some(TextOf {
                 address: Some(address),
@@ -200,10 +201,74 @@ fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
     }
 }
 
+/// The same asked of the rows the pane is drawing: what text row `row` says.
+fn text_of(rows: &Rows, row: usize) -> Option<TextOf> {
+    let Row { stretch, kind } = rows.row(row)?;
+    text_at(
+        rows.placed_of(stretch)?,
+        rows.stretch(stretch)?,
+        rows.body(stretch),
+        kind,
+    )
+}
+
+/// The placed address the row of kind `kind` stands at and the line it says, or [`None`]
+/// where it says nothing. The one answer for both readers of it: what a row draws and
+/// copies, and what the walk searches ([`stretch_texts`]).
+fn line_at(
+    placed: &analysis::Placed,
+    stretch: &Stretch,
+    body: Option<&Body>,
+    kind: Kind,
+) -> Option<(u64, Line)> {
+    if let Kind::Instruction(index) = kind {
+        let assembly = body?.assembly.as_ref()?;
+        let address = placed.place(assembly.instructions.get(index)?.address);
+        return Some((address, instruction_line(assembly, index)));
+    }
+    let text = text_at(placed, stretch, body, kind)?;
+    Some((text.address?, text_line(text.mark, &text.text)))
+}
+
+/// Every line stretch `flat` of `object`'s code draws, in listing order: the placed
+/// address each sits at and its text.
+///
+/// **The one statement of what a stretch says.** The pane draws it a row at a time
+/// through [`Rows`], which counts its rows out of the very same [`StretchRows`]. The
+/// search that walks an object's code (`find_bar.rs`) has no [`Rows`] -- it decodes a
+/// stretch, reads it and lets it go, and a [`Rows`] per stretch would build the whole
+/// skeleton each time -- so it takes a whole stretch from here. A row kind added to
+/// [`Kind`] therefore reaches the walk with the pane, and a search can neither find what
+/// the reader cannot see nor miss what they can.
+///
+/// The decode is the crate's own, thrown away again with the lines. The lanes over it are
+/// laid out because the rows are counted from them, which is what tells an instruction
+/// row from a separator.
+pub(crate) fn stretch_texts(
+    object: &Object,
+    index: &section::Flat,
+    flat: usize,
+) -> Vec<(u64, Line)> {
+    let Some((place, stretch)) = index.stretch(flat) else {
+        return Vec::new();
+    };
+    let Some(placed) = index.code().sections().get(place.section) else {
+        return Vec::new();
+    };
+    let decoded = index
+        .code()
+        .decode(object, place)
+        .map(|decoded| Body::of(decoded.code, decoded.gap.map(|gap| gap.range)));
+    let rows = StretchRows::of(placed, stretch, place, flat, decoded);
+    rows.kinds()
+        .filter_map(|kind| line_at(placed, stretch, rows.body(), kind))
+        .collect()
+}
+
 /// The text a row copies as: what it draws, one line -- the address column, then
 /// [`code_line`]. A row that draws nothing copies nothing, address or no address.
-pub(crate) fn row_line(rows: &Rows, reading: &Reading, row: usize) -> String {
-    let line = code_line(rows, reading, row).to_string();
+pub(crate) fn row_line(rows: &Rows, row: usize) -> String {
+    let line = code_line(rows, row).to_string();
     match rows.address_of(row) {
         Some(address) if !line.is_empty() => format!("{address:016X} {line}"),
         _ => line,
@@ -212,52 +277,34 @@ pub(crate) fn row_line(rows: &Rows, reading: &Reading, row: usize) -> String {
 
 /// The text row `row` draws after its address, as a character selection copies it:
 /// [`row_line`] without the address column.
-pub(crate) fn code_line(rows: &Rows, reading: &Reading, row: usize) -> Line {
-    match rows.row(row) {
-        Some(Row {
-            stretch,
-            kind: Kind::Instruction(index),
-        }) => reading
-            .held
-            .get(&stretch)
-            .and_then(|s| s.code.as_ref())
-            .and_then(|studied| studied.assembly.as_ref())
-            .map(|assembly| instruction_line(assembly, index))
-            .unwrap_or_default(),
-        _ => text_of(rows, row)
-            .map(|text| text_line(text.mark, &text.text))
-            .unwrap_or_default(),
-    }
+pub(crate) fn code_line(rows: &Rows, row: usize) -> Line {
+    line_of(rows, row).map(|(_, line)| line).unwrap_or_default()
 }
 
-/// The `index`th symbol at stretch `flat`'s address.
-fn label_of(rows: &Rows, flat: usize, index: usize) -> Option<Arc<SymbolData>> {
-    rows.stretch(flat)?.symbols.get(index).cloned()
+/// The same asked of the rows the pane is drawing: where row `row` stands and what it
+/// says, and [`None`] where it says nothing.
+fn line_of(rows: &Rows, row: usize) -> Option<(u64, Line)> {
+    let Row { stretch, kind } = rows.row(row)?;
+    line_at(
+        rows.placed_of(stretch)?,
+        rows.stretch(stretch)?,
+        rows.body(stretch),
+        kind,
+    )
 }
 
 /// The text a section's header row draws.
-pub(crate) fn header_text(placed: &analysis::Placed) -> String {
+fn header_text(placed: &analysis::Placed) -> String {
     format!("section {}", placed.listing.section().name)
 }
 
 /// The text a symbol's label row draws.
-pub(crate) fn label_text(symbol: &SymbolData) -> String {
+fn label_text(symbol: &SymbolData) -> String {
     format!("{}:", symbol.display())
 }
 
-/// The bytes gap row `index` of stretch `flat` draws, and the placed address they start
-/// at.
-fn gap_bytes(rows: &Rows, flat: usize, index: usize) -> Option<(u64, Vec<u8>)> {
-    // The rows' own gap and not the reading's: they are counted from it, and it is the
-    // whole stretch where nothing was decoded.
-    let gap = rows.body(flat)?.gap.as_ref()?;
-    gap_row_bytes(rows.placed_of(flat)?, gap, index)
-}
-
-/// The same asked of the section and the gap themselves, for a reader with no [`Rows`] to
-/// ask: the search that walks an object's code a stretch at a time (`find_bar.rs`), which
-/// must draw the same text this does or find what the pane does not show.
-pub(crate) fn gap_row_bytes(
+/// The bytes gap row `index` of `gap` draws, and the placed address they start at.
+fn gap_row_bytes(
     placed: &analysis::Placed,
     gap: &Range<u64>,
     index: usize,
@@ -312,7 +359,7 @@ struct TextRow {
 /// `dq` for quadwords down to `db` for bytes -- and the row's text: the values in that
 /// unit, little-endian as x86 reads them, padded to the width a row of bytes would take,
 /// then the same bytes as characters between bars, a dot for anything unprintable.
-pub(crate) fn dump_line(bytes: &[u8]) -> (&'static str, String) {
+fn dump_line(bytes: &[u8]) -> (&'static str, String) {
     let (mark, unit) = [("dq", 8), ("dd", 4), ("dw", 2), ("db", 1)]
         .into_iter()
         .find(|&(_, unit)| !bytes.is_empty() && bytes.len() % unit == 0)
@@ -391,7 +438,7 @@ impl Component for TextRow {
                     open_document(
                         doors.open,
                         doors.visits,
-                        Document::Assembly(Selection::Symbol(symbol.clone())),
+                        Document::Symbol(symbol.clone()),
                         Reach::NewTab,
                     );
                 }),
@@ -417,7 +464,7 @@ impl Component for TextRow {
         // so both the address column and the arrows start where they do on an instruction
         // row; then the address, gutter too. A row that is nobody's line is never marked.
         let before = std::iter::once(code_mark(false))
-            .chain(gutter_column(lanes::MAX_LANES, None))
+            .chain(gutter_column(CODE_LANES, None))
             .chain([address_label(self.address)])
             .collect();
 
@@ -447,7 +494,7 @@ impl Component for TextRow {
 
 /// The text a [`TextRow`] draws after its address, as the clipboard sees it: the data
 /// directive and a space where the row has one, then the text.
-pub(crate) fn text_line(mark: Option<&str>, text: &str) -> Line {
+fn text_line(mark: Option<&str>, text: &str) -> Line {
     match mark {
         Some(mark) => Line::text(format!("{mark} {text}")),
         None => Line::text(text),
@@ -727,7 +774,7 @@ impl Component for SectionList {
                     let rows = built.clone();
                     move |row| {
                         rows.as_ref()
-                            .map(|built| row_line(built, &built.reading, row))
+                            .map(|built| row_line(built, row))
                             .unwrap_or_default()
                     }
                 }),
@@ -735,7 +782,7 @@ impl Component for SectionList {
                     let rows = built.clone();
                     move |row| {
                         rows.as_ref()
-                            .map(|built| code_line(built, &built.reading, row))
+                            .map(|built| code_line(built, row))
                             .unwrap_or_default()
                     }
                 }),
@@ -832,7 +879,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             };
             let address = asm.assembly().instructions[index]
                 .address
-                .wrapping_add(asm.bias);
+                .wrapping_add(asm.bias());
             // The rows either side, where they are instructions of this same stretch:
             // a label, a header or a separator is nobody's pair.
             let paired_at = |row: usize| match rows.row(row) {
@@ -867,13 +914,13 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             };
             let address = asm.assembly().instructions[below]
                 .address
-                .wrapping_add(asm.bias);
+                .wrapping_add(asm.bias());
             let mut lit = lanes::lit(touching(stretch), below);
             lit.corner = false;
             SeparatorRow {
                 row: i,
                 wash,
-                width: lanes::MAX_LANES,
+                width: CODE_LANES,
                 arrows: RowArrows {
                     lanes: asm.lanes().boundary(below),
                     lit,
@@ -1434,7 +1481,7 @@ pub(crate) fn show_in_code(
 /// landing on the line the row was compiled from where it has one: `show_in_code`'s door
 /// the other way, and a tab of its own likewise.
 pub(crate) fn open_as_symbol(doors: Doors, symbol: Symbol, address: u64, at: Option<LinePos>) {
-    let tab = Document::Assembly(Selection::Symbol(symbol));
+    let tab = Document::Symbol(symbol);
     land(
         doors,
         Landing {

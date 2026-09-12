@@ -312,7 +312,7 @@ impl Component for SymbolRow {
         let symbol = self.symbols[self.index].clone();
         let pick = Pick::Symbol(symbol.clone());
         let text = symbol.data.display().to_owned();
-        let document = Document::Assembly(Selection::Symbol(symbol));
+        let document = Document::Symbol(symbol);
 
         cut_tooltip(
             fitted.cut(),
@@ -486,7 +486,7 @@ impl Component for ObjectsPanel {
             Some((
                 _,
                 Stop {
-                    document: Document::Assembly(Selection::Object(object)) | Document::Code(object),
+                    document: Document::Object(object) | Document::Code(object),
                     ..
                 },
             )) => Some(Arc::as_ptr(object).addr()),
@@ -627,7 +627,7 @@ impl Component for SymbolsPanel {
             Some((
                 _,
                 Stop {
-                    document: Document::Assembly(Selection::Symbol(symbol)),
+                    document: Document::Symbol(symbol),
                     ..
                 },
             )) => Some(symbol.clone()),
@@ -638,13 +638,7 @@ impl Component for SymbolsPanel {
         let keys = ListKeys::over(
             filtered.clone(),
             |symbol: &Symbol| Pick::Symbol(symbol.clone()),
-            move |symbol: &Symbol| {
-                opened(
-                    doors,
-                    ctrl,
-                    Document::Assembly(Selection::Symbol(symbol.clone())),
-                )
-            },
+            move |symbol: &Symbol| opened(doors, ctrl, Document::Symbol(symbol.clone())),
         );
 
         // An empty list means the same two things here as in `short_list`, and the whole

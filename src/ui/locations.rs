@@ -869,7 +869,7 @@ fn press_location(
         ctrl,
     } = to;
     let open = doors.open;
-    let symbol_tab = Document::Assembly(Selection::Symbol(symbol.clone()));
+    let symbol_tab = Document::Symbol(symbol.clone());
     // Bound to a `let` so the table's guard is gone before `driven` is written.
     let press = chosen(&open.docs.peek(), at, subject);
     match press {

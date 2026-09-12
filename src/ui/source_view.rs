@@ -913,7 +913,7 @@ pub(crate) fn source_side(
                     .map(|at| at.line),
             })
         }
-        Document::Assembly(_) => {
+        Document::Object(_) | Document::Symbol(_) => {
             let shown = analysis.shown.as_ref()?;
             let lines = &shown.studied.lines;
             let picked = marks

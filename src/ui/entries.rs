@@ -33,7 +33,7 @@ pub(crate) fn stop_text(stop: &Stop) -> String {
 /// [`entry_tooltip`].
 pub(crate) fn entry_text(entry: &Document) -> String {
     match entry {
-        Document::Assembly(Selection::Symbol(_)) => short_name(&entry_name(entry)),
+        Document::Symbol(_) => short_name(&entry_name(entry)),
         entry => entry_name(entry),
     }
 }
@@ -43,10 +43,8 @@ pub(crate) fn entry_text(entry: &Document) -> String {
 /// something a reader can search for after the tab stopped drawing it.
 pub(crate) fn entry_name(entry: &Document) -> String {
     match entry {
-        Document::Assembly(Selection::Object(object)) | Document::Code(object) => {
-            object.name.clone()
-        }
-        Document::Assembly(Selection::Symbol(symbol)) => symbol.data.display().to_owned(),
+        Document::Object(object) | Document::Code(object) => object.name.clone(),
+        Document::Symbol(symbol) => symbol.data.display().to_owned(),
         Document::Source(file) => source::name_of(Path::new(&**file)),
     }
 }
@@ -59,7 +57,7 @@ pub(crate) fn entry_name(entry: &Document) -> String {
 /// it. Every other kind is drawn under the whole of its name, so the one string is both.
 pub(crate) fn entry_spellings(entry: &Document) -> (String, String) {
     match entry {
-        Document::Assembly(Selection::Symbol(symbol)) => {
+        Document::Symbol(symbol) => {
             let whole = symbol.data.display().to_owned();
             (short_name(&whole), whole)
         }
@@ -77,7 +75,7 @@ pub(crate) fn entry_spellings(entry: &Document) -> (String, String) {
 /// [`entry_spellings`]. Every other kind asks the two functions, which stay the rules.
 pub(crate) fn entry_labels(entry: &Document) -> (String, String) {
     match entry {
-        Document::Assembly(Selection::Symbol(_)) => entry_spellings(entry),
+        Document::Symbol(_) => entry_spellings(entry),
         entry => (entry_text(entry), entry_tooltip(entry)),
     }
 }
@@ -122,12 +120,8 @@ pub(crate) enum EntryKey<'a> {
 
 pub(crate) fn entry_key(entry: &Document) -> EntryKey<'_> {
     match entry {
-        Document::Assembly(Selection::Object(object)) => {
-            EntryKey::Object(Arc::as_ptr(object).addr())
-        }
-        Document::Assembly(Selection::Symbol(symbol)) => {
-            EntryKey::Symbol(Arc::as_ptr(&symbol.data).addr())
-        }
+        Document::Object(object) => EntryKey::Object(Arc::as_ptr(object).addr()),
+        Document::Symbol(symbol) => EntryKey::Symbol(Arc::as_ptr(&symbol.data).addr()),
         Document::Source(file) => EntryKey::Source(file),
         Document::Code(object) => EntryKey::Code(Arc::as_ptr(object).addr()),
     }

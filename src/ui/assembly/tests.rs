@@ -185,8 +185,7 @@ fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
     };
     let assembly = Arc::new(listing(symbol.data.clone()));
     let studied = Studied::with_assembly(symbol, Some(assembly.clone()));
-    let width = studied.lanes.width;
-    let data = AsmData::of(studied, None, 0, 0, width, false).expect("the fixture decodes");
+    let data = AsmData::of(studied, In::Alone { subject: None }).expect("the fixture decodes");
 
     in_runtime(|| {
         // The modifiers a row is drawn with, as the root provides them: nothing here
@@ -475,7 +474,8 @@ fn every_field_of_a_listing_prop_is_compared() {
 
     let assembly = Arc::new(listing(symbol.data.clone()));
     let studied = |symbol: &Symbol| Studied::with_assembly(symbol.clone(), Some(assembly.clone()));
-    let data = AsmData::of(studied(&symbol), None, 0, 0, 1, false).expect("the fixture decodes");
+    let data =
+        AsmData::of(studied(&symbol), In::Alone { subject: None }).expect("the fixture decodes");
 
     assert!(data == data.clone(), "a listing differs from itself");
     for (field, changed) in [
@@ -491,38 +491,35 @@ fn every_field_of_a_listing_prop_is_compared() {
         (
             "subject",
             AsmData {
-                subject: Some(Subject {
-                    tab: DocId::unfiled(),
-                    file: Arc::from("main.rs"),
-                }),
+                listing: In::Alone {
+                    subject: Some(Subject {
+                        tab: DocId::unfiled(),
+                        file: Arc::from("main.rs"),
+                    }),
+                },
+                ..data.clone()
+            },
+        ),
+        // Which listing it is, with nothing else to tell the two apart: the gutter width
+        // and the doors a row gets both follow it.
+        (
+            "listing",
+            AsmData {
+                listing: In::Code { base: 0, bias: 0 },
                 ..data.clone()
             },
         ),
         (
             "base",
             AsmData {
-                base: 1,
+                listing: In::Code { base: 1, bias: 0 },
                 ..data.clone()
             },
         ),
         (
             "bias",
             AsmData {
-                bias: 1,
-                ..data.clone()
-            },
-        ),
-        (
-            "width",
-            AsmData {
-                width: 2,
-                ..data.clone()
-            },
-        ),
-        (
-            "code_tab",
-            AsmData {
-                code_tab: true,
+                listing: In::Code { base: 0, bias: 1 },
                 ..data.clone()
             },
         ),
@@ -531,8 +528,8 @@ fn every_field_of_a_listing_prop_is_compared() {
     }
 
     let mut docs = Docs::default();
-    let tab = docs.open(Document::Assembly(Selection::Symbol(symbol.clone())));
-    let elsewhere = docs.open(Document::Assembly(Selection::Symbol(other.clone())));
+    let tab = docs.open(Document::Symbol(symbol.clone()));
+    let elsewhere = docs.open(Document::Symbol(other.clone()));
 
     let rows = InstructionList {
         tab,
@@ -552,7 +549,7 @@ fn every_field_of_a_listing_prop_is_compared() {
             "data",
             InstructionList {
                 data: AsmData {
-                    base: 1,
+                    listing: In::Code { base: 1, bias: 0 },
                     ..data.clone()
                 },
                 ..rows.clone()
@@ -571,7 +568,7 @@ fn every_field_of_a_listing_prop_is_compared() {
 
     let pane = AssemblyPane {
         tab,
-        document: Document::Assembly(Selection::Symbol(symbol)),
+        document: Document::Symbol(symbol),
     };
     assert!(pane == pane.clone(), "a pane differs from itself");
     for (field, changed) in [
@@ -585,7 +582,7 @@ fn every_field_of_a_listing_prop_is_compared() {
         (
             "document",
             AssemblyPane {
-                document: Document::Assembly(Selection::Symbol(other)),
+                document: Document::Symbol(other),
                 ..pane.clone()
             },
         ),

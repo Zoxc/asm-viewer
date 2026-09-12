@@ -3,12 +3,11 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use analysis::{Architecture, BinaryFormat, Object, ObjectData};
 
 use super::*;
-use crate::document::Selection;
 
 /// A distinct document: two calls with the same `name` still produce different `Arc`s, and
 /// so entries that do not compare equal.
 fn place(name: &str) -> Document {
-    Document::Assembly(Selection::Object(Arc::new(Object::new(
+    Document::Object(Arc::new(Object::new(
         PathBuf::from("/tmp/lib.a"),
         name.to_owned(),
         BinaryFormat::Elf,
@@ -16,7 +15,7 @@ fn place(name: &str) -> Document {
         HashMap::new(),
         Vec::new(),
         ObjectData::from(&b""[..]),
-    ))))
+    )))
 }
 
 /// The panel draws the record newest first, and a place visited again moves to the top

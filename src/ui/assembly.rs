@@ -172,6 +172,39 @@ fn line_of(head: &[(String, SpanKind)], link: Option<Lifted>, tail: &[(String, S
     line
 }
 
+/// How many lanes the gutter is drawn with in a listing of a whole object's code: one
+/// width for every symbol in it, so the addresses start at one x. The one place that
+/// number is named.
+pub(crate) const CODE_LANES: usize = lanes::MAX_LANES;
+
+/// Which of the two listings a symbol's rows are drawn in, and where in it they sit.
+///
+/// The two are not a pair of independent settings: a symbol read alone starts at row 0 at
+/// the file's own addresses with its own gutter, and a stretch of an object's code starts
+/// where the stretch does at the addresses the layout placed it at with one gutter width
+/// for every symbol. Saying which listing it is says all of that, so nothing can hand a
+/// subject to the code listing or a bias to a symbol's own.
+#[derive(Clone, PartialEq)]
+pub(crate) enum In {
+    /// A symbol's own listing, read on its own.
+    Alone {
+        /// The source-driven tab this listing is the assembly side of, or `None` for an
+        /// assembly-driven tab's own listing.
+        subject: Option<Subject>,
+    },
+    /// A stretch of an object's code, drawn among its neighbours.
+    Code {
+        /// The listing row this symbol's first instruction row is drawn at. What `lanes`
+        /// answers in rows is relative to the symbol, and this is what the scroll and the
+        /// picked-out run -- which speak the listing's rows -- have it added.
+        base: usize,
+        /// What is added to every address drawn or copied: the section's place in the
+        /// object's layout (`Section::bias`), where two functions of a relocatable object
+        /// are both at 0 and have to be told apart.
+        bias: u64,
+    },
+}
+
 /// A disassembled symbol, where its branches are drawn and what says where its
 /// instructions came from, compared by pointer.
 ///
@@ -183,52 +216,61 @@ fn line_of(head: &[(String, SpanKind)], link: Option<Lifted>, tail: &[(String, S
 pub(crate) struct AsmData {
     /// What the worker made of the symbol: the listing, its gutter layout and its lines.
     pub(crate) studied: Studied,
-    /// The source-driven tab this listing is the assembly side of, or `None` for an
-    /// assembly-driven tab's own listing.
-    pub(crate) subject: Option<Subject>,
-    /// The listing row this symbol's first instruction row is drawn at: 0 in a listing
-    /// that is one symbol, and where the symbol starts in a listing of a whole object's
-    /// code. What `lanes` answers in rows is relative to the symbol, and this is what the
-    /// scroll and the picked-out run -- which speak the listing's rows -- have it added.
-    pub(crate) base: usize,
-    /// What is added to every address drawn or copied: 0 for a symbol
-    /// read on its own, and the section's place in the object's layout
-    /// (`Section::bias`) in a listing of all its code, where two functions of a
-    /// relocatable object are both at 0 and have to be told apart.
-    pub(crate) bias: u64,
-    /// How many lanes the gutter is drawn with: the symbol's own on its own, and one width
-    /// for every symbol in a listing of many, so the addresses start at one x.
-    pub(crate) width: usize,
-    /// Whether this listing is the object's code already, where a row has no
-    /// neighbours to be shown among.
-    pub(crate) code_tab: bool,
+    /// Which listing the rows are drawn in, and everything that follows from it.
+    pub(crate) listing: In,
 }
 
 impl AsmData {
-    /// `studied` drawn in the listing the arguments after it describe (the fields of the
-    /// same names). The one way one of these is made, so the two listings cannot differ in
-    /// what they hand their rows.
+    /// `studied` drawn in `listing`. The one way one of these is made, so the two listings
+    /// cannot differ in what they hand their rows.
     ///
     /// [`None`] for a symbol with nothing to decode, which draws no rows at all. That
     /// check is here and nowhere else, and it is what leaves [`AsmData::assembly`] an
     /// answer rather than a question.
-    pub(crate) fn of(
-        studied: Studied,
-        subject: Option<Subject>,
-        base: usize,
-        bias: u64,
-        width: usize,
-        code_tab: bool,
-    ) -> Option<AsmData> {
+    pub(crate) fn of(studied: Studied, listing: In) -> Option<AsmData> {
         studied.assembly.as_ref()?;
-        Some(AsmData {
-            studied,
-            subject,
-            base,
-            bias,
-            width,
-            code_tab,
-        })
+        Some(AsmData { studied, listing })
+    }
+
+    /// The source-driven tab this listing is the assembly side of: a location found from
+    /// it is chosen for it. Never the code listing's, which is a tab of its own.
+    pub(crate) fn subject(&self) -> Option<&Subject> {
+        match &self.listing {
+            In::Alone { subject } => subject.as_ref(),
+            In::Code { .. } => None,
+        }
+    }
+
+    /// The listing row this symbol's first instruction row is drawn at: 0 in a listing
+    /// that is one symbol.
+    pub(crate) fn base(&self) -> usize {
+        match self.listing {
+            In::Alone { .. } => 0,
+            In::Code { base, .. } => base,
+        }
+    }
+
+    /// What is added to every address drawn or copied: 0 for a symbol read on its own.
+    pub(crate) fn bias(&self) -> u64 {
+        match self.listing {
+            In::Alone { .. } => 0,
+            In::Code { bias, .. } => bias,
+        }
+    }
+
+    /// How many lanes the gutter is drawn with: the symbol's own on its own, and
+    /// [`CODE_LANES`] among its neighbours.
+    pub(crate) fn width(&self) -> usize {
+        match self.listing {
+            In::Alone { .. } => self.studied.lanes.width,
+            In::Code { .. } => CODE_LANES,
+        }
+    }
+
+    /// Whether this listing is the object's code already, where a row has no neighbours
+    /// to be shown among.
+    pub(crate) fn code_tab(&self) -> bool {
+        matches!(self.listing, In::Code { .. })
     }
 
     /// The instructions the rows are drawn from: the worker's own, asked of it rather
@@ -508,12 +550,7 @@ impl Opens {
                 show_in_code(doors, places, object, placed, None, Reach::InPlace);
             }
             Opens::Symbol(symbol, reach) => {
-                open_document(
-                    doors.open,
-                    doors.visits,
-                    Document::Assembly(Selection::Symbol(symbol)),
-                    reach,
-                );
+                open_document(doors.open, doors.visits, Document::Symbol(symbol), reach);
             }
             // `show_in_code` leaves the move to `land` where this listing is that code
             // already.
@@ -992,12 +1029,12 @@ fn instruction_text(
                     object: data.object().clone(),
                     data: symbol.clone(),
                 },
-                code_tab: data.code_tab,
+                code_tab: data.code_tab(),
             }),
             // A branch's displacement is the other way to follow it: the row it lands
             // on, and the run a press on that row would have made.
             Link::Branch => data.assembly().edge_from(index).map(|edge| Door::Row {
-                to: data.base + data.lanes().row_of(edge.to),
+                to: data.base() + data.lanes().row_of(edge.to),
                 at: data.position(edge.to),
             }),
             // Where the instruction goes, with no name and no row here: the door into
@@ -1104,7 +1141,7 @@ fn instruction_menu(
     let instruction = &data.assembly().instructions[index];
     // The source-driven tab this listing is the assembly side of, if it is one: a
     // location found from it is chosen for it.
-    let subject = data.subject.clone();
+    let subject = data.subject().cloned();
     // The symbol this row is code of, in either listing: what the door back opens, and
     // what the menu bookmarks. One symbol, so one value.
     let symbol = Symbol {
@@ -1115,16 +1152,16 @@ fn instruction_menu(
     // from there, the door back to the symbol read alone. The door takes the placed
     // address, which in a symbol's own listing is not the one drawn.
     let neighbours =
-        (!data.code_tab).then(|| (data.object().clone(), data.placed(instruction.address)));
+        (!data.code_tab()).then(|| (data.object().clone(), data.placed(instruction.address)));
     // The door back takes the symbol's own address, the space its listing draws.
     // Wherever this listing is not the tab itself, which is an object's code and the
     // assembly side of a source-driven tab: in the second the symbol has no other door,
     // the Symbols list aside, since the tab is a file. An assembly-driven tab is the
     // symbol already and gets none.
-    let alone =
-        (data.code_tab || data.subject.is_some()).then(|| (symbol.clone(), instruction.address));
+    let alone = (data.code_tab() || data.subject().is_some())
+        .then(|| (symbol.clone(), instruction.address));
     // The same symbol as a document, which is what the bookmark item takes.
-    let symbol_document = Document::Assembly(Selection::Symbol(symbol));
+    let symbol_document = Document::Symbol(symbol);
 
     // The column is the source pane's business: nothing in an instruction row is a name a
     // server could be asked about.
@@ -1191,13 +1228,13 @@ impl Component for InstructionRow {
         // has placed the symbol's section.
         let address = self.data.assembly().instructions[self.index]
             .address
-            .wrapping_add(self.data.bias);
+            .wrapping_add(self.data.bias());
 
         // Before the text: the mark, saying whether the debug info places this
         // instruction anywhere at all; the arrow gutter; and the address, which is gutter
         // too, a press on it picking the row out and no characters.
         let before = std::iter::once(code_mark(at.is_some()))
-            .chain(gutter_column(self.data.width, Some(self.arrows)))
+            .chain(gutter_column(self.data.width(), Some(self.arrows)))
             .chain([address_label(Some(address))])
             .collect();
 
@@ -1455,7 +1492,7 @@ fn asm_row(i: usize, rows: &AsmRows) -> Element {
         return SeparatorRow {
             row: i,
             wash,
-            width: rows.data.width,
+            width: rows.data.width(),
             arrows: RowArrows {
                 lanes: rows.data.lanes().boundary(below),
                 lit,
@@ -1528,7 +1565,7 @@ impl AssemblyPane {
                 extent: shown.studied.extent(),
             }),
             _ => match &self.document {
-                Document::Assembly(Selection::Object(object)) | Document::Code(object) => {
+                Document::Object(object) | Document::Code(object) => {
                     Some(Heading::Object(object.clone()))
                 }
                 _ => None,
@@ -1555,24 +1592,20 @@ impl AssemblyPane {
             Showing::Message(text) => return placeholder_on(palette().asm_pane_bg, text),
             Showing::Nothing => return blank_pane(palette().asm_pane_bg),
         };
-        let studied = shown.studied.clone();
         // A listing that is one symbol: its rows start at the top, its addresses are the
         // file's own, its gutter is as wide as it needs, and it is not the code. None at
         // all for a symbol with nothing to decode.
-        let width = studied.lanes.width;
         let data = AsmData::of(
-            studied,
-            match &shown.ask {
-                Ask::Source { at, .. } => Some(Subject {
-                    tab: self.tab,
-                    file: at.file.clone(),
-                }),
-                Ask::Symbol(_) => None,
+            shown.studied.clone(),
+            In::Alone {
+                subject: match &shown.ask {
+                    Ask::Source { at, .. } => Some(Subject {
+                        tab: self.tab,
+                        file: at.file.clone(),
+                    }),
+                    Ask::Symbol(_) => None,
+                },
             },
-            0,
-            0,
-            width,
-            false,
         );
         let Some(data) = data else {
             return placeholder_on(palette().asm_pane_bg, "Assembly unavailable");

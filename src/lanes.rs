@@ -11,7 +11,7 @@
 //! survive sharing and only the joining line goes ambiguous -- and it is the longest
 //! edges, whose ends are rarely on screen together, that are pushed out there.
 
-use analysis::BranchEdge;
+use analysis::{Assembly, BranchEdge};
 use std::ops::RangeInclusive;
 use std::sync::{Arc, LazyLock};
 
@@ -84,6 +84,15 @@ impl Lanes {
             placed,
             width,
             separators,
+        }
+    }
+
+    /// The layout over what was decoded for a symbol, and the empty one where nothing
+    /// was. The one recipe, so nothing lays out a gutter the pane would draw differently.
+    pub fn over(assembly: Option<&Assembly>) -> Arc<Lanes> {
+        match assembly {
+            Some(assembly) => Arc::new(Lanes::new(&assembly.edges, assembly.instructions.len())),
+            None => Lanes::none(),
         }
     }
 

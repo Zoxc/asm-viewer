@@ -22,7 +22,7 @@
 //! draw at two addresses and the listing reads as one.
 
 use crate::lanes::Lanes;
-use analysis::{Assembly, CodeListing, Place, Stretch};
+use analysis::{Assembly, CodeListing, Place, Placed, Stretch};
 use std::{ops::Range, sync::Arc};
 
 /// How many of a gap's bytes one row draws.
@@ -46,6 +46,17 @@ pub struct Body {
 }
 
 impl Body {
+    /// A stretch's body from what the crate's decode gave for it: the lanes laid out over
+    /// the listing, as the worker lays them out for the pane ([`Lanes::over`]).
+    pub fn of(assembly: Option<Arc<Assembly>>, gap: Option<Range<u64>>) -> Body {
+        let lanes = Lanes::over(assembly.as_deref());
+        Body {
+            assembly,
+            lanes,
+            gap,
+        }
+    }
+
     /// The instruction rows and the separators between them. The lanes were laid out over
     /// this body's own assembly, so the count is theirs.
     fn listing_rows(&self) -> usize {
@@ -98,8 +109,13 @@ pub enum Kind {
     Gap(usize),
 }
 
-/// One stretch's share of the rows.
-struct StretchRows {
+/// One stretch's share of the rows: what it draws, and where in the listing it draws it.
+///
+/// [`Rows`] holds one per stretch and counts the whole listing out of them. It is also
+/// the way in for a reader holding **one** stretch and no listing: the search that walks
+/// an object's code decodes a stretch, reads it and lets it go, and a [`Rows`] per
+/// stretch would build the whole skeleton each time (`ui/section_view.rs`).
+pub struct StretchRows {
     /// The placed address the stretch starts at, and how many bytes it covers.
     start: u64,
     bytes: u64,
@@ -156,6 +172,46 @@ impl BodyRows {
 }
 
 impl StretchRows {
+    /// The rows stretch `flat` of the listing draws, given whatever was decoded for it.
+    /// `place` says whether it opens its section, which is a header row, and `flat`
+    /// whether anything is drawn above it -- every stretch but the listing's first wears
+    /// a rule.
+    pub fn of(
+        placed: &Placed,
+        stretch: &Stretch,
+        place: Place,
+        flat: usize,
+        decoded: Option<Body>,
+    ) -> StretchRows {
+        StretchRows {
+            start: placed.place(stretch.range.start),
+            bytes: stretch_bytes(stretch),
+            bias: placed.bias(),
+            space: flat > 0,
+            header: place.stretch == 0,
+            labels: stretch.symbols.len(),
+            body: BodyRows::of(stretch, decoded),
+        }
+    }
+
+    /// What the rows are drawn from: what was decoded, with its gap as the rows draw it
+    /// -- widened to the whole stretch where the decode found no instructions
+    /// ([`BodyRows::of`]). [`None`] where nothing has been decoded.
+    pub fn body(&self) -> Option<&Body> {
+        match &self.body {
+            BodyRows::Decoded(body) => Some(body),
+            BodyRows::Estimated(_) => None,
+        }
+    }
+
+    /// Every row the stretch draws, in the order it draws them. [`Rows::row`] answers
+    /// this one row at a time for the listing as a whole, out of this very layout, so a
+    /// row kind added to [`Kind`] reaches both readers together.
+    pub fn kinds(&self) -> impl Iterator<Item = Kind> + '_ {
+        self.heading()
+            .chain((0..self.body_rows()).filter_map(|local| self.body_kind(local)))
+    }
+
     fn body_rows(&self) -> usize {
         match &self.body {
             BodyRows::Estimated(rows) => *rows,
@@ -308,19 +364,14 @@ impl Flat {
 /// the stretches -- by that index -- that have been.
 fn stretch_rows(flat_index: &Flat, decoded: impl Fn(usize) -> Option<Body>) -> Vec<StretchRows> {
     let mut stretches = Vec::with_capacity(flat_index.count());
-    for placed in flat_index.code().sections() {
-        let bias = placed.bias();
+    for (section, placed) in flat_index.code().sections().iter().enumerate() {
         for (index, stretch) in placed.listing.stretches().iter().enumerate() {
             let flat = stretches.len();
-            stretches.push(StretchRows {
-                start: placed.place(stretch.range.start),
-                bytes: stretch_bytes(stretch),
-                bias,
-                space: flat > 0,
-                header: index == 0,
-                labels: stretch.symbols.len(),
-                body: BodyRows::of(stretch, decoded(flat)),
-            });
+            let place = Place {
+                section,
+                stretch: index,
+            };
+            stretches.push(StretchRows::of(placed, stretch, place, flat, decoded(flat)));
         }
     }
     stretches
@@ -383,10 +434,7 @@ impl Rows {
 
     /// What was decoded for stretch `flat`, if anything was.
     pub fn body(&self, flat: usize) -> Option<&Body> {
-        match &self.stretches.get(flat)?.body {
-            BodyRows::Decoded(body) => Some(body),
-            BodyRows::Estimated(_) => None,
-        }
+        self.stretches.get(flat)?.body()
     }
 
     /// What the stretch adds to its symbol's own addresses.

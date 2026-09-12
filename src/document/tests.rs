@@ -32,14 +32,14 @@ fn everything_in_a_file_says_so() {
     let lib = Path::new("/tmp/lib.a");
     let other = Path::new("/tmp/some.dll");
 
-    let member = Document::Assembly(Selection::Object(objects[1].clone()));
+    let member = Document::Object(objects[1].clone());
     assert!(member.in_file(lib));
     assert!(!member.in_file(other));
 
-    let symbol = Document::Assembly(Selection::Symbol(Symbol {
+    let symbol = Document::Symbol(Symbol {
         object: objects[0].clone(),
         data: objects[0].symbols_sorted[0].clone(),
-    }));
+    });
     assert!(symbol.in_file(lib));
     assert!(!symbol.in_file(other));
 }

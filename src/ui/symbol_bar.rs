@@ -96,9 +96,9 @@ fn fact(name: &str, value: String) -> impl IntoElement {
 /// What the bar names: the drawn symbol together with the bytes its listing was decoded
 /// over, or the object a tab that is a whole binary shows.
 ///
-/// A [`Selection`] with the number added rather than a [`Selection`], because the number
-/// is [`SymbolData::extent`] -- the crate's most expensive answer, taken under the debug
-/// backend's mutex -- and a bar drawn in a render may not ask for it. The worker has paid
+/// It re-spells [`Document`]'s two assembly-driven places with the number added, because
+/// the number is [`SymbolData::extent`] -- the crate's most expensive answer, taken under
+/// the debug backend's mutex -- and a bar drawn in a render may not ask for it. The worker has paid
 /// for it once already ([`Studied::extent`]), so the bar is handed what it has.
 #[derive(Clone)]
 pub(crate) enum Heading {

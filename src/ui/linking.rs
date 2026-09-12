@@ -277,7 +277,7 @@ fn shown(open: Open, chosen: &[String], program: &str) -> Vec<(Arc<str>, String)
             Document::Source(file) => Some(file.clone()),
             // A symbol in a binary is a place in no file, and an object's code is the
             // whole of one: neither is a document a server has anything to say about.
-            Document::Assembly(..) | Document::Code(..) => None,
+            Document::Object(..) | Document::Symbol(..) | Document::Code(..) => None,
         })
         .filter_map(|file| {
             let spoken = spoken_as(chosen, program, Path::new(&*file))?;

@@ -46,7 +46,7 @@ pub(crate) enum Ask {
 /// whether the listing on screen is the reader's own.
 pub(crate) fn asked_of(ask: &Ask) -> Document {
     match ask {
-        Ask::Symbol(symbol) => Document::Assembly(Selection::Symbol(symbol.clone())),
+        Ask::Symbol(symbol) => Document::Symbol(symbol.clone()),
         Ask::Source { at, .. } => Document::Source(at.file.clone()),
     }
 }
@@ -89,8 +89,8 @@ fn keeps_listing(shown: Option<&Shown>, ask: &Ask) -> bool {
 pub(crate) fn ask(active: Option<&Entry>, driven: &Driven) -> Option<Ask> {
     let entry = active?;
     match &entry.1.document {
-        Document::Assembly(Selection::Symbol(symbol)) => Some(Ask::Symbol(symbol.clone())),
-        Document::Assembly(Selection::Object(_)) | Document::Code(_) => None,
+        Document::Symbol(symbol) => Some(Ask::Symbol(symbol.clone())),
+        Document::Object(_) | Document::Code(_) => None,
         Document::Source(file) => driven
             .line(entry)
             .or(entry.1.line())
@@ -399,7 +399,7 @@ impl Analyzed {
             // sentence to leave up either.
             (None, Some(_)) => Showing::Nothing,
             (None, None) => Showing::Message(Cow::Borrowed(match document {
-                Document::Assembly(_) => "No symbol selected",
+                Document::Object(_) | Document::Symbol(_) => "No symbol selected",
                 Document::Source(_) => "Click a source line",
                 // The listing beside this asks nothing; its source side follows the
                 // instruction picked out in it.
@@ -585,10 +585,7 @@ impl Studied {
     /// decodes a stretch through the crate's listing, which is the same decode, and must
     /// not pay for it twice.
     pub(crate) fn with_assembly(symbol: Symbol, assembly: Option<Arc<Assembly>>) -> Studied {
-        let lanes = match &assembly {
-            Some(assembly) => Arc::new(Lanes::new(&assembly.edges, assembly.instructions.len())),
-            None => Lanes::none(),
-        };
+        let lanes = Lanes::over(assembly.as_deref());
         let lines = SymbolLines::new(&symbol, assembly.as_deref());
 
         Studied {

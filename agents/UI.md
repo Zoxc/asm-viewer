@@ -319,7 +319,10 @@ with no project -- they are nobody's project's -- out of `NoProjectPage` and **n
 the strip's tabs are written into the session, and there is no session to put a tab in.
 
 **One strip, three kinds of tab.** A `Document` (`document.rs`) is **a place in a binary or a file**.
-`Document::Assembly(Selection)` is an object or a function. `Document::Source(Arc<str>)` is a file
+`Document::Object(Arc<Object>)` is an object and `Document::Symbol(Symbol)` a function. One flat
+enum: the two used to sit in a `Selection` that a `Document::Assembly` wrapped, and every match over
+a document paid a nesting level for a type that carried nothing else and that nothing else held.
+`Document::Source(Arc<str>)` is a file
 as a string and not a `PathBuf`: the spelling the debug info said, or the project directory joined
 with a Files row's entries, which is deliberately the same spelling and is never canonicalised
 (`agents/Sidebar.md`). `Document::Code(Arc<Object>)` is **all of one object's code** as one listing
@@ -328,7 +331,7 @@ source, and the variant says which side the tab is *about* and therefore which d
 object's code is assembly-driven like a function's tab. It is one document per object, compared by
 the object's pointer, and where the reader was in it is the tab's position and not its identity: a
 place in it at an address is that tab landed there, which is also what a call target with no symbol
-will open. Pressing an object in the Objects list opens it. `Selection::Object`, the object tab that
+will open. Pressing an object in the Objects list opens it. `Document::Object`, the object tab that
 draws only "No symbol selected", stays a valid document (restorable, and the shape the file-tab goal
 in `notes/Goals.md` will fill) and has no door for now. So opening a file from a directory panel and
 opening a function from the symbol list produce the same kind of thing, differing only in which way
@@ -422,8 +425,8 @@ reader is reading in it), or a double press on its header. `navigate` never does
 not being going somewhere new in it. `raise` is the move between places already open (the strip's
 menu, the neighbour a close lands on, a restored session) and records nothing. Pressing a tab needs
 none of them: freya's own header wrapper sets the panel's active tab, which *is* the change.
-`Selection` itself has **no "nothing" variant**: having none open is an absent one, which is the
-only spelling that stays honest once a selection is something a tab can hold. A new tab goes in
+A place in a binary has **no "nothing" variant**: nothing open is an absent document, which is the
+only spelling that stays honest once a place is something a tab can hold. A new tab goes in
 **beside the tab on screen** (`Strip::show`), the way a browser opens a link, whatever kind that tab
 is: a page has no reserved place at the left of the bar, being a tab like any other.
 

@@ -85,7 +85,7 @@ the symbol a source-driven tab's assembly side draws could be reached only throu
 list. Both sides carry one now, in the menu the rows already have and not on the bars, which have a
 toggle already and would want a third kind of control for it. An instruction's is **"Open as
 symbol"**, the item an object's code carried already, gated now on the listing not being the tab
-itself -- `code_tab`, or an `AsmData::subject`, which is set exactly when the assembly pane
+itself -- `AsmData::code_tab`, or an `AsmData::subject`, which is set exactly when the assembly pane
 follows. A line's names the file and goes through `open_source_place`, the one arrival every door
 into a *place* in a source file makes -- a definition followed, a Locations row, a Search hit -- so
 the new tab's assembly side follows that line as it follows a clicked one. Both open beside the tab, on the row the menu was over, as a menu item does everywhere here,
@@ -922,13 +922,17 @@ that costs is **two index spaces**, and `Lanes` is the only thing allowed to con
 lanes were laid out over and hold. An **instruction index** is what `AsmData::position`,
 the gutter, `Lanes::touching_any` and the branch edges speak; a **listing row** is what the scroll
 (`reveal_row`, `use_kept_position`) and the selected run (`Marked`, `on_listing_key`) speak.
-`InstructionRow` carries both and never mixes them. A row is also told three things about the
-listing it is in, through `AsmData`, so that the same row serves a listing that is not one symbol's:
-`base`, the listing row the symbol's first instruction row is drawn at, added to every row `Lanes`
-answers (a branch label's target is `base + row_of`); `bias`, added to every address the row draws
-or copies (`Section::bias`, what tells two functions of a relocatable object apart when both are at
-0); and `width`, the gutter's lane count, the symbol's own when it is read alone. On its own, a
-symbol's listing hands in 0, 0 and its lanes' width, and nothing about it changed. The separator
+`InstructionRow` carries both and never mixes them. A row is also told **which of the two listings
+it is in**, through `AsmData::listing`, so that the same row serves a listing that is not one
+symbol's. `In::Alone` is a symbol read on its own and carries the source-driven tab it is the
+assembly side of, if it is one; `In::Code` is a stretch of an object's code and carries `base`, the
+listing row the symbol's first instruction row is drawn at, added to every row `Lanes` answers (a
+branch label's target is `base + row_of`), and `bias`, added to every address the row draws or
+copies (`Section::bias`, what tells two functions of a relocatable object apart when both are at 0).
+Everything else follows from which one it is and is asked of it: `AsmData::width` is the symbol's
+own lanes alone and `CODE_LANES` among its neighbours, `base` and `bias` are 0 alone, and
+`code_tab` is the variant. They were five fields the two callers filled in lockstep, two of them
+`usize` and so swappable without a compile error. The separator
 draws the lanes that cross it (`Lanes::boundary`; the row below's `top` strokes run full height), so
 a branch's line is unbroken where the listing opens the gap under it, and it carries neither stub
 nor arrowhead, both of which belong to the row landed on. It takes the mark handlers too, so a sweep
@@ -975,7 +979,7 @@ the listing, which is the `base` an `InstructionRow` is handed.
 
 **The section view reads an object's code in windows and keeps its place by address**
 (`src/ui/section_view.rs`). The rows above are drawn into one `VirtualScrollView`: the instruction
-rows are `InstructionRow` told its `base`, `bias` and a gutter `MAX_LANES` wide, the separators
+rows are `InstructionRow` told `In::Code` with its `base` and `bias`, the separators
 `SeparatorRow`, and the header, label, empty and gap rows four small rows of the view's own. All of
 them are keyed in a key space per kind over the placed address they stand for, the separators'
 lesson applied to every row. `RowKey::of` is the one place a `Kind` becomes a key and its match is
@@ -1361,13 +1365,18 @@ every one: a word per function on a binary with 115k of them is a write per func
 bar reads. The bar draws that where a count would be, and "No matches" when a walk comes back round
 with nothing.
 
-**The walk reads the text the pane draws, through the pane's own builders.** `stretch_lines` asks
-`section_view`'s `header_text`, `label_text`, `gap_row_bytes`, `dump_line` and `text_line`, and
-`instruction_line` as everything else does; a search that built its own strings would find what the
-reader cannot see, or miss what they can. Those five were reachable only through a `&Rows` before,
-which is why `gap_row_bytes` now takes the section and the gap themselves: `Rows::new` walks every
-stretch of the whole skeleton, so a `Rows` per stretch would make the walk quadratic in a binary with
-115k of them.
+**The walk reads the text the pane draws, out of one composer.** `section_view::stretch_texts` is
+every line one stretch draws, in listing order, with the placed address each sits at: the walk takes
+a whole stretch from it, and the pane draws a row at a time out of the same `StretchRows` the
+composer builds. Sharing the *builders* was not enough -- which rows a stretch has, in what order
+and at what address is the part that drifts, and a kind added to `Kind` was an arm in the pane and a
+loop in the walk with nothing linking them, so the walk would silently not search what the reader
+sees. Now one `StretchRows::kinds` states the order and one `line_at` the text, and a new kind
+reaches both together (`the_walk_over_an_objects_code_holds_every_line_the_pane_draws` pins it).
+`StretchRows` is public for this: `Rows::new` walks every stretch of the whole skeleton, so a `Rows`
+per stretch would make the walk quadratic in a binary with 115k of them, but one stretch's rows cost
+one stretch. The walk pays a `Lanes` layout per stretch it decodes, which is what tells an
+instruction row from a separator; the decode beside it is far the larger cost.
 
 **The match is landed by the pane and not through a `Planting`.** A planting is spent by
 `use_kept_place`, whose effect wakes on the document changing or the reading's generation moving --

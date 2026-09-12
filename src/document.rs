@@ -1,9 +1,8 @@
 //! What the reader has open: a place in a binary, or a source file. Framework-free.
 //!
-//! [`Document`] is what every tab, trail, visit and bookmark is keyed by, and
-//! [`Selection`] is the assembly-driven half of one: an object, or a symbol in it. Both
-//! compare by `Arc` pointer identity, the app's rule everywhere; a source file compares
-//! as text, so the same file reached two ways is one tab.
+//! [`Document`] is what every tab, trail, visit and bookmark is keyed by. The three
+//! assembly-driven kinds compare by `Arc` pointer identity, the app's rule everywhere;
+//! a source file compares as text, so the same file reached two ways is one tab.
 //!
 //! [`Pane`] is the two sides every tab has, and [`Document::driven_from`] which of them
 //! the reader came for.
@@ -14,34 +13,6 @@
 use std::{path::Path, sync::Arc};
 
 use analysis::{Object, Symbol};
-
-/// What is currently selected in the UI. There is no "nothing" variant: having none is an
-/// absent one, `Option<Selection>`.
-#[derive(Clone)]
-pub enum Selection {
-    Object(Arc<Object>),
-    Symbol(Symbol),
-}
-
-impl Selection {
-    /// The file it came out of: an archive for a member, and never an object's name.
-    pub fn file(&self) -> &Path {
-        match self {
-            Selection::Object(object) => &object.path,
-            Selection::Symbol(symbol) => &symbol.object.path,
-        }
-    }
-}
-
-impl PartialEq for Selection {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Selection::Object(a), Selection::Object(b)) => Arc::ptr_eq(a, b),
-            (Selection::Symbol(a), Selection::Symbol(b)) => a == b,
-            _ => false,
-        }
-    }
-}
 
 /// One of the two panes that show code.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -79,8 +50,13 @@ pub enum Kind {
 /// was in it is the tab's position, not its identity.
 #[derive(Clone)]
 pub enum Document {
-    Assembly(Selection),
+    /// An object's symbols.
+    Object(Arc<Object>),
+    /// One symbol's code.
+    Symbol(Symbol),
+    /// A source file.
     Source(Arc<str>),
+    /// The whole of an object's code, as one listing.
     Code(Arc<Object>),
 }
 
@@ -97,9 +73,9 @@ impl Document {
     /// so a relative one stays relative.
     pub fn file(&self) -> &Path {
         match self {
-            Document::Assembly(selection) => selection.file(),
+            Document::Object(object) | Document::Code(object) => &object.path,
+            Document::Symbol(symbol) => &symbol.object.path,
             Document::Source(file) => Path::new(&**file),
-            Document::Code(object) => &object.path,
         }
     }
 
@@ -107,7 +83,7 @@ impl Document {
     /// glyph needs of it.
     pub fn kind(&self) -> Kind {
         match self {
-            Document::Assembly(_) => Kind::Binary,
+            Document::Object(_) | Document::Symbol(_) => Kind::Binary,
             Document::Source(_) => Kind::Source,
             Document::Code(_) => Kind::Code,
         }
@@ -119,7 +95,7 @@ impl Document {
     pub fn driven_from(&self) -> Pane {
         match self {
             Document::Source(_) => Pane::Source,
-            Document::Assembly(_) | Document::Code(_) => Pane::Assembly,
+            Document::Object(_) | Document::Symbol(_) | Document::Code(_) => Pane::Assembly,
         }
     }
 
@@ -136,19 +112,20 @@ impl Document {
     /// object or a file. What the analysis worker is asked for.
     pub fn symbol(&self) -> Option<&Symbol> {
         match self {
-            Document::Assembly(Selection::Symbol(symbol)) => Some(symbol),
+            Document::Symbol(symbol) => Some(symbol),
             _ => None,
         }
     }
 }
 
 impl PartialEq for Document {
-    /// Each variant by its own rule — `Arc` pointer identity for a selection and for an
+    /// Each variant by its own rule — `Arc` pointer identity for an object and for an
     /// object's code, text for a file — and never across the kinds: an object's code and
     /// the object itself are two documents.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Document::Assembly(a), Document::Assembly(b)) => a == b,
+            (Document::Object(a), Document::Object(b)) => Arc::ptr_eq(a, b),
+            (Document::Symbol(a), Document::Symbol(b)) => a == b,
             (Document::Source(a), Document::Source(b)) => a == b,
             (Document::Code(a), Document::Code(b)) => Arc::ptr_eq(a, b),
             _ => false,

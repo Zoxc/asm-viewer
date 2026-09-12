@@ -6,7 +6,6 @@ use analysis::{
 };
 
 use super::*;
-use crate::document::Selection;
 
 /// A bare `Object` with the given text symbols, which `symbols_sorted` holds by name.
 fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
@@ -46,10 +45,10 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
 }
 
 fn symbol(object: &Arc<Object>, index: usize) -> Document {
-    Document::Assembly(Selection::Symbol(Symbol {
+    Document::Symbol(Symbol {
         object: object.clone(),
         data: object.symbols_sorted[index].clone(),
-    }))
+    })
 }
 
 fn names(bookmarks: &Bookmarks) -> Vec<Cow<'_, str>> {

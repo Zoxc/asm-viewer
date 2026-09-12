@@ -1269,7 +1269,7 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     let (mut objects, mut asm_at, mut src_at) =
         (states.objects, states.places.asm_at, states.places.src_at);
     objects.write().push(object.clone());
-    let tab = |symbol: &Symbol| Document::Assembly(Selection::Symbol(symbol.clone()));
+    let tab = |symbol: &Symbol| Document::Symbol(symbol.clone());
     let went = |target: Document| open_document(states.open, states.visits, target, Reach::NewTab);
     went(tab(&first));
     went(tab(&second));
@@ -1353,7 +1353,7 @@ fn a_history_row_names_the_function_and_not_the_whole_symbol() {
     open_document(
         states.open,
         states.visits,
-        Document::Assembly(Selection::Symbol(symbol)),
+        Document::Symbol(symbol),
         Reach::NewTab,
     );
     test.sync_and_update();
@@ -1489,7 +1489,7 @@ fn the_tab_menu_hangs_from_the_buttons_right_edge() {
         open_document(
             states.open,
             states.visits,
-            Document::Assembly(Selection::Symbol(symbol.clone())),
+            Document::Symbol(symbol.clone()),
             Reach::NewTab,
         );
     }
@@ -1560,7 +1560,7 @@ fn the_document_menu_opens_and_closes() {
         open_document(
             states.open,
             states.visits,
-            Document::Assembly(Selection::Symbol(symbol.clone())),
+            Document::Symbol(symbol.clone()),
             Reach::NewTab,
         );
     }
@@ -1667,7 +1667,7 @@ fn the_toolbar_buttons_step_the_history_and_follow_the_cursor() {
     let documents: Vec<Document> = symbols
         .iter()
         .take(3)
-        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .map(|symbol| Document::Symbol(symbol.clone()))
         .collect();
     // Along one tab's trail: the first opens the tab, the next two are followed in it.
     open_document(
@@ -3294,7 +3294,7 @@ fn close_harness() -> impl IntoElement {
 /// second would be an assertion about the fonts on whoever ran it.
 fn one_close_target(test: &mut TestingRunner, states: &ProjectStates) -> Area {
     let symbols = fixture_symbols();
-    let document = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let document = Document::Symbol(symbols[0].clone());
     open_document(states.open, states.visits, document, Reach::NewTab);
     test.sync_and_update();
 
@@ -3463,7 +3463,7 @@ fn the_panel_and_the_table_hold_the_same_documents() {
     let documents: Vec<Document> = symbols
         .iter()
         .take(2)
-        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .map(|symbol| Document::Symbol(symbol.clone()))
         .chain([Document::Source(Arc::from("/src/main.rs"))])
         .collect();
 
@@ -3531,8 +3531,8 @@ fn a_bulk_close_takes_the_trails_with_the_chips() {
     let path = object.path.clone();
     let source = Document::Source(Arc::from("/src/main.rs"));
     let documents = [
-        Document::Assembly(Selection::Symbol(symbols[0].clone())),
-        Document::Assembly(Selection::Symbol(symbols[1].clone())),
+        Document::Symbol(symbols[0].clone()),
+        Document::Symbol(symbols[1].clone()),
     ];
 
     let (mut test, states) = TestingRunner::new(
@@ -3605,8 +3605,8 @@ fn a_bulk_close_forgets_the_tabs_it_closed_and_no_others() {
     let object = symbols[0].object.clone();
     let path = object.path.clone();
     let documents = [
-        Document::Assembly(Selection::Symbol(symbols[0].clone())),
-        Document::Assembly(Selection::Symbol(symbols[1].clone())),
+        Document::Symbol(symbols[0].clone()),
+        Document::Symbol(symbols[1].clone()),
         Document::Source(Arc::from("/src/main.rs")),
         Document::Source(Arc::from("/src/lib.rs")),
     ];
@@ -3688,7 +3688,7 @@ fn closing_a_document_lands_on_its_right_hand_neighbour() {
     let documents: Vec<Document> = symbols
         .iter()
         .take(3)
-        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .map(|symbol| Document::Symbol(symbol.clone()))
         .collect();
 
     let (mut test, states) = TestingRunner::new(
@@ -3738,7 +3738,7 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
     let documents: Vec<Document> = symbols
         .iter()
         .take(3)
-        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .map(|symbol| Document::Symbol(symbol.clone()))
         .collect();
 
     let (mut test, states) = TestingRunner::new(
@@ -3811,8 +3811,8 @@ fn switching_to_an_open_tab_is_not_a_visit() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
     let (first, second) = (
-        Document::Assembly(Selection::Symbol(symbols[0].clone())),
-        Document::Assembly(Selection::Symbol(symbols[1].clone())),
+        Document::Symbol(symbols[0].clone()),
+        Document::Symbol(symbols[1].clone()),
     );
 
     let (mut test, states) = TestingRunner::new(
@@ -3872,7 +3872,7 @@ fn closing_a_binary_keeps_the_source_tabs() {
     let object = symbol.object.clone();
     let path = object.path.clone();
     let source = Document::Source(Arc::from("/src/main.rs"));
-    let function = Document::Assembly(Selection::Symbol(symbol));
+    let function = Document::Symbol(symbol);
 
     let (mut test, states) = TestingRunner::new(
         project_harness,
@@ -5051,7 +5051,7 @@ fn the_fixed_sentences_a_pane_draws_are_borrowed() {
         .expect("the fixture holds sum_to");
     let fresh = Analyzed::default();
     for document in [
-        Document::Assembly(Selection::Symbol(symbol.clone())),
+        Document::Symbol(symbol.clone()),
         Document::Source(Arc::from("one.rs")),
         Document::Code(symbol.object.clone()),
     ] {
@@ -6692,7 +6692,7 @@ fn a_location_row_opens_its_symbol() {
     test.release_cursor(press);
     settle(&mut test);
 
-    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    let document = Document::Symbol(wanted.clone());
     assert!(states.open.active() == Some(document.clone()));
     assert!(states
         .visits
@@ -6727,7 +6727,7 @@ fn a_location_row_lands_on_its_line() {
     open_document(
         states.open,
         states.visits,
-        Document::Assembly(Selection::Symbol(symbols[0].clone())),
+        Document::Symbol(symbols[0].clone()),
         Reach::NewTab,
     );
     located.write().asked = Some(Query::line(at.clone()));
@@ -6742,7 +6742,7 @@ fn a_location_row_lands_on_its_line() {
     test.release_cursor(press);
     settle(&mut test);
 
-    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    let document = Document::Symbol(wanted.clone());
     assert!(states.open.active() == Some(document));
     assert!(
         source_line(roots.doors.marked) == Some(at.clone()),
@@ -6791,7 +6791,7 @@ fn landing_on_the_document_already_on_top_picks_the_line_out_at_once() {
         1.,
     );
     let states = roots.states;
-    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    let document = Document::Symbol(wanted.clone());
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     settle(&mut test);
 
@@ -6848,7 +6848,7 @@ fn a_run_in_a_file_the_listing_names_is_the_companion() {
         }),
         ..Default::default()
     };
-    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    let document = Document::Symbol(wanted.clone());
     let marks = |file: Option<&str>| Marks {
         assembly: None,
         source: file.map(|file| picked_row(0, file, Owed::BOTH)),
@@ -7038,7 +7038,7 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
     test.press_cursor(press);
     test.release_cursor(press);
     settle(&mut test);
-    assert!(states.open.active() == Some(Document::Assembly(Selection::Symbol(wanted))));
+    assert!(states.open.active() == Some(Document::Symbol(wanted)));
 }
 
 /// **A location row's press and Enter on it are one door.** The row and the panel's keys
@@ -7131,14 +7131,14 @@ fn a_landing_is_spent_by_whichever_document_arrives() {
 
     let mut landing = roots.doors.land;
     landing.set(Some(Landing {
-        tab: Document::Assembly(Selection::Symbol(symbols[0].clone())),
+        tab: Document::Symbol(symbols[0].clone()),
         at: Some(Landed::line(at.clone())),
         address: None,
     }));
     open_document(
         states.open,
         states.visits,
-        Document::Assembly(Selection::Symbol(symbols[1].clone())),
+        Document::Symbol(symbols[1].clone()),
         Reach::NewTab,
     );
     settle(&mut test);
@@ -10347,7 +10347,7 @@ fn a_companions_line_opens_the_file_it_is_in() {
     };
     let entry = "Open door.c".to_string();
 
-    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let symbol = Document::Symbol(sum_to.clone());
     let shown = companion(Ask::Symbol(sum_to.clone()));
     let (mut test, roots) = TestingRunner::new(
         companion_menu_harness,
@@ -10681,20 +10681,11 @@ fn what_a_tab_asks_follows_its_kind_and_its_driven_line() {
 
     assert!(ask(None, &driven).is_none(), "nothing open asks nothing");
     assert!(
-        ask(
-            Some(&on(
-                first,
-                Document::Assembly(Selection::Symbol(symbol.clone()))
-            )),
-            &driven
-        ) == Some(Ask::Symbol(symbol.clone()))
+        ask(Some(&on(first, Document::Symbol(symbol.clone()))), &driven)
+            == Some(Ask::Symbol(symbol.clone()))
     );
     // An object is a place in a binary but not one with a listing.
-    assert!(ask(
-        Some(&on(first, Document::Assembly(Selection::Object(object)))),
-        &driven
-    )
-    .is_none());
+    assert!(ask(Some(&on(first, Document::Object(object))), &driven).is_none());
     // A source-driven tab nothing has been clicked in yet.
     assert!(ask(Some(&on(first, tab.clone())), &driven).is_none());
 
@@ -11987,7 +11978,7 @@ fn the_bar_names_the_drawn_symbol_and_not_the_tab() {
         ask: Ask::Symbol(drawn_symbol.clone()),
         studied: Studied::new(drawn_symbol.clone()),
     };
-    let tab = Document::Assembly(Selection::Symbol(elsewhere.clone()));
+    let tab = Document::Symbol(elsewhere.clone());
 
     let (mut test, _roots) = TestingRunner::new(
         tab_pane_harness,
@@ -12015,7 +12006,7 @@ fn the_bar_names_the_drawn_symbol_and_not_the_tab() {
 #[test]
 fn an_object_tab_is_named_by_its_object() {
     let object = fixture_symbols()[0].object.clone();
-    let tab = Document::Assembly(Selection::Object(object.clone()));
+    let tab = Document::Object(object.clone());
 
     let (mut test, _states) = TestingRunner::new(
         tab_pane_harness,
@@ -12149,7 +12140,7 @@ fn the_expanded_section_says_what_the_info_pane_said() {
     open_document(
         states.open,
         states.visits,
-        Document::Assembly(Selection::Symbol(sum_to.clone())),
+        Document::Symbol(sum_to.clone()),
         Reach::NewTab,
     );
     settle(&mut test);
@@ -12223,7 +12214,7 @@ fn the_bar_says_how_many_bytes_the_listing_under_it_holds() {
     open_document(
         states.open,
         states.visits,
-        Document::Assembly(Selection::Symbol(sum_to.clone())),
+        Document::Symbol(sum_to.clone()),
         Reach::NewTab,
     );
     settle(&mut test);
@@ -12257,7 +12248,7 @@ fn the_bar_says_how_many_bytes_the_listing_under_it_holds() {
 fn the_symbol_section_is_remembered_per_tab() {
     let (_path, objects) = fixture_objects(2);
     let (first, second) = (objects[0].clone(), objects[1].clone());
-    let tab = |object: &Arc<Object>| Document::Assembly(Selection::Object(object.clone()));
+    let tab = |object: &Arc<Object>| Document::Object(object.clone());
 
     let (mut test, (states, showing)) = TestingRunner::new(
         tab_pane_harness,
@@ -12461,7 +12452,7 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
         "sum_to opens on line {line}, which is the top of the file anyway"
     );
 
-    let document = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let document = Document::Symbol(sum_to.clone());
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
@@ -12774,7 +12765,7 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
     let boundary = (600.0 - ResizableContext::HANDLE_SIZE) * LEADING / 100.0;
     let went = |target: Document| open_document(states.open, states.visits, target, Reach::NewTab);
 
-    went(Document::Assembly(Selection::Symbol(sum_to.clone())));
+    went(Document::Symbol(sum_to.clone()));
     settle(&mut test);
     let (asm, src) = (assembly_at(&test), source_at(&test, "own.c"));
     assert!(
@@ -12970,7 +12961,7 @@ fn the_leading_bar_puts_the_following_pane_away() {
     open_document(
         states.open,
         states.visits,
-        Document::Assembly(Selection::Symbol(sum_to.clone())),
+        Document::Symbol(sum_to.clone()),
         Reach::NewTab,
     );
     settle(&mut test);
@@ -13055,7 +13046,7 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
         open_document(
             states.open,
             states.visits,
-            Document::Assembly(Selection::Symbol(sum_to.clone())),
+            Document::Symbol(sum_to.clone()),
             Reach::NewTab,
         );
         settle(&mut test);
@@ -18011,7 +18002,7 @@ fn a_picked_out_instruction_lights_its_line() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let document = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let document = Document::Symbol(sum_to.clone());
     let (mut test, (states, marked)) = TestingRunner::new(
         source_pane_harness,
         (500., 600.).into(),
@@ -18117,7 +18108,7 @@ fn a_sweep_in_the_source_pane_does_not_work_its_pair_out_again() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let document = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let document = Document::Symbol(sum_to.clone());
     let (mut test, (states, marked)) = TestingRunner::new(
         source_pane_harness,
         (500., 600.).into(),
@@ -18355,7 +18346,7 @@ fn the_gutter_marks_the_lines_that_have_code() {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
     };
-    let document = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let document = Document::Symbol(sum_to.clone());
     let (mut test, (states, coded)) = TestingRunner::new(
         source_pane_harness,
         (500., 600.).into(),
@@ -18637,7 +18628,7 @@ fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
     open_document(
         states.open,
         states.visits,
-        Document::Assembly(Selection::Symbol(symbols[0].clone())),
+        Document::Symbol(symbols[0].clone()),
         Reach::NewTab,
     );
     settle(&mut test);
@@ -18701,7 +18692,7 @@ fn pressing_an_object_row_opens_its_code() {
         .iter()
         .any(|entry| *entry == document));
     assert!(
-        states.open.active() != Some(Document::Assembly(Selection::Object(object))),
+        states.open.active() != Some(Document::Object(object)),
         "the object tab is not what opened"
     );
     assert_eq!(entry_text(&document), "line_fixture.o");
@@ -19224,7 +19215,7 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     settle(&mut test);
     let rows = rows_of(&decoded);
     let now = (0..rows.len())
-        .find(|&row| row_line(&rows, &decoded, row) == "0000000000000014 twice:")
+        .find(|&row| row_line(&rows, row) == "0000000000000014 twice:")
         .expect("the label has a row");
     assert_ne!(
         now, was,
@@ -19413,9 +19404,7 @@ fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
     let reading = reading_of(&object, &[0]);
     let rows = rows_of(&reading);
 
-    let lines: Vec<String> = (0..rows.len())
-        .map(|row| row_line(&rows, &reading, row))
-        .collect();
+    let lines: Vec<String> = (0..rows.len()).map(|row| row_line(&rows, row)).collect();
     assert_eq!(lines[0], "0000000000000000 section .text");
     assert_eq!(lines[1], "", "the blank under the header");
     assert_eq!(lines[2], "0000000000000000 add:");
@@ -19585,7 +19574,7 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
             .expect("the fixture holds twice")
             .clone(),
     };
-    let symbol = Document::Assembly(Selection::Symbol(twice));
+    let symbol = Document::Symbol(twice);
     assert!(states.open.active() == Some(symbol.clone()));
     assert!(states
         .visits
@@ -19658,7 +19647,7 @@ fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
     press_at(&mut test, item);
     settle(&mut test);
 
-    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let symbol = Document::Symbol(sum_to.clone());
     assert!(states.open.active() == Some(symbol.clone()));
     assert!(
         states.open.strip.peek().tabs().len() == 2,
@@ -19720,7 +19709,7 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
     );
     let states = roots.states;
     let landing = roots.doors.land;
-    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let symbol = Document::Symbol(sum_to.clone());
     open_document(states.open, states.visits, symbol, Reach::NewTab);
     settle(&mut test);
 
@@ -19929,7 +19918,7 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
     );
     let (states, landing) = (roots.states, roots.doors.land);
     let mut ctrl = roots.keys.ctrl;
-    let symbol = Document::Assembly(Selection::Symbol(f.clone()));
+    let symbol = Document::Symbol(f.clone());
     open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
     settle(&mut test);
 
@@ -20036,10 +20025,10 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     press_at(&mut test, link);
     settle(&mut test);
     settle(&mut test);
-    let symbol = Document::Assembly(Selection::Symbol(Symbol {
+    let symbol = Document::Symbol(Symbol {
         object: object.clone(),
         data: add.clone(),
-    }));
+    });
     assert!(
         states.open.active() == Some(code.clone()),
         "the listing was left"
@@ -20278,7 +20267,6 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0, 1, 2]);
     let rows = rows_of(&reading);
-    let decoded = reading_of(&object, &[0, 1, 2]);
     let (mut test, roots) = TestingRunner::new(
         code_harness,
         (600., 10.0 * code_row_height()).into(),
@@ -20300,7 +20288,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     // Scroll to the call itself, which is the place being left: the row of `sum_to`'s
     // one instruction carrying a relocation.
     let call = (0..rows.len())
-        .find(|&row| row_line(&rows, &decoded, row).contains("call"))
+        .find(|&row| row_line(&rows, row).contains("call"))
         .expect("sum_to calls add");
     test.scroll(
         (300., 150.),
@@ -20822,7 +20810,7 @@ fn a_gap_row_is_marked_as_data() {
         .find(|&row| matches!(kind_at(&rows, row), Some(Kind::Gap(_))))
         .expect("the stretch has a gap row");
     // Sixteen bytes divide into quadwords, little-endian; a row of them is `dq`.
-    let copied = row_line(&rows, &reading, gap_row);
+    let copied = row_line(&rows, gap_row);
     let value = |bytes: &[u8]| {
         bytes
             .iter()
@@ -20924,7 +20912,7 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
     assert!(!gaps.is_empty(), "the stretch draws none of its bytes");
     for &row in &gaps {
         let address = rows.address_of(row).expect("a gap row has an address");
-        let line = row_line(&rows, &reading, row);
+        let line = row_line(&rows, row);
         assert!(line.starts_with(&format!("{address:016X} ")), "{line:?}");
         assert!(line.ends_with('|'), "row {row} draws no bytes: {line:?}");
     }
@@ -20994,7 +20982,7 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
     press_at(&mut test, item);
     settle(&mut test);
 
-    let symbol = Document::Assembly(Selection::Symbol(twice.clone()));
+    let symbol = Document::Symbol(twice.clone());
     assert!(states.open.active() == Some(symbol.clone()));
     let landed = landing
         .peek()
@@ -21357,7 +21345,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     press_at(&mut test, item);
     settle(&mut test);
     settle(&mut test);
-    let symbol = Document::Assembly(Selection::Symbol(twice.clone()));
+    let symbol = Document::Symbol(twice.clone());
     assert!(states.open.active() == Some(symbol.clone()));
     // The tab is up and its listing is not: the caret waits for the listing.
     assert!(
@@ -21422,7 +21410,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     let states = roots.states;
     settle(&mut test);
 
-    let first_tab = Document::Assembly(Selection::Symbol(first.clone()));
+    let first_tab = Document::Symbol(first.clone());
     let mut landing = doors.land;
     landing.set(Some(Landing {
         tab: first_tab.clone(),
@@ -21442,7 +21430,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     assert!(planting.tab == first_tab);
 
     // Another document arrives: spent.
-    let second_tab = Document::Assembly(Selection::Symbol(second));
+    let second_tab = Document::Symbol(second);
     open_document(states.open, states.visits, second_tab, Reach::NewTab);
     settle(&mut test);
     settle(&mut test);
@@ -21504,7 +21492,7 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
     let (doors, states) = (roots.doors, roots.states);
     settle(&mut test);
 
-    let tab = Document::Assembly(Selection::Symbol(shown.clone()));
+    let tab = Document::Symbol(shown.clone());
     open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
     let mut analysis = roots.analysis;
     analysis.set(Analyzed {
@@ -21521,7 +21509,7 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
     // spend, and not this listing's to plant.
     let mut plant = doors.plant;
     let other = Planting {
-        tab: Document::Assembly(Selection::Symbol(elsewhere)),
+        tab: Document::Symbol(elsewhere),
         address: first,
     };
     plant.set(Some(other.clone()));
@@ -21839,7 +21827,7 @@ fn a_bookmark_row_opens_its_place() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to")
         .clone();
-    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    let document = Document::Symbol(wanted.clone());
 
     let (mut test, states) = TestingRunner::new(
         bookmarks_harness,
@@ -21879,7 +21867,7 @@ fn a_bookmark_is_kept_when_its_binary_closes() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to")
         .clone();
-    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    let document = Document::Symbol(wanted.clone());
 
     let (mut test, states) = TestingRunner::new(
         bookmarks_harness,
@@ -21916,7 +21904,7 @@ fn a_bookmark_is_kept_when_its_binary_closes() {
 #[test]
 fn a_bookmark_row_is_removed_from_its_menu() {
     let symbols = fixture_symbols();
-    let document = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let document = Document::Symbol(symbols[0].clone());
     let file = Document::Source(Arc::from("/src/main.rs"));
 
     let (mut test, states) = TestingRunner::new(
@@ -22086,7 +22074,7 @@ fn a_symbol_row_bookmarks_its_symbol_from_its_menu() {
     let row = centre_of(&test, "sum_to");
     choose_from_menu(&mut test, row, "Add bookmark");
     let made = bookmarks.peek().entries().to_vec();
-    let document = Document::Assembly(Selection::Symbol(wanted.clone()));
+    let document = Document::Symbol(wanted.clone());
     assert_eq!(
         made,
         [Bookmark::new(
@@ -22167,8 +22155,8 @@ fn header_menu_harness() -> impl IntoElement {
 fn a_tabs_menu_bookmarks_its_document() {
     let symbols = fixture_symbols();
     let (first, second) = (
-        Document::Assembly(Selection::Symbol(symbols[0].clone())),
-        Document::Assembly(Selection::Symbol(symbols[1].clone())),
+        Document::Symbol(symbols[0].clone()),
+        Document::Symbol(symbols[1].clone()),
     );
     let (mut test, states) = TestingRunner::new(
         header_menu_harness,
@@ -22255,7 +22243,7 @@ fn chip_menu_labels<E: IntoElement + 'static>(
 #[test]
 fn a_tabs_menu_says_the_windows_keys_only_on_the_tab_on_screen() {
     let symbols = fixture_symbols();
-    let document = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let document = Document::Symbol(symbols[0].clone());
     let object = symbols[0].object.clone();
     let keys = [shortcuts::key!(CloseTab), shortcuts::key!(Bookmark)];
 
@@ -22303,7 +22291,7 @@ fn an_instruction_rows_menu_bookmarks_its_symbol() {
     let states = roots.states;
     let mut objects = states.objects;
     objects.set(vec![sum_to.object.clone()]);
-    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let symbol = Document::Symbol(sum_to.clone());
     open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
     settle(&mut test);
 
@@ -22348,7 +22336,7 @@ fn an_instruction_rows_menu_says_none_of_the_source_panes_keys() {
     let states = roots.states;
     let mut objects = states.objects;
     objects.set(vec![sum_to.object.clone()]);
-    let symbol = Document::Assembly(Selection::Symbol(sum_to.clone()));
+    let symbol = Document::Symbol(sum_to.clone());
     open_document(states.open, states.visits, symbol, Reach::NewTab);
     settle(&mut test);
 
@@ -23071,19 +23059,16 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
     // And the press still opens the symbol.
     test.release_cursor(right_of(&link));
     settle(&mut test);
-    let opened = Document::Assembly(Selection::Symbol(Symbol {
+    let opened = Document::Symbol(Symbol {
         object: fixture_symbols()[0].object.clone(),
         data: target,
-    }));
+    });
     assert!(
         states
             .open
             .active()
             .is_some_and(|active| match (&active, &opened) {
-                (
-                    Document::Assembly(Selection::Symbol(a)),
-                    Document::Assembly(Selection::Symbol(b)),
-                ) => a.data.name == b.data.name,
+                (Document::Symbol(a), Document::Symbol(b)) => a.data.name == b.data.name,
                 _ => false,
             }),
         "the link did not open its symbol"
@@ -24621,7 +24606,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     let documents: Vec<Document> = symbols
         .iter()
         .take(3)
-        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .map(|symbol| Document::Symbol(symbol.clone()))
         .collect();
 
     let (mut test, states) = TestingRunner::new(
@@ -24753,7 +24738,7 @@ fn a_link_followed_with_a_page_on_screen_lands_in_a_tab_of_its_own() {
     let documents: Vec<Document> = symbols
         .iter()
         .take(2)
-        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .map(|symbol| Document::Symbol(symbol.clone()))
         .collect();
 
     let (mut test, states) = TestingRunner::new(
@@ -24830,7 +24815,7 @@ fn a_sidebar_row_opens_the_temporal_tab_and_the_next_row_reuses_it() {
     let documents: Vec<Document> = symbols
         .iter()
         .take(3)
-        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .map(|symbol| Document::Symbol(symbol.clone()))
         .collect();
 
     let (mut test, states) = TestingRunner::new(
@@ -24921,7 +24906,7 @@ fn a_new_tab_opens_beside_the_one_on_screen() {
     let documents: Vec<Document> = symbols
         .iter()
         .take(3)
-        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .map(|symbol| Document::Symbol(symbol.clone()))
         .collect();
 
     let (mut test, states) = TestingRunner::new(
@@ -24996,7 +24981,7 @@ fn a_temporal_tab_is_promoted_by_ctrl_and_by_a_link_followed_in_it_and_not_by_ba
     let documents: Vec<Document> = symbols
         .iter()
         .take(3)
-        .map(|symbol| Document::Assembly(Selection::Symbol(symbol.clone())))
+        .map(|symbol| Document::Symbol(symbol.clone()))
         .collect();
     let source = Document::Source(Arc::from("/src/main.rs"));
 
@@ -25069,8 +25054,8 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
     let path = object.path.clone();
-    let symbol = Document::Assembly(Selection::Symbol(symbols[0].clone()));
-    let other = Document::Assembly(Selection::Symbol(symbols[1].clone()));
+    let symbol = Document::Symbol(symbols[0].clone());
+    let other = Document::Symbol(symbols[1].clone());
     let source = Document::Source(Arc::from("/src/main.rs"));
 
     let (mut test, states) = TestingRunner::new(
@@ -25187,7 +25172,7 @@ fn navigating_panes() -> (
         roots.doors.land,
         roots.doors,
     );
-    let document = Document::Assembly(Selection::Symbol(sum_to));
+    let document = Document::Symbol(sum_to);
     (
         test, states, marked, landing, doors, document, file, directory,
     )
@@ -25238,7 +25223,7 @@ fn runs_of(marked: State<Marks>) -> (Option<Picked>, Option<Picked>) {
 fn navigating_brings_back_each_panes_caret_and_selection() {
     let symbols = fixture_symbols();
     let (mut test, states, marked, _landing, _doors, sum_to, file, _directory) = navigating_panes();
-    let add = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let add = Document::Symbol(symbols[0].clone());
     let id = open_document(states.open, states.visits, sum_to.clone(), Reach::NewTab)
         .expect("a document panel");
     settle(&mut test);
@@ -25324,7 +25309,7 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
 fn a_landing_on_arrival_wins_over_the_kept_runs() {
     let symbols = fixture_symbols();
     let (mut test, states, marked, _landing, doors, sum_to, file, _directory) = navigating_panes();
-    let add = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let add = Document::Symbol(symbols[0].clone());
     let id = open_document(states.open, states.visits, sum_to.clone(), Reach::NewTab)
         .expect("a document panel");
     settle(&mut test);
@@ -25412,7 +25397,7 @@ fn a_standing_run_of_another_line_is_not_kept_over_the_driven_one() {
     let source = Document::Source(file.clone());
     open_document(states.open, states.visits, source.clone(), Reach::NewTab);
     settle(&mut test);
-    let symbol = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let symbol = Document::Symbol(symbols[0].clone());
     open_document(states.open, states.visits, symbol, Reach::NewTab);
     settle(&mut test);
 
@@ -25450,8 +25435,8 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
     let path = object.path.clone();
-    let symbol = Document::Assembly(Selection::Symbol(symbols[0].clone()));
-    let other = Document::Assembly(Selection::Symbol(symbols[1].clone()));
+    let symbol = Document::Symbol(symbols[0].clone());
+    let other = Document::Symbol(symbols[1].clone());
     let source = Document::Source(Arc::from("/src/main.rs"));
 
     let (mut test, states) = TestingRunner::new(
@@ -25617,10 +25602,10 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
     );
 
     // A symbol's tab beside it: the reading is reset, and the run goes with the place.
-    let symbol = Document::Assembly(Selection::Symbol(Symbol {
+    let symbol = Document::Symbol(Symbol {
         object: object.clone(),
         data: object.symbols_sorted[0].clone(),
-    }));
+    });
     open_document(states.open, states.visits, symbol, Reach::NewTab);
     settle(&mut test);
     settle(&mut test);
@@ -25638,7 +25623,7 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
     let guessed = reading_of(&object, &[]);
     let rows = rows_of(&guessed);
     let now = (0..rows.len())
-        .find(|&row| row_line(&rows, &guessed, row) == "0000000000000014 twice:")
+        .find(|&row| row_line(&rows, row) == "0000000000000014 twice:")
         .expect("the label has a row");
     assert_ne!(now, was, "the guess for add was exact, proving nothing");
     sections.set(guessed);
@@ -25775,7 +25760,7 @@ fn label_slant(test: &TestingRunner, text: &str) -> Option<FontSlant> {
 #[test]
 fn the_temporal_tabs_name_is_italic_and_a_double_press_makes_it_stay() {
     let symbols = fixture_symbols();
-    let document = Document::Assembly(Selection::Symbol(symbols[0].clone()));
+    let document = Document::Symbol(symbols[0].clone());
     let (mut test, states) = TestingRunner::new(
         header_menu_harness,
         (300., 100.).into(),
@@ -30815,7 +30800,7 @@ fn a_lists_pick_is_its_own_and_the_tab_is_only_the_fallback() {
         open_document(
             states.open,
             states.visits,
-            Document::Assembly(Selection::Symbol(symbol.clone())),
+            Document::Symbol(symbol.clone()),
             Reach::Preview,
         );
         settle(test);
@@ -31453,7 +31438,7 @@ fn the_arrows_move_the_pick_and_enter_opens_the_row() {
         .expect("the row is one of the fixture's symbols")
         .clone();
     assert!(
-        open == Document::Assembly(Selection::Symbol(wanted)),
+        open == Document::Symbol(wanted),
         "Enter opened something else"
     );
 }
@@ -31640,7 +31625,7 @@ fn a_pick_past_the_end_of_a_narrowed_list_answers_nothing() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture's symbol");
     assert!(
-        open == Document::Assembly(Selection::Symbol(wanted)),
+        open == Document::Symbol(wanted),
         "the arrows and Enter were over two different lists"
     );
 }
@@ -31827,7 +31812,7 @@ fn a_filter_box_hands_the_arrows_and_enter_to_its_list() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture's symbol");
     assert!(
-        open == Document::Assembly(Selection::Symbol(wanted)),
+        open == Document::Symbol(wanted),
         "Enter from the box opened something else"
     );
 }
@@ -33009,6 +32994,59 @@ fn nothing_is_said_of_a_query_the_worker_has_not_answered() {
     );
 }
 
+/// The walk that searches an object's code reads exactly what the pane draws. Both go
+/// through `stretch_texts`: the pane counts its rows out of the `StretchRows` it builds
+/// and the walk takes the lines it builds, so every line the pane draws is a line the
+/// walk holds at the address it is drawn at, and neither has a row the other has not.
+///
+/// Two fixtures, for the four kinds of text row between them: the object has the header,
+/// the labels and the instructions, and the DLL has gap rows as well -- the fixture's own
+/// functions leave no padding between them.
+#[test]
+fn the_walk_over_an_objects_code_holds_every_line_the_pane_draws() {
+    let mut gaps = 0;
+    for fixture in ["line_fixture.o", "line_fixture.dll"] {
+        let (_path, objects) = fixture_objects_of(fixture, 1);
+        let object = objects[0].clone();
+        let index = section::Flat::new(Arc::new(CodeListing::new(&object)));
+        let held: Vec<usize> = (0..index.count()).collect();
+        let reading = reading_of(&object, &held);
+        let rows = rows_of(&reading);
+
+        // Every row the pane draws text in, and where it draws it.
+        let mut drawn: Vec<(u64, String)> = (0..rows.len())
+            .filter_map(|row| {
+                let line = code_line(&rows, row).to_string();
+                (!line.is_empty())
+                    .then(|| rows.address_of(row))
+                    .flatten()
+                    .map(|address| (address, line))
+            })
+            .collect();
+        assert!(drawn.len() > 4, "{fixture} draws nothing to compare");
+        // A gap row wears the data directive for the unit its bytes divide into.
+        gaps += drawn
+            .iter()
+            .filter(|(_, line)| {
+                ["dq ", "dd ", "dw ", "db "]
+                    .iter()
+                    .any(|m| line.starts_with(m))
+            })
+            .count();
+
+        let mut walked: Vec<(u64, String)> = held
+            .iter()
+            .flat_map(|&flat| section_view::stretch_texts(&object, &index, flat))
+            .map(|(address, line)| (address, line.to_string()))
+            .collect();
+
+        drawn.sort();
+        walked.sort();
+        assert_eq!(drawn, walked, "{fixture}");
+    }
+    assert!(gaps > 0, "neither fixture drew a row of a gap's bytes");
+}
+
 /// What every kind of row in an object's code copies, both ways: whole rows (`row_line`,
 /// which Ctrl+C takes with nothing selected) and a character sweep (`code_line`). The two
 /// are the same text either side of the address column -- a row that draws an address
@@ -33020,12 +33058,7 @@ fn each_kind_of_row_of_an_objects_code_copies_the_same_text_both_ways() {
     let object = objects[0].clone();
     let reading = reading_of(&object, &[0, 1, 2]);
     let rows = rows_of(&reading);
-    let both = |row: usize| {
-        (
-            row_line(&rows, &reading, row),
-            code_line(&rows, &reading, row).to_string(),
-        )
-    };
+    let both = |row: usize| (row_line(&rows, row), code_line(&rows, row).to_string());
 
     // The header, with the address the section starts at.
     assert_eq!(
@@ -33051,7 +33084,7 @@ fn each_kind_of_row_of_an_objects_code_copies_the_same_text_both_ways() {
     // An instruction whose operand is a relocation's target, the name being what the row
     // draws in the placeholder's place.
     let call = (0..rows.len())
-        .find(|&row| code_line(&rows, &reading, row).to_string().contains("call"))
+        .find(|&row| code_line(&rows, row).to_string().contains("call"))
         .expect("the fixture calls");
     let at = rows
         .address_of(call)
@@ -33091,17 +33124,14 @@ fn each_kind_of_row_of_an_objects_code_copies_the_same_text_both_ways() {
     let gap = (0..gap_rows.len())
         .find(|&row| matches!(kind_at(&gap_rows, row), Some(Kind::Gap(_))))
         .expect("the stretch has a gap row");
-    let swept = code_line(&gap_rows, &gapped, gap).to_string();
+    let swept = code_line(&gap_rows, gap).to_string();
     // The data directive, the values, then the bytes as characters between bars.
     assert!(
         swept.starts_with("dq ") && swept.ends_with('|'),
         "{swept:?}"
     );
     let address = gap_rows.address_of(gap).expect("a gap row has an address");
-    assert_eq!(
-        row_line(&gap_rows, &gapped, gap),
-        format!("{address:016X} {swept}")
-    );
+    assert_eq!(row_line(&gap_rows, gap), format!("{address:016X} {swept}"));
 
     // And the rule every row of every listing follows: the address column, then what a
     // sweep would copy -- and nothing at all for a row that draws nothing.
@@ -33795,7 +33825,7 @@ fn the_other_pane_key_puts_the_following_pane_away_and_brings_it_back() {
     let (mut test, states) = mount_pane_chords(shown);
     let follows = root_key_states().follows;
 
-    let document = Document::Assembly(Selection::Symbol(sum_to));
+    let document = Document::Symbol(sum_to);
     open_document(states.open, states.visits, document, Reach::NewTab);
     settle(&mut test);
     // The two sides, each by something only it draws.

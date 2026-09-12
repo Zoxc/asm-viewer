@@ -3,7 +3,6 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use analysis::{Architecture, BinaryFormat, Object, ObjectData};
 
 use super::*;
-use crate::document::Selection;
 
 /// A distinct stop: two calls with the same `name` still produce different `Arc`s, and so
 /// entries that do not compare equal.
@@ -13,7 +12,7 @@ fn selection(name: &str) -> Stop {
 
 /// The document inside one of those.
 fn document(name: &str) -> Document {
-    Document::Assembly(Selection::Object(object(name)))
+    Document::Object(object(name))
 }
 
 /// A distinct object: two calls with the same `name` still produce different `Arc`s.
@@ -346,7 +345,7 @@ fn restoring_collapses_duplicates_before_capping() {
 /// [`Document::in_file`], which is `project.rs`'s to test.
 fn named(entry: &Document) -> &str {
     match entry {
-        Document::Assembly(Selection::Object(object)) => &object.name,
+        Document::Object(object) => &object.name,
         _ => unreachable!("the entries here are all objects"),
     }
 }

@@ -36,7 +36,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::bookmarks::Bookmark;
 use crate::cargo::Profile;
 use crate::docs::{DocId, Entry};
-use crate::document::{Document, Kind, Selection};
+use crate::document::{Document, Kind};
 use crate::history::{History, Stop};
 use crate::order::Order;
 use crate::positions::{Driven, Positions, Spot};
@@ -1009,12 +1009,12 @@ impl SavedDocument {
                 object_name: object.name.clone(),
                 shown: SavedShown::Code,
             },
-            Document::Assembly(Selection::Object(object)) => SavedDocument::Object {
+            Document::Object(object) => SavedDocument::Object {
                 path: object.path.clone(),
                 object_name: object.name.clone(),
                 shown: SavedShown::Symbols,
             },
-            Document::Assembly(Selection::Symbol(symbol)) => SavedDocument::Symbol {
+            Document::Symbol(symbol) => SavedDocument::Symbol {
                 path: symbol.object.path.clone(),
                 object_name: symbol.object.name.clone(),
                 address: symbol.data.address,
@@ -1096,7 +1096,7 @@ impl SavedDocument {
             SavedDocument::Object { shown, .. } => {
                 let object = loaded.object(self)?;
                 Some(match shown {
-                    SavedShown::Symbols => Document::Assembly(Selection::Object(object)),
+                    SavedShown::Symbols => Document::Object(object),
                     SavedShown::Code => Document::Code(object),
                 })
             }
@@ -1114,10 +1114,7 @@ impl SavedDocument {
                     loaded.changed(path),
                 )?
                 .clone();
-                Some(Document::Assembly(Selection::Symbol(Symbol {
-                    object,
-                    data,
-                })))
+                Some(Document::Symbol(Symbol { object, data }))
             }
         }
     }
@@ -1175,11 +1172,8 @@ impl SavedDocument {
     /// object and an object that is gone to nothing at all. What the *active document*
     /// wants, there being one of it and the app having to open somewhere.
     fn resolve_or_degrade(&self, loaded: &Loaded) -> Option<Document> {
-        self.resolve(loaded).or_else(|| {
-            loaded
-                .object(self)
-                .map(|object| Document::Assembly(Selection::Object(object)))
-        })
+        self.resolve(loaded)
+            .or_else(|| loaded.object(self).map(Document::Object))
     }
 }
 
