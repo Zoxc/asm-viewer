@@ -12,6 +12,12 @@
 //! [`show_page`] puts its chip in the bar and [`close_page`] takes it out, and neither
 //! owes anything else.
 //!
+//! The doors into a *place* are here too: [`open_source_place`] for a file and a line,
+//! [`show_in_code`] and [`open_as_symbol`] for an address in an object's code. Each builds
+//! a [`Landing`] and goes through [`land`]. A path a server answered with is named by the
+//! spelling an open tab already has for that file ([`spelling`]), so one file reached two
+//! ways is one tab.
+//!
 //! The window's tab keys are answered here too, and each of them is one of those doors
 //! and not a second way round it: [`step_tab`] and [`show_nth`] work out which tab the
 //! bar names and hand it to [`raise_tab`], and [`close_showing`] hands the tab on screen
@@ -554,6 +560,186 @@ pub(crate) fn land_on(doors: Doors, id: DocId, at: LinePos) {
         address: None,
     }));
     raise(open, id);
+}
+
+/// Open `path` as a source-driven tab on `line`, `columns` of it selected, and let the
+/// assembly side follow that line.
+///
+/// The landing is `land`'s, so this is the same arrival every other door makes: the source
+/// pane on the line, both panes owed the scroll, and the place on the tab's trail so Back
+/// returns to where the reader pressed. What `land` does not do is say which line the
+/// assembly side follows, so the drive is written here -- under the place the tab is
+/// **at**, which the landing has just made, and not under the file.
+///
+/// Every door into a *place* in a source file goes through this: the definition an answer
+/// named, a row of the references the Locations panel lists, a hit the Search panel found,
+/// and the companion a source row's menu offers. A path with no line to land on -- a Files
+/// row, a finder row -- is [`open_source_file`]'s instead.
+pub(crate) fn open_source_place(
+    doors: Doors,
+    places: Places,
+    path: &Path,
+    line: u32,
+    columns: Option<Range<usize>>,
+    reach: Reach,
+) {
+    let open = doors.open;
+    let file = spelling(open, path);
+    let document = Document::Source(file.clone());
+    let id = land(
+        doors,
+        Landing {
+            tab: document.clone(),
+            at: Some(Landed {
+                pos: LinePos {
+                    file: file.clone(),
+                    line,
+                },
+                columns,
+            }),
+            // A file and a line: the compiler named no instruction here, and which symbol
+            // the line is in is the assembly side's own question.
+            address: None,
+        },
+        reach,
+    );
+    let Some(id) = id else {
+        return;
+    };
+    // Bound to a `let` of its own, so the table's guard is gone before the write.
+    let entry = place_at(&open.docs.peek(), id, &document);
+    let mut driven = places.driven;
+    driven.write().remember((id, entry), line);
+}
+
+/// What to name the document opening `path`: the spelling an open source tab already has
+/// for that file, and `path`'s own where no tab has one.
+///
+/// A [`Document::Source`] is compared as text and never canonicalised, so one file reached
+/// two ways is one tab only where both ways spell it alike (`src/project.rs`). The server
+/// answers with canonical absolute paths; the app's own spelling is a project directory as
+/// the reader typed it joined with a Files row, or whatever the debug info said. So a
+/// directory typed with a `..`, a `./` or through a symlink -- and on Windows every answer,
+/// whose separators are the URI's -- would open a second tab of the file the reader is
+/// already reading, splitting its trail, its positions and its driven line across the two.
+fn spelling(open: Open, path: &Path) -> Arc<str> {
+    // `path` is the same path every time round, so it is reduced once for the whole walk
+    // and not once per tab. What is left is one reduction per open source tab, on the UI
+    // thread and a filesystem call on Unix. There are a handful of them and this is a
+    // press behind a round trip to the server, so it costs what following a link already
+    // costs.
+    let real = reduced(path);
+    let held = {
+        let docs = open.docs.peek();
+        open.ids()
+            .into_iter()
+            .filter_map(|id| match docs.get(id) {
+                Some(Document::Source(file)) => Some(file.clone()),
+                _ => None,
+            })
+            .find(|file| same_file(Path::new(&**file), real.as_deref(), path))
+    };
+    held.unwrap_or_else(|| Arc::from(path.to_string_lossy().as_ref()))
+}
+
+/// Whether `one` names the file `path` does, `real` being `path` reduced or [`None`] where
+/// it will not reduce.
+///
+/// Spelled alike is the answer without asking. Otherwise both have to reduce to one path,
+/// so two that will not reduce are the same only when they are spelled alike.
+///
+/// The reduction of `path` is the caller's and not taken here: it is one path against
+/// every open tab, and taking it per tab is the same call over again.
+fn same_file(one: &Path, real: Option<&Path>, path: &Path) -> bool {
+    one == path || matches!((reduced(one), real), (Some(one), Some(real)) if one == real)
+}
+
+/// `path` reduced, so that two spellings of one file come out alike; [`None`] where it will
+/// not reduce. Not the same call on both platforms.
+///
+/// On Unix it is `fs::canonicalize`: a project directory reached through a symlink is the
+/// case this walk is for, and only the filesystem resolves one. That is the call the walk
+/// costs, one per open source tab.
+///
+/// On Windows it is `path::absolute`, which is `GetFullPathNameW`: `.` and `..` collapsed
+/// by spelling, the prefix left plain, and nothing asked of the filesystem at all.
+/// `fs::canonicalize` there answers verbatim (`\\?\C:\work\app`), a spelling nothing else
+/// in the app uses -- not the debug info's, not a project directory joined with a Files
+/// row, and not what a `file:` URI comes back as. `Path` reads that prefix as a different
+/// component, so reducing to it would spell one file two ways, which is the one thing this
+/// walk exists to prevent.
+fn reduced(path: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let full = std::path::absolute(path);
+    #[cfg(not(windows))]
+    let full = path.canonicalize();
+
+    full.ok()
+}
+
+/// Show the instruction at `address` -- placed, in `object`'s code -- among its
+/// neighbours: the object's code tab, opened the way `reach` says on that address, with
+/// the caret on the instruction's row and the line the instruction was compiled from
+/// picked out in the source pane where it has one.
+///
+/// `reach` is the press's to say: a menu item asks for a tab of its own, a bare address
+/// pressed in a symbol's listing for the code in place and, with Ctrl, for a tab of its
+/// own (`Reach::inside`). Where the listing is that code already the reach never comes up:
+/// `land` finds the document on top and moves inside it.
+///
+/// The place is written in the same handler as the open and before any render, so the
+/// pane's first run finds it; it comes *after* the open only because the entry it is kept
+/// under names the tab, and a new tab has no id until it is opened. When the code tab is
+/// already on top the write is what moves the view, `use_kept_place` reading the map for
+/// exactly this. The line and the instruction go through `land`, which knows whether
+/// the tab is on top; the caret is planted by the pane once it has rows, on the row at
+/// or below the address, and moved onto the instruction itself once its stretch decodes.
+pub(crate) fn show_in_code(
+    doors: Doors,
+    places: Places,
+    object: Arc<Object>,
+    address: u64,
+    at: Option<LinePos>,
+    reach: Reach,
+) {
+    let code = Document::Code(object.clone());
+    // The stop `land` makes of the landing below, kept for the place written down after
+    // it. Moving inside the listing the reader is already in is put on the trail there,
+    // so Back comes back to the instruction that was followed and not to where the jump
+    // landed, and the place left keeps its own rows and runs, being an entry of its own.
+    let stop = Stop::at(object, address);
+    let id = land(
+        doors,
+        Landing {
+            tab: code.clone(),
+            at: at.map(Landed::line),
+            address: Some(address),
+        },
+        reach,
+    );
+    if let Some(id) = id {
+        let mut code_at = places.code_at;
+        code_at
+            .write()
+            .remember((id, stop), Spot { address, rows: 0 });
+    }
+}
+
+/// Open `symbol`'s own tab from a row of it read among its neighbours, the caret on that
+/// row's instruction -- `address` is the symbol's own, the space its listing draws -- and
+/// landing on the line the row was compiled from where it has one: `show_in_code`'s door
+/// the other way, and a tab of its own likewise.
+pub(crate) fn open_as_symbol(doors: Doors, symbol: Symbol, address: u64, at: Option<LinePos>) {
+    let tab = Document::Symbol(symbol);
+    land(
+        doors,
+        Landing {
+            tab,
+            at: at.map(Landed::line),
+            address: Some(address),
+        },
+        Reach::NewTab,
+    );
 }
 
 /// A step along the trail of the tab on screen: the mouse's back and forward buttons, and

@@ -176,7 +176,7 @@ assembly side and nine on the source one. A handle may sit in more than one bund
 runs `Marked` hands the panes.
 
 **The bar says which project is open, and the controls beside the name are not one control**
-(`ProjectChip`, `src/ui/no_project.rs`). A project the reader gave a place needs only to be
+(`ProjectChip`, `src/ui/project_view.rs`). A project the reader gave a place needs only to be
 let go of, so it has a close; one the app is keeping has nowhere to be let go *to*, so it has
 Save and Delete named outright rather than a x that would mean one of them. Each is a
 component holding a `Doing` and not a handler, for `TabClose`'s reason: a `Component` is

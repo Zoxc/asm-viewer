@@ -1,5 +1,5 @@
-//! The menus a right-click opens over a tab and over a file row, and the two items more
-//! than one menu is built of.
+//! The menus a right-click opens over a tab, over a file row and over a sidebar row, and
+//! the two items more than one menu is built of.
 //!
 //! A menu is **built per press**, closing over whatever was under the pointer, and its
 //! states come in as arguments because it is made in an event handler, where no hook may
@@ -143,8 +143,26 @@ pub(crate) fn bookmark_item(
         .child(menu_label(text, key))
 }
 
+/// The menu a Symbols or History row opens on a right-click: [`bookmark_item`] and
+/// nothing else.
+///
+/// No key beside it: Ctrl+D is about the tab on screen and this row is not it.
+pub(crate) fn bookmark_menu(
+    bookmarked: State<Bookmarks>,
+    objects: State<Vec<Arc<Object>>>,
+    document: Document,
+) -> Menu {
+    Menu::new().child(bookmark_item(
+        bookmarked,
+        objects,
+        document,
+        "Add bookmark",
+        None,
+    ))
+}
+
 /// The write every bookmark gesture makes: a bookmark of `document` added, or the one
-/// pointing at it taken off. The item above presses it and so does the window's key
+/// pointing at it taken off. [`bookmark_item`] presses it and so does the window's key
 /// (`Chord::Bookmark`), so the two cannot come to mean different things.
 ///
 /// Which of the two happens is [`Bookmarks::toggle`]'s own question, asked by resolving

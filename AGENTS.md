@@ -244,7 +244,8 @@ command.
   are given too. A context holding one state is one `context(Wrapper, value)` line there; a
   bundle or a memo is a `provide`.
 - `src/ui/metrics.rs` — every measurement no component owns, and the fonts they follow.
-- `src/ui/palette.rs` — every colour, the theme it is resolved from, and the compositing rules.
+- `src/ui/palette.rs` — every colour, the appearance the window is drawn in, the stored
+  choice it is resolved from, and the compositing rules.
 - `src/ui/state.rs` — what the root provides and no one mechanism owns, and the bundles the
   whole app is passed around in. A context lives with the mechanism it belongs to (`Marked` in
   `marks.rs`, `Doors` in `focus.rs`, `Loading` in `loading.rs`, the `Pad*` family in `pad.rs`),
@@ -259,7 +260,7 @@ command.
   `Doors` (what every door out of one place into another is given), what each tab keeps of
   where it was left and of its runs, and the effects that spend a landing.
 - `src/ui/follow.rs` — following a name in the source to what it names: whom the question is
-  put to, the question itself, and the place its answer opens, with the caret it lands on.
+  put to, the question itself, and where its answer opens, with the caret it lands on.
 - `src/ui/linking.rs` — which names in the file the Source pane is showing are links: what
   it has asked the server, what came back, and why the asking waits until the server is
   ready; and which files the server has been told the reader has open, which is what makes
@@ -303,13 +304,16 @@ command.
   settings said, the worker that talks to it, and the control in the top bar that starts and
   stops it.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means: the
-  doors in, the closers, and a step along a tab's trail.
+  doors in, the three into a *place* among them (a file and a line, an address in an
+  object's code, a symbol of its own); which spelling of a path a source tab is named by;
+  the closers, and a step along a tab's trail.
 - `src/ui/entries.rs` — what a document is called and drawn as wherever a list names one:
   the short spelling and the whole one, the glyph, and the key a row is drawn under.
 - `src/ui/loading.rs` — reading binaries onto the objects list: the one path anything is
   ever added by, the one thread, the batches, and which load an answer belongs to.
-- `src/ui/menus.rs` — the menus a right-click opens over a tab and over a file row, and the
-  two items more than one menu is built of. Each is built per press, in an event handler.
+- `src/ui/menus.rs` — the menus a right-click opens over a tab, over a file row and over a
+  sidebar row, and the two items more than one menu is built of. Each is built per press,
+  in an event handler.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, and the rows each is built of.
 - `src/ui/building.rs` — building the project's own workspace: what is held about it, the one
   worker thread, which binaries a finished build replaces, and which of the files its
@@ -340,7 +344,9 @@ command.
   tab, the body under it all, and the table saying what each page is drawn as.
 - `src/ui/project_view.rs` — which project is open: the project's own fields, its binaries,
   the cargo build, the language server and the other projects, five sections each redrawn on
-  its own; and `OpenProject`, the project as the view's boxes hold it.
+  its own; the chip in the top bar that opens the page, with the buttons that close, save
+  and delete the project; the window that asks before a delete and the one that says a
+  project would not open; and `OpenProject`, the project as the view's boxes hold it.
 - `src/ui/session.rs` — the session as the UI keeps it in step with `project.rs`: what is
   saved when, what a restore fills in, and what a switch empties; and `settings.toml` wired
   to the appearance and the fonts. Every hook `app()` calls that draws nothing.

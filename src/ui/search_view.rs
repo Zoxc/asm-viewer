@@ -177,20 +177,6 @@ async fn take_hits(
     }
 }
 
-/// A line and the two colours it is drawn in: the run before the cut in whatever the row
-/// inherits, and the rest in `base`. What marked it is not here at all -- a match is the
-/// paragraph's own wash now (`marked`, `ui/parts.rs`), not a colour on the characters --
-/// so this is only for a row that draws part of its text dimmed: the file finder's, whose
-/// directories are a step back from the name.
-pub(crate) fn dimmed_after(text: &str, at: usize, base: Color) -> Vec<Span<'static>> {
-    let (head, tail) = text.split_at(at.min(text.len()));
-    let mut spans = vec![Span::new(head.to_owned())];
-    if !tail.is_empty() {
-        spans.push(Span::new(tail.to_owned()).color(base));
-    }
-    spans
-}
-
 /// The Search view: a box over every hit the last search found.
 #[derive(PartialEq)]
 pub(crate) struct SearchPanel;

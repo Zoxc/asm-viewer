@@ -984,6 +984,17 @@ fn row_line(
     )
 }
 
+/// A line in two colours: the run before `at` in whatever the row inherits, the rest in
+/// `base` -- the directories after the name, a step back from it.
+fn dimmed_after(text: &str, at: usize, base: Color) -> Vec<Span<'static>> {
+    let (head, tail) = text.split_at(at.min(text.len()));
+    let mut spans = vec![Span::new(head.to_owned())];
+    if !tail.is_empty() {
+        spans.push(Span::new(tail.to_owned()).color(base));
+    }
+    spans
+}
+
 /// What sits between the name and the directories above it.
 const GAP: &str = "  ";
 

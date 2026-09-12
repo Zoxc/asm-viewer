@@ -1,5 +1,6 @@
-//! Which project is open: the pane that says so, what the reader can say about it, and
-//! the other projects they can go to.
+//! Which project is open: the pane that says so, the chip in the top bar that opens it,
+//! what the reader can say about the project, the window that asks before a delete and the
+//! one that says a project would not open, and the other projects they can go to.
 
 use super::*;
 
@@ -795,5 +796,199 @@ impl Component for ProjectTab {
                 .child(RecentsSection),
         )
         .into_element()
+    }
+}
+
+/// What one of the project's buttons in the bar does.
+///
+/// An enum and not a handler, for [`TabClose`]'s reason: a `Component` is `PartialEq` and a
+/// closure is not, so a button holding one would re-render on every render of the bar.
+#[derive(Clone, Copy, PartialEq)]
+enum Doing {
+    /// Let the project go, leaving the app with none. It is left where it is.
+    Close,
+    /// Put it in a file, which is what an unsaved project has instead of a close.
+    Save,
+    /// Take it away. Asks first.
+    Delete,
+}
+
+/// One of them, drawn the way the bar's other controls are.
+#[derive(Clone, Copy, PartialEq)]
+struct ChipButton {
+    doing: Doing,
+}
+
+impl Component for ChipButton {
+    fn render(&self) -> impl IntoElement {
+        let hovering = use_state(|| false);
+        let states = use_project_states();
+        let mut deleting = use_consume::<Deleting>().0;
+        let doing = self.doing;
+
+        let (tooltip, icon) = match doing {
+            Doing::Close => ("Close the project", ("x", lucide::x())),
+            Doing::Save => ("Save the project to a file", ("save", lucide::save())),
+            Doing::Delete => ("Delete the project", ("trash-2", lucide::trash_2())),
+        };
+
+        extra_tooltip(
+            tooltip.to_owned(),
+            bar_button(hovering, true, Glow::No)
+                .on_press(move |_| match doing {
+                    Doing::Close => close_project(states),
+                    Doing::Save => ask_where_to_save(states, project::Put::Move),
+                    Doing::Delete => {
+                        let name = states.proj.peek().file.as_deref().map(project::label);
+                        deleting.set(name);
+                    }
+                })
+                .child(glyph(icon)),
+        )
+    }
+}
+
+/// The open project, in the top bar beside the menu: what it is called, and what can be
+/// done with it.
+///
+/// **A close button, or Save and Delete.** A project the reader gave a place needs only to
+/// be let go of; one the app is keeping has nowhere to be let go *to*, so the two things it
+/// can have done to it are named outright rather than hidden behind a x that would mean one
+/// of them. Delete asks first ([`DeleteProjectPopup`]); Save does not, having nothing to
+/// undo, and it is a move rather than a copy -- there is no second project afterwards.
+///
+/// Pressing the name shows the Project view, which is where the rest of it is. Hovering it
+/// says where the project is kept, which is the one thing the name leaves out.
+#[derive(PartialEq)]
+pub(crate) struct ProjectChip;
+
+impl Component for ProjectChip {
+    fn render(&self) -> impl IntoElement {
+        let hovering = use_state(|| false);
+        let proj = use_consume::<Proj>().0;
+        let open = use_open();
+        // Read and not peeked: the bar follows the project being saved, closed or opened.
+        let file = proj.read().file.clone();
+        let Some(file) = file else {
+            return rect().into_element();
+        };
+        let unsaved = project::unsaved(&file);
+
+        rect()
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .spacing(2.0)
+            .child(extra_tooltip(
+                file.to_string_lossy().into_owned(),
+                bar_pill(hovering, true, Glow::No)
+                    .on_press(move |_| show_page(open, Page::Project))
+                    .child(label().text(elide(&project::label(&file))).max_lines(1)),
+            ))
+            .maybe(!unsaved, |chip| {
+                chip.child(ChipButton {
+                    doing: Doing::Close,
+                })
+            })
+            .maybe(unsaved, |chip| {
+                chip.child(ChipButton { doing: Doing::Save })
+                    .child(ChipButton {
+                        doing: Doing::Delete,
+                    })
+            })
+            .into_element()
+    }
+}
+
+/// The window that says a project would not open. Drawn as nothing at all until there is
+/// something to say, the way `RescuedPopup` is.
+#[derive(PartialEq)]
+pub(crate) struct UnopenedPopup {
+    pub(crate) naming: Option<project::Failure>,
+}
+
+impl Component for UnopenedPopup {
+    fn render(&self) -> impl IntoElement {
+        let mut unopened = use_consume::<Unopened>().0;
+
+        notice(move |_| unopened.set(None)).map(self.naming.clone(), |popup, failure| {
+            popup
+                .child(
+                    notice_body()
+                        .child(label().text("That project would not open".to_owned()))
+                        // What went wrong, in the reason's own words. A paragraph and not
+                        // a label: a parser's message is as long as it is.
+                        .child(
+                            paragraph()
+                                .color(palette().address_fg)
+                                .span(failure.reason.to_string()),
+                        )
+                        // Said only where there is a file to have left alone. The app
+                        // never moves a project of the reader's aside, and a window about
+                        // a file that will not parse is the one place that is worth
+                        // saying.
+                        .maybe_child(
+                            (failure.reason != project::Reason::Missing).then(|| {
+                                notice_line("It has been left exactly as it is.".to_owned())
+                            }),
+                        )
+                        .child(notice_path(failure.path.to_string_lossy().into_owned())),
+                )
+                .child(
+                    PopupButtons::new().child(
+                        Button::new()
+                            .filled()
+                            .on_press(move |_| unopened.set(None))
+                            .child("Close"),
+                    ),
+                )
+        })
+    }
+}
+
+/// The window the app asks before deleting a project.
+///
+/// Nothing is deleted until it is answered: the control in the bar sets [`Deleting`] and
+/// this is what acts. `on_close_request` is the "no" for free -- Escape and a press outside
+/// -- and an empty `Popup` draws nothing at all, so with nothing to ask this lays out as
+/// nothing.
+#[derive(PartialEq)]
+pub(crate) struct DeleteProjectPopup {
+    pub(crate) asking: Option<String>,
+}
+
+impl Component for DeleteProjectPopup {
+    fn render(&self) -> impl IntoElement {
+        let states = use_project_states();
+        let mut deleting = use_consume::<Deleting>().0;
+
+        notice(move |_| deleting.set(None)).map(self.asking.clone(), |popup, name| {
+            popup
+                .child(
+                    notice_body()
+                        .child(label().text(format!("Delete {name}?")))
+                        .child(notice_line(
+                            "It is saved nowhere else: its binaries and its bookmarks go \
+                             with it."
+                                .to_owned(),
+                        )),
+                )
+                .child(
+                    PopupButtons::new()
+                        .child(
+                            Button::new()
+                                .on_press(move |_| deleting.set(None))
+                                .child("Cancel"),
+                        )
+                        .child(
+                            Button::new()
+                                .filled()
+                                .on_press(move |_| {
+                                    deleting.set(None);
+                                    delete_project(states);
+                                })
+                                .child("Delete"),
+                        ),
+                )
+        })
     }
 }

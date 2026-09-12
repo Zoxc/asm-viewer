@@ -92,24 +92,6 @@ fn remove_menu(bookmarked: State<Bookmarks>, index: usize) -> Menu {
     )
 }
 
-/// The menu a Symbols or History row opens on a right-click: [`bookmark_item`] and
-/// nothing else.
-///
-/// No key beside it: Ctrl+D is about the tab on screen and this row is not it.
-pub(crate) fn bookmark_menu(
-    bookmarked: State<Bookmarks>,
-    objects: State<Vec<Arc<Object>>>,
-    document: Document,
-) -> Menu {
-    Menu::new().child(bookmark_item(
-        bookmarked,
-        objects,
-        document,
-        "Add bookmark",
-        None,
-    ))
-}
-
 /// What the panel builds a row from: where the bookmark is in the reader's own list,
 /// which its menu removes by, the bookmark, and the place it resolves to now.
 type Listed = (usize, Bookmark, Option<Document>);

@@ -324,6 +324,13 @@ impl Palette {
     }
 }
 
+/// A resolved theme: what the palette is actually asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Appearance {
+    Light,
+    Dark,
+}
+
 thread_local! {
     /// Which of the two palettes the window is currently drawn in.
     ///

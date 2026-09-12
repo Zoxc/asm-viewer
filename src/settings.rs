@@ -82,20 +82,13 @@ pub fn points(value: f32) -> Option<f32> {
     (value.is_finite() && value > 0.0 && value <= MAX_POINTS).then_some(value)
 }
 
-/// Which theme the user asked for. Resolving [`Theme::Desktop`] to an [`Appearance`] is
+/// Which theme the user asked for. Resolving [`Theme::Desktop`] to an `Appearance` is
 /// `ui/palette.rs`'s job: this module holds no window and stays framework-free.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Theme {
     #[default]
     Desktop,
-    Light,
-    Dark,
-}
-
-/// A resolved theme: what the palette is actually asked for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Appearance {
     Light,
     Dark,
 }

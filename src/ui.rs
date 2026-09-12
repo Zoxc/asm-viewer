@@ -62,7 +62,7 @@ pub(crate) use crate::scratchpad::{
     RowId, Scratchpad, SOURCE_FILE,
 };
 pub(crate) use crate::section;
-pub(crate) use crate::settings::{Appearance, FontSetting, Settings, Theme as ThemeChoice};
+pub(crate) use crate::settings::{FontSetting, Settings, Theme as ThemeChoice};
 pub(crate) use crate::shared::{same_arc, ByPtr, Shared};
 pub(crate) use crate::shortcuts;
 pub(crate) use crate::source::{self, showable, SourceFile};
