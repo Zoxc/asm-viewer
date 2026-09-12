@@ -823,6 +823,7 @@ pub(crate) fn use_analysis_with(
     mut analysis: State<Analyzed>,
     located: State<Located>,
     coded: State<Coded>,
+    showing: State<Option<Arc<str>>>,
     reading: State<Reading>,
     window: State<Option<CodeAsk>>,
     work: impl Fn(Question) -> Answer + Send + 'static,
@@ -861,7 +862,10 @@ pub(crate) fn use_analysis_with(
                 write_if(reading, |next| next.take(&ask, code, decoded));
             }
             Answer::Marked { file, lines, over } => {
-                write_if(coded, |next| next.take(file, lines, over));
+                // The file the pane is showing *now*, which is what an answer is kept
+                // for -- the listing's rule, and `Coded::take`'s to apply.
+                let showing = showing.peek().clone();
+                write_if(coded, |next| next.take(showing.as_ref(), file, lines, over));
             }
             Answer::Located { query, symbols } => {
                 let open = objects.peek().clone();
@@ -956,12 +960,14 @@ pub(crate) fn use_analysis_with(
     // a gutter that was drawn before its binary had been read.
     use_side_effect(move || {
         let open = objects.read().clone();
-        // Read and not peeked: the pane writing the file it moved to is the other half
-        // of what wakes this. Bound before the send, the guard being a read.
-        let pending = coded.read().pending(&open).cloned();
-        let Some(file) = pending else {
+        // Read and not peeked, both: the pane moving to another file is the other half
+        // of what wakes this. Bound before the send, the guards being reads.
+        let Some(file) = showing.read().clone() else {
             return;
         };
+        if !coded.read().pending(&file, &open) {
+            return;
+        }
         requests_for_marks.send(Question::Marks {
             file,
             objects: open,

@@ -303,13 +303,22 @@ a pane that draws what it has meanwhile. **A worker of its own and not the analy
 seconds of DWARF into (`agents/Worker.md`); which is also what has the pane's three questions -- the
 text, the gutter's marks and the links -- asked at once rather than each behind the last.
 
+**The pane's three questions are one fact.** Which file it is showing is written to `ShowingFile`
+(`src/ui/source_view.rs`) and nowhere else; the reader's effect, the marks' and the links' each read
+it beside the state their own answer lands in. It used to be a `wanted` field on each of those three
+states, written in one pass by an accessor closure. Three copies of one fact agreed only while that
+one writer kept them in step; a move between files was three notifications for one move; and one of
+them went into `Sourced`, which the pane itself reads for what to draw, so asking woke the scope
+waiting on the answer. A fourth reader of which file is up now reads the state instead of adding a
+field.
+
 **The answer is the cache and the state is the knock on the door.** The parse lands in
-`HIGHLIGHTED`, misses included, and `Sourced` carries the file the pane wants and a count of the
-answers, nothing being re-rendered for a write to a `static`. So a file the reader has seen before
-is found as the pane renders, with no question asked and no frame lost, and only a file that is new
-to the app is waited for. What the pane draws while it waits is its own background and no message:
-`Drawing::Waiting`, which is not `Drawing::Missing` -- "not read yet" and "not there" are different
-answers and only the second is a sentence. The cost is a door into a file the app has never read,
+`HIGHLIGHTED`, misses included, and `Sourced` carries a count of the answers, nothing being
+re-rendered for a write to a `static`. So a file the reader has seen before is found as the pane
+renders, with no question asked and no frame lost, and only a file that is new to the app is waited
+for. What the pane draws while it waits is its own background and no message: `Drawing::Waiting`,
+which is not `Drawing::Missing` -- "not read yet" and "not there" are different answers and only
+the second is a sentence. The cost is a door into a file the app has never read,
 which draws nothing for as long as the read takes and then the file from its top before the landing
 moves it, both of them passes the door into a file already in hand does not have (`notes/Goals.md`,
 under Navigation).

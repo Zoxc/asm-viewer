@@ -207,21 +207,21 @@ would otherwise leave the panel looking for ever.
 `ui/source_view.rs`). The question is a file and the answer is the lines of it any open object has
 code from — `Object::lines_from_source`, which reads the same `SourceIndex` a locate does and hands
 back bare line numbers rather than symbols. It is a whole file at a time and not a query per row,
-and the Source pane asks it by writing the file it is drawing into `Coded::wanted`, the way the
+and the Source pane asks it by writing the file it is drawing into `ShowingFile`, the way the
 section view asks for a window by writing it into `Window`: a view cannot reach the request channel,
 so a state it writes and an effect here reads is how a pane asks. Worked **last** of the four, being
 the answer whose absence costs the reader least while they wait. It is judged on landing by the
-file the pane is showing *now* (`Coded::take`), the listing's comparison rule once more. What keeps it true is
-different from the locate's, though: a set of line numbers has nothing in it to sweep for a binary
-that has closed, and a state holding the objects to notice would be the state stopping them from
-closing — so `Coded` records which objects the answer was worked out over, by pointer
+file the pane is showing *now*, handed to `Coded::take` from `ShowingFile`, the listing's comparison
+rule once more. What keeps it true is different from the locate's, though: a set of line numbers
+has nothing in it to sweep for a binary that has closed, and a state holding the objects to notice
+would be the state stopping them from closing — so `Coded` records which objects the answer was worked out over, by pointer
 (`object_ids`), and the effect asks again whenever those differ from what is open. A load finishing
 is such a difference, which is what puts marks in a gutter drawn before its binary had been read.
 
 **The source reader is a second worker, and deliberately not this one** (`ui/highlight.rs`). The
 file the Source pane is showing is read off disk and parsed for its spans on a thread of its own,
 fed by the pane the way the marks question is: the pane writes the file it is drawing into
-`Sourced::wanted` and an effect turns that into the question. It is not a fifth kind of question
+`ShowingFile` and an effect turns that into the question. It is not a fifth kind of question
 here because of what this worker's queue holds: a listing is seconds of DWARF, and a file queued
 behind one would arrive long after the tab it belongs to -- where the two questions a source
 document opens with, its text and which of its lines have code, are asked at the same moment and

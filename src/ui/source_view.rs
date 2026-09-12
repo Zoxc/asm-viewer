@@ -677,7 +677,7 @@ impl Component for SourceList {
         let pairs = pairs.read().clone();
         // The gutter's marks: which lines of this file produced code at all, whether
         // anything is picked out and whether or not a listing is up. Asking is the pane's
-        // ([`asks_for`]); this reads whatever has been answered.
+        // ([`ShowingFile`]); this reads whatever has been answered.
         let coded = use_consume::<Coding>().0;
         let compiled = coded
             .read()
@@ -704,7 +704,7 @@ impl Component for SourceList {
         // pane's to guess. Nothing until it has said so -- so no link is ever drawn that
         // could not be followed, where a pane that lit them as soon as a server *started*
         // drew them through the minute it spends reading the project. Asked for by the
-        // pane ([`asks_for`]) and read here through `try_consume_context`, a pane mounted
+        // pane ([`ShowingFile`]) and read here through `try_consume_context`, a pane mounted
         // without one having no links; the answer is an `Arc` inside, so carrying it to
         // the rows is a pointer compare.
         let links = try_consume_context::<Linking>()
@@ -1027,33 +1027,26 @@ thread_local! {
     static PAIRINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Write `file` into the `wanted` of one of the three states a pane asks through, and
-/// only when it is not what is already being asked for: a pane redrawn for any of the
-/// dozen other reasons must not wake a worker.
+/// The file the Source pane is showing, shared through context, and nothing else: the one
+/// fact the reader, the gutter's marks and the links are each asked about.
 ///
-/// `None` is written too, so that a pane which has stopped drawing a file stops asking
-/// about one.
-fn asks_for<T: Clone + PartialEq + 'static>(
-    mut state: State<T>,
-    wanted: impl Fn(&mut T) -> &mut Option<Arc<str>>,
-    file: &Option<Arc<str>>,
-) {
-    let mut next = state.peek().clone();
-    if wanted(&mut next) == file {
-        return;
-    }
-    *wanted(&mut next) = file.clone();
-    state.set(next);
-}
+/// **Written by the pane and read beside each of the three states an answer lands in.**
+/// One file, because one is drawn; a pane that moves to another asks again, and `None`
+/// where it draws none, so a pane that has stopped drawing a file stops asking about one.
+/// Its own state rather than a field of each: three copies of one fact agree only while
+/// one writer keeps them in step, and each write woke everything reading the state it
+/// went into -- the pane itself among them, which reads [`Sourced`] for what to draw.
+#[derive(Clone, Copy)]
+pub(crate) struct ShowingFile(pub(crate) State<Option<Arc<str>>>);
 
-/// The gutter's marks, shared through context: the Source pane writes the file it is
-/// showing and the analysis worker writes the lines back.
+/// The gutter's marks, shared through context: the analysis worker writes the lines of
+/// the file [`ShowingFile`] names.
 #[derive(Clone, Copy)]
 pub(crate) struct Coding(pub(crate) State<Coded>);
 
 /// The lines of one source file the open objects have code for: what the gutter marks,
-/// and the answer to a [`Question::Marks`] the pane asks by writing the file it is
-/// showing into [`Coded::wanted`].
+/// and the answer to the [`Question::Marks`] asked for whatever file [`ShowingFile`]
+/// names.
 ///
 /// **Every line that produced code, not the drawn symbol's own.** A source-driven tab has
 /// no drawn symbol until a line is clicked, so a mark bounded by one would be a gutter
@@ -1062,12 +1055,9 @@ pub(crate) struct Coding(pub(crate) State<Coded>);
 /// something. Which symbol is the pair's question and the Locations panel's.
 ///
 /// There is no `pending` field, for [`Located`]'s reason: a file is being looked for
-/// exactly while it is wanted and the answer is not about it.
+/// exactly while it is showing and the answer is not about it.
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Coded {
-    /// The file the Source pane is showing, written by it. One file, because one is
-    /// drawn; a pane that moves to another asks again.
-    pub(crate) wanted: Option<Arc<str>>,
     /// The file the lines below are of, and the lines. An empty set is an answer.
     pub(crate) found: Option<(Arc<str>, Arc<HashSet<u32>>)>,
     /// The objects the answer was worked out over, by pointer, which is what identity is
@@ -1086,30 +1076,27 @@ pub(crate) fn object_ids(open: &[Arc<Object>]) -> Vec<usize> {
 }
 
 impl Coded {
-    /// The file a question is owed for: one is wanted, and the answer is about another
-    /// file or was worked out over other objects than `open`.
-    pub(crate) fn pending(&self, open: &[Arc<Object>]) -> Option<&Arc<str>> {
-        let wanted = self.wanted.as_ref()?;
-        match &self.found {
-            Some((file, _)) if file == wanted && self.over == object_ids(open) => None,
-            _ => Some(wanted),
-        }
+    /// Whether a question is owed for `showing`: the answer is about another file, or was
+    /// worked out over other objects than `open`.
+    pub(crate) fn pending(&self, showing: &Arc<str>, open: &[Arc<Object>]) -> bool {
+        !matches!(&self.found, Some((file, _)) if file == showing && self.over == object_ids(open))
     }
 
     /// Take `lines` as the answer about `file`, worked out `over` those objects. Whether
     /// anything changed, so the caller writes only then ([`write_if`]).
     ///
-    /// The locate's rule, against the file the pane is showing *now*: a reader who moved
-    /// on while the index built is not given the file they left. There is no per-object
-    /// sweep, the answer being lines and not symbols -- what keeps it true as binaries
-    /// come and go is `over` and the effect that reads it.
+    /// The locate's rule, against `showing`, the file the pane is showing *now*: a reader
+    /// who moved on while the index built is not given the file they left. There is no
+    /// per-object sweep, the answer being lines and not symbols -- what keeps it true as
+    /// binaries come and go is `over` and the effect that reads it.
     pub(crate) fn take(
         &mut self,
+        showing: Option<&Arc<str>>,
         file: Arc<str>,
         lines: Arc<HashSet<u32>>,
         over: Vec<usize>,
     ) -> bool {
-        if self.wanted.as_ref() != Some(&file) {
+        if showing != Some(&file) {
             return false;
         }
         self.found = Some((file, lines));
@@ -1257,25 +1244,25 @@ impl Component for SourcePane {
             source_side(Some(&self.document), &analysis, &marks, built.as_deref())
         };
 
-        // **The three questions about the file this pane is showing, asked together.**
-        // Its text, the lines of it anything open has code from, and which of its names
-        // the language server calls links: none is the other's to wait for, and they are
-        // answered by the reader, the analysis worker and the server, which are three
-        // threads. Asked here rather than by the rows, which are drawn out of the first
-        // answer and so could ask for the other two only once it had landed; and
-        // **before the early return below**, a hook having to run on every render.
+        // **The one fact three questions are asked about:** which file this pane is
+        // showing. Its text, the lines of it anything open has code from, and which of
+        // its names the language server calls links -- none is the other's to wait for,
+        // and they are answered by the reader, the analysis worker and the server, which
+        // are three threads. Each has an effect of its own that reads this beside the
+        // state its answer lands in, so what is written here is the file and nothing
+        // about any of them. Written here rather than by the rows, which are drawn out of
+        // the first answer and so could ask for the other two only once it had landed;
+        // and **before the early return below**, a hook having to run on every render --
+        // which is why the reader's state is consumed here too, the pane reading it past
+        // that return for what to draw.
+        let showing = use_consume::<ShowingFile>().0;
         let sourced = use_consume::<Sourcing>().0;
-        let coded = use_consume::<Coding>().0;
-        let linking = try_consume_context::<Linking>().map(|linking| linking.0);
-        let showing = side.as_ref().map(|side| side.file().clone());
-        use_side_effect_with_deps(&showing, move |file: &Option<Arc<str>>| {
-            asks_for(sourced, |sourced| &mut sourced.wanted, file);
-            asks_for(coded, |coded| &mut coded.wanted, file);
-            // Unconditional, as every hook is: a pane mounted with no server context
-            // writes nothing, inside the closure and not around it.
-            if let Some(linking) = linking {
-                asks_for(linking, |linked| &mut linked.wanted, file);
-            }
+        let file = side.as_ref().map(|side| side.file().clone());
+        use_side_effect_with_deps(&file, move |file: &Option<Arc<str>>| {
+            // Written only where it moved: a pane redrawn for any of the dozen other
+            // reasons must not wake a worker.
+            let mut showing = showing;
+            showing.set_if_modified(file.clone());
         });
 
         let Some(side) = side else {

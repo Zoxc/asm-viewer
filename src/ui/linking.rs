@@ -1,9 +1,9 @@
 //! Which names in the file the Source pane is showing are links: what it has asked the
 //! language server, and what came back.
 //!
-//! The pane writes the file it draws and an effect turns that into a question, which is
-//! how the gutter's marks are asked for too (`Coded`, `src/ui/source_view.rs`). One file,
-//! because one is drawn; a pane that moves to another asks again.
+//! The pane writes the file it draws into one state and an effect here turns that into a
+//! question, which is how its text and the gutter's marks are asked for too
+//! (`ShowingFile`, `src/ui/source_view.rs`).
 //!
 //! **The question is only ever put to a server that has finished reading the project.**
 //! Not for tidiness: a request holds the one conversation until it is answered and there
@@ -24,8 +24,6 @@ use super::*;
 /// The links in the file the pane is showing, and the question owed for it.
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Linked {
-    /// The file the Source pane is showing, written by it.
-    pub(crate) wanted: Option<Arc<str>>,
     /// The question in flight: the file it is about and the run it went out in.
     ///
     /// Held for the reason `Follow` and `Located` hold theirs -- **an answer to a
@@ -47,21 +45,17 @@ pub(crate) struct Linked {
 }
 
 impl Linked {
-    /// The file a question is owed for: one is wanted, nothing held answers it, and none
-    /// is already on its way.
-    pub(crate) fn pending(&self, run: u64) -> Option<&Arc<str>> {
-        let wanted = self.wanted.as_ref()?;
+    /// Whether a question is owed for `showing`: nothing held answers it, and none is
+    /// already on its way.
+    pub(crate) fn pending(&self, showing: &Arc<str>, run: u64) -> bool {
         let about = |held: &Option<(Arc<str>, u64)>| {
             held.as_ref()
-                .is_some_and(|(file, at)| file == wanted && *at == run)
+                .is_some_and(|(file, at)| file == showing && *at == run)
         };
         if about(&self.asked) {
-            return None;
+            return false;
         }
-        match &self.found {
-            Some((file, at, _)) if file == wanted && *at == run => None,
-            _ => Some(wanted),
-        }
+        !matches!(&self.found, Some((file, at, _)) if file == showing && *at == run)
     }
 
     /// The question has gone out. Whether anything changed, so the caller writes only
@@ -382,13 +376,14 @@ pub(crate) struct Linking(pub(crate) State<Linked>);
 pub(crate) fn use_linking(
     language: State<Language>,
     linked: State<Linked>,
+    showing: State<Option<Arc<str>>>,
     opened: State<Opened>,
     jobs: LspJobs,
 ) {
     use_side_effect(move || {
-        // Read and not peeked, both of them: the pane writing the file it moved to is one
-        // half of what wakes this, and the server saying it has finished reading the
-        // project is the other. A file opened while it was still reading has no links
+        // Read and not peeked, all of them: the pane moving to another file is one of
+        // the things that wakes this, and the server saying it has finished reading the
+        // project is another. A file opened while it was still reading has no links
         // until then, and gets them without the reader doing anything.
         let held = language.read().clone();
         if !held.ready() {
@@ -402,10 +397,12 @@ pub(crate) fn use_linking(
             }
             return;
         }
-        let pending = linked.read().pending(held.run).cloned();
-        let Some(file) = pending else {
+        let Some(file) = showing.read().clone() else {
             return;
         };
+        if !linked.read().pending(&file, held.run) {
+            return;
+        }
         // Only about a file the server has been told the app is showing, which is what
         // `Opened` decides -- and which leaves out a file of a language the server is not
         // for, since one asked about it answers as if it were its own (`serves`).

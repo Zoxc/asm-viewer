@@ -4095,6 +4095,7 @@ fn analysis_harness() -> impl IntoElement {
         analysis,
         located,
         coded,
+        use_consume::<ShowingFile>().0,
         reading,
         window,
         move |question| work(question),
@@ -6867,7 +6868,7 @@ struct Subject(Arc<str>);
 fn source_menu_harness() -> impl IntoElement {
     // The file the pane draws, read where this stands rather than on the reader's own
     // thread: what these tests are about is what the pane makes of a file it has.
-    use_source_reading_now(use_consume::<Sourcing>().0);
+    use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
     let file = use_consume::<Subject>().0;
     rect().expanded().child(ContextMenuViewer::new()).child({
         let document = Document::Source(file);
@@ -6883,7 +6884,7 @@ fn source_menu_harness() -> impl IntoElement {
 fn linking_harness() -> impl IntoElement {
     // The file the pane draws, read where this stands rather than on the reader's own
     // thread: what these tests are about is what the pane makes of a file it has.
-    use_source_reading_now(use_consume::<Sourcing>().0);
+    use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
     let states = use_project_states();
     let language = use_consume::<Talking>().0;
     let follow = use_consume::<Following>().0;
@@ -6902,7 +6903,13 @@ fn linking_harness() -> impl IntoElement {
     );
     let opened = use_consume::<Documents>().0;
     use_opened(language, opened, states.open, states.proj, jobs.clone());
-    use_linking(language, linked, opened, jobs.clone());
+    use_linking(
+        language,
+        linked,
+        use_consume::<ShowingFile>().0,
+        opened,
+        jobs.clone(),
+    );
     use_hovering(language, hover, jobs.clone());
     // Handed out, so a test that is about the server itself can start one and be given
     // the channel its remarks come back on. The rest reach the server through the pane.
@@ -8279,7 +8286,6 @@ fn a_link() -> links::Links {
 fn an_answer_to_a_question_nobody_asked_is_not_taken() {
     let file: Arc<str> = Arc::from("/p/src/main.rs");
     let mut linked = Linked::default();
-    linked.wanted = Some(file.clone());
 
     assert!(linked.asking(1, file.clone()), "the question went out");
     assert!(linked.answer(1, file.clone(), a_link()), "and was answered");
@@ -8306,30 +8312,23 @@ fn an_answer_to_a_question_nobody_asked_is_not_taken() {
 fn a_question_on_its_way_is_not_asked_again() {
     let file: Arc<str> = Arc::from("/p/src/main.rs");
     let mut linked = Linked::default();
-    linked.wanted = Some(file.clone());
 
-    assert_eq!(
-        linked.pending(1),
-        Some(&file),
-        "nothing asked, nothing held"
-    );
+    assert!(linked.pending(&file, 1), "nothing asked, nothing held");
     linked.asking(1, file.clone());
-    assert_eq!(linked.pending(1), None, "the question went out twice");
+    assert!(!linked.pending(&file, 1), "the question went out twice");
 
     // A server that has been restarted is a different question: what is in flight is the
     // old one's, and its answer will be an answer to nobody.
-    assert_eq!(linked.pending(2), Some(&file));
+    assert!(linked.pending(&file, 2));
 
     linked.answer(1, file.clone(), a_link());
-    assert_eq!(
-        linked.pending(1),
-        None,
+    assert!(
+        !linked.pending(&file, 1),
         "an answered question was asked again"
     );
 
     // And the pane moving to another file is a question of its own.
-    linked.wanted = Some(Arc::from("/p/src/other.rs"));
-    assert!(linked.pending(1).is_some());
+    assert!(linked.pending(&Arc::from("/p/src/other.rs"), 1));
 }
 
 /// **A definition in a file already open moves inside its tab.** The server answers with
@@ -9756,7 +9755,7 @@ fn right_click(test: &mut TestingRunner, at: (f64, f64)) {
 fn companion_menu_harness() -> impl IntoElement {
     // The file the pane draws, read where this stands rather than on the reader's own
     // thread: what these tests are about is what the pane makes of a file it has.
-    use_source_reading_now(use_consume::<Sourcing>().0);
+    use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
     let analysis = use_consume::<Analysis>().0;
     let document = analysis
         .read()
@@ -10624,7 +10623,7 @@ struct Showing(State<Arc<str>>);
 fn showing_harness() -> impl IntoElement {
     // The file the pane draws, read where this stands rather than on the reader's own
     // thread: what these tests are about is what the pane makes of a file it has.
-    use_source_reading_now(use_consume::<Sourcing>().0);
+    use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
     let showing = use_consume::<Showing>().0;
     rect().expanded().child({
         let document = Document::Source(showing.read().clone());
@@ -10680,7 +10679,11 @@ struct SourceWork(Arc<dyn Fn(&SourceAsk) + Send + Sync>);
 /// and two channels -- doing whatever [`SourceWork`] says.
 fn reading_harness() -> impl IntoElement {
     let work = use_consume::<SourceWork>().0;
-    use_source_reading_with(use_consume::<Sourcing>().0, move |ask| work(ask));
+    use_source_reading_with(
+        use_consume::<Sourcing>().0,
+        use_consume::<ShowingFile>().0,
+        move |ask| work(ask),
+    );
     let showing = use_consume::<Showing>().0;
     rect().expanded().child({
         let document = Document::Source(showing.read().clone());
@@ -10772,6 +10775,119 @@ fn a_file_already_read_is_drawn_with_no_question_asked() {
         vec![1, 2],
         "the file in hand was not drawn: {:?}",
         labels(&test)
+    );
+
+    forget_source_under(&directory);
+}
+
+/// How many times [`SourceWatcher`] has drawn. An `Arc<AtomicUsize>` and not a state, for
+/// [`RootRenders`]' reason: nothing draws from it, and a state read in a render body would be
+/// one more thing the scope under test was subscribed to.
+#[derive(Clone)]
+struct SourceDraws(Arc<std::sync::atomic::AtomicUsize>);
+
+/// A scope that reads the reader's state and nothing else: what a write to `Sourced`
+/// wakes. The pane reads it the same way, for what to draw.
+#[derive(PartialEq)]
+struct SourceWatcher;
+
+impl Component for SourceWatcher {
+    fn render(&self) -> impl IntoElement {
+        let _drawing = use_consume::<Sourcing>()
+            .0
+            .read()
+            .drawing(Path::new("watched.rs"));
+        use_consume::<SourceDraws>()
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        rect()
+    }
+}
+
+/// The Source pane over [`Showing`]'s file. Its own scope, so moving the pane leaves the
+/// root and the watcher beside it alone.
+#[derive(PartialEq)]
+struct MovingPane;
+
+impl Component for MovingPane {
+    fn render(&self) -> impl IntoElement {
+        let document = Document::Source(use_consume::<Showing>().0.read().clone());
+        rect().expanded().child(SourcePane {
+            tab: pane_tab(&document),
+            document,
+        })
+    }
+}
+
+/// The two side by side under a root that reads nothing. **No reader is mounted**: what
+/// is under test is the asking, and an answer landing is a write to `Sourced` of its own.
+fn moving_pane_harness() -> impl IntoElement {
+    rect().expanded().child(SourceWatcher).child(MovingPane)
+}
+
+/// **Which file the pane is showing is a state of its own, and moving to another wakes
+/// nothing that draws.** The pane writes one fact, `ShowingFile`, which the reader's
+/// effect, the marks' and the links' each read beside the state their answer lands in.
+///
+/// Written into `Sourced` instead, as it was, the ask and the answer shared a state: every
+/// scope that read the reader for what to draw -- the pane itself among them -- was drawn
+/// again for a question it has no answer to yet, and the same fact went into three states
+/// that agreed only because one effect wrote them in one pass.
+#[test]
+fn a_move_between_files_does_not_wake_what_reads_the_reader() {
+    let directory = Seeded::directory("showing");
+    let first = directory.named("first.rs", "fn one() {}\n");
+    let second = directory.named("second.rs", "fn two() {}\n");
+
+    let (mut test, (states, mut shown, showing, draws)) = TestingRunner::new(
+        moving_pane_harness,
+        (400., 300.).into(),
+        {
+            let first = first.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || {
+                    let shown = provide(Showing(State::create(first.clone()))).0;
+                    let draws = provide(SourceDraws(Arc::new(
+                        std::sync::atomic::AtomicUsize::new(0),
+                    )))
+                    .0;
+                    let roots = test_roots();
+                    (roots.states, shown, roots.showing, draws)
+                })
+            }
+        },
+        1.,
+    );
+    let open = |file: &Arc<str>| {
+        open_document(
+            states.open,
+            states.visits,
+            Document::Source(file.clone()),
+            Reach::NewTab,
+        );
+    };
+    open(&first);
+    settle(&mut test);
+    assert_eq!(
+        showing.read().as_deref(),
+        Some(&*first),
+        "the pane never said which file it is showing"
+    );
+
+    let drawn = draws.load(std::sync::atomic::Ordering::Relaxed);
+    shown.set(second.clone());
+    open(&second);
+    settle(&mut test);
+
+    assert_eq!(
+        showing.read().as_deref(),
+        Some(&*second),
+        "the pane did not ask about the file it moved to"
+    );
+    assert_eq!(
+        draws.load(std::sync::atomic::Ordering::Relaxed),
+        drawn,
+        "the move drew everything that reads the reader's state for what to draw"
     );
 
     forget_source_under(&directory);
@@ -11661,7 +11777,7 @@ struct Mounted(State<bool>);
 fn source_pane_harness() -> impl IntoElement {
     // The file the pane draws, read where this stands rather than on the reader's own
     // thread: what these tests are about is what the pane makes of a file it has.
-    use_source_reading_now(use_consume::<Sourcing>().0);
+    use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
     let analysis = use_consume::<Analysis>().0;
     let mounted = use_consume::<Mounted>().0;
     let document = analysis
@@ -12025,7 +12141,7 @@ fn the_gutter_puts_its_strokes_on_whole_device_pixels() {
 fn panes_harness() -> impl IntoElement {
     // The file the pane draws, read where this stands rather than on the reader's own
     // thread: what these tests are about is what the pane makes of a file it has.
-    use_source_reading_now(use_consume::<Sourcing>().0);
+    use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
     let open = use_open();
     // Read and not peeked: this is the harness's whole subscription to a tab being
     // activated, and `Active` is a memo and a beat behind.
@@ -13650,6 +13766,7 @@ fn scratchpad_listing_harness() -> impl IntoElement {
         use_consume::<Analysis>().0,
         use_consume::<Locations>().0,
         use_consume::<Coding>().0,
+        use_consume::<ShowingFile>().0,
         reading,
         window,
         answer,
@@ -17050,7 +17167,6 @@ fn the_gutter_marks_the_lines_that_have_code() {
     settle(&mut test);
 
     let answer = |lines: [u32; 2], of: &Arc<str>| Coded {
-        wanted: Some(file.clone()),
         found: Some((of.clone(), Arc::new(HashSet::from(lines)))),
         over: Vec::new(),
     };
@@ -17100,14 +17216,14 @@ fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
     let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
     let file = directory.named("driven.c", &text);
 
-    let (mut test, (states, coded)) = TestingRunner::new(
+    let (mut test, (states, coded, showing)) = TestingRunner::new(
         panes_harness,
         (600., 400.).into(),
         |runner: &mut _| {
             // No listing at all, which is what a source-driven tab has before a line in
             // it has been clicked -- so the root's own `Analysis`, left empty.
             let roots = runner.provide_root_context(test_roots);
-            (roots.states, roots.coded)
+            (roots.states, roots.coded, roots.showing)
         },
         1.,
     );
@@ -17125,14 +17241,13 @@ fn a_source_driven_tab_is_marked_before_anything_is_clicked() {
 
     // The pane asked, which is what reaches the worker.
     assert_eq!(
-        coded.read().wanted.as_deref(),
+        showing.read().as_deref(),
         Some(&*file),
         "the pane never asked which of its lines have code"
     );
 
     let mut coded = coded;
     coded.set(Coded {
-        wanted: Some(file.clone()),
         found: Some((file.clone(), Arc::new(HashSet::from([3, 4])))),
         over: Vec::new(),
     });
@@ -17701,7 +17816,7 @@ fn closing_a_code_tab_forgets_its_address() {
 fn code_source_harness() -> impl IntoElement {
     // The file the pane draws, read where this stands rather than on the reader's own
     // thread: what these tests are about is what the pane makes of a file it has.
-    use_source_reading_now(use_consume::<Sourcing>().0);
+    use_source_reading_now(use_consume::<Sourcing>().0, use_consume::<ShowingFile>().0);
     let reading = use_consume::<Sections>().0;
     let object = reading.read().object.clone();
     match object {

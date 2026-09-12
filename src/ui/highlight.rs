@@ -333,8 +333,8 @@ pub(crate) struct SourceAsk {
     pub(crate) appearance: Appearance,
 }
 
-/// The reader, shared through context: the Source pane writes the file it is showing and
-/// the worker writes the parse into [`HIGHLIGHTED`].
+/// The reader, shared through context: the worker writes the parse of the file
+/// [`ShowingFile`] names into [`HIGHLIGHTED`].
 #[derive(Clone, Copy)]
 pub(crate) struct Sourcing(pub(crate) State<Sourced>);
 
@@ -349,9 +349,6 @@ pub(crate) struct Sourcing(pub(crate) State<Sourced>);
 /// [`answers`]: Sourced::answers
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Sourced {
-    /// The file the Source pane is showing, written by it. One file, because one is
-    /// drawn; a pane that moves to another asks again.
-    pub(crate) wanted: Option<Arc<str>>,
     /// How many files the reader has answered for.
     answers: u64,
 }
@@ -374,13 +371,16 @@ impl Sourced {
         }
     }
 
-    /// The question owed: a file is wanted and the cache has no parse of it in this
-    /// appearance.
+    /// The question owed for `showing`: the cache has no parse of it in this appearance.
     ///
     /// A miss answers for every appearance -- a file that is not there is not there in
     /// either theme -- so it is asked about once and not again.
-    fn pending(&self, appearance: Appearance) -> Option<SourceAsk> {
-        let file = PathBuf::from(&**self.wanted.as_ref()?);
+    ///
+    /// It reads no field, and is a method for what reading the state does: an answer
+    /// bumps [`Sourced::answers`], which is what has the effect below look in the cache
+    /// again.
+    fn pending(&self, showing: &Arc<str>, appearance: Appearance) -> Option<SourceAsk> {
+        let file = PathBuf::from(&**showing);
         let owed = match highlighted().get(&file) {
             Some(Some(text)) => text.appearance != appearance,
             Some(None) => false,
@@ -421,8 +421,8 @@ const TRIES: usize = 4;
 
 /// Read the files the Source pane asks for on a thread of the app's own. Called once, at
 /// the root.
-pub(crate) fn use_source_reading(sourced: State<Sourced>) {
-    use_source_reading_with(sourced, |ask| {
+pub(crate) fn use_source_reading(sourced: State<Sourced>, showing: State<Option<Arc<str>>>) {
+    use_source_reading_with(sourced, showing, |ask| {
         read(ask);
     });
 }
@@ -441,6 +441,7 @@ pub(crate) fn use_source_reading(sourced: State<Sourced>) {
 /// asked.
 pub(crate) fn use_source_reading_with(
     sourced: State<Sourced>,
+    showing: State<Option<Arc<str>>>,
     work: impl Fn(&SourceAsk) + Send + 'static,
 ) {
     let requests = use_worker(
@@ -462,17 +463,24 @@ pub(crate) fn use_source_reading_with(
         },
     );
 
-    use_source_asking(sourced, move |ask| requests.send(ask));
+    use_source_asking(sourced, showing, move |ask| requests.send(ask));
 }
 
 /// Ask for whatever the pane is showing and has not been read: the effect both readers
 /// share, the app's one and the tests' own.
-fn use_source_asking(sourced: State<Sourced>, ask: impl Fn(SourceAsk) + 'static) {
+fn use_source_asking(
+    sourced: State<Sourced>,
+    showing: State<Option<Arc<str>>>,
+    ask: impl Fn(SourceAsk) + 'static,
+) {
     use_side_effect(move || {
-        // Read and not peeked, both of them: the pane writing the file it moved to is one
-        // half of what wakes this, and a theme switch is the other -- the spans carry
-        // their colours, so a switch is a file to read again.
-        let pending = sourced.read().pending(appearance());
+        // Read and not peeked, all three: the pane moving to another file is one of the
+        // things that wakes this, an answer landing is another, and a theme switch is the
+        // third -- the spans carry their colours, so a switch is a file to read again.
+        let Some(file) = showing.read().clone() else {
+            return;
+        };
+        let pending = sourced.read().pending(&file, appearance());
         let Some(pending) = pending else {
             return;
         };
@@ -488,8 +496,8 @@ fn use_source_asking(sourced: State<Sourced>, ask: impl Fn(SourceAsk) + 'static)
 /// answer that is a millisecond's work. The tests that *are* about the reading mount
 /// [`use_source_reading`] and pump.
 #[cfg(test)]
-pub(crate) fn use_source_reading_now(sourced: State<Sourced>) {
-    use_source_asking(sourced, move |ask| {
+pub(crate) fn use_source_reading_now(sourced: State<Sourced>, showing: State<Option<Arc<str>>>) {
+    use_source_asking(sourced, showing, move |ask| {
         read(&ask);
         let mut sourced = sourced;
         let answered = sourced.peek().answers.wrapping_add(1);

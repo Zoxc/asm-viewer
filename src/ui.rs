@@ -473,6 +473,7 @@ pub(crate) struct Roots {
     pub(crate) window: State<Option<CodeAsk>>,
     pub(crate) beside: State<Option<Arc<Object>>>,
     pub(crate) sourced: State<Sourced>,
+    pub(crate) showing: State<Option<Arc<str>>>,
     pub(crate) finds: State<Finds>,
     pub(crate) pad_follows: State<bool>,
     pub(crate) pad: State<Pads>,
@@ -628,8 +629,10 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     let window = provide(Window(State::create(None))).0;
     let beside = provide(Beside(State::create(None))).0;
     // The file the Source pane is showing, read off disk and parsed on a thread of its
-    // own -- and every code pane's find bar, whose bars are kept per place.
+    // own -- and every code pane's find bar, whose bars are kept per place. The file
+    // itself is a state of its own, the pane writing it and three effects reading it.
     let sourced = provide(Sourcing(State::create(Sourced::default()))).0;
+    let showing = provide(ShowingFile(State::create(None))).0;
     let finds = provide(Looking(places.finds)).0;
 
     // At the root rather than in the tab: a tab off screen is unmounted, and neither a
@@ -682,6 +685,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         window,
         beside,
         sourced,
+        showing,
         finds,
         pad_follows,
         pad,
@@ -735,6 +739,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         window,
         beside,
         sourced,
+        showing,
         finds,
         pad_follows,
         pad,
@@ -812,6 +817,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         analysis,
         located,
         coded,
+        showing,
         reading,
         window,
         answer,
@@ -822,7 +828,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // The reader: the file the Source pane is showing, read off disk and parsed on a
     // thread of its own. Not the analysis worker's queue, which a click can put seconds
     // of DWARF into (`agents/Worker.md`).
-    use_source_reading(sourced);
+    use_source_reading(sourced, showing);
     // The find bars' worker. Its own for the reason the source reader has one: a pattern
     // supersedes on every keystroke and must not queue behind the seconds of DWARF a
     // click costs (`agents/Worker.md`).
@@ -850,7 +856,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // What a name followed in the source opens, which the answer above fills in.
     use_follow(follow, doors, places);
     use_opened(language, opened, open, proj, jobs.clone());
-    use_linking(language, linked, opened, jobs.clone());
+    use_linking(language, linked, showing, opened, jobs.clone());
     use_hovering(language, hover, jobs.clone());
 
     rect()
