@@ -14,32 +14,57 @@ use std::{borrow::Cow, sync::OnceLock};
 
 use crate::settings::{self, FontSetting, Settings};
 
-/// The platform's own interface and fixed-width families. These have to be *named*:
-/// freya's global fallbacks are all proportional, so a font nothing resolves would
-/// silently take the assembly view out of a monospaced face. Naming another platform's
-/// fonts here would be worse than naming none -- a Windows machine that happens to have
-/// DejaVu installed would render in it instead of its own fonts.
-#[cfg(target_os = "windows")]
-const DEFAULT_UI: &str = "Segoe UI";
-#[cfg(target_os = "windows")]
-const DEFAULT_MONO: &str = "Consolas";
+/// The constants for one of the two fonts: the family to fall back on, the size to fall
+/// back on, and the key each desktop keeps the font under. One row per font, so a third
+/// font is a row rather than an arm in each of four matches.
+///
+/// The two key names are unread on Windows, where the desktop lookups are compiled out.
+/// They stay in the row so that a font's facts are in one place on every platform.
+struct Facts {
+    /// The platform's own family. These have to be *named*: freya's global fallbacks are
+    /// all proportional, so a font nothing resolves would silently take the assembly view
+    /// out of a monospaced face. Naming another platform's fonts here would be worse than
+    /// naming none -- a Windows machine that happens to have DejaVu installed would render
+    /// in it instead of its own fonts.
+    ///
+    /// Everywhere but Windows and macOS the generic families are the right answer: skia
+    /// resolves them through fontconfig, which is what has been configured with the
+    /// system's choices.
+    family: &'static str,
+    /// The app's own size, in points: the 12 and 14 logical pixels the floem version drew
+    /// at. Used wherever the desktop has no say, and where it named a family but no size.
+    points: f32,
+    /// KDE's key in the `[General]` group of `kdeglobals`.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    kde: &'static str,
+    /// Gnome's key in the GTK schema every GTK desktop shares.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    gnome: &'static str,
+}
 
-#[cfg(target_os = "macos")]
-const DEFAULT_UI: &str = ".AppleSystemUIFont";
-#[cfg(target_os = "macos")]
-const DEFAULT_MONO: &str = "Menlo";
+static UI_FACTS: Facts = Facts {
+    #[cfg(target_os = "windows")]
+    family: "Segoe UI",
+    #[cfg(target_os = "macos")]
+    family: ".AppleSystemUIFont",
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    family: "sans-serif",
+    points: 9.0,
+    kde: "font",
+    gnome: "font-name",
+};
 
-/// Everywhere else the generic families are the right answer: skia resolves them
-/// through fontconfig, which is what has been configured with the system's choices.
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-const DEFAULT_UI: &str = "sans-serif";
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-const DEFAULT_MONO: &str = "monospace";
-
-/// The app's own sizes, in points: the 12 and 14 logical pixels the floem version drew
-/// at. Used wherever the desktop has no say, and where it named a family but no size.
-const DEFAULT_UI_POINTS: f32 = 9.0;
-const DEFAULT_MONO_POINTS: f32 = 10.5;
+static FIXED_FACTS: Facts = Facts {
+    #[cfg(target_os = "windows")]
+    family: "Consolas",
+    #[cfg(target_os = "macos")]
+    family: "Menlo",
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    family: "monospace",
+    points: 10.5,
+    kde: "fixed",
+    gnome: "monospace-font-name",
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Font {
@@ -80,9 +105,8 @@ pub struct Fonts {
     pub mono: Font,
 }
 
-/// Which of the two fonts is being asked for, and every per-font fact under it: what each
-/// desktop calls it, the platform's own family, the app's own size, and the reader's
-/// setting for it.
+/// Which of the two fonts is being asked for, and every per-font fact under it: the
+/// constants in [`Facts`], and the reader's own setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Which {
     Ui,
@@ -90,23 +114,15 @@ enum Which {
 }
 
 impl Which {
-    /// The platform's own family for this font.
-    fn family(self) -> &'static str {
+    /// This font's row of the table.
+    fn facts(self) -> &'static Facts {
         match self {
-            Which::Ui => DEFAULT_UI,
-            Which::Fixed => DEFAULT_MONO,
+            Which::Ui => &UI_FACTS,
+            Which::Fixed => &FIXED_FACTS,
         }
     }
 
-    /// The app's own size for it, in points.
-    fn points(self) -> f32 {
-        match self {
-            Which::Ui => DEFAULT_UI_POINTS,
-            Which::Fixed => DEFAULT_MONO_POINTS,
-        }
-    }
-
-    /// The reader's own setting for it.
+    /// The reader's own setting for it, which is no constant and so no part of the row.
     fn setting(self, settings: &Settings) -> &FontSetting {
         match self {
             Which::Ui => &settings.interface,
@@ -206,10 +222,7 @@ mod desktop {
     /// `kreadconfig` rather than reading the file matters: neither `font` nor `fixed` is
     /// written out until it is changed, and only KDE knows its own defaults.
     fn kde(which: Which) -> Option<Spec> {
-        let key = match which {
-            Which::Ui => "font",
-            Which::Fixed => "fixed",
-        };
+        let key = which.facts().kde;
 
         ["kreadconfig6", "kreadconfig5"]
             .into_iter()
@@ -232,12 +245,7 @@ mod desktop {
 
     /// Ask Gnome, through the GTK schema every GTK desktop shares.
     fn gnome(which: Which) -> Option<Spec> {
-        let key = match which {
-            Which::Ui => "font-name",
-            Which::Fixed => "monospace-font-name",
-        };
-
-        let mut spec = parse_pango(&gsettings(key)?)?;
+        let mut spec = parse_pango(&gsettings(which.facts().gnome)?)?;
 
         // `text-scaling-factor` is how Gnome says "make text bigger": `font-name` keeps
         // its nominal size and the accessibility slider moves this instead. It multiplies
@@ -515,12 +523,12 @@ fn resolve_font(setting: &FontSetting, desktop: Option<&Spec>, which: Which) -> 
         families: family
             .map(Cow::Owned)
             .into_iter()
-            .chain([Cow::Borrowed(which.family())])
+            .chain([Cow::Borrowed(which.facts().family)])
             .collect(),
         points: setting
             .size()
             .or_else(|| desktop.and_then(|desktop| desktop.points))
-            .unwrap_or(which.points()),
+            .unwrap_or(which.facts().points),
     }
 }
 

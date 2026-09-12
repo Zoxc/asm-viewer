@@ -90,7 +90,7 @@ fn nothing_chosen_and_nothing_answered_is_the_platforms_own() {
     let font = resolved(&setting(None, None), None);
 
     assert_eq!(font.families, ["monospace"]);
-    assert_eq!(font.points, DEFAULT_MONO_POINTS);
+    assert_eq!(font.points, FIXED_FACTS.points);
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn a_desktop_answer_with_no_size_keeps_its_family() {
     let font = resolved(&setting(None, None), Spec::new("Noto Sans Mono", None));
 
     assert_eq!(font.families, ["Noto Sans Mono", "monospace"]);
-    assert_eq!(font.points, DEFAULT_MONO_POINTS);
+    assert_eq!(font.points, FIXED_FACTS.points);
 }
 
 #[test]
@@ -188,6 +188,20 @@ fn an_unset_field_is_showing_what_it_falls_through_to() {
     // The half that was: the size is the reader's, the family is still inherited.
     assert_eq!(resolved.mono.points, 13.0);
     assert_eq!(resolved.mono.families, inherited.mono.families);
+}
+
+/// The key names are the whole of the contract with each desktop, and a wrong one fails
+/// quietly: a key `kreadconfig` or `gsettings` does not know is the same `None` as a tool
+/// that is not installed, so the app draws the fallback font and says nothing. The rest of
+/// each row is pinned by what the merge falls back to; the keys are asserted here because
+/// nothing else on this machine reads them.
+#[test]
+fn each_font_carries_the_key_each_desktop_keeps_it_under() {
+    assert_eq!((UI_FACTS.kde, UI_FACTS.gnome), ("font", "font-name"));
+    assert_eq!(
+        (FIXED_FACTS.kde, FIXED_FACTS.gnome),
+        ("fixed", "monospace-font-name")
+    );
 }
 
 #[test]
@@ -273,7 +287,7 @@ fn a_size_out_of_range_is_refused_from_either_source() {
     // The reader's, out of `settings.toml` or the settings page.
     assert_eq!(
         resolved(&setting(None, Some(huge)), None).points,
-        DEFAULT_MONO_POINTS
+        FIXED_FACTS.points
     );
 
     // The desktop's, refused as the answer is parsed, so the family it named still
@@ -283,5 +297,5 @@ fn a_size_out_of_range_is_refused_from_either_source() {
 
     let font = resolved(&setting(None, None), desktop);
     assert_eq!(font.families, ["Fira Code", "monospace"]);
-    assert_eq!(font.points, DEFAULT_MONO_POINTS);
+    assert_eq!(font.points, FIXED_FACTS.points);
 }

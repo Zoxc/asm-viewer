@@ -146,7 +146,10 @@ so naming one would turn "no font setting" into a process that will not start. w
 `GetProcAddress`es that family for the same reason. The pairing is also what makes it *correct*:
 both the metrics and the DC's DPI are virtualised into whatever DPI space the process is in, so they
 agree without this file knowing which that is. Windows stores no desktop-wide monospace font at all,
-so that half stays `Consolas`. Each font is then a *chain*: the desktop's answer in front of the
+so that half stays `Consolas`. Every per-font constant -- the platform's family, the app's own size
+and the key each desktop keeps it under -- is one row of a two-row table (`Facts`) that `Which`
+indexes, so a third font is a row, not an arm in each of four matches. Only the reader's own setting
+stays a match, being no constant. Each font is then a *chain*: the desktop's answer in front of the
 platform's own (`Segoe UI`/`Consolas`, `.AppleSystemUIFont`/`Menlo`, else the generic
 `sans-serif`/`monospace` that skia resolves through fontconfig). A family named with no usable size
 keeps the family and takes the app's default size. What *usable* means is `settings::points`, one
