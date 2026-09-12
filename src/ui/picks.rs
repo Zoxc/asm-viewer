@@ -56,8 +56,9 @@ pub(crate) enum Pick {
     Symbol(Symbol),
     /// A place the reader has been, in the History list.
     Visit(Document),
-    /// A bookmark by its place in the list, which is what its own menu names it by.
-    Bookmark(usize),
+    /// A bookmark: the entry itself, which is what its row draws. Not its place in the
+    /// list, which its menu removes by and which the row below a removed one inherits.
+    Bookmark(Bookmark),
     /// A path: a row of the Files tree, a file the Objects tree read, and the file a run
     /// of hits or of references is grouped under.
     Path(PathBuf),

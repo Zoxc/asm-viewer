@@ -49,7 +49,7 @@ impl Component for BookmarkRow {
         let picking = use_picking(Panel::Bookmarks);
         let index = self.index;
         let at = self.at;
-        let pick = Pick::Bookmark(index);
+        let pick = Pick::Bookmark(self.bookmark.clone());
         let dead = self.live.is_none();
 
         // Drawn from the bookmark whether or not the place is live, so a row does not
@@ -141,6 +141,10 @@ pub(crate) fn bookmark_menu(
     ))
 }
 
+/// What the panel builds a row from: where the bookmark is in the reader's own list,
+/// which its menu removes by, the bookmark, and the place it resolves to now.
+type Listed = (usize, Bookmark, Option<Document>);
+
 /// The Bookmarks list: every bookmark of the project, in the order the reader added them,
 /// filtered on the whole name the way the History list is.
 #[derive(PartialEq)]
@@ -162,24 +166,29 @@ impl Component for BookmarksPanel {
         // Resolved where the rows are built, against the objects as they are now: reading
         // both is what re-resolves every row when a binary is opened or closed, which is
         // the whole of how a bookmark comes back to life. A handful of rows, so no memo.
-        let (rows, listed, any): (Vec<Element>, Vec<(usize, Option<Document>)>, bool) = {
+        let (rows, listed, any): (Vec<Element>, Vec<Listed>, bool) = {
             let bookmarked = bookmarked.read();
             let objects = objects.read();
             let entries = bookmarked.entries();
-            // What the rows are of, kept beside them: each row's bookmark and the place it
-            // resolved to, which is what the arrows step and Enter opens. A dead one keeps
-            // its row and opens nothing, as pressing it does.
-            let listed: Vec<(usize, Option<Document>)> = entries
+            // What the rows are of, kept beside them: each row's bookmark, which is what
+            // the arrows pick out, and the place it resolved to, which is what Enter
+            // opens. A dead one keeps its row and opens nothing, as pressing it does.
+            let listed: Vec<Listed> = entries
                 .iter()
                 .enumerate()
                 .filter(|(_, bookmark)| matcher.matches(&bookmark.label()))
-                .map(|(index, bookmark)| (index, bookmark.document.resolve_by_name(&objects)))
+                .map(|(index, bookmark)| {
+                    (
+                        index,
+                        bookmark.clone(),
+                        bookmark.document.resolve_by_name(&objects),
+                    )
+                })
                 .collect();
             let rows = listed
                 .iter()
                 .enumerate()
-                .map(|(at, (index, live))| {
-                    let bookmark = &entries[*index];
+                .map(|(at, (index, bookmark, live))| {
                     BookmarkRow {
                         index: *index,
                         bookmark: bookmark.clone(),
@@ -198,16 +207,20 @@ impl Component for BookmarksPanel {
             let stepped = listed.clone();
             ListKeys {
                 length: listed.len(),
-                at: Box::new(move |at| stepped.get(at).map(|(index, _)| Pick::Bookmark(*index))),
-                open: Box::new(
-                    move |at| match listed.get(at).and_then(|(_, live)| live.clone()) {
+                at: Box::new(move |at| {
+                    stepped
+                        .get(at)
+                        .map(|(_, bookmark, _)| Pick::Bookmark(bookmark.clone()))
+                }),
+                open: Box::new(move |at| {
+                    match listed.get(at).and_then(|(_, _, live)| live.clone()) {
                         Some(live) => {
                             open_document(open, visits, live, Reach::outside(ctrl));
                             Pressed::Opened
                         }
                         None => Pressed::Folded,
-                    },
-                ),
+                    }
+                }),
                 fold: ListKeys::flat(),
             }
         };

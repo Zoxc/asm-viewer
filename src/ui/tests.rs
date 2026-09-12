@@ -19922,6 +19922,94 @@ fn a_bookmark_row_is_removed_from_its_menu() {
     assert_eq!(left, [symbols[0].data.display()]);
 }
 
+/// **A bookmark row's pick is the bookmark itself, not its place in the list.** Removing
+/// another bookmark moves every row under it up one; a pick held as a position would then
+/// light the row that moved into it, and Enter would open that row.
+///
+/// Headless because none of it is visible to a unit test: which row the panel draws lit,
+/// and what the Enter it answers opens.
+#[test]
+fn removing_a_bookmark_leaves_the_pick_on_the_row_it_was_put_on() {
+    let files = [
+        "/src/a.rs",
+        "/src/b.rs",
+        "/src/c.rs",
+        "/src/d.rs",
+        "/src/e.rs",
+    ];
+    let (mut test, (states, mut alt)) = TestingRunner::new(
+        bookmarks_harness,
+        (300., 300.).into(),
+        |runner: &mut _| {
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.alt)
+        },
+        1.,
+    );
+    let mut bookmarks = states.bookmarks;
+    bookmarks.set(Bookmarks::from_entries(
+        files
+            .iter()
+            .map(|path| bookmark_of(&Document::Source(Arc::from(*path))))
+            .collect(),
+    ));
+    settle(&mut test);
+
+    let top = |test: &TestingRunner, name: &str| {
+        label_area(test, name)
+            .unwrap_or_else(|| panic!("{name} is drawn"))
+            .origin
+            .y
+    };
+
+    // The fourth row picked out and nothing opened: Alt is what makes a press a pick.
+    alt.set(true);
+    settle(&mut test);
+    let row = centre_of(&test, "d.rs");
+    press_at(&mut test, row);
+    settle(&mut test);
+    alt.set(false);
+    settle(&mut test);
+    assert_ne!(drawn_at(&test, top(&test, "d.rs")), Chosen::No);
+    assert!(states.open.active().is_none(), "Alt+press opened a tab");
+
+    // The second bookmark removed from its own menu, which is the one gesture that moves
+    // the rows under it.
+    let row = centre_of(&test, "b.rs");
+    choose_from_menu(&mut test, row, "Remove bookmark");
+    assert_eq!(bookmarks.peek().entries().len(), 4);
+
+    assert_ne!(
+        drawn_at(&test, top(&test, "d.rs")),
+        Chosen::No,
+        "the pick left the row it was put on"
+    );
+    assert_eq!(
+        drawn_at(&test, top(&test, "e.rs")),
+        Chosen::No,
+        "the row that moved up into the pick's place is lit"
+    );
+
+    // The place the pick was made at has moved under it, so Enter opens nothing at all
+    // rather than the row now standing there -- and the next arrow starts the list again,
+    // which is what says the keys still reach it.
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    assert!(
+        states.open.active().is_none(),
+        "Enter opened the row that moved up into the pick's place"
+    );
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    assert!(
+        states.open.active() == Some(Document::Source(Arc::from("/src/a.rs"))),
+        "the keyboard is no longer in the list"
+    );
+}
+
 /// The Symbols list with the context-menu viewer a right-click on a row needs, over the
 /// project's states and the `Symbols` memo `app()` derives from the objects.
 fn symbols_harness() -> impl IntoElement {
