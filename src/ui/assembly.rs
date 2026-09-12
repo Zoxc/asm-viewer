@@ -1321,11 +1321,11 @@ impl Component for InstructionList {
                 );
             }
         });
-        // The picked-out run is listing rows, and `touching` speaks instructions: a run
-        // that is one separator lights nothing.
+        // The picked-out run is listing rows and the edges speak instructions;
+        // `Studied::touching` crosses between the two. Base 0: a symbol read alone is
+        // drawn from the listing's first row. A run that is one separator lights nothing.
         let touching = chars
-            .and_then(|run| data.lanes().instructions_in(run.rows()))
-            .map(|indices| data.lanes().touching_any(indices))
+            .map(|run| data.studied.touching(run.rows(), 0))
             .unwrap_or_default();
 
         // The bar's chords, the step it asks for and the listing's own keys, all of it

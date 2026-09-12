@@ -805,10 +805,17 @@ a `PartialEq` returning `true` unconditionally, exactly wrong for a row a scroll
 `InstructionRow` therefore pads horizontally only: a line must reach the row's top and bottom edges
 or the column comes out dashed. Selecting rows draws their own branches darker (`branch_lit_fg`),
 which is the pane's own run and not the pair: a source position is many rows. The run is **listing
-rows** and not instruction indices, so that one state can serve a listing of many symbols; the list
-converts it back through `Lanes::instructions_in` and asks `Lanes::touching_any` once for the run,
-one pass over the edges rather than one per row, and a run that is one separator lights nothing. In
-an object's code that is done per held stretch, each stretch's lanes speaking its own instructions.
+rows** and not instruction indices, so that one state can serve a listing of many symbols;
+`Studied::touching` converts it back through `Lanes::instructions_in` and asks
+`Lanes::touching_any` once for the run, one pass over the edges rather than one per row, and a run
+that is one separator lights nothing. In an object's code it is asked per held stretch, each
+stretch's lanes speaking its own instructions and its base saying which listing row its first
+instruction is drawn at. **The base is crossed in one place**: `touching` shares a private
+`instructions_in` with `Studied::places`, so the edges the gutter lights and the lines the Source
+pane pairs cannot land a row apart. The run's start saturates and its end is checked -- one opening
+above a stretch starts at the stretch's first row, one ending above it holds none of the stretch at
+all. It was written once per pane, and two spellings of it can disagree over a separator at the
+run's end: one lights an edge the other does not scroll to.
 
 **A reveal owed to a pane that has not been measured is kept, not spent.** `reveal_row` needs to
 know what is on screen already -- to leave a row alone that is on it, and to give up the margin

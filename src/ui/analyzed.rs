@@ -649,19 +649,43 @@ impl Studied {
         (0..assembly.instructions.len()).find(|&index| self.paired(index, pair))
     }
 
+    /// The instructions this listing draws in the listing rows `rows`, `base` being the
+    /// listing row its first instruction is drawn at. The **one** place a run of listing
+    /// rows is crossed into instruction indices with a base: two answers about the same
+    /// run cannot then land a row apart.
+    ///
+    /// The start saturates and the end is checked. A run opening above this listing
+    /// starts at its first row; one ending above it holds none of it at all.
+    /// [`Lanes::instructions_in`] settles the ends from there -- a separator opening the
+    /// run is inside it, one closing it is not.
+    fn instructions_in(
+        &self,
+        rows: RangeInclusive<usize>,
+        base: usize,
+    ) -> Option<RangeInclusive<usize>> {
+        let first = rows.start().saturating_sub(base);
+        let last = rows.end().checked_sub(base)?;
+        self.lanes.instructions_in(first..=last)
+    }
+
     /// The positions the instructions drawn in the listing rows `rows` were compiled
     /// from, `base` being the listing row this symbol's first instruction row is drawn
     /// at. One per instruction placed somewhere, in listing order; a run of rows that is
     /// separators alone answers nothing.
     pub(crate) fn places(&self, rows: RangeInclusive<usize>, base: usize) -> Vec<LinePos> {
-        let first = rows.start().saturating_sub(base);
-        let Some(last) = rows.end().checked_sub(base) else {
-            return Vec::new();
-        };
-        let Some(indices) = self.lanes.instructions_in(first..=last) else {
+        let Some(indices) = self.instructions_in(rows, base) else {
             return Vec::new();
         };
         indices.filter_map(|index| self.position(index)).collect()
+    }
+
+    /// The edges starting or ending at an instruction drawn in the listing rows `rows`,
+    /// `base` as in [`Studied::places`]: what the gutter lights for the run. Empty for a
+    /// run that is separators alone.
+    pub(crate) fn touching(&self, rows: RangeInclusive<usize>, base: usize) -> Vec<PlacedEdge> {
+        self.instructions_in(rows, base)
+            .map(|indices| self.lanes.touching_any(indices))
+            .unwrap_or_default()
     }
 }
 

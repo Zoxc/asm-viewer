@@ -674,10 +674,7 @@ impl Component for SectionList {
                 .filter_map(|(&flat, stretched)| {
                     let studied = stretched.code.as_ref()?;
                     let base = built.body_start(flat)?;
-                    let first = run.rows().start().saturating_sub(base);
-                    let last = run.rows().end().checked_sub(base)?;
-                    let indices = studied.lanes.instructions_in(first..=last)?;
-                    let edges = studied.lanes.touching_any(indices);
+                    let edges = studied.touching(run.rows(), base);
                     (!edges.is_empty()).then_some((flat, edges))
                 })
                 .collect(),

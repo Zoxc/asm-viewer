@@ -198,3 +198,51 @@ fn a_place_with_no_listing_leaves_nothing_waiting() {
     assert!(state.asked(None, &[object], &visits).is_none());
     assert!(state.pending.is_none(), "the wait outlived the question");
 }
+
+/// The base is where the two index spaces meet, and one function crosses it: `touching`
+/// and `places` share it, so the gutter cannot light an edge the pane will not scroll
+/// to. A run opening above this listing starts at its first row, one ending above it
+/// holds nothing of it, and a separator opening the run is inside it while one closing
+/// the run is not -- all of it with a base under the rows.
+#[test]
+fn a_run_of_listing_rows_crosses_into_this_listings_instructions_by_its_base() {
+    // Branches 0 -> 2 and 3 -> 5 over nine instructions. A separator is drawn above
+    // each landing row, so instruction 5 is drawn at row 7 of this listing and the
+    // separator opening its block at row 6.
+    let edges = [
+        analysis::BranchEdge { from: 0, to: 2 },
+        analysis::BranchEdge { from: 3, to: 5 },
+    ];
+    let studied = Studied {
+        symbol: symbol_of(&fixture()),
+        assembly: None,
+        lanes: Arc::new(Lanes::new(&edges, 9)),
+        lines: SymbolLines {
+            info: None,
+            file: None,
+            line: None,
+        },
+    };
+    assert_eq!(studied.lanes.row_of(5), 7);
+
+    // The listing row the section view draws this stretch's first instruction at.
+    let base = 100;
+    let lit = |rows: RangeInclusive<usize>| studied.touching(rows, base);
+
+    // The run ends above this listing, so it holds none of it. The end is checked and
+    // not clamped: clamped, it would light the branch off the first instruction.
+    assert!(lit(90..=99).is_empty());
+    // The run opens above and reaches in. The start saturates to the first row, and
+    // that same branch is lit.
+    assert_eq!(lit(90..=101).len(), 1);
+    // A separator closing the run belongs to the instruction below it, which is then
+    // outside: instruction 5 is not in rows 5..=6 and its branch stays dark.
+    assert!(lit(105..=106).is_empty());
+    // Opening the run, that instruction is inside it.
+    assert_eq!(lit(106..=107).len(), 1);
+    // A run that is the separator alone holds no instruction at all.
+    assert!(lit(106..=106).is_empty());
+    // And the symbol read alone, with no base, answers the same run shifted down: the
+    // two panes ask one function.
+    assert_eq!(lit(106..=107), studied.touching(6..=7, 0));
+}
