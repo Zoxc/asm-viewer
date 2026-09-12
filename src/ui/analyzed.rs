@@ -141,8 +141,11 @@ pub(crate) enum Question {
 }
 
 /// The four kinds of job, which supersede separately.
+///
+/// `JobKind` and not `Kind`: the prelude's [`Kind`] is a document's, which a type of that
+/// name here would put out of reach.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
+enum JobKind {
     Listing,
     Code,
     Locate,
@@ -150,12 +153,12 @@ enum Kind {
 }
 
 impl Question {
-    fn kind(&self) -> Kind {
+    fn job_kind(&self) -> JobKind {
         match self {
-            Question::Study(_) | Question::Resolve { .. } => Kind::Listing,
-            Question::Code(_) => Kind::Code,
-            Question::Locate { .. } => Kind::Locate,
-            Question::Marks { .. } => Kind::Marks,
+            Question::Study(_) | Question::Resolve { .. } => JobKind::Listing,
+            Question::Code(_) => JobKind::Code,
+            Question::Locate { .. } => JobKind::Locate,
+            Question::Marks { .. } => JobKind::Marks,
         }
     }
 }
@@ -176,11 +179,11 @@ pub(crate) fn newest(first: Question, queued: impl Iterator<Item = Question>) ->
     let mut locate = None;
     let mut marks = None;
     for question in std::iter::once(first).chain(queued) {
-        match question.kind() {
-            Kind::Listing => listing = Some(question),
-            Kind::Code => code = Some(question),
-            Kind::Locate => locate = Some(question),
-            Kind::Marks => marks = Some(question),
+        match question.job_kind() {
+            JobKind::Listing => listing = Some(question),
+            JobKind::Code => code = Some(question),
+            JobKind::Locate => locate = Some(question),
+            JobKind::Marks => marks = Some(question),
         }
     }
     listing

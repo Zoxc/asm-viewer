@@ -185,7 +185,7 @@ own -- the Objects tree's idiom down to the mark itself, which is `disclosure`'s
 (`src/ui/parts.rs`) -- a triangle being the toggle where a name is a copy. What it opens is the
 rest of what is known: for a symbol its section, address, declared size, extent and the object it
 came from; for an object the format, the symbol count and the path. The extent is the one the
-listing under the bar was decoded over, handed in with the name (`Named::Symbol`) and read off the
+listing under the bar was decoded over, handed in with the name (`Heading::Symbol`) and read off the
 `Assembly` the worker made: `facts` runs in a render, and `SymbolData::extent` is a lookup under the
 debug backend's mutex. Each fact is a `field_row` cut
 to one line for the reason the names are.

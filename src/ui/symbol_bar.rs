@@ -101,7 +101,7 @@ fn fact(name: &str, value: String) -> impl IntoElement {
 /// backend's mutex -- and a bar drawn in a render may not ask for it. The worker has paid
 /// for it once already ([`Studied::extent`]), so the bar is handed what it has.
 #[derive(Clone)]
-pub(crate) enum Named {
+pub(crate) enum Heading {
     Symbol {
         symbol: Symbol,
         /// How many bytes the pane below is drawing, from the listing it is drawing.
@@ -111,17 +111,17 @@ pub(crate) enum Named {
 }
 
 /// The identity rule the rest of the UI keeps: pointers, never names.
-impl PartialEq for Named {
+impl PartialEq for Heading {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (
-                Named::Symbol { symbol, extent },
-                Named::Symbol {
+                Heading::Symbol { symbol, extent },
+                Heading::Symbol {
                     symbol: other,
                     extent: bytes,
                 },
             ) => symbol == other && extent == bytes,
-            (Named::Object(a), Named::Object(b)) => Arc::ptr_eq(a, b),
+            (Heading::Object(a), Heading::Object(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -129,9 +129,9 @@ impl PartialEq for Named {
 
 /// The rest of what is known about what the bar names, which is what the Info pane
 /// answered before it. The two names are the bar's own rows and are not repeated here.
-fn facts(named: &Named) -> Vec<Element> {
-    match named {
-        Named::Symbol { symbol, extent } => {
+fn facts(heading: &Heading) -> Vec<Element> {
+    match heading {
+        Heading::Symbol { symbol, extent } => {
             let data = &symbol.data;
             vec![
                 fact(
@@ -150,7 +150,7 @@ fn facts(named: &Named) -> Vec<Element> {
                 fact("Object", symbol.object.name.clone()).into_element(),
             ]
         }
-        Named::Object(object) => vec![
+        Heading::Object(object) => vec![
             fact("Format", format!("{:?}", object.format)).into_element(),
             fact("Symbols", object.symbols.len().to_string()).into_element(),
             fact("Path", object.path.display().to_string()).into_element(),
@@ -161,7 +161,7 @@ fn facts(named: &Named) -> Vec<Element> {
 /// The bar over the Assembly pane, naming what that pane is drawing, and the section it
 /// expands into.
 ///
-/// **The drawn symbol and never the selected one.** It is handed a [`Named`] worked out
+/// **The drawn symbol and never the selected one.** It is handed a [`Heading`] worked out
 /// from the same [`Analyzed::showing`] the listing under it is built from, rather than
 /// reading `Active` the way the Info pane it replaces did: the two disagree for as long as
 /// the worker takes, and a bar naming a function the rows below it are not of is worse than
@@ -173,7 +173,7 @@ fn facts(named: &Named) -> Vec<Element> {
 /// be gone the moment the reader looked at another tab.
 #[derive(Clone, PartialEq)]
 pub(crate) struct SymbolBar {
-    pub(crate) named: Named,
+    pub(crate) heading: Heading,
     /// The tab this bar is in, which is what its open-or-shut is filed under -- the tab
     /// and not the place on its trail, so the section stays open along the trail.
     pub(crate) tab: DocId,
@@ -189,8 +189,8 @@ impl Component for SymbolBar {
         let open = expanded.read().contains(&self.tab);
         // The mangled row only where there is a demangling: `display()` falls back to the
         // mangled name, so a symbol that was never mangled would otherwise be named twice.
-        let names: Vec<Element> = match &self.named {
-            Named::Symbol { symbol, .. } => {
+        let names: Vec<Element> = match &self.heading {
+            Heading::Symbol { symbol, .. } => {
                 let data = &symbol.data;
                 std::iter::once(
                     NameRow {
@@ -208,7 +208,7 @@ impl Component for SymbolBar {
                 }))
                 .collect()
             }
-            Named::Object(object) => vec![NameRow {
+            Heading::Object(object) => vec![NameRow {
                 text: object.name.clone(),
                 dim: false,
             }
@@ -262,7 +262,7 @@ impl Component for SymbolBar {
                     .overflow(Overflow::Clip)
                     .children(names)
                     .children(match open {
-                        true => facts(&self.named),
+                        true => facts(&self.heading),
                         false => Vec::new(),
                     }),
             )

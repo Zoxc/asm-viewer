@@ -137,6 +137,18 @@ pub(crate) fn use_periodic_save() {
     });
 }
 
+/// The store this run keeps its files in, or the failure that says there is none: what a
+/// way into a project asks before it opens anything.
+///
+/// Nowhere to keep anything is not a fact about the file, so the load never answers it
+/// ([`project::Reason::NoStore`]); the caller does, and this is the one place it is built.
+fn store_for(states: ProjectStates, path: &Path) -> Result<Store, project::Failure> {
+    states.store.peek().clone().ok_or_else(|| project::Failure {
+        path: path.to_path_buf(),
+        reason: project::Reason::NoStore,
+    })
+}
+
 /// Reopen the last project -- its name, binaries, tabs and selection -- once, at startup.
 /// Which project that is, is `project::reopen`'s answer.
 pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<PathBuf>) {
@@ -146,24 +158,21 @@ pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<Path
         // What the app was given beats what it was last in. A file that will not parse
         // opens nothing and is said so, the same as one picked from a menu would be: it is
         // the reader's own file and is left exactly as it is.
-        let store = states.store.peek().clone();
-        let opened = match (store.as_ref(), &opening) {
-            (Some(store), Some(path)) => Some(
+        let opened = match &opening {
+            Some(path) => Some(
                 // The path the app was given, put beside the two halves so every branch
                 // here answers the same shape; `open_at` does not touch it.
-                project::open_at(store, path)
+                store_for(states, path)
+                    .and_then(|store| project::open_at(&store, path))
                     .map(|(project, session)| (path.clone(), project, session)),
             ),
-            (Some(store), None) => project::reopen(store),
-            // Nowhere to keep anything, so nothing opens. Only worth saying to a reader
-            // who asked for a project; a startup that would have reopened one has the
-            // empty screen to show for it either way.
-            (None, opening) => opening.clone().map(|path| {
-                Err(project::Failure {
-                    path,
-                    reason: project::Reason::NoStore,
-                })
-            }),
+            // With nowhere to keep anything there is nothing to reopen and nothing to say:
+            // a startup that would have reopened a project has the empty screen to show
+            // for it either way. A reader who asked for one is told, in the arm above.
+            None => {
+                let store = states.store.peek().clone();
+                store.as_ref().and_then(project::reopen)
+            }
         };
         // Nothing to reopen is the empty screen and not something to say; `project::reopen`
         // counts a last project whose file has gone as one of those.
@@ -462,14 +471,7 @@ pub(crate) fn switch_project(
     mut unopened: State<Option<project::Failure>>,
     path: PathBuf,
 ) {
-    let store = states.store.peek().clone();
-    let switched = match store.as_ref() {
-        Some(store) => project::switch(store, &path),
-        None => Err(project::Failure {
-            path: path.clone(),
-            reason: project::Reason::NoStore,
-        }),
-    };
+    let switched = store_for(states, &path).and_then(|store| project::switch(&store, &path));
     let (project, session) = match switched {
         Ok(both) => both,
         Err(failure) => {

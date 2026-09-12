@@ -49,8 +49,6 @@ enum Wanted {
 }
 
 impl Keys {
-    /// The box a tab takes the keyboard into: the first registered, which is the pane the
-    /// tab is driven from -- `DocumentBody` mounts the leading side first.
     /// The box an ask should be spent on: the **leading pane's**, where the tab on screen
     /// has one drawn, and otherwise whatever box there is.
     ///
@@ -61,9 +59,17 @@ impl Keys {
     /// the file beside the listing they had just asked for.
     fn wanted_box(&self, leads: Option<Pane>) -> Option<(Option<Pane>, AccessibilityId)> {
         leads
-            .and_then(|pane| self.boxes.iter().find(|(of, _)| *of == Some(pane)))
-            .or_else(|| self.boxes.first())
-            .copied()
+            .and_then(|pane| self.pane_box(pane).map(|a11y| (Some(pane), a11y)))
+            .or_else(|| self.boxes.first().copied())
+    }
+
+    /// The box `pane` registered, where it has one mounted: what puts the keyboard back
+    /// in the code after a find bar over it is closed.
+    pub(crate) fn pane_box(&self, pane: Pane) -> Option<AccessibilityId> {
+        self.boxes
+            .iter()
+            .find(|(of, _)| *of == Some(pane))
+            .map(|(_, a11y)| *a11y)
     }
 
     /// The box `panel` registered, where it is mounted at all: what a chord that reaches
@@ -99,17 +105,6 @@ pub(crate) fn use_panel_keyboard(panel: Panel, a11y: AccessibilityId) {
     use_drop(move || {
         keyboard.write().panels.retain(|(_, open)| *open != a11y);
     });
-}
-
-/// The focusable box `pane` registered, where it has one mounted: what puts the keyboard
-/// back in the code after a find bar over it is closed.
-pub(crate) fn pane_box(keyboard: State<Keys>, pane: Pane) -> Option<AccessibilityId> {
-    keyboard
-        .peek()
-        .boxes
-        .iter()
-        .find(|(of, _)| *of == Some(pane))
-        .map(|(_, a11y)| *a11y)
 }
 
 /// Whether the keyboard is inside the tab on screen. Asking is what subscribes the caller

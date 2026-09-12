@@ -1459,17 +1459,17 @@ impl AssemblyPane {
     /// worker ([`ask`] answers `None` for both, and the hook then resets [`Analyzed`]), so
     /// there is never an analysis of either and the bar has to fall back to the document
     /// to name the object. Everything else is the symbol the pane is drawing.
-    fn named(&self, analysis: &Analyzed) -> Option<Named> {
+    fn heading(&self, analysis: &Analyzed) -> Option<Heading> {
         match analysis.showing(&self.document) {
             // The extent comes from the listing being drawn and not from the crate: the bar
             // prints it in a render, and nothing analyses anything there.
-            Showing::Listing(shown) => Some(Named::Symbol {
+            Showing::Listing(shown) => Some(Heading::Symbol {
                 symbol: shown.studied.symbol.clone(),
                 extent: shown.studied.extent(),
             }),
             _ => match &self.document {
                 Document::Assembly(Selection::Object(object)) | Document::Code(object) => {
-                    Some(Named::Object(object.clone()))
+                    Some(Heading::Object(object.clone()))
                 }
                 _ => None,
             },
@@ -1546,9 +1546,9 @@ impl Component for AssemblyPane {
             // only works out for a `flex` child of a `Content::Flex` parent.
             .content(Content::Flex)
             .background(palette().asm_pane_bg)
-            .maybe_child(self.named(&analysis).map(|named| {
+            .maybe_child(self.heading(&analysis).map(|heading| {
                 SymbolBar {
-                    named,
+                    heading,
                     tab,
                     // This pane leads in every tab but a source-driven one.
                     leading: self.document.driven_from() == Pane::Assembly,

@@ -49,7 +49,9 @@ column, which lines up only in a fixed-width font and only while nothing wraps, 
 wide can promise neither. `Reason`'s `Display` is then one whole sentence per variant -- what the
 reader is shown -- and `UnopenedPopup` draws it with the path under it. `Reason::NoStore` is the
 one a caller supplies rather than the load: nowhere to keep anything is not a fact about the file,
-but it is still why the project did not open.
+but it is still why the project did not open. The two ways in that report it -- a startup given a
+file, and a switch -- both ask `store_for` (`src/ui/session.rs`) for the store, so the failure is
+built in one place.
 
 **And the reader is told**, which is the half that makes it a rescue at all: a file moved somewhere
 nobody hears about is a file lost politely. `store::moved()` hands over the destinations recorded

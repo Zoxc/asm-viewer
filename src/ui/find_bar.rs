@@ -566,7 +566,9 @@ impl Component for FindBar {
         let step = move |direction| edit_find(finds, at, move |bar| bar.step = Some(direction));
         let close = move || {
             close_find(finds, at);
-            if let Some(pane) = pane_box(keyboard, at.1) {
+            // Out of the guard first: an `if let` holds its scrutinee for the whole body.
+            let pane_box = keyboard.peek().pane_box(at.1);
+            if let Some(pane) = pane_box {
                 pane.request_focus();
             }
         };

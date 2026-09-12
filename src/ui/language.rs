@@ -747,7 +747,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
 
 /// Whose answer a job is, for [`superseded_as`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Kind {
+enum JobKind {
     Following,
     Listing,
     Linking,
@@ -769,19 +769,19 @@ enum Kind {
 /// The `match` is exhaustive on purpose, and this is the only place the rule is written:
 /// a job added with nothing said about superseding would otherwise queue behind every one
 /// of its own kind in silence.
-fn superseded_as(job: &LspJob) -> Option<Kind> {
+fn superseded_as(job: &LspJob) -> Option<JobKind> {
     match job {
         LspJob::Ask {
             want: lsp::Question::Followed(_),
             ..
-        } => Some(Kind::Following),
+        } => Some(JobKind::Following),
         LspJob::Ask {
             want: lsp::Question::Listed(_),
             ..
-        } => Some(Kind::Listing),
-        LspJob::Tokens { .. } => Some(Kind::Linking),
-        LspJob::Hover { .. } => Some(Kind::Hovering),
-        LspJob::ReadSettings { .. } => Some(Kind::Settings),
+        } => Some(JobKind::Listing),
+        LspJob::Tokens { .. } => Some(JobKind::Linking),
+        LspJob::Hover { .. } => Some(JobKind::Hovering),
+        LspJob::ReadSettings { .. } => Some(JobKind::Settings),
         // Never dropped. The two documents are not questions: they are the difference
         // between what the server holds and what the reader has open, and a dropped one
         // leaves the two disagreeing for good. A start and a stop are what the reader
@@ -799,7 +799,7 @@ fn superseded_as(job: &LspJob) -> Option<Kind> {
 /// [`superseded_as`] says.
 pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -> Vec<LspJob> {
     let jobs: Vec<LspJob> = std::iter::once(first).chain(queued).collect();
-    let mut last: HashMap<Kind, usize> = HashMap::new();
+    let mut last: HashMap<JobKind, usize> = HashMap::new();
     for (at, job) in jobs.iter().enumerate() {
         if let Some(kind) = superseded_as(job) {
             last.insert(kind, at);
