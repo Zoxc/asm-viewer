@@ -73,7 +73,9 @@ are asked about -- is read there, which is what subscribes the memo to it.
 `use_locate_asks` in `locations.rs`, which keeps the retain-open sweep beside it over the same
 `Objects`, and `use_mark_asks` in `coded.rs` beside `Coded`. `use_analysis_with` starts the
 one thread and hands back the way to ask it; the root calls each of the three with that. What is
-left in `analyzed.rs` is the listing question, whose state is that module's own. The *taking* is
+left in `analyzed.rs` is the listing question. Its state is `studied.rs`, beside the panes that
+draw it, so every one of the four sits with what it is the state of and `analyzed.rs` is the worker
+alone: the questions, the drain, the answer task, and the one effect that asks. The *taking* is
 not split the same way and should not be: one worker answers over one channel with one `Answer`, so
 one closure judges what lands, each arm through the owning state's own method. The asking used to
 sit there too, which put a state's read-or-peek decisions eight hundred lines from the state they

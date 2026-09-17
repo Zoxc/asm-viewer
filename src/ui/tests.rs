@@ -25603,7 +25603,7 @@ fn sweeping_the_source_pane_copies_no_analysis() {
     settle(&mut test);
     settle(&mut test);
 
-    let copied = crate::ui::analyzed::copies();
+    let copied = crate::ui::studied::copies();
     sweep(&mut test, marked, Pane::Source, 2, 3);
 
     let (_, source) = runs_of(marked);
@@ -25611,7 +25611,7 @@ fn sweeping_the_source_pane_copies_no_analysis() {
     assert_eq!(source.chars.rows(), 2..=3);
     assert!(source.file.as_deref() == Some(&*file));
     assert_eq!(
-        crate::ui::analyzed::copies(),
+        crate::ui::studied::copies(),
         copied,
         "drawing the source side copied the whole answer"
     );

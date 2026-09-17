@@ -179,6 +179,8 @@ mod state;
 pub(crate) use state::*;
 mod strip;
 pub(crate) use strip::*;
+mod studied;
+pub(crate) use studied::*;
 mod symbol_bar;
 pub(crate) use symbol_bar::*;
 mod width;

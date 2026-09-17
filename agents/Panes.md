@@ -68,7 +68,7 @@ move of a sweep in either pane -- it reads the runs -- and on every word from th
 `Analyzed` is a whole answer: a listing, the symbol it is of, and the questions either side of it.
 So the two guards are bound around the one call that wants both (`source_side`), spent and
 dropped, and every later read of the analysis is a short scope of its own. `Analyzed`'s `Clone`
-counts itself (`analyzed::copies`), as `Grouped`'s does (`agents/Sidebar.md`), so a headless test
+counts itself (`studied::copies`), as `Grouped`'s does (`agents/Sidebar.md`), so a headless test
 can say a sweep copied nothing.
 
 **A tab opens its source side on the symbol's own lines**, which is what selecting a symbol asked to

@@ -252,7 +252,11 @@ command.
   and so does the bundle that groups it; the rest is here, `Placing` among them -- whether a
   code pane is a tab's or the Scratchpad's, which is what its place, its runs and its find
   bar are filed under.
-- `src/ui/analyzed.rs` — the worker's question, its answer, and the supersession rule.
+- `src/ui/analyzed.rs` — the analysis worker: the four kinds of question, the drain that
+  supersedes each kind on its own, the work itself, and the task that takes every answer.
+- `src/ui/studied.rs` — the listing the two panes draw: the question they put, what answers
+  it, what a pane draws while it is being worked out, which answers are kept, and when an
+  instruction and a source line are the same place.
 - `src/ui/finder.rs` — the file finder: the box Ctrl+P opens over the app, the files of the
   project's directory under it, and the one worker that walks them and picks them out. The
   walked files never reach the UI thread; the rows a query picked out are what cross.
