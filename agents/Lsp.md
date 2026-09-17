@@ -531,14 +531,15 @@ which, and a `u64` comes back. A function and not a line in each, because the st
 a process handle and the project's settings -- cloning it to read a `bool` and a `u64`
 copied all of that on the UI thread, and a hover is put again at every pointer stop.
 
-What the server says unasked comes back on a bounded channel the `Start` job carries, under
-the run it was started in, and the only thing said so far is whether it is working. Bounded
-so that a server reporting progress in a tight loop cannot outrun the app: the reader thread
-waiting is the whole of the backpressure. **Working is not a state**, it is what a server
-that is there is doing, so it is carried by the two states that have one and cannot be
-written beside a state with none. A handshake's answer and a first `$/progress` arrive in
-either order without one undoing the other, since the remark is kept across the change of
-state; a remark about a server the app has let go of has nowhere to land.
+What the server says unasked comes back on a bounded channel the `Start` job carries,
+under the run it was started in. Two things are said over it: whether it is working, and
+whether it has settled (below). Bounded so that a server reporting progress in a tight
+loop cannot outrun the app: the reader thread waiting is the whole of the backpressure.
+**Neither is a state**, both are what a server that is there is doing, so they are carried
+by the two states that have one and cannot be written beside a state with none. A
+handshake's answer and a first `$/progress` arrive in either order without one undoing the
+other, since the remark is kept across the change of state; a remark about a server the
+app has let go of has nowhere to land.
 
 `worth_doing` drains the queue to the last question of each kind, keeping every start and
 stop: a reader clicking twice wants the second answer, a reader who asks for a name's
