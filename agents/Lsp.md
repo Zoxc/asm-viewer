@@ -47,16 +47,26 @@ about the program reading it *now*, and a control reading "not agreed to" over a
 going through their project would be answering them with a lie.
 
 What it is about is a *directory*, and the effect that follows the project is where that is
-kept honest -- but only one of the three things it sees is the agreement being outlived.
+kept honest -- but only one of the four things it sees is the agreement being outlived.
 The reader typing a new directory into the box has pointed **this** project somewhere else,
 and the agreement was to the old place, so it goes. A project *arriving* brings its own
 answer with it, out of its own session, and taking that off it would not only ask again but
 write the `false` straight back into the session it was read from, since the open project is
-saved as it changes. And the mount is neither: the deps it mounts with are already the
-reopened project's, the restore being an earlier hook of the same render. So the effect is
-handed what it last saw beside what it sees now (`use_on_change`, `agents/UI.md`), and
-clears only where the id stayed and the directory moved. The server still stops for all
-three: it belonged to the project that is being left.
+saved as it changes. A project *saved* moves only where it is kept. And the mount is none
+of those: the deps it mounts with are already the reopened project's, the restore being an
+earlier hook of the same render. So the effect is handed what it last saw beside what it
+sees now (`use_on_change`, `agents/UI.md`), and clears only where the file stayed and the
+directory moved.
+
+**The server stops by the directory and not by the project.** The directory is what it
+reads and what the settings are read from, so one it is no longer over ends it and the
+settings go with it; a file that moved on its own is neither. That file is Save
+(`ask_where_to_save`, the only thing that puts a project somewhere else while the tree
+stays), and stopping there threw away a server that had read a whole project for a gesture
+about where a `project.toml` is kept. What the file alone does still stop is a project
+arriving over the directory the last one's server is reading **without having agreed** to
+one itself: the agreement is one project's, and a server running for a project that never
+gave one is what the prompt is there to prevent.
 
 It sees those two paths through a **memo** rather than reading the project at the root.
 The hook is called from `app()`, and the Project view's boxes write the open project on
@@ -538,9 +548,11 @@ while the server is still starting is sent all the same -- it queues behind the 
 is answered once there is somebody to answer it, and finds nothing to talk to if the start
 failed. A question with the server off is not sent: the control is what starts one.
 
-Leaving the project ends its server, from a side effect on the project's id and directory
+Leaving the project ends its server, from a side effect on the project's file and directory
 rather than from `clear_project`: the server was started over that directory, and a
 directory typed into the Project view is a different project's as far as it is concerned.
+Saving the project is the change that ends nothing, the directory being where it was
+(above).
 
 ## The control, and what the Project view says
 

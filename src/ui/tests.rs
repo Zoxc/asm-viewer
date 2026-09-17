@@ -29705,6 +29705,95 @@ fn changing_the_project_stops_the_server() {
     assert_eq!(next_job(&asks), Some(AskedOfServer::Stop));
 }
 
+/// Saving the project moves where it is kept and nothing the server reads: the same
+/// directory, the same settings, the same agreement, so the server it was started with
+/// goes on running.
+#[test]
+fn saving_the_project_leaves_its_server_running() {
+    let handle = process::Handle::to_nothing();
+    let (mut test, roots, _asking, asks) = mount_server({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
+            _ => None,
+        }
+    });
+    let states = roots.states;
+    let language = roots.language;
+    let mut proj = states.proj;
+    proj.write().file = Some(PathBuf::from("/store/one.avproj"));
+    settle(&mut test);
+    with_a_directory(&mut test, &states, "/p");
+
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, running);
+
+    // What `ask_where_to_save` writes once the dialog has answered and the project is in
+    // the reader's own file: the file moves and the directory does not.
+    proj.write().file = Some(PathBuf::from("/elsewhere/mine.avproj"));
+    settle(&mut test);
+
+    let state = language.read().state.clone();
+    assert!(
+        matches!(state, Lsp::Running { .. }),
+        "saving stopped the server: {state:?}"
+    );
+    assert!(!handle.finished(), "saving killed the server");
+    assert!(proj.read().trusted, "saving took the agreement away");
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+    assert_eq!(
+        next_job(&asks),
+        None,
+        "saving asked the worker for something"
+    );
+}
+
+/// The other half of that: a project arriving over the directory the last one's server is
+/// reading stops it unless it has agreed to one itself. The agreement is a project's own.
+#[test]
+fn a_project_that_has_not_agreed_stops_the_server_it_arrives_over() {
+    let handle = process::Handle::to_nothing();
+    let (mut test, roots, _asking, asks) = mount_server({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
+            _ => None,
+        }
+    });
+    let states = roots.states;
+    let language = roots.language;
+    let mut proj = states.proj;
+    proj.write().file = Some(PathBuf::from("/store/one.avproj"));
+    settle(&mut test);
+    with_a_directory(&mut test, &states, "/p");
+
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, running);
+
+    // A project arriving is one write, `enter_project`'s: its file and the answer out of
+    // its own session together.
+    {
+        let mut open = proj.write();
+        open.file = Some(PathBuf::from("/store/two.avproj"));
+        open.trusted = false;
+    }
+    settle(&mut test);
+
+    assert_eq!(language.read().state, Lsp::Off);
+    assert!(
+        handle.finished(),
+        "a project that has not agreed is being read all the same"
+    );
+    assert_eq!(
+        next_job(&asks),
+        Some(AskedOfServer::Start(PathBuf::from("/p")))
+    );
+    assert_eq!(next_job(&asks), Some(AskedOfServer::Stop));
+}
+
 /// A question is only asked while a server is running: nothing about a question starts
 /// one, which is the other half of "the control is what starts it".
 #[test]

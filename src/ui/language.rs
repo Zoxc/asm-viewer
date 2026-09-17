@@ -1091,17 +1091,24 @@ pub(crate) fn use_language_with(
         let open = proj.read();
         (open.file.clone(), open.workspace())
     });
-    // Leaving a project ends its server and takes the reader's agreement with it: it is
-    // the project's directory the server was started over and the directory they agreed
-    // to, and a directory typed into the Project view is a different project's on both
-    // counts.
+    // **The directory is what a change is judged by**: both paths are watched and only one
+    // of them is what a server reads. A directory it is no longer over ends it, and the
+    // settings go with it, having been that directory's. The file moving on its own is
+    // Save and nothing else -- the same tree, the same settings -- so the server stays.
+    // Stopping there threw away a server that had read a whole project for a gesture about
+    // where a `project.toml` is kept.
     //
-    // `before` is what tells the two changes apart. A directory typed into the box is the
-    // reader pointing *this* project somewhere else, and the agreement was to the old
-    // place; a project arriving is another project's answer arriving with it, and that
-    // answer is its own to give. The mount is neither: what it mounts with is the reopened
-    // project, the restore being an earlier hook of the same render, so an agreement read
-    // out of `project.toml` survives the launch that read it.
+    // The file is watched for the two things only it can say. A directory typed into the
+    // box with the file where it was is the reader pointing *this* project somewhere else,
+    // and the agreement was to the old place, so it goes; a project arriving brings its own
+    // answer with it, out of its own session, and that answer is its own to give. And a
+    // project arriving over the directory the last one's server is still reading stops it
+    // where it has not agreed: the agreement is one project's, and a server running for a
+    // project that never gave one is what the prompt is there to prevent.
+    //
+    // The mount is neither: what it mounts with is the reopened project, the restore being
+    // an earlier hook of the same render, so an agreement read out of `project.toml`
+    // survives the launch that read it.
     //
     // The memo is read **in the deps and not in the render**, which is what subscribes the
     // effect to the two paths and leaves the root subscribed to neither: the box the
@@ -1109,14 +1116,21 @@ pub(crate) fn use_language_with(
     use_on_change(move || places.read().clone(), {
         let jobs = jobs.clone();
         move |before, (file, directory): &(Option<PathBuf>, Option<PathBuf>)| {
-            stop_server(language, &jobs);
-            // And the settings go with it: they were another project's. Read again here,
-            // where a project arrives, so the answer is in hand before either press can
-            // ask for a server and whether or not one is ever started -- the Project view
-            // lists them either way.
-            write_if(language, |held| held.forget_settings());
-            if let Some(directory) = directory.clone() {
-                jobs.send(LspJob::ReadSettings { directory });
+            let elsewhere = !before.is_some_and(|(_, was_directory)| was_directory == directory);
+            if elsewhere {
+                // Read again here, where a directory arrives, so the answer is in hand
+                // before either press can ask for a server and whether or not one is ever
+                // started -- the Project view lists them either way.
+                write_if(language, |held| held.forget_settings());
+                if let Some(directory) = directory.clone() {
+                    jobs.send(LspJob::ReadSettings { directory });
+                }
+            }
+            // Bound to a `let` of its own: the write at the foot is to the state this was
+            // read from.
+            let agreed = proj.peek().trusted;
+            if elsewhere || !agreed {
+                stop_server(language, &jobs);
             }
             let moved = before.is_some_and(|(was_file, was_directory)| {
                 was_file == file && was_directory != directory
