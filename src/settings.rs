@@ -13,11 +13,6 @@ use crate::store::Store;
 const FILE_NAME: &str = "settings.toml";
 
 /// Everything the user can set.
-///
-/// **The field order is load-bearing**: TOML cannot reopen a table, so every plain value
-/// must be emitted before the first sub-table, and getting it wrong fails at *runtime*.
-/// `theme` is a bare string and the two fonts are tables, so `theme` comes first; the
-/// round-trip test is what keeps that true.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {

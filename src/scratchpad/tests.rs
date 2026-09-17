@@ -35,9 +35,9 @@ fn dependencies<N: Into<String>, V: Into<String>>(
         .collect()
 }
 
-/// The whole generated manifest, asserted as text rather than as a value: the field order
-/// rule is a property of the *serializer*, and a round trip through a struct would not see
-/// it. `[workspace]` being emitted at all is here for the same reason.
+/// The whole generated manifest, asserted as text rather than as a value: cargo reads
+/// this file, so what it says is what matters -- the sorting, the trimming, and
+/// `[workspace]` being there at all.
 #[test]
 fn a_package_is_a_manifest_and_a_main() {
     let mut scratchpad = scratchpad();

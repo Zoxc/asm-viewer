@@ -40,14 +40,15 @@ impl OpenProject {
         OpenProject {
             file: Some(file),
             workspace_text: project
+                .details
                 .directory
                 .as_ref()
                 .map(|directory| directory.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            language_server: project.language_server.clone().unwrap_or_default(),
-            language_files: project.language_files.clone().unwrap_or_default(),
+            language_server: project.details.language_server.clone().unwrap_or_default(),
+            language_files: project.details.language_files.clone().unwrap_or_default(),
             trusted,
-            profile: project.cargo.clone().unwrap_or_default().profile,
+            profile: project.details.cargo.clone().unwrap_or_default().profile,
         }
     }
 

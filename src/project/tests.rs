@@ -308,7 +308,7 @@ fn a_missing_object_falls_back_to_nothing() {
 }
 
 /// Serialize to TOML and read it straight back, which is the only way to catch the `toml`
-/// crate's runtime failures: a bare `None`, and a value emitted after a table.
+/// crate's runtime failures -- a bare `None` among them.
 fn round_trip<T>(value: &T) -> String
 where
     T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -1452,18 +1452,6 @@ fn session_with(selection: Option<&str>) -> Session {
     }
 }
 
-/// The half of a project that is what the user said. `Saves::record` compares the two
-/// field by field ([`Project::is_about`]) rather than building this, so these tests are
-/// the only place it is put together.
-fn details_of(project: &Project) -> Details {
-    Details {
-        directory: project.directory.clone(),
-        language_server: project.language_server.clone(),
-        language_files: project.language_files.clone(),
-        cargo: project.cargo.clone(),
-    }
-}
-
 /// The writes landing, which is what the caller does once `write_or_warn` has answered:
 /// the baselines move with the files and not before. Every test but the ones about a
 /// write that fails goes through this.
@@ -1491,7 +1479,7 @@ fn recorded(
     binaries: Vec<PathBuf>,
     session: Session,
 ) -> Option<(Project, Option<Session>)> {
-    let unchanged = details_of(&saves.written);
+    let unchanged = saves.written.details.clone();
     let bookmarks = saves.written.bookmarks.clone();
     let decided = saves.record(&unchanged, &binaries, false, &bookmarks, session);
     landed(saves, decided)
@@ -1512,7 +1500,7 @@ fn mid_load(
     binaries: &[&str],
     session: Session,
 ) -> Option<(Project, Option<Session>)> {
-    let unchanged = details_of(&saves.written);
+    let unchanged = saves.written.details.clone();
     let bookmarks = saves.written.bookmarks.clone();
     let decided = saves.record(&unchanged, &paths(binaries), true, &bookmarks, session);
     landed(saves, decided)
@@ -1537,11 +1525,8 @@ fn opening_a_binary_is_written_at_once() {
         Some((
             Project {
                 id: None,
-                directory: None,
-                language_server: None,
-                language_files: None,
+                details: Details::default(),
                 binaries: paths(&["/tmp/lib.a"]),
-                cargo: None,
                 bookmarks: Vec::new(),
             },
             Some(session_with(None)),
@@ -1653,11 +1638,11 @@ fn a_record_keeps_the_directory_the_project_was_given() {
     let mut saves = Saves::default();
     let named = Project {
         id: None,
-        directory: Some(PathBuf::from("/src/kernel")),
-        language_server: None,
-        language_files: None,
+        details: Details {
+            directory: Some(PathBuf::from("/src/kernel")),
+            ..Details::default()
+        },
         binaries: paths(&["/tmp/vmlinux"]),
-        cargo: None,
         bookmarks: Vec::new(),
     };
     saves.opened(
@@ -1668,7 +1653,10 @@ fn a_record_keeps_the_directory_the_project_was_given() {
     );
 
     let (project, _) = written(&mut saves, &["/tmp/lib.a"], None).expect("a write");
-    assert_eq!(project.directory, Some(PathBuf::from("/src/kernel")));
+    assert_eq!(
+        project.details.directory,
+        Some(PathBuf::from("/src/kernel"))
+    );
     // And the binaries are the ones the app is showing: that half *is* derived.
     assert_eq!(project.binaries, paths(&["/tmp/lib.a"]));
 }
@@ -1682,11 +1670,11 @@ fn reopening_seeds_the_details_but_not_the_baseline() {
     let mut saves = Saves::default();
     let loaded = Project {
         id: None,
-        directory: Some(PathBuf::from("/src/kernel")),
-        language_server: None,
-        language_files: None,
+        details: Details {
+            directory: Some(PathBuf::from("/src/kernel")),
+            ..Details::default()
+        },
         binaries: paths(&["/tmp/vmlinux"]),
-        cargo: None,
         bookmarks: Vec::new(),
     };
     saves.opened(
@@ -1712,11 +1700,8 @@ fn a_binary_landing_mid_load_is_not_written() {
     let mut saves = Saves::default();
     let loaded = Project {
         id: None,
-        directory: None,
-        language_server: None,
-        language_files: None,
+        details: Details::default(),
         binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
-        cargo: None,
         bookmarks: Vec::new(),
     };
     saves.opened(
@@ -1767,11 +1752,8 @@ fn a_session_recorded_mid_load_is_not_left_pending() {
     let mut saves = Saves::default();
     let loaded = Project {
         id: None,
-        directory: None,
-        language_server: None,
-        language_files: None,
+        details: Details::default(),
         binaries: paths(&["/tmp/vmlinux"]),
-        cargo: None,
         bookmarks: Vec::new(),
     };
     saves.opened(
@@ -1818,7 +1800,7 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
     // still being read.
     let named = Details {
         directory: Some(PathBuf::from("/src/kernel")),
-        ..details_of(&saves.written)
+        ..saves.written.details.clone()
     };
     let decided = saves.record(
         &named,
@@ -1828,7 +1810,10 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
         Session::default(),
     );
     let (project, session) = landed(&mut saves, decided).expect("a write");
-    assert_eq!(project.directory, Some(PathBuf::from("/src/kernel")));
+    assert_eq!(
+        project.details.directory,
+        Some(PathBuf::from("/src/kernel"))
+    );
     assert_eq!(
         project.binaries,
         paths(&["/tmp/lib.a"]),
@@ -1874,11 +1859,8 @@ fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
         written.0,
         Project {
             id: None,
-            directory: named.directory.clone(),
-            language_server: None,
-            language_files: None,
+            details: named.clone(),
             binaries: paths(&["/tmp/lib.a"]),
-            cargo: None,
             bookmarks: Vec::new(),
         }
     );
@@ -1905,9 +1887,10 @@ fn clearing_a_detail_is_a_change_too() {
         &Store::at("/state"),
         kept_at("kernel-1"),
         &Project {
-            language_server: None,
-            language_files: None,
-            directory: Some(PathBuf::from("/src/kernel")),
+            details: Details {
+                directory: Some(PathBuf::from("/src/kernel")),
+                ..Details::default()
+            },
             ..Project::default()
         },
         &Session::default(),
@@ -1915,7 +1898,7 @@ fn clearing_a_detail_is_a_change_too() {
 
     let decided = saves.record(&Details::default(), &[], false, &[], Session::default());
     let written = landed(&mut saves, decided).expect("a write");
-    assert_eq!(written.0.directory, None);
+    assert_eq!(written.0.details.directory, None);
     assert_eq!(written.1, None);
 }
 
@@ -1927,11 +1910,8 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
     let mut saves = Saves::default();
     let loaded = Project {
         id: None,
-        directory: None,
-        language_server: None,
-        language_files: None,
+        details: Details::default(),
         binaries: paths(&["/tmp/vmlinux", "/tmp/lib.a"]),
-        cargo: None,
         bookmarks: Vec::new(),
     };
     saves.opened(
@@ -1949,13 +1929,16 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
     };
     let decided = saves.record(&named, &[], true, &[], Session::default());
     let written = landed(&mut saves, decided).expect("a write");
-    assert_eq!(written.0.directory, Some(PathBuf::from("/src/kernel")));
+    assert_eq!(
+        written.0.details.directory,
+        Some(PathBuf::from("/src/kernel"))
+    );
     assert_eq!(written.0.binaries, loaded.binaries);
 
     // Once the parse lands the write *is* about the binaries, which is the one kind that
     // may replace the list.
     let decided = saves.record(
-        &details_of(&saves.written),
+        &saves.written.details.clone(),
         &paths(&["/tmp/vmlinux"]),
         false,
         &[],
@@ -1979,7 +1962,7 @@ fn a_write_that_failed_is_recorded_again() {
     // A binaries change, written at once -- and neither file reaches the disk, so
     // nothing is noted as written and the session is owed.
     let decided = saves.record(
-        &details_of(&saves.written),
+        &saves.written.details.clone(),
         &paths(&["/tmp/lib.a"]),
         false,
         &[],
@@ -2020,7 +2003,7 @@ fn the_project_id_is_stamped_once_and_both_halves_come_back_with_it() {
     // A binaries change: both halves at once, and both stamped.
     let decided = saves
         .record(
-            &details_of(&open),
+            &open.details.clone(),
             &paths(&["/tmp/lib.a"]),
             false,
             &[],
@@ -2035,7 +2018,7 @@ fn the_project_id_is_stamped_once_and_both_halves_come_back_with_it() {
     // And a session-only change, which waits for a flush: stamped before it is compared
     // against the baseline, so it is stamped by the time it is taken out again.
     let decided = saves.record(
-        &details_of(&open),
+        &open.details.clone(),
         &paths(&["/tmp/lib.a"]),
         false,
         &[],
@@ -2093,7 +2076,7 @@ fn a_change_to_any_one_detail_is_written_and_the_same_one_again_is_not() {
         let mut saves = Saves::default();
         let decided = saves.record(&change, &[], false, &[], Session::default());
         let (project, session) = landed(&mut saves, decided).expect("a write");
-        assert!(project.is_about(&change), "{change:?}");
+        assert_eq!(project.details, change, "{change:?}");
         assert_eq!(session, None, "the project file alone: {change:?}");
 
         let again = saves.record(&change, &[], false, &[], Session::default());
@@ -2110,9 +2093,10 @@ fn entering_a_project_empties_every_baseline() {
     written(&mut saves, &["/tmp/lib.a"], Some("a.o"));
 
     let entered = Project {
-        language_server: None,
-        language_files: None,
-        directory: Some(PathBuf::from("/src/other")),
+        details: Details {
+            directory: Some(PathBuf::from("/src/other")),
+            ..Details::default()
+        },
         ..Project::default()
     };
     saves.opened(
@@ -2126,7 +2110,7 @@ fn entering_a_project_empties_every_baseline() {
     // directory of the project just entered — every one of them the baseline.
     let decided = saves.record(
         &Details {
-            directory: entered.directory.clone(),
+            directory: entered.details.directory.clone(),
             language_server: None,
             language_files: None,
             cargo: None,
@@ -2155,37 +2139,44 @@ fn a_project() -> Project {
         // A project the app wrote always has one, which is what the session beside it is
         // matched against.
         id: ProjectId::parse("00000000deadbeef"),
-        directory: Some(PathBuf::from("/src/kernel")),
-        language_server: Some("ra-multiplex".into()),
-        language_files: Some("rs".into()),
+        details: Details {
+            directory: Some(PathBuf::from("/src/kernel")),
+            language_server: Some("ra-multiplex".into()),
+            language_files: Some("rs".into()),
+            cargo: None,
+        },
         binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
-        cargo: None,
         bookmarks: Vec::new(),
     }
 }
 
-/// The field-order trap for the project half, asserted against a real serializer rather
-/// than read off the struct.
+/// The project half through a real serializer. [`Details`] is **flattened**, so what the
+/// reader said is keys of the file rather than a `[details]` table of their own, and the
+/// file reads back as what was written.
 #[test]
 fn a_project_round_trips_through_toml() {
-    let project = a_project();
+    let project = Project {
+        details: Details {
+            cargo: Some(Cargo {
+                profile: Profile::Debug,
+            }),
+            ..a_project().details
+        },
+        ..a_project()
+    };
     let text = round_trip(&project);
-    assert!(!text.contains("\n["), "a table in the project file\n{text}");
-
-    let id = text.find("id = ").expect("the id");
-    let directory = text.find("directory = ").expect("the directory");
-    let server = text
-        .find("language_server = ")
-        .expect("the language server");
-    let binaries = text.find("binaries = ").expect("the binaries");
-    assert!(
-        id < directory && directory < server && server < binaries,
-        "{text}"
-    );
-    assert_eq!(
-        toml::from_str::<Project>(&text).expect("reading it back"),
-        project
-    );
+    assert!(!text.contains("[details]"), "{text}");
+    for key in [
+        "id = ",
+        "directory = ",
+        "language_server = ",
+        "language_files = ",
+        "binaries = ",
+    ] {
+        assert!(text.contains(key), "no {key} in\n{text}");
+    }
+    // The flattened table is a table of the file, wherever the struct puts it.
+    assert!(text.contains("[cargo]"), "{text}");
 }
 
 /// What the reader has not said is an *absent* key, never an empty one a later reader could
@@ -2227,14 +2218,14 @@ fn a_path_under_the_project_file_is_written_relative_to_it() {
 
     let project = Project {
         id: ProjectId::parse("00000000deadbeef"),
-        directory: Some(directory.to_path_buf()),
-        language_server: None,
-        language_files: None,
+        details: Details {
+            directory: Some(directory.to_path_buf()),
+            ..Details::default()
+        },
         binaries: vec![
             directory.join("target/debug/vmlinux"),
             "/usr/lib/libc.so".into(),
         ],
-        cargo: None,
         bookmarks: vec![Bookmark {
             name: Some("start".to_owned()),
             document: SavedDocument::Object {
@@ -2270,7 +2261,10 @@ fn a_project_file_moved_with_its_tree_points_at_the_new_one() {
     fs::create_dir_all(&there).expect("creating the second test directory");
 
     let project = Project {
-        directory: Some(here.to_path_buf()),
+        details: Details {
+            directory: Some(here.to_path_buf()),
+            ..Details::default()
+        },
         binaries: vec![here.join("target/debug/vmlinux")],
         ..Project::default()
     };
@@ -2280,7 +2274,7 @@ fn a_project_file_moved_with_its_tree_points_at_the_new_one() {
     fs::copy(here.join("kernel.avproj"), there.join("kernel.avproj")).expect("copying");
 
     let moved = Project::load_from(&there.join("kernel.avproj")).expect("reading it back");
-    assert_eq!(moved.directory, Some(there.to_path_buf()));
+    assert_eq!(moved.details.directory, Some(there.to_path_buf()));
     assert_eq!(moved.binaries, vec![there.join("target/debug/vmlinux")]);
 }
 
@@ -2835,11 +2829,11 @@ fn the_recent_view_describes_each_project_from_its_own_file() {
                 &path,
                 &Project {
                     id: None,
-                    directory: Some(PathBuf::from("/src").join(name)),
-                    language_server: None,
-                    language_files: None,
+                    details: Details {
+                        directory: Some(PathBuf::from("/src").join(name)),
+                        ..Details::default()
+                    },
                     binaries: paths(&["/tmp/lib.a", "/tmp/some.dll"]),
-                    cargo: None,
                     bookmarks: Vec::new(),
                 },
             )
@@ -3290,13 +3284,11 @@ fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
     }
 }
 
-/// A bookmark is what the user said, so it is `project.toml`'s: the one table in that file,
-/// after every plain value, and inside it the name before its document's table.
+/// A bookmark is what the user said, so it is `project.toml`'s, written as an array of
+/// tables and read back as what went in.
 #[test]
-fn bookmarks_are_written_after_the_binaries_and_name_first() {
+fn bookmarks_are_written_to_the_project_file_and_read_back() {
     let project = Project {
-        language_server: None,
-        language_files: None,
         bookmarks: vec![
             Bookmark {
                 name: Some("kernel::start".into()),
@@ -3313,21 +3305,10 @@ fn bookmarks_are_written_after_the_binaries_and_name_first() {
     };
     let text = round_trip(&project);
 
-    let binaries = text.find("binaries = ").expect("the binaries");
-    let first = text.find("[[bookmarks]]").expect("a bookmark");
-    assert!(binaries < first, "{text}");
-    assert!(
-        !text[..first].contains("\n["),
-        "a table before the bookmarks\n{text}"
-    );
-
-    let name = text
-        .find("name = \"kernel::start\"")
-        .expect("the bookmark's name");
-    let document = text
-        .find("[bookmarks.document.Symbol]")
-        .expect("its document");
-    assert!(first < name && name < document, "{text}");
+    assert!(text.contains("[[bookmarks]]"), "{text}");
+    assert!(text.contains("name = \"kernel::start\""), "{text}");
+    // Each document is a table named after its variant.
+    assert!(text.contains("[bookmarks.document.Symbol]"), "{text}");
     assert!(text.contains("[bookmarks.document.Source]"), "{text}");
 
     // And none at all is a key that is absent, not an empty list.
@@ -3409,8 +3390,6 @@ fn a_bookmark_on_a_made_up_name_writes_no_spelling() {
 fn a_bookmarks_change_writes_the_project_file_alone() {
     let mut saves = Saves::default();
     let reopened = Project {
-        language_server: None,
-        language_files: None,
         bookmarks: vec![Bookmark {
             name: Some("caller".into()),
             document: saved_symbol("a.o", "caller", 0),
@@ -3426,7 +3405,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
 
     // Seeded: the same bookmarks are no change, while the parse has yet to land.
     let unchanged = saves.record(
-        &details_of(&saves.written),
+        &saves.written.details.clone(),
         &[],
         false,
         &reopened.bookmarks.clone(),
@@ -3440,7 +3419,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
         document: saved_symbol("a.o", "target", 6),
     });
     let decided = saves.record(
-        &details_of(&saves.written),
+        &saves.written.details.clone(),
         &[],
         false,
         &added.clone(),
@@ -3456,7 +3435,7 @@ fn a_bookmarks_change_writes_the_project_file_alone() {
 
     // Removing them all is a change too, written as an absent key.
     let decided = saves.record(
-        &details_of(&saves.written),
+        &saves.written.details.clone(),
         &[],
         false,
         &[],
@@ -3521,13 +3500,14 @@ fn resolving_by_name_agrees_with_the_strict_rule_and_survives_a_rebuild() {
 fn a_cargo_section_is_written_where_toml_can_read_it_back() {
     let project = Project {
         id: None,
-        directory: Some(PathBuf::from("/src/kernel")),
-        language_server: None,
-        language_files: None,
+        details: Details {
+            directory: Some(PathBuf::from("/src/kernel")),
+            cargo: Some(Cargo {
+                profile: Profile::Debug,
+            }),
+            ..Details::default()
+        },
         binaries: paths(&["/tmp/vmlinux"]),
-        cargo: Some(Cargo {
-            profile: Profile::Debug,
-        }),
         bookmarks: vec![Bookmark {
             name: Some("start".to_owned()),
             document: SavedDocument::Source {
@@ -3556,11 +3536,8 @@ fn a_cargo_section_is_written_where_toml_can_read_it_back() {
 fn nothing_chosen_and_nothing_built_write_no_section() {
     let project = Project {
         id: None,
-        directory: None,
-        language_server: None,
-        language_files: None,
+        details: Details::default(),
         binaries: Vec::new(),
-        cargo: None,
         bookmarks: Vec::new(),
     };
     assert!(!round_trip(&project).contains("[cargo]"));

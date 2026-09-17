@@ -235,13 +235,15 @@ section is a **table of its own and is absent when it has nothing to say**, so a
 chosen a profile in and a session nothing was built in each write no section at all. A table also
 leaves room for what the next build setting needs, which a loose key would not.
 
-Both are placed after the plain values of their struct, which is the field-order rule the file has
-followed since `toml` 0.x. Note that the rule is now belt and braces: `toml` 1.x's serializer emits
-every plain value before every table whatever order the struct declares them in, so the round-trip
-tests can no longer fail on a misplaced field. The declaration order is kept anyway, because it is
-what a reader of the struct is entitled to assume and because nothing here wants to depend on that
-serializer detail. So the file a user might keep, copy or hand-edit is
-exactly the one that changes only when they do something. Three things follow, and they are why it
+**Field order in these structs decides nothing.** `toml` 1.x serializes into a value tree and
+writes it out plain values first, then tables, then arrays of tables, at every level and in
+whatever order the struct declares them; there is no `ValueAfterTable` error left to hit. The rule
+this file once followed -- every plain value before the first sub-table, on pain of a *runtime*
+failure -- was `toml` 0.5's and is gone. A struct is declared in whatever order reads best, and
+the round-trip tests pin what the file says rather than where a key sits in it.
+
+So the file a user might keep, copy or hand-edit is exactly the one that changes only when they do
+something. Three things follow, and they are why it
 is two files rather than two tables. A session that will not parse loses a scroll position
 and not the list of binaries. The file *is* the project, so a run killed between the `create_new`
 and the first write reopens as the empty project it is rather than being orphaned. And a binaries
@@ -352,13 +354,7 @@ seen apart; nothing past it carries them. A restore answers with a `RestoredTab`
 page or a document, rather than a tuple, since the rows and the line no longer survive the same things: the live trail,
 `History::rebuilt` over the places that resolved with the saved cursor carried past the ones that
 did not, and a `RestoredEntry` per surviving place. A tab with nothing left on its trail is dropped
-whole, and so is a page this build does not have. **Field order within these structs is load-bearing**: TOML emits plain values before tables,
-so `binaries` sits beside the id only because every other field of `Project` is a plain value and
-`bookmarks`, the one array of tables in that file, comes last; `SavedTab`'s `temporal` and `cursor`
-must precede its `entries`, a `SavedEntry`'s rows its `document`, a `SavedDocument::Symbol`'s
-`address` its `symbol_name` (a `SavedName` is written as a table either way), and a `Bookmark`'s
-`name` its `document` (`SavedHistory` has no plain field at all). Getting it wrong fails at
-*runtime*, not at compile time, and a round trip through real TOML per struct is what holds it.
+whole, and so is a page this build does not have.
 
 `Session::digests` is the digest each binary had when the session was saved, keyed by path. It is in
 the *other* file from `binaries` and not a field beside them, because `binaries` is the list to
@@ -398,9 +394,13 @@ which is what `Visits::record` and `History::push` are.
 two of the three things driving it sit outside the component tree.
 `record(&details, &binaries, loading, &bookmarks, session)` is called on every state change and
 compares each against its baseline. By reference, all but the session: on the ordinary run nothing
-about `project.toml` has changed and everything handed in is dropped, so only the write path clones,
-and `Project::is_about` compares the four user-given fields without building a `Details` of the
-baseline to compare with. The session is the exception -- it has to be built to be compared, and it
+about `project.toml` has changed and everything handed in is dropped, so only the write path clones.
+**`Details` is the four user-given fields and `Project` holds it whole**, under `#[serde(flatten)]`,
+so they are keys of `project.toml` as before and a fifth is added in one place. The baseline is
+compared with `==` and the write hands the same value back, neither field by field. The one cost:
+serde reads a flattened field out of a buffer, which `toml` can put no span on, so a hand-edited
+`directory = 7` is reported at line 1 rather than where it is, where `id = 7` beside it still names
+its place. The session is the exception -- it has to be built to be compared, and it
 is kept when it differs. A change to the `binaries` writes **both files immediately**.
 A change to the user-given `details` (the directory, the server, the profile) or to the
 `bookmarks` writes **the project file alone**, since neither lets go of a binary and so neither
@@ -520,9 +520,8 @@ desktop's current answer copied into the file. An unspecified field is therefore
 *absent* from the TOML (`skip_serializing_if`, since TOML has no null anyway), so nothing can later
 mistake an inherited value for a chosen one, and the settings page can show the difference. Sizes
 are stored in **points**, the unit the desktops answer in, so an override and the value it overrides
-are comparable; `fonts.rs` converts once at the end. Field order is load-bearing here too (`theme`
-is a plain value and the two fonts are tables), and the round-trip test is what holds it. There is
-**no `Saves`-shaped policy and deliberately no second autosave timer**: a settings change is already
+are comparable; `fonts.rs` converts once at the end. There is **no `Saves`-shaped policy and
+deliberately no second autosave timer**: a settings change is already
 as rare as a deliberate action, so `Settings::save` is public and writes at once. **Resolving
 `Theme::Desktop` is deliberately not this module's job**: "which theme does the desktop prefer" is a
 question for whatever owns the window, so `settings.rs` holds only the choice and stays

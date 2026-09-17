@@ -112,11 +112,27 @@ impl ProjectId {
 
 /// The things a user can give a project that are not files: which directory it is about,
 /// what to read it with, and what to build it with.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// The project file's own fields, flattened into [`Project`] rather than repeated there,
+/// so a new one is added here and nowhere else.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Details {
+    /// The directory the project is about, not the one it is stored in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directory: Option<PathBuf>,
+    /// The language server this project is read with, when it is not the usual one:
+    /// a program to run, found on the path or named outright. **Absent** means
+    /// rust-analyzer, which is what a Rust project has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_server: Option<String>,
+    /// Which of the project's files that server is for, as extensions separated by
+    /// whatever the reader typed between them: `c h cpp`, or `rs`. **Absent** means the
+    /// program's own answer -- Rust for rust-analyzer, and every language this app knows
+    /// for a program it cannot guess about (`language_files`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_files: Option<String>,
+    /// What to build the directory with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cargo: Option<Cargo>,
 }
 
@@ -141,11 +157,6 @@ pub struct SessionCargo {
 }
 
 /// The user-given half of a project: `project.toml`.
-///
-/// **Field order is load-bearing** in every serde struct in this module: TOML cannot
-/// reopen a table once a later one has begun, so every plain value must be emitted before
-/// the first sub-table, and getting it wrong fails at *runtime* rather than at compile
-/// time. The round-trip tests are what hold it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
     /// Which project this is, and what the files beside it are matched against. **Absent**
@@ -153,20 +164,10 @@ pub struct Project {
     /// nothing beside it is believed, since nothing can be matched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<ProjectId>,
-    /// The directory the project is about, not the one it is stored in.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub directory: Option<PathBuf>,
-    /// The language server this project is read with, when it is not the usual one:
-    /// a program to run, found on the path or named outright. **Absent** means
-    /// rust-analyzer, which is what a Rust project has.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub language_server: Option<String>,
-    /// Which of the project's files that server is for, as extensions separated by
-    /// whatever the reader typed between them: `c h cpp`, or `rs`. **Absent** means the
-    /// program's own answer -- Rust for rust-analyzer, and every language this app knows
-    /// for a program it cannot guess about (`language_files`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub language_files: Option<String>,
+    /// What the reader said about the project, which is the one thing the app does not
+    /// decide for itself. Flattened, so these are keys of the file like the rest.
+    #[serde(flatten)]
+    pub details: Details,
     /// The paths that were opened, deduplicated, in the order they were opened.
     ///
     /// `serde(default)` for the reason the session's fields have it, and for one more: a
@@ -175,12 +176,8 @@ pub struct Project {
     /// is. Written always, empty or not, since it is the list and not a hint.
     #[serde(default)]
     pub binaries: Vec<PathBuf>,
-    /// What to build the directory with. A table, so it comes after every plain value
-    /// above and before the array of tables below.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cargo: Option<Cargo>,
-    /// The places the reader bookmarked, in the order they did. The one array of tables
-    /// in this file, so it comes last; absent rather than empty when there are none.
+    /// The places the reader bookmarked, in the order they did. Absent rather than empty
+    /// when there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bookmarks: Vec<Bookmark>,
 }
@@ -191,16 +188,6 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl Project {
-    /// Whether what the user said about this project is already what `details` says.
-    /// Field by field, so neither side is cloned to be compared: this is asked on every
-    /// state change and answers "no change" almost every time.
-    fn is_about(&self, details: &Details) -> bool {
-        self.directory == details.directory
-            && self.language_server == details.language_server
-            && self.language_files == details.language_files
-            && self.cargo == details.cargo
-    }
-
     /// Turn every path in this project the way `spelling` says, against the directory the
     /// project file is in.
     ///
@@ -225,7 +212,7 @@ impl Project {
             }
         };
 
-        if let Some(about) = &mut self.directory {
+        if let Some(about) = &mut self.details.directory {
             turn(about);
         }
         for binary in &mut self.binaries {
@@ -440,8 +427,7 @@ pub struct SavedUi {
     /// How wide the **leading** side of a document was, as a percentage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split: Option<f32>,
-    /// The sidebar's panels and the groups they were in. A table, so it comes after the
-    /// two plain values above.
+    /// The sidebar's panels and the groups they were in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dock: Option<SavedDock>,
 }
@@ -470,8 +456,7 @@ pub enum SavedDock {
     },
 }
 
-/// The app-noticed half of a project: `session.toml`. Field order is load-bearing; see
-/// [`Project`].
+/// The app-noticed half of a project: `session.toml`.
 ///
 /// **`PartialEq` and not `Eq`**: the widths in `[ui]` are `f32`s, which is what a dragged
 /// handle is. Nothing here wants the total ordering `Eq` promises -- what a session is
@@ -484,9 +469,8 @@ pub struct Session {
     /// another id: a session that cannot say which project it belongs to is not this one's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<ProjectId>,
-    /// The page that was on screen, where one was. A plain value, so it comes before
-    /// every table below; `active` beside it is a document, and the two cannot both be
-    /// set, the tab on screen being one tab.
+    /// The page that was on screen, where one was. `active` beside it is a document, and
+    /// the two cannot both be set, the tab on screen being one tab.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_page: Option<String>,
     /// Whether the reader has agreed to a language server being run over the project's
@@ -558,8 +542,7 @@ pub enum OnScreen<'a> {
 /// restart would be worth little. The entries travel *with* the tab rather than in lists
 /// beside [`Session::tabs`], because a restore drops the entries and the tabs that no
 /// longer resolve, which would shift every later row of a parallel array onto the wrong
-/// tab. Field order is load-bearing: `page`, `temporal` and `cursor` are
-/// plain values and `entries` is written as an array of tables.
+/// tab.
 ///
 /// A row with a `page` is a page tab and has no trail; every other field is what a
 /// document tab is made of. The name is written as a **string** and not as a serde enum
@@ -582,9 +565,6 @@ pub struct SavedTab {
 }
 
 /// One place on a saved tab's trail, and the row each of its two sides was left at.
-///
-/// Field order is load-bearing: the rows, the lines and the addresses are plain values
-/// and `document` is written as a sub-table.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedEntry {
     /// Which row was at the top of the assembly side, `0` being the first instruction.
@@ -684,8 +664,8 @@ impl RestoredEntry {
     }
 }
 
-/// The record of visits in saved form: every place visited, newest first. No cursor --
-/// the cursors are the tabs' -- so nothing has to precede the array of tables.
+/// The record of visits in saved form: every place visited, newest first. No cursor: the
+/// cursors are the tabs'.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedHistory {
     #[serde(default)]
@@ -763,7 +743,7 @@ pub fn recent_projects(store: &Store) -> Vec<Recent> {
             let project = Project::load_from(&path).unwrap_or_default();
             Some(Recent {
                 path,
-                directory: project.directory,
+                directory: project.details.directory,
                 binaries: project.binaries.len(),
             })
         })
@@ -888,16 +868,14 @@ pub enum SavedDocument {
     Object {
         path: PathBuf,
         object_name: String,
-        /// Which of the two ([`SavedShown`]). A plain value, like the two above it: the
-        /// path and the name say both, and this is all that tells them apart.
+        /// Which of the two ([`SavedShown`]): the path and the name say both, and this
+        /// is all that tells them apart.
         shown: SavedShown,
     },
     Symbol {
         path: PathBuf,
         object_name: String,
         address: u64,
-        /// Last, and after `address`: a saved name is written as a table of its own, and
-        /// a table cannot precede a plain value ([`Store::write_toml`]).
         symbol_name: SavedName,
     },
     Source {
@@ -1632,7 +1610,7 @@ impl Saves {
             ..session
         };
         let binaries_changed = !loading && self.binaries != binaries;
-        let details_changed = !self.written.is_about(details);
+        let details_changed = self.written.details != *details;
         let bookmarks_changed = self.written.bookmarks != bookmarks;
         let session_changed = !loading && *self.latest() != session;
 
@@ -1655,16 +1633,13 @@ impl Saves {
         Some(Recorded {
             project: Project {
                 id: self.written.id,
-                directory: details.directory.clone(),
-                language_server: details.language_server.clone(),
-                language_files: details.language_files.clone(),
+                details: details.clone(),
                 // A write that is not about the binaries keeps the ones already in the
                 // file; see [`Saves::binaries`].
                 binaries: match binaries_changed {
                     true => binaries.to_vec(),
                     false => self.written.binaries.clone(),
                 },
-                cargo: details.cargo.clone(),
                 bookmarks: bookmarks.to_vec(),
             },
             binaries_changed,
