@@ -12,6 +12,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
+use jsonc_parser::ParseOptions;
 use serde_json::{json, Value};
 
 /// What this app asks of a language server whatever the project: the options it sends at
@@ -99,10 +100,9 @@ pub enum Unreadable {
     /// It could not be read at all. A file that is not there is not this: that is the
     /// ordinary case and answers with [`Settings::none`].
     Unread(String),
-    /// Not JSON, once the comments and trailing commas an editor allows are taken out
-    /// of it ([`as_json`]).
+    /// Not the JSONC an editor would read ([`JSONC`]).
     NotJson(String),
-    /// JSON, but not an object.
+    /// Read, but not an object. A file with nothing in it is this one.
     NotAnObject,
     /// A name given a value and made a table by a longer name: `cargo` beside
     /// `cargo.features`. Which was meant is not for this app to pick.
@@ -153,7 +153,7 @@ pub fn settings_in(directory: &Path) -> Result<Settings, Unreadable> {
 /// were watched happening against a real server. The rest of the file is the editor's own
 /// keys, and they are skipped without a word.
 pub fn settings_from(text: &str, directory: &Path) -> Result<Settings, Unreadable> {
-    let read: Value = serde_json::from_str(&as_json(text))
+    let read: Value = jsonc_parser::parse_to_serde_value(text, &JSONC)
         .map_err(|error| Unreadable::NotJson(error.to_string()))?;
     let Value::Object(read) = read else {
         return Err(Unreadable::NotAnObject);
@@ -182,90 +182,29 @@ pub fn settings_from(text: &str, directory: &Path) -> Result<Settings, Unreadabl
     })
 }
 
-/// The JSON in a settings file.
+/// How the file's text is read: **JSONC**, which is what VS Code reads it as and what the
+/// files in the wild are written in -- the tree this whole thing is for opens with nine
+/// lines of `//`.
 ///
-/// VS Code reads that file as **JSONC**, and the files in the wild are written as one: the
-/// tree the whole feature is for opens with nine lines of `//`. `serde_json` takes neither
-/// comments nor a trailing comma, so both are taken out here, before it sees the text.
+/// Comments and a trailing comma, and **nothing else**. `jsonc-parser`'s own defaults go
+/// on to take what JSON5 takes -- a single-quoted string, a name without quotes, a hex
+/// number, a comma left out -- and no editor reading this file takes any of it, so each is
+/// turned off here. A file this app read and the reader's editor would not is the two
+/// disagreeing in silence about what a server was told.
 ///
-/// Comments become spaces rather than nothing, and a newline inside a block comment is
-/// kept, so what `serde_json` says about the line and column of a real mistake is about
-/// the file the reader wrote. The comma before a `}` or a `]` becomes a space the same
-/// way; a blanked comment is whitespace, so one standing between the two changes nothing.
-///
-/// **Nothing inside a string is touched**, and that is the whole difficulty: a `//` is
-/// half of every URL, and a string can end in an escaped quote (`"a \" // b"`) or hold a
-/// backslash before its closing one (`"c:\\"`), so this tracks whether it is inside a
-/// string and whether the last character was an escape. Getting that wrong cuts a path
-/// short without a word, which is the failure this whole feature is against.
-fn as_json(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    let mut string = false;
-    let mut escaped = false;
-    // Where the last comma was written, while nothing but whitespace has followed it.
-    let mut comma: Option<usize> = None;
-    while let Some(character) = chars.next() {
-        if string {
-            out.push(character);
-            match character {
-                _ if escaped => escaped = false,
-                '\\' => escaped = true,
-                '"' => string = false,
-                _ => {}
-            }
-            continue;
-        }
-        match (character, chars.peek()) {
-            ('"', _) => {
-                string = true;
-                comma = None;
-                out.push('"');
-            }
-            // To the end of the line, which is left where it is.
-            ('/', Some('/')) => {
-                out.push_str("  ");
-                chars.next();
-                while chars.peek().is_some_and(|next| *next != '\n') {
-                    out.push(' ');
-                    chars.next();
-                }
-            }
-            // To the next `*/`, keeping the newlines so the lines below still count.
-            ('/', Some('*')) => {
-                out.push_str("  ");
-                chars.next();
-                let mut star = false;
-                for character in chars.by_ref() {
-                    out.push(match character {
-                        '\n' => '\n',
-                        _ => ' ',
-                    });
-                    if star && character == '/' {
-                        break;
-                    }
-                    star = character == '*';
-                }
-            }
-            (',', _) => {
-                comma = Some(out.len());
-                out.push(',');
-            }
-            ('}' | ']', _) => {
-                if let Some(at) = comma.take() {
-                    out.replace_range(at..at + 1, " ");
-                }
-                out.push(character);
-            }
-            _ if character.is_whitespace() => out.push(character),
-            _ => {
-                comma = None;
-                out.push(character);
-            }
-        }
-    }
-    out
-}
+/// Nothing is stripped before the parse. A `//` is half of every URL and a string can end
+/// in an escaped quote, so a pass that blanks comments has to track every string in the
+/// file or it cuts a path short without a word; a parser that reads JSONC has done that
+/// already.
+const JSONC: ParseOptions = ParseOptions {
+    allow_comments: true,
+    allow_trailing_commas: true,
+    allow_loose_object_property_names: false,
+    allow_missing_commas: false,
+    allow_single_quoted_strings: false,
+    allow_hexadecimal_numbers: false,
+    allow_unary_plus_numbers: false,
+};
 
 /// A name being built out of the file's dotted keys: the value the file gave under exactly
 /// this name, or the table a longer name made of it. The two are what tells a clash from a
@@ -331,8 +270,8 @@ fn object_of(table: BTreeMap<String, Node>) -> Value {
 ///
 /// Per leaf and not per name, so a project setting `cargo.features` keeps whatever else
 /// this app sent under `cargo` rather than standing in for the whole of it. Recursion is
-/// bounded by the two values' own depth, and a parsed one is bounded by `serde_json`'s
-/// nesting limit.
+/// bounded by the two values' own depth, and a parsed one is bounded by the nesting the
+/// parse allowed ([`JSONC`]).
 fn merged(base: Value, over: Value) -> Value {
     match (base, over) {
         (Value::Object(mut base), Value::Object(over)) => {

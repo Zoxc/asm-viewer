@@ -421,19 +421,25 @@ two was meant is not this app's to pick.
 
 The file is read as **JSONC**, as VS Code reads it and as the files in the wild are
 written: the tree this is all for opens with nine lines of `//`. `serde_json` takes neither
-comments nor a trailing comma, so `as_json` blanks both in one pass before it sees the
-text. Comments become spaces, and a newline in a block comment is kept, so what
-`serde_json` says about the line and column of a real mistake is about the file the reader
-wrote. A blanked comment is whitespace, which is what the comma rule skips over anyway, so
-the two jobs need no order between them. Nothing inside a string is touched, and that is
-the whole difficulty: a `//` is half of every URL, and a string can end in an escaped quote
-or hold a backslash before its closing one, so the pass tracks the string and the escape.
-Getting it wrong cuts a path short without a word, which is the failure this feature exists
-to prevent -- and in one pass it blanks a comma inside a string as well.
+comments nor a trailing comma, so `jsonc-parser` reads the text and `serde_json` never sees
+it. That was eighty hand-written lines that blanked both before handing the text on, and
+the difficulty was always the strings: a `//` is half of every URL, and a string can end in
+an escaped quote or hold a backslash before its closing one, so a pass that blanks comments
+has to track every string in the file. Getting it wrong cuts a path short without a word,
+which is the failure this feature exists to prevent. A parser that reads the format has
+done that already, and a file with no specification is a poor thing to keep a reader for.
 
-Two bounds, both because the input is a file (`AGENTS.md`): the tree is built iteratively so
-a name of ten thousand dots cannot overflow the stack, and `DEEPEST` refuses a name of more
-parts than the walk back out is written to recurse over.
+**JSONC and not JSON5**, which is what the crate takes by default: a name without quotes, a
+single-quoted string, a hex number, a leading plus, a comma left out. No editor reading
+this file takes any of them, so each is turned off (`JSONC`, `lsp/settings.rs`) -- a file
+this app read and the reader's editor would not is the two disagreeing in silence about
+what a server was told. A file with nothing in it is not an object and starts nothing; a
+file that is not there is the ordinary case and says nothing at all.
+
+Three bounds, all because the input is a file (`AGENTS.md`): the tree is built iteratively
+so a name of ten thousand dots cannot overflow the stack, `DEEPEST` refuses a name of more
+parts than the walk back out is written to recurse over, and the parse itself stops at 512
+levels of nesting, which is the crate's own.
 
 **An error starts nothing.** The check is in `Language::starting`, the transition a start
 goes through, so neither press nor the agreement can grow a path around it -- the same

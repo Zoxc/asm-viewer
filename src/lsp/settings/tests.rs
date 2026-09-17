@@ -112,6 +112,34 @@ fn a_variable_this_cannot_resolve_is_a_failure() {
     assert_eq!(settings.options()["x"], json!("${workspaceFolder"));
 }
 
+/// JSONC and not JSON5. The parser's own defaults go on to take a name without quotes, a
+/// single-quoted string, a hex number, a leading plus and a comma left out, and no editor
+/// reading this file takes any of them: a file this app read and the reader's editor would
+/// not is the two disagreeing in silence about what a server was told.
+#[test]
+fn what_an_editor_would_refuse_is_refused() {
+    for text in [
+        r#"{ rustAnalyzer: 1 }"#,
+        r#"{ 'rust-analyzer.x': 1 }"#,
+        r#"{ "rust-analyzer.x": 0xFF }"#,
+        r#"{ "rust-analyzer.x": +1 }"#,
+        r#"{ "rust-analyzer.x": 1 "rust-analyzer.y": 2 }"#,
+    ] {
+        let Err(Unreadable::NotJson(_)) = read(text) else {
+            panic!("{text} was read");
+        };
+    }
+}
+
+/// A file with nothing in it, and one that is nothing but comments: neither is an object,
+/// so neither starts a server. An empty file is one the reader is part way through, not a
+/// project that said nothing -- that is a file that is not there at all.
+#[test]
+fn a_file_that_says_nothing_is_not_an_object() {
+    assert_eq!(read(""), Err(Unreadable::NotAnObject));
+    assert_eq!(read("// nothing yet\n"), Err(Unreadable::NotAnObject));
+}
+
 /// A file that is not JSON, and one that is JSON but not an object.
 #[test]
 fn a_file_that_is_not_an_object_of_json_is_a_failure() {
@@ -144,7 +172,7 @@ fn the_comments_and_trailing_commas_an_editor_allows_are_taken() {
     );
 }
 
-/// Nothing inside a string is stripped. A `//` is half of every URL, and a string that
+/// Nothing inside a string is a comment. A `//` is half of every URL, and a string that
 /// ends in an escaped quote or holds a backslash before its closing one must not swallow
 /// what comes after it -- a path cut short without a word is the failure this is against.
 #[test]
@@ -165,10 +193,9 @@ fn nothing_inside_a_string_is_taken_for_a_comment() {
     assert_eq!(settings.options()["d"], json!("/* not a comment */"));
 }
 
-/// A comma inside a string is not the comma the trailing-comma rule takes out. One pass
-/// does both jobs, so the string tracking holds the comma rule up as well: a string whose
-/// closing quote was missed leaves the text under it outside every string, and a comma
-/// there before a bracket is blanked, taking a real value with it.
+/// A comma inside a string is not a trailing comma. A string whose closing quote was
+/// missed leaves the text under it outside every string, and a comma there before a
+/// bracket would take a real value with it.
 #[test]
 fn a_comma_inside_a_string_is_not_a_trailing_comma() {
     let settings = read(
@@ -210,8 +237,8 @@ fn a_header_of_comments_over_the_object_is_read() {
     assert_eq!(settings.options()["linkedProjects"], json!(["Cargo.toml"]));
 }
 
-/// What a comment is blanked with keeps the lines under it where they were, so what
-/// `serde_json` says about a real mistake is about the file the reader wrote.
+/// A mistake is reported on the line the reader wrote it on, comments above it and all:
+/// what the Project view shows is the only place they will be told where to look.
 #[test]
 fn a_comment_leaves_the_lines_under_it_where_they_were() {
     let text = "/* one\n   two */\n{\n  \"a\" \"b\"\n}";
