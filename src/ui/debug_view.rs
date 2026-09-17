@@ -120,12 +120,10 @@ impl Component for FileRow {
 /// the box exists for at all -- the pane it was working for is left waiting, and nothing
 /// on screen would otherwise say why.
 ///
-/// Named, like every thread this app starts, because the record says which thread died.
+/// Started through [`worker::thread`], which is how every thread this app starts is named:
+/// the record says which thread died.
 fn panic_off_thread() {
-    let started = std::thread::Builder::new()
-        .name("the Debug page's panic".to_owned())
-        .spawn(|| panic!("a panic asked for on the Debug page"));
-    if let Err(error) = started {
-        log::warn!("the panicking thread could not be started: {error}");
-    }
+    worker::thread("the Debug page's panic", || {
+        panic!("a panic asked for on the Debug page")
+    });
 }

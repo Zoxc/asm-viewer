@@ -23,11 +23,11 @@ a `OnceLock`, so the losers would block on the winner instead of running in para
 parallelism `notes/Goals.md` asks for is parsing many objects at once, a different job.)
 
 **The thread, the two channels and the task taking the answers are not this worker's own**
-(`src/ui/worker.rs`). `use_worker` is the shape the five request/answer workers are started in --
-this one, the source reader, the build, the scratchpad and the language server, which takes the
-answer sender back with it -- and `stream` the shape of the two one-shot ones, the search and the
-binary loader, worked once for one question and stopped by the receiver going. What differs stays with each
-worker: the drain policy (`newest` here), the work, and the state each answer lands in. The work is an argument on every one of them, which is the seam the headless tests
+(`src/ui/worker.rs`). `use_worker` is the shape the six request/answer workers are started in --
+this one, the source reader, the build, the scratchpad, the find bar and the language server,
+which takes the answer sender back with it -- and `stream` the shape of the three one-shot ones,
+the search, a code pane's find and the binary loader, worked once for one question and stopped by
+the receiver going. What differs stays with each worker: the drain policy (`newest` here), the work, and the state each answer lands in. The work is an argument on every one of them, which is the seam the headless tests
 substitute a worker of their own through. Four of them -- `use_source_reading`, `use_find`,
 `use_building`, `use_language` -- have a plain wrapper beside the `_with` form naming the app's one
 value, so `app()` reads as wiring there and the `_with` form is visibly the test entry; the search,
