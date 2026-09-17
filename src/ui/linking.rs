@@ -363,13 +363,6 @@ pub(crate) fn use_opened(
     });
 }
 
-/// What the app has told the server it is showing.
-///
-/// Provided at the root and consumed by the headless harnesses alone: the app hands the
-/// state itself to [`use_opened`] and [`use_linking`], which is what the `allow` says.
-#[derive(Clone, Copy)]
-pub(crate) struct Documents(#[cfg_attr(not(test), allow(dead_code))] pub(crate) State<Opened>);
-
 /// What the Source pane's rows read to know which of their names are links.
 #[derive(Clone, Copy)]
 pub(crate) struct Linking(pub(crate) State<Linked>);

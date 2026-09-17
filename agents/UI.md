@@ -129,6 +129,12 @@ language server is running, and what would stop it -- `agents/Lsp.md`); `Documen
 it under the wrapper and hands the state back, so the thirty of them differ in two tokens and
 none can wrap the wrong state in the right newtype. A bundle or a memo is `provide` as before.
 
+**One state at the root is no context.** `Opened` -- which files the server has been told the
+reader has open -- is read by three hooks the root calls itself and is handed to each, so a
+context over it would be one nothing consumes. The harnesses that wire those same hooks reach
+it through a context of their own, provided over the root's state by `test_roots` rather than
+by `roots`: a seam the tests want belongs where the tests are.
+
 **Three of them a run has to decide for itself**, and they are what `roots` takes or leaves.
 Where the files go and what the settings file said are handed in, so a test can name a store of
 its own; and `Rescued` starts empty and is *written* after the restore rather than provided

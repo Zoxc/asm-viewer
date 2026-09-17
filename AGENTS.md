@@ -242,7 +242,7 @@ command.
 - `src/ui.rs` — the freya UI's root: its prelude, the list of its files, `toolbar` with its two
   history buttons, `app`, and `roots` — the one list of root contexts, which the headless tests
   are given too. A context holding one state is one `context(Wrapper, value)` line there; a
-  bundle or a memo is a `provide`.
+  bundle or a memo is a `provide`; and one state is handed down rather than provided at all.
 - `src/ui/metrics.rs` — every measurement no component owns, and the fonts they follow.
 - `src/ui/palette.rs` — every colour, the appearance the window is drawn in, the stored
   choice it is resolved from, and the compositing rules.

@@ -439,6 +439,8 @@ pub(crate) struct Roots {
     pub(crate) finds: State<Finds>,
     pub(crate) pad: State<Pads>,
     pub(crate) pad_text: State<PadBuffers>,
+    /// The one field that is no root context, and the only one a component cannot reach
+    /// for itself ([`roots`]).
     pub(crate) opened: State<Opened>,
     pub(crate) language: State<Language>,
     pub(crate) follow: State<Follow>,
@@ -624,7 +626,12 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     // Which files the server is told the reader has open, which is what makes it answer
     // about them at all -- and what a build has to say it rewrote, the server holding the
     // text it was given until it is told otherwise.
-    let opened = context(Documents, Opened::default());
+    //
+    // The one state here that is no context: the three hooks that read it -- `use_opened`,
+    // `use_linking` and `use_building` -- are the root's own and are handed it, so a
+    // context would be one nothing ever consumes. A headless harness wires those same
+    // hooks, and provides a context of its own over this state (`test_roots`).
+    let opened = State::create(Opened::default());
     // At the root for the reason the rest are, and one more: a language server is a
     // process, and a process that outlives the view it was started from is one nothing can
     // stop. Beside it, where a followed name's answer lands; which of a source file's

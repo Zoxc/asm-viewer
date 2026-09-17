@@ -674,9 +674,22 @@ fn test_store() -> PathBuf {
 /// A plain function, called through the runner -- `runner.provide_root_context(test_roots)`
 /// -- because that is what runs it in the root scope, which is where a `State` a context
 /// holds has to be made.
+///
+/// Beside them, [`Documents`]: the tests' own, over the one state the app hands down
+/// rather than provides.
 fn test_roots() -> Roots {
-    roots(Some(Store::at(test_store())), &Settings::default())
+    let roots = roots(Some(Store::at(test_store())), &Settings::default());
+    provide(Documents(roots.opened));
+    roots
 }
+
+/// What the app has told the server it is showing, as a harness reaches it.
+///
+/// The app hands the state down instead, so this is the tests' own context and not the
+/// root's -- over the state the root made, since a second state would leave a harness
+/// reading one and the test that writes it another.
+#[derive(Clone, Copy)]
+struct Documents(State<Opened>);
 
 /// The deps [`use_on_change_harness`] watches, and the unrelated state its callback reads.
 #[derive(Clone, Copy)]
