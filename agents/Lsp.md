@@ -394,6 +394,10 @@ read and thrown away. It needed no turning off while the app opened nothing.
 
 ## The project's own settings
 
+`src/lsp/settings.rs`, and a file of its own because it has nothing in common with the
+conversation: no message, no process, no stream. It is the one part of the client that
+reads a file.
+
 Some trees cannot be read by a server that was told nothing, and what would fix that is
 already in them: `.vscode/settings.json`, VS Code's own file. So it is read and passed
 through, and **no such file is the ordinary case** rather than anything worth a word.

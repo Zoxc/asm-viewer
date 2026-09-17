@@ -191,8 +191,10 @@ command.
 - `src/lanes.rs` — where each branch is drawn in the assembly view's arrow gutter.
 - `src/lsp.rs` — the language server: the program the project names started over its
   directory, the messages spoken to it, which way it counts a column and the conversion
-  where that is not the app's, the project's own `.vscode/settings.json` read into what it
-  is told, and the process a stop kills.
+  where that is not the app's, and the process a stop kills.
+- `src/lsp/settings.rs` — what a server is told about the project: what this app asks of
+  every one, and the project's own `.vscode/settings.json` read and laid over it. The only
+  part of the conversation that reads a file.
 - `src/references.rs` — the places a language server answered a question with, grouped
   under the file each is in and with the text of the line each is on: what the Locations
   panel draws.
