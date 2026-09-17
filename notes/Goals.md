@@ -25,12 +25,12 @@ leaves this list when it is. That is a move made on request, like everything els
   is for the app to draw them itself: cut the answer into fenced blocks and the prose
   between them, put each block through the `SyntaxHighlighter` and `palette().syntax()` the
   pane already uses, with the grammar taken from the fence's word through the one list of
-  extensions (`src/source.rs`), and hand only the prose to the markdown viewer. The
+  extensions (`src/languages.rs`), and hand only the prose to the markdown viewer. The
   decisions are what a fence's word means where the app has no grammar for it, and whether
   a block keeps a ground of its own.
 
 - [D] Grammars beyond Rust / C / C++ for the source side. Any other extension renders plain, the
-  many `source::Language` now names for the pane split's sake included; each language is a
+  many `languages::Language` now names for the pane split's sake included; each language is a
   `tree-sitter-<lang>` dependency and an arm in `language()`. Deferred, and
   deferred *per language* rather than as a whole: a grammar is a parser generator's worth of
   generated C compiled into the binary, so wiring a list of them up front pays for parsers for

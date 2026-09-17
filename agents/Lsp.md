@@ -9,7 +9,7 @@ rust-analyzer). A project on a toolchain of its own is read by a server this app
 guess at, and the same box is where a wrapper like `ra-multiplex` goes; it is a plain value
 in `project.toml` beside the name and the directory, and the Project view is where it is
 typed. Nothing in `lsp.rs` names a program at all -- the default is
-`source::Language::Rust.server()`, with the rest of the per-language facts -- and the
+`languages::Language::Rust.server()`, with the rest of the per-language facts -- and the
 failures it reports say "the language server" rather than a name this app did not choose.
 
 ## Why it is a control and not a lazy start
@@ -366,7 +366,7 @@ and not what it serves: a box of extensions in the Project view beside the progr
 whatever spelling the reader types them (`c, h` and `.c .h` are one answer). Where they say
 nothing it is the program's own: the one program this app knows by name is Rust's, and a
 project that named its own gets asked about whatever it opens, that being the reader's
-business. The identifier the file is opened with is `source::Language::spoken` where the
+business. The identifier the file is opened with is `languages::Language::spoken` where the
 app knows the language, and the extension itself where the reader named one it does not --
 which is what the specification says to send, and which a server that does not know it
 ignores.

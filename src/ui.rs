@@ -45,6 +45,7 @@ pub(crate) use crate::fonts::{self, Font, Fonts};
 pub(crate) use crate::functions::{self, Function};
 pub(crate) use crate::history::{History, Place, Stop};
 pub(crate) use crate::lanes::{self, Lanes, Lit, PlacedEdge, RowLanes};
+pub(crate) use crate::languages;
 pub(crate) use crate::links;
 pub(crate) use crate::lsp::{self, Lookup};
 pub(crate) use crate::naming::short_name;

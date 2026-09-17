@@ -18,7 +18,7 @@ window.
 **Which panes a tab has is the reader's to say, and the file's until they do.** A source-driven tab on
 a file in no compiled language *opens* as the Source pane alone: a `Cargo.toml` or a `.json` is read,
 never disassembled, so the second pane would be an empty half of the window with a handle to drag it
-wider. The question is `source::compiled`, off the same extension list the grammars come from, and an
+wider. The question is `languages::compiled`, off the same extension list the grammars come from, and an
 extension it does not know is answered no: the assembly side is offered for the languages the app can
 say become machine code, and a file it cannot place opens as source until the reader asks for one.
 That is only what a tab opens with: the toggle on the leading bar puts the following
@@ -292,11 +292,11 @@ does have is its tree-sitter pipeline, public on its own: `SyntaxHighlighter` + 
 `EditorSyntaxTheme` turn a `Rope` into one list of `(Color, TextNode)` spans per line. The theme is
 the app's own (`Palette::syntax`), and the grammars are ours: Rust, C and C++, and the TOML and JSON
 a project directory is full of, which the Files view opens and which get no function pass, a
-configuration file defining none. Which grammar is `source::Language::grammar`, off the same
+configuration file defining none. Which grammar is `Language::grammar`, off the same
 extension list, so the colouring, the function pass and the pane split cannot disagree about what a
 file is; `ui/highlight.rs`'s `language()` is that pair wrapped in an `EditorLanguage` and nothing
 else, freya's type being the one part of the question that has to be up here. The list sits in
-`source.rs` and not in the UI because the split and the language server ask it too, and it answers
+`languages.rs` and not in the UI because the split and the language server ask it too, and it answers
 `.h` with C, a header the C grammar misparses being coloured oddly rather than dropped. **It names
 far more languages than it colours**, because the two cost different things: a grammar is a
 dependency and a parser generator's worth of generated C, where knowing a `.zig` or a `.f90` becomes

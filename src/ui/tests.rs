@@ -23013,13 +23013,13 @@ fn toml_and_json_files_are_highlighted() {
 fn a_compiled_language_with_no_grammar_is_still_compiled() {
     for named in ["shader.zig", "server.go", "start.S", "view.mm", "kernel.cu"] {
         let path = Path::new(named);
-        assert!(source::compiled(path), "{named} has no assembly side");
+        assert!(languages::compiled(path), "{named} has no assembly side");
         assert!(language(path).is_none(), "{named} claimed a grammar");
     }
     // And the three the app does colour still have theirs.
     for named in ["main.rs", "sum.c", "sum.hpp"] {
         let path = Path::new(named);
-        assert!(source::compiled(path), "{named}");
+        assert!(languages::compiled(path), "{named}");
         assert!(language(path).is_some(), "{named} lost its grammar");
     }
 }
@@ -30163,7 +30163,9 @@ fn the_project_names_the_language_server_it_is_read_with() {
     // Unsaid, it is the usual one, and nothing is written into the file about it.
     assert_eq!(
         proj.read().server(),
-        source::Language::Rust.server().expect("rust has a server")
+        languages::Language::Rust
+            .server()
+            .expect("rust has a server")
     );
     assert_eq!(proj.read().details().language_server, None);
 

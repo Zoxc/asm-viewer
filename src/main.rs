@@ -13,6 +13,7 @@ mod fuzzy;
 mod grouped;
 mod history;
 mod lanes;
+mod languages;
 mod links;
 mod lsp;
 mod naming;

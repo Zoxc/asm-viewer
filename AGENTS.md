@@ -160,13 +160,15 @@ command.
 - `src/shutdown.rs` — everything that has to happen before the process ends, in the one
   order both the window's close hook and the panic hook's shutdown thread run it in: the
   projects flushed, then every program the app started stopped.
+- `src/languages.rs` — `Language`: the one list of extensions the app knows, and the one
+  place a per-language fact is decided -- what compiles, which tree-sitter grammar colours
+  it, how its functions are found, and which language server reads it. Plural because
+  `src/ui/language.rs` holds the language server's own state and the prelude brings that
+  name in.
 - `src/source.rs` — source files read off disk and cached by path, failures included; the
-  one name a path is called by; whether a path can be shown at all, which is the reader's own
-  first step and the gate the UI puts in front of it; and `Language`, the one list of
-  extensions the app knows and the one place a per-language fact is decided: what compiles,
-  which tree-sitter grammar colours it, how its functions are found, and which language
-  server reads it. `Seeded` is the test-only other way into that cache: a file with nothing
-  on the disk behind it.
+  one name a path is called by; and whether a path can be shown at all, which is the
+  reader's own first step and the gate the UI puts in front of it. `Seeded` is the
+  test-only other way into that cache: a file with nothing on the disk behind it.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
   source file, its build, and the pads there are in the order they were last opened.
 - `src/temporary.rs` — test-only: a path under the system temporary directory that a test

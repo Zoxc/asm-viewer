@@ -117,10 +117,10 @@ impl Highlighted {
             .saturating_sub(usize::from(file.text().ends_with('\n')));
 
         // The function spans, which the language decides and not this
-        // (`source::Language::functions`): a scanner of its own for Rust, a second parse
+        // (`languages::Language::functions`): a scanner of its own for Rust, a second parse
         // with the same grammar for C and C++, nothing for the rest. Milliseconds, once
         // per file, beside the highlighting and on the same thread.
-        let functions = source::Language::of(file.path())
+        let functions = languages::Language::of(file.path())
             .map_or_else(Vec::new, |language| language.functions(file.text()));
 
         let mut cutting = Cutting::default();
@@ -263,13 +263,13 @@ impl Cutting {
 }
 
 /// The tree-sitter grammar to parse a file with, where there is one: what
-/// [`source::Language::grammar`] answers, in freya's type.
+/// [`languages::Language::grammar`] answers, in freya's type.
 ///
 /// The wrapping is the whole of it. Which grammar a file gets is a per-language fact and
 /// is decided in `source.rs` with the rest of them; `EditorLanguage` is the editor's, so
 /// putting one together is the one part that has to be up here.
 pub(crate) fn language(path: &Path) -> Option<EditorLanguage> {
-    let (grammar, query) = source::Language::of(path)?.grammar()?;
+    let (grammar, query) = languages::Language::of(path)?.grammar()?;
     Some(EditorLanguage::new(grammar, query))
 }
 

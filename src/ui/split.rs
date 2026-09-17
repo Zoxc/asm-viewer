@@ -17,7 +17,7 @@ use super::*;
 /// **Only a source-driven tab opens with one pane**, and only on a file in no compiled
 /// language: a `Cargo.toml` or a `.json` is read and never disassembled, so the pane
 /// beside it would be an empty half of the window with a handle to drag it wider. The
-/// question is `source::compiled`, off the same extension list the grammars come from,
+/// question is `languages::compiled`, off the same extension list the grammars come from,
 /// and an extension it does not know is answered no -- an assembly side is offered for
 /// the languages the app can say become machine code, and a file it cannot place opens
 /// as source until the reader asks for one.
@@ -29,7 +29,7 @@ pub(crate) fn following(
     match (said.get(&of), document) {
         (Some(&said), _) => said,
         (None, Some(document)) => {
-            document.driven_from() != Pane::Source || source::compiled(document.file())
+            document.driven_from() != Pane::Source || languages::compiled(document.file())
         }
         (None, None) => true,
     }

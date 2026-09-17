@@ -38,7 +38,7 @@ pub struct Function {
 }
 
 /// Every function `text` defines, found by a parse of it with `grammar`: how
-/// [`source::Language::functions`] answers for C and C++, which is where the grammar
+/// [`languages::Language::functions`] answers for C and C++, which is where the grammar
 /// comes from.
 ///
 /// A parse of its own, since the highlighter keeps its tree private and what is wanted of
@@ -46,7 +46,7 @@ pub struct Function {
 /// (`agents/Panes.md`). A grammar the parser will not take and a text it could not parse
 /// are both no functions rather than a panic.
 ///
-/// [`source::Language::functions`]: crate::source::Language::functions
+/// [`languages::Language::functions`]: crate::languages::Language::functions
 pub fn parsed(grammar: LanguageFn, text: &str) -> Vec<Function> {
     let mut parser = Parser::new();
     if parser.set_language(&grammar.into()).is_err() {

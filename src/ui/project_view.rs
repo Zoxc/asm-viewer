@@ -66,11 +66,11 @@ impl OpenProject {
     }
 
     /// The program a project that names none is read with: the one the language this app
-    /// is written for is read with (`source::Language::server`). Its own function because
+    /// is written for is read with (`languages::Language::server`). Its own function because
     /// the Program box draws it as the placeholder, and two spellings of the default could
     /// come to disagree.
     pub(crate) fn default_server() -> &'static str {
-        source::Language::Rust.server().unwrap_or_default()
+        languages::Language::Rust.server().unwrap_or_default()
     }
 
     /// Whether the reader named a server of their own rather than leaving the app's. What
@@ -639,7 +639,7 @@ impl Component for LanguageSection {
             )
             .placeholder(match open.names_server() {
                 true => "every file opened",
-                false => source::Language::Rust.spoken(),
+                false => languages::Language::Rust.spoken(),
             })
             .width(Size::fill()),
         ))

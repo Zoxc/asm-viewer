@@ -760,7 +760,7 @@ impl<W: Write + Send + 'static> Talk<W> {
     }
 
     /// Tell the server the app is showing `file`, whose text is `text` and whose language
-    /// a server calls `language` (`source::Language::spoken`).
+    /// a server calls `language` (`languages::Language::spoken`).
     ///
     /// **This is what makes an answer about the file arrive at all.** The protocol has the
     /// client own the documents it shows: after this the server answers about the text

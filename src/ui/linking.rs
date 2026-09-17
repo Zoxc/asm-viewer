@@ -242,18 +242,18 @@ impl Opened {
 /// by name is Rust's, and a project that named its own gets asked about whatever it opens,
 /// that being the reader's business.
 ///
-/// The identifier is [`source::Language::spoken`] where the app knows the language, and
+/// The identifier is [`languages::Language::spoken`] where the app knows the language, and
 /// the extension itself where the reader named one it does not: the specification says to
 /// send the extension for a language it has no name for, and a server that does not know
 /// the identifier ignores the file, which is what it would have done anyway.
 fn spoken_as(chosen: &[String], program: &str, path: &Path) -> Option<String> {
-    let known = source::Language::of(path);
+    let known = languages::Language::of(path);
     let extension = path.extension().and_then(|extension| extension.to_str());
     if chosen.is_empty() {
         let known = known?;
-        // The one program this app knows by name is Rust's (`source::Language::server`);
+        // The one program this app knows by name is Rust's (`languages::Language::server`);
         // anything else is the project's own.
-        return match source::Language::Rust.server() == Some(program) {
+        return match languages::Language::Rust.server() == Some(program) {
             true => (known.server() == Some(program)).then(|| known.spoken().to_owned()),
             false => Some(known.spoken().to_owned()),
         };
