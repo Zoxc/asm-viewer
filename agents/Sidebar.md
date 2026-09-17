@@ -404,9 +404,17 @@ has been drawn -- so it leaves an ask behind it.
 
 **A raise that would change nothing is not written.** `raise_panel` asks `DockArea::is_active`
 first, as `raise_tab` asks `Strip::would_raise`: a write notifies whether or not the value changed,
-and a dock write re-renders the docking area and every panel header. That is not the chords, which
+and a dock write re-renders the docking area and every group in it. That is not the chords, which
 a reader presses by hand, but the questions -- every Enter in the Search box and every Alt+F12 goes
 through `raise_panel`, and after the first the panel it names is already on top.
+
+**A raise that does change something redraws two headers, not seven.** `PanelHeader`
+(`ui/dock.rs`) is a component keyed by its panel and told whether it is the one on top, as
+`TabHeader` is told which tab is on screen. It has to be a component of its own to be told
+anything: a header built inline is built in its group's render, and freya rebuilds every group on
+every dock write -- `DockingArea` reads the tree to lay it out, and its `DockPanelView` never
+compares equal -- so what a header read of the dock made no difference to what woke it. Diffed
+instead, the headers a raise left alone stop at the comparison.
 
 **"The panel the keyboard is in" is the box that panel registered.** The sidebar is arrangeable,
 so nothing about where a panel sits can be relied on; what can is that only the panel on top in a

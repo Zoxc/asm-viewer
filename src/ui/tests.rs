@@ -34657,7 +34657,7 @@ fn dock_harness() -> impl IntoElement {
 
 /// **A raise of the panel already on top writes nothing.** `State::write` notifies whether
 /// or not the value changed, so a dock written for a panel that was showing already
-/// re-renders the docking area and every panel header for nothing -- and every search
+/// re-renders the docking area and every group in it for nothing -- and every search
 /// asked and every locations question comes through `raise_panel`, which after the first
 /// finds the panel on top. Fails on the unguarded `dock.write().show_panel(panel)`.
 #[test]
@@ -34699,6 +34699,78 @@ fn raising_the_panel_already_on_top_redraws_nothing() {
     assert!(
         counted() > raised,
         "the row was not drawn again for a raise"
+    );
+}
+
+/// The sidebar's dock and nothing else, so what is counted below is the real headers.
+fn panel_headers_harness() -> impl IntoElement {
+    let dock = use_consume::<SidebarDock>().0;
+    rect().expanded().child(docking_area(dock))
+}
+
+/// Whether the header naming `title` is the one drawn as its group's top: the title's
+/// label inside a row-high box wearing `pane_bg`.
+fn header_on_top(test: &TestingRunner, title: &str) -> bool {
+    let Some(label) = label_area(test, title) else {
+        return false;
+    };
+    test.find(|node, element| {
+        let area = node.layout().area;
+        let inside = area.origin.x <= label.origin.x
+            && area.origin.y <= label.origin.y
+            && area.max_x() >= label.max_x()
+            && area.max_y() >= label.max_y();
+        (element.style().background == Fill::Color(palette().pane_bg)
+            && area.height() == list_row_height()
+            && inside)
+            .then_some(())
+    })
+    .is_some()
+}
+
+/// **A raise redraws the two headers whose top changed, and no others.** A dock write
+/// re-renders the whole docking area -- freya reads the tree to lay it out, and its
+/// `DockPanelView` never compares equal -- so a header built inline is built again
+/// whatever it reads, the other group's included. `PanelHeader` is a component keyed by
+/// its panel and told whether it is on top, so the rebuild is a diff and the headers a
+/// raise left alone stop there.
+///
+/// Fails on the inline header, which redrew all four of these for a raise that changed
+/// two.
+#[test]
+fn a_raise_redraws_only_the_headers_it_changed() {
+    let (mut test, dock) = TestingRunner::new(
+        panel_headers_harness,
+        (500., 500.).into(),
+        |runner: &mut _| {
+            runner.provide_root_context(|| {
+                // Search behind Objects, and a second group that has nothing to do with
+                // the raise.
+                let mut dock = test_roots().states.arranged.dock;
+                dock.set(DockArea::column(vec![
+                    vec![Panel::Objects, Panel::Search],
+                    vec![Panel::Symbols, Panel::History],
+                ]));
+                dock
+            })
+        },
+        1.,
+    );
+    settle(&mut test);
+    assert!(header_on_top(&test, "Objects"), "Objects is not on top");
+
+    let before = headers_drawn();
+    raise_panel(dock, Panel::Search);
+    settle(&mut test);
+
+    assert!(
+        header_on_top(&test, "Search") && !header_on_top(&test, "Objects"),
+        "the raise is not what the headers draw"
+    );
+    assert_eq!(
+        headers_drawn() - before,
+        2,
+        "a raise redrew headers it did not change"
     );
 }
 

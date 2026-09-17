@@ -150,7 +150,7 @@ impl Panel {
 ///
 /// Asked before it is written, as `raise_tab` asks [`Strip::would_raise`]: `State::write`
 /// notifies whether or not the value changed, and a dock write re-renders the docking
-/// area and every panel header. Every search and every locations question comes through
+/// area and every group in it. Every search and every locations question comes through
 /// here, and after the first the panel it names is already on top.
 pub(crate) fn raise_panel(mut dock: State<DockArea>, panel: Panel) {
     // Bound in a statement of its own: the write below is to the state this read.
@@ -477,15 +477,74 @@ fn panel_label(panel: Panel, background: Color) -> impl IntoElement {
         .child(label().text(elide(panel.title())).max_lines(1))
 }
 
+/// One panel's tab header, as `TabHeader` is one tab's chip (`ui/strip.rs`): a component
+/// of its own, keyed by its panel and told whether it is the one on top rather than
+/// asking.
+///
+/// It has to be a component to be told anything. A header built inline is built again
+/// with its whole group, and every dock write rebuilds every group: freya's `DockingArea`
+/// reads the tree to lay it out, and its `DockPanelView` never compares equal. A
+/// component is diffed instead, so a raise redraws the two headers whose top changed and
+/// leaves the rest alone.
+#[derive(Clone, PartialEq)]
+struct PanelHeader {
+    panel: Panel,
+    /// Whether this is the panel on top in its group.
+    active: bool,
+    /// Whether a panel being dragged would land here.
+    landing: bool,
+    key: DiffKey,
+}
+
+keyed!(PanelHeader);
+
+impl Component for PanelHeader {
+    fn render(&self) -> impl IntoElement {
+        #[cfg(test)]
+        HEADERS.set(HEADERS.get() + 1);
+        let background = if self.landing {
+            palette().selected_bg
+        } else if self.active {
+            palette().pane_bg
+        } else {
+            Color::TRANSPARENT
+        };
+        panel_label(self.panel, background)
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.keyed()
+    }
+}
+
+/// Test-only: how many panel headers this thread has drawn.
+///
+/// A thread-local, `freya-testing` running the whole app on the test's own thread, which
+/// makes this the one way to settle which headers a raise redrew: a header that was
+/// skipped and one that came out the same are the same tree. Nothing resets it -- a test
+/// takes the count before and after what it is about.
+#[cfg(test)]
+pub(crate) fn headers_drawn() -> usize {
+    HEADERS.get()
+}
+
+#[cfg(test)]
+thread_local! {
+    static HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The header freya asks for, filled in from what the dock says about that panel. The
+/// read subscribes the group, which the docking area over it has subscribed already: what
+/// spares an unchanged header is the diff, not what is read here.
 fn panel_header(ctx: TabContext<Panel>, area: State<DockArea>) -> Element {
-    let background = if ctx.is_drop_target {
-        palette().selected_bg
-    } else if area.read().is_active(ctx.tab_id) {
-        palette().pane_bg
-    } else {
-        Color::TRANSPARENT
-    };
-    panel_label(ctx.tab_id, background).into_element()
+    PanelHeader {
+        panel: ctx.tab_id,
+        active: area.read().is_active(ctx.tab_id),
+        landing: ctx.is_drop_target,
+        key: DiffKey::None,
+    }
+    .key(ctx.tab_id)
+    .into_element()
 }
 
 /// The copy of the panel that follows the cursor while it is being dragged.
