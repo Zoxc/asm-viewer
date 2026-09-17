@@ -218,7 +218,14 @@ impl Component for ArtifactRow {
 }
 
 /// The place a diagnostic points at, drawn as a [`PlaceTarget`] where this pane can reach
-/// it: pressing it opens that file as source, on the line and column the compiler named.
+/// it: pressing it opens that file as source on the line the compiler named, through
+/// [`open_source_place`], the arrival every door into a place in a file makes. So the file
+/// already open under another spelling is the tab this opens in, and the assembly side is
+/// driven from that line.
+///
+/// The **column** is not carried. cargo counts one in characters and a landing's are UTF-16
+/// units along the line, which only the text of the line converts between; this pane has no
+/// text, so the caret lands at the start of the line.
 ///
 /// cargo spells the file relative to where it ran, so the place is the project's directory
 /// joined with it, and which of those files may be opened is [`Builds::sources`], picked
@@ -235,6 +242,7 @@ impl Component for ArtifactRow {
 /// diagnostic.
 fn source_place(
     doors: Doors,
+    places: Places,
     ctrl: State<bool>,
     build: &Builds,
     directory: Option<&Path>,
@@ -259,21 +267,8 @@ fn source_place(
         PlaceTarget {
             text,
             press: target.map(|file| {
-                let file: Arc<str> = Arc::from(&*file.to_string_lossy());
                 EventHandler::new(move |_| {
-                    land(
-                        doors,
-                        Landing {
-                            tab: Document::Source(file.clone()),
-                            at: Some(Landed::line(LinePos {
-                                file: file.clone(),
-                                line,
-                            })),
-                            // A source file and no instruction: the compiler named a line.
-                            address: None,
-                        },
-                        Reach::outside(ctrl),
-                    );
+                    open_source_place(doors, places, &file, line, None, Reach::outside(ctrl));
                 })
             }),
         }
@@ -423,6 +418,7 @@ impl Component for CargoSection {
         // `source_place`: a hook may only be called while a component renders, and there
         // is one place per diagnostic.
         let doors = use_doors();
+        let places = use_places();
         let ctrl = use_consume::<Ctrl>().0;
         let open = proj.read().clone();
         let directory = open.workspace();
@@ -463,7 +459,8 @@ impl Component for CargoSection {
             .diagnostics()
             .iter()
             .map(|diagnostic| {
-                let place = source_place(doors, ctrl, &held, directory.as_deref(), diagnostic);
+                let place =
+                    source_place(doors, places, ctrl, &held, directory.as_deref(), diagnostic);
                 diagnostic_block(diagnostic, place)
             })
             .collect();

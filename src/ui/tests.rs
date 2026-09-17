@@ -28867,6 +28867,80 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     );
 }
 
+/// **A diagnostic's place opens in the tab the file is already in.** The place is the
+/// project's directory as the reader typed it joined with what cargo said, so a directory
+/// typed with a `..` -- or reached through a symlink -- spells a file the reader already
+/// has open a second way. `Document::Source` is compared as text, so that second spelling
+/// would be a second tab of one file, splitting its trail and its positions.
+///
+/// The press goes through `open_source_place` for this: `spelling` is where one file
+/// reached two ways is made one tab, and it is no more this pane's rule than any other
+/// door's.
+#[test]
+fn a_diagnostics_place_opens_in_the_tab_the_file_is_already_in() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // The same directory spelled through a child and back out, which only `canonicalize`
+    // reduces: the file cargo names under it is the file the reader has open.
+    let stepped = root.join("src").join("..");
+    let file = stepped.join("src/main.rs");
+    let open_as = Arc::<str>::from(&*root.join("src/main.rs").to_string_lossy());
+    assert_ne!(
+        Path::new(&*open_as),
+        file,
+        "the two spellings are one path without asking anybody"
+    );
+
+    let run = cargo::Run::Rejected {
+        diagnostics: vec![cargo::Diagnostic {
+            level: Level::Error,
+            message: "mismatched types".to_owned(),
+            rendered: "error: mismatched types".to_owned(),
+            span: Some(cargo::Span {
+                file: "src/main.rs".to_owned(),
+                line: 2,
+                column: 1,
+            }),
+        }],
+        message: String::new(),
+    };
+
+    let manifest = root.join("Cargo.toml");
+    let (mut test, roots, _asking, _asks) = mount_project(move |_: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: Some(manifest.clone()),
+            profiles: None,
+            debug_lines: true,
+            edit_refused: None,
+        })
+    });
+    let states = roots.states;
+
+    let mut proj = states.proj;
+    proj.write().workspace_text = stepped.to_string_lossy().into_owned();
+    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    let mut build = states.build;
+    build.write().built = Some(Arc::new(run));
+    build.write().sources = Arc::new(HashSet::from([file]));
+
+    // The reader has the file open already, under the spelling with no `..` in it.
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(open_as.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+
+    let place = centre_of(&test, "src/main.rs:2:1");
+    press_at(&mut test, place);
+    settle(&mut test);
+
+    assert!(
+        open_documents(states.open) == [Document::Source(open_as)],
+        "the place opened a second tab of a file the reader already had open"
+    );
+}
+
 /// **How a place is spelled and whether it can be pressed are two questions.** cargo spells
 /// a file it built relative to where it ran, so a file under the directory is a short path
 /// already and is drawn whole; a path from outside is a registry path, most of a line on its

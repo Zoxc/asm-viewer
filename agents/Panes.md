@@ -98,7 +98,8 @@ toggle already and would want a third kind of control for it. An instruction's i
 symbol"**, the item an object's code carried already, gated now on the listing not being the tab
 itself -- `AsmData::code_tab`, or an `AsmData::subject`, which is set exactly when the assembly pane
 follows. A line's names the file and goes through `open_source_place`, the one arrival every door
-into a *place* in a source file makes -- a definition followed, a Locations row, a Search hit -- so
+into a *place* in a source file makes -- a definition followed, a Locations row, a Search hit, a
+diagnostic's place in the Project view -- so
 the new tab's assembly side follows that line as it follows a clicked one. Both open beside the tab, on the row the menu was over, as a menu item does everywhere here,
 and the leading pane carries neither, being the tab already (`Common::drives`). What a following
 pane with nothing in it should offer never had to be settled: a source-driven tab draws no listing

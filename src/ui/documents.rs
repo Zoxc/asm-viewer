@@ -578,7 +578,8 @@ pub(crate) fn land_on(doors: Doors, id: DocId, at: LinePos) {
 ///
 /// Every door into a *place* in a source file goes through this: the definition an answer
 /// named, a row of the references the Locations panel lists, a hit the Search panel found,
-/// and the companion a source row's menu offers. A path with no line to land on -- a Files
+/// the companion a source row's menu offers, and the place a diagnostic names in the
+/// Project view. A path with no line to land on -- a Files
 /// row, a finder row -- is [`open_source_file`]'s instead.
 pub(crate) fn open_source_place(
     doors: Doors,

@@ -571,6 +571,12 @@ registry path, cut down to its name (`diagnostic_place`, `diagnostic_place_by_na
 under the directory that the source cache would not read is no target and keeps its path all
 the same -- whether a place can be pressed says nothing about how long it is.
 
+**Pressing one is `open_source_place`** (`agents/Panes.md`), the arrival every door into a place
+in a file makes, so a file the reader already has open under another spelling opens in that tab
+and not a second one. What the press cannot carry is the column: cargo counts one in characters
+and a landing's are UTF-16 units along the line, which only the text of the line converts
+between, and this pane has no text.
+
 The **debug-lines offer** is why the profile and the manifest are read together. Release is the
 default profile, since a reader inspecting a binary is usually asking what the optimiser did, and
 cargo's own default for release is *no* debug information -- which is a binary with no source side,
