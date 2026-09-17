@@ -471,7 +471,6 @@ feature there with the substitute, so a release that brings it is noticed.
 - **Asking for a colour or a font is what subscribes a scope to it** (`palette()`, `fonts()`);
   `set_appearance` and `set_fonts` are the only writers. Never write a literal colour or row height.
 - **Persisted formats need no backward compatibility** yet: a stale file is ignored, not migrated.
-  Field order in the serde structs is load-bearing, since TOML puts plain values before tables.
 
 ## Gotchas before editing the UI
 
