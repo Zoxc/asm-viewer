@@ -734,8 +734,8 @@ fn moved_off(
 /// [`use_land`]'s: it saves the runs of the place being left and puts back the arriving
 /// place's own, and it does so in an effect woken by the same change as these two, in
 /// no order anyone can rely on -- a drop made here for the switch could land after the
-/// restore and take the restored run with it. So each effect keeps the entry it last ran
-/// for and, when the entry has changed, records the new one and does nothing else; what
+/// restore and take the restored run with it. So each effect judges itself by the entry
+/// the last run saw ([`use_on_change`]) and, where that has changed, does nothing; what
 /// it drops is a listing replaced *within* one place.
 pub(crate) fn use_clear_marks(
     active: Memo<Option<Entry>>,
@@ -746,58 +746,58 @@ pub(crate) fn use_clear_marks(
     // The **question** and not the active document: a source-driven tab's listing is
     // replaced when a line in it is clicked, which changes no document, and a run picked
     // out of the last line's function would survive into the next one's as raw row
-    // indices. The entry and the question this last ran for, in an `Rc<RefCell>` and not
-    // a `State`: nothing renders from them.
-    let asked_for = use_hook(|| Rc::new(RefCell::new(None::<(Option<Entry>, Option<Ask>)>)));
-    use_side_effect(move || {
-        let ask = asked.read_ask();
-        let entry = active.peek().clone();
-        // Cloned out of the borrow before the `borrow_mut`.
-        let was = asked_for.borrow().clone();
-        *asked_for.borrow_mut() = Some((entry.clone(), ask.clone()));
-        let Some((was_entry, was_ask)) = was else {
-            return;
-        };
-        // The same place asking another question: the listing under the run is going.
-        if was_entry == entry && was_ask != ask {
-            unmark(marked, Pane::Assembly);
-        }
-    });
-    // Which entry, and which file the Source pane was drawing, the last time this ran.
-    let showing = use_hook(|| Rc::new(RefCell::new((None::<Entry>, None::<Arc<str>>))));
-    use_side_effect(move || {
-        // The *file the Source pane is drawing*, which is not the active document: two
-        // functions from one file leave the same lines on screen. Compared against what
-        // it last was rather than answered to directly, since reading the analysis
-        // subscribes this to writes -- a request, the word that it is taking a while --
-        // that change no listing.
-        let active = active.read().clone();
-        let document = active.as_ref().map(|(_, stop)| &stop.document);
-        // No code rows: only the file is wanted, and it is the line of a code tab's
-        // companion, not its file, that is read out of them.
-        let file = source_side(document, &analysis.read(), &marked.read(), None)
-            .map(|side| side.file().clone());
-        // Cloned out of the borrow before the `borrow_mut`.
-        let (was_entry, was) = showing.borrow().clone();
-        // The file the run is in. Bound to a `let` of its own: the guard must be over
-        // before the write below.
-        let picked = marked
-            .peek()
-            .source
-            .as_ref()
-            .and_then(|picked| picked.file.clone());
-        let off = moved_off(
-            was_entry.as_ref(),
-            active.as_ref(),
-            was.as_ref(),
-            file.as_ref(),
-            picked.as_ref(),
-        );
-        *showing.borrow_mut() = (active, file);
-        if off {
-            unmark(marked, Pane::Source);
-        }
-    });
+    // indices. What the last run saw is [`use_on_change`]'s, which is the whole of what
+    // either of these two effects kept.
+    use_on_change(
+        move || (active.peek().clone(), asked.read_ask()),
+        move |was, (entry, ask)| {
+            let Some((was_entry, was_ask)) = was else {
+                return;
+            };
+            // The same place asking another question: the listing under the run is going.
+            if was_entry == entry && was_ask != ask {
+                unmark(marked, Pane::Assembly);
+            }
+        },
+    );
+    use_on_change(
+        move || {
+            // The *file the Source pane is drawing*, which is not the active document: two
+            // functions from one file leave the same lines on screen. Compared against what
+            // it last was rather than answered to directly, since reading the analysis
+            // subscribes this to writes -- a request, the word that it is taking a while --
+            // that change no listing.
+            let active = active.read().clone();
+            let document = active.as_ref().map(|(_, stop)| &stop.document);
+            // No code rows: only the file is wanted, and it is the line of a code tab's
+            // companion, not its file, that is read out of them.
+            let file = source_side(document, &analysis.read(), &marked.read(), None)
+                .map(|side| side.file().clone());
+            (active, file)
+        },
+        move |was, (active, file)| {
+            let Some((was_entry, was_file)) = was else {
+                return;
+            };
+            // The file the run is in. Bound to a `let` of its own: the guard must be over
+            // before the `unmark` below.
+            let picked = marked
+                .peek()
+                .source
+                .as_ref()
+                .and_then(|picked| picked.file.clone());
+            let off = moved_off(
+                was_entry.as_ref(),
+                active.as_ref(),
+                was_file.as_ref(),
+                file.as_ref(),
+                picked.as_ref(),
+            );
+            if off {
+                unmark(marked, Pane::Source);
+            }
+        },
+    );
 }
 
 /// One run of [`use_land`] as its stages share it: the switch it is answering, and what
@@ -850,40 +850,40 @@ pub(crate) fn use_land(
         ..
     } = doors;
     let (driven, marks_at) = (places.driven, places.marks_at);
-    // The entry the runs on screen belong to. An `Rc<RefCell>` and not a `State`:
-    // nothing renders from it.
-    let showing = use_hook(|| Rc::new(RefCell::new(None::<Entry>)));
 
-    use_side_effect(move || {
-        // Subscribes the effect to the active document, which is all it wants from it;
-        // the landing is peeked, so setting one wakes nothing until the document does.
-        let active = active.read().clone();
+    // The entry the runs on screen belong to is what the last run saw, which is
+    // [`use_on_change`]'s to keep. Reading the active document is all this wants of it;
+    // the landing is peeked, so setting one wakes nothing until the document does.
+    use_on_change(
+        move || active.read().clone(),
+        move |was, active| {
+            // The mount is a change like any other here: a session restored onto a tab
+            // arrives at that place and is landed on it.
+            let leaving = was.cloned().flatten();
+            let active = active.clone();
+            if leaving == active {
+                return;
+            }
 
-        // Cloned out of the borrow before the `borrow_mut`.
-        let leaving = showing.borrow().clone();
-        if leaving == active {
-            return;
-        }
-        *showing.borrow_mut() = active.clone();
+            let mut step = Step {
+                active,
+                leaving,
+                standing: marked.peek().source.clone(),
+                landed: None,
+                kept: None,
+            };
 
-        let mut step = Step {
-            active,
-            leaving,
-            standing: marked.peek().source.clone(),
-            landed: None,
-            kept: None,
-        };
+            keep_leaving(&step, open, marked, marks_at);
+            take_landing(&mut step, open, landing, plant);
+            take_kept(&mut step, marks_at);
 
-        keep_leaving(&step, open, marked, marks_at);
-        take_landing(&mut step, open, landing, plant);
-        take_kept(&mut step, marks_at);
-
-        let marks = Marks {
-            assembly: assembly_run(&step, sectioned),
-            source: source_run(&step, driven),
-        };
-        marked.set_if_modified(marks);
-    });
+            let marks = Marks {
+                assembly: assembly_run(&step, sectioned),
+                source: source_run(&step, driven),
+            };
+            marked.set_if_modified(marks);
+        },
+    );
 }
 
 /// Keep the runs of the place being left under its entry ([`Places::marks_at`]).

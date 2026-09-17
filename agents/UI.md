@@ -86,8 +86,9 @@ for it: it takes a closure answering the deps -- read inside the effect, which i
 source needs so the effect follows it and the scope that mounted the hook does not -- and hands the
 callback what the last run saw beside what it sees now, `None` on the mount. A wake that left the
 deps where they were calls nothing, so a read the callback makes for its own reasons cannot be
-mistaken for a change. Two mechanisms kept that bookkeeping themselves, in two different
-containers, before it was written once (`agents/Lsp.md`, `agents/Sidebar.md`).
+mistaken for a change. It was written for two mechanisms that each kept that bookkeeping
+themselves, in two different containers (`agents/Lsp.md`, `agents/Sidebar.md`); the three effects
+that land a place and drop its runs go through it too (`agents/Panes.md`).
 
 **`prevent_default` cancels the events an event derives; `stop_propagation` stops it bubbling.** One
 platform event becomes a queue of tree events, and a handler calling `prevent_default` makes the

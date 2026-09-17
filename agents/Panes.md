@@ -804,8 +804,9 @@ are kept per tab and place, `Places::marks_at`: a `Positions<Entry, Kept>` besid
 `Positions` generalised to a `Clone` value for it, forgotten with them in the same three
 closers for the same reason (an `Entry` holds the `Arc<Object>` its document points into), and never
 saved, since a run is a view of a tab. `use_land` is the whole of it, and is the one effect that
-touches the marks on a change of the active entry. It holds the entry the runs on screen belong to
-in an `Rc<RefCell>`, as `use_kept_position` holds its tab, saves `Marked` under that entry on the
+touches the marks on a change of the active entry. It is woken by the active entry through
+`use_on_change` (`agents/UI.md`), which hands it the entry the runs on screen belong to, saves
+`Marked` under that entry on the
 way out (**settled**, no gesture and nothing owed, and only while the entry is still on its trail,
 since the run after a close is still holding the place that has gone and would put its binary
 straight back), and then gives the arriving place its own. Three rules settle what wins: a pending
@@ -816,8 +817,8 @@ Writing on the way out and not on every change of `Marked` is deliberate: a swee
 pointer move, and the entry those writes belong to is a memo a beat behind them. What made this
 subtle is that `use_clear_marks`'s two effects are woken by the same change of entry as `use_land`,
 in an order nothing guarantees. A drop made there *for the switch* could land after the restore and
-take the restored run with it, so each of them keeps the entry it last ran for and hands a change of
-entry off to `use_land` untouched. **An object's code is the one listing whose rows are not its rows
+take the restored run with it, so each of them judges itself by what the last run saw -- the same
+hook -- and hands a change of entry off to `use_land` untouched. **An object's code is the one listing whose rows are not its rows
 next time**: the reading is reset when the tab is left (`use_reading_of`) and comes back as guesses,
 so a run kept by rows would land rows away. Its assembly run is kept with the **place each of its
 rows stood for** (`Kept::spots`, stamped with the reading generation), written by `use_kept_place`
