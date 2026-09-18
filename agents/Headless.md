@@ -381,6 +381,15 @@ link-following tests pressed a name and then ran 32 passes before reading the st
 one press in ten had not been answered by then. Anything a thread or a `Timer` answers waits on its
 condition and never on a number.
 
+**Nor is a fixed sleep.** `serving`, which every test with a language server in it starts with,
+ran twenty passes a millisecond apart and then let its caller assert about links the worker might
+not have filed yet. It waits on the Tokens answer now (`Linked::answered`: the file the pane is
+showing, in the run the server is on), and on nothing where nothing is coming -- no file on screen,
+or one this project's server is not for, which is never opened with the server and so never asked
+about. What is *owed* settles in passes, the question going out from an effect on this thread, so
+the helper is a settle and then the wait. Held still, with a worker that sleeps a quarter of a
+second before it answers, the old loop fails every run and the wait passes every run.
+
 **What to wait on where the answer changes nothing.** Usually it is a state the answer sets, and
 that covers the jobs behind it too: a worker is one ordered thread, so an answer that has landed
 means every job up to it was recorded, and the passes after it are the test's own thread and not a

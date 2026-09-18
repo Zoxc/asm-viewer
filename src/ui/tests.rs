@@ -6591,25 +6591,43 @@ fn label_area(test: &TestingRunner, text: &str) -> Option<Area> {
     })
 }
 
-/// A few passes, since the rows sit behind a memo over the answer: the memo is
-/// recomputed by a task woken on the write, a pass later than the write itself.
 /// A server that is running and has answered what the file's names are.
 ///
-/// Setting the state is not enough on its own any more: a link is drawn because the
-/// server said the name is one, and saying so is a question sent to the worker and an
-/// answer coming back, which is two turns of the loop and not one.
-fn serving(test: &mut TestingRunner, language: &mut State<Language>) {
+/// Setting the state is not enough on its own: a link is drawn because the server said
+/// the name is one, and saying so is a question sent to the worker and an answer coming
+/// back, which is two turns of the loop and not one.
+fn serving(test: &mut TestingRunner, roots: &Roots) {
+    let mut language = roots.language;
     language.write().state = Lsp::running_to_nothing();
-    // The worker is a real thread, so the answer arrives in its own time and not in this
-    // one's: polling the executor without giving it any cannot see an answer that has not
-    // been sent yet. A millisecond a turn, twenty turns, and the whole suite still runs
-    // in seconds.
-    for _ in 0..20 {
-        settle(test);
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    served(test, roots);
 }
 
+/// Wait until the server has said what it has to say about the file the pane is showing,
+/// which is what every caller of it goes on to assert about.
+///
+/// **The answer is the only part another thread has.** The question goes out from an
+/// effect on this one, gated on the set of open documents another effect writes, so what
+/// is owed settles in passes; what comes back does not, and a count of passes gives a
+/// worker no time at all (`agents/Headless.md`). Hence a settle and then a wait.
+///
+/// There is nothing to wait for where nothing was asked: no file on screen, or one this
+/// project's server is not for, which is never opened with it and so never asked about.
+#[track_caller]
+fn served(test: &mut TestingRunner, roots: &Roots) {
+    settle(test);
+    let (language, linked, showing, opened) =
+        (roots.language, roots.linked, roots.showing, roots.opened);
+    pump(test, move |_| {
+        let run = language.peek().run;
+        let Some(file) = showing.peek().clone() else {
+            return true;
+        };
+        !opened.peek().holds(run, &file) || linked.peek().answered(&file, run)
+    });
+}
+
+/// A few passes, since the rows sit behind a memo over the answer: the memo is
+/// recomputed by a task woken on the write, a pass later than the write itself.
 fn settle(test: &mut TestingRunner) {
     for _ in 0..8 {
         test.sync_and_update();
@@ -8000,13 +8018,11 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
         file.clone(),
     );
     let states = roots.states;
-    let language = roots.language;
     let driven = roots.states.places.driven;
-    let mut language = language;
     let calling = Document::Source(file.clone());
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -8103,7 +8119,7 @@ fn a_definition_answer_from_another_run_opens_nothing() {
     // A server started and stopped a few times, so that there is a run before this one
     // for an answer to be stamped with.
     language.write().run = 4;
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     // The first click, and the answer to it that names another server's run.
     let first = word_point(&test, "one");
@@ -8157,7 +8173,6 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
         file.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8165,7 +8180,7 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -8233,7 +8248,6 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
         file.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8241,7 +8255,7 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     let before = source::touches();
@@ -8293,7 +8307,6 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
         file.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8301,7 +8314,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -8383,11 +8396,10 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
         two_calling_links(),
     );
     let states = roots.states;
-    let mut language = roots.language;
     let calling = Document::Source(file.clone());
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     // The first click, waited for: the worker records a job when it takes it, so this is
     // what says the question is in flight rather than queued behind the second -- where
@@ -8455,7 +8467,6 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
         file.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
     let calling = Document::Source(file.clone());
     let elsewhere = Document::Source(Arc::from("/p/src/elsewhere.rs"));
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
@@ -8465,7 +8476,7 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
     let other = tab_showing(&states, &elsewhere).expect("the tab the reader moves to");
     raise_document(&states, &calling);
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     // The press, waited for: the worker records a job when it takes it, so this is what
     // says the question is with the server and the answer still to come.
@@ -8539,7 +8550,6 @@ fn hovering_over(
         file.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8547,7 +8557,7 @@ fn hovering_over(
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
     let at = word_point(&test, word);
     test.move_cursor(at);
     hovered(&mut test);
@@ -8758,7 +8768,6 @@ fn a_sweep_along_a_line_asks_about_none_of_the_names_it_passes() {
     let (file, _directory) = calling_file("resting");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8766,7 +8775,7 @@ fn a_sweep_along_a_line_asks_about_none_of_the_names_it_passes() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
     let hovers = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<Lookup> {
         std::iter::from_fn(|| next_job(asks))
             .filter_map(|job| match job {
@@ -8925,7 +8934,6 @@ fn a_name_the_server_says_nothing_about_draws_no_box() {
         file.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8933,7 +8941,7 @@ fn a_name_the_server_says_nothing_about_draws_no_box() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
     test.move_cursor(word_point(&test, "helper"));
     hovered(&mut test);
 
@@ -8971,7 +8979,6 @@ fn with_no_server_there_is_no_name_to_hover_at_all() {
     let (file, _directory) = calling_file("hover-no-server");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -8992,7 +8999,7 @@ fn with_no_server_there_is_no_name_to_hover_at_all() {
     assert!(hover_box(&test).is_none(), "a box was drawn with no server");
 
     // And the control: a server, and the same pointer on the same word.
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
     test.move_cursor((5., 5.));
     settle(&mut test);
     test.move_cursor(word_point(&test, "helper"));
@@ -9065,7 +9072,6 @@ fn a_right_click_on_a_link_offers_the_names_references() {
     let (file, _directory) = calling_file("uses");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -9073,7 +9079,7 @@ fn a_right_click_on_a_link_offers_the_names_references() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     // Off the link, on the row's own gutter: the line's locations and nothing about a
     // name.
@@ -9130,7 +9136,6 @@ fn a_name_where_one_is_defined_is_not_a_link() {
     let (file, _directory) = calling_file("defined");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -9138,7 +9143,7 @@ fn a_name_where_one_is_defined_is_not_a_link() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     // `main` on `fn main() {`, which `calling_links` marks as a declaration.
     let defined = word_point(&test, "main");
@@ -9261,7 +9266,6 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
         dotted.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -9269,7 +9273,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -9339,7 +9343,6 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
         stepped.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -9347,7 +9350,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -9379,7 +9382,7 @@ fn a_stopped_server_leaves_no_links_behind() {
     let (mut test, roots, asking, _asks) =
         mount_linking_classifying(|| Ok(calling_links()), |_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
+    let language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -9387,7 +9390,7 @@ fn a_stopped_server_leaves_no_links_behind() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     // A link, as the menu on it says.
     let call = word_point(&test, "helper");
@@ -9529,11 +9532,7 @@ fn a_refused_file_is_asked_about_again_once_the_server_goes_quiet() {
         Some(&*file),
         "a file refused while the server was loading was never asked about again"
     );
-    // The answer travels back over the worker's own thread, which the settling waits for.
-    for _ in 0..20 {
-        settle(&mut test);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    served(&mut test, &roots);
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
     assert!(
@@ -9551,7 +9550,6 @@ fn the_server_is_told_which_files_the_reader_has_open() {
     let (file, _directory) = calling_file("shown");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -9559,7 +9557,7 @@ fn the_server_is_told_which_files_the_reader_has_open() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
         std::iter::from_fn(|| next_job(asks))
@@ -9575,10 +9573,9 @@ fn the_server_is_told_which_files_the_reader_has_open() {
     // And the tab goes.
     let id = states.open.now().map(|(id, _)| id).expect("a tab");
     close_tab(states.open, states.places, id);
-    for _ in 0..20 {
-        settle(&mut test);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    // The close is sent from an effect on this thread; `told` is what waits for the
+    // worker to record it.
+    settle(&mut test);
     assert_eq!(
         told(&asks),
         [AskedOfServer::Closed(file.clone())],
@@ -9597,9 +9594,7 @@ fn a_file_read_afresh_is_opened_with_the_server_again() {
     let (mut test, roots, _asking, asks) =
         mount_linking_classifying(|| Ok(calling_links()), |_job: LspJob| None, file.clone());
     let states = roots.states;
-    let language = roots.language;
     let opened = roots.opened;
-    let mut language = language;
     open_document(
         states.open,
         states.visits,
@@ -9607,7 +9602,7 @@ fn a_file_read_afresh_is_opened_with_the_server_again() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
     let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
         std::iter::from_fn(|| next_job(asks))
             .filter(|job| matches!(job, AskedOfServer::Opened(_) | AskedOfServer::Closed(_)))
@@ -9623,10 +9618,7 @@ fn a_file_read_afresh_is_opened_with_the_server_again() {
     );
     let mut opened = opened;
     opened.set(waiting);
-    for _ in 0..20 {
-        settle(&mut test);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle(&mut test);
 
     assert_eq!(
         told(&asks),
@@ -9650,7 +9642,7 @@ fn a_server_that_is_stopped_leaves_the_app_holding_none_of_its_files() {
     let (mut test, roots, asking, asks) =
         mount_linking_classifying(|| Ok(calling_links()), |_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
+    let language = roots.language;
     let opened = roots.opened;
     open_document(
         states.open,
@@ -9659,7 +9651,7 @@ fn a_server_that_is_stopped_leaves_the_app_holding_none_of_its_files() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
         std::iter::from_fn(|| next_job(asks))
@@ -9673,10 +9665,7 @@ fn a_server_that_is_stopped_leaves_the_app_holding_none_of_its_files() {
     // The reader stops the server.
     let jobs = asking.read().clone().expect("the worker");
     stop_server(language, &jobs);
-    for _ in 0..20 {
-        settle(&mut test);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    pump(&mut test, |_| !opened.peek().holds(run, &file));
     assert!(
         !opened.peek().holds(run, &file),
         "the app is still holding a file open with a server that has gone"
@@ -9690,7 +9679,7 @@ fn a_server_that_is_stopped_leaves_the_app_holding_none_of_its_files() {
     );
 
     // And the next server is told to open the file, with nothing to close first.
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
     assert_eq!(
         told(&asks),
         [AskedOfServer::Opened(file.clone())],
@@ -9713,7 +9702,6 @@ fn a_file_the_server_is_not_for_is_neither_opened_nor_asked_about() {
     );
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -9721,12 +9709,11 @@ fn a_file_the_server_is_not_for_is_neither_opened_nor_asked_about() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
-    for _ in 0..20 {
-        settle(&mut test);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    serving(&mut test, &roots);
 
+    // Nothing is owed, so there is nothing to wait for: a job the app should not have
+    // sent would be sent from an effect on this thread, and `next_job` waits for the
+    // worker to record whatever did arrive.
     let asked: Vec<AskedOfServer> = std::iter::from_fn(|| next_job(&asks)).collect();
     assert!(
         !asked
@@ -9745,7 +9732,6 @@ fn a_project_names_the_files_its_server_is_for() {
     let file = directory.named("add.c", "int bump(int n) {\n    return n + 1;\n}\n");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -9753,7 +9739,7 @@ fn a_project_names_the_files_its_server_is_for() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
     let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
         std::iter::from_fn(|| next_job(asks))
             .filter(|job| matches!(job, AskedOfServer::Opened(_)))
@@ -9771,10 +9757,7 @@ fn a_project_names_the_files_its_server_is_for() {
         open.language_server = "clangd".to_owned();
         open.language_files = ".c, .h".to_owned();
     }
-    for _ in 0..20 {
-        settle(&mut test);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    settle(&mut test);
     assert_eq!(
         told(&asks),
         [AskedOfServer::Opened(file.clone())],
@@ -9812,10 +9795,9 @@ fn a_file_is_asked_about_only_once_the_server_says_it_has_settled() {
             },
         };
     }
-    for _ in 0..20 {
-        settle(&mut test);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    // As above: a question this should not have put would go out from an effect on this
+    // thread, and `next_job` waits for the worker.
+    settle(&mut test);
     let asked: Vec<AskedOfServer> = std::iter::from_fn(|| next_job(&asks)).collect();
     assert!(
         !asked
@@ -9918,10 +9900,7 @@ fn what_a_server_said_before_it_settled_is_asked_again_once_it_has() {
         Some(&*file),
         "what a server said before it settled was never asked again"
     );
-    for _ in 0..20 {
-        settle(&mut test);
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    served(&mut test, &roots);
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
     assert!(
@@ -9971,11 +9950,10 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
         in_an_impl,
     );
     let states = roots.states;
-    let mut language = roots.language;
     let calling = Document::Source(file.clone());
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let tab = states.open.now().expect("a tab").0;
     let before = stops_of(&states, tab).len();
@@ -10046,7 +10024,6 @@ fn a_link_that_is_not_a_colour_run_is_still_a_span_of_its_own() {
     let (mut test, roots, _asks) =
         mount_linking_calling(|_job: LspJob| None, file.clone(), inside_a_run);
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10054,7 +10031,7 @@ fn a_link_that_is_not_a_colour_run_is_still_a_span_of_its_own() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let drawn = drawn_spans(&test);
     let row = drawn
@@ -10082,7 +10059,6 @@ fn a_name_in_the_source_wears_the_links_own_box() {
     let (file, _directory) = calling_file("lit");
     let (mut test, roots, _asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10090,7 +10066,7 @@ fn a_name_in_the_source_wears_the_links_own_box() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     // `helper`, the one name in the file the server called a call.
     let call = word_point(&test, "helper");
@@ -10129,7 +10105,6 @@ fn an_item_in_a_trait_impl_asks_the_server_for_its_declaration() {
     let (mut test, roots, asks) =
         mount_linking_calling(|_job: LspJob| None, file.clone(), in_an_impl);
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10137,7 +10112,7 @@ fn an_item_in_a_trait_impl_asks_the_server_for_its_declaration() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -10160,7 +10135,6 @@ fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
     let (file, _directory) = calling_file("asks3");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10168,7 +10142,7 @@ fn a_right_click_on_a_name_offers_the_three_questions_for_the_server() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     right_click(&mut test, call);
@@ -10207,7 +10181,6 @@ fn the_menus_definition_asks_where_a_click_on_the_link_does() {
     let (file, _directory) = calling_file("asksdef");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10215,7 +10188,7 @@ fn the_menus_definition_asks_where_a_click_on_the_link_does() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     right_click(&mut test, call);
@@ -10239,7 +10212,6 @@ fn a_source_rows_menu_says_the_key_beside_each_question() {
     let (file, _directory) = calling_file("menukeys");
     let (mut test, roots, _asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10247,7 +10219,7 @@ fn a_source_rows_menu_says_the_key_beside_each_question() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     right_click(&mut test, call);
@@ -10273,7 +10245,6 @@ fn a_right_click_on_a_definitions_own_name_offers_its_references() {
     let (file, _directory) = calling_file("defuses");
     let (mut test, roots, _asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10281,7 +10252,7 @@ fn a_right_click_on_a_definitions_own_name_offers_its_references() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let defined = word_point(&test, "main");
     right_click(&mut test, defined);
@@ -10333,7 +10304,6 @@ fn the_f12_family_asks_about_the_name_under_the_caret() {
     let (file, _directory) = calling_file("f12caret");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10341,7 +10311,7 @@ fn the_f12_family_asks_about_the_name_under_the_caret() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
     caret_on(&mut test, "main");
 
     // F12 asks the server where the name is, at the place a click on a link asks about:
@@ -10397,7 +10367,6 @@ fn a_caret_on_no_name_asks_nothing_about_one() {
     let (file, _directory) = calling_file("f12space");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10405,7 +10374,7 @@ fn a_caret_on_no_name_asks_nothing_about_one() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     // The caret in the indentation of `    let n = helper(1);`, which is the second line
     // and where the server placed no name at all.
@@ -10443,7 +10412,6 @@ fn a_pane_with_no_run_answers_none_of_the_f12_family() {
     let (file, _directory) = calling_file("f12norun");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10451,7 +10419,7 @@ fn a_pane_with_no_run_answers_none_of_the_f12_family() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
     caret_on(&mut test, "main");
 
     // Escape peels the run away: a press leaves a caret and nothing selected, so the
@@ -10504,7 +10472,7 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
         file.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
+    let language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10512,7 +10480,7 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     right_click(&mut test, call);
@@ -10565,7 +10533,7 @@ fn a_references_question_a_broken_server_never_answers_says_there_are_none() {
         file.clone(),
     );
     let states = roots.states;
-    let mut language = roots.language;
+    let language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10573,7 +10541,7 @@ fn a_references_question_a_broken_server_never_answers_says_there_are_none() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     right_click(&mut test, call);
@@ -10635,13 +10603,12 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
     let (file, _directory) = calling_file("asks");
     let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
     let states = roots.states;
-    let mut language = roots.language;
     let document = Document::Source(file.clone());
     open_document(states.open, states.visits, document, Reach::NewTab);
     settle(&mut test);
     // A server there to be asked: nothing is a link without one. Written after the
     // project has settled, since a project arriving is what stops a server.
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
@@ -10690,7 +10657,6 @@ fn a_press_after_a_wide_character_asks_at_its_byte() {
     );
     let (mut test, roots, asks) = mount_linking_calling(|_job: LspJob| None, file.clone(), links);
     let states = roots.states;
-    let mut language = roots.language;
     open_document(
         states.open,
         states.visits,
@@ -10698,7 +10664,7 @@ fn a_press_after_a_wide_character_asks_at_its_byte() {
         Reach::NewTab,
     );
     settle(&mut test);
-    serving(&mut test, &mut language);
+    serving(&mut test, &roots);
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);

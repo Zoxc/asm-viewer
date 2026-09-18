@@ -127,6 +127,19 @@ impl Linked {
         held
     }
 
+    /// Whether what is held is the server's answer about `file` in run `run` -- its
+    /// names or its refusal, both being the server having spoken -- with no question
+    /// still in flight.
+    ///
+    /// Test-only: it is what a headless test waits for before asserting about links
+    /// (`serving`, `src/ui/tests.rs`). The app asks the other way round, which is
+    /// [`Linked::pending`].
+    #[cfg(test)]
+    pub(crate) fn answered(&self, file: &str, run: u64) -> bool {
+        self.asked.is_none()
+            && matches!(&self.found, Some((of, at, _)) if &**of == file && *at == run)
+    }
+
     /// Drop what is held about `file`, so the next turn of [`use_linking`] asks about it
     /// again. Whether anything changed, so the caller writes only then.
     ///
