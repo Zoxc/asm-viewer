@@ -146,15 +146,16 @@ keyed!(SourceRow);
 
 /// The text of `columns` on row `index`, or `None` where they name nothing of it.
 ///
-/// The columns are the byte offsets a language server counts in (`src/links.rs`), counted
-/// back into the units the row draws in and cut out of the row's own text -- which is
-/// what a menu built from a press calls the name, so what the reader right-clicked is
-/// what the menu says.
+/// The columns are the byte offsets a language server counts in (`src/links.rs`), cut out
+/// of the row's own text -- which is what a menu built from a press calls the name, so
+/// what the reader right-clicked is what the menu says. Columns inside a character name
+/// nothing.
 fn name_at(source: &SourceText, index: usize, columns: &Range<u32>) -> Option<String> {
     let cut = source.0.text(index);
-    let drawn = drawn_columns(&cut.whole, columns);
-    let name = Line::text(&*cut.whole).slice(drawn.start, drawn.end);
-    (!name.is_empty()).then_some(name)
+    let name = cut
+        .whole
+        .get(columns.start as usize..columns.end as usize)?;
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// A run of a name's byte columns as the UTF-16 units the row `text` is drawn in.
@@ -173,7 +174,7 @@ fn byte_column(text: &str, column: usize) -> u32 {
 /// run to every reader of a `Line` -- what it copies, how wide it is, where a find hits
 /// (`src/find.rs`) -- so cutting it up again here would say the same thing at a cost.
 pub(crate) fn source_line(source: &SourceText, index: usize) -> Line {
-    Line::text(&*source.0.text(index).whole)
+    Line::text(source.0.text(index).whole.clone())
 }
 
 /// What a press, a right-click or the pointer on one of a row's names is answered from:
@@ -243,6 +244,7 @@ impl Named {
             // Always a door: nothing here is a link until the server has said the name is
             // one, so there is nothing to hold a modifier back for.
             is_link: Rc::new(|| true),
+            lit_fg: palette().name_hover_fg,
             follow: Rc::new(move |columns: Range<usize>| {
                 let column = byte_column(&named.text, columns.start);
                 follow_link(
@@ -476,7 +478,7 @@ impl Component for SourceRow {
         // a row is drawn afresh for a scroll, a modifier and every keystroke in the find
         // bar, and the cut is the same every time ([`Highlighted::text`]).
         let cut = common.source.0.text(index);
-        let line = Line::text(&*cut.whole);
+        let line = Line::text(cut.whole.clone());
         let named = Named {
             at: LinePos::of_row(common.file.clone(), index),
             text: cut.whole.clone(),
@@ -487,15 +489,11 @@ impl Component for SourceRow {
         let on_line = named.on_line();
 
         let text = Text {
-            finds: common
-                .marking
-                .as_ref()
-                .map(|marking| marking.hits(&line))
-                .unwrap_or_default(),
+            marking: common.marking.clone(),
             line,
             // The one allocation a drawn row still owes: freya's `Span` holds a
             // `Cow<'static, str>`, so a span cannot borrow the cut it was taken from.
-            head: common
+            spans: common
                 .source
                 .0
                 .pieces(cut)
@@ -505,7 +503,6 @@ impl Component for SourceRow {
                         .assembly_font()
                 })
                 .collect(),
-            tail: Vec::new(),
             chars: self.chars,
             links: named.linked(on_line),
         };

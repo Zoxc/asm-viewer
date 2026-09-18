@@ -187,14 +187,13 @@ leaves this list when it is. That is a move made on request, like everything els
   key handlers are per pane on purpose (`agents/Panes.md`); this is the rule that decides
   which of them answers, not a global handler.
 
-- [ ] Let a symbol link be selectable with no modifier held. A link is an inline child of the
-  row's one paragraph and one unit to the text engine, so a sweep *across* a row already
-  copies it whole (`a_link_in_the_text_is_one_unit_and_still_opens_its_symbol`); a sweep that
-  *starts* on one needs Alt, since the link acts on the release and the gesture would
-  otherwise end as a navigation. What would need nothing held is a press that declines to be a
-  door when the pointer moved between the down and the up, which is what a browser does. It
-  wants the sweep's own state to say whether anything was selected (`agents/Panes.md`,
-  `src/ui/marks.rs`).
+- [ ] Let a link be selectable with no modifier held. A link is a run of the row's text, so a
+  sweep *across* it already selects it character by character
+  (`a_sweep_selects_across_a_link_and_a_press_still_opens_it`); a sweep that *starts* on one
+  needs Alt, since the link is followed as the button goes down. What would need nothing held
+  is a press that follows the link on the release, and only when the pointer did not move
+  between the down and the up, which is what a browser does. It wants the sweep's own state
+  to say whether anything was selected (`agents/Panes.md`, `src/ui/marks.rs`).
 - [ ] Following a call or jump should put the caret on what it goes to. A symbol named in
   an operand opens that symbol's tab and lands nowhere in particular -- at the top, or
   wherever the tab was left -- where the two doors beside it both land exactly: the bare

@@ -572,8 +572,8 @@ addend a format stores in the operand rather than in the relocation entry (COFF,
 printed beside the name. A near branch has no rip-like form to fall back on either: iced prints its
 target as the address the displacement works out to, so a relocated one reads as an address it does
 not go to. Where the name landed is the span `write_symbol` records, which becomes
-`Operand::SymbolName`'s own. That is what lets `InstructionRow` render the run before it as one
-`paragraph()`, the span as a `DoorLabel`, and the run after it as a second `paragraph()`. The other
+`Operand::SymbolName`'s own. That is what lets `InstructionRow` draw the name in the operand's own
+place as a link, a run of the row's text between the spans before and after it. The other
 override, `write_number`, is how a branch target reaches the output: the span an instruction's
 *own* displacement was printed into. One field holds either, because the two never both matter --
 the resolver is armed exactly when the instruction names a symbol, and an operand a name went into
@@ -584,7 +584,7 @@ their targets and left the displacement as the answer. Where no relocation cover
 it is a direct near `call`, the backend asks `Code::symbol_at_local` for the text symbol that
 **starts exactly** at the address the encoding names, and hands it out as the same
 `Operand::SymbolName` a relocated call gets: the resolver substitutes the name for the operand, `write_symbol` records the
-span, and the UI's `DoorLabel` draws it with no change of its own. Three limits, each deliberate.
+span, and the UI draws it as the same link with no change of its own. Three limits, each deliberate.
 *Exact start only*: a call into the middle of a function
 stays the number it is, and a target no symbol starts at (a PLT stub, a stripped static) stays plain
 text. *Same section*: the index is by placed address (`Section::bias` added), which makes a

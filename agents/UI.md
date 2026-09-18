@@ -203,16 +203,12 @@ leads. **It is what a press is handed whole**: `Landings`, the narrower set a sy
 took, was `doors`, `ctrl` and the places dug out of `project`, and with `places` on `Doors` it
 narrowed to nothing the callee did not already have. `press_location` and `symbol_keys` take the
 pane's `ListStates` itself, so there is one set and no second way to build one.
-`LinkStates` (`assembly.rs`) is the third of these and the smallest: the two modifiers a
-linked operand lights itself by, the `Doors` a press on it goes through, and the `Listing`
-`reveal_row` reads at the press. `DoorLabel` is the most-made component in the app -- one per
-linked operand of every row on screen, rebuilt as a scroll recycles a row -- and it reached for
-four contexts a render, three of them wanted only by the press. `use_link_states` gathers it in
-each of the two listings' renders, beside `use_row_states`, and takes `doors` off that bundle
-rather than reaching for it again, so a row's menu and the links in it cannot disagree about
-where a door leads. It rides down with the rows and compares equal always
-(`what_a_links_press_reaches_for_costs_the_label_no_render`), which is a counter and not an
-element: a label whose scope is kept still has its node rebuilt when the row around it renders.
+`LinkStates` (`assembly.rs`) is the third of these and the smallest: Ctrl, which a linked
+operand's door is asked about, the `Doors` a press on it goes through, and the `Listing`
+`reveal_row` reads at the press. `use_link_states` gathers it in each of the two listings'
+renders, beside `use_row_states`, and takes `doors` off that bundle rather than reaching for it
+again, so a row's menu and the links in it cannot disagree about where a door leads. It rides
+down with the rows and compares equal always, so a row is not drawn again for it.
 A handle may sit in more than one bundle: `Doors` and `ProjectStates` both carry `Open` and
 `Places`, `RowStates` and `ListStates` carry `Doors`, `ListStates` carries `Picking` and
 `ProjectStates`, and `Doors` carries the runs `Marked` hands the panes. Two routes to one

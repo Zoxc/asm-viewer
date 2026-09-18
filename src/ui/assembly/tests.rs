@@ -28,7 +28,6 @@ fn link_states() -> LinkStates {
     let roots = roots(None, &Settings::default());
     LinkStates {
         ctrl: roots.keys.ctrl,
-        alt: roots.keys.alt,
         doors: roots.doors,
         listing: Listing::detached(),
     }
@@ -48,39 +47,21 @@ fn instruction(address: u64, format: Vec<(String, SpanKind)>) -> Instruction {
     }
 }
 
-/// The row's drawn text as columns: the head spans, the link as the one unit the text
-/// engine counts it as, then the tail spans. The link's own text is taken from the copy,
-/// which is what makes the columns around it the thing being compared -- and the two are
-/// first held to agreeing about whether there is a link at all.
-fn drawn(text: &Text<Option<InlineLink>>) -> Line {
-    let inline = text.line.pieces.iter().find_map(|piece| match piece {
-        crate::chars::Piece::Inline(name) => Some(name.clone()),
-        crate::chars::Piece::Text(_) => None,
-    });
-    assert_eq!(
-        inline.is_some(),
-        text.links.is_some(),
-        "one half has a link and the other has none"
-    );
-
-    let mut line = Line::default();
-    for span in &text.head {
-        line.push_text(span.text.to_string());
-    }
-    if let Some(name) = inline {
-        line.push_inline(name);
-    }
-    for span in &text.tail {
-        line.push_text(span.text.to_string());
-    }
-    line
+/// The row's drawn text: its spans, joined.
+fn drawn(text: &Text) -> Line {
+    Line::text(
+        text.spans
+            .iter()
+            .map(|span| span.text.to_string())
+            .collect::<String>(),
+    )
 }
 
 /// A listing holding one instruction of every kind a row draws differently: no link at
 /// all, a relocation's name in the operand it applies to, one appended because the
 /// formatter offered no operand to put it in, a branch this listing has the row for, a
 /// bare target, and a name inside a memory operand, which is the case with a tail. Every
-/// one of them is padded to the operand column, which is what the drawing rewrites.
+/// one of them is padded to the operand column, which the copy trims where it ends a row.
 fn listing(target: Arc<SymbolData>) -> Assembly {
     let mut instructions = vec![
         instruction(
@@ -177,11 +158,10 @@ fn listing(target: Arc<SymbolData>) -> Assembly {
 }
 
 /// **What a row copies is what it draws.** The spans a row is drawn from and the line it
-/// is copied as come out of one [`split`], and the only place the two can drift apart is
-/// the padding to the operand column, which the drawing rewrites in non-breaking spaces so
-/// that skia does not trim it away. One unit each, so a column into the drawn text lands
+/// is copied as come out of one walk ([`pieces`]), so a column into the drawn text lands
 /// on the character that same column of the copy lands on -- and a sweep selects what the
-/// reader swept over.
+/// reader swept over. The copy trims the formatter's padding after the last span, and
+/// that is all it leaves out. Each row's link goes where its operand says.
 #[test]
 fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
     let path =
@@ -202,42 +182,43 @@ fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
 
     in_runtime(|| {
         // What a link is handed, as the list hands it: the root's own contexts, and a
-        // listing with no box behind it -- nothing here presses one, and a label only
-        // peeks the modifiers when the pointer reaches it.
+        // listing with no box behind it -- nothing here presses one.
         let states = link_states();
         for index in 0..data.assembly().instructions.len() {
             let text = instruction_text(&data, index, RowChars::default(), None, &states);
-            let (drawn, copied) = (drawn(&text), &text.line);
-
-            for col in 0..copied.units() {
-                assert_eq!(
-                    drawn.slice(col, col + 1).replace('\u{a0}', " "),
-                    copied.slice(col, col + 1),
-                    "row {index}, column {col}: drew {drawn} and copied {copied}"
-                );
-            }
-            // Past the end of the copy the drawn text holds only the formatter's padding,
-            // which the copy trims and skia does not measure either.
-            assert!(
-                drawn
-                    .slice(copied.units(), drawn.units())
-                    .chars()
-                    .all(|c| c == ' ' || c == '\u{a0}'),
-                "row {index} draws {drawn} past the end of {copied}"
+            let (drawn, copied) = (drawn(&text).to_string(), text.line.to_string());
+            assert_eq!(
+                drawn.trim_end(),
+                copied,
+                "row {index} draws what it does not copy"
             );
         }
     });
+
+    // The door each row's link is: none for a row that names nothing, the symbol for a
+    // relocation wherever its name goes, the row a branch lands on where this listing has
+    // it, and the object's code at the address a call goes to.
+    let doors = (0..assembly.instructions.len())
+        .map(|index| match door_of(&data, index) {
+            None => "none",
+            Some(Door::Symbol { .. }) => "symbol",
+            Some(Door::Row { .. }) => "row",
+            Some(Door::Address { .. }) => "address",
+            Some(Door::Label { .. }) => "label",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        doors,
+        ["none", "symbol", "symbol", "row", "address", "symbol"]
+    );
 }
 
-/// **Every link a row can have is one inline piece, the fourth included.** [`split`] says
-/// which of the four it lifted out and what that one says, so a line is head, link, tail
-/// whichever it was: a relocation's name in the operand it applies to, a branch this
-/// listing has the row for, a bare target, and -- the case with no span of its own -- a
-/// name the formatter offered no operand for, appended behind one space. That last one is
-/// the whole of what `asm_line` puts after the address, so the two are held together here
-/// as well.
+/// **Every link a row can have is one run of its text**: a relocation's name in the
+/// operand it applies to, a branch's displacement, a call's target, and -- the case with
+/// no span of its own -- a name the formatter offered no operand for, appended behind one
+/// space.
 #[test]
-fn every_kind_of_link_is_one_inline_piece() {
+fn every_kind_of_link_is_one_run_of_the_text() {
     let target = Arc::new(SymbolData::new(
         "_ZN3add3addE".to_owned(),
         Some("add".to_owned()),
@@ -246,65 +227,64 @@ fn every_kind_of_link_is_one_inline_piece() {
         0,
     ));
     let assembly = listing(target);
-    let kinds = (0..assembly.instructions.len())
-        .map(|index| {
-            split(&assembly.instructions[index], linked(&assembly, index))
-                .1
-                .map(|link| link.kind)
-        })
+    let lines = assembly
+        .instructions
+        .iter()
+        .map(text_of)
         .collect::<Vec<_>>();
-    assert_eq!(
-        kinds,
-        vec![
-            None,
-            Some(Link::Relocation),
-            Some(Link::Appended),
-            Some(Link::Branch),
-            Some(Link::Target),
-            Some(Link::Relocation),
-        ]
-    );
-
-    let lines = (0..assembly.instructions.len())
-        .map(|index| instruction_line(&assembly, index))
-        .collect::<Vec<_>>();
-    let inlines = |line: &Line| {
-        line.pieces
-            .iter()
-            .filter_map(|piece| match piece {
-                crate::chars::Piece::Inline(name) => Some(name.clone()),
-                crate::chars::Piece::Text(_) => None,
-            })
-            .collect::<Vec<_>>()
+    // The text the link's columns cover, which is what a press on it follows.
+    let linked_text = |(line, columns): &(Line, Option<Range<usize>>)| {
+        columns
+            .clone()
+            .map(|columns| line.slice(columns.start, columns.end))
     };
 
-    // The padding after the last span is not text, and a row with no link has no piece
-    // the text engine counts as one unit.
-    assert_eq!(lines[0].to_string(), "mov     rax, rbx");
-    assert!(inlines(&lines[0]).is_empty());
+    // The padding after the last span is not text, and a row with no link has no run.
+    assert_eq!(lines[0].0.to_string(), "mov     rax, rbx");
+    assert_eq!(linked_text(&lines[0]), None);
 
-    assert_eq!(lines[1].to_string(), "call    add");
-    assert_eq!(inlines(&lines[1]), ["add"]);
-    // Appended: every span, then the space, then the name -- one unit, as the others are.
-    assert_eq!(lines[2].to_string(), "nop    add");
-    assert_eq!(inlines(&lines[2]), ["add"]);
-    assert_eq!(lines[2].units(), "nop    ".len() + 1);
-    assert_eq!(lines[3].to_string(), "jmp     0x0");
-    assert_eq!(inlines(&lines[3]), ["0x0"]);
-    assert_eq!(lines[4].to_string(), "call    0x2000");
-    assert_eq!(inlines(&lines[4]), ["0x2000"]);
+    assert_eq!(lines[1].0.to_string(), "call    add");
+    assert_eq!(linked_text(&lines[1]).as_deref(), Some("add"));
+    // Appended: every span, then the space, then the name.
+    assert_eq!(lines[2].0.to_string(), "nop    add");
+    assert_eq!(linked_text(&lines[2]).as_deref(), Some("add"));
+    assert_eq!(lines[3].0.to_string(), "jmp     0x0");
+    assert_eq!(linked_text(&lines[3]).as_deref(), Some("0x0"));
+    assert_eq!(lines[4].0.to_string(), "call    0x2000");
+    assert_eq!(linked_text(&lines[4]).as_deref(), Some("0x2000"));
     // The name inside a memory operand: the tail is drawn after it.
-    assert_eq!(lines[5].to_string(), "mov     rax, [add]");
-    assert_eq!(inlines(&lines[5]), ["add"]);
+    assert_eq!(lines[5].0.to_string(), "mov     rax, [add]");
+    assert_eq!(linked_text(&lines[5]).as_deref(), Some("add"));
+}
 
-    for (index, line) in lines.iter().enumerate() {
-        let instruction = &assembly.instructions[index];
-        assert_eq!(
-            asm_line(instruction, 0),
-            format!("{:016X} {line}", instruction.address),
-            "instruction {index}"
+/// A symbol's name is the file's to say, and it can end in whitespace or be nothing but
+/// it. The copy trims the padding after the last span, which takes that whitespace with
+/// it, and the link's columns never run past what is left: a name of spaces alone is no
+/// link at all, and one ending in them is the name before them.
+#[test]
+fn a_link_named_in_whitespace_stays_inside_the_line() {
+    let named = |name: &str| {
+        let mut nop = instruction(
+            0,
+            vec![
+                span("nop", SpanKind::Mnemonic),
+                span("   ", SpanKind::Other),
+            ],
         );
-    }
+        nop.operand = Some(Operand::SymbolName {
+            symbol: Arc::new(SymbolData::new(name.to_owned(), None, 0, None, 0)),
+            span: None,
+        });
+        text_of(&nop)
+    };
+
+    let (line, link) = named("   ");
+    assert_eq!(line.to_string(), "nop");
+    assert_eq!(link, None, "a name of spaces alone is a link past the line");
+
+    let (line, link) = named("f  ");
+    assert_eq!(line.to_string(), "nop    f");
+    assert_eq!(link, Some(7..8), "the link runs past the trimmed line");
 }
 
 /// **A reveal the pane owes goes to a listing row, and the pair's is an instruction.**
@@ -357,15 +337,15 @@ fn a_planted_address_lands_on_the_instruction_holding_it() {
     assert_eq!(planted_index(&[], 0x10), None, "a listing with no rows");
 }
 
-/// **One answer for what a press on a link does**, over the two modifiers and the listing
-/// the link is drawn in, and the whole of it: where the target opens as well as which
-/// target it is. A press that is no door is left to the row -- and a label with Ctrl held
-/// is a door that opens nothing, so the row does not get that one either.
+/// **One answer for what a press on a link does**, over Ctrl and the listing the link is
+/// drawn in, and the whole of it: where the target opens as well as which target it is.
+/// A press that is no door is left to the row, which a label is without Ctrl. Alt is the
+/// row's, which asks it before any door.
 ///
 /// The reach is the half `Opens::go` used to decide, from a second read of the same key,
 /// which left "Ctrl opens a tab of its own" untestable here.
 #[test]
-fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
+fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/analysis/tests/fixtures/line_fixture.o");
     let objects = analysis::open_files(vec![path]);
@@ -404,42 +384,37 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
         }),
     };
 
-    // Alt shuts every door in every pane: the press is a selection this time.
-    for door in [&in_code, &alone, &address, &label, &row] {
-        assert!(door.opens(true, false).is_none());
-        assert!(door.opens(true, true).is_none());
-    }
     assert!(
-        label.opens(false, false).is_none(),
+        label.opens(false).is_none(),
         "a label without Ctrl has nowhere to go, and the press is the row's"
     );
     assert!(
-        matches!(label.opens(false, true), Some(Opens::Nothing)),
-        "a label with Ctrl is a door the row must not also get"
+        label.opens(true) == Some(Opens::Symbol(symbol.clone(), Reach::NewTab)),
+        "a label with Ctrl opens its symbol in a tab of its own"
     );
 
     // In the unified view a plain press moves down the listing already on screen, at the
     // address that listing draws the target at; Ctrl opens the symbol on its own.
     assert!(matches!(
-        in_code.opens(false, false),
+        in_code.opens(false),
         Some(Opens::InCode { placed, .. }) if placed == target.placed(target.address)
     ));
     // With Ctrl either door is the symbol on its own, in a tab that stays: the two
     // listings differ in where a plain press goes and not in what Ctrl means.
     for door in [&in_code, &alone] {
         assert!(
-            door.opens(false, true) == Some(Opens::Symbol(symbol.clone(), Reach::NewTab)),
+            door.opens(true) == Some(Opens::Symbol(symbol.clone(), Reach::NewTab)),
             "Ctrl on a name opens the symbol in a tab of its own"
         );
     }
     // In a symbol's own listing there is nowhere to move to, so a plain press follows the
     // name in place, the way a browser follows a link.
-    assert!(alone.opens(false, false) == Some(Opens::Symbol(symbol.clone(), Reach::InPlace)));
+    assert!(alone.opens(false) == Some(Opens::Symbol(symbol.clone(), Reach::InPlace)));
 
     // A bare address is the object's code, in place or in a tab of its own by the same
     // rule.
     assert!(
-        address.opens(false, false)
+        address.opens(false)
             == Some(Opens::Code {
                 object: object.clone(),
                 address: 0x2000,
@@ -447,7 +422,7 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
             })
     );
     assert!(
-        address.opens(false, true)
+        address.opens(true)
             == Some(Opens::Code {
                 object,
                 address: 0x2000,
@@ -463,8 +438,8 @@ fn what_a_press_on_a_link_opens_turns_on_alt_ctrl_and_the_listing() {
             line: 3,
         }),
     });
-    assert!(row.opens(false, false) == to_the_row);
-    assert!(row.opens(false, true) == to_the_row);
+    assert!(row.opens(false) == to_the_row);
+    assert!(row.opens(true) == to_the_row);
 }
 
 /// **Every field of the three listing props takes part in its comparison.** A field left

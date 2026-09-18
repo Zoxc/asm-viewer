@@ -5,8 +5,7 @@
 //!
 //! A column here is a **UTF-16 unit** into the row's text as the row draws it, which is
 //! the unit the text engine answers a pointer in and takes a highlight in. A row's text is
-//! a [`Line`] of pieces, because a row can hold an element that is not text -- a relocation
-//! link -- which the engine counts as one unit and which copies as the whole name it shows.
+//! a [`Line`].
 //!
 //! Everywhere else in the app a column is a **byte offset** into the file's line, which is
 //! what a language server is asked in and answers in (`src/lsp.rs`). So this module owns
@@ -16,8 +15,8 @@
 //! the same kind of fact for the count a length written for a reader is in.
 
 use std::fmt;
-use std::iter;
 use std::ops::{Range, RangeInclusive};
+use std::sync::Arc;
 
 /// A place in a listing: a row, and a column in UTF-16 units of that row's text. Ordered
 /// by row first, which is what puts the two ends of a selection in listing order.
@@ -512,54 +511,6 @@ pub fn beyond(
     Some(Reach { row, x })
 }
 
-/// One piece of a row's text.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum Piece {
-    Text(String),
-    /// An element drawn in the row's text in place of a name -- a relocation link -- which
-    /// the text engine counts as one unit and which copies as the name.
-    Inline(String),
-}
-
-impl Piece {
-    /// What the piece draws, or the name an inline element copies as.
-    fn text(&self) -> &str {
-        match self {
-            Piece::Text(text) | Piece::Inline(text) => text,
-        }
-    }
-
-    /// The piece character by character: how many columns each takes, and the character
-    /// itself where the piece is text. An inline element is one character of its own, one
-    /// column wide whatever its name. The one place a piece's width is stated: a row's
-    /// units are the sum of it, and every walk along a row is [`Line::cells`], which
-    /// steps over it -- so no two of them can put a column in a different place.
-    fn characters(&self) -> impl Iterator<Item = (usize, Option<char>)> + '_ {
-        let text = match self {
-            Piece::Text(text) => Some(text),
-            Piece::Inline(_) => None,
-        };
-        text.into_iter()
-            .flat_map(|text| text.chars().map(|c| (c.len_utf16(), Some(c))))
-            .chain(text.is_none().then_some((1, None)))
-    }
-
-    fn units(&self) -> usize {
-        self.characters().map(|(units, _)| units).sum()
-    }
-}
-
-/// One stretch of a row a pattern is looked for in ([`Line::runs`]).
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum Run<'a> {
-    /// A stretch of adjacent text pieces, joined: a row is pushed one span at a time and
-    /// a pattern crossing two of them is the ordinary case.
-    Text(String),
-    /// The name an inline element draws. It is one character of the row, so there are no
-    /// columns inside it to point at, and it ends the text run either side of it.
-    Inline(&'a str),
-}
-
 /// What kind of character one is, for a step by word: a word is a run of one kind, and
 /// whitespace is what a step passes over first.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -569,8 +520,6 @@ enum Class {
     /// Everything else that is not whitespace: `[`, `,`, `::`.
     Punct,
     Space,
-    /// An inline element, a word of its own.
-    Inline,
 }
 
 impl Class {
@@ -648,109 +597,63 @@ fn word_after(atoms: &[Atom], col: usize) -> Option<usize> {
     Some(atoms[i].end)
 }
 
-/// A row's text as it is drawn, in pieces.
+/// A row's text as it is drawn. Shared, so a row whose text is already held -- a line
+/// of a source file -- is not copied to be drawn.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct Line {
-    pub pieces: Vec<Piece>,
-}
+pub struct Line(Arc<str>);
 
 impl Line {
-    /// A row that is plain text.
-    pub fn text(text: impl Into<String>) -> Self {
-        Line {
-            pieces: vec![Piece::Text(text.into())],
-        }
+    pub fn text(text: impl Into<Arc<str>>) -> Self {
+        Line(text.into())
     }
 
-    pub fn push_text(&mut self, text: impl Into<String>) {
-        self.pieces.push(Piece::Text(text.into()));
-    }
-
-    pub fn push_inline(&mut self, name: impl Into<String>) {
-        self.pieces.push(Piece::Inline(name.into()));
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 
     /// How many units the text engine counts the row as.
     pub fn units(&self) -> usize {
-        self.pieces.iter().map(Piece::units).sum()
+        units(&self.0)
     }
 
-    /// The row character by character: the columns each spans, the piece it is in, and
-    /// the character itself where that piece is text. **The row's one walk.** The atoms,
-    /// a slice and the runs a pattern is looked for in are all this walk, so a change to
-    /// how wide a piece draws ([`Piece::characters`]) moves every column at once.
-    pub fn cells(&self) -> impl Iterator<Item = (Range<usize>, &Piece, Option<char>)> + '_ {
-        self.pieces
-            .iter()
-            .flat_map(|piece| piece.characters().map(move |character| (piece, character)))
-            .scan(0, |col, (piece, (units, character))| {
-                let start = *col;
-                *col += units;
-                Some((start..*col, piece, character))
-            })
-    }
-
-    /// The row in the stretches a pattern is looked for in, each with the columns it
-    /// covers: adjacent text joined into one run, and every inline element on its own.
-    pub fn runs(&self) -> impl Iterator<Item = (Range<usize>, Run<'_>)> + '_ {
-        let mut cells = self.cells().peekable();
-        iter::from_fn(move || {
-            let (span, piece, character) = cells.next()?;
-            let Some(character) = character else {
-                return Some((span, Run::Inline(piece.text())));
-            };
-            let mut text = String::from(character);
-            let mut end = span.end;
-            loop {
-                let Some((next, _, Some(character))) = cells.peek() else {
-                    break;
-                };
-                let (next_end, character) = (next.end, *character);
-                cells.next();
-                text.push(character);
-                end = next_end;
-            }
-            Some((span.start..end, Run::Text(text)))
+    /// The row character by character: the columns each spans and the character. **The
+    /// row's one walk**, which the atoms and a slice are both made of, so no two of them
+    /// can put a column in a different place.
+    fn cells(&self) -> impl Iterator<Item = (Range<usize>, char)> + '_ {
+        self.0.chars().scan(0, |col, character| {
+            let start = *col;
+            *col += character.len_utf16();
+            Some((start..*col, character))
         })
     }
 
-    /// The row's characters, each as the columns it spans and what kind it is; an inline
-    /// element is one of its own kind. What every step along the row is a step over, so
-    /// none can land inside a character two units wide.
+    /// The row's characters, each as the columns it spans and what kind it is. What every
+    /// step along the row is a step over, so none can land inside a character two units
+    /// wide.
     fn atoms(&self) -> Vec<Atom> {
         self.cells()
-            .map(|(span, _, character)| Atom {
+            .map(|(span, character)| Atom {
                 start: span.start,
                 end: span.end,
-                class: character.map_or(Class::Inline, Class::of),
+                class: Class::of(character),
             })
             .collect()
     }
 
     /// The text between two columns. A column inside a character that is two units wide
-    /// rounds outward, so nothing here can cut a character in half; an inline element is
-    /// copied whole when its one unit is inside the range.
+    /// rounds outward, so nothing here can cut a character in half.
     pub fn slice(&self, from: usize, to: usize) -> String {
         let (from, to) = (from.min(to), from.max(to));
-        let mut out = String::new();
-        for (span, piece, character) in self.cells() {
-            if span.end > from && span.start < to {
-                match character {
-                    Some(character) => out.push(character),
-                    None => out.push_str(piece.text()),
-                }
-            }
-        }
-        out
+        self.cells()
+            .filter(|(span, _)| span.end > from && span.start < to)
+            .map(|(_, character)| character)
+            .collect()
     }
 }
 
 impl fmt::Display for Line {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for piece in &self.pieces {
-            f.write_str(piece.text())?;
-        }
-        Ok(())
+        f.write_str(&self.0)
     }
 }
 

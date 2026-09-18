@@ -6591,6 +6591,44 @@ fn label_area(test: &TestingRunner, text: &str) -> Option<Area> {
     })
 }
 
+/// Where `run`, starting at byte `at` of `text`, is drawn in a paragraph drawing `text` at
+/// `area`. The listing's font is fixed-width, so a column is a column's width along the
+/// paragraph, and the arithmetic is exact enough to land inside a name.
+fn run_area(area: Area, text: &str, at: usize, run: &str) -> Area {
+    let units = |text: &str| text.encode_utf16().count() as f32;
+    let unit = area.width() / units(text);
+    Area::new(
+        (area.min_x() + units(&text[..at]) * unit, area.min_y()).into(),
+        Size2D::new(units(run) * unit, area.height()),
+    )
+}
+
+/// Where the link reading exactly `text` in an instruction row was drawn, for a press or a
+/// sweep over it: a span of the row's paragraph, and never its first, which is the
+/// mnemonic -- so an `add` instruction is not taken for a link to `add`.
+fn link_area(test: &TestingRunner, text: &str) -> Option<Area> {
+    use freya::elements::paragraph::ParagraphElement;
+    use std::any::Any;
+
+    test.find(|node, _element| {
+        let element = node.element();
+        let paragraph = (element.as_ref() as &dyn Any).downcast_ref::<ParagraphElement>()?;
+        let spans: Vec<&str> = paragraph.spans.iter().map(|span| &*span.text).collect();
+        let at = spans.iter().skip(1).position(|span| *span == text)? + 1;
+        let at = spans[..at].concat().len();
+        Some(run_area(node.layout().area, &spans.concat(), at, text))
+    })
+}
+
+/// The middle of [`link_area`], as a point to press.
+fn link_centre(test: &TestingRunner, text: &str) -> (f64, f64) {
+    let area = link_area(test, text).unwrap_or_else(|| panic!("{text:?} is drawn as a link"));
+    (
+        (area.origin.x + area.width() / 2.0) as f64,
+        (area.origin.y + area.height() / 2.0) as f64,
+    )
+}
+
 /// A server that is running and has answered what the file's names are.
 ///
 /// Setting the state is not enough on its own: a link is drawn because the server said
@@ -7945,19 +7983,18 @@ fn mount_linking_classifying(
 /// The middle of the run reading `word` in the one code row that draws it.
 ///
 /// `label_area` answers with the whole paragraph for a span, a code row's text being one
-/// paragraph; a press has to land on the word. The font is fixed-width, so a column is a
-/// column's width along the paragraph and the arithmetic is exact enough to land inside a
-/// name.
+/// paragraph; a press has to land on the word ([`run_area`]).
 fn word_point(test: &TestingRunner, word: &str) -> (f64, f64) {
     let (area, text, _) = paragraphs(test)
         .into_iter()
         .find(|(_, text, _)| text.contains(word))
         .unwrap_or_else(|| panic!("{word:?} is drawn"));
     let at = text.find(word).expect("found just above");
-    let column = text[..at].encode_utf16().count() as f32;
-    let width = area.width() / text.encode_utf16().count() as f32;
-    let middle = area.min_x() + (column + word.encode_utf16().count() as f32 / 2.0) * width;
-    (middle as f64, (area.origin.y + area.height() / 2.0) as f64)
+    let run = run_area(area, &text, at, word);
+    (
+        (run.min_x() + run.width() / 2.0) as f64,
+        (run.origin.y + run.height() / 2.0) as f64,
+    )
 }
 
 /// The place the server was asked about, waited for: the worker takes its jobs on a
@@ -12126,7 +12163,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
         "the row it lands on is on screen already: {drawn:?}"
     );
 
-    let operand = label_area(&test, "61h").expect("the operand is laid out");
+    let operand = link_area(&test, "61h").expect("the operand is laid out");
     let at = (
         (operand.origin.x + operand.width() as f32 / 2.0) as f64,
         (operand.origin.y + operand.height() as f32 / 2.0) as f64,
@@ -12171,7 +12208,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
 
     // And again on the backward jump: the press lands on 67h, and what is picked out
     // afterwards is 4Bh's row -- the row jumped *to*, not the row the pointer was over.
-    let operand = label_area(&test, "4Bh").expect("the backward jump is on screen now");
+    let operand = link_area(&test, "4Bh").expect("the backward jump is on screen now");
     let at = (
         (operand.origin.x + operand.width() as f32 / 2.0) as f64,
         (operand.origin.y + operand.height() as f32 / 2.0) as f64,
@@ -18922,75 +18959,6 @@ fn what_an_instruction_rows_menu_reaches_for_costs_the_row_no_render() {
     );
 }
 
-/// **What a press on a linked operand reaches for is the list's to consume**
-/// ([`LinkStates`]), and a label carrying it is not re-rendered for it. A label is one
-/// per linked operand of every row on screen and is rebuilt as every scroll recycles a
-/// row, so it is the most-made component in the app; it reached for four contexts a
-/// render, three of them wanted only by a press.
-///
-/// A run picked out on the label's own row re-renders that row -- the wash and the
-/// columns are its own -- and says nothing about the link in it. Made to fail first with
-/// a [`LinkStates`] that compares unequal, which is a render a label for handles the root
-/// never replaces.
-///
-/// Headless because nothing shows either way: the label draws the same thing, and only
-/// the element freya rebuilt says whether the scope rendered again.
-#[test]
-fn what_a_links_press_reaches_for_costs_the_label_no_render() {
-    let sum_to = fixture_symbols()
-        .into_iter()
-        .find(|symbol| symbol.data.name == "sum_to")
-        .expect("the fixture holds sum_to");
-    let shown = Shown {
-        ask: Ask::Symbol(sum_to.clone()),
-        studied: Studied::new(sum_to.clone()),
-    };
-    let (mut test, marked) = TestingRunner::new(
-        listing_harness,
-        (900., 600.).into(),
-        move |runner: &mut _| {
-            runner
-                .provide_root_context(move || listing_states(shown))
-                .doors
-                .marked
-        },
-        1.,
-    );
-    let mut marked = marked;
-    settle(&mut test);
-
-    // `sum_to` calls `add`, and the relocation's name in that operand is the link. The
-    // row it is drawn in is the box a whole row tall around the name, which is what the
-    // run below has to reach for this to be measuring anything.
-    let row = |test: &TestingRunner| {
-        let name = label_area(test, "add").expect("the relocation's name is drawn");
-        test.find(|node, _element| {
-            let area = node.layout().area;
-            let around = area.min_y() <= name.min_y() && name.max_y() <= area.max_y();
-            (around && area.height() == code_row_height()).then(|| node.element())
-        })
-        .expect("the name is drawn in a row of the listing")
-    };
-
-    let (before, drawn) = (row(&test), assembly::links_drawn());
-    // A run over the name's own row, which is row 12 of the listing: the fifth
-    // instruction after the separator at 4Bh.
-    marked.set(Marks {
-        assembly: Some(picked_row(12, "line_fixture.c", Owed::default())),
-        source: None,
-    });
-    settle(&mut test);
-    assert!(
-        !Rc::ptr_eq(&before, &row(&test)),
-        "the run never reached the row the link is in, so nothing here was measured"
-    );
-    assert_eq!(
-        assembly::links_drawn(),
-        drawn,
-        "a run picked out in the row drew the link inside it again"
-    );
-}
-
 /// The Source pane's gutter marks every line of the file that produced code, and nothing
 /// else: a reader scanning it can tell those from the lines that produced none without
 /// picking anything out. The set is the file's own, answered for the whole file, so it is
@@ -20578,7 +20546,7 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
     settle(&mut test);
 
     // Drawn as a link with nothing held, which is what the hand over it says.
-    let door = centre_of(&test, &operand);
+    let door = link_centre(&test, &operand);
     test.move_cursor(door);
     settle(&mut test);
     assert_eq!(
@@ -20607,7 +20575,10 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
     settle(&mut test);
     ctrl.set(true);
     settle(&mut test);
-    press_at(&mut test, door);
+    // At the link's other end: a second press where the first was is a double press,
+    // which takes the word and follows nothing.
+    let area = link_area(&test, &operand).expect("the operand is drawn");
+    press_at(&mut test, right_of(&area));
     settle(&mut test);
     assert!(
         states.open.active() == Some(code.clone()),
@@ -20666,13 +20637,8 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     let visited = states.visits.peek().entries().len();
 
     // The operand naming `add`, which `sum_to` calls: the label row over it reads
-    // `add:` and is a different string.
-    // The link is a `label()` of its own; the `add` mnemonic further up is a span of a
-    // row's paragraph, which is why this asks for labels alone.
-    let (_, area) = labels_with_areas(&test)
-        .into_iter()
-        .find(|(text, _)| text == "add")
-        .expect("the link is drawn");
+    // `add:` and is a different string, and an `add` mnemonic is its row's first span.
+    let area = link_area(&test, "add").expect("the link is drawn");
     let link = (
         (area.origin.x + area.width() / 2.0) as f64,
         (area.origin.y + area.height() / 2.0) as f64,
@@ -20718,10 +20684,12 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
         })
     );
 
-    // With Ctrl held it is the other door: the symbol alone, beside the listing.
+    // With Ctrl held it is the other door: the symbol alone, beside the listing. Pressed
+    // at the link's end, a second press where the first was being a double press.
     ctrl.set(true);
     settle(&mut test);
-    press_at(&mut test, link);
+    let area = link_area(&test, "add").expect("the link is drawn");
+    press_at(&mut test, right_of(&area));
     settle(&mut test);
     assert!(
         states.open.active() == Some(symbol.clone()),
@@ -20963,10 +20931,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     assert!(!shown.is_empty(), "the pane is drawing nothing");
 
     // Follow the call.
-    let (_, area) = labels_with_areas(&test)
-        .into_iter()
-        .find(|(text, _)| text == "add")
-        .expect("the link is drawn");
+    let area = link_area(&test, "add").expect("the link is drawn");
     press_at(
         &mut test,
         (
@@ -21056,7 +21021,7 @@ fn a_bare_target_in_the_unified_view_moves_on_a_plain_press() {
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
 
-    let door = centre_of(&test, &operand);
+    let door = link_centre(&test, &operand);
     press_at(&mut test, door);
     settle(&mut test);
     settle(&mut test);
@@ -21108,7 +21073,7 @@ fn the_hand_is_shown_over_a_bare_target_in_the_unified_view() {
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
 
-    let area = label_area(&test, &operand).expect("the operand is drawn");
+    let area = link_area(&test, &operand).expect("the operand is drawn");
     let y = (area.origin.y + area.height() / 2.0) as f64;
     // The row's own text first, just left of the address: the I-beam, so that what the
     // move onto the address does is the whole of the question.
@@ -21186,10 +21151,7 @@ fn an_operand_and_a_label_wear_the_same_box() {
     settle(&mut test);
 
     // The operand naming `add`, which `sum_to` calls: a link of its own inside the row.
-    let (_, operand) = labels_with_areas(&test)
-        .into_iter()
-        .find(|(text, _)| text == "add")
-        .expect("the link is drawn");
+    let operand = link_area(&test, "add").expect("the link is drawn");
     test.move_cursor(inside(operand));
     settle(&mut test);
     assert!(
@@ -21224,12 +21186,13 @@ fn inside(area: Area) -> (f64, f64) {
 
 /// **Alt turns the light and the hand off**, not the press alone: while it is held no
 /// link lights and the pointer over one is the I-beam, so nothing offers what it will not
-/// do. Asked of both kinds of link in the one listing -- a label, which is the row's own
-/// text, and an operand, which is an element inside it -- and with the same pointer once
-/// Alt is up as the control.
+/// do. Asked of both kinds of link in the one listing -- a label, which is the whole of
+/// its row's text, and an operand, which is a run inside it -- and with the same pointer
+/// once Alt is up as the control.
 ///
-/// Alt goes down over the **resting** pointer for the label: a light that waited for the
-/// next move would be one the reader is looking at while it is already wrong.
+/// Alt goes down over the **resting** pointer for the label, and comes up over it for the
+/// operand: a light that waited for the next move would be one the reader is looking at
+/// while it is already wrong.
 #[test]
 fn alt_held_darkens_every_link_and_the_hand() {
     let (_path, objects) = fixture_objects(1);
@@ -21257,10 +21220,7 @@ fn alt_held_darkens_every_link_and_the_hand() {
     open_document(states.open, states.visits, code, Reach::NewTab);
     settle(&mut test);
 
-    let (_, operand) = labels_with_areas(&test)
-        .into_iter()
-        .find(|(text, _)| text == "add")
-        .expect("the link is drawn");
+    let operand = link_area(&test, "add").expect("the link is drawn");
     let label = label_area(&test, "sum_to:").expect("sum_to is labelled");
 
     // The label, lit under Ctrl, and darkened by Alt with the pointer where it was.
@@ -21289,12 +21249,16 @@ fn alt_held_darkens_every_link_and_the_hand() {
         "the operand showed the hand with Alt held"
     );
 
-    // The control: the same pointer, on the same operand, with Alt up.
+    // The control: the same pointer, on the same operand, with Alt up -- lit before the
+    // pointer moves again.
     alt.set(false);
     settle(&mut test);
+    assert!(
+        lit_over(&test, operand),
+        "the operand stayed dark as Alt came up over it"
+    );
     test.move_cursor(inside(operand));
     settle(&mut test);
-    assert!(lit_over(&test, operand), "the operand did not light again");
     assert_eq!(
         icon_now(),
         CursorIcon::Pointer,
@@ -21348,7 +21312,7 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
 
     ctrl.set(true);
     settle(&mut test);
-    let door = centre_of(&test, &operand);
+    let door = link_centre(&test, &operand);
     press_at(&mut test, door);
     settle(&mut test);
     settle(&mut test);
@@ -23544,7 +23508,7 @@ fn a_compiled_language_with_no_grammar_is_still_compiled() {
 }
 
 /// Every row of a listing on screen, top to bottom: its box, its text -- the spans
-/// joined, an inline child counting for nothing here -- and the highlight its row drew for
+/// joined -- and the highlight its row drew for
 /// the character selection, which is the rect in the selection's colour level with it and
 /// starting at or after its left edge (a row selected whole starts at the row's).
 ///
@@ -23887,11 +23851,11 @@ fn the_characters_are_copied_before_the_rows_and_dropped_before_them() {
     );
 }
 
-/// A relocation link is an inline child of the row's text: to the text engine it is one
-/// unit, at the column the pieces before it add up to, and it is still the link it was --
-/// a press on it opens the target's tab.
+/// A relocation link is a run of the row's own text: a sweep that crosses it selects it
+/// character by character, as it selects any other text, and a press on it still opens
+/// the target's tab.
 #[test]
-fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
+fn a_sweep_selects_across_a_link_and_a_press_still_opens_it() {
     let shown = shown_sum_to();
     let assembly = shown.studied.assembly.clone().expect("sum_to decodes");
     let lanes = shown.studied.lanes.clone();
@@ -23904,16 +23868,12 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
     let target = instruction.symbol().cloned().expect("a target");
     let row = lanes.row_of(index);
     let line = instruction_line(&assembly, index);
-    let before = Line {
-        pieces: line
-            .pieces
-            .iter()
-            .take_while(|piece| !matches!(piece, crate::chars::Piece::Inline(_)))
-            .cloned()
-            .collect(),
-    }
-    .units();
-    assert!(before > 0 && before < line.units(), "{line:?}");
+    let name = target.display();
+    let start = line
+        .to_string()
+        .rfind(name)
+        .map(|at| line.to_string()[..at].encode_utf16().count())
+        .expect("the copy holds the name");
 
     let (mut test, roots) = TestingRunner::new(
         listing_harness,
@@ -23924,39 +23884,50 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
     let states = roots.states;
     let marked = roots.doors.marked;
     settle(&mut test);
-    let link = label_area(&test, target.display()).expect("the link is drawn");
+    let link = link_area(&test, name).expect("the link is drawn");
+    let unit = link.width() / name.encode_utf16().count() as f32;
 
-    // The left edge of the link is the column before it; its right edge is one unit on.
-    test.move_cursor(left_of(&link));
-    test.press_cursor(left_of(&link));
-    test.move_cursor(right_of(&link));
+    // From the column before the link to the one after it: every character of it picked
+    // out, and none of it followed.
+    let before = (
+        (link.min_x() - unit / 2.0) as f64,
+        (link.origin.y + link.height() / 2.0) as f64,
+    );
+    let after = ((link.max_x() + unit / 2.0) as f64, before.1);
+    test.move_cursor(before);
+    test.press_cursor(before);
+    test.move_cursor(after);
+    test.release_cursor(after);
     settle(&mut test);
+    assert!(
+        states.open.active().is_none(),
+        "a sweep that began beside the link followed it"
+    );
     let picked = marked
         .peek()
         .assembly
         .clone()
         .expect("the press picked the row out");
     assert_eq!(picked.chars.rows(), row..=row);
-    let chars = picked.chars;
-    assert_eq!(
-        chars.ends(),
-        (
-            Caret { row, col: before },
-            Caret {
-                row,
-                col: before + 1
-            }
-        )
+    let (from, to) = picked.chars.ends();
+    assert!(
+        from.col < start && to.col > start + name.encode_utf16().count() - 1,
+        "the sweep did not cross the link's text: {from:?} {to:?} around {start}"
     );
     assert!(
-        paragraphs(&test)
-            .iter()
-            .any(|(_, _, h)| spans(*h, link.min_x(), link.max_x())),
-        "the link's unit is not highlighted"
+        paragraphs(&test).iter().any(|(_, _, h)| h
+            .is_some_and(|h| h.min_x() < link.min_x() && h.max_x() >= link.max_x() - 1.0)),
+        "the link's text is not highlighted"
     );
 
-    // And the press still opens the symbol.
-    test.release_cursor(right_of(&link));
+    // And a press on it still opens the symbol.
+    press_at(
+        &mut test,
+        (
+            (link.min_x() + link.width() / 2.0) as f64,
+            (link.origin.y + link.height() / 2.0) as f64,
+        ),
+    );
     settle(&mut test);
     let opened = Document::Symbol(Symbol {
         object: fixture_symbols()[0].object.clone(),
@@ -23976,8 +23947,8 @@ fn a_link_in_the_text_is_one_unit_and_still_opens_its_symbol() {
 
 /// Alt held makes a press on a link the start of a selection and nothing else. Every
 /// door in a code row acts on a plain press, which leaves no way to put the pointer down
-/// on one and sweep: the release follows the link. Alt is what says "not a door this
-/// time", and the selection the row's own `pointer_down` began is what stands.
+/// on one and sweep: the press follows the link. Alt is what says "not a door this time",
+/// and the selection the row's own `pointer_down` began is what stands.
 #[test]
 fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
     let shown = shown_sum_to();
@@ -24009,10 +23980,10 @@ fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
     let mut alt = alt;
     alt.set(true);
     settle(&mut test);
-    let link = label_area(&test, target.display()).expect("the link is drawn");
+    let link = link_area(&test, target.display()).expect("the link is drawn");
 
-    // The whole gesture, down on the link and up on it: without Alt this is what opens
-    // the symbol (`a_link_in_the_text_is_one_unit_and_still_opens_its_symbol`).
+    // The whole gesture, down on the link and up on it: without Alt the down alone opens
+    // the symbol (`a_sweep_selects_across_a_link_and_a_press_still_opens_it`).
     test.move_cursor(left_of(&link));
     test.press_cursor(left_of(&link));
     test.move_cursor(right_of(&link));
@@ -24142,27 +24113,6 @@ fn a_double_press_takes_the_word_under_it() {
     );
 }
 
-/// The row copy and the character copy are one text: `asm_line` is the address column
-/// and then the row's text as the characters see it, link and all, for every instruction
-/// of a real object.
-#[test]
-fn a_rows_copy_is_its_address_and_its_text() {
-    for symbol in fixture_symbols() {
-        let Some(assembly) = symbol.data.assembly(&symbol.object) else {
-            continue;
-        };
-        for (index, instruction) in assembly.instructions.iter().enumerate() {
-            let line = instruction_line(&assembly, index);
-            assert_eq!(
-                asm_line(instruction, 0),
-                format!("{:016X} {line}", instruction.address),
-                "{}: instruction {index}",
-                symbol.data.name
-            );
-        }
-    }
-}
-
 /// `instruction_line` is total. A row asking about its neighbour below asks past the
 /// last instruction, so an index the listing has no instruction for answers an empty
 /// line rather than panicking, and no caller has to check the length first.
@@ -24175,11 +24125,11 @@ fn an_instruction_line_past_the_listing_is_empty() {
         .expect("sum_to decodes");
     let past = assembly.instructions.len();
     assert!(
-        !instruction_line(&assembly, past - 1).pieces.is_empty(),
+        instruction_line(&assembly, past - 1).units() > 0,
         "the last instruction has text"
     );
-    assert!(instruction_line(&assembly, past).pieces.is_empty());
-    assert!(instruction_line(&assembly, usize::MAX).pieces.is_empty());
+    assert!(instruction_line(&assembly, past).units() == 0);
+    assert!(instruction_line(&assembly, usize::MAX).units() == 0);
 }
 
 /// The listing under half a pixel of something above it: what the real window does to it
@@ -24821,11 +24771,10 @@ impl Component for LentRow {
             Vec::new(),
             Some(Text {
                 line: Line::text(LENT_TEXT),
-                head: vec![Span::new(LENT_TEXT).assembly_font()],
-                tail: Vec::new(),
+                spans: vec![Span::new(LENT_TEXT).assembly_font()],
                 chars: RowChars::default(),
-                finds: Vec::new(),
-                links: NoLinks,
+                marking: None,
+                links: None,
             }),
             None,
         )

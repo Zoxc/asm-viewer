@@ -111,47 +111,15 @@ fn a_slice_never_splits_a_character() {
     assert_eq!(line.slice(4, 1), "\u{1F600}b");
 }
 
-/// A relocation link is one unit of the row to the text engine and the whole name to the
-/// clipboard, and copies whole when its unit is inside the range.
-#[test]
-fn an_inline_element_is_one_unit_and_copies_as_its_name() {
-    let mut line = Line::default();
-    line.push_text("call ");
-    line.push_inline("core::fmt::write");
-    line.push_text(" ; tail");
-    assert_eq!(line.units(), "call ".len() + 1 + " ; tail".len());
-    assert_eq!(line.to_string(), "call core::fmt::write ; tail");
-    assert_eq!(line.slice(0, 6), "call core::fmt::write");
-    assert_eq!(line.slice(5, 6), "core::fmt::write");
-    assert_eq!(line.slice(6, 8), " ;");
-    assert_eq!(line.slice(0, 5), "call ");
-}
-
-/// How wide a piece draws is one rule, and counting a row's units, laying out its atoms
-/// and slicing it all read it off the same place: the atoms run end to end from nothing to
-/// the row's units, and slicing one atom's columns copies the one character it spans --
-/// the whole name for an inline element's one column.
+/// The row's units, its atoms and a slice all put a column in the same place: the atoms
+/// run end to end from nothing to the row's units, and slicing one atom's columns copies
+/// the one character it spans.
 #[test]
 fn the_units_the_atoms_and_the_slice_put_a_column_in_the_same_place() {
-    let mut line = Line::default();
-    line.push_text("mov a\u{1F600}, ");
-    line.push_inline("core::fmt::write");
-    line.push_text("+8");
+    let line = Line::text("mov a\u{1F600}, +8");
 
-    // What each column of the row copies, an inline element counting as one.
-    let copied = [
-        "m",
-        "o",
-        "v",
-        " ",
-        "a",
-        "\u{1F600}",
-        ",",
-        " ",
-        "core::fmt::write",
-        "+",
-        "8",
-    ];
+    // What each column of the row copies.
+    let copied = ["m", "o", "v", " ", "a", "\u{1F600}", ",", " ", "+", "8"];
     let atoms = line.atoms();
     assert_eq!(atoms.len(), copied.len());
 
@@ -171,33 +139,8 @@ fn the_units_the_atoms_and_the_slice_put_a_column_in_the_same_place() {
         at = atom.end;
     }
     assert_eq!(at, line.units(), "the atoms end where the row's units do");
-    // The wide character is two columns and the inline element one, whatever its name.
+    // The wide character is two columns.
     assert_eq!(atoms[5].end - atoms[5].start, 2);
-    assert_eq!(atoms[8].end - atoms[8].start, 1);
-}
-
-/// The same walk again, in the runs a pattern is looked for in: adjacent text joined --
-/// a row is pushed one span at a time -- an inline element a run of its own, and each
-/// run's columns the ones the row draws it at.
-#[test]
-fn the_runs_join_adjacent_text_and_leave_an_element_on_its_own() {
-    let mut line = Line::default();
-    line.push_text("call ");
-    line.push_text("a\u{1F600}");
-    line.push_inline("core::fmt::write");
-    line.push_text("+8");
-
-    let runs: Vec<_> = line.runs().collect();
-    assert_eq!(
-        runs,
-        vec![
-            (0..8, Run::Text("call a\u{1F600}".to_owned())),
-            (8..9, Run::Inline("core::fmt::write")),
-            (9..11, Run::Text("+8".to_owned())),
-        ]
-    );
-    // The runs cover the row end to end, in the columns everything else counts in.
-    assert_eq!(runs.last().unwrap().0.end, line.units());
 }
 
 /// A sweep that has left the rows reaches the row on screen nearest the pointer, at the
@@ -319,8 +262,7 @@ fn left_and_right_step_by_character_and_cross_rows_at_their_ends() {
 }
 
 /// A step by word passes over whitespace and then over a run of one kind: an
-/// identifier, a number, or a run of punctuation, each a word; an inline element is a
-/// word of its own.
+/// identifier, a number, or a run of punctuation, each a word.
 #[test]
 fn a_step_by_word_takes_a_run_of_one_kind() {
     let row = listing(0).atoms();
@@ -346,16 +288,10 @@ fn a_step_by_word_takes_a_run_of_one_kind() {
     assert_eq!(word_before(&padded, 2), Some(0));
     assert_eq!(word_after(&padded, 5), None);
     assert_eq!(word_before(&padded, 0), None);
-    // Underscores are word characters, and an inline element is one word.
-    let mut line = Line::default();
-    line.push_text("call my_fn_2 ");
-    line.push_inline("core::fmt::write");
-    line.push_text("+8");
-    let call = line.atoms();
+    // Underscores are word characters.
+    let call = Line::text("call my_fn_2 +8").atoms();
     assert_eq!(word_after(&call, 5), Some(12));
-    assert_eq!(word_after(&call, 12), Some(14), "the inline element");
-    assert_eq!(word_before(&call, 14), Some(13));
-    assert_eq!(word_after(&call, 14), Some(15));
+    assert_eq!(word_before(&call, 12), Some(5));
 
     // Through the selection, and across rows at the ends as a character step does.
     let at = |row, col| CharSelection::at(caret(row, col));

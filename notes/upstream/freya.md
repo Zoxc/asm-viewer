@@ -29,10 +29,10 @@ with `element_location` taken from the deepest listening node, and every ancesto
 re-dispatched that same data (`freya-core-0.4.3/src/runner.rs:320-354`), so an ancestor's
 `element_location()` is relative to whichever descendant listened. Non-bubbling events
 (`pointer_move`, `pointer_over`, the globals) are measured per listener. **Cost:** nothing
-inside a code row listens to `pointer_down` -- the links listen to the press -- so the row's
-handler can turn the location into a column (`ui/code_row.rs`);
-`a_link_in_the_text_is_one_unit_and_still_opens_its_symbol` presses a link and would catch a
-child that started listening.
+inside a code row listens to `pointer_down` -- a link is a run of the row's own text, which
+the row hit-tests itself -- so the row's handler can turn the location into a column
+(`ui/code_row.rs`); `a_sweep_selects_across_a_link_and_a_press_still_opens_it` presses a link
+and would catch a child that started listening.
 
 **A drag goes on outside the window, and the global press that ends one is cancellable.**
 Two facts about a held button. The good one: `freya-winit` forwards every `CursorMoved`
@@ -500,12 +500,6 @@ is a seam wherever the line's fonts or a placeholder make the line taller than a
 code panes draw both marks themselves as rects of the row on the device pixel grid
 (`ui/code_row.rs`), reading the columns' x off the `ParagraphHolder` -- which is the one
 thing that could not be done without the engine, and which works.
-
-**One inline child is one unit, in writing.** `paragraph().child(..)` reserves a placeholder
-that skia counts as one UTF-16 unit of the text (U+FFFC), which is what makes a link inside a
-row selectable as a whole; nothing in freya's docs says so, and the registry cannot show
-skia's source, so the app pins it with a test
-(`a_link_in_the_text_is_one_unit_and_still_opens_its_symbol`).
 
 **A tooltip that does not arm under a held button.** `TooltipContainer` arms its timer on
 `pointer_over` and disarms on `pointer_out` and on nothing else (`tooltip.rs:204-216`), so

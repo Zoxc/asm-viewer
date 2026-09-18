@@ -585,9 +585,8 @@ release
 goes to when nothing names it**: a call into the middle of a function, a call to a function a
 stripped image has no symbol for, a jump out of the symbol in a listing with no row for it
 (`Operand::Call` and an `Operand::Branch` with no edge, `agents/Analysis.md`). The number is drawn
-onto `Door::Address` (`Link::Target`, the third of `split`'s links), inline in the row's paragraph
-as the other two are,
-and a press on it is `show_in_code` with the **placed** address and no line. A link on its own, as
+as `Door::Address` (`door_of`, which picks each link's door from its operand), a run of the row's
+text as the other two are, and a press on it is `show_in_code` with the **placed** address and no line. A link on its own, as
 every operand link is: a plain press opens that code in place, Ctrl opens it in a tab of its own.
 Either lands on the row **at or below** the address, the view and the caret both. That rounding is
 `section::Rows::row_for`'s and holds for every kind of row (the instruction holding the byte, the
@@ -601,18 +600,18 @@ nearest (`agents/UI.md`).
 
 **`Door::open_now` is the one answer to "is this a link now"**, and the light, the pointer's icon
 and the press are all picked by it, so none of the three can offer what the others will not do. The
-label that draws itself by it, the closure the row is handed for the icon (`InlineLink`,
-`TextLinks`) and the press ask the same rule, the press through `Door::opens`: the door and the
-two modifiers in, and what the press opens out -- **where** it opens as well as what, the two
-variants that open a document carrying the `Reach` (`Reach::inside_with`) -- so the whole decision
-can be read and tested apart from the four ways of carrying it out, which are `Opens::go` and read
-no modifier. `go` used to read the Ctrl a second time, which put half the decision where a test of
-`opens` could not see it. A label with Ctrl held is a door that opens nothing -- it is a run of its
-row's own text and the row is what follows it -- and eats the press all the same.
-**All three operand doors are one label**, a
-`DoorLabel` with a `Door` saying which. The hover, the chrome, the Alt rule and the text are the
-same for each; the press and the two colours are all that differ. Ctrl is read in the render only
-where the answer turns on it, so only a label is drawn again as Ctrl goes down and up.
+row asks it through the closure its `TextLinks` carries, for the light and the icon, and the press
+asks it again through `Door::opens`: the door and Ctrl in, and what the press opens out -- **where**
+it opens as well as what, the two variants that open a document carrying the `Reach`
+(`Reach::inside_with`) -- so the whole decision can be read and tested apart from the four ways of
+carrying it out, which are `Opens::go` and read no modifier. `go` used to read the Ctrl a second
+time, which put half the decision where a test of `opens` could not see it. Alt is not part of it:
+the row asks Alt of every link before any door. A label is a door only with Ctrl held, so it
+always opens its symbol in a tab of its own, through the same `LinkStates::link` as an operand. **All three operand doors are one
+kind of link**, a run of the row's text with a `Door` saying which (`LinkStates::link`). The hover,
+the chrome, the Alt rule and the text are the same for each; the press and the two colours are all
+that differ. Ctrl is read in the render only by the row the pointer is on, so only that row is drawn
+again as Ctrl goes down and up.
 
 **In the unified view a link does not leave it.** The rows a target is in are rows of the listing
 already, so a plain press on a name or on a bare address is `show_in_code` at the target's placed
@@ -652,26 +651,28 @@ one whether or not it has a line or a door.
 draws -- the wash, the rounded corner, the rule under it in the lit colour -- wherever it is
 drawn: an operand of an instruction, a label in an object's listing, a name in the source.
 So there is one place to change how a link looks, and a reader has one thing to learn. The
-box is the element's own where the link is an element, and the row's where it is a run of the
-row's text (`lit_box`, placed by the run's columns and inside the row's height): a freya text
-style carries a colour, a weight and a decoration, and nothing to draw a box with, which is
+box is the row's, placed by the link's columns and inside the row's height (`lit_box`): a freya
+text style carries a colour, a weight and a decoration, and nothing to draw a box with, which is
 why a run of text used to make do with an underline. **Alt shuts every door**, and takes the
 light and the hand with it: nothing lights and nothing shows the hand while it is held, so
-nothing offers the press Alt has taken away. Alt is read in the render only by the link under
-the pointer, and the icon follows the pointer, so a hand over a link Alt has just shut is put
+nothing offers the press Alt has taken away. Alt is read in the render only by the row the
+pointer is on, and the icon follows the pointer, so a hand over a link Alt has just shut is put
 right by the next move, as it is for Ctrl.
 
-**A call in the source is a door of its own, and it is text and not an element.** A row's
-paragraph takes one inline child, and an inline is one *unit* to the text engine
-(`src/chars.rs`), so a name made into an element would stop a source row's columns being the
-file's own line counted in units -- which is what lets a press on one be counted straight
-into the byte offset the language server is asked at (`chars::bytes_of`, and the links' own
-columns back the other way). So the door is decided from the pressed column instead: the
-row's `TextLinks` carries the columns of every link in it, whether a press on one is a door
-now and what such a press follows, `code_row` hit-tests the pointer against them for the
-light, the hand and the press, and lighting one changes a span's style and never where the
-spans are cut. A boundary that moved with the pointer would re-shape the row, and the widest
-row a listing has drawn only ever grows. A label in an object's listing is the same kind of
+**Every link is text and not an element.** A row's columns are its text counted in units,
+which is what lets a press on a name in the source be counted straight into the byte offset
+the language server is asked at (`chars::bytes_of`, and the links' own columns back the other
+way), and what lets a sweep select across an operand character by character. An operand was
+once an inline child of the row's paragraph, which the text engine counts as one unit, so a
+sweep could only take it whole. So the door is decided from the column instead: the row's
+`TextLinks` carries the columns of every link in it, whether a press on one is a door now and
+what such a press follows, `code_row` hit-tests the pointer against them for the light, the
+hand and the press, and lighting one changes a span's style and never where the spans are cut.
+A boundary that moved with the pointer would re-shape the row, and the widest
+row a listing has drawn only ever grows. The column hit-tested is the **character** under the
+pointer (`char_col`: the one whose box holds the pointer, either side of the boundary) and not the
+caret boundary skia answers with, which over the right half of a name's last character is past the
+name. A label in an object's listing is the same kind of
 door -- a run of the row's own text, and the whole of it -- so the row that draws it hands
 its text and its link over and puts **no handler of its own on top**. One put there would
 replace `code_row`'s of that name and say nothing, freya keeping one handler per event name:
@@ -751,18 +752,12 @@ pane never sees the one that mattered, and the row moving covers the keyboard, t
 autoscroll, a resize and a font change as well.
 
 **Alt held says a press is not a door this time.** Every door in a code row acts on a plain press,
-which left no way to put the pointer down on one and sweep: the release followed the link and the
-gesture ended as a navigation. So each door -- the three inline labels and the code listing's label
-row, which is a press on the row itself -- returns from its press while `Alt` is held, and returns
-*without* stopping it, so the press means what a press on the row's own text means. Nothing else is
-needed: the selection is already made by then. A row's `pointer_down` runs `mark_press` before any
-of them, an inline link being one unit of the row's text (`src/chars.rs`), so the caret is already
-on the link's own column with the sweep begun -- which is why the guard is in the press and never
-in `pointer_down`, where it would destroy the very selection Alt is there to leave. Alt is read by
-its own name and its own bit alone, having no Caps Lock to be made out of; right Alt on a European
-layout is `AltGraph` and is not it. The door's box stays lit while Alt is held, the pointer being
-over a link either way: a read of `Alt` in every label would re-render the listing on a modifier
-held for other reasons.
+which leaves no way to put the pointer down on one and sweep: the press follows the link and the
+gesture ends as a navigation. Every link is followed from the row's own `pointer_down`, so that is
+where the one guard is: while `Alt` is held it follows nothing, and the press is what a press on
+the row's own text is -- the caret on the link's column and a sweep begun. Alt is read by its own
+name and its own bit alone, having no Caps Lock to be made out of; right Alt on a European layout
+is `AltGraph` and is not it.
 
 **A door that names an instruction puts the caret on it, and does so when the listing is drawn and
 not when the document arrives.** A line is a row of a file, which has the same rows every time, so
@@ -924,8 +919,8 @@ caret, the lit link's box and every find hit's wash — come out of one `RowCell
 three of the four. The stub is the highlight's own and stays there. Both marks are
 `interactive(false)`, and **both slots are always there**, empty rects when there is nothing to
 mark: freya matches siblings by position (`notes/upstream/freya.md`), so a highlight appearing
-before the paragraph on the press would move the paragraph along one and remount it, link and all,
-between the down and the up, and the press meant for the link would never fire. The gutter is a
+before the paragraph on the press would move the paragraph along one and remount it, between the
+down and the up of every press. The gutter is a
 child of the row, so a sideways scroll carries it with the addresses, by a whole number of pixels,
 the scroll offset being an `i32`, and the strokes stay on the grid. The rule a separator row draws
 goes on the grid the same way and from the same answer (`Grid::stroke` over the middle of a row), so
@@ -1153,37 +1148,27 @@ read, and a fourth listing, or a fourth chord shared by all three, is one edit.
 (`src/chars.rs`; `Picked::chars`). Every row of the three listings is drawn by one `code_row`
 (`src/ui/code_row.rs`): the shared width, wash and handlers, with what comes before the text (the
 mark, the arrow gutter, the address, a line number) and the text itself handed in. The text is **one
-`paragraph()`**, with the relocation or branch link placed inside it as an inline child: freya
-reserves a placeholder sized from the child and moves the child's layout node to it, so the link
-keeps its hover, its cursor and its press, and to the text engine it is one unit of the row
-(`Piece::Inline`), which copies as the whole name. The model is the app's own and framework-free. A
-`Caret` is a row and a column in **UTF-16 units**, the unit skia answers a pointer in and takes a
-highlight in, and a `Line` is the row's text in pieces so a column into what is drawn is a column
-into what is copied: `instruction_line`, `source_line` and `code_line` are built from the same
-splits the rows draw from, and `asm_line` is the address plus `instruction_line` -- the call itself,
-not a third way of building the same string. The one place the two halves can drift apart is an
-instruction row's padding to the operand column. Skia trims trailing whitespace when it measures a
-paragraph, which would butt a relocation target's name up against the mnemonic, so
-`instruction_text` (`src/ui/assembly.rs`) draws that padding in **non-breaking spaces** — one unit
-each, as a plain space is, and one more for the space `asm_line` puts before a name it had to
-append. That appended name is a link like any other and not a `None` each side has to spot for
-itself: `split` hands back what the link says beside which of the four kinds it is (`Lifted`), and
-the name the formatter offered no operand for is the fourth, `Link::Appended`, after every span and
-with an empty tail. `split` decides nothing beyond that: the four kinds are a projection of the
-crate's own `Operand` (`agents/Analysis.md`) plus `linked`, which is whether this listing has the
-row a branch lands on, and it re-checks none of what the crate already promised. The two sets of
-four do not line up, and need not: the crate's split by how an address was arrived at, `split`'s by
-how the row draws it, which is why an `Operand::Branch` comes back as `Link::Branch` or
-`Link::Target` depending on the listing. The two halves are built side by side there for that
-reason, out of the **one** `split` a row makes: `instruction_text` draws the spans and builds the
-copied line from the same head, link and tail, and `line_of` takes that split rather than the
-instruction so neither half can work it out again. `instruction_line` is a split and a `line_of`,
-and it is total -- an index the listing has no instruction for answers an empty line, which is
+`paragraph()`** of spans, a link being one of them. The model is the app's own and
+framework-free. A `Caret` is a row and a column in **UTF-16 units**, the unit skia answers a pointer
+in and takes a highlight in, and a `Line` is the row's text as it is drawn, so a column into what is
+drawn is a column into what is copied: `instruction_line`, `source_line` and `code_line` are built from the same
+text the rows draw, and `asm_line` is the address plus the same text -- not a third way of building
+the same string. An instruction's two halves are one walk, `pieces` (`src/ui/assembly.rs`): the
+formatter's spans with the link in place of the one it replaced, and a name the formatter offered
+no operand for appended after them all behind a space, a link like any other and not a `None` each
+side has to spot for itself. `instruction_text` draws the pieces and `text_of` joins them into the
+copy, trimming the formatter's padding after the last span -- which is all the two differ in --
+and clamping the link's columns to what is left, a name from the file being free to end in
+whitespace or be nothing else. Which door a link is is not the walk's business: `door_of` picks it
+from the crate's own `Operand` (`agents/Analysis.md`), a branch being its row where the listing
+has an edge for it and its address where it has not. The padding was once drawn in non-breaking
+spaces, when the text before a link was a paragraph of its own and skia trimmed its end; inside
+one paragraph nothing is trimmed but the row's own end. `instruction_line` is total -- an index the listing has no instruction for answers an empty line, which is
 what a row asking about its neighbour below wants of the row after the last, and what leaves its
 callers no length to check. The module's own tests hold every column of the drawn text to the
 same column of the copy, over an instruction of each kind a row draws differently. freya supplies
 exactly the two primitives a paragraph has anyway: the hit-test behind its `ParagraphHolder`
-(`caret_col`, `word_at`, in `ui/code_row.rs`; `None` before layout where freya's own code would unwrap)
+(`caret_col`, `char_col`, `word_at`, in `ui/code_row.rs`; `None` before layout where freya's own code would unwrap)
 and the highlight paint (`highlights`, `text_select_bg`, `CursorMode::Expanded` so it fills the
 row). No `use_editable`, no rope of the listing: the editor's model wants one rope and a line per
 row, and an object's code is estimated rows that are counted afresh with every answer. **Gutter
@@ -1288,7 +1273,7 @@ the named key and asking no more than whether Ctrl was held made the first a cha
 second a screen, which is a window binding a pane had quietly taken. The motions are framework-free
 and tested against a five-row listing. A step is over a *character*, never a UTF-16 unit, so a
 two-unit character is one step and a column left inside one by a sweep rounds outward as `slice`
-does. An inline element is one step and one word. A word is a run of one kind, alphanumerics and
+does. A word is a run of one kind, alphanumerics and
 underscores or punctuation, with whitespace passed over first, the rule an editor's Ctrl+arrow
 follows; skia's `get_word_boundary` is **not** used for it (it is what the double press takes, but
 it is a hit-test on a laid-out paragraph and a key move has no row on screen to ask). Left at a
@@ -1386,14 +1371,9 @@ It is `marks::update` and `write_if` (`agents/Worker.md`) again, for a state the
 rather than a worker.
 
 **A hit is columns, and a match is drawn as rects and never as split spans.** `find::hits_in` matches
-each run of adjacent `Piece::Text` whole -- an assembly line is pushed one span at a time, so
-`mov rax` crosses three of them -- and matches a `Piece::Inline` against the whole symbol name it
-draws: either the pattern is somewhere in that name, and the columns the element occupies are the
-hit, or it is not. **It counts no column of its own.** The runs and the columns they cover are
-`Line::runs` (`src/chars.rs`), over `Line::cells`, the row's one walk: the atoms a caret steps by,
-a slice and these runs all read how wide a piece draws off `Piece::characters`. `hits_in` used to
-restate that width, so an element drawn as anything but one unit would have put every hit past it
-one column off. The wash is one more always-present sibling in
+the row's text whole -- an assembly line is drawn one span at a time, so `mov rax` crosses three of
+them -- and counts what the matcher answers in bytes back into columns (`chars::columns_of`). The
+wash is one more always-present sibling in
 `code_row::row`, a single rect holding one child per match, under the selection; freya matches
 siblings by position, so the varying count sits inside a slot that never varies. It is **purple**
 and not the `match_bg` a filter's hits wear (`find_bg`): green already means "the same place as the

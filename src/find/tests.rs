@@ -54,57 +54,11 @@ fn an_invalid_pattern_hits_nothing() {
     assert_eq!(hits_in(&text("(a)"), &filter.matcher()), none());
 }
 
-/// **A run of adjacent text is matched whole.** An assembly line is pushed one span at a
-/// time, so a pattern crossing two of them is the ordinary case and not an edge one:
-/// matching each piece on its own answers nothing here.
-#[test]
-fn a_pattern_crosses_the_spans_a_line_is_pushed_in() {
-    let mut line = Line::default();
-    line.push_text("mov");
-    line.push_text(" ");
-    line.push_text("rax");
-
-    assert_eq!(hits_in(&line, &matcher("mov rax")), vec![0..7]);
-    assert_eq!(hits_in(&line, &matcher("v r")), vec![2..5]);
-}
-
-/// An inline element is one column and its text is a whole symbol name, so the hit is the
-/// column it is drawn at -- there are no columns inside it to mark.
-#[test]
-fn an_inline_element_hits_as_one_column() {
-    let mut line = Line::default();
-    line.push_text("call ");
-    line.push_inline("some_function");
-
-    assert_eq!(hits_in(&line, &matcher("some_fun")), vec![5..6]);
-    assert_eq!(hits_in(&line, &matcher("call")), vec![0..4]);
-}
-
-/// And it ends the run: a pattern cannot straddle it, the columns it would cover not
-/// existing.
-#[test]
-fn a_pattern_does_not_straddle_an_inline_element() {
-    let mut line = Line::default();
-    line.push_text("call ");
-    line.push_inline("target");
-    line.push_text(", 7");
-
-    assert_eq!(hits_in(&line, &matcher("call target")), none());
-    // The text on the far side of it is still its own run, at the columns past the one
-    // the element takes.
-    assert_eq!(hits_in(&line, &matcher(", 7")), vec![6..9]);
-}
-
 /// Columns are UTF-16 units, which is what the caret and the wash are placed by: a
 /// character outside the basic plane is two of them.
 #[test]
 fn columns_are_counted_in_utf16_units() {
     assert_eq!(hits(&text("\u{1f600}ab"), "ab"), vec![2..4]);
-    // And a run after an inline counts the element as one, whatever its name is.
-    let mut line = Line::default();
-    line.push_inline("\u{1f600}\u{1f600}");
-    line.push_text("ab");
-    assert_eq!(hits_in(&line, &matcher("ab")), vec![1..3]);
 }
 
 /// A step goes to the next hit and wraps at the end; back goes the other way.
@@ -170,24 +124,4 @@ fn a_step_from_an_index_that_is_gone_reads_the_caret() {
     let caret = Caret { row: 4, col: 0 };
 
     assert_eq!(step(&hits, Some(9), caret, Direction::Forward), Some(1));
-}
-
-/// **The columns are the row's own.** Where a hit lands after an inline element is
-/// whatever the row says the element is wide, read off the line and not restated here:
-/// widen an element in `Piece::characters` and the text past it moves with it.
-#[test]
-fn a_hit_after_an_inline_element_is_where_the_row_puts_it() {
-    let mut leading = Line::default();
-    leading.push_inline("some_function");
-    let mut line = leading.clone();
-    line.push_text(", 7");
-
-    // The columns the element takes, as the row itself counts them.
-    let element = 0..leading.units();
-
-    assert_eq!(hits_in(&line, &matcher("some_fun")), vec![element.clone()]);
-    assert_eq!(
-        hits_in(&line, &matcher(", 7")),
-        vec![element.end..element.end + 3]
-    );
 }

@@ -27,160 +27,105 @@ pub(crate) fn address_column(address: u64) -> String {
 /// address column, then [`instruction_line`]'s own text. The gutter is left out, being a
 /// picture of the branches. `bias` is what the listing adds to every address it draws
 /// (see [`AsmData::bias`]).
-///
-/// Whether a branch is drawn as a link decides which *piece* its number is and never what
-/// the line says, so this needs no listing to ask.
 pub(crate) fn asm_line(instruction: &Instruction, bias: u64) -> String {
-    let (head, link, tail) = split(instruction, false);
     format!(
         "{}{}",
         address_column(instruction.address.wrapping_add(bias)),
-        line_of(head, link, tail)
+        text_of(instruction).0
     )
 }
 
-/// Which element an instruction row draws in place of one of the formatter's spans, or
-/// after them all.
+/// What one piece of an instruction's text is: one of the formatter's spans, or the link.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Link {
-    /// The relocation target's name, in the operand the relocation applies to.
-    Relocation,
-    /// A branch's displacement, where the listing has the row it lands on.
-    Branch,
-    /// The address an unnamed call or a branch this listing has no row for goes to: a
-    /// door into the object's code at that address, opened with Ctrl and plain text
-    /// without it.
-    Target,
-    /// The relocation target's name with no span of its own: the formatter offered no
-    /// operand to substitute it into, so it is appended after every span, behind a space.
-    Appended,
+enum Piece {
+    Span(SpanKind),
+    Link,
 }
 
-/// The one element lifted out of an instruction's text: which of the four kinds it is,
-/// and what it says. A relocation's text is the target's own name -- what
-/// [`SymbolData::display`] says, the rule the disassembler substituted the operand by --
-/// and a branch's or a target's is the number the formatter printed. All of it is
-/// borrowed from the instruction, so nothing after [`split`] works out again what it
-/// chose.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct Lifted<'a> {
-    kind: Link,
-    text: &'a str,
-}
-
-/// How an instruction's text is drawn after its address: the formatter's spans up to the
-/// link, the link with what it says, and the spans after it. There is at most one link
-/// because the crate says so: an [`Operand`] is one case and carries the one span it has,
-/// and this is that projected onto the four kinds a row draws. The crate's cases split by
-/// how the address was arrived at and these by how the row draws it, which is why an
-/// [`Operand::Branch`] can come back as either of two. `linked` is the only thing added,
-/// and it is the listing's to know: whether it has the row a branch lands on.
+/// An instruction's text after its address, piece by piece: the formatter's spans, with
+/// the link in place of the one it replaced. There is at most one link because the crate
+/// says so: an [`Operand`] is one case and carries the one span it has. A relocation's
+/// link says the target's own name -- what [`SymbolData::display`] says, the rule the
+/// disassembler substituted the operand by -- and a branch's or a call's the number the
+/// formatter printed.
 ///
-/// A relocation the formatter offered no operand for is a link all the same: it comes
-/// back as [`Link::Appended`] after every span, with an empty tail.
-fn split(
-    instruction: &Instruction,
-    linked: bool,
-) -> (
-    &[(String, SpanKind)],
-    Option<Lifted<'_>>,
-    &[(String, SpanKind)],
-) {
-    let name = instruction.symbol().map(|symbol| symbol.display());
-    let span = match &instruction.operand {
-        // The name goes in the operand it was substituted into, or, where the formatter
-        // offered none, after every span; the `None` arm below is where that lands.
-        Some(Operand::SymbolName { span, .. }) => span.map(|i| (i, Link::Relocation)),
-        // A branch's own displacement is a link to its row where this listing has one,
-        // and the address it goes to where it has not.
-        Some(Operand::Branch { span, .. }) => {
-            Some((*span, if linked { Link::Branch } else { Link::Target }))
+/// A name the formatter offered no operand for is a link all the same, appended after
+/// every span behind a space.
+///
+/// **The one walk both halves of a row are built from**: the line it copies
+/// ([`text_of`]) and the spans it draws ([`instruction_text`]), so a column into one is a
+/// column into the other.
+fn pieces(instruction: &Instruction) -> Vec<(&str, Piece)> {
+    fn spans(run: &[(String, SpanKind)]) -> Vec<(&str, Piece)> {
+        run.iter()
+            .map(|(text, kind)| (text.as_str(), Piece::Span(*kind)))
+            .collect()
+    }
+    let format = &instruction.format;
+    // Where the link goes and what it says. The crate records a span into `format`'s own
+    // length, so the bounds only guard a listing built by hand.
+    let (at, text) = match &instruction.operand {
+        Some(Operand::SymbolName { symbol, span }) => {
+            (span.filter(|&i| i < format.len()), symbol.display())
         }
-        Some(Operand::Call { span, .. }) => Some((*span, Link::Target)),
-        Some(Operand::Placeholder) | None => None,
-    }
-    // The crate records a span into `format`'s own length, so this only guards a listing
-    // built by hand.
-    .filter(|&(i, _)| i < instruction.format.len());
-
-    match span {
-        Some((i, Link::Relocation)) => (
-            &instruction.format[..i],
-            name.map(|text| Lifted {
-                kind: Link::Relocation,
-                text,
-            }),
-            &instruction.format[i + 1..],
-        ),
-        Some((i, kind)) => (
-            &instruction.format[..i],
-            Some(Lifted {
-                kind,
-                text: &instruction.format[i].0,
-            }),
-            &instruction.format[i + 1..],
-        ),
-        // No span to lift out. A target still to be named is appended after them all.
-        None => (
-            &instruction.format[..],
-            name.map(|text| Lifted {
-                kind: Link::Appended,
-                text,
-            }),
-            &[][..],
-        ),
+        Some(Operand::Branch { span, .. } | Operand::Call { span, .. }) => {
+            let Some((text, _)) = format.get(*span) else {
+                return spans(format);
+            };
+            (Some(*span), text.as_str())
+        }
+        Some(Operand::Placeholder) | None => return spans(format),
+    };
+    match at {
+        Some(i) => {
+            let mut pieces = spans(&format[..i]);
+            pieces.push((text, Piece::Link));
+            pieces.extend(spans(&format[i + 1..]));
+            pieces
+        }
+        None => {
+            let mut pieces = spans(format);
+            pieces.push((" ", Piece::Span(SpanKind::Other)));
+            pieces.push((text, Piece::Link));
+            pieces
+        }
     }
 }
 
-/// Whether instruction `index`'s branch is drawn as a link: where the listing has the row
-/// it lands on, which is the same set the gutter draws an arrow for. An edge is only ever
-/// built for an [`Operand::Branch`], and one of those always has a span, so the edge is the
-/// whole question.
-fn linked(assembly: &Assembly, index: usize) -> bool {
-    assembly.edge_from(index).is_some()
+/// An instruction's text as the line a row copies, and the columns of its link in it.
+///
+/// The formatter's padding after the last span is not text, so it is trimmed; a link that
+/// ended in whitespace, or said nothing but it, loses what was trimmed. The file names
+/// the symbol, so either can happen, and the columns never run past the line.
+fn text_of(instruction: &Instruction) -> (Line, Option<Range<usize>>) {
+    let mut text = String::new();
+    let mut link = None;
+    for (piece, kind) in pieces(instruction) {
+        let start = chars::units(&text);
+        text.push_str(piece);
+        if kind == Piece::Link {
+            link = Some(start..chars::units(&text));
+        }
+    }
+    text.truncate(text.trim_end().len());
+    let units = chars::units(&text);
+    let link = link
+        .map(|link: Range<usize>| link.start.min(units)..link.end.min(units))
+        .filter(|link| !link.is_empty());
+    (Line::text(text), link)
 }
 
-/// The text instruction `index`'s row draws after its address, as the clipboard sees it:
-/// the formatter's spans with the link as one inline piece among them. What the row draws
-/// is built from the same [`split`], so a column into one is a column into the other, and
-/// [`asm_line`] is this behind an address column.
+/// The text instruction `index`'s row draws after its address, as the clipboard sees it,
+/// and [`asm_line`] is this behind an address column.
 ///
 /// Total: an index past the last instruction answers an empty line, which is what a row
 /// asking about its neighbour below wants of the row after the last (see
 /// [`Studied::position`]).
 pub(crate) fn instruction_line(assembly: &Assembly, index: usize) -> Line {
-    let Some(instruction) = assembly.instructions.get(index) else {
-        return Line::default();
-    };
-    let (head, link, tail) = split(instruction, linked(assembly, index));
-    line_of(head, link, tail)
-}
-
-/// One [`split`] as the line a row copies as: the head spans, the link as the one piece
-/// the text engine counts as a single unit, then the tail. It takes the split and not the
-/// instruction, so a row drawing the spans splits once.
-fn line_of(head: &[(String, SpanKind)], link: Option<Lifted>, tail: &[(String, SpanKind)]) -> Line {
-    let mut line = Line::default();
-    let push = |line: &mut Line, run: &[(String, SpanKind)]| {
-        for (text, _) in run {
-            line.push_text(text.clone());
-        }
-    };
-    push(&mut line, head);
-    if let Some(link) = link {
-        if link.kind == Link::Appended {
-            line.push_text(" ");
-        }
-        line.push_inline(link.text.to_owned());
-    }
-    push(&mut line, tail);
-    // The formatter's padding after the last span is not text.
-    if let Some(crate::chars::Piece::Text(last)) = line.pieces.last_mut() {
-        last.truncate(last.trim_end().len());
-    }
-    line.pieces
-        .retain(|piece| !matches!(piece, crate::chars::Piece::Text(text) if text.is_empty()));
-    line
+    assembly
+        .instructions
+        .get(index)
+        .map_or_else(Line::default, |instruction| text_of(instruction).0)
 }
 
 /// How many lanes the gutter is drawn with in a listing of a whole object's code: one
@@ -386,11 +331,11 @@ pub(crate) struct RowArrows {
 }
 
 /// Where a press on a link in a code row goes, and whether it is a link at all just now
-/// ([`Door::open_now`]). The three an instruction can offer are one label with three
-/// presses, and not three labels: the hover, the chrome, the Alt rule and the drawn text
-/// are the same for each, and this is what differs. The fourth is not an operand: it is
-/// the label row in an object's own listing (`section_view`), which asks the same rule so
-/// that every link in the app is lit by one answer.
+/// ([`Door::open_now`]). The three an instruction can offer are one run of its text with
+/// three presses: the hover, the chrome, the Alt rule and the drawn text are the same for
+/// each, and this is what differs. The fourth is not an operand: it is the label row in an
+/// object's own listing (`section_view`), which asks the same rule so that every link in
+/// the app is lit by one answer.
 #[derive(Clone)]
 pub(crate) enum Door {
     /// The name of a relocation target, in place of the meaningless numeric operand.
@@ -452,41 +397,6 @@ pub(crate) enum Door {
     Label { symbol: Symbol },
 }
 
-impl PartialEq for Door {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                Door::Symbol { symbol, code_tab },
-                Door::Symbol {
-                    symbol: other_symbol,
-                    code_tab: other_code_tab,
-                },
-            ) => symbol == other_symbol && code_tab == other_code_tab,
-            (
-                Door::Address { object, address },
-                Door::Address {
-                    object: other_object,
-                    address: other_address,
-                },
-            ) => Arc::ptr_eq(object, other_object) && address == other_address,
-            (
-                Door::Label { symbol },
-                Door::Label {
-                    symbol: other_symbol,
-                },
-            ) => symbol == other_symbol,
-            (
-                Door::Row { to, at },
-                Door::Row {
-                    to: other_to,
-                    at: other_at,
-                },
-            ) => to == other_to && at == other_at,
-            _ => false,
-        }
-    }
-}
-
 /// Where a press on a link goes, once the door and the modifiers have been asked
 /// ([`Door::opens`]): the **whole** decision, which [`Opens::go`] carries out and adds
 /// nothing to. Which is why the two variants that open a document carry the [`Reach`]
@@ -510,8 +420,6 @@ enum Opens {
     },
     /// A row of the listing on screen, with the place it names for the source pane.
     Row { to: usize, at: Option<LinePos> },
-    /// Nothing, the press being the door's all the same. See [`Door::opens`].
-    Nothing,
 }
 
 impl PartialEq for Opens {
@@ -554,7 +462,6 @@ impl PartialEq for Opens {
                     at: other_at,
                 },
             ) => to == other_to && at == other_at,
-            (Opens::Nothing, Opens::Nothing) => true,
             _ => false,
         }
     }
@@ -565,7 +472,7 @@ impl Opens {
     /// modifier is read here -- what they said is in the decision.
     ///
     /// `listing` is the list's own scroll and box, read at the press rather than at the
-    /// render that drew the label, so a row moved to is a row of the listing on screen
+    /// render that drew the link, so a row moved to is a row of the listing on screen
     /// now.
     fn go(self, doors: Doors, listing: &Listing) {
         match self {
@@ -584,17 +491,15 @@ impl Opens {
             } => {
                 show_in_code(doors, object, address, None, reach);
             }
-            Opens::Nothing => {}
             Opens::Row { to, at } => {
                 // The row is reached by a press, so the pane is on screen and measured:
                 // the height is peeked, a handler subscribing to nothing.
                 let mut controller = listing.controller;
                 let _ = reveal_row(&mut controller, listing.height(), listing.rows(), to);
-                // The row landed on becomes the picked-out one, replacing the row the
-                // press started on -- which `pointer_down` has already marked, that being
-                // the one handler a stopped press does not undo. The source pane owes the
-                // scroll to the target's line, where it has one; this pane has just been
-                // given its own, above.
+                // The row landed on becomes the picked-out one; the press that followed
+                // the link marked nothing of its own. The source pane owes the scroll to
+                // the target's line, where it has one; this pane has just been given its
+                // own, above.
                 mark_row(doors.marked, at.map(|at| at.file), to);
             }
         }
@@ -607,10 +512,10 @@ impl Door {
     /// what the others will not do. Always, where what the door opens does not turn on the
     /// reader; only with **Ctrl** held for a label, which without it has nowhere to go.
     ///
-    /// Asked by the label that draws itself by it, by the closure the row is handed for
-    /// the pointer's icon ([`InlineLink`], [`TextLinks`]), and by the press. Alt is not
-    /// part of it: Alt says a press on a link is a selection this time, and shuts every
-    /// door in every pane rather than any one of them.
+    /// Asked through the closure the row is handed ([`TextLinks`]), for the light, the
+    /// pointer's icon and the press. Alt is not part of it: Alt says a press on a link is
+    /// a selection this time, and shuts every door in every pane, so the row asks it of
+    /// every link rather than any one of them.
     ///
     /// `ctrl` is asked only where the answer turns on it, so only the links it can change
     /// are drawn again as it goes down and up.
@@ -621,17 +526,12 @@ impl Door {
         }
     }
 
-    /// **What a press on the link opens**, with the two modifiers as they were when the
-    /// button went down. [`None`] is a press that is not a door: it goes on into the row,
-    /// which picks the line out and opens nothing.
-    ///
-    /// Alt says the press is a selection this time and shuts every door; so does a door
-    /// [`open_now`](Self::open_now) says is not open, which for a label is Ctrl not being
-    /// held. A label with Ctrl held **is** a door and opens [`Opens::Nothing`]: it is a
-    /// run of its row's own text and the row is what follows it (`section_view`), so the
-    /// press is still the door's and must not reach the row.
-    fn opens(&self, alt: bool, ctrl: bool) -> Option<Opens> {
-        if alt || !self.open_now(|| ctrl) {
+    /// **What a press on the link opens**, with Ctrl as it was when the button went down.
+    /// [`None`] is a press that is not a door: it goes on into the row, which picks the
+    /// line out and opens nothing. That is a door [`open_now`](Self::open_now) says is not
+    /// open, which for a label is Ctrl not being held.
+    fn opens(&self, ctrl: bool) -> Option<Opens> {
+        if !self.open_now(|| ctrl) {
             return None;
         }
         // Where a door that opens a document opens it: in place, or, with Ctrl, in a tab
@@ -650,7 +550,8 @@ impl Door {
                 address: *address,
                 reach,
             },
-            Door::Label { .. } => Opens::Nothing,
+            // Only ever with Ctrl, so in a tab of its own.
+            Door::Label { symbol } => Opens::Symbol(symbol.clone(), reach),
             Door::Row { to, at } => Opens::Row {
                 to: *to,
                 at: at.clone(),
@@ -658,7 +559,7 @@ impl Door {
         })
     }
 
-    /// The colour the label is drawn in at rest, and the one it takes while it is lit --
+    /// The colour the link is drawn in at rest, and the one it takes while it is lit --
     /// which is the rule under it too.
     fn colours(&self) -> (Color, Color) {
         match self {
@@ -671,31 +572,28 @@ impl Door {
     }
 }
 
-/// What a press on a linked operand reaches for: the two modifiers the label lights
-/// itself by, where the door leads, and the list's own scroll and box.
+/// What a press on a linked operand reaches for: Ctrl, which the door is asked about,
+/// where the door leads, and the list's own scroll and box.
 ///
-/// **Consumed where the list renders and carried down to the labels as data.** Reaching
-/// for a context is a hook, and there is one label per linked operand of every row on
-/// screen -- the most-made component in the app, rebuilt as every scroll recycles a row
-/// -- so a label that consumed these itself paid four context walks a render for a press
-/// that almost never comes.
+/// **Consumed where the list renders and carried down to the rows as data.** Reaching for
+/// a context is a hook, which a handler may not run, and a row consuming these itself paid
+/// three context walks a render for a press that almost never comes.
 ///
 /// The handles are the root's and the [`Listing`] the box's, none of them ever replaced,
-/// so this **compares equal always**: a label holding one is not re-rendered for it.
+/// so this **compares equal always**: a row holding one is not re-rendered for it.
 ///
 /// `doors` is [`RowStates`]'s, taken off the bundle the rows already carry rather than
 /// reached for again, so the row's menu and its links cannot come to disagree about
 /// where a door leads.
 #[derive(Clone)]
 pub(crate) struct LinkStates {
-    /// Whether Ctrl is held, which is what makes a label a door.
+    /// Whether Ctrl is held, which is what makes a label a door and a target open in a
+    /// tab of its own.
     ctrl: State<bool>,
-    /// Whether Alt is held, which shuts every door in every pane.
-    alt: State<bool>,
     /// Where a press on the link goes.
     doors: Doors,
     /// The list's own scroll and its measured height, which `reveal_row` needs at the
-    /// moment of the press rather than at the render that drew the label.
+    /// moment of the press rather than at the render that drew the row.
     listing: Listing,
 }
 
@@ -709,91 +607,40 @@ impl PartialEq for LinkStates {
 pub(crate) fn use_link_states(doors: Doors, list: &ListBox) -> LinkStates {
     LinkStates {
         ctrl: use_consume::<Ctrl>().0,
-        alt: use_consume::<Alt>().0,
         doors,
         listing: list.listing(),
     }
 }
 
-/// One of an instruction's operands drawn as a link: what it says, and where a press on
-/// it goes.
-#[derive(Clone, PartialEq)]
-struct DoorLabel {
-    /// The operand as the disassembler printed it, or the name that replaced it: what
-    /// the reader is pressing.
-    text: String,
-    door: Door,
-    /// What the light and the press reach for, told to the label by the list: a handler
-    /// may not run a hook, and compares equal always ([`LinkStates`]).
-    states: LinkStates,
-}
-
-impl DoorLabel {
-    /// This label as the row draws it, inside its paragraph: the element, and the
-    /// pointer's icon asking the label's own rule for whether a press is a door, so the
-    /// hand is over exactly what is drawn as a link. Alt shuts it, as it shuts the light
-    /// and the press.
-    fn inline(self) -> InlineLink {
-        let door = self.door.clone();
-        let (ctrl, alt) = (self.states.ctrl, self.states.alt);
-        InlineLink {
-            element: self.into_element(),
-            is_link: Rc::new(move || !*alt.peek() && door.open_now(|| *ctrl.peek())),
-        }
-    }
-}
-
-counter!(
-    /// Test-only: how many linked operands this thread has drawn. A label drawn again
-    /// draws exactly what it drew before, so the render is the one place the question
-    /// can be answered from.
-    pub(crate) fn links_drawn() = LINKS_DRAWN
-);
-
-impl Component for DoorLabel {
-    fn render(&self) -> impl IntoElement {
-        #[cfg(test)]
-        LINKS_DRAWN.set(LINKS_DRAWN.get() + 1);
-
-        let mut hovering = use_state(|| false);
+impl LinkStates {
+    /// The link at `columns` of a row, through `door`: lit and followed while the door is
+    /// open, and followed by carrying out what it [`opens`](Door::opens). Ctrl is read in
+    /// the closure the row asks from its render, so only a row the pointer is on is
+    /// subscribed to it, and peeked at the press.
+    ///
+    /// The row's text is in no file, so it has no names a language server could be asked
+    /// about: a question is put by file, line and column.
+    pub(crate) fn link(&self, columns: Range<usize>, door: Door) -> TextLinks {
         let LinkStates {
             ctrl,
-            alt,
             doors,
             ref listing,
-        } = self.states;
+        } = *self;
         let listing = listing.clone();
-        let door = self.door.clone();
-        let (rest, lit_fg) = door.colours();
-        // Alt, read while the pointer is on the label and not otherwise, so a label
-        // nobody is pointing at is not on its list -- and read whether or not the door is
-        // open, or the label would never be drawn again when Alt came up.
-        let blocked = hovering() && alt();
-        // Lit where the pointer is on it and a press would be a door, which for a label
-        // is only while Ctrl is held.
-        let lit = hovering() && !blocked && door.open_now(|| ctrl());
-
-        rect()
-            .maybe(lit, |rect| link_chrome(rect, Some(lit_fg)))
-            .on_pointer_over(move |_| hovering.set_if_modified(true))
-            .on_pointer_out(move |_| hovering.set_if_modified(false))
-            .on_press(move |e: Event<PressEventData>| {
-                // What this press is, decided before anything is opened. A press that is
-                // no door is left to the row, whose `pointer_down` has already begun a
-                // selection over the link.
-                let Some(opens) = door.opens(*alt.peek(), *ctrl.peek()) else {
-                    return;
-                };
-                // Or the press bubbles into the row, which would pin the line the
-                // instruction being left came from.
-                e.stop_propagation();
-                opens.go(doors, &listing);
-            })
-            .child(label().text(self.text.clone()).max_lines(1).color(if lit {
-                lit_fg
-            } else {
-                rest
-            }))
+        let lit_fg = door.colours().1;
+        let asked = door.clone();
+        TextLinks {
+            columns: vec![columns],
+            is_link: Rc::new(move || asked.open_now(|| ctrl())),
+            follow: Rc::new(move |_| {
+                if let Some(opens) = door.opens(*ctrl.peek()) {
+                    opens.go(doors, &listing);
+                }
+            }),
+            lit_fg,
+            names: Vec::new(),
+            on_hover: None,
+        }
     }
 }
 
@@ -1051,7 +898,7 @@ impl Component for SeparatorRow {
             std::iter::once(code_mark(false))
                 .chain(gutter_column(width, Some(self.arrows)))
                 .collect(),
-            None::<Text<NoLinks>>,
+            None,
             None,
         )
         .child(block_rule())
@@ -1141,19 +988,44 @@ impl InstructionRow {
     }
 }
 
+/// Where a press on instruction `index`'s link goes, picked by what its operand names: a
+/// relocation target's symbol; a branch's own row where this listing has the row it lands
+/// on, which is the same set the gutter draws an arrow for; and otherwise the address it
+/// goes to, a door into the object's code there in either listing -- the unified view's
+/// own rows included, where the target may be screens away.
+fn door_of(data: &AsmData, index: usize) -> Option<Door> {
+    let instruction = data.assembly().instructions.get(index)?;
+    Some(match instruction.operand.as_ref()? {
+        Operand::SymbolName { symbol, .. } => Door::Symbol {
+            symbol: Symbol {
+                object: data.object().clone(),
+                data: symbol.clone(),
+            },
+            code_tab: data.code_tab(),
+        },
+        // The run a press on the row landed on would have made.
+        Operand::Branch { address, .. } => match data.assembly().edge_from(index) {
+            Some(edge) => Door::Row {
+                to: data.base() + data.lanes().row_of(edge.to),
+                at: data.position(edge.to),
+            },
+            None => Door::Address {
+                object: data.object().clone(),
+                address: data.placed(*address),
+            },
+        },
+        Operand::Call { address, .. } => Door::Address {
+            object: data.object().clone(),
+            address: data.placed(*address),
+        },
+        Operand::Placeholder => return None,
+    })
+}
+
 /// The text instruction `index`'s row draws after its address, and the line that row
-/// copies.
-///
-/// The disassembler says which span the link replaced, so the text is three parts: the
-/// spans before that span, the link, and the spans after it. That keeps the link in the
-/// operand's own position, inside the brackets of a memory operand and after the `rip+`
-/// of a rip-relative one. The link is an inline child of the row's one paragraph, so to
-/// the text engine it is one unit of the row's text.
-///
-/// **A column into what is drawn is a column into what is copied.** Both halves come out
-/// of one [`split`], and the drawn spans differ from [`instruction_line`]'s text only in
-/// the padding to the operand column, which is drawn in non-breaking spaces -- one unit
-/// each, as a plain space is. The tests hold the two to each other.
+/// copies, both out of one walk ([`pieces`]). The link keeps the operand's own position,
+/// inside the brackets of a memory operand and after the `rip+` of a rip-relative one,
+/// and is a span of the row's text like any other, so a sweep selects across it.
 ///
 /// `states` is handed in and not reached for: it is the list's, consumed once where the
 /// rows are built, and this is not a component.
@@ -1161,103 +1033,44 @@ fn instruction_text(
     data: &AsmData,
     index: usize,
     chars: RowChars,
-    marking: Option<&Marking>,
+    marking: Option<Marking>,
     states: &LinkStates,
-) -> Text<Option<InlineLink>> {
+) -> Text {
     let instruction = &data.assembly().instructions[index];
-    let (head, link, tail) = split(instruction, linked(data.assembly(), index));
-    // The copied line, out of the same split the spans below are drawn from.
-    let line = line_of(head, link, tail);
-    let inline: Option<InlineLink> = link.and_then(|link| {
-        let door = match link.kind {
-            // The relocation target's name -- in the operand the relocation applies to,
-            // or after them all where the formatter offered none to put it in.
-            Link::Relocation | Link::Appended => instruction.symbol().map(|symbol| Door::Symbol {
-                symbol: Symbol {
-                    object: data.object().clone(),
-                    data: symbol.clone(),
-                },
-                code_tab: data.code_tab(),
-            }),
-            // A branch's displacement is the other way to follow it: the row it lands
-            // on, and the run a press on that row would have made.
-            Link::Branch => data.assembly().edge_from(index).map(|edge| Door::Row {
-                to: data.base() + data.lanes().row_of(edge.to),
-                at: data.position(edge.to),
-            }),
-            // Where the instruction goes, with no name and no row here: the door into
-            // the object's code at that address, in either listing -- the unified view's
-            // own rows included, where the target may be screens away.
-            Link::Target => instruction.target().map(|target| Door::Address {
-                object: data.object().clone(),
-                address: data.placed(target),
-            }),
-        };
-        door.map(|door| {
-            DoorLabel {
-                text: link.text.to_owned(),
-                door,
-                states: states.clone(),
-            }
-            .inline()
+    let door = door_of(data, index);
+    // The link's text in the colour its door is drawn in at rest.
+    let rest = door
+        .as_ref()
+        .map_or(palette().name_fg, |door| door.colours().0);
+    let spans = pieces(instruction)
+        .into_iter()
+        .map(|(text, piece)| {
+            let (colour, weight) = match piece {
+                Piece::Span(kind) => (
+                    kind_color(kind),
+                    match kind {
+                        SpanKind::Mnemonic => FontWeight::BOLD,
+                        _ => FontWeight::NORMAL,
+                    },
+                ),
+                Piece::Link => (rest, FontWeight::NORMAL),
+            };
+            Span::new(text.to_owned())
+                .color(colour)
+                .font_weight(weight)
+                .assembly_font()
         })
-    });
-    let appended = matches!(
-        link,
-        Some(Lifted {
-            kind: Link::Appended,
-            ..
-        })
-    );
-
-    // Whatever text runs up to the link ends in the formatter's padding to the operand
-    // column, and Skia trims trailing whitespace when it measures a paragraph — which
-    // would butt the name right up against the mnemonic. Make that padding non-breaking
-    // to keep the column; one unit each way, so the columns still agree with the plain
-    // text.
-    let spans = |run: &[(String, SpanKind)], pad_end: bool| {
-        let last = run.len().saturating_sub(1);
-        run.iter()
-            .enumerate()
-            .map(|(i, (text, kind))| {
-                let text = if pad_end && i == last {
-                    let kept = text.trim_end_matches(' ');
-                    format!("{kept}{}", "\u{a0}".repeat(text.len() - kept.len()))
-                } else {
-                    text.clone()
-                };
-
-                Span::new(text)
-                    .color(kind_color(*kind))
-                    .assembly_font()
-                    .font_weight(if *kind == SpanKind::Mnemonic {
-                        FontWeight::BOLD
-                    } else {
-                        FontWeight::NORMAL
-                    })
-            })
-            .collect::<Vec<_>>()
-    };
-    let mut head = spans(head, link.is_some());
-    if appended {
-        // The space `asm_line` puts before an appended name, non-breaking for the reason
-        // above.
-        head.push(
-            Span::new("\u{a0}")
-                .color(kind_color(SpanKind::Other))
-                .assembly_font(),
-        );
-    }
+        .collect();
+    let (line, columns) = text_of(instruction);
 
     Text {
-        finds: marking
-            .map(|marking| marking.hits(&line))
-            .unwrap_or_default(),
+        marking,
         line,
-        head,
-        tail: spans(tail, false),
+        spans,
         chars,
-        links: inline,
+        links: door
+            .zip(columns)
+            .map(|(door, columns)| states.link(columns, door)),
     }
 }
 
@@ -1381,7 +1194,7 @@ impl Component for InstructionRow {
                 &self.data,
                 self.index,
                 self.chars,
-                self.marking.as_ref(),
+                self.marking.clone(),
                 &self.links,
             )),
             Some(instruction_menu(self.asking, &self.data, self.index, at)),
@@ -1403,7 +1216,7 @@ struct InstructionList {
     /// The listing these rows draw, made by the pane -- which is what says there is one
     /// to draw. It carries the whole of what the worker made of the symbol and not just
     /// its object, because these rows draw a disassembly *and* answer to it: a relocation
-    /// label navigates to a symbol in the same object.
+    /// link navigates to a symbol in the same object.
     data: AsmData,
     /// The question this listing answers, and **not** the one being asked: while the
     /// worker catches up the pane is still drawing the listing being left. Two things
@@ -1461,8 +1274,8 @@ impl Component for InstructionList {
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
-        // What a link in a row's text reaches for, consumed here and carried to the
-        // labels: a handler may not run a hook, and a label is one per linked operand.
+        // What a link in a row's text reaches for, consumed here and carried to the rows:
+        // a handler may not run a hook.
         let links = use_link_states(doors, &list);
         // What the find bar over this pane is looking for, for every row to wash, and
         // what it searches, claimed for as long as these rows are drawn.

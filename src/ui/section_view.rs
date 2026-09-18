@@ -371,6 +371,8 @@ struct TextRow {
     chars: RowChars,
     /// What the find bar is looking for. See [`SectionRows::marking`].
     marking: Option<Marking>,
+    /// What the label's link reaches for. See [`SectionRows::links`].
+    links: LinkStates,
     key: DiffKey,
 }
 
@@ -422,8 +424,6 @@ keyed!(TextRow);
 
 impl Component for TextRow {
     fn render(&self) -> impl IntoElement {
-        let ctrl = use_consume::<Ctrl>().0;
-        let doors = use_doors();
         // What the row is, drawn: the colour and the weight the three kinds differ in.
         // Asked for here, in the row's own render, because asking is what subscribes a
         // scope to the theme, and it is this scope a switch has to draw again.
@@ -435,18 +435,18 @@ impl Component for TextRow {
 
         // The text: the data directive, where the row has one, then what the row says --
         // one paragraph, and the same one `code_line` copies.
-        let mut head = Vec::new();
+        let mut spans = Vec::new();
         if let Some(mark) = self.text.mark {
             // Non-breaking, so the engine cannot trim it: it is one unit of the text
             // either way.
-            head.push(
+            spans.push(
                 Span::new(format!("{mark}\u{a0}"))
                     .color(palette().keyword_fg)
                     .font_weight(FontWeight::BOLD)
                     .assembly_font(),
             );
         }
-        head.push(
+        spans.push(
             Span::new(self.text.text.clone())
                 .color(color)
                 .font_weight(weight)
@@ -464,32 +464,12 @@ impl Component for TextRow {
                 object: self.object.clone(),
                 data,
             };
-            let door = Door::Label {
-                symbol: symbol.clone(),
-            };
-            TextLinks::unnamed(
-                vec![whole],
-                Rc::new(move || door.open_now(|| ctrl())),
-                // A tab of its own, as Ctrl opens one everywhere.
-                Rc::new(move |_| {
-                    open_document(
-                        doors.open,
-                        doors.visits,
-                        Document::Symbol(symbol.clone()),
-                        Reach::NewTab,
-                    );
-                }),
-            )
+            self.links.link(whole, Door::Label { symbol })
         });
         let text = Text {
-            finds: self
-                .marking
-                .as_ref()
-                .map(|marking| marking.hits(&line))
-                .unwrap_or_default(),
+            marking: self.marking.clone(),
             line,
-            head,
-            tail: Vec::new(),
+            spans,
             chars: self.chars,
             links,
         };
@@ -565,7 +545,7 @@ impl Component for EmptyRow {
                 measured: false,
             },
             vec![code_mark(false)],
-            None::<Text<NoLinks>>,
+            None,
             None,
         )
         .maybe(self.rule, |row| row.child(block_rule()))
@@ -657,8 +637,8 @@ impl Component for SectionList {
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
-        // What a link in a row's text reaches for, consumed here and carried to the
-        // labels: a handler may not run a hook, and a label is one per linked operand.
+        // What a link in a row's text reaches for, consumed here and carried to the rows:
+        // a handler may not run a hook.
         let links = use_link_states(doors, &list);
         let (controller, viewport) = (list.controller, list.viewport());
         // What the find bar over this pane is looking for, for every row to wash. It
@@ -893,6 +873,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                 wash,
                 chars,
                 marking: data.marking.clone(),
+                links: data.links.clone(),
                 key: DiffKey::None,
             }
             .key(key)
