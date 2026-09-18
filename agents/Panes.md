@@ -269,7 +269,7 @@ opens `name_menu` above those, the three questions only a language server can an
 **Four of that menu are keys as well, asked about the caret** (`caret_questions`): `F12` for where
 the name under it is defined, `Shift+F12` for what refers to it, `Ctrl+F12` for what implements it
 and `Alt+F12` for the line's own locations. They make the same three calls the menu does --
-`follow_name`, `find_listed`, `find_locations` -- so a key and the item beside it cannot come to
+`follow_name`, `Locating::listed`, `Locating::find` -- so a key and the item beside it cannot come to
 mean two things; all that differs is where the place comes from, the run's lead read as a place
 instead of the pointer's column. `name_at_column` is where a column is
 looked up among the server's names, and the pointer's `Named::at_column` goes through it too, so the

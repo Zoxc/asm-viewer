@@ -326,11 +326,11 @@ pub(crate) fn caret_questions(
         let Some(caret) = caret else {
             return;
         };
-        let (located, dock) = (common.asking.located, common.asking.dock);
+        let locating = common.asking.locating;
         // Where the caret is, said once: every question below is about this place.
         let at = LinePos::of_row(common.file.clone(), caret.row);
         if chord == Chord::AllLocations {
-            find_locations(located, dock, Query::line(at), common.subject());
+            locating.find(Query::line(at), common.subject());
             return;
         }
         let named = name_at_column(&common.source, &at, &common.links, caret.col);
@@ -345,8 +345,8 @@ pub(crate) fn caret_questions(
                 lsp::Followed::Definition,
                 Reach::InPlace,
             ),
-            Chord::References => find_listed(server, located, dock, named, lsp::Listed::References),
-            _ => find_listed(server, located, dock, named, lsp::Listed::Implementations),
+            Chord::References => locating.listed(server, named, lsp::Listed::References),
+            _ => locating.listed(server, named, lsp::Listed::Implementations),
         }
     }
 }
@@ -367,10 +367,7 @@ pub(crate) fn caret_questions(
 /// handler may not run.
 fn source_menu(named: Named) -> RowMenu {
     let RowStates {
-        doors,
-        located,
-        dock,
-        ..
+        doors, locating, ..
     } = named.common.asking;
     let open = doors.open;
     // The file this row is in, where the pane is showing it beside somebody else's tab. A
@@ -395,11 +392,10 @@ fn source_menu(named: Named) -> RowMenu {
         let name = column
             .and_then(|column| named.at_column(column))
             .zip(server.clone())
-            .map(|(name, server)| name_menu(&server, located, dock, open, name))
+            .map(|(name, server)| name_menu(&server, locating, open, name))
             .unwrap_or_default();
         let menu = locate_menu(
-            located,
-            dock,
+            locating,
             at.clone(),
             subject.clone(),
             function,

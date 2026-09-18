@@ -417,31 +417,60 @@ pub(crate) fn use_locate_asks(
     });
 }
 
-/// Ask `query`, and bring the panel that will answer to the front. The one writer of
-/// [`Located::asked`].
-///
-/// Asking the question already answered asks again: the objects may have changed since,
-/// and the answer is about the objects that were open when it was asked. Dropping the
-/// stale answer is what makes [`use_locate_asks`] send the question, there being no
-/// `pending` to set. The panel is brought to the top of whichever group of the sidebar
-/// holds it, since it may have been dragged into any of them -- and only when the question
-/// is asked, never when the answer lands, so a reader who moved on meanwhile is not
-/// pulled back.
-pub(crate) fn find_locations(
-    mut located: State<Located>,
-    dock: State<DockArea>,
-    query: Query,
-    subject: Option<Subject>,
-) {
-    let mut next = located.peek().clone();
-    if next.found.as_ref().is_some_and(|found| found.of == query) {
-        next.found = None;
-    }
-    next.asked = Some(query);
-    next.subject = subject;
-    located.set(next);
+/// Where a question about a line, a function or a name is answered, and the dock whose
+/// Locations panel is brought to the front when one is asked: what every door into the
+/// panel takes, in one `Copy` bundle.
+#[derive(Clone, Copy)]
+pub(crate) struct Locating {
+    pub(crate) located: State<Located>,
+    pub(crate) dock: State<DockArea>,
+}
 
-    raise_panel(dock, Panel::Locations);
+impl Locating {
+    /// Ask `query`, and bring the panel that will answer to the front. The one writer of
+    /// [`Located::asked`].
+    ///
+    /// Asking the question already answered asks again: the objects may have changed
+    /// since, and the answer is about the objects that were open when it was asked.
+    /// Dropping the stale answer is what makes [`use_locate_asks`] send the question,
+    /// there being no `pending` to set. The panel is brought to the top of whichever
+    /// group of the sidebar holds it, since it may have been dragged into any of them --
+    /// and only when the question is asked, never when the answer lands, so a reader who
+    /// moved on meanwhile is not pulled back.
+    pub(crate) fn find(self, query: Query, subject: Option<Subject>) {
+        let Locating { mut located, dock } = self;
+        let mut next = located.peek().clone();
+        if next.found.as_ref().is_some_and(|found| found.of == query) {
+            next.found = None;
+        }
+        next.asked = Some(query);
+        next.subject = subject;
+        located.set(next);
+
+        raise_panel(dock, Panel::Locations);
+    }
+
+    /// Ask the server question `of` about `named`, hold the question, and bring the panel
+    /// to the front.
+    ///
+    /// The question is the server's, so it is sent here rather than from the effect that
+    /// sends the worker's: what it is asked in is a server run, and there is nothing to
+    /// ask with no server -- a question is not what starts one, that being the control the
+    /// reader presses (`follow_name`'s rule).
+    pub(crate) fn listed(self, server: &Server, named: NameAt, of: lsp::Listed) {
+        let NameAt { at, name, column } = named;
+        let asked = ask_where(
+            server.language,
+            &server.jobs,
+            Lookup::at(&at, column),
+            lsp::Question::Listed(of),
+        );
+        let Some(ticket) = asked else {
+            return;
+        };
+        // These answers are places in files: no row of one chooses a symbol for a tab.
+        self.find(Query::listed(of, at, name, column, ticket), None);
+    }
 }
 
 /// The name a question for the server is about: the row it is on, what it is called, and
@@ -451,39 +480,6 @@ pub(crate) struct NameAt {
     pub(crate) at: LinePos,
     pub(crate) name: String,
     pub(crate) column: usize,
-}
-
-/// Ask the server question `of` about `named`, hold the question, and bring the panel to
-/// the front.
-///
-/// The question is the server's, so it is sent here rather than from the effect that
-/// sends the worker's: what it is asked in is a server run, and there is nothing to ask
-/// with no server -- a question is not what starts one, that being the control the reader
-/// presses (`follow_name`'s rule).
-pub(crate) fn find_listed(
-    server: &Server,
-    located: State<Located>,
-    dock: State<DockArea>,
-    named: NameAt,
-    of: lsp::Listed,
-) {
-    let NameAt { at, name, column } = named;
-    let asked = ask_where(
-        server.language,
-        &server.jobs,
-        Lookup::at(&at, column),
-        lsp::Question::Listed(of),
-    );
-    let Some(ticket) = asked else {
-        return;
-    };
-    // These answers are places in files: no row of one chooses a symbol for a tab.
-    find_locations(
-        located,
-        dock,
-        Query::listed(of, at, name, column, ticket),
-        None,
-    );
 }
 
 /// The three questions a server can be asked about `named`, as the rows a name's menu
@@ -501,8 +497,7 @@ pub(crate) fn find_listed(
 /// handler may run no hook.
 pub(crate) fn name_menu(
     server: &Server,
-    located: State<Located>,
-    dock: State<DockArea>,
+    locating: Locating,
     open: Open,
     named: NameAt,
 ) -> Vec<MenuButton> {
@@ -526,7 +521,7 @@ pub(crate) fn name_menu(
     // The two list questions are one shape; only which one differs.
     let listed = |of| {
         let (server, named) = (server.clone(), named.clone());
-        MenuButton::new().on_press(move |_| find_listed(&server, located, dock, named.clone(), of))
+        MenuButton::new().on_press(move |_| locating.listed(&server, named.clone(), of))
     };
     vec![
         definition,
@@ -550,10 +545,8 @@ pub(crate) fn name_menu(
 ///
 /// `key` is Alt+F12 where the pane the menu was opened in answers it, which is the Source
 /// pane alone: an instruction row's menu is the same rows without it.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn locate_menu(
-    located: State<Located>,
-    dock: State<DockArea>,
+    locating: Locating,
     at: LinePos,
     subject: Option<Subject>,
     function: Option<Function>,
@@ -565,7 +558,7 @@ pub(crate) fn locate_menu(
         let query = Query::function(at, &function);
         let subject = subject.clone();
         MenuButton::new()
-            .on_press(move |_| find_locations(located, dock, query.clone(), subject.clone()))
+            .on_press(move |_| locating.find(query.clone(), subject.clone()))
             .child(format!("Find instances of {}", function.name))
     });
 
@@ -575,7 +568,7 @@ pub(crate) fn locate_menu(
         .children(named.into_iter().map(MenuButton::into_element))
         .child(
             MenuButton::new()
-                .on_press(move |_| find_locations(located, dock, line.clone(), subject.clone()))
+                .on_press(move |_| locating.find(line.clone(), subject.clone()))
                 .child(menu_label("Find all locations", key)),
         )
         .maybe_child(instances)

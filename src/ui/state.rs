@@ -544,9 +544,7 @@ pub(crate) struct Arrangement {
 pub(crate) struct RowStates {
     pub(crate) doors: Doors,
     /// Where a question about a line, a name or a function is answered.
-    pub(crate) located: State<Located>,
-    /// The dock the Locations panel is brought to the front of.
-    pub(crate) dock: State<DockArea>,
+    pub(crate) locating: Locating,
     /// What "Bookmark symbol" adds to.
     pub(crate) bookmarked: State<Bookmarks>,
     /// The objects a bookmark is judged live against.
@@ -563,8 +561,10 @@ impl PartialEq for RowStates {
 pub(crate) fn use_row_states() -> RowStates {
     RowStates {
         doors: use_doors(),
-        located: use_consume::<Locations>().0,
-        dock: use_consume::<SidebarDock>().0,
+        locating: Locating {
+            located: use_consume::<Locations>().0,
+            dock: use_consume::<SidebarDock>().0,
+        },
         bookmarked: use_consume::<Bookmarked>().0,
         objects: use_consume::<Objects>().0,
     }

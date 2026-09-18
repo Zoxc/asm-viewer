@@ -11309,7 +11309,11 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
     let on_top = |dock: State<DockArea>, panel: Panel| dock.peek().is_active(panel);
     assert!(on_top(sidebar, Panel::History));
 
-    find_locations(located, sidebar, Query::line(at.clone()), None);
+    let locating = Locating {
+        located,
+        dock: sidebar,
+    };
+    locating.find(Query::line(at.clone()), None);
     assert!(on_top(sidebar, Panel::Locations));
     assert!(located.peek().pending() == Some(&Query::line(at.clone())));
     pump(&mut test, |_| located.peek().found.is_some());
@@ -11335,7 +11339,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
         1,
         "an answer re-asked itself when an object was opened"
     );
-    find_locations(located, sidebar, Query::line(at.clone()), None);
+    locating.find(Query::line(at.clone()), None);
     assert!(located.peek().pending() == Some(&Query::line(at.clone())));
     pump(&mut test, |_| {
         located

@@ -1089,8 +1089,7 @@ fn instruction_menu(
 ) -> RowMenu {
     let RowStates {
         doors,
-        located,
-        dock,
+        locating,
         bookmarked,
         objects,
     } = asking;
@@ -1126,8 +1125,7 @@ fn instruction_menu(
             // No Alt+F12: the key asks about the caret in the **Source** pane, and this
             // listing draws no source (`caret_questions`).
             Some(at) => locate_menu(
-                located,
-                dock,
+                locating,
                 at.clone(),
                 subject.clone(),
                 None,
