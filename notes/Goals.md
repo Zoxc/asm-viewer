@@ -667,7 +667,7 @@ leaves this list when it is. That is a move made on request, like everything els
   element `code_row.rs` puts in the paragraph — nothing outside `CodeEditor` can put one in
   its, the wall the deferred "scroll the editor to a pressed diagnostic" item is already behind.
   The smaller half is which server: a project names the program it is read with
-  (`src/project.rs`) and there is one for the open project, where a pad is a package of the
+  (`src/project/files.rs`) and there is one for the open project, where a pad is a package of the
   app's own making under the app's data directory.
 - [ ] Show a scratchpad in the window on its own, with no panels. A pad is `Page::Scratchpad`,
   one of the three pages beside Project and Settings, so it is drawn inside the same strip and

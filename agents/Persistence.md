@@ -4,6 +4,11 @@ What the app writes to disk and when: the projects, each one's two files, the se
 recents order and the user's own settings. Scratchpads have their own storage and are in
 `agents/Scratchpad.md`.
 
+The code is `src/project/`, split the way this note reads: `files.rs` is the two schemas and the
+id, `restore.rs` is live state into a session and back, `recents.rs` is the order, `saves.rs` is
+when a write happens. `project.rs` over them is the lifecycle -- entering a project, leaving it,
+putting it somewhere else, taking it away -- since each of those touches more than one.
+
 There is **no published version of this app yet**, so persisted formats need no backward
 compatibility: a schema change is just a schema change, a stale file is ignored rather than
 migrated, and `#[serde(default)]` is added only when it earns its place on its own merits.
@@ -132,7 +137,7 @@ and the section is absent until something is dragged, so a window nobody has tou
 nothing and a build without one of them reads the rest.
 
 The arrangement is a **mirror** of freya's `DockNode`, which derives no serde -- and a mirror
-is what keeps `project.rs` framework-free besides. Panels are written as **strings**
+is what keeps `project/files.rs` framework-free besides. Panels are written as **strings**
 (`Panel::stored`) for `SavedTab`'s reason: an unknown name is a parse error where a string is
 one panel this build does not have. `DockArea::restored` therefore treats what comes back as
 a reader's arrangement and not a promise: a name this build lacks is dropped, one named twice
@@ -390,8 +395,10 @@ through `Order::restored_within`, which is where collapsing duplicates onto thei
 occurrence and the cut after it live. `Order::touch_within` is the same pair on the way in,
 which is what `Visits::record` and `History::push` are.
 
-**When** a save happens is `Saves` in `project.rs`, a `static Mutex` rather than UI state because
-two of the three things driving it sit outside the component tree.
+**When** a save happens is `Saves` (`project/saves.rs`), a `static Mutex` rather than UI state
+because two of the three things driving it sit outside the component tree. `Saves` decides and
+holds the baselines; the `record` and `flush` the app calls are `project.rs`'s, and they put on
+disk what was decided.
 `record(&details, &binaries, loading, &bookmarks, session)` is called on every state change and
 compares each against its baseline. By reference, all but the session: on the ordinary run nothing
 about `project.toml` has changed and everything handed in is dropped, so only the write path clones.
