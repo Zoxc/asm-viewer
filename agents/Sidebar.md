@@ -728,7 +728,12 @@ list is the focusable rows box its pane already mints for Ctrl+F, handed down as
 Files tree, which has no filter bar to mint one, grew one of its own. **The row asks as it draws,
 and not the pane**: `is_focused` reads the platform's own state, so asking is what subscribes, and a
 pane that asked would have every mounted panel re-rendered by a focus move anywhere in the app -- a
-click into a code pane or a filter box -- for rows that wake on their own.
+click into a code pane or a filter box -- for rows that wake on their own. **The pick a row asks
+for is a memo over its own panel's entry** and not the table: there is no reading one key of a
+`HashMap`, so a row that read the table was woken by every other panel's pick as well, and a press
+or an arrow step in one list redrew every mounted row of every other. `use_picking` mints the memo
+where the panel is named, which is once per list and not once per row
+(`a_pick_made_in_one_list_draws_no_row_of_another`).
 The hover is a grey too, and
 the palette test holds it fainter than either -- the pointer passing over a row must not read as the
 reader having chosen it. The file finder is not a panel and keeps its own pick, its keyboard row

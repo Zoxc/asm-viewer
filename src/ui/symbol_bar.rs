@@ -32,7 +32,7 @@ impl Component for NameRow {
         let copying = self.text.clone();
         // Not hit while a sweep is under way: the pointer dragging a selection up past
         // the bar would otherwise arm the name's tooltip, and light it.
-        let sweeping = try_consume_context::<Marked>().is_some_and(|marked| sweeping(marked.0));
+        let sweeping = use_sweeping();
 
         rect()
             .width(Size::fill())

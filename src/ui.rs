@@ -570,6 +570,8 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     context(Shortcuts, Filter::default());
     let bookmarks = context(Bookmarked, Bookmarks::default());
     let marked = context(Marked, Marks::default());
+    // Whether a sweep is under way, out of that state and not read off it: see [`Sweeping`].
+    provide(Sweeping(Memo::create(move || sweeping_in(&marked.read()))));
     // What a door is given: the three states it shares with the rest of the app, and the
     // two halves of a landing, which it owns.
     let doors = provide(Doors {

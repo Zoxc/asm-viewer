@@ -844,7 +844,7 @@ impl Component for PadAssembly {
             )
             // Last, so the listing above is given what is left: the code makes room for
             // the find bar rather than being covered by it, as a document's pane does.
-            .maybe_child(find_bar_over((Placing::Pad, Pane::Assembly)))
+            .child(find_bar_over((Placing::Pad, Pane::Assembly)))
     }
 }
 

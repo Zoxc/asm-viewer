@@ -27188,7 +27188,7 @@ struct BarOver(State<Where>);
 fn moving_bar_harness() -> impl IntoElement {
     let over = use_consume::<BarOver>().0;
     let at = *over.read();
-    rect().expanded().maybe_child(find_bar_over(at))
+    rect().expanded().child(find_bar_over(at))
 }
 
 /// **A find bar is keyed by the pane it is over**, so a bar that moves to another pane is
@@ -31879,6 +31879,207 @@ fn drawn_at(test: &TestingRunner, y: f32) -> Chosen {
         (_, true) => Chosen::Idle,
         _ => Chosen::No,
     }
+}
+
+/// **A keystroke in one pane's find bar draws neither the other pane nor its bar.**
+/// Whether a bar is open, and what is in one, are each one key of `Finds`, and there is no
+/// reading one key of a table: both reads are of the whole of it, so every write woke every
+/// reader. Asked in the pane, that was the Assembly pane -- which clones the whole analysis
+/// on its first line -- and asked in the bar, it was the other bar of the same tab.
+///
+/// The slot is a component of its own now and the bar reads its own entry through a memo.
+/// Fails on either read put back: the pane and the bar are both drawn again for a
+/// character typed somewhere else.
+#[test]
+fn a_keystroke_in_one_find_bar_draws_neither_the_other_pane_nor_its_bar() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+    let (mut test, finds) = TestingRunner::new(
+        listing_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| {
+            runner
+                .provide_root_context(move || listing_states(shown))
+                .finds
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // This pane's own bar -- the harness draws no document, so its tab is the unfiled one
+    // -- and a second bar that nothing here draws.
+    let mine = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let elsewhere = (Placing::Pad, Pane::Assembly);
+    open_find(finds, mine, None, None);
+    open_find(finds, elsewhere, None, None);
+    settle(&mut test);
+    assert_eq!(
+        bars_open(&test),
+        1,
+        "the pane is not drawing the bar this is about"
+    );
+
+    let (panes, bars) = (assembly::panes_drawn(), find_bar::bars_drawn());
+    edit_find(finds, elsewhere, |bar| bar.filter.pattern.push('a'));
+    settle(&mut test);
+    assert_eq!(
+        assembly::panes_drawn(),
+        panes,
+        "a character typed in another bar drew the pane again"
+    );
+    assert_eq!(
+        find_bar::bars_drawn(),
+        bars,
+        "a character typed in another bar drew this one again"
+    );
+}
+
+/// How many find bars are drawn, by the placeholder each empty box says.
+fn bars_open(test: &TestingRunner) -> usize {
+    labels(test).iter().filter(|text| *text == "Find").count()
+}
+
+/// **A pick made in one list draws no row of another.** Every row of every list asks its
+/// panel's pick as it draws itself, and the pick of each is one key of one table: read
+/// whole, a press or an arrow step in one panel drew every mounted row of every other, and
+/// the Symbols list is 115k rows. `use_picking` mints a memo over the panel's own entry
+/// instead.
+///
+/// The pick is written rather than pressed for: a press moves the pointer, and a row reads
+/// the hover and the focus for reasons of its own. What is under test is the table.
+///
+/// Fails on the read of the table put back, which redraws the Symbols row for a pick made
+/// in the History list.
+#[test]
+fn a_pick_made_in_one_list_draws_no_row_of_another() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let file = Document::Source(Arc::from("/src/main.rs"));
+    let (mut test, (states, picks)) = TestingRunner::new(
+        two_lists_harness,
+        (600., 300.).into(),
+        |runner: &mut _| {
+            runner.provide_root_context(|| {
+                let roots = test_roots();
+                let picks = try_consume_context::<Picks>()
+                    .expect("the root provides the picks")
+                    .0;
+                (roots.states, picks)
+            })
+        },
+        1.,
+    );
+    let (mut objects, mut picks) = (states.objects, picks);
+    objects.set(vec![object]);
+    open_document(states.open, states.visits, file.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    // A Symbols row, which nothing below is about. The element and not the area,
+    // because **the element is how this asks whether the row rendered again**.
+    let row = |test: &TestingRunner| {
+        let name = label_area(test, "sum_to").expect("the symbol row is drawn");
+        test.find(|node, element| {
+            let area = node.layout().area;
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            let around = area.min_y() <= name.min_y() && name.max_y() <= area.max_y();
+            (handled && around && area.height() == list_row_height()).then(|| node.element())
+        })
+        .expect("the symbol row carries its own handlers")
+    };
+
+    let before = row(&test);
+    picks.write().insert(
+        Panel::History,
+        PickedRow {
+            pick: Pick::Visit(file.clone()),
+            at: 0,
+        },
+    );
+    settle(&mut test);
+    assert!(
+        Rc::ptr_eq(&before, &row(&test)),
+        "a pick made in the History list drew a Symbols row it says nothing about"
+    );
+}
+
+/// **A sweep growing draws no name in the pane's bar again.** A control the sweep passes
+/// over asks whether one is under way before it answers the pointer, and the answer is two
+/// bools out of a state that is written on every pointer move that grows a run: read off
+/// `Marks`, every name in the bar and the pane toggle were drawn again for each of those
+/// moves. `Sweeping` is a memo over the two flags, so they are drawn as a sweep starts and
+/// ends and not as it moves.
+///
+/// Fails on the read of `Marks` put back.
+#[test]
+fn a_sweep_growing_draws_no_name_in_the_bar_again() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+    let (mut test, marked) = TestingRunner::new(
+        listing_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| {
+            runner
+                .provide_root_context(move || listing_states(shown))
+                .doors
+                .marked
+        },
+        1.,
+    );
+    let mut marked = marked;
+    // A run being swept out in the pane, one row of it so far.
+    let sweeping = |to: usize| Marks {
+        assembly: Some(Picked {
+            chars: CharSelection::between(Caret { row: 0, col: 0 }, Caret { row: to, col: 0 }),
+            dragging: true,
+            by_rows: true,
+            file: None,
+            owed: Owed::default(),
+        }),
+        source: None,
+    };
+    marked.set(sweeping(1));
+    settle(&mut test);
+
+    // The name the bar draws, and the box inside its row that answers the pointer: the
+    // deepest, the bar's own box around it being no part of the row.
+    let name = |test: &TestingRunner| {
+        let drawn = label_area(test, "sum_to").expect("the bar names the symbol");
+        let boxes = test.find_many(|node, element| {
+            let area = node.layout().area;
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            let around = area.min_x() <= drawn.min_x()
+                && drawn.max_x() <= area.max_x()
+                && area.min_y() <= drawn.min_y()
+                && drawn.max_y() <= area.max_y();
+            (handled && around).then(|| node.element())
+        });
+        boxes.last().cloned().expect("the name answers the pointer")
+    };
+
+    let before = name(&test);
+    // The run grows by a row, which is one move of the sweep.
+    marked.set(sweeping(2));
+    settle(&mut test);
+    assert!(
+        Rc::ptr_eq(&before, &name(&test)),
+        "a sweep growing drew the name in the bar again"
+    );
 }
 
 /// The Symbols list beside the History list: two lists on screen, and only one of them can

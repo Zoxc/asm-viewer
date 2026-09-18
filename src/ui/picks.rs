@@ -91,7 +91,10 @@ impl PartialEq for Pick {
 /// list per keystroke, and the Symbols list is 115k rows -- and it goes stale when the list
 /// changes under it, a filter typed or an archive folded. [`ListKeys::held`] is what
 /// notices, and the arrows then start from the end they came from.
-#[derive(Clone)]
+///
+/// `PartialEq` because a panel's own entry is read through a [`Memo`] ([`use_picking`]),
+/// which is what keeps a press in one list off every other list's rows.
+#[derive(Clone, PartialEq)]
 pub(crate) struct PickedRow {
     pub(crate) pick: Pick,
     pub(crate) at: usize,
@@ -350,20 +353,29 @@ impl ListKeys {
 #[derive(Clone, Copy)]
 pub(crate) struct Picking {
     picks: State<HashMap<Panel, PickedRow>>,
+    /// This panel's own entry in that table, as a row asks for it: see [`use_picking`].
+    picked: Memo<Option<PickedRow>>,
     alt: State<bool>,
     keyboard: State<Keys>,
     panel: Panel,
 }
 
-/// The pick of the panel a row is in. Called in the row's own render, as every
-/// context-consuming function must be.
+/// The pick of the panel a row is in, minted once on the pane every panel draws its list
+/// in ([`use_list_pane`]) and carried to the rows in [`ListStates`].
 ///
-/// Nothing here is read, only consumed, so a pane that calls this for its handlers
-/// ([`use_list_pane`]) subscribes to nothing. Whether the keyboard is in the list is
-/// asked in [`Picking::drawn`] for that reason.
+/// The states are consumed and not read, so the pane subscribes to none of them. Whether
+/// the keyboard is in the list is asked in [`Picking::drawn`] for that reason.
+///
+/// **The pick itself is a [`Memo`] over this panel's entry** and not the table. Every row
+/// of every list reads it as it draws itself, so a read of the table put every mounted
+/// row of every panel on the list of what a press or an arrow step in one of them wakes.
+/// A memo notifies only when this panel's own entry changes. It is made here because the
+/// panel is the pane's and not the row's, so there is one per list and not one per row.
 pub(crate) fn use_picking(panel: Panel) -> Picking {
+    let picks = use_consume::<Picks>().0;
     Picking {
-        picks: use_consume::<Picks>().0,
+        picks,
+        picked: use_memo(move || picks.read().get(&panel).cloned()),
         alt: use_consume::<Alt>().0,
         keyboard: use_consume::<Keyboard>().0,
         panel,
@@ -380,8 +392,8 @@ impl Picking {
     /// draws nothing from the answer. Asked there, a focus move anywhere in the app would
     /// re-render every mounted panel for rows that wake on their own.
     pub(crate) fn drawn(&self, pick: &Pick, shown: bool) -> Chosen {
-        let picks = self.picks.read();
-        let selected = match picks.get(&self.panel) {
+        let picked = self.picked.read();
+        let selected = match picked.as_ref() {
             Some(picked) => &picked.pick == pick,
             None => shown,
         };

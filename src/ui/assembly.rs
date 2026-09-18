@@ -1742,8 +1742,17 @@ impl AssemblyPane {
     }
 }
 
+counter!(
+    /// Test-only: how many times this thread has drawn the Assembly pane. Its first line
+    /// clones the whole analysis, so what wakes it is worth pinning.
+    pub(crate) fn panes_drawn() = PANES_DRAWN
+);
+
 impl Component for AssemblyPane {
     fn render(&self) -> impl IntoElement {
+        #[cfg(test)]
+        PANES_DRAWN.set(PANES_DRAWN.get() + 1);
+
         let analysis = use_consume::<Analysis>().0.read().clone();
         let tab = self.tab;
         let bar = find_bar_over((Placing::Tab(tab), Pane::Assembly));
@@ -1771,7 +1780,7 @@ impl Component for AssemblyPane {
             )
             // Last, so the listing above is given what is left: the code makes room for
             // the bar rather than being covered by it.
-            .maybe_child(bar)
+            .child(bar)
     }
 }
 

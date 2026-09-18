@@ -66,7 +66,8 @@ pub(crate) struct HoverBox;
 impl Component for HoverBox {
     fn render(&self) -> impl IntoElement {
         let hover = use_consume::<Hovering>().0;
-        let marked = use_consume::<Marked>().0;
+        // Above the two early returns below, as a hook has to be.
+        let sweeping = use_sweeping();
         // How tall the answer is when nothing is holding it in, which is what says
         // whether there is anything to scroll. Measured rather than asked for: a scroll
         // view is `fill` by default, and one inside a box as tall as what it holds is the
@@ -81,7 +82,7 @@ impl Component for HoverBox {
         // Not while a menu is open, which is what freya's own tooltip does, and not while
         // a selection is being swept out, which is what the two pane bars do: a box under
         // the pointer during a gesture is a box in the way of it.
-        if ContextMenu::is_open() || sweeping(marked) {
+        if ContextMenu::is_open() || sweeping {
             return rect().into_element();
         }
 

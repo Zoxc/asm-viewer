@@ -1235,9 +1235,13 @@ to it, and what reads one back clamps to it too -- `Listing::scrolled` here, `re
 `reveal_caret` for the keyboard. The release is the root's
 `on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar thumb
 cancels. **A control the sweep passes over does not answer the pointer**: the companion header
-and the symbol bar's names are `interactive(false)` while a sweep is under way (`sweeping`), since
-freya's tooltip arms on the hover alone and a pointer dragging a selection up past them armed and
-showed theirs (`notes/upstream/freya.md`). **What re-renders a row when the caret moves** is its
+and the symbol bar's names are `interactive(false)` while a sweep is under way (`use_sweeping`),
+since freya's tooltip arms on the hover alone and a pointer dragging a selection up past them armed
+and showed theirs (`notes/upstream/freya.md`). The answer is a **memo** over the two `dragging`
+flags (`Sweeping`, made in `roots` beside the marks): `Marks` is written on every pointer move that
+grows a run, and the four controls that ask this want two bools out of it, so read off the state
+they were all drawn again for every one of those moves
+(`a_sweep_growing_draws_no_name_in_the_bar_again`). **What re-renders a row when the caret moves** is its
 list's data: the three lists hand their rows `chars` through `new_with_data`, and the section view's
 hand-written `SectionRows` comparison must include it, or a move along a row, which changes no row
 of the run, rebuilds nothing and the caret stays drawn where it was. **Nothing inside a row may
@@ -1335,6 +1339,16 @@ write that same ask, and write it themselves rather than being handed a closure:
 prop never compares equal, so a button holding one was built again on every render of the bar --
 which is every write to `Finds`, a keystroke among them. Each carries the pane and the direction,
 and both are the same on every render.
+
+**Whether a bar is open is asked in a scope of its own** (`FindSlot`). That, too, is one key of
+`Finds`, so the pane that asked was woken by every keystroke in every bar in the app -- and the
+Assembly pane clones the whole analysis on its first line. The slot is a component keyed by the
+pane, the bar under it is what comes and goes, and the pane's column is built once; a keystroke
+elsewhere redraws the slot and stops. The bar itself reads **its own entry through a memo** for the
+same reason: both bars of a tab can be open, and typing in one drew the other
+(`a_keystroke_in_one_find_bar_draws_neither_the_other_pane_nor_its_bar`). Keying the slot by the
+pane is what makes the memo's closure safe to write `at` into: a key change resets a scope's hooks,
+and the panes themselves are handed a new tab rather than mounted again.
 
 **The bar is the last child of the pane's own flex column.** Both panes were already
 `Content::Flex` with a fixed-height bar and one `height(Size::flex(1.0))` body, so a third child

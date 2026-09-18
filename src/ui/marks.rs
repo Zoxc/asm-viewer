@@ -200,12 +200,27 @@ pub(crate) fn pair_of(marked: State<Marks>, pane: Pane) -> Option<Picked> {
 /// Whether a sweep is under way in either pane -- the button down on a run -- which is
 /// what a control the sweep passes over asks before it answers the pointer: a tooltip
 /// armed by a pointer that is dragging a selection past it is a tooltip nobody asked for,
-/// and freya's arms on the hover alone (`notes/upstream/freya.md`). A read, so the
-/// control re-renders as a sweep starts and ends.
-pub(crate) fn sweeping(marked: State<Marks>) -> bool {
-    let marks = marked.read();
+/// and freya's arms on the hover alone (`notes/upstream/freya.md`).
+///
+/// **A [`Memo`] and not a read of [`Marks`]**: the answer is two bools, and the state
+/// behind it is written on every pointer move that grows a run. A memo notifies only
+/// when the answer itself changes, so the pane toggle and every name in a bar are drawn
+/// again as a sweep starts and ends and not as it moves. Made in [`roots`] beside the
+/// state it reads.
+#[derive(Clone, Copy)]
+pub(crate) struct Sweeping(pub(crate) Memo<bool>);
+
+/// What that memo answers, out of one read of the two runs.
+pub(crate) fn sweeping_in(marks: &Marks) -> bool {
     let dragging = |picked: &Option<Picked>| picked.as_ref().is_some_and(|p| p.dragging);
     dragging(&marks.assembly) || dragging(&marks.source)
+}
+
+/// Whether a sweep is under way, as a component sees it. A read, so the control is drawn
+/// again as one starts and ends; [`false`] where the context is missing, which is a pane
+/// mounted without the root's marks.
+pub(crate) fn use_sweeping() -> bool {
+    try_consume_context::<Sweeping>().is_some_and(|sweeping| *sweeping.0.read())
 }
 
 /// The run `pane` holds -- the caret, the characters picked out, and so the rows lit --

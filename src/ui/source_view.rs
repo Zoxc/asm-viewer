@@ -489,7 +489,7 @@ impl Component for SourcePane {
     fn render(&self) -> impl IntoElement {
         let marked = use_consume::<Marked>().0;
         // Whether a sweep is under way, for the header not to answer the pointer during one.
-        let sweeping = sweeping(marked);
+        let sweeping = use_sweeping();
         let doors = use_doors();
         let (open, visits) = (doors.open, doors.visits);
         let ctrl = use_consume::<Ctrl>().0;
@@ -609,7 +609,7 @@ impl Component for SourcePane {
             )
             // Last, so the rows above are given what is left: the code makes room for the
             // bar rather than being covered by it.
-            .maybe_child(find_bar_over((Placing::Tab(self.tab), Pane::Source)))
+            .child(find_bar_over((Placing::Tab(self.tab), Pane::Source)))
             .into()
     }
 }

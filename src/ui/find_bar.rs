@@ -27,6 +27,7 @@
 use super::*;
 // `Direction` by name as well as through the glob: here it is which way a step goes, and
 // freya's prelude has a layout `Direction` this file never asks for (`ui.rs` on `Panel`).
+use crate::counter;
 use crate::find::{self, Direction, Hit};
 
 /// Which bar: the listing it is drawn in -- a tab, or the scratchpad's -- and which of the
@@ -369,21 +370,56 @@ pub(crate) fn use_searching(at: Where, searchable: Option<Searchable>) {
     use_drop(move || claim(None));
 }
 
-/// The bar over `at`, where one is open: what a pane puts last in its own column.
+/// The slot a pane keeps for its find bar: the bar over `at` where one is open, and
+/// nothing where none is.
 ///
-/// Keyed by the pane, so a tab switch remounts it and its box is seeded again from that
-/// pane's own bar rather than going on with the last tab's.
-pub(crate) fn find_bar_over(at: Where) -> Option<Element> {
-    let finds = try_consume_context::<Looking>().map(|looking| looking.0);
-    let open = finds.is_some_and(|finds| finds.read().open(&at));
-    open.then(|| {
-        FindBar {
-            at,
-            key: DiffKey::None,
+/// **A component of its own, so that the question is asked in a scope of its own.**
+/// Whether a bar is open is one key of [`Finds`], and there is no reading one key of a
+/// table: the read is of the whole of it, and a keystroke in any bar wakes it. Asked in
+/// the pane, that put the pane itself on the list -- and the Assembly pane's first line
+/// clones the whole analysis. Asked here, a keystroke in one pane's bar redraws this slot
+/// and stops, the bar under it comparing equal.
+///
+/// Keyed by the pane, so a tab switch remounts it -- and the [`FindBar`] under it, whose
+/// box is then seeded again from that pane's own bar rather than going on with the last
+/// tab's.
+#[derive(Clone, PartialEq)]
+pub(crate) struct FindSlot {
+    pub(crate) at: Where,
+    pub(crate) key: DiffKey,
+}
+
+keyed!(FindSlot);
+
+impl Component for FindSlot {
+    fn render(&self) -> impl IntoElement {
+        let finds = try_consume_context::<Looking>().map(|looking| looking.0);
+        let open = finds.is_some_and(|finds| finds.read().open(&self.at));
+        match open {
+            true => FindBar {
+                at: self.at,
+                key: DiffKey::None,
+            }
+            .into_element(),
+            // A box of no size rather than no child: the pane's column is built once and
+            // the slot is what comes and goes inside it.
+            false => rect().into_element(),
         }
-        .key(at)
-        .into_element()
-    })
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.keyed()
+    }
+}
+
+/// That slot, as a pane puts it last in its own column.
+pub(crate) fn find_bar_over(at: Where) -> Element {
+    FindSlot {
+        at,
+        key: DiffKey::None,
+    }
+    .key(at)
+    .into_element()
 }
 
 /// What the worker is asked and what it answers.
@@ -497,13 +533,28 @@ pub(crate) struct FindBar {
 
 keyed!(FindBar);
 
+counter!(
+    /// Test-only: how many find bars this thread has drawn. Both bars of a tab can be
+    /// open, and a bar drawn again draws what it drew before.
+    pub(crate) fn bars_drawn() = BARS_DRAWN
+);
+
 impl Component for FindBar {
     fn render(&self) -> impl IntoElement {
+        #[cfg(test)]
+        BARS_DRAWN.set(BARS_DRAWN.get() + 1);
+
         let at = self.at;
         let finds = use_consume::<Looking>().0;
         let keyboard = use_consume::<Keyboard>().0;
         let box_id = use_hook(AccessibilityId::new_unique);
-        let bar = finds.read().get(&at).clone();
+        // **This bar's own entry and not the table.** Both bars of a tab can be open, and
+        // a read of [`Finds`] is a read of every bar in the app, so typing in one drew the
+        // other. A memo notifies only when this entry changes; it is safe to key the
+        // closure on `at` because the slot above is keyed by it, which resets these hooks
+        // when it moves.
+        let held = use_memo(move || finds.read().get(&at).clone());
+        let bar = held.read().clone();
 
         // The box's own copy of what is typed, seeded from the bar when this mounts and
         // written back below. The editing buffer and not the answer: an `Input` wants a

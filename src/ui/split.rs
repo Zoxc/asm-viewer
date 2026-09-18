@@ -194,7 +194,7 @@ impl Component for PaneToggle {
         let hovering = use_state(|| false);
         // Not hit while a sweep is under way, as the names beside it are not: the pointer
         // dragging a selection up past the bar would otherwise arm this tooltip.
-        let sweeping = try_consume_context::<Marked>().is_some_and(|marked| sweeping(marked.0));
+        let sweeping = use_sweeping();
 
         // Which pane it is that follows, for the tooltip to say what the press does, and
         // whether it is up.
