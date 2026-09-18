@@ -18014,9 +18014,9 @@ fn a_run_that_cannot_start_says_why() {
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_run(pad, &jobs);
-    pump(&mut test, |_| !pad.peek().state().is_running());
+    pump(&mut test, |_| !shown_run(pad, &jobs).is_running());
 
-    let verdict = pad.peek().state().run_verdict().expect("a verdict");
+    let verdict = shown_run(pad, &jobs).verdict().expect("a verdict");
     assert!(
         verdict.text.contains("No such file or directory"),
         "{}",
@@ -18077,10 +18077,15 @@ fn a_request_copies_no_more_of_the_pad_than_it_sends() {
     );
 }
 
+/// The shown pad's run, or one never started.
+fn shown_run(pad: State<Pads>, jobs: &PadJobs) -> PadRun {
+    let shown = pad.peek().shown().clone();
+    jobs.runs.peek().get(&shown).cloned().unwrap_or_default()
+}
+
 /// Every line of a pad's own output, oldest first.
-fn output_lines(pad: State<Pads>) -> Vec<String> {
-    let pads = pad.peek();
-    let output = &pads.state().output;
+fn output_lines(pad: State<Pads>, jobs: &PadJobs) -> Vec<String> {
+    let output = shown_run(pad, jobs).output;
     (0..output.len())
         .filter_map(|index| output.line(index).map(|line| line.text.to_string()))
         .collect()
@@ -18145,8 +18150,8 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
     let mut first = emitters.lock().expect("the emitters").remove(0);
     first(run_line("one"));
     first(run_line("two"));
-    pump(&mut test, |_| pad.peek().state().output.len() == 2);
-    assert_eq!(output_lines(pad), ["one", "two"]);
+    pump(&mut test, |_| shown_run(pad, &jobs).output.len() == 2);
+    assert_eq!(output_lines(pad, &jobs), ["one", "two"]);
 
     // The next run: the number moves on and the output starts empty, so what the run
     // before it goes on writing is for nobody.
@@ -18154,7 +18159,10 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
     pump(&mut test, |_| {
         emitters.lock().expect("the emitters").len() == 1
     });
-    assert!(output_lines(pad).is_empty(), "the run did not start afresh");
+    assert!(
+        output_lines(pad, &jobs).is_empty(),
+        "the run did not start afresh"
+    );
 
     first(run_line("late"));
     first(RunEvent::Ended(Ended::Exited(Some(0))));
@@ -18162,10 +18170,10 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
         test.sync_and_update();
     }
     assert!(
-        output_lines(pad).is_empty(),
+        output_lines(pad, &jobs).is_empty(),
         "a left run's line landed in the run after it"
     );
-    let left = matches!(pad.peek().state().run_state, RunState::Starting);
+    let left = matches!(shown_run(pad, &jobs).state, RunState::Starting);
     assert!(left, "a left run's ending stopped the run after it");
 
     // The two runs writing at once, which is one batch: nothing polls the task between
@@ -18174,18 +18182,74 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
     let mut second = emitters.lock().expect("the emitters").remove(0);
     first(run_line("later still"));
     second(run_line("after"));
-    pump(&mut test, |_| pad.peek().state().output.len() == 1);
-    assert_eq!(output_lines(pad), ["after"]);
+    pump(&mut test, |_| shown_run(pad, &jobs).output.len() == 1);
+    assert_eq!(output_lines(pad, &jobs), ["after"]);
 
     // And this run's own ending is its own.
     second(RunEvent::Ended(Ended::Exited(Some(0))));
     pump(&mut test, |_| {
-        matches!(pad.peek().state().run_state, RunState::Over(_))
+        matches!(shown_run(pad, &jobs).state, RunState::Over(_))
     });
-    assert_eq!(output_lines(pad), ["after"]);
-    let verdict = pad.peek().state().run_verdict().expect("a verdict");
+    assert_eq!(output_lines(pad, &jobs), ["after"]);
+    let verdict = shown_run(pad, &jobs).verdict().expect("a verdict");
     assert_eq!(verdict.text, "Exited");
     assert!(!verdict.bad);
+}
+
+/// **A running program's lines draw the output and nothing else.** Output arrives with no
+/// bound on how fast, and it used to be written into `Pads`, which every piece of the page
+/// reads: each batch drew the pad list, the heading, the details, the dependency rows, the
+/// diagnostics and the delete question again for nothing they draw.
+#[test]
+fn a_runs_lines_draw_no_other_piece_of_the_page() {
+    let emitters: Arc<Mutex<Vec<Box<dyn FnMut(RunEvent) + Send>>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let handed = emitters.clone();
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { pad, emit, .. } => {
+                handed.lock().expect("the emitters").push(emit);
+                PadAnswer::Saved { pad, failure: None }
+            }
+        });
+    let pad = roots.pad;
+
+    pump(&mut test, |_| pad.peek().state().opened());
+    already_built(pad, fixture_artifact());
+    test.sync_and_update();
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_run(pad, &jobs);
+    pump(&mut test, |_| {
+        !emitters.lock().expect("the emitters").is_empty()
+    });
+    let mut emit = emitters.lock().expect("the emitters").remove(0);
+    emit(run_line("one"));
+    pump(&mut test, |test| labels(test).contains(&"one".to_owned()));
+    settle(&mut test);
+
+    let drawn = pieces_drawn();
+    emit(run_line("two"));
+    emit(run_line("three"));
+    pump(&mut test, |test| labels(test).contains(&"three".to_owned()));
+    settle(&mut test);
+    assert_eq!(
+        pieces_drawn(),
+        drawn,
+        "a batch of output drew a piece of the page that draws none"
+    );
 }
 
 /// **Nothing runs while a build does**, and the rule is `request_run`'s rather than the
@@ -18228,7 +18292,7 @@ fn a_run_asked_for_during_a_build_starts_nothing() {
 
     request_run(pad, &jobs);
     assert!(
-        !pad.peek().state().is_running(),
+        !shown_run(pad, &jobs).is_running(),
         "a run started while a build was writing the executable"
     );
     for _ in 0..8 {
@@ -18251,7 +18315,7 @@ fn a_run_asked_for_during_a_build_starts_nothing() {
 /// reach it.
 #[test]
 fn the_pads_build_chord_is_refused_while_a_build_is_on() {
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, asking, asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => unreachable!("this test has one pad"),
@@ -18279,6 +18343,7 @@ fn the_pads_build_chord_is_refused_while_a_build_is_on() {
     pump(&mut test, |_| pad.peek().state().opened());
     already_built(pad, fixture_artifact());
     test.sync_and_update();
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
     while asks.try_recv().is_ok() {}
 
     let source = pad.peek().state().scratchpad.source.clone();
@@ -18292,7 +18357,7 @@ fn the_pads_build_chord_is_refused_while_a_build_is_on() {
     let (key, modifiers) = Chord::Run.pressed();
     key_with(&mut test, key, modifiers);
     assert!(
-        !pad.peek().state().is_running(),
+        !shown_run(pad, &jobs).is_running(),
         "F5 started a run while a build was writing the executable"
     );
 
@@ -18326,7 +18391,7 @@ fn the_pads_build_chord_is_refused_while_a_build_is_on() {
 #[test]
 fn the_pads_run_and_new_chords_press_its_buttons() {
     let answering = Scratchpad::new("pad-1").expect("an id");
-    let (mut test, roots, _asking, asks) =
+    let (mut test, roots, asking, asks) =
         mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
             PadJob::List => PadAnswer::Listed(Vec::new()),
             PadJob::New => PadAnswer::Created(Ok(answering.clone())),
@@ -18351,16 +18416,20 @@ fn the_pads_run_and_new_chords_press_its_buttons() {
     // compiler: no test in this repo runs cargo.
     already_built(pad, fixture_artifact());
     test.sync_and_update();
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
     while asks.try_recv().is_ok() {}
 
     let (key, modifiers) = Chord::Run.pressed();
     key_with(&mut test, key, modifiers);
-    assert!(pad.peek().state().is_running(), "F5 did not start the run");
+    assert!(
+        shown_run(pad, &jobs).is_running(),
+        "F5 did not start the run"
+    );
 
     let (key, modifiers) = Chord::StopRun.pressed();
     key_with(&mut test, key, modifiers);
     assert!(
-        !pad.peek().state().is_running(),
+        !shown_run(pad, &jobs).is_running(),
         "Shift+F5 did not stop the run"
     );
 

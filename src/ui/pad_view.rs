@@ -92,6 +92,19 @@ counter!(
     pub(crate) fn rows_drawn() = ROWS_DRAWN
 );
 
+counter!(
+    /// Test-only: how many times a piece of the page that draws no output was drawn: the
+    /// tab, the pad list, the heading, the details, the dependency list, the diagnostics
+    /// and the delete question.
+    pub(crate) fn pieces_drawn() = PIECES_DRAWN
+);
+
+/// Count one render of a piece [`pieces_drawn`] counts.
+fn drew_piece() {
+    #[cfg(test)]
+    PIECES_DRAWN.set(PIECES_DRAWN.get() + 1);
+}
+
 impl Component for DependencyRow {
     fn render(&self) -> impl IntoElement {
         #[cfg(test)]
@@ -434,7 +447,7 @@ fn use_follow_tail(mut controller: ScrollController, viewport: f32, output: usiz
 #[derive(Clone)]
 pub(crate) struct OutputPane {
     pub(crate) lines: Arc<RunOutput>,
-    /// Where the run got to -- [`PadState::run_verdict`]'s answer.
+    /// Where the run got to -- [`PadRun::verdict`]'s answer.
     pub(crate) verdict: Verdict,
     pub(crate) key: DiffKey,
 }
@@ -518,6 +531,36 @@ impl Component for OutputPane {
     }
 }
 
+/// The shown pad's run, as an [`OutputPane`], or nothing before it has run.
+///
+/// **The one piece that reads a pad's output**, so a batch of lines draws this and the pane
+/// under it and nothing else on the page.
+#[derive(Clone, PartialEq)]
+struct PadOutput {
+    pad: PadId,
+}
+
+impl Component for PadOutput {
+    fn render(&self) -> impl IntoElement {
+        let runs = use_consume::<PadJobs>().runs;
+        let ran = runs
+            .read()
+            .get(&self.pad)
+            .and_then(|run| run.verdict().map(|verdict| (verdict, run.output.clone())));
+        match ran {
+            Some((verdict, lines)) => OutputPane {
+                lines,
+                verdict,
+                key: DiffKey::None,
+            }
+            .key(self.pad.as_str().to_owned())
+            .into_element(),
+            // A bare rect measures nothing and takes no share of the column.
+            None => rect().into_element(),
+        }
+    }
+}
+
 /// What a pad is called on screen: the name the reader gave it, or — for one they have not
 /// named — the app's own label, which is its id in angle brackets.
 ///
@@ -589,6 +632,7 @@ struct DeletePopup;
 
 impl Component for DeletePopup {
     fn render(&self) -> impl IntoElement {
+        drew_piece();
         let mut pad = use_consume::<Pad>().0;
         let text = use_consume::<PadText>().0;
         let jobs = use_consume::<PadJobs>();
@@ -859,6 +903,7 @@ struct PadList;
 
 impl Component for PadList {
     fn render(&self) -> impl IntoElement {
+        drew_piece();
         let pad = use_consume::<Pad>().0;
         let jobs = use_consume::<PadJobs>();
 
@@ -924,19 +969,21 @@ struct PadHeader;
 
 impl Component for PadHeader {
     fn render(&self) -> impl IntoElement {
+        drew_piece();
         let pad = use_consume::<Pad>().0;
         let jobs = use_consume::<PadJobs>();
         let run_jobs = jobs.clone();
 
-        let (opened, building, running, runnable) = {
+        // Through a memo, which wakes this only when a run starts or ends: the lines the
+        // program writes are in the same state and arrive with no bound on how fast.
+        let runs = jobs.runs;
+        let running = use_memo(move || runs.read().is_running(pad.read().shown()));
+        let running = running();
+
+        let (opened, building, runnable) = {
             let pads = pad.read();
             let state = pads.state();
-            (
-                state.opened(),
-                state.building,
-                state.is_running(),
-                state.executable().is_some(),
-            )
+            (state.opened(), state.building, state.executable().is_some())
         };
 
         section_heading(
@@ -964,7 +1011,7 @@ impl Component for PadHeader {
                             // in `request_run`: cargo is writing over the executable.
                             .enabled(running || (runnable && !building))
                             .on_press(move |_| match running {
-                                true => stop_run(pad),
+                                true => stop_run(pad, &run_jobs),
                                 false => request_run(pad, &run_jobs),
                             })
                             .child(match running {
@@ -989,6 +1036,7 @@ struct PadDetails;
 
 impl Component for PadDetails {
     fn render(&self) -> impl IntoElement {
+        drew_piece();
         // The one line of this pane that is a path and so can outrun its column.
         let packaged = use_fitted();
         let pad = use_consume::<Pad>().0;
@@ -1048,6 +1096,7 @@ struct DependencyList;
 
 impl Component for DependencyList {
     fn render(&self) -> impl IntoElement {
+        drew_piece();
         let mut pad = use_consume::<Pad>().0;
 
         let (rows, unsaved, refusal) = {
@@ -1106,6 +1155,7 @@ struct DiagnosticsPane;
 
 impl Component for DiagnosticsPane {
     fn render(&self) -> impl IntoElement {
+        drew_piece();
         let pad = use_consume::<Pad>().0;
         // Here rather than in the row: a press puts the cursor in the pad's buffer, and
         // the hook that reaches for them may only be called while a component renders.
@@ -1154,6 +1204,7 @@ pub(crate) struct ScratchpadTab;
 
 impl Component for ScratchpadTab {
     fn render(&self) -> impl IntoElement {
+        drew_piece();
         let pad = use_consume::<Pad>().0;
         let text = use_consume::<PadText>().0;
         // Consumed here, because the key handler below runs no hook. The four chords are
@@ -1161,10 +1212,10 @@ impl Component for ScratchpadTab {
         // the controls.
         let jobs = use_consume::<PadJobs>();
 
-        // What the editor and the listing under it are drawn of: which pad, the program
-        // it last built, and where its run got to. The rest of the pad is read by the
-        // piece that draws it.
-        let (shown, program, building, stale, ran) = {
+        // What the editor and the listing beside it are drawn of: which pad and the
+        // program it last built. The rest of the pad is read by the piece that draws it,
+        // and its run by [`PadOutput`].
+        let (shown, program, building, stale) = {
             let pads = pad.read();
             let state = pads.state();
             (
@@ -1172,9 +1223,6 @@ impl Component for ScratchpadTab {
                 state.program.clone(),
                 state.building,
                 state.out_of_date(),
-                state
-                    .run_verdict()
-                    .map(|verdict| (verdict, state.output.clone())),
             )
         };
 
@@ -1189,16 +1237,6 @@ impl Component for ScratchpadTab {
         let following = following(Placing::Pad, None, &said.read());
         // Where the reader left the handle, written back as they drag it.
         split.follow();
-
-        let output = ran.map(|(verdict, lines)| {
-            OutputPane {
-                lines,
-                verdict,
-                key: DiffKey::None,
-            }
-            .key(shown.as_str().to_owned())
-            .into_element()
-        });
 
         // The reader's own side of the split: the file, then what the compiler said about
         // the file directly above it, then what the program it built printed.
@@ -1220,7 +1258,7 @@ impl Component for ScratchpadTab {
             // Under the diagnostics rather than over them: what the compiler said is about
             // the source directly above it, and what the program said is the newest thing
             // in the pane.
-            .maybe_child(output)
+            .child(PadOutput { pad: shown.clone() })
             .into_element();
 
         // What the split's other side draws: the program the pad built, or the one line
@@ -1310,7 +1348,7 @@ fn pad_key(pad: State<Pads>, jobs: &PadJobs, key: &Key, modifiers: Modifiers) {
     match Chord::of(key, modifiers) {
         Some(Chord::Build) => request_build(pad, jobs),
         Some(Chord::Run) => request_run(pad, jobs),
-        Some(Chord::StopRun) => stop_run(pad),
+        Some(Chord::StopRun) => stop_run(pad, jobs),
         Some(Chord::NewPad) => request_new_pad(jobs),
         _ => {}
     }

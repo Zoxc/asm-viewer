@@ -173,13 +173,15 @@ neither the Objects panel nor the paths a project saves.
 
 **`ScratchpadTab` is a skeleton, and every piece of the pane reads the slice of `Pads` it draws.**
 The pad list, the heading with Build and Run, the name and package rows, the dependency rows, the
-diagnostics and the delete question are each a component; the tab itself reads only what the editor
-and the listing beside it are drawn of -- which pad is shown, the program it last built, and where
-its run got to. It was one function drawing all of them, and it copied the shown `PadState` out
-whole first: the source, every dependency and every diagnostic cloned on every keystroke. **The
-split buys no renders.** freya subscribes a scope to the whole of a state it read, so a keystroke in
-the name box still wakes every piece that read `Pads`. What it takes away is that clone, and a
-function nobody could read a piece of without scrolling past the rest.
+diagnostics, the output and the delete question are each a component; the tab itself reads only
+what the editor and the listing beside it are drawn of -- which pad is shown and the program it last
+built. It was one function drawing all of them, and it copied the shown `PadState` out whole first:
+the source, every dependency and every diagnostic cloned on every keystroke. **The split buys no
+renders.** freya subscribes a scope to the whole of a state it read, so a keystroke in the name box
+still wakes every piece that read `Pads`. What it takes away is that clone, and a function nobody
+could read a piece of without scrolling past the rest. A keystroke comes at the reader's pace, so
+that is accepted. **A program's output does not**, which is why a pad's run is not in `Pads` at all
+(below).
 
 **What a build made is written into the package, so a pad opens on its program.** Nothing the
 app holds about a build survives a restart, and the artifact's path may never be derived --
@@ -361,10 +363,10 @@ worker built in, carried back on the answer: the thread that wrote the files say
 rather than the UI opening a second `Store` and deriving the same path from it.
 
 **Everything the app holds about a scratchpad is per pad.** `Pads` is the table of them and which
-one is shown; `PadState` is one pad's own, and every field it has (what was read, what is being
-built, which run is going and what it has written) was already about one pad. A pad is in the table
-from the moment it is first shown and never leaves, so `Pads::state()` is never absent and no call
-site grows an `Option`. **Runs are per pad**: an event carries the pad beside the run number, so a
+one is shown; `PadState` is one pad's own: what was read and what is being built. A pad is in the
+table from the moment it is first shown and never leaves, so `Pads::state()` is never absent and no
+call site grows an `Option`. **Runs are per pad**, in `Runs` beside the table rather than in it:
+which run is going and what it has written. An event carries the pad beside the run number, so a
 program started in one pad goes on running and goes on writing into *its own* list while another pad
 is on screen, and its `Ended` stops the pad it belongs to rather than the one being looked at. What
 stops a run is unchanged and per pad (its Stop, its pad's rebuild, its pad's next run), and the
@@ -566,14 +568,20 @@ wears: stderr is not an error, it is the other stream, so it takes the palette's
 Between the two streams there is no order to preserve and none is claimed: two pipes read by two
 threads, which is all a terminal has either.
 
-**A line arriving is written into the table and not over it.** The task takes everything already
-queued in one go, so a batch is one render however many lines it holds, and it writes through the
-state's own guard. `Pads` holds every pad's source, dependencies, diagnostics and output, so
-replacing the table to push one line would copy all of it -- and copy the deque of lines a second
-time inside `Arc::make_mut`, the `Arc` over them having just been cloned with the table. What is
-left is the one copy the pane's own hold on those lines forces. The guard is taken only when the
-batch holds something for a pad that is still there and still on the run it names, a write notifying
-whether or not it changed anything.
+**A line arriving is written into `Runs`, and `Runs` is a state of its own.** Output has no bound
+on how fast it comes -- an accidental `loop {}` is the ordinary case -- and every piece of the page
+reads `Pads`, so a batch written there drew the pad list, the details, every dependency row's boxes,
+every diagnostic and the delete question again for nothing they draw. Only `PadOutput`, the pane
+under it and the Run button read `Runs`, the button through a memo over whether the shown pad is
+running, so a batch draws the output and nothing else.
+`a_runs_lines_draw_no_other_piece_of_the_page` pins it, counting through `pad_view::pieces_drawn`.
+`Runs` travels in `PadJobs`, the handle the events channel is already in, so what starts, stops and
+draws a run reaches it without a context of its own. The task takes everything already queued in
+one go, so a batch is one render however many lines it holds, and it writes through the state's
+own guard, so `Arc::make_mut` copies the lines once, for the pane's own hold on them. The guard is
+taken only when the batch holds something for a pad still on the run it names, a write notifying
+whether or not it changed anything. A delete takes the pad's entry out, so what is still on its way
+for it lands nowhere.
 
 **The list follows the newest line, and the reader takes it back by scrolling away.** Arriving lines
 keep the pane pinned to the bottom while the reader is at the bottom; a wheel away from there

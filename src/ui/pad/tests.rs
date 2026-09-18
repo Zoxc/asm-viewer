@@ -149,18 +149,18 @@ fn a_build_answered_for_a_pad_that_asked_for_none_is_not_taken() {
 
 #[test]
 fn a_program_that_would_not_start_is_said_only_for_the_run_that_asked() {
-    let mut pads = Pads::default();
-    pads.show(id("pad-a"));
-    pads.state_mut().run = 2;
-    pads.state_mut().run_state = RunState::Starting;
+    let mut runs = Runs::default();
+    runs.start(&id("pad-a"));
+    runs.start(&id("pad-a"));
+    let state = |runs: &Runs| runs.get(&id("pad-a")).expect("held").state.clone();
 
-    pads.started(&id("pad-a"), 1, Err(Failure::NoDirectory));
+    runs.started(&id("pad-a"), 1, Err(Failure::NoDirectory));
     assert!(
-        matches!(pads.state().run_state, RunState::Starting),
+        matches!(state(&runs), RunState::Starting),
         "a run the reader has left says nothing about the one that is on"
     );
-    pads.started(&id("pad-a"), 2, Err(Failure::NoDirectory));
-    assert!(matches!(pads.state().run_state, RunState::Over(_)));
+    runs.started(&id("pad-a"), 2, Err(Failure::NoDirectory));
+    assert!(matches!(state(&runs), RunState::Over(_)));
 }
 
 /// A build writes the package on its way, so it is what says whether the disk has caught

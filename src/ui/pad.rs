@@ -10,10 +10,9 @@
 //! to interrupt.
 //!
 //! **Everything here is per pad.** [`Pads`] is the table of them and which one is shown;
-//! [`PadState`] is one pad's own, and every field of it — what was read, what is being
-//! built, which run is going and what it has written — was already about one pad. So a
-//! program started in one pad goes on running and goes on writing into **its own** list
-//! while another pad is on screen.
+//! [`PadState`] is one pad's own: what was read and what is being built. Its run is in
+//! [`Runs`], also per pad, so a program started in one pad goes on running and goes on
+//! writing into **its own** list while another pad is on screen.
 
 use super::*;
 use crate::counter;
@@ -119,10 +118,14 @@ impl PadBuffers {
 /// program is saying and is bounded, which is the app's half of the backpressure -- a full
 /// channel blocks the pipe thread, which blocks the program. One event channel for the
 /// app rather than one per pad, so an event says which pad it is about.
+///
+/// It carries [`Runs`] too, the state those events land in, so what starts, stops and
+/// draws a run reaches it through the same handle that sends the job.
 #[derive(Clone)]
 pub(crate) struct PadJobs {
     jobs: Requests<PadJob>,
     events: async_channel::Sender<(PadId, u64, RunEvent)>,
+    pub(crate) runs: State<Runs>,
 }
 
 /// Every pad the app is holding, and which of them the pane draws.
@@ -378,26 +381,6 @@ impl Pads {
         true
     }
 
-    /// The handle to a started program, or why there is none.
-    ///
-    /// **A handle for a run the reader has already left is stopped here and nowhere
-    /// else**, this being the first moment anything in the app is holding it: dropping it
-    /// would leave a process running that nothing could ever name again.
-    fn started(&mut self, name: &PadId, run: u64, started: Result<process::Handle, Failure>) {
-        let state = self.get_mut(name);
-        let mine = state
-            .as_ref()
-            .is_some_and(|state| state.run == run && matches!(state.run_state, RunState::Starting));
-        match (started, state) {
-            (Ok(running), Some(state)) if mine => state.run_state = RunState::Going(running),
-            (Ok(running), _) => running.stop(),
-            (Err(failure), Some(state)) if mine => {
-                state.run_state = RunState::Over(Ended::Failed(failure.to_string()))
-            }
-            (Err(_), _) => {}
-        }
-    }
-
     /// Let go of a deleted pad: out of the table -- its save baseline with it, so an id
     /// handed out again is read before it is written, exactly as a pad the app has never
     /// seen is -- out of the order, and off the screen if it was the one being drawn.
@@ -492,6 +475,20 @@ pub(crate) struct PadState {
     /// [`Scratchpad::write_to`] refuses outright for a bad row, so a bad row stops the
     /// *source* being written too and the pane has to say so.
     pub(crate) unsaved: Option<Failure>,
+}
+
+/// Every pad's program: where its run got to and what it has written.
+///
+/// **Apart from [`Pads`], because only the output pane and the Run button draw it.** A
+/// running program's output arrives with no bound on how fast, and every piece of the page
+/// reads `Pads`, so a batch written there drew all of them again. A pad is in here from its
+/// first run until it is deleted.
+#[derive(Default)]
+pub(crate) struct Runs(HashMap<PadId, PadRun>);
+
+/// One pad's program.
+#[derive(Clone, Default)]
+pub(crate) struct PadRun {
     /// Which run the arriving output belongs to, counted up by [`request_run`].
     ///
     /// **Events carry a run number** where `use_analysis` compares identities instead: the
@@ -500,10 +497,9 @@ pub(crate) struct PadState {
     /// another is one keypress, and untagged the first one's last lines and its `Ended`
     /// would land in the second's output.
     run: u64,
-    pub(crate) run_state: RunState,
-    /// What the running program has written. Behind an `Arc` because the deque under it
-    /// holds thousands of lines and the pane draws them by that pointer: a batch of
-    /// arriving lines is one `Arc::make_mut` and nothing else copies them.
+    pub(crate) state: RunState,
+    /// What the running program has written. Behind an `Arc` because the pane draws the
+    /// lines by that pointer: a batch of arriving lines is one `Arc::make_mut`.
     pub(crate) output: Arc<RunOutput>,
 }
 
@@ -591,22 +587,89 @@ impl PadState {
             .as_ref()
             .is_some_and(|program| program.built_from != self.scratchpad.digest())
     }
+}
 
-    /// Whether a program is on its way up or already going.
+impl Runs {
+    pub(crate) fn get(&self, pad: &PadId) -> Option<&PadRun> {
+        self.0.get(pad)
+    }
+
+    /// Whether `pad`'s program is on its way up or already going.
+    pub(crate) fn is_running(&self, pad: &PadId) -> bool {
+        self.get(pad).is_some_and(PadRun::is_running)
+    }
+
+    /// Start `pad`'s next run: numbered one on from the last, `Starting`, and with nothing
+    /// written yet. Answers the number.
+    fn start(&mut self, pad: &PadId) -> u64 {
+        let state = self.0.entry(pad.clone()).or_default();
+        *state = PadRun {
+            run: state.run + 1,
+            state: RunState::Starting,
+            output: Arc::default(),
+        };
+        state.run
+    }
+
+    /// Whether `run` is the run `pad` is on, so an event of it is wanted.
+    fn wants(&self, pad: &PadId, run: u64) -> bool {
+        self.get(pad).is_some_and(|state| state.run == run)
+    }
+
+    /// One event of `pad`'s program, taken only if it is of the run the pad is on: a run
+    /// the reader has left has no output and no ending here.
+    fn took(&mut self, pad: &PadId, run: u64, event: RunEvent) {
+        let Some(state) = self.0.get_mut(pad).filter(|state| state.run == run) else {
+            return;
+        };
+        match event {
+            RunEvent::Wrote(line) => Arc::make_mut(&mut state.output).push(line),
+            RunEvent::Ended(ended) => state.state = RunState::Over(ended),
+        }
+    }
+
+    /// The handle to a started program, or why there is none.
+    ///
+    /// **A handle for a run the reader has already left is stopped here and nowhere
+    /// else**, this being the first moment anything in the app is holding it: dropping it
+    /// would leave a process running that nothing could ever name again.
+    fn started(&mut self, pad: &PadId, run: u64, started: Result<process::Handle, Failure>) {
+        let state = self
+            .0
+            .get_mut(pad)
+            .filter(|state| state.run == run && matches!(state.state, RunState::Starting));
+        match (started, state) {
+            (Ok(running), Some(state)) => state.state = RunState::Going(running),
+            (Ok(running), None) => running.stop(),
+            (Err(failure), Some(state)) => {
+                state.state = RunState::Over(Ended::Failed(failure.to_string()))
+            }
+            (Err(_), None) => {}
+        }
+    }
+
+    /// Let go of a deleted pad's run, so nothing still on its way for it lands anywhere.
+    fn forget(&mut self, pad: &PadId) {
+        self.0.remove(pad);
+    }
+}
+
+impl PadRun {
+    /// Whether the program is on its way up or already going.
     pub(crate) fn is_running(&self) -> bool {
-        matches!(self.run_state, RunState::Starting | RunState::Going(_))
+        matches!(self.state, RunState::Starting | RunState::Going(_))
     }
 
     /// The line over the output, saying where the run got to. `None` before anything has
     /// been run, which is what leaves the pane out.
-    pub(crate) fn run_verdict(&self) -> Option<Verdict> {
+    pub(crate) fn verdict(&self) -> Option<Verdict> {
         let dropped = match self.output.dropped() {
             0 => String::new(),
             1 => " (1 earlier line dropped)".to_owned(),
             count => format!(" ({count} earlier lines dropped)"),
         };
 
-        let (text, bad) = match &self.run_state {
+        let (text, bad) = match &self.state {
             RunState::Idle => return None,
             RunState::Starting => ("Starting...".to_owned(), false),
             RunState::Going(_) => ("Running".to_owned(), false),
@@ -646,7 +709,7 @@ pub(crate) enum PadJob {
     /// it is the directory to fork in, which the id alone says.
     Run {
         /// Which run this is, so a handle arriving after the reader has moved on can be
-        /// recognised and stopped rather than stored. See [`PadState::run`].
+        /// recognised and stopped rather than stored. See [`PadRun::run`].
         run: u64,
         pad: PadId,
         executable: PathBuf,
@@ -874,6 +937,8 @@ pub(crate) fn use_scratchpad_with(
     mut sourced: State<Sourced>,
     work: impl Fn(PadJob) -> PadAnswer + Send + 'static,
 ) -> PadJobs {
+    let mut runs = use_state(Runs::default);
+
     // What a running program is saying, on a channel of the app's own and taken by a task
     // of its own: a program that never ends would otherwise share a loop with every save.
     // Bounded, which is the app's half of the backpressure -- a full channel blocks the
@@ -891,34 +956,18 @@ pub(crate) fn use_scratchpad_with(
                 // notifies whether or not it changed anything, so a batch that is all a
                 // deleted pad's or a left run's would cost a render for nothing. Bound to
                 // a `let` and dropped, the write below being of this state.
-                let pads = pad.peek();
-                let wanted = batch
-                    .iter()
-                    .any(|(name, run, _)| pads.get(name).is_some_and(|state| state.run == *run));
-                drop(pads);
+                let held = runs.peek();
+                let wanted = batch.iter().any(|(name, run, _)| held.wants(name, *run));
+                drop(held);
                 if !wanted {
                     continue;
                 }
 
-                // Through the guard, so a line lands in the deque the app is holding
-                // rather than in a copy of every pad's source, diagnostics and output
-                // taken to push it -- and so `Arc::make_mut` copies the lines once per
-                // batch, for the pane's own hold on them, rather than twice.
-                let mut pads = pad.write();
+                // Into the pad the program belongs to, which is very often not the pad on
+                // screen: leaving a pad does not stop what is running in it.
+                let mut held = runs.write();
                 for (name, run, event) in batch {
-                    // Into the pad the program belongs to, which is very often not the
-                    // pad on screen: leaving a pad does not stop what is running in it.
-                    let Some(state) = pads.get_mut(&name) else {
-                        continue;
-                    };
-                    // A run the reader has left: not this run's output, not its ending.
-                    if run != state.run {
-                        continue;
-                    }
-                    match event {
-                        RunEvent::Wrote(line) => Arc::make_mut(&mut state.output).push(line),
-                        RunEvent::Ended(ended) => state.run_state = RunState::Over(ended),
-                    }
+                    held.took(&name, run, event);
                 }
             }
         });
@@ -999,7 +1048,7 @@ pub(crate) fn use_scratchpad_with(
                 run,
                 started,
             } => {
-                pad.write().started(&name, run, started);
+                runs.write().started(&name, run, started);
             }
         },
     );
@@ -1009,6 +1058,7 @@ pub(crate) fn use_scratchpad_with(
     let jobs = use_provide_context(move || PadJobs {
         jobs: requests,
         events: emitted,
+        runs,
     });
 
     // What pads there are, asked for once: `use_hook` runs on mount and never again. The
@@ -1170,14 +1220,16 @@ pub(crate) fn request_new_pad(jobs: &PadJobs) {
 ///
 /// Its program is stopped first: the directory it was started in is about to go, and a
 /// program left behind by that is one nothing could ever find again. A run still forking is
-/// stopped where it lands, its handle arriving for no pad in the table.
+/// stopped where it lands, its handle arriving for no run in [`Runs`].
 pub(crate) fn request_delete_pad(
     mut pad: State<Pads>,
     mut text: State<PadBuffers>,
     jobs: &PadJobs,
     name: PadId,
 ) {
-    stop_run_of(pad, &name);
+    let mut runs = jobs.runs;
+    stop_run_of(runs, &name);
+    runs.write().forget(&name);
 
     let mut pads = pad.write();
     pads.confirming = None;
@@ -1252,7 +1304,7 @@ pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
     // A rebuild stops what **this** pad started: cargo is about to write over the very file
     // that process is running. Another pad's program is about another executable and goes
     // on. Editing stops nothing, deliberately.
-    stop_run(pad);
+    stop_run(pad, jobs);
 
     pad.write().state_mut().building = true;
     jobs.jobs.send(PadJob::Build(scratchpad));
@@ -1266,37 +1318,28 @@ pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
 ///
 /// Whatever was running is stopped first: two generations of output arriving into one list
 /// is a pane with no answer to "what is this".
-pub(crate) fn request_run(mut pad: State<Pads>, jobs: &PadJobs) {
-    // The output starts empty and the run is numbered, so everything still on its way from
-    // the run before this one is for a number nobody is listening to. The number is this
-    // pad's own, which is enough because an event carries the pad beside it. The executable
-    // and the id are read here too, so starting a program copies no part of the pad.
+pub(crate) fn request_run(pad: State<Pads>, jobs: &PadJobs) {
+    // The executable and the id are read out of the pad, so starting a program copies no
+    // part of it.
     let asked = {
         let pads = pad.peek();
         let state = pads.state();
         state
             .executable()
             .filter(|_| !state.building)
-            .map(|executable| {
-                (
-                    executable.to_path_buf(),
-                    state.run + 1,
-                    state.scratchpad.id().clone(),
-                )
-            })
+            .map(|executable| (executable.to_path_buf(), state.scratchpad.id().clone()))
     };
-    let Some((executable, run, name)) = asked else {
+    let Some((executable, name)) = asked else {
         return;
     };
 
-    stop_run(pad);
+    stop_run(pad, jobs);
 
-    let mut pads = pad.write();
-    let shown = pads.state_mut();
-    shown.run = run;
-    shown.run_state = RunState::Starting;
-    shown.output = Arc::new(RunOutput::default());
-    drop(pads);
+    // The output starts empty and the run is numbered, so everything still on its way from
+    // the run before this one is for a number nobody is listening to. The number is this
+    // pad's own, which is enough because an event carries the pad beside it.
+    let mut runs = jobs.runs;
+    let run = runs.write().start(&name);
 
     let events = jobs.events.clone();
     jobs.jobs.send(PadJob::Run {
@@ -1314,9 +1357,9 @@ pub(crate) fn request_run(mut pad: State<Pads>, jobs: &PadJobs) {
 /// Stop the shown pad's program, for real. Only the shown pad has a Stop button, and only
 /// the shown pad's own rebuild or next run stops it -- another pad's program is about
 /// another executable and is left alone.
-pub(crate) fn stop_run(pad: State<Pads>) {
+pub(crate) fn stop_run(pad: State<Pads>, jobs: &PadJobs) {
     let shown = pad.peek().shown().clone();
-    stop_run_of(pad, &shown);
+    stop_run_of(jobs.runs, &shown);
 }
 
 /// The whole of the above for a pad named outright, which a delete needs: the pad whose
@@ -1328,14 +1371,14 @@ pub(crate) fn stop_run(pad: State<Pads>) {
 /// "Stopped" when the program is gone rather than when the button was pressed.
 /// `Starting` is the case a `bool` would have lost -- the fork has not come back, so
 /// leaving `Starting` behind is what makes the handle unwanted when it arrives.
-fn stop_run_of(mut pad: State<Pads>, name: &PadId) {
-    let run_state = pad.peek().get(name).map(|state| state.run_state.clone());
+fn stop_run_of(mut runs: State<Runs>, name: &PadId) {
+    let run_state = runs.peek().get(name).map(|state| state.state.clone());
     match run_state {
         Some(RunState::Going(running)) => running.stop(),
         Some(RunState::Starting) => {
-            let mut pads = pad.write();
-            if let Some(state) = pads.get_mut(name) {
-                state.run_state = RunState::Over(Ended::Stopped);
+            let mut held = runs.write();
+            if let Some(state) = held.0.get_mut(name) {
+                state.state = RunState::Over(Ended::Stopped);
             }
         }
         None | Some(RunState::Idle | RunState::Over(_)) => {}
