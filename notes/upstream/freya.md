@@ -47,7 +47,7 @@ and freya's own scrollbar thumb prevents it unconditionally in its press
 (`scrollthumb.rs:64-69`), as does `VirtualScrollView` while its scrollbar is held
 (`virtual_scrollview.rs:360-364`) -- so a sweep let go of over the thumb, which appears
 under a pointer moving toward the pane's edge, never ended and the run followed the bare
-pointer from then on. **Cost:** the sweep beyond the rows is `on_sweep_beyond`
+pointer from then on. **Cost:** the sweep beyond the rows is `use_sweep_beyond`
 (`ui/code_row.rs`), and the release is the root's `on_capture_global_pointer_press`, the
 capture phase running before anything can cancel it (`ui.rs`).
 

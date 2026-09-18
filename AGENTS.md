@@ -195,6 +195,8 @@ command.
   it leaves of a list: the ranked index every filtered list is drawn from.
 - `src/fuzzy.rs` — characters in order: what the file finder's box asks of a path, where it
   hit, and how well.
+- `src/find.rs` — what a find bar asks of one code pane: where a pattern hits in a line as
+  it is drawn, in the columns a pane counts, and which hit a step goes to.
 - `src/walk.rs` — the project's directory walked: the rules both readers of it share, and
   the files that came back.
 - `src/search.rs` — the project's directory searched for a pattern: the walk, the match,
@@ -413,7 +415,10 @@ command.
   box says, or nothing. And `keyed!`, which writes what a row needs to be diffed by the
   key it is given.
 - `src/ui/picks.rs` — the row each list has picked out: what a pick is, the one per panel,
-  the Alt that picks without opening, and which of two colours a picked row wears.
+  the Alt that picks without opening, and which of two colours a picked row wears. Also the
+  keyboard in a list -- the pick as its cursor, and the moves a panel answers with its
+  `ListKeys` -- and `opened`, the one door a row's press goes through, which says whether
+  the press took the keyboard with it.
 - `src/ui/place_row.rs` — the row the Search and Locations panels both draw: a file, or one
   place found in it, and the three things the panels differ in.
 - `src/ui/place_target.rs` — the place a diagnostic names, drawn as a target: the one
@@ -425,10 +430,13 @@ command.
   the drain policy that supersedes and the task that takes the answers, in the two shapes
   every worker in the app is one of.
 
-Twelve `ui/` names avoid shadowing a crate module the prelude brings in (`source_view`,
-`project_view`, `filter_bar`, `bookmarks_view`, `files_view`, `shortcuts_view`, `pad`,
-`analyzed`, `building`, `language`, `linking`, `strip`); `Panel` is imported by name beside
-the glob, freya's prelude having one of its own. The rest is in `agents/UI.md`.
+No `ui/` file carries the name of a crate module the prelude brings in: `source_view`,
+`project_view`, `search_view`, `section_view`, `settings_view`, `shortcuts_view`,
+`bookmarks_view`, `files_view`, `filter_bar`, `find_bar`, `documents`, `language`,
+`linking`, `pad`, `analyzed`, `building` and `strip` are each a name beside one. A count is
+left out: `source_view`, `source_row` and `source_bar` all stand off `source`, so it would
+go stale with the next file. `Panel` is imported by name beside the glob, freya's prelude
+having one of its own. The rest is in `agents/UI.md`.
 
 Everything except the UI is framework-free and unit-tested rather than eyeballed. **A module's
 tests are a file of their own**: `src/<module>/tests.rs`, declared `#[cfg(test)] mod tests;` at
@@ -512,9 +520,10 @@ feature there with the substitute, so a release that brings it is noticed.
   `raise`, `navigate`, `close_tab`, `close_others` and `close_binary` are the only six functions
   that open or close a **document** tab, or change what one shows. A page's chip goes in and
   comes out on its own, through `show_page` and `close_page`: a page draws state held at the
-  root, so it has no trail to keep in step and closing one loses nothing. `close` is no seventh
-  function: it is the one match from a `Tab` onto whichever of the two closes it belongs to,
-  which every caller holding a tab rather than an id goes through.
+  root, so it has no trail to keep in step and closing one loses nothing. Neither `raise_tab`
+  nor `close` is a seventh: they are what a caller holding a `Tab` rather than an id goes
+  through -- `raise` is `raise_tab` given a document's tab, and `close` the one match from a
+  `Tab` onto whichever of the two closes it belongs to.
 - **Identity in the UI is `Arc` pointer identity**, never names or indices: list keys are
   `Arc::as_ptr(..).addr()` and prop `PartialEq`s are hand-written with `Arc::ptr_eq`. A list
   of rows is a `Shared` (`src/shared.rs`), which is that rule written once; an optional

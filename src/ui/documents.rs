@@ -4,13 +4,12 @@
 //! together by [`Open`]'s own methods, which every opening and every close below writes
 //! through, and the tab on screen being one of the open ones is [`Strip`]'s. What is here
 //! is the rest: which door a click is, and what a close has to let go of.
-//! [`open_document`], [`raise`],
-//! [`raise_tab`], [`navigate`], [`close_tab`], [`close_others`] and [`close_binary`] are
-//! what open or close a **document** tab or change what one shows, and every path that
-//! opens a document -- [`land`] included -- goes through [`open_document`]. A page is the
-//! one tab outside that: it draws state held at the root and has no trail, so
-//! [`show_page`] puts its chip in the bar and [`close_page`] takes it out, and neither
-//! owes anything else.
+//! [`open_document`], [`raise`], [`navigate`], [`close_tab`], [`close_others`] and
+//! [`close_binary`] are the six that open or close a **document** tab or change what one
+//! shows, and every path that opens a document -- [`land`] included -- goes through
+//! [`open_document`]. A page is the one tab outside that: it draws state held at the root
+//! and has no trail, so [`show_page`] puts its chip in the bar and [`close_page`] takes it
+//! out, and neither owes anything else.
 //!
 //! The doors into a *place* are here too: [`open_source_place`] for a file and a line,
 //! [`show_in_code`] and [`open_as_symbol`] for an address in an object's code. Each builds
@@ -22,7 +21,9 @@
 //! and not a second way round it: [`step_tab`] and [`show_nth`] work out which tab the
 //! bar names and hand it to [`raise_tab`], and [`close_showing`] hands the tab on screen
 //! to [`close`], which is the one match from a [`Tab`] onto whichever of [`close_tab`]
-//! and [`close_page`] it belongs to.
+//! and [`close_page`] it belongs to. Neither is a door of its own: they are what a caller
+//! holding a [`Tab`] rather than an id goes through, [`raise`] being [`raise_tab`] given a
+//! document's tab.
 
 use super::*;
 

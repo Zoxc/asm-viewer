@@ -61,7 +61,7 @@ that one object, so no two symbols share one -- and the pair says the same thing
 argument.
 
 **Ctrl+F puts the caret in the box over the list it is pressed in.** The binding is on the rows of
-`use_filter_pane` and not on the root, so it reaches the box of the list the reader is in and
+`use_list_pane` and not on the root, so it reaches the box of the list the reader is in and
 nothing else: the Objects box from the Objects list, and no box at all from a code pane, which
 keeps its own keys. `Chord::Find` is exact — Ctrl or Meta, and neither Shift nor Alt — which is
 what leaves Ctrl+Shift+F to the Search panel. The rows are
@@ -244,9 +244,9 @@ flattener states and measured (`src/grouped.rs`, below); the `Arc`s are for the 
 for identity, so a row still compares by what it says, and a `Pick` takes a copy of the path per row
 *drawn*. A root that cannot be read is a placeholder's job to say, as is a project with no
 directory at all, which points at the Project view and never puts the working directory in its
-place. The read is on the UI thread, one `read_dir` of one level per fold, the `pads_in` precedent:
-nothing is *analysed*, and a listing is what a file dialog does; a worker is the upgrade if a
-network mount ever makes a fold slow. Rows are directories first and then files, each sorted by
+place. The read is on the UI thread, one `read_dir` of one level per fold, the `scratchpad::pads`
+precedent: nothing is *analysed*, and a listing is what a file dialog does; a worker is the upgrade
+if a network mount ever makes a fold slow. Rows are directories first and then files, each sorted by
 `walk::by_name`, the comparator the walk sorts by too, and hidden entries are shown; `.git` and
 `target` fold away with one click. **A symlink is not a row**, whatever it points at: the kind is
 the one `read_dir` hands back and is never followed, which is what the walk does and what
@@ -677,9 +677,9 @@ on a page and not a control in a bar, which is what `bar_button` rounds (`agents
 reference rows in one and its location rows in the other on the same ground, which is what makes it
 drift and not a rule. So one wash lights a row wherever it is drawn. The grounds went next: **every
 panel is on `pane_bg`** and the cream is out of the palette, and no caller names a surface any more
--- `use_filter_pane` and `use_search_pane` took one as an argument, which is what let the three tabs
-of one sidebar disagree. `dead_list_row` is the same frame with no hover, for the rows nothing is
-pressed on: the bookmark whose place does not resolve, and the Project view's two.
+-- what is now `use_list_pane` was two hooks and each took one as an argument, which is what let
+the three tabs of one sidebar disagree. `dead_list_row` is the same frame with no hover, for the
+rows nothing is pressed on: the bookmark whose place does not resolve, and the Project view's two.
 
 **What a row's press and its menu reach for is the list's to consume.** Reaching for a context is
 a hook, and a press handler and a menu are built by a render and run long after it, so the states

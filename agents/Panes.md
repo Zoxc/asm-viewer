@@ -1194,8 +1194,9 @@ the run, the rows lit being the rows it touches. The column is the pointer's row
 taken from `on_sized` into cells (scroll-invariant, and no font's advance assumed). **A sweep
 carries on beyond the rows**, outside the listing's box, the pane, the window, because the platform
 keeps reporting a held button's pointer wherever it goes and freya sends its global move to every
-listener (`notes/upstream/freya.md`). Each list's box listens with `on_sweep_beyond`, which asks
-`beyond` (`src/chars.rs`, pure, tested) where the sweep reaches: nothing while the pointer is over a
+listener (`notes/upstream/freya.md`). Each list's box answers the global move with
+`use_sweep_beyond`, which asks `beyond` (`src/chars.rs`, pure, tested) where the sweep reaches:
+nothing while the pointer is over a
 row, which answers for itself; else the row on screen nearest it (`Reach`: the first above, the last
 below, the one level with the pointer beside) at **the column under the pointer's x clamped into the
 box**, which the list asks of the row through the paragraph the row lent it (`Listing::texts`,
@@ -1262,10 +1263,10 @@ Ctrl+C copies the characters where any are selected and otherwise the rows: the 
 own line, address and all, as an editor copies the line under a caret with nothing selected
 (`copy_text`, pure, so the rule is tested without a clipboard). Escape collapses the selection to
 its caret, and so the lit rows to the caret's row, and drops the run on a second press (`peel`);
-everything that drops a run drops its caret with it. Each row is handed its own `highlight` by its
-list (`highlight_of`, unclamped at the end so a row's prop changes only when an end moves on it),
-which is the reason `selected` is a row prop. The tests press on the ends of a row's text so none
-measures a font.
+everything that drops a run drops its caret with it. Each row is handed what it draws of the run by
+its list (`RowChars::of`, which asks `CharSelection::of_row` with no width, so a row's prop changes
+only when an end moves on it), which is the reason `chars` is a row prop. The tests press on the
+ends of a row's text so none measures a font.
 
 **The keyboard moves the caret** (`Motion`, `CharSelection::moved`, `src/chars.rs`; `move_caret` in
 `ui/marks.rs`): the arrows by character and, with Ctrl, by word; Home and End to the row's ends and,

@@ -342,7 +342,7 @@ component and not a
 keystroke in the Project view's boxes and the root must not re-render for those, so the read is
 a **memo** over the one thing the branch is about; and `app()` is mounted by no test, so a
 branch inside it is a branch nothing can ask about. Settings and the Scratchpad still open
-with no project -- they are nobody's project's -- out of `NoProjectPage` and **not** the strip:
+with no project -- they are nobody's project's -- out of `NoProject` and **not** the strip:
 the strip's tabs are written into the session, and there is no session to put a tab in.
 
 **One strip, three kinds of tab.** A `Document` (`document.rs`) is **a place in a binary or a file**.

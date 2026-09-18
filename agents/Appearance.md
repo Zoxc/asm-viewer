@@ -201,17 +201,17 @@ has to be *carried* rather than picked up, freya's theme sheet being a value, so
 the sheet in an effect. Two things wake that effect and each carries what the other does not: its
 deps, which hold the appearance and the interface size, and the `palette()` and `fonts()` reads
 `interface_theme` makes *inside* it, which is how a fixed-width size change gets there -- a read
-inside an effect subscribes it. `ROW_HEIGHT` went the same way and became a function: one font's
-size plus `ROW_LEADING` (12, which is exactly what the old constant's 26 was over the 14px
-fixed-width default). The alternative, a page offering a 20pt assembly font and drawing it clipped
-inside a 26px row, was worse than the work. It is safe because the scroll view's `item_size` and its
-rows' own height are read in the **same render pass**, so they cannot see different numbers, and
-because the per-tab positions saved are *rows* rather than pixel offsets. The floor
-(`MIN_ROW_HEIGHT`) is against a hand-edited `settings.toml`, where a size of 0.1 is positive enough
-to pass `FontSetting::size` and would make `item_size` a fraction of a pixel. `link_box_height` is
-that rule once more: the box a code row draws round a lit run of its own text is the row less
-`LINK_BOX_INSET` at each edge, so it is a function beside the height it comes from and never a
-number kept anywhere.
+inside an effect subscribes it. `ROW_HEIGHT` went the same way and became a function
+(`row_height_for`): one font's size plus 12 of leading, which is exactly what the old constant's
+26 was over the 14px fixed-width default. The alternative, a page offering a 20pt assembly font
+and drawing it clipped inside a 26px row, was worse than the work. It is safe because the scroll
+view's `item_size` and its rows' own height are read in the **same render pass**, so they cannot
+see different numbers, and because the per-tab positions saved are *rows* rather than pixel
+offsets. The floor of 14 is against a hand-edited `settings.toml`, where a size of 0.1 is positive
+enough to pass `FontSetting::size` and would make `item_size` a fraction of a pixel.
+`link_box_height` is that rule once more: the box a code row draws round a lit run of its own text
+is the row less `LINK_BOX_INSET` at each edge, so it is a function beside the height it comes from
+and never a number kept anywhere.
 
 **`FONTS` starts at the app's own fonts, and `app` writes the real pair before anything draws.**
 The thread-local initialises from `fonts::defaults()` -- the platform families at 9pt and 10.5pt,
