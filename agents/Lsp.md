@@ -2,7 +2,8 @@
 
 A language server, started over the open project's directory and asked two things about a
 source position: where what is there is defined, and everywhere it is used. `src/lsp.rs` is
-the client, `src/ui/language.rs` is the state, the worker and the control in the top bar.
+the client, `src/ui/language.rs` the state and the presses, `src/ui/language/worker.rs`
+the thread that does the talking, and `src/ui/language_view.rs` the control in the top bar.
 
 **Which program is the project's own setting** (`Project::language_server`, empty for
 rust-analyzer). A project on a toolchain of its own is read by a server this app cannot
@@ -137,10 +138,10 @@ keeps the last job of each kind, and everything `superseded_as` gives no kind at
 every question a reader asks: it turns the `-32801` and `-32800` codes into a null answer,
 which every reader of an answer already takes as nothing found. `request` itself is left
 raw for the handshake, which needs the refusal, and for `semantic_tokens`, where a refusal
-is a question to put again. On the worker, `language::asked` wraps every job that says
-anything to a server: no server is no answer, and a `Broken` conversation is dropped there
-rather than in each arm. Both were copied per question before, and the copy a new question
-forgot would be the one that leaves a dead conversation in `talking`.
+is a question to put again. On the worker, `language::worker::asked` wraps every job that
+says anything to a server: no server is no answer, and a `Broken` conversation is dropped
+there rather than in each arm. Both were copied per question before, and the copy a new
+question forgot would be the one that leaves a dead conversation in `talking`.
 
 **A reader thread owns the server's output.** It began without one -- a request read frames
 until its own answer came back -- and that was enough right up to the moment the app needed
@@ -577,10 +578,11 @@ Saving the project is the change that ends nothing, the directory being where it
 
 ## The control, and what the Project view says
 
-In the top bar, left of the two history buttons, drawn as a link and three letters -- what
-a language server is asked here is where a name leads, and a link is that question rather
-than the machinery answering it -- and built on `bar_pill`, the same frame `NavButton` takes as a square, but **named and
-bordered** rather than an icon alone: it is the only thing in the app that starts a process
+In the top bar (`src/ui/language_view.rs`), left of the two history buttons, drawn as a
+link and three letters -- what a language server is asked here is where a name leads, and a
+link is that question rather than the machinery answering it -- and built on `bar_pill`,
+the same frame `NavButton` takes as a square, but **named and bordered** rather than an
+icon alone: it is the only thing in the app that starts a process
 the reader did not ask for by name. It says `LSP` and not `rust-analyzer`, which is what
 that corner has room for beside two chevrons and is the part of the app being named rather
 than the program; the program's own name is in the tooltip and in the Project view. Which

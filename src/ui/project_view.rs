@@ -579,7 +579,8 @@ impl Component for CargoSection {
 
 /// The language server: which program reads the project, which of its files, whether the
 /// reader has agreed to it, and how the last start went. This section only says how it
-/// went; the control that starts and stops one is in the top bar (`src/ui/language.rs`).
+/// went; the control that starts and stops one is in the top bar
+/// (`src/ui/language_view.rs`).
 #[derive(PartialEq)]
 struct LanguageSection;
 

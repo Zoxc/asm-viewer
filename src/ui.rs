@@ -124,6 +124,8 @@ mod keys;
 pub(crate) use keys::*;
 mod language;
 pub(crate) use language::*;
+mod language_view;
+pub(crate) use language_view::*;
 mod linking;
 pub(crate) use linking::*;
 mod list_box;

@@ -324,8 +324,11 @@ command.
   statement of what a stretch's rows say, which the search that walks the code reads too.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the pane its list is drawn in.
 - `src/ui/language.rs` — whether a language server is running, what the project's own
-  settings said, the worker that talks to it, and the control in the top bar that starts and
-  stops it.
+  settings said, and the presses that start it, stop it and put a question to it;
+  `language/worker.rs` is the blocking half -- the jobs, the answers, which of them a newer
+  question takes the place of, and the only part that names `lsp::Server`.
+- `src/ui/language_view.rs` — what that server is drawn as: the control in the top bar that
+  starts and stops it, and the band under the bar that asks before a first start.
 - `src/ui/documents.rs` — what opening, closing and moving between documents means: the
   doors in, the three into a *place* among them (a file and a line, an address in an
   object's code, a symbol of its own); which spelling of a path a source tab is named by;
