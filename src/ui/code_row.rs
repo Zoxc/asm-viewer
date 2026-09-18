@@ -684,7 +684,10 @@ pub(crate) type RowMenu = Rc<dyn Fn(Event<PressEventData>, Option<usize>)>;
 
 /// The row: its chrome, what comes `before` the text -- a gutter, an address, a line
 /// number -- the `text` where the row has any, and the `menu` the right button opens.
-pub(crate) fn code_row(
+///
+/// A hook, so a row calls it once and on every render: never behind an `if`, a `match`
+/// arm or a `map`.
+pub(crate) fn use_code_row(
     chrome: Chrome,
     before: Vec<Element>,
     mut text: Option<Text>,

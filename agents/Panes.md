@@ -453,7 +453,7 @@ pin.
 
 **Every row of a listing is as wide as the pane or as the widest row the listing has drawn,
 whichever is more** (`Widest`, `src/ui/width.rs`), which is what lets both panes scroll sideways;
-the chrome every row shares is `code_row` (`src/ui/code_row.rs`), below. A `VirtualScrollView`
+the chrome every row shares is `use_code_row` (`src/ui/code_row.rs`), below. A `VirtualScrollView`
 already scrolls on x (the wheel's `delta_x`, Shift and the wheel, a horizontal scrollbar) but only
 as far as the widest row it has *built*, and a row filling the pane leaves it nothing. A row
 measured to its content would give it that and lose the wash, which is the row's own background. So
@@ -668,7 +668,7 @@ and what lets a sweep select across an operand character by character. An operan
 once an inline child of the row's paragraph, which the text engine counts as one unit, so a
 sweep could only take it whole. So the door is decided from the column instead: the row's
 `TextLinks` carries the columns of every link in it, whether a press on one is a door now and
-what such a press follows, `code_row` hit-tests the pointer against them for the light, the
+what such a press follows, `use_code_row` hit-tests the pointer against them for the light, the
 hand and the press, and lighting one changes a span's style and never where the spans are cut.
 A boundary that moved with the pointer would re-shape the row, and the widest
 row a listing has drawn only ever grows. The column hit-tested is the **character** under the
@@ -677,7 +677,7 @@ caret boundary skia answers with, which over the right half of a name's last cha
 name. A label in an object's listing is the same kind of
 door -- a run of the row's own text, and the whole of it -- so the row that draws it hands
 its text and its link over and puts **no handler of its own on top**. One put there would
-replace `code_row`'s of that name and say nothing, freya keeping one handler per event name:
+replace `use_code_row`'s of that name and say nothing, freya keeping one handler per event name:
 the `on_pointer_out` that row used to chain on took away the one that puts the pointer's icon
 back, and the I-beam followed the reader out of the listing.
 
@@ -707,7 +707,7 @@ and a row that read that would be drawn again for every word of it.
 **Hovering a name is the same hit test and a different answer.** `TextLinks::names` carries the
 columns of every name the server placed on the row -- links and the places where one is
 defined alike, since a hover over the name where a function is defined is its own signature
-and doc comment -- and `code_row` hit-tests the pointer against them beside the links. It is
+and doc comment -- and `use_code_row` hit-tests the pointer against them beside the links. It is
 not fed to `cut_at`: hovering changes no span's style, so it cuts the row nowhere and cannot
 widen the listing. It sits on the link kind and not on `Text`, that kind being the only one that
 can have any: an inline link is an element and not a run of text, and a row with no links has no
@@ -1148,7 +1148,7 @@ drawn" was a rule two closures had to agree on. Now it is one closure the seed a
 read, and a fourth listing, or a fourth chord shared by all three, is one edit.
 
 **A sweep along a row's text selects characters**, beside the rows and not instead of them
-(`src/chars.rs`; `Picked::chars`). Every row of the three listings is drawn by one `code_row`
+(`src/chars.rs`; `Picked::chars`). Every row of the three listings is drawn by one `use_code_row`
 (`src/ui/code_row.rs`): the shared width, wash and handlers, with what comes before the text (the
 mark, the arrow gutter, the address, a line number) and the text itself handed in. The text is **one
 `paragraph()`** of spans, a link being one of them. The model is the app's own and

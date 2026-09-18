@@ -21149,7 +21149,7 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     );
 }
 
-/// **Leaving a row puts the pointer's icon back**, whatever kind of row it is. `code_row`
+/// **Leaving a row puts the pointer's icon back**, whatever kind of row it is. `use_code_row`
 /// sets the icon and its own `on_pointer_out` is the only thing that resets it, so a row
 /// kind that chains a handler of that name onto what it is handed takes the reset away --
 /// freya keeps one handler per event name, and nothing says which one won. The text rows
@@ -24709,7 +24709,7 @@ fn pad_listing_harness() -> impl IntoElement {
 
 /// The gap on each side -- left, top, right, bottom -- between a code listing's box and
 /// the box the pane it is in gives it. The listing is the focusable box the rows are
-/// drawn in (`ListBox::render`), so this is the pane's inset and nothing else.
+/// drawn in (`ListBox::use_rows`), so this is the pane's inset and nothing else.
 fn listing_insets(test: &TestingRunner) -> Vec<[f32; 4]> {
     test.find_many(|node, _element| {
         let listing = node
@@ -25144,7 +25144,7 @@ struct MeasuredListing(Rc<RefCell<Option<Listing>>>);
 #[derive(Clone, Copy)]
 struct MeasuredSeen(State<Vec<f32>>);
 
-/// A code pane's box as the app makes it -- `use_list_box` and its `render`, with rows
+/// A code pane's box as the app makes it -- `use_list_box` and its `use_rows`, with rows
 /// enough to scroll over -- inside a box the test resizes, and a scope reading the height
 /// the list reports.
 fn measured_harness() -> impl IntoElement {
@@ -25167,7 +25167,7 @@ fn measured_harness() -> impl IntoElement {
     rect()
         .width(Size::fill())
         .height(Size::px(tall))
-        .child(list.render(
+        .child(list.use_rows(
             marked,
             MEASURED_ROWS,
             |_: Event<KeyboardEventData>| {},
@@ -25255,7 +25255,7 @@ keyed!(LentRow);
 
 impl Component for LentRow {
     fn render(&self) -> impl IntoElement {
-        code_row(
+        use_code_row(
             Chrome {
                 pane: Pane::Assembly,
                 row: self.row,

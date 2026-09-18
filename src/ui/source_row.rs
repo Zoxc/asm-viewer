@@ -492,7 +492,7 @@ impl Component for SourceRow {
 
         // The same gesture as the assembly pane's, from the same chrome. The run is a
         // run of this file.
-        code_row(
+        use_code_row(
             Chrome {
                 pane: Pane::Source,
                 row: index,

@@ -266,7 +266,7 @@ impl Component for SourceList {
         rect()
             .width(Size::fill())
             .height(Size::flex(1.0))
-            .child(listing_inset(list.render(
+            .child(listing_inset(list.use_rows(
                 marked,
                 length,
                 on_key_down,

@@ -484,7 +484,7 @@ impl Component for TextRow {
         // what comes back: freya keeps an element's handlers in a map by event name, so a
         // handler put on here would replace the row's own of that name and say nothing
         // (`ui/code_row.rs`).
-        code_row(
+        use_code_row(
             Chrome {
                 pane: Pane::Assembly,
                 row: self.row,
@@ -533,7 +533,7 @@ impl Component for EmptyRow {
         // Nothing to measure and nothing to press but the row: empty space is washed too,
         // and swept across. The mark's column all the same, so this row's rule and a
         // separator's stay the distance apart they were.
-        code_row(
+        use_code_row(
             Chrome {
                 pane: Pane::Assembly,
                 row: self.row,
@@ -803,7 +803,7 @@ impl Component for SectionList {
             },
         );
 
-        list.render(
+        list.use_rows(
             marked,
             length,
             on_key_down,

@@ -9,7 +9,7 @@
 //! rows on the pixel grid, the focus a press asks for -- so it is written once here and
 //! each list hands in its pane, its rows and its builder.
 //!
-//! [`use_list_box`] is the hooks the box is made of and [`ListBox::render`] the box.
+//! [`use_list_box`] is the hooks the box is made of and [`ListBox::use_rows`] the box.
 //! **Both are hooks**, so a list calls each once and on every render; what is the list's
 //! own -- the position it puts back, the caret a door planted, the window it asks the
 //! worker for -- stays in the list, between the two.
@@ -87,12 +87,12 @@ impl ListBox {
     }
 
     /// The box, around `length` rows built from `data` by `build`. A hook, the sweep's
-    /// cells being one, so it is called once per render.
+    /// cells being one, so a list calls it once and on every render.
     ///
     /// The data goes to the `VirtualScrollView` and never into the builder: the builder
     /// closure is not compared across renders, so anything the rows depend on that is
     /// captured is never seen again.
-    pub(crate) fn render<D: PartialEq + 'static>(
+    pub(crate) fn use_rows<D: PartialEq + 'static>(
         &self,
         marked: State<Marks>,
         length: usize,

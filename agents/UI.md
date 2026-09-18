@@ -224,7 +224,7 @@ pane's `ListStates` itself, so there is one set and no second way to build one.
 `LinkStates` (`assembly.rs`) is the third of these and the smallest: Ctrl, which a linked
 operand's door is asked about, the `Doors` a press on it goes through, and the `Listing`
 `reveal_row` reads at the press. It is **not** list data: the row that draws a link gathers it
-(`use_link_states`), the `Listing` being the context the list's box provides, which `code_row`
+(`use_link_states`), the `Listing` being the context the list's box provides, which `use_code_row`
 consumes in the same row anyway. An instruction row hands it its `RowStates`'s `doors`, so its
 menu and its links cannot disagree about where a door leads.
 A handle may sit in more than one bundle: `Doors` and `ProjectStates` both carry `Open` and

@@ -869,7 +869,7 @@ impl Component for SeparatorRow {
         // width every layout, without end. It takes the mark handlers with the chrome,
         // so a sweep down the listing is not cut in half by every boundary it crosses;
         // a run started on a separator is a row of no file and no text.
-        code_row(
+        use_code_row(
             Chrome {
                 pane: Pane::Assembly,
                 row: self.row,
@@ -1164,7 +1164,7 @@ impl Component for InstructionRow {
 
         // The run is a run of the file this row was compiled from, which is what the
         // source pane shows beside an object's code.
-        code_row(
+        use_code_row(
             Chrome {
                 pane: Pane::Assembly,
                 row: self.row,
@@ -1384,7 +1384,7 @@ impl Component for InstructionList {
             },
         );
 
-        list.render(
+        list.use_rows(
             marked,
             length,
             on_key_down,
