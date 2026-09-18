@@ -165,7 +165,7 @@ pub(crate) fn raise_panel(dock: State<DockArea>, panel: Panel) {
 /// mounted: the box to put the keyboard in does not exist until the raise above has been
 /// drawn. [`use_keyboard_asked`] spends the ask once the panel has registered one
 /// (`ui/keyboard.rs`).
-pub(crate) fn reach_panel(dock: State<DockArea>, keyboard: State<Keys>, panel: Panel) {
+pub(crate) fn reach_panel(dock: State<DockArea>, keyboard: Keyboard, panel: Panel) {
     raise_panel(dock, panel);
     ask_for_panel(keyboard, panel);
 }

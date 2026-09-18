@@ -569,7 +569,7 @@ impl Component for FindBar {
 
         let at = self.at;
         let finds = use_consume::<Looking>().0;
-        let keyboard = use_consume::<Keyboard>().0;
+        let keyboard = use_consume::<Keyboard>();
         let box_id = use_hook(AccessibilityId::new_unique);
         // **This bar's own entry and not the table.** Both bars of a tab can be open, and
         // a read of [`Finds`] is a read of every bar in the app, so typing in one drew the
@@ -618,7 +618,7 @@ impl Component for FindBar {
         let close = move || {
             close_find(finds, at);
             // Out of the guard first: an `if let` holds its scrutinee for the whole body.
-            let pane_box = keyboard.peek().pane_box(at.1);
+            let pane_box = keyboard.keys.peek().pane_box(at.1);
             if let Some(pane) = pane_box {
                 pane.request_focus();
             }

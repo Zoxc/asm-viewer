@@ -10,8 +10,7 @@
 use super::*;
 
 /// Every box the keyboard can be put in -- the two code panes, the listing of an object's
-/// code, the scratchpad's editor, and the list of each sidebar panel -- and which of them
-/// it has been asked into.
+/// code, the scratchpad's editor, and the list of each sidebar panel.
 ///
 /// The boxes are a **registration** and not a flag written when one takes the focus: focus
 /// is *lost* without an event -- something else asks for it -- so what is asked of the
@@ -31,10 +30,6 @@ pub(crate) struct Keys {
     /// The box each mounted panel is reached by: its filter box where it has one, and its
     /// rows where it has not (`ui/filter_bar.rs`).
     panels: Vec<(Panel, AccessibilityId)>,
-    /// Where the keyboard has been asked to go, and [`None`] once it is there. Spent by
-    /// [`use_keyboard_asked`] once there is a box to spend it on -- which may be several
-    /// renders later, a pane with nothing to draw yet registering none.
-    wanted: Option<Wanted>,
 }
 
 /// What the keyboard has been asked into. **One ask and not one per kind**: the reader
@@ -82,15 +77,35 @@ impl Keys {
     }
 }
 
-/// [`Keys`], shared through context.
+/// [`Keys`] and the ask, shared through context.
+///
+/// **Two states and not one**: the boxes change as a pane or a panel mounts, and the ask
+/// with every chip pressed and every row that opens a tab. The chip of the tab on screen
+/// reads the boxes ([`keyboard_in_tab`]), and must not be drawn again for an ask made and
+/// spent.
 #[derive(Clone, Copy)]
-pub(crate) struct Keyboard(pub(crate) State<Keys>);
+pub(crate) struct Keyboard {
+    pub(crate) keys: State<Keys>,
+    /// Where the keyboard has been asked to go, and [`None`] once it is there. Spent by
+    /// [`use_keyboard_asked`] once there is a box to spend it on -- which may be several
+    /// renders later, a pane with nothing to draw yet registering none.
+    asked: State<Option<Wanted>>,
+}
+
+impl Keyboard {
+    pub(crate) fn create() -> Self {
+        Keyboard {
+            keys: State::create(Keys::default()),
+            asked: State::create(None),
+        }
+    }
+}
 
 /// Register `a11y` as one of the boxes the keyboard can be in inside the tab on screen,
 /// for as long as this scope is mounted, as the box of `pane` -- [`None`] for a box that
 /// is not a pane's. See [`Keys`].
 pub(crate) fn use_tab_keyboard(pane: Option<Pane>, a11y: AccessibilityId) {
-    let mut keyboard = use_consume::<Keyboard>().0;
+    let mut keyboard = use_consume::<Keyboard>().keys;
     use_hook(move || keyboard.write().boxes.push((pane, a11y)));
     use_drop(move || {
         keyboard.write().boxes.retain(|(_, open)| *open != a11y);
@@ -100,7 +115,7 @@ pub(crate) fn use_tab_keyboard(pane: Option<Pane>, a11y: AccessibilityId) {
 /// The same for a sidebar panel: `a11y` is the box a chord that reaches `panel` puts the
 /// keyboard in, for as long as the panel is mounted. See [`Keys`].
 pub(crate) fn use_panel_keyboard(panel: Panel, a11y: AccessibilityId) {
-    let mut keyboard = use_consume::<Keyboard>().0;
+    let mut keyboard = use_consume::<Keyboard>().keys;
     use_hook(move || keyboard.write().panels.push((panel, a11y)));
     use_drop(move || {
         keyboard.write().panels.retain(|(_, open)| *open != a11y);
@@ -109,8 +124,9 @@ pub(crate) fn use_panel_keyboard(panel: Panel, a11y: AccessibilityId) {
 
 /// Whether the keyboard is inside the tab on screen. Asking is what subscribes the caller
 /// to the focus moving, `AccessibilityId::is_focused` reading the platform's own state.
-pub(crate) fn keyboard_in_tab(keyboard: State<Keys>) -> bool {
+pub(crate) fn keyboard_in_tab(keyboard: Keyboard) -> bool {
     keyboard
+        .keys
         .read()
         .boxes
         .iter()
@@ -119,50 +135,56 @@ pub(crate) fn keyboard_in_tab(keyboard: State<Keys>) -> bool {
 
 /// Ask for the keyboard to go into the tab on screen: what pressing a chip does, so that
 /// reading follows the tab the reader just chose, and what Escape on a list does.
-pub(crate) fn ask_for_keyboard(mut keyboard: State<Keys>) {
-    keyboard.write().wanted = Some(Wanted::Tab);
+pub(crate) fn ask_for_keyboard(mut keyboard: Keyboard) {
+    keyboard.asked.set_if_modified(Some(Wanted::Tab));
 }
 
 /// Ask for it to go into `panel` instead: what a panel's chord does, once it has raised
 /// the panel ([`reach_panel`]).
-pub(crate) fn ask_for_panel(mut keyboard: State<Keys>, panel: Panel) {
-    keyboard.write().wanted = Some(Wanted::Panel(panel));
+pub(crate) fn ask_for_panel(mut keyboard: Keyboard, panel: Panel) {
+    keyboard.asked.set_if_modified(Some(Wanted::Panel(panel)));
 }
 
 /// Spend that ask, once whatever it was made for has mounted a box. In an effect and not
 /// in the press or the chord, because the press is what mounts the panes and the chord is
 /// what raises the panel: the box to focus does not exist until the render it caused has
 /// run.
-pub(crate) fn use_keyboard_asked(mut keyboard: State<Keys>, open: Open, marked: State<Marks>) {
+pub(crate) fn use_keyboard_asked(keyboard: Keyboard, open: Open, marked: State<Marks>) {
     use_side_effect(move || {
-        // Which side leads the tab on screen, which is the pane the ask is for: the one
-        // the reader asked to see, and the one `DocumentBody` draws first.
-        let leads = {
-            let (strip, docs) = (open.strip.read(), open.docs.read());
-            active_tab(&strip, &docs).map(|(_, at)| at.document.driven_from())
-        };
         // **An ask is kept until there is somewhere to spend it.** A tab opened from a
         // list has nothing to focus in the pass that opened it: its assembly side draws a
         // sentence until the worker answers, and a pane with nothing to show registers no
         // box at all -- so an ask spent on `None` was every ask a row ever made. A panel
         // asked for is the same the other way round: the chord that named it may have
         // raised it from behind another, and its box arrives with the render that does.
-        // The state is *read*, which is what subscribes this to the boxes as well as to
-        // the ask, so a box arriving is what wakes it. The guard is gone before the write.
-        let waiting = {
-            let keys = keyboard.read();
-            match keys.wanted {
-                None => None,
-                Some(Wanted::Tab) => keys.wanted_box(leads),
-                // No pane, so no caret: a list's own pick is its cursor, and a panel
-                // handed the keyboard has one already or takes it from the first arrow.
-                Some(Wanted::Panel(panel)) => keys.panel_box(panel).map(|a11y| (None, a11y)),
+        // While an ask waits the boxes are *read*, which is what subscribes this to them,
+        // so a box arriving is what wakes it. With no ask it reads nothing but the ask, and
+        // is not woken by every tab moved or trail pushed.
+        let wanted = *keyboard.asked.read();
+        let waiting = match wanted {
+            None => return,
+            Some(Wanted::Tab) => {
+                // Which side leads the tab on screen, which is the pane the ask is for:
+                // the one the reader asked to see, and the one `DocumentBody` draws first.
+                let leads = {
+                    let (strip, docs) = (open.strip.read(), open.docs.read());
+                    active_tab(&strip, &docs).map(|(_, at)| at.document.driven_from())
+                };
+                keyboard.keys.read().wanted_box(leads)
             }
+            // No pane, so no caret: a list's own pick is its cursor, and a panel handed
+            // the keyboard has one already or takes it from the first arrow.
+            Some(Wanted::Panel(panel)) => keyboard
+                .keys
+                .read()
+                .panel_box(panel)
+                .map(|a11y| (None, a11y)),
         };
         let Some((pane, a11y)) = waiting else {
             return;
         };
-        keyboard.write().wanted = None;
+        let mut asked = keyboard.asked;
+        asked.set(None);
         a11y.request_focus();
         // **A pane handed the keyboard has a caret put in it**, where it has no run of its
         // own. Nothing was clicked in it -- a row of a list opened this tab, or a chip was
@@ -183,8 +205,6 @@ pub(crate) fn use_keyboard_asked(mut keyboard: State<Keys>, open: Open, marked: 
 /// says. An ask now waits for a box, so one made for a tab that never drew a pane would sit
 /// there and be spent by whatever pane arrived next -- taking the keyboard out of the list
 /// the reader had put it in meanwhile.
-pub(crate) fn unask_keyboard(mut keyboard: State<Keys>) {
-    if keyboard.peek().wanted.is_some() {
-        keyboard.write().wanted = None;
-    }
+pub(crate) fn unask_keyboard(mut keyboard: Keyboard) {
+    keyboard.asked.set_if_modified(None);
 }

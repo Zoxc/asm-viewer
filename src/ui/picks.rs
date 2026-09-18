@@ -337,7 +337,7 @@ pub(crate) struct Picking {
     /// This panel's own entry in that table, as a row asks for it: see [`use_picking`].
     picked: Memo<Option<PickedRow>>,
     alt: State<bool>,
-    keyboard: State<Keys>,
+    keyboard: Keyboard,
     panel: Panel,
     /// The focusable box the list's rows are in, which is what answers for whether the
     /// keyboard is in the list.
@@ -361,7 +361,7 @@ pub(crate) fn use_picking(panel: Panel, rows: AccessibilityId) -> Picking {
         picks,
         picked: use_memo(move || picks.read().get(&panel).cloned()),
         alt: use_consume::<Alt>().0,
-        keyboard: use_consume::<Keyboard>().0,
+        keyboard: use_consume::<Keyboard>(),
         panel,
         rows,
     }

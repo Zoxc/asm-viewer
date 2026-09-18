@@ -2598,7 +2598,7 @@ fn marker_harness() -> impl IntoElement {
     // What `app()` calls at the root: the press on a chip asks for the keyboard, and this
     // is what spends the ask once the tab has mounted what it has.
     use_keyboard_asked(
-        use_consume::<Keyboard>().0,
+        use_consume::<Keyboard>(),
         use_open(),
         use_consume::<Marked>().0,
     );
@@ -25224,7 +25224,7 @@ fn the_box_writes_its_height_into_the_listing_and_a_read_of_it_wakes() {
         (MEASURED_BOX, MEASURED_BOX).into(),
         |runner| {
             runner.provide_root_context(|| Marked(State::create(Marks::default())));
-            runner.provide_root_context(|| Keyboard(State::create(Keys::default())));
+            runner.provide_root_context(Keyboard::create);
             (
                 runner
                     .provide_root_context(|| MeasuredTall(State::create(MEASURED_BOX)))
@@ -28803,7 +28803,7 @@ fn search_harness() -> impl IntoElement {
     // And what `app()` calls at the root: the chord that reaches this panel leaves an ask
     // behind it, and this is what spends it on the box the panel registers.
     use_keyboard_asked(
-        use_consume::<Keyboard>().0,
+        use_consume::<Keyboard>(),
         use_open(),
         use_consume::<Marked>().0,
     );
@@ -32977,6 +32977,38 @@ fn a_push_onto_one_trail_draws_no_other_chip() {
     );
 }
 
+/// **An ask for the keyboard draws no chip.** The chip on screen reads the boxes the
+/// keyboard can be in, to mark whether it is in the tab; the ask made by every chip pressed
+/// and every row that opens a tab is a state of its own, so making one and dropping it
+/// leaves the chip alone.
+///
+/// Fails with the ask put back in the state the boxes are in.
+#[test]
+fn an_ask_for_the_keyboard_draws_no_chip() {
+    let (mut test, roots) = TestingRunner::new(
+        bar_harness,
+        (600., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let states = roots.states;
+    let file = Document::Source(Arc::from("/src/main.rs"));
+    open_document(states.open, states.visits, file, Reach::NewTab);
+    settle(&mut test);
+    assert!(label_area(&test, "main.rs").is_some(), "the chip is drawn");
+
+    let before = strip::chips_drawn();
+    ask_for_keyboard(roots.keyboard);
+    settle(&mut test);
+    unask_keyboard(roots.keyboard);
+    settle(&mut test);
+    assert_eq!(
+        strip::chips_drawn() - before,
+        0,
+        "an ask made and dropped drew the chip on screen"
+    );
+}
+
 /// **A tab moved along the bar does not draw the tab list's button again.** While its menu
 /// is down the button draws one fact of the strip, whether it holds any tab, and the strip
 /// is written by every tab opened, closed, moved or raised. Read per render, the button was
@@ -33456,7 +33488,7 @@ fn list_and_pane_harness() -> impl IntoElement {
     let a11y = use_a11y();
     use_tab_keyboard(Some(Pane::Assembly), a11y);
     use_keyboard_asked(
-        use_consume::<Keyboard>().0,
+        use_consume::<Keyboard>(),
         use_open(),
         use_consume::<Marked>().0,
     );
@@ -33485,7 +33517,7 @@ fn list_and_pane_harness() -> impl IntoElement {
 fn two_panes_harness() -> impl IntoElement {
     let (source, assembly) = (use_a11y(), use_a11y());
     use_keyboard_asked(
-        use_consume::<Keyboard>().0,
+        use_consume::<Keyboard>(),
         use_open(),
         use_consume::<Marked>().0,
     );
@@ -33627,7 +33659,7 @@ fn the_ask_goes_to_the_pane_that_leads_the_tab() {
 fn late_pane_harness() -> impl IntoElement {
     let a11y = use_a11y();
     use_keyboard_asked(
-        use_consume::<Keyboard>().0,
+        use_consume::<Keyboard>(),
         use_open(),
         use_consume::<Marked>().0,
     );
@@ -35679,7 +35711,7 @@ thread_local! {
 /// and the two flags saying whether a following pane is up.
 #[derive(Clone)]
 struct RootStates {
-    keyboard: State<Keys>,
+    keyboard: Keyboard,
     language: State<Language>,
     jobs: LspJobs,
     /// Whether each place's following pane is up -- a tab's and the Scratchpad's alike:
@@ -35693,7 +35725,7 @@ struct RootStates {
 /// tests' tuples growing four states none of them looks at.
 fn use_root_key_states() {
     let proj = use_consume::<Proj>().0;
-    let keyboard = use_consume::<Keyboard>().0;
+    let keyboard = use_consume::<Keyboard>();
     let language = use_consume::<Talking>().0;
     let follow = use_consume::<Following>().0;
     let located = use_consume::<Locations>().0;
@@ -36331,12 +36363,12 @@ struct KeyboardSaid {
 
 impl Component for KeyboardSaid {
     fn render(&self) -> impl IntoElement {
-        let keyboard = use_consume::<Keyboard>().0;
+        let keyboard = use_consume::<Keyboard>();
         let pane = self.pane;
         // Read and not peeked: a panel registers its box as it mounts, so a chord that
         // raised one gives this something new to ask about a render later.
         let panels: Vec<(Panel, AccessibilityId)> = {
-            let keys = keyboard.read();
+            let keys = keyboard.keys.read();
             [Panel::Files, Panel::Objects, Panel::Symbols]
                 .into_iter()
                 .filter_map(|panel| keys.panel_box(panel).map(|a11y| (panel, a11y)))
@@ -36371,7 +36403,7 @@ fn reaching_harness() -> impl IntoElement {
     // What `app()` calls at the root: a chord leaves an ask behind it, and this is what
     // spends it once the panel it named has drawn a box.
     use_keyboard_asked(
-        use_consume::<Keyboard>().0,
+        use_consume::<Keyboard>(),
         use_open(),
         use_consume::<Marked>().0,
     );

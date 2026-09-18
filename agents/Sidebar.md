@@ -445,10 +445,10 @@ nothing to filter by. So Ctrl+T lands in the Symbols box, where what is typed ne
 list, and Ctrl+Shift+E lands on the Files list itself; either way the keys a list answers are
 answered, the box handing on the arrows, Enter and Escape to the rows under it.
 
-**One ask, for the tab and for a panel alike.** `Keys` holds where the keyboard has been asked to
-go (`ui/keyboard.rs`), and `use_keyboard_asked` spends it at the root once there is a box --
+**One ask, for the tab and for a panel alike.** `Keyboard` holds where the keyboard has been asked
+to go (`ui/keyboard.rs`), and `use_keyboard_asked` spends it at the root once there is a box --
 several renders later, where a panel had to be raised or a pane had nothing to draw yet. The same
-field a pressed chip and an opened row write, deliberately: the reader has one keyboard, so a chord
+state a pressed chip and an opened row write, deliberately: the reader has one keyboard, so a chord
 that reaches a panel cancels the ask a row left rather than racing it. The Search panel kept a
 `focus` flag of its own in `Searched` and spent it in its own effect; one ask replaced it.
 

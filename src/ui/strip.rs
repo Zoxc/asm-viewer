@@ -370,7 +370,7 @@ impl Component for TabHeader {
         // Consumed here, in the render, for the menu: its handler may not run a hook.
         let states = use_project_states();
         let open = states.open;
-        let keyboard = use_consume::<Keyboard>().0;
+        let keyboard = use_consume::<Keyboard>();
         let tab = self.tab;
         // Copied out for the menu: whether this chip is the tab on screen is what says
         // which of the window's keys the menu may claim.

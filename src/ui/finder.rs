@@ -507,7 +507,7 @@ impl Component for FinderOverlay {
         let finder = use_consume::<Finding>().0;
         let states = use_project_states();
         let visits = states.visits;
-        let keyboard = use_consume::<Keyboard>().0;
+        let keyboard = use_consume::<Keyboard>();
         // The panel's one focusable node is its box, so it is the box that answers for
         // the list under it: the rows are drawn live while the reader is typing at them,
         // and in the grey if the keyboard has gone elsewhere (`ui/picks.rs`).
@@ -693,7 +693,7 @@ fn note(text: &str) -> Element {
 fn finder_key(
     finder: State<Finder>,
     states: ProjectStates,
-    keyboard: State<Keys>,
+    keyboard: Keyboard,
     list: ScrollController,
     listed: &Listed,
     key: &Key,
@@ -794,7 +794,7 @@ fn followed(mut list: ScrollController, (at, rows): (usize, usize)) {
 fn open_found(
     finder: State<Finder>,
     states: ProjectStates,
-    keyboard: State<Keys>,
+    keyboard: Keyboard,
     path: &Path,
     reach: Reach,
 ) {
@@ -888,7 +888,7 @@ impl Component for FoundRow {
 
         let alt = use_consume::<Alt>().0;
         let ctrl = use_consume::<Ctrl>().0;
-        let keyboard = use_consume::<Keyboard>().0;
+        let keyboard = use_consume::<Keyboard>();
         let index = self.index;
 
         let Some(row) = self.rows.get(self.index) else {

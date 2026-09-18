@@ -334,7 +334,7 @@ fn toolbar() -> impl IntoElement {
 pub(crate) fn root_key_down(
     keys: ModifierKeys,
     states: ProjectStates,
-    keyboard: State<Keys>,
+    keyboard: Keyboard,
     finder: State<Finder>,
     language: State<Language>,
     jobs: &LspJobs,
@@ -437,7 +437,7 @@ pub(crate) fn root_key_down(
 pub(crate) struct Roots {
     pub(crate) prefs: State<EditedSettings>,
     pub(crate) active: Memo<Option<Entry>>,
-    pub(crate) keyboard: State<Keys>,
+    pub(crate) keyboard: Keyboard,
     pub(crate) follows: State<HashMap<Placing, bool>>,
     pub(crate) states: ProjectStates,
     pub(crate) doors: Doors,
@@ -560,7 +560,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     // The row each list has picked out. At the root and not in the panels: a panel that is
     // not its dock tab's is unmounted, and a pick outlives the reader looking elsewhere.
     context(Picks, HashMap::new());
-    let keyboard = context(Keyboard, Keys::default());
+    let keyboard = provide(Keyboard::create());
     let follows = context(Follows, HashMap::new());
     // The Shortcuts page's box. At the root for the reason the type gives: the page is
     // unmounted whenever another tab is on screen.

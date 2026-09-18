@@ -357,7 +357,7 @@ So `root_key_down` takes the **bundles** -- `ProjectStates`, which carries `Open
 -- and not a state per binding, which is what it did with two chords and could not go on doing:
 the states a chord wants are the states its door wants, so a parameter per key would have grown
 the list by one on every binding. What is still handed in by name is what belongs to no bundle:
-where the keyboard can be put (`Keys`, which the panel chords ask through), the finder, and the
+where the keyboard can be put (`Keyboard`, which the panel chords ask through), the finder, and the
 language server with the worker it is spoken to through.
 
 The rows are handed to the view as `&'static Gesture`, which is why `SECTIONS` is a `static`
@@ -634,7 +634,9 @@ code listing, the scratchpad's editor -- each registering itself while it is mou
 asked at the draw**, not a flag written when a box takes the focus, because focus is *lost* without
 an event: something else asks for it and nothing tells the loser. `AccessibilityId::is_focused`
 reads the platform's own state, so asking is what subscribes the chip to the focus moving -- and
-only the chip that is showing asks, or every chip would re-render whenever the keyboard moved.
+only the chip that is showing asks, or every chip would re-render whenever the keyboard moved. The
+ask is a state of its own beside the boxes, so the chip is not drawn again for each ask made and
+spent.
 
 **A chip is dragged along the bar to move it**, which is the one thing the bar asks freya for: each
 chip is a `DropZone<Tab>` around a `DragZone<Tab>`, the pattern freya's own docking uses, and a drop
