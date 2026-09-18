@@ -145,10 +145,10 @@ impl Component for SourceList {
         // pane's to guess. Nothing until it has said so -- so no link is ever drawn that
         // could not be followed, where a pane that lit them as soon as a server *started*
         // drew them through the minute it spends reading the project. Asked for by the
-        // pane ([`ShowingFile`]) and read here through `try_consume_context`, a pane mounted
+        // pane ([`ShowingFile`]) and read here through `use_try_consume`, a pane mounted
         // without one having no links; the answer is an `Arc` inside, so carrying it to
         // the rows is a pointer compare.
-        let links = try_consume_context::<Linking>()
+        let links = use_try_consume::<Linking>()
             .and_then(|held| held.0.read().links_in(&self.file).cloned())
             .unwrap_or_default();
 
@@ -158,7 +158,7 @@ impl Component for SourceList {
         let asking = use_row_states();
         let ctrl = use_consume::<Ctrl>().0;
         let server = try_use_server();
-        let hover = try_consume_context::<Hovering>().map(|hovering| hovering.0);
+        let hover = use_try_consume::<Hovering>().map(|hovering| hovering.0);
 
         let length = self.source.0.lines;
         // The tab's entry and not the file: see `SourceList::document`.

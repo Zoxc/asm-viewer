@@ -130,9 +130,9 @@ pub(crate) struct Server {
 /// All three contexts are asked for before any is dropped, so this takes the same slots
 /// on every render whatever it answers.
 pub(crate) fn try_use_server() -> Option<Server> {
-    let language = try_consume_context::<Talking>();
-    let follow = try_consume_context::<Following>();
-    let jobs = try_consume_context::<LspJobs>();
+    let language = use_try_consume::<Talking>();
+    let follow = use_try_consume::<Following>();
+    let jobs = use_try_consume::<LspJobs>();
     Some(Server {
         language: language?.0,
         follow: follow?.0,
