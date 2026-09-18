@@ -463,7 +463,13 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
     if let Some((id, _)) = on_top {
         // The document is already on top, so nothing is opened and `open_stop` never
         // runs: the push here is the only record that the reader was somewhere else in
-        // it a moment ago.
+        // it a moment ago. Which is why an instruction of the symbol on top is a place
+        // here and nowhere else: a call it makes to itself moves nothing, and without a
+        // stop of its own Back could not come back to the call.
+        let stop = match (&landing.tab, landing.address) {
+            (Document::Symbol(symbol), Some(address)) => Stop::in_symbol(symbol.clone(), address),
+            _ => stop,
+        };
         let moved = moved_to(open, id, &stop);
         // A move inside the document is a change of place, and every change of place is
         // `use_land`'s: it keeps the runs of the place being left and gives the arriving
@@ -527,7 +533,12 @@ fn stop_of(landing: &Landing) -> Stop {
         .as_ref()
         .filter(|at| matches!(&landing.tab, Document::Source(file) if at.pos.file == *file))
         .map(|at| at.pos.line);
-    Stop::paired(landing.tab.clone(), landing.address, line)
+    // A symbol's address is a caret in it and not a place, but for a door into the symbol
+    // already on top, which `land` makes a place of for itself.
+    let address = landing
+        .address
+        .filter(|_| !matches!(landing.tab, Document::Symbol(_)));
+    Stop::paired(landing.tab.clone(), address, line)
 }
 
 /// Put `stop` on the trail of `id`, a tab already showing its document, where it is a
@@ -728,9 +739,7 @@ pub(crate) fn show_in_code(
     );
     if let Some(id) = id {
         let mut code_at = doors.places.code_at;
-        code_at
-            .write()
-            .remember((id, stop), Spot { address, rows: 0 });
+        code_at.write().remember((id, stop), Spot::at(address));
     }
 }
 

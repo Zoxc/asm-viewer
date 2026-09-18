@@ -269,10 +269,10 @@ pub(crate) enum Placing {
 #[derive(Clone, Copy)]
 pub(crate) struct Places {
     /// Which row each place had its **assembly** side left on.
-    pub(crate) asm_at: State<Positions<Entry>>,
+    pub(crate) asm_at: State<Positions<Entry, TopRow>>,
     /// The other half: which row its **source** side was left on, keyed by the same entry
     /// rather than by the file the pane happens to be showing.
-    pub(crate) src_at: State<Positions<Entry>>,
+    pub(crate) src_at: State<Positions<Entry, TopRow>>,
     /// Where a listing of an object's whole code was left, as an address: its rows are
     /// counted afresh with every answer, so a row number would mean nothing for long.
     pub(crate) code_at: State<Positions<Entry, Spot>>,

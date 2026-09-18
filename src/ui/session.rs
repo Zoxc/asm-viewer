@@ -461,13 +461,21 @@ fn place_entries(places: Places, id: DocId, entries: Vec<RestoredEntry>) {
         // The place itself, address and line and all: two stops in one object's code, or
         // in one file, are two keys, as they were when they were saved.
         let key = (id, entry.stop());
-        asm.remember(key.clone(), entry.asm_row);
         src.remember(key.clone(), entry.src_row);
         if let Some(line) = entry.line {
             from.remember(key.clone(), line);
         }
-        if let Some(address) = entry.address {
-            code.remember(key, Spot { address, rows: 0 });
+        // An object's code keeps its place as an address and the rows past it; every other
+        // listing, as a row.
+        match entry.address {
+            Some(address) => code.remember(
+                key,
+                Spot {
+                    address,
+                    past: entry.asm_row,
+                },
+            ),
+            None => asm.remember(key, entry.asm_row),
         }
     }
 }

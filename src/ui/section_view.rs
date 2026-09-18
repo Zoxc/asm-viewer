@@ -954,7 +954,8 @@ struct Held {
 /// re-issued until a run finds the view there, a few times and no more.
 #[derive(Clone, Copy)]
 struct Move {
-    /// The place the move was to.
+    /// The place the move was to, with how far into its row: what it is issued at, and
+    /// issued again at.
     to: Spot,
     /// How often it has been issued again.
     tries: usize,
@@ -973,12 +974,12 @@ impl Move {
         row_of(built, self.to) == Some(row) || self.tries >= Self::TRIES
     }
 
-    /// The row to issue the move at again, counting the try. [`None`] where the place
-    /// has no row in the rows there are now; the run stops there all the same, the move
-    /// still owed.
-    fn retry(&mut self, built: &Built) -> Option<usize> {
+    /// Where to issue the move again, counting the try. [`None`] where the place has no
+    /// row in the rows there are now; the run stops there all the same, the move still
+    /// owed.
+    fn retry(&mut self, built: &Built) -> Option<TopRow> {
         self.tries += 1;
-        row_of(built, self.to)
+        top_of(built, self.to)
     }
 }
 
@@ -1012,11 +1013,9 @@ struct At {
     /// The row at the top of the pane, before it is clamped: the offset was scrolled
     /// against the rows there were, and a rebuild clamps it against those instead.
     scrolled: usize,
-    /// That row among the rows this run has.
-    row: usize,
-    /// How far past the top row's edge the view is.
-    remainder: f64,
-    /// The place the top row stands for.
+    /// That row among the rows this run has, and how far into it the view is.
+    top: TopRow,
+    /// The place the top of the pane stands for.
     derived: Option<Spot>,
     /// The place the map holds for the tab.
     known: Option<Spot>,
@@ -1040,14 +1039,14 @@ impl At {
         top: f64,
         height: f64,
     ) -> At {
-        let scrolled = (top / height) as usize;
-        let row = scrolled.min(built.len().saturating_sub(1));
+        let scrolled = TopRow::of_offset(top, height);
+        // Past the last row the top of it, with no part of a row to keep.
+        let top = scrolled.within(built.len());
         let known = step.tab.as_ref().and_then(|tab| places.read().at(tab));
         At {
-            scrolled,
-            row,
-            remainder: top - row as f64 * height,
-            derived: spot_at(built, row),
+            scrolled: scrolled.row,
+            top,
+            derived: spot_of(built, top),
             known,
             written: known != was,
         }
@@ -1110,8 +1109,8 @@ fn use_kept_place(
             // and read back through one would not agree with itself.
             let height = code_row_height() as f64;
             let top = f64::from((-offset).max(0));
-            let to_offset =
-                |rows: f64| -> i32 { -((rows * height).round().min(i32::MAX as f64) as i32) };
+            // Nowhere past the rows to hold a move to: the view clamps it as it draws.
+            let scroll_to = |top: TopRow| scroll_y(top, height, f64::INFINITY);
 
             let Some(generation) = generation else {
                 if rows.peek().is_some() {
@@ -1155,13 +1154,13 @@ fn use_kept_place(
             // there, and left where it is on a run that switches tab or counts the rows
             // afresh, which chooses its own target below.
             if let Some(mut moving) = state.moving {
-                if moving.arrived(&built, at.row) {
+                if moving.arrived(&built, at.top.row) {
                     state.moving = None;
                 } else if !step.switching && !step.rebuilt {
                     let to = moving.retry(&built);
                     state.moving = Some(moving);
                     if let Some(to) = to {
-                        controller.scroll_to_y(to_offset(to as f64));
+                        controller.scroll_to_y(scroll_to(to));
                     }
                     return;
                 }
@@ -1186,15 +1185,26 @@ fn use_kept_place(
             let Some(target) = target else {
                 return;
             };
-            let Some(to) = row_of(&built, target) else {
+            // A place arriving brings how far into its row it was left; otherwise the view
+            // keeps its own, so a chunk landing above does not snap it to a row edge.
+            let into = if step.switching {
+                target.past.into
+            } else {
+                at.top.into
+            };
+            let target = Spot {
+                past: TopRow {
+                    into,
+                    ..target.past
+                },
+                ..target
+            };
+            let Some(to) = top_of(&built, target) else {
                 return;
             };
-            if to != at.row || (step.rebuilt && step.switching) {
-                // Keeping the sub-row remainder, so a chunk landing above does not snap
-                // the view to a row edge.
-                let keep = if step.switching { 0.0 } else { at.remainder };
-                controller.scroll_to_y(to_offset(to as f64 + keep / height));
-                state.derived = spot_at(&built, to);
+            if to != at.top || (step.rebuilt && step.switching) {
+                controller.scroll_to_y(scroll_to(to));
+                state.derived = spot_of(&built, to);
                 state.moving = Some(Move {
                     to: target,
                     tries: 0,
@@ -1301,7 +1311,7 @@ fn plant_caret(
         row,
         Spot {
             address,
-            rows: row.saturating_sub(first),
+            past: TopRow::at(row.saturating_sub(first)),
         },
     ))
 }
@@ -1472,18 +1482,38 @@ fn file_at(built: &Built, row: usize) -> Option<Arc<str>> {
 /// the address is inside one -- and the rows past it, clamped to the listing. [`None`]
 /// for an address in no stretch.
 pub(crate) fn row_of(rows: &Rows, spot: Spot) -> Option<usize> {
+    top_of(rows, spot).map(|top| top.row)
+}
+
+/// [`row_of`] with how far into the row: where the top of a pane goes to put `spot` there.
+fn top_of(rows: &Rows, spot: Spot) -> Option<TopRow> {
     let first = rows.row_for(spot.address)?;
-    Some((first + spot.rows).min(rows.len().saturating_sub(1)))
+    let past = spot.past;
+    Some(
+        TopRow {
+            row: first + past.row,
+            ..past
+        }
+        .within(rows.len()),
+    )
 }
 
 /// The place row `row` stands for: its address and how many rows past that address's own
 /// row it is.
 pub(crate) fn spot_at(rows: &Rows, row: usize) -> Option<Spot> {
-    let address = rows.address_of(row)?;
+    spot_of(rows, TopRow::at(row))
+}
+
+/// [`spot_at`] with how far into the row: the place the top of a pane at `top` stands for.
+fn spot_of(rows: &Rows, top: TopRow) -> Option<Spot> {
+    let address = rows.address_of(top.row)?;
     let first = rows.row_for(address)?;
     Some(Spot {
         address,
-        rows: row.saturating_sub(first),
+        past: TopRow {
+            row: top.row.saturating_sub(first),
+            ..top
+        },
     })
 }
 

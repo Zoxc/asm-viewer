@@ -59,7 +59,7 @@ fn harness() -> impl IntoElement {
 #[derive(Clone, Copy)]
 struct KeptTab(State<Entry>);
 #[derive(Clone, Copy)]
-struct KeptAt(State<Positions<Entry>>);
+struct KeptAt(State<Positions<Entry, TopRow>>);
 /// The tabs that are open and the trail behind each, which is what a position is only
 /// kept for.
 #[derive(Clone, Copy)]
@@ -230,7 +230,7 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
     assert!(left_at > 0, "the wheel moved nothing");
     // The scroll was written down as it happened, which is what survives the window merely
     // being closed.
-    assert_eq!(at.peek().at(&a), Some(left_at));
+    assert_eq!(at.peek().at(&a).map(|at| at.row), Some(left_at));
 
     // A tab this pane has never shown starts at the top, and pointedly not at the offset
     // the tab before it was at.
@@ -238,7 +238,7 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
     test.sync_and_update();
     assert_eq!(top_row(&mut test), 0);
     // And the tab left behind is remembered, not overwritten by where the new one is.
-    assert_eq!(at.peek().at(&a), Some(left_at));
+    assert_eq!(at.peek().at(&a).map(|at| at.row), Some(left_at));
 
     tab.set(a.clone());
     test.sync_and_update();
@@ -928,13 +928,7 @@ fn the_bar_offers_a_close_or_a_save_and_a_delete() {
         .max_by(|a, b| a.origin.x.total_cmp(&b.origin.x))
         .expect("the rightmost of the two")
     };
-    press_at(
-        &mut test,
-        (
-            (last.origin.x + last.width() / 2.0) as f64,
-            (last.origin.y + last.height() / 2.0) as f64,
-        ),
-    );
+    press_at(&mut test, middle(last));
     settle(&mut test);
     assert_eq!(deleting.peek().as_deref(), Some("Unsaved project 1"));
     assert!(
@@ -1138,13 +1132,7 @@ fn a_page_picked_with_no_project_opens_as_a_tab() {
                 (area.width() == toggle_size() && area.height() == toggle_size()).then_some(area)
             })
             .expect("the button is a square of its own");
-        press_at(
-            test,
-            (
-                (area.origin.x + area.width() / 2.0) as f64,
-                (area.origin.y + area.height() / 2.0) as f64,
-            ),
-        );
+        press_at(test, middle(area));
         settle(test);
     };
 
@@ -1360,8 +1348,8 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     went(tab(&second));
     went(source.clone());
     let (first_entry, source_entry) = (entry_of(&states, &tab(&first)), entry_of(&states, &source));
-    asm_at.write().remember(first_entry.clone(), 12);
-    src_at.write().remember(source_entry.clone(), 7);
+    asm_at.write().remember(first_entry.clone(), TopRow::at(12));
+    src_at.write().remember(source_entry.clone(), TopRow::at(7));
     test.sync_and_update();
 
     assert_eq!(open_documents(states.open).len(), 3);
@@ -2073,13 +2061,7 @@ fn the_tab_list_closes_a_tab_from_its_own_row() {
         .into_iter()
         .next()
         .expect("the × on that row");
-    press_at(
-        &mut test,
-        (
-            (close.origin.x + close.width() / 2.0) as f64,
-            (close.origin.y + close.height() / 2.0) as f64,
-        ),
-    );
+    press_at(&mut test, middle(close));
     settle(&mut test);
 
     assert!(
@@ -2821,10 +2803,7 @@ fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
             (area.width() == toggle_size() && area.height() == toggle_size()).then_some(area)
         })
         .expect("the button is a square of its own");
-    let button = (
-        (area.origin.x + area.width() / 2.0) as f64,
-        (area.origin.y + area.height() / 2.0) as f64,
-    );
+    let button = middle(area);
     press_at(&mut test, button);
     settle(&mut test);
 
@@ -3008,13 +2987,7 @@ fn a_tab_opened_leaves_the_pages_button_alone_while_its_menu_is_down() {
 
     // The other half. With the menu up, a page opened under it is marked without the
     // reader closing and reopening the menu.
-    press_at(
-        &mut test,
-        (
-            (area.origin.x + area.width() / 2.0) as f64,
-            (area.origin.y + area.height() / 2.0) as f64,
-        ),
-    );
+    press_at(&mut test, middle(area));
     settle(&mut test);
     let plain = row_background(&test, Page::Settings.title());
     let mut strip = states.open.strip;
@@ -3056,13 +3029,7 @@ fn the_pages_menu_says_the_key_beside_the_items_that_have_one() {
             (area.width() == toggle_size() && area.height() == toggle_size()).then_some(area)
         })
         .expect("the button is a square of its own");
-    press_at(
-        &mut test,
-        (
-            (area.origin.x + area.width() / 2.0) as f64,
-            (area.origin.y + area.height() / 2.0) as f64,
-        ),
-    );
+    press_at(&mut test, middle(area));
     settle(&mut test);
 
     let drawn = labels(&test);
@@ -3138,13 +3105,7 @@ fn closing_a_page_lands_on_its_neighbour_and_keeps_what_it_held() {
         .into_iter()
         .min_by(|left, right| left.origin.x.total_cmp(&right.origin.x))
         .expect("the × on the page's chip");
-    press_at(
-        &mut test,
-        (
-            (close.origin.x + close.width() / 2.0) as f64,
-            (close.origin.y + close.height() / 2.0) as f64,
-        ),
-    );
+    press_at(&mut test, middle(close));
     settle(&mut test);
     let strip = states.open.strip.peek();
     assert_eq!(
@@ -3764,10 +3725,7 @@ fn a_press_beside_the_glyph_still_closes_the_tab() {
     test.sync_and_update();
     let target = one_close_target(&mut test, &states);
 
-    let centre = (
-        (target.origin.x + target.width() / 2.0) as f64,
-        (target.origin.y + target.height() / 2.0) as f64,
-    );
+    let centre = middle(target);
     let press = |test: &mut TestingRunner, at: (f64, f64)| {
         test.move_cursor(at);
         test.press_cursor(at);
@@ -3829,10 +3787,7 @@ fn the_close_target_lights_under_the_pointer() {
         "the × is lit before the pointer is on it"
     );
 
-    let centre = (
-        (target.origin.x + target.width() / 2.0) as f64,
-        (target.origin.y + target.height() / 2.0) as f64,
-    );
+    let centre = middle(target);
     test.move_cursor(centre);
     test.sync_and_update();
     assert_eq!(
@@ -4026,8 +3981,8 @@ fn a_bulk_close_forgets_the_tabs_it_closed_and_no_others() {
     let (mut asm_at, mut src_at) = (states.places.asm_at, states.places.src_at);
     for document in &documents {
         let entry = entry_of(&states, document);
-        asm_at.write().remember(entry.clone(), 3);
-        src_at.write().remember(entry, 7);
+        asm_at.write().remember(entry.clone(), TopRow::at(3));
+        src_at.write().remember(entry, TopRow::at(7));
     }
     test.sync_and_update();
 
@@ -4162,7 +4117,7 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
         .map(|document| entry_of(&states, document))
         .collect();
     for (row, entry) in entries.iter().enumerate() {
-        asm_at.write().remember(entry.clone(), row + 1);
+        asm_at.write().remember(entry.clone(), TopRow::at(row + 1));
     }
     test.sync_and_update();
 
@@ -4184,7 +4139,7 @@ fn closing_the_other_tabs_keeps_the_one_it_was_opened_on() {
     );
     assert_eq!(
         states.places.asm_at.peek().at(&entries[1]),
-        Some(2),
+        Some(TopRow::at(2)),
         "the kept tab lost the row it was left at"
     );
     assert!(
@@ -6799,10 +6754,7 @@ fn link_area(test: &TestingRunner, text: &str) -> Option<Area> {
 /// The middle of [`link_area`], as a point to press.
 fn link_centre(test: &TestingRunner, text: &str) -> (f64, f64) {
     let area = link_area(test, text).unwrap_or_else(|| panic!("{text:?} is drawn as a link"));
-    (
-        (area.origin.x + area.width() / 2.0) as f64,
-        (area.origin.y + area.height() / 2.0) as f64,
-    )
+    middle(area)
 }
 
 /// A server that is running, started as the project's boxes say, and has answered what
@@ -11027,10 +10979,7 @@ fn a_press_on_a_call_with_no_server_picks_the_line_out() {
 /// Where the label reading `text` is, as a point to put the pointer on.
 fn centre_of(test: &TestingRunner, text: &str) -> (f64, f64) {
     let area = label_area(test, text).unwrap_or_else(|| panic!("{text:?} is drawn"));
-    (
-        (area.origin.x + area.width() / 2.0) as f64,
-        (area.origin.y + area.height() / 2.0) as f64,
-    )
+    middle(area)
 }
 
 /// A right-click, which no `TestingRunner` method sends. The popup is placed at the last
@@ -11699,11 +11648,18 @@ fn listing_harness() -> impl IntoElement {
 fn listing_states(shown: Shown) -> Roots {
     let roots = test_roots();
     let mut analysis = roots.analysis;
-    analysis.set(Analyzed {
+    analysis.set(answered(shown));
+    roots
+}
+
+/// `shown` as the worker leaves an answer: drawn, and the last question answered, which
+/// is what says the listing is its place's (`use_drawn_place`).
+fn answered(shown: Shown) -> Analyzed {
+    Analyzed {
+        answered: Some(shown.ask.clone()),
         shown: Some(shown),
         ..Analyzed::default()
-    });
-    roots
+    }
 }
 
 /// A listing scrolled by a separator's distance puts a *different* separator in the slot
@@ -13002,10 +12958,7 @@ fn triangle_of(test: &TestingRunner) -> (f64, f64) {
         .expect("the bar draws a disclosure triangle")
         .layout()
         .area;
-    (
-        (area.origin.x + area.width() / 2.0) as f64,
-        (area.origin.y + area.height() / 2.0) as f64,
-    )
+    middle(area)
 }
 
 /// The section under the bar says what the Info pane said, and a little more -- the address
@@ -13406,7 +13359,9 @@ fn a_tab_opens_its_source_side_on_the_symbols_own_lines() {
     // And a tab that has been somewhere comes back to where it was, over the symbol's
     // own lines: the first open is the only one this answers.
     let mut src_at = states.places.src_at;
-    src_at.write().remember(entry_of(&states, &document), 120);
+    src_at
+        .write()
+        .remember(entry_of(&states, &document), TopRow::at(120));
     let mut mounted = mounted;
     mounted.set(false);
     land(&mut test);
@@ -17784,10 +17739,7 @@ fn label_centre(test: &TestingRunner, text: &str) -> Option<(f64, f64)> {
             return None;
         }
         let area = node.layout().area;
-        Some((
-            (area.origin.x + area.width() / 2.0) as f64,
-            (area.origin.y + area.height() / 2.0) as f64,
-        ))
+        Some(middle(area))
     })
 }
 
@@ -20049,12 +20001,11 @@ fn rows_of(reading: &Reading) -> Arc<Rows> {
     Arc::new(Rows::new(code.code().clone(), |flat| reading.body(flat)))
 }
 
-/// The address labels drawn, top to bottom.
-fn address_labels(test: &TestingRunner) -> Vec<String> {
-    let mut drawn: Vec<(f32, String)> = test.find_many(|node, element| {
+/// The address labels drawn and where each is, top to bottom.
+fn address_label_rows(test: &TestingRunner) -> Vec<(f32, String)> {
+    let mut drawn: Vec<(f32, String)> = test.find_many(|node, _element| {
         use freya::elements::label::LabelElement;
         use std::any::Any;
-        let _ = element;
         let element = node.element();
         let label = (element.as_ref() as &dyn Any).downcast_ref::<LabelElement>()?;
         let text = label.text.to_string();
@@ -20062,7 +20013,21 @@ fn address_labels(test: &TestingRunner) -> Vec<String> {
             .then(|| (node.layout().area.origin.y, text))
     });
     drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
-    drawn.into_iter().map(|(_, text)| text).collect()
+    drawn
+}
+
+/// The address labels drawn, top to bottom.
+fn address_labels(test: &TestingRunner) -> Vec<String> {
+    address_label_rows(test)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
+}
+
+/// Where the topmost address label is drawn: what says how far into a row a pane is
+/// scrolled, which the labels alone cannot.
+fn first_label_y(test: &TestingRunner) -> f32 {
+    address_label_rows(test).first().map_or(0.0, |(y, _)| *y)
 }
 
 /// Before a byte is decoded, a code tab draws its section's header, a label for every
@@ -20195,7 +20160,7 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
             .at(&entry_of(&states, &document)),
         Some(Spot {
             address: 0x30,
-            rows: 2
+            past: TopRow::at(2)
         }),
         "the place is written down as the reader scrolls: two rows past the rule over \
          the stretch, which is the row the address itself finds"
@@ -20238,13 +20203,11 @@ fn a_code_tab_comes_back_to_the_address_it_was_left_at() {
     let mut states = roots.states;
     let document = Document::Code(object.clone());
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
-    states.places.code_at.write().remember(
-        entry_of(&states, &document),
-        Spot {
-            address: 0x14,
-            rows: 0,
-        },
-    );
+    states
+        .places
+        .code_at
+        .write()
+        .remember(entry_of(&states, &document), Spot::at(0x14));
     settle(&mut test);
     settle(&mut test);
 
@@ -20306,7 +20269,7 @@ fn closing_a_code_tab_forgets_its_address() {
         entry.clone(),
         Spot {
             address: 0x30,
-            rows: 2,
+            past: TopRow::at(2),
         },
     );
     test.sync_and_update();
@@ -20597,22 +20560,7 @@ fn a_carried_run_keeps_the_caret_at_the_end_it_was_swept_to() {
             assembly: Some(swept),
             source: None,
         },
-        spots: vec![
-            (
-                20,
-                Spot {
-                    address: 0x20,
-                    rows: 0,
-                },
-            ),
-            (
-                40,
-                Spot {
-                    address: 0x40,
-                    rows: 0,
-                },
-            ),
-        ],
+        spots: vec![(20, Spot::at(0x20)), (40, Spot::at(0x40))],
         generation: Some(0),
     };
 
@@ -21076,10 +21024,7 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, first)),
-        Some(Spot {
-            address: first,
-            rows: 0
-        })
+        Some(Spot::at(first))
     );
     let landed = landing.peek().clone().expect("the line is left to land");
     assert!(landed.tab == code);
@@ -21304,10 +21249,7 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, target)),
-        Some(Spot {
-            address: target,
-            rows: 0
-        })
+        Some(Spot::at(target))
     );
     // The instruction is left to land, and no line: the target's row is not this one.
     let landed = landing.peek().clone().expect("the target is left to land");
@@ -21349,10 +21291,7 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     // The operand naming `add`, which `sum_to` calls: the label row over it reads
     // `add:` and is a different string, and an `add` mnemonic is its row's first span.
     let area = link_area(&test, "add").expect("the link is drawn");
-    let link = (
-        (area.origin.x + area.width() / 2.0) as f64,
-        (area.origin.y + area.height() / 2.0) as f64,
-    );
+    let link = middle(area);
     press_at(&mut test, link);
     settle(&mut test);
     settle(&mut test);
@@ -21388,10 +21327,7 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, add.address)),
-        Some(Spot {
-            address: add.address,
-            rows: 0
-        })
+        Some(Spot::at(add.address))
     );
 
     // With Ctrl held it is the other door: the symbol alone, beside the listing. Pressed
@@ -21623,11 +21559,12 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     let call = (0..rows.len())
         .find(|&row| row_line(&rows, row).contains("call"))
         .expect("sum_to calls add");
+    // Part way into a row, as a wheel leaves a pane.
     test.scroll(
         (300., 150.),
         (
             0.,
-            -(call.saturating_sub(2) as f64) * code_row_height() as f64,
+            -(call.saturating_sub(2) as f64) * code_row_height() as f64 - 7.0,
         ),
     );
     settle(&mut test);
@@ -21637,18 +21574,12 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
         .peek()
         .at(&entry_of(&states, &code))
         .expect("the place the reader is at is written down");
-    let shown = address_labels(&test);
+    let (shown, shown_y) = (address_labels(&test), first_label_y(&test));
     assert!(!shown.is_empty(), "the pane is drawing nothing");
 
     // Follow the call.
     let area = link_area(&test, "add").expect("the link is drawn");
-    press_at(
-        &mut test,
-        (
-            (area.origin.x + area.width() / 2.0) as f64,
-            (area.origin.y + area.height() / 2.0) as f64,
-        ),
-    );
+    press_at(&mut test, middle(area));
     settle(&mut test);
     settle(&mut test);
     let trail: Vec<Stop> = states
@@ -21691,6 +21622,11 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
         shown,
         "Back did not come back to the rows the place was left at"
     );
+    assert_eq!(
+        first_label_y(&test),
+        shown_y,
+        "Back came back to the top of the row and not part way into it"
+    );
     // And the place jumped to keeps its own row, for Forward to come back to.
     assert_eq!(
         states
@@ -21698,10 +21634,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
             .code_at
             .peek()
             .at(&code_entry_of(&states, &code, add.address)),
-        Some(Spot {
-            address: add.address,
-            rows: 0
-        })
+        Some(Spot::at(add.address))
     );
 }
 
@@ -22719,13 +22652,10 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
 
     // The worker's answer: the listing is drawn, and the caret is on the row.
     let mut analysis = roots.analysis;
-    analysis.set(Analyzed {
-        shown: Some(Shown {
-            ask: Ask::Symbol(twice.clone()),
-            studied: studied.clone(),
-        }),
-        ..Analyzed::default()
-    });
+    analysis.set(answered(Shown {
+        ask: Ask::Symbol(twice.clone()),
+        studied: studied.clone(),
+    }));
     settle(&mut test);
     settle(&mut test);
     let (assembly, source) = runs_of(doors.marked);
@@ -22796,13 +22726,10 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
 
     // The first symbol's listing comes, and its tab is raised: nothing is planted.
     let mut analysis = roots.analysis;
-    analysis.set(Analyzed {
-        shown: Some(Shown {
-            ask: Ask::Symbol(first),
-            studied,
-        }),
-        ..Analyzed::default()
-    });
+    analysis.set(answered(Shown {
+        ask: Ask::Symbol(first),
+        studied,
+    }));
     raise_document(&states, &first_tab);
     settle(&mut test);
     settle(&mut test);
@@ -22853,13 +22780,10 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
     let tab = Document::Symbol(shown.clone());
     open_document(states.open, states.visits, tab.clone(), Reach::NewTab);
     let mut analysis = roots.analysis;
-    analysis.set(Analyzed {
-        shown: Some(Shown {
-            ask: Ask::Symbol(shown),
-            studied,
-        }),
-        ..Analyzed::default()
-    });
+    analysis.set(answered(Shown {
+        ask: Ask::Symbol(shown),
+        studied,
+    }));
     settle(&mut test);
     settle(&mut test);
 
@@ -24537,12 +24461,7 @@ fn a_press_in_the_gutter_places_the_caret_and_a_sweep_takes_whole_rows() {
         .map(|(_, area)| area)
         .collect::<Vec<_>>();
     let (first, second) = (addresses[0], addresses[1]);
-    let centre = |area: Area| {
-        (
-            (area.origin.x + area.width() / 2.0) as f64,
-            (area.origin.y + area.height() / 2.0) as f64,
-        )
-    };
+    let centre = |area: Area| middle(area);
 
     test.move_cursor(centre(first));
     test.press_cursor(centre(first));
@@ -24871,13 +24790,7 @@ fn alt_held_shuts_the_unified_views_own_door() {
     alt.set(true);
     settle(&mut test);
     let label = label_area(&test, "sum_to:").expect("sum_to is labelled");
-    press_at(
-        &mut test,
-        (
-            (label.origin.x + label.width() / 2.0) as f64,
-            (label.origin.y + label.height() / 2.0) as f64,
-        ),
-    );
+    press_at(&mut test, middle(label));
     settle(&mut test);
     assert!(
         states.open.active() == Some(code),
@@ -26305,7 +26218,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
     let mut asm_at = states.places.asm_at;
     asm_at
         .write()
-        .remember((id, Stop::whole(documents[0].clone())), 12);
+        .remember((id, Stop::whole(documents[0].clone())), TopRow::at(12));
     for document in &documents[1..] {
         let landed = open_document(states.open, states.visits, document.clone(), Reach::InPlace);
         assert_eq!(landed, Some(id), "a link opened a tab of its own");
@@ -26324,7 +26237,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
             .asm_at
             .peek()
             .at(&(id, Stop::whole(documents[0].clone()))),
-        Some(12),
+        Some(TopRow::at(12)),
         "the row of the place left was forgotten"
     );
 
@@ -26347,7 +26260,7 @@ fn a_link_inside_a_tab_is_followed_in_place_and_back_returns() {
             .asm_at
             .peek()
             .at(&(id, Stop::whole(documents[0].clone()))),
-        Some(12)
+        Some(TopRow::at(12))
     );
     navigate(states.open, Nav::Forward);
     test.sync_and_update();
@@ -26751,10 +26664,10 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
     let mut asm_at = states.places.asm_at;
     asm_at
         .write()
-        .remember((survivor, Stop::whole(symbol.clone())), 12);
+        .remember((survivor, Stop::whole(symbol.clone())), TopRow::at(12));
     asm_at
         .write()
-        .remember((survivor, Stop::whole(source.clone())), 3);
+        .remember((survivor, Stop::whole(source.clone())), TopRow::at(3));
     test.sync_and_update();
     assert_eq!(open_documents(states.open).len(), 2);
 
@@ -26779,7 +26692,7 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
             .asm_at
             .peek()
             .at(&(survivor, Stop::whole(source.clone()))),
-        Some(3)
+        Some(TopRow::at(3))
     );
     assert!(states.visits.peek().entries() == [source]);
 }
@@ -28581,13 +28494,10 @@ fn studied_named(name: &str) -> (Symbol, Studied) {
 
 /// `studied` in the analysis, as the worker's answer about `symbol`.
 fn show_studied(mut analysis: State<Analyzed>, symbol: &Symbol, studied: &Studied) {
-    analysis.set(Analyzed {
-        shown: Some(Shown {
-            ask: Ask::Symbol(symbol.clone()),
-            studied: studied.clone(),
-        }),
-        ..Analyzed::default()
-    });
+    analysis.set(answered(Shown {
+        ask: Ask::Symbol(symbol.clone()),
+        studied: studied.clone(),
+    }));
 }
 
 /// What a bar over `studied`'s listing searches.
@@ -30882,13 +30792,7 @@ fn the_recent_projects_are_read_once_for_the_project_on_screen() {
             (square && handled).then_some(area)
         })
         .expect("the menu's button");
-    press_at(
-        &mut test,
-        (
-            (button.origin.x + button.width() / 2.0) as f64,
-            (button.origin.y + button.height() / 2.0) as f64,
-        ),
-    );
+    press_at(&mut test, middle(button));
     settle(&mut test);
     assert_eq!(
         label_colour(&test, "Open recent"),
@@ -35036,13 +34940,7 @@ fn alt_in_the_finder_moves_to_the_row_and_opens_nothing() {
     keys.down(&Key::Named(NamedKey::Alt), Modifiers::empty());
     settle(&mut test);
     let at = wanted.1;
-    press_at(
-        &mut test,
-        (
-            (at.origin.x + at.width() / 2.0) as f64,
-            (at.origin.y + at.height() / 2.0) as f64,
-        ),
-    );
+    press_at(&mut test, middle(at));
     settle(&mut test);
 
     assert!(finder.peek().open, "an Alt+press closed the finder");
@@ -35074,12 +34972,7 @@ fn a_pick_and_a_press_open_the_row_and_close_the_finder() {
         std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
     }
     let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
-    let centre_of_row = |at: Area| {
-        (
-            (at.origin.x + at.width() / 2.0) as f64,
-            (at.origin.y + at.height() / 2.0) as f64,
-        )
-    };
+    let centre_of_row = |at: Area| middle(at);
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -37297,4 +37190,353 @@ fn a_question_is_marked_before_it_goes_out() {
         [(1, true)],
         "the question went out before it was marked"
     );
+}
+
+/// Two symbols of the gcc fixture, each drawn beside a file of its own: `sum_to`, long,
+/// beside a long file, and `add`, short, beside a short one. The window shows six code
+/// rows, so the long ones scroll and the short ones hardly do. Handed back with the guard
+/// holding the two files.
+struct Followed {
+    test: TestingRunner,
+    roots: Roots,
+    sum_to: Symbol,
+    add: Symbol,
+    long: Arc<str>,
+    short: Arc<str>,
+    _files: Seeded,
+}
+
+impl Followed {
+    fn new() -> Followed {
+        let symbols = fixture_symbols();
+        let named = |name: &str| {
+            symbols
+                .iter()
+                .find(|symbol| symbol.data.name == name)
+                .expect("the fixture holds it")
+                .clone()
+        };
+        let (sum_to, add) = (named("sum_to"), named("add"));
+        let files = Seeded::directory("following");
+        let lines = |count: usize| -> String {
+            (1..=count)
+                .map(|n| format!("int line_{n}(void);\n"))
+                .collect()
+        };
+        let long = files.named("long.c", &lines(80));
+        let short = files.named("short.c", &lines(3));
+        let (test, roots) = TestingRunner::new(
+            navigating_harness,
+            (1200., 6.0 * code_row_height() + 60.).into(),
+            |runner: &mut _| runner.provide_root_context(test_roots),
+            1.,
+        );
+        Followed {
+            test,
+            roots,
+            sum_to,
+            add,
+            long,
+            short,
+            _files: files,
+        }
+    }
+
+    /// `symbol`'s listing as the worker answers `ask` with it, drawn beside `file`.
+    fn answer(&mut self, ask: Ask, symbol: &Symbol, file: &Arc<str>) {
+        let mut studied = Studied::new(symbol.clone());
+        studied.lines.file = Some(file.clone());
+        studied.lines.line = None;
+        let mut analysis = self.roots.analysis;
+        analysis.set(answered(Shown { ask, studied }));
+        settle(&mut self.test);
+        settle(&mut self.test);
+    }
+
+    /// The same for a symbol's own tab.
+    fn answer_symbol(&mut self, symbol: &Symbol) {
+        let file = if symbol.data.name == "add" {
+            self.short.clone()
+        } else {
+            self.long.clone()
+        };
+        self.answer(Ask::Symbol(symbol.clone()), symbol, &file);
+    }
+
+    /// The top of the pane on the left, or the right: the text of its first row and where
+    /// it is drawn, which says how far into that row the pane is scrolled.
+    fn top(&self, left: bool) -> (String, f32) {
+        let mut rows: Vec<(Area, String)> = paragraphs(&self.test)
+            .into_iter()
+            .filter(|(area, _, _)| (area.min_x() < 600.0) == left)
+            .map(|(area, text, _)| (area, text))
+            .collect();
+        rows.sort_by(|a, b| a.0.origin.y.total_cmp(&b.0.origin.y));
+        rows.first()
+            .map(|(area, text)| (text.clone(), area.origin.y))
+            .unwrap_or_default()
+    }
+
+    /// Scroll the pane on `side` down by `rows` rows and part of one more.
+    fn scroll(&mut self, side: f64, rows: usize) {
+        self.test.scroll(
+            (side, 60.),
+            (0., -(rows as f64) * code_row_height() as f64 - 7.0),
+        );
+        settle(&mut self.test);
+    }
+}
+
+/// **A caret planted for a tab of its own goes into that tab's listing.** Ctrl on a link
+/// opens the target beside, and the new tab first draws the listing it was opened from --
+/// the analysis is one for every tab -- so a caret planted for the target in the first
+/// render was spent on the wrong listing and lost.
+#[test]
+fn a_link_followed_into_a_tab_of_its_own_lands_the_caret_there() {
+    let mut world = Followed::new();
+    let (states, doors) = (world.roots.states, world.roots.doors);
+    let (sum_to, add) = (world.sum_to.clone(), world.add.clone());
+    world.answer_symbol(&sum_to);
+    open_document(
+        states.open,
+        states.visits,
+        Document::Symbol(sum_to.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut world.test);
+
+    // Down to the call, which is below the fold.
+    world.scroll(100., call_row(&sum_to) - 1);
+    let mut ctrl = world.roots.keys.ctrl;
+    ctrl.set(true);
+    settle(&mut world.test);
+    let at = link_centre(&world.test, "add");
+    press_at(&mut world.test, at);
+    settle(&mut world.test);
+    assert!(states.open.active() == Some(Document::Symbol(add.clone())));
+    assert!(
+        doors.marked.peek().assembly.is_none(),
+        "a caret was planted in the listing being left"
+    );
+    world.answer_symbol(&add);
+    let caret = doors
+        .marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("no caret was planted");
+    assert_eq!(caret.chars.rows(), 0..=0);
+}
+
+/// **The Source pane of a symbol's tab comes back to where it was left, too.** It draws
+/// the file of the listing on screen, which a link followed or a step back leaves up
+/// until the worker answers, so its offset is that file's and not the arriving place's.
+#[test]
+fn back_puts_a_symbols_source_pane_back_where_it_was() {
+    let mut world = Followed::new();
+    let states = world.roots.states;
+    let (sum_to, add) = (world.sum_to.clone(), world.add.clone());
+    world.answer_symbol(&sum_to);
+    open_document(
+        states.open,
+        states.visits,
+        Document::Symbol(sum_to.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut world.test);
+    world.scroll(900., 20);
+    let left = world.top(false);
+    assert!(
+        left.0.contains("line_2"),
+        "the wheel moved nothing: {left:?}"
+    );
+
+    open_document(
+        states.open,
+        states.visits,
+        Document::Symbol(add.clone()),
+        Reach::InPlace,
+    );
+    settle(&mut world.test);
+    world.answer_symbol(&add);
+    navigate(states.open, Nav::Back);
+    settle(&mut world.test);
+    world.answer_symbol(&sum_to);
+    assert_eq!(world.top(false), left);
+}
+
+/// **Back between two lines of one file comes back to the listing's rows.** Both places
+/// are the file, so the tab is at the first line again before the listing it drives is
+/// back; a row kept for it and put back against the other line's short listing was
+/// clamped there.
+#[test]
+fn back_between_two_lines_of_a_file_puts_the_listing_back() {
+    let mut world = Followed::new();
+    let states = world.roots.states;
+    let (sum_to, add, long) = (world.sum_to.clone(), world.add.clone(), world.long.clone());
+    let on = |line: u32| Ask::Source {
+        at: LinePos {
+            file: long.clone(),
+            line,
+        },
+        chosen: None,
+    };
+    world.answer(on(1), &sum_to, &long);
+    open_stop(
+        states.open,
+        states.visits,
+        Stop::on(long.clone(), 1),
+        Reach::NewTab,
+    );
+    settle(&mut world.test);
+    // The file leads, so the listing is the right-hand pane.
+    world.scroll(900., 8);
+    let left = world.top(false);
+    assert!(!left.0.is_empty(), "the listing is drawing nothing");
+
+    open_stop(
+        states.open,
+        states.visits,
+        Stop::on(long.clone(), 2),
+        Reach::InPlace,
+    );
+    settle(&mut world.test);
+    world.answer(on(2), &add, &long);
+    navigate(states.open, Nav::Back);
+    settle(&mut world.test);
+    world.answer(on(1), &sum_to, &long);
+    assert_eq!(world.top(false), left);
+}
+
+/// **A call a symbol makes to itself is a place Back comes back from.** The symbol is the
+/// document on top, so following it opens nothing and moves no document: it lands on an
+/// instruction of the symbol, a stop of its own, with the caret on the first row and the
+/// listing at its top -- and Back puts the listing back where the call was.
+#[test]
+fn a_call_to_itself_is_a_stop_back_comes_back_from() {
+    let mut world = Followed::new();
+    let (states, doors) = (world.roots.states, world.roots.doors);
+    let sum_to = world.sum_to.clone();
+    world.answer_symbol(&sum_to);
+    let id = open_document(
+        states.open,
+        states.visits,
+        Document::Symbol(sum_to.clone()),
+        Reach::NewTab,
+    )
+    .expect("a tab");
+    settle(&mut world.test);
+    let top = world.top(true);
+    world.scroll(100., 6);
+    let left = world.top(true);
+    assert_ne!(left, top, "the wheel moved nothing");
+
+    // What a press on a link to the symbol on screen does.
+    land(
+        doors,
+        Landing {
+            tab: Document::Symbol(sum_to.clone()),
+            at: None,
+            address: Some(sum_to.data.address),
+        },
+        Reach::InPlace,
+    );
+    settle(&mut world.test);
+    settle(&mut world.test);
+    let trail = states
+        .open
+        .docs
+        .peek()
+        .trail(id)
+        .expect("open")
+        .entries()
+        .to_vec();
+    assert!(
+        trail
+            == [
+                Stop::in_symbol(sum_to.clone(), sum_to.data.address),
+                Stop::whole(Document::Symbol(sum_to.clone()))
+            ],
+        "the call is not a place on the trail"
+    );
+    let caret = doors
+        .marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("no caret was planted");
+    assert_eq!(caret.chars.rows(), 0..=0);
+    assert_eq!(world.top(true).0, top.0, "the listing is not at its top");
+
+    navigate(states.open, Nav::Back);
+    settle(&mut world.test);
+    settle(&mut world.test);
+    assert_eq!(world.top(true), left, "Back did not come back to the call");
+}
+
+/// **A link followed in a symbol's listing opens the target at its top, and Back comes back
+/// to the rows the call was left at** -- part way into a row, as a wheel leaves one --
+/// with the worker a beat behind each time, as it is: the tab names the next place before
+/// the listing drawn is that place's.
+#[test]
+fn a_link_followed_in_a_symbol_opens_at_its_top_and_back_returns_to_the_call() {
+    let mut world = Followed::new();
+    let (states, doors) = (world.roots.states, world.roots.doors);
+    let (sum_to, add) = (world.sum_to.clone(), world.add.clone());
+    world.answer_symbol(&sum_to);
+    open_document(
+        states.open,
+        states.visits,
+        Document::Symbol(sum_to.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut world.test);
+    world.scroll(100., call_row(&sum_to) - 1);
+    let left = world.top(true);
+
+    let call = link_centre(&world.test, "add");
+    press_at(&mut world.test, call);
+    settle(&mut world.test);
+    assert!(states.open.active() == Some(Document::Symbol(add.clone())));
+    world.answer_symbol(&add);
+    assert_eq!(
+        address_labels(&world.test).first(),
+        Some(&format!("{:016X} ", add.data.address)),
+        "the target did not open at its first instruction"
+    );
+    let caret = doors
+        .marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("no caret was planted");
+    assert_eq!(
+        caret.chars.rows(),
+        0..=0,
+        "the caret is not on the first row"
+    );
+
+    navigate(states.open, Nav::Back);
+    settle(&mut world.test);
+    world.answer_symbol(&sum_to);
+    assert_eq!(
+        world.top(true),
+        left,
+        "Back did not come back to where the call was left"
+    );
+}
+
+/// The listing row of `symbol`'s first instruction naming a relocation's target: in the
+/// fixture, `sum_to`'s call to `add`.
+fn call_row(symbol: &Symbol) -> usize {
+    let studied = Studied::new(symbol.clone());
+    let call = studied
+        .assembly
+        .as_ref()
+        .expect("the symbol decodes")
+        .instructions
+        .iter()
+        .position(|instruction| matches!(instruction.operand, Some(Operand::SymbolName { .. })))
+        .expect("the symbol calls something");
+    studied.lanes.row_of(call)
 }

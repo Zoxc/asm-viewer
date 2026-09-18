@@ -896,23 +896,38 @@ needs an arm for one. So an entry means "this side of this place on this tab" fo
 as the tab is open and the place is on its trail, and going Back comes back to the rows that were
 left. **A place and not a document** is what makes following a link inside the
 unified view, or a name inside a file, a step Back returns from: the two addresses, or the two
-lines, are two entries, and a step between them is a switch to every pane, which is the whole of
+lines, are two entries. A symbol is one place, with one exception: a call it makes to itself
+lands on an instruction of it (`Stop::in_symbol`, made by `land` for the symbol already on top
+and nowhere else), or the call would move nothing and Back could not return to it. So the
+entries are two, and a step between them is a switch to every pane, which is the whole of
 the behaviour -- there is no second mechanism for moving the view inside one listing. Which is
 also why every key is built from the stop the tab is **at** (`place_at`) and never from its
 document: a key made of the document alone names a place the trail does not hold, and the two maps
 it is the key to answer "never seen" and "closed tab" to that -- a position that reads as the top
 of the file and a write that is silently dropped. `use_kept_position` is the whole of the behaviour,
 called once by `InstructionList` and once by `SourceList`, each handed its tab's id as a prop from
-`DocumentBody`. Which place a listing's row is filed under is `asked_of` the question that listing
-answers, never the place the app is showing: while the worker catches up the pane is drawing the one
-being left, and for a source-driven tab the question's place is the file and not the resolved
-symbol, which is very likely on no trail at all. Navigating in place is not a switch of tab:
+`DocumentBody`. Which place a pane's row is filed under is the place of what it is drawing
+(`use_drawn_place`, `src/ui/studied.rs`), never simply the one the tab is at: a link followed, a
+step Back, a line of a file stepped to or a tab opened beside moves the tab at once, while the
+pane still draws the listing it had -- and a symbol's Source pane the file beside it. Keyed by the
+tab's new place, that listing's offset was filed as the arriving one's, and a planted caret went
+into the listing being left. So the tab's place is the key only once the last question the worker
+answered is the one that place asks (`Analyzed::answered`, which a line compiling to nothing
+answers too); until then a pane keeps the key it had and plants nothing. Comparing documents
+instead missed two lines of one file and a tab opened beside, whose trail the listing on screen
+is on no place of. The switching run takes the row being left from the raw offset, not the offset clamped to the
+arriving listing's length: clamped, a long function left for a short one was written down at the
+short one's end, and Back came back there. Navigating in place is not a switch of tab:
 `DocumentBody` reads the table, so a push re-renders it and the panes are handed the new document as
 a prop with their controllers kept, and the hook's switching arm files the row of the place left
 under that place's own entry (still on the trail, so still `contains`) before putting the arriving
 one back. Keying the source side by the *file* instead made two functions compiled from one file
 share a position they have no reason to share. What is kept is a **row**, clamped to what the tab
-holds *now*, so a rebuilt binary or a shortened file cannot come back past the end. A tab nothing is
+holds *now*, so a rebuilt binary or a shortened file cannot come back past the end. With how far
+into it (`TopRow`, and `Spot::past` for an object's code): kept as a whole row alone, a pane left
+part way into a row came back snapped to its top, which is most of the time, a wheel's step being
+no whole number of rows. The part is a `u16` of 65536ths beside the row, not the row as one float,
+so the row stays exact however far down a listing goes. A tab nothing is
 remembered for opens at an **opening row** the caller hands in: `0` for the Assembly pane, whose
 first row is the symbol's own first line, and the symbol's own line for the Source pane
 (`SourceSide::opening`, off `SymbolLines::line`). A remembered row wins over it, so it is the first
@@ -973,8 +988,9 @@ counted afresh with every answer that lands (`agents/Panes.md`), so a row there 
 long. `Places::code_at` is a `Positions<Entry, Spot>`, the map generalised over its value, `row`'s
 clamp being the one rows-only answer. It holds the placed address at the top of the pane and how
 many rows past that address's own row it was, since the rule over a stretch, the blank under it, its
-header, its labels and its first instruction all sit at one address. It is forgotten with the rest
-of `Places`. `use_kept_place` in `src/ui/section_view.rs` is its `use_kept_position`,
+header, its labels and its first instruction all sit at one address, and how far into the last
+of them (`Spot::past`, a `TopRow`). A move there carries the whole of where it goes, so a retry
+issues it at the same offset as the first try. It is forgotten with the rest of `Places`. `use_kept_place` in `src/ui/section_view.rs` is its `use_kept_position`,
 and the differences are the point. The map is **read** and not peeked, so a place written from
 outside while the tab is on top is answered (the run that wakes on its own write finds nothing moved
 and writes nothing). The rows the place is re-applied against are produced in the same run, so a

@@ -17,7 +17,7 @@ use crate::counter;
 use crate::docs::{DocId, Entry};
 use crate::document::Document;
 use crate::history::{History, Stop};
-use crate::positions::{Driven, Positions, Spot};
+use crate::positions::{Driven, Fraction, Positions, Spot, TopRow};
 use crate::tabs::Page;
 use crate::visits::Visits;
 
@@ -105,8 +105,8 @@ pub enum OnScreen<'a> {
 /// four are `&Positions` of near-identical type, so a field name says which is which
 /// where a position could not.
 pub struct LeftAt<'a> {
-    pub asm_rows: &'a Positions<Entry>,
-    pub src_rows: &'a Positions<Entry>,
+    pub asm_rows: &'a Positions<Entry, TopRow>,
+    pub src_rows: &'a Positions<Entry, TopRow>,
     pub places: &'a Positions<Entry, Spot>,
     pub driven: &'a Driven,
 }
@@ -154,11 +154,20 @@ impl LeftAt<'_> {
     /// [`Positions`] at all and is written out as row `0`.
     fn entry(&self, id: DocId, stop: &Stop) -> SavedEntry {
         let entry = (id, stop.clone());
+        let spot = self.places.at(&entry);
+        // An object's code keeps its assembly side as a place and not a row: the rows past
+        // the address stand in for the row.
+        let asm = spot
+            .map(|spot| spot.past)
+            .unwrap_or_else(|| self.asm_rows.at(&entry).unwrap_or_default());
+        let src = self.src_rows.at(&entry).unwrap_or_default();
         SavedEntry {
-            asm_row: self.asm_rows.at(&entry).unwrap_or(0),
-            src_row: self.src_rows.at(&entry).unwrap_or(0),
+            asm_row: asm.row,
+            asm_into: asm.into.0,
+            src_row: src.row,
+            src_into: src.into.0,
             line: self.driven.line(&entry),
-            asm_address: self.places.at(&entry).map(|spot| spot.address),
+            asm_address: spot.map(|spot| spot.address),
             code_address: stop.address(),
             src_line: stop.line(),
             document: SavedDocument::from_document(&stop.document),
@@ -316,8 +325,9 @@ pub enum RestoredTab {
 #[derive(Clone, PartialEq)]
 pub struct RestoredEntry {
     pub document: Document,
-    pub asm_row: usize,
-    pub src_row: usize,
+    /// For an object's code, the rows past `address`'s own row.
+    pub asm_row: TopRow,
+    pub src_row: TopRow,
     pub line: Option<u32>,
     /// The address an object's code tab was scrolled to, and nothing else.
     pub address: Option<u64>,
@@ -513,10 +523,16 @@ impl SavedEntry {
             .binary_path()
             .is_some_and(|path| loaded.changed(path));
         let (asm_row, src_row, address, code_address) = match changed {
-            true => (0, 0, None, None),
+            true => (TopRow::default(), TopRow::default(), None, None),
             false => (
-                self.asm_row,
-                self.src_row,
+                TopRow {
+                    row: self.asm_row,
+                    into: Fraction(self.asm_into),
+                },
+                TopRow {
+                    row: self.src_row,
+                    into: Fraction(self.src_into),
+                },
                 self.asm_address,
                 self.code_address,
             ),

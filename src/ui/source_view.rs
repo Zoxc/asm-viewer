@@ -164,9 +164,19 @@ impl Component for SourceList {
         // The tab's entry and not the file: see `SourceList::document`.
         let docs = asking.doors.open.docs;
         // The place the tab is at: two lines of one file reached along one trail are two
-        // entries, each with its own scroll. Read and not peeked, so a step between them
-        // re-renders this pane and the hook sees the switch.
-        let entry = (self.tab, place_at(&docs.read(), self.tab, &self.document));
+        // entries, each with its own scroll. A symbol's companion is the file of the
+        // listing drawn, which is the tab's place only once the worker has answered it.
+        // Peeked: the answer that makes it the tab's hands this pane that listing's file,
+        // which draws it again.
+        let answered = analysis.peek().answered.clone();
+        let (entry, _) = use_drawn_place(
+            docs,
+            asking.doors.places.driven,
+            self.tab,
+            &self.document,
+            matches!(self.document, Document::Symbol(_)),
+            answered.as_ref(),
+        );
         use_kept_position(
             asking.doors.places.src_at,
             docs,

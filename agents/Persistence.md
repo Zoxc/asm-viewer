@@ -333,14 +333,18 @@ every trail and the record of visits. **A document `tabs` entry is a whole trail
 showed, so that Back works across a restart. Reopening after a rebuild is this app's daily
 loop, and a trail lost on every restart would be worth little; the cost is a file a few entries
 longer per tab, capped at `history::MAX_ENTRIES` (50) per trail. Each place carries **the rows both
-of its sides were left at**: an entry is a `SavedEntry` (`asm_row` + `src_row` + `line` +
-`asm_address` + `code_address` + `src_line` + `document`), rather than the tab having arrays of
-rows beside its trail.
+of its sides were left at**: an entry is a `SavedEntry` (`asm_row` + `asm_into` + `src_row` +
+`src_into` + `line` + `asm_address` + `code_address` + `src_line` + `document`), rather than the
+tab having arrays of rows beside its trail. Each `_into` is how far into its row the side was
+left, in 65536ths of it, and absent for none (`TopRow`): a whole row alone came back snapped to
+the row's top, which is nearly always, a wheel's step being no whole number of rows. A whole row
+and a part rather than one float, so the row is exact however far down a listing goes.
 `asm_address` is where an object's **code** tab was *scrolled* to, as a placed address, and is
 absent for every other kind: that listing's rows are counted afresh as it is decoded, so a row
 there is no place to come back to and an address is (`agents/UI.md`, `Places::code_at`). It is a claim about a layout, so
-a rebuilt binary takes it with the rows. How many rows past the address the tab was is not saved, a
-label being a fine place to come back to. The rows travel with their place because a restore
+a rebuilt binary takes it with the rows. For such a tab `asm_row` and `asm_into` are how many rows
+past the address's own row it was and how far into the last (`Spot`): a stretch's rule, header,
+labels and first instruction all sit at one address. The rows travel with their place because a restore
 drops the places that no longer resolve, which would shift every later row of a parallel array onto
 the wrong place. They are rows and not pixel offsets so that a font change does not move every saved
 position, and they are hints and not facts: `#[serde(default)]`, and clamped to what the tab holds
@@ -357,7 +361,9 @@ binary keeps it. `code_address` is that pair on the other side: which placed add
 is, where the place is one in an object's code, against `asm_address`'s scroll. The two part
 company the moment the reader scrolls, and spelling one with the other brings a listing opened at
 no place in particular back as the address it was scrolled to. It is a claim about a layout as the
-scroll is, so a rebuilt binary takes both, and the place comes back as the whole listing.
+scroll is, so a rebuilt binary takes both, and the place comes back as the whole listing. It
+is also the address of an instruction of a symbol, the one place inside a symbol (a call it makes
+to itself, `Stop::in_symbol`), there the symbol's own address and not a placed one.
 The file states the halves apart and so can state a pairing that means nothing --
 a line of an object's code, an address in a file -- which a `history::Stop` cannot hold. So
 `RestoredEntry::stop` puts them back through `Stop::paired`, which is where that rule lives: the

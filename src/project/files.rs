@@ -481,12 +481,19 @@ pub struct SavedTab {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedEntry {
     /// Which row was at the top of the assembly side, `0` being the first instruction.
-    /// `serde(default)` because it is a hint and not a fact.
+    /// `serde(default)` because it is a hint and not a fact. For an object's code, how
+    /// many rows past `asm_address`'s own row.
     #[serde(default)]
     pub asm_row: usize,
+    /// How far into that row, in 65536ths of it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub asm_into: u16,
     /// Which line was at the top of the source side, `0` being the file's first line.
     #[serde(default)]
     pub src_row: usize,
+    /// How far into that line, in 65536ths of it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub src_into: u16,
     /// Which line of the file a source-driven place's assembly side was driven from, and
     /// absent for every other kind. It is what makes `asm_row` mean anything for such a
     /// place: without it the listing that row is a row of is not there to come back to.
@@ -502,8 +509,8 @@ pub struct SavedEntry {
     /// else; the place it is at is `code_address` below.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asm_address: Option<u64>,
-    /// The placed address this place *is*, for a stop in an object's code, and absent for
-    /// every other kind. Not the same thing as `asm_address` above, which is where that
+    /// The address this place *is*: placed, for a stop in an object's code, and the
+    /// symbol's own, for an instruction of a symbol; absent for every other kind. Not the same thing as `asm_address` above, which is where that
     /// listing was scrolled to: this is where the reader arrived and what Back comes back
     /// to, and the two part company the moment they scroll.
     ///
@@ -722,5 +729,10 @@ pub(super) fn session_beside(path: &Path) -> PathBuf {
 }
 
 // `pub(super)` so the rest of the module's tests build on the fixtures declared here.
+/// No part of a row, which a saved entry leaves out.
+fn is_zero(into: &u16) -> bool {
+    *into == 0
+}
+
 #[cfg(test)]
 pub(super) mod tests;

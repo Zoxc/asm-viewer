@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use analysis::{Architecture, BinaryFormat, Object, ObjectData};
+use analysis::{Architecture, BinaryFormat, Object, ObjectData, SymbolData};
 
 use super::*;
 
@@ -489,10 +489,23 @@ fn a_half_that_does_not_belong_to_its_document_is_no_place_at_all() {
         Stop::paired(source, Some(64), Some(7)) == Stop::on(file, 7),
         "the document says which half is its own"
     );
-    let symbol = selection("neither");
+    let whole = selection("neither");
     assert!(
-        Stop::paired(symbol.document.clone(), Some(64), Some(7)) == symbol,
-        "a symbol is the place, and carries neither half"
+        Stop::paired(whole.document.clone(), Some(64), Some(7)) == whole,
+        "an object is the place, and carries neither half"
+    );
+    // A symbol's address is an instruction of it: where a call it makes to itself lands.
+    let symbol = Symbol {
+        object: object("symbol"),
+        data: Arc::new(SymbolData::new("f".to_owned(), None, 16, None, 8)),
+    };
+    let instruction = Stop::paired(Document::Symbol(symbol.clone()), Some(20), Some(7));
+    assert!(instruction == Stop::in_symbol(symbol.clone(), 20));
+    assert!(instruction.address() == Some(20) && instruction.line().is_none());
+    assert!(
+        Stop::paired(Document::Symbol(symbol.clone()), None, Some(7))
+            == Stop::whole(Document::Symbol(symbol)),
+        "a line of a symbol is no place"
     );
 }
 

@@ -110,7 +110,9 @@ pub(in crate::project) fn saved_symbol(
 pub(in crate::project) fn saved_entry(document: SavedDocument, asm_row: usize) -> SavedEntry {
     SavedEntry {
         asm_row,
+        asm_into: 0,
         src_row: 0,
+        src_into: 0,
         line: None,
         asm_address: None,
         code_address: None,

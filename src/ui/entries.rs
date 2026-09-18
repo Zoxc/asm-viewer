@@ -21,7 +21,7 @@ pub(crate) fn stop_text(stop: &Stop) -> String {
             None => Names::of(&stop.document).text,
         },
         Place::Source(line) => format!("{}:{line}", Names::of(&stop.document).text),
-        Place::Whole => Names::of(&stop.document).text,
+        Place::Whole | Place::Instruction(_) => Names::of(&stop.document).text,
     }
 }
 

@@ -9,10 +9,10 @@ use crate::docs::Docs;
 use crate::document::Document;
 use crate::history::Stop;
 
-fn positions(at: &[(&str, usize)]) -> Positions<String> {
+fn positions(at: &[(&str, usize)]) -> Positions<String, TopRow> {
     let mut positions = Positions::default();
     for (tab, row) in at {
-        positions.remember((*tab).to_owned(), *row);
+        positions.remember((*tab).to_owned(), TopRow::at(*row));
     }
     positions
 }
@@ -21,21 +21,21 @@ fn positions(at: &[(&str, usize)]) -> Positions<String> {
 fn a_tab_never_seen_is_at_no_row_and_opens_at_the_top() {
     let positions = positions(&[]);
     assert_eq!(positions.at(&"a".to_owned()), None);
-    assert_eq!(positions.row(&"a".to_owned(), 100), 0);
+    assert_eq!(positions.row(&"a".to_owned(), 100), TopRow::at(0));
 }
 
 #[test]
 fn a_remembered_row_comes_back() {
     let positions = positions(&[("a", 12), ("b", 40)]);
-    assert_eq!(positions.at(&"a".to_owned()), Some(12));
-    assert_eq!(positions.row(&"b".to_owned(), 100), 40);
+    assert_eq!(positions.at(&"a".to_owned()), Some(TopRow::at(12)));
+    assert_eq!(positions.row(&"b".to_owned(), 100), TopRow::at(40));
 }
 
 #[test]
 fn remembering_a_tab_twice_replaces_its_row() {
     let mut positions = positions(&[("a", 12)]);
-    positions.remember("a".to_owned(), 13);
-    assert_eq!(positions.at(&"a".to_owned()), Some(13));
+    positions.remember("a".to_owned(), TopRow::at(13));
+    assert_eq!(positions.at(&"a".to_owned()), Some(TopRow::at(13)));
     assert_eq!(positions.at.len(), 1);
 }
 
@@ -45,11 +45,40 @@ fn remembering_a_tab_twice_replaces_its_row() {
 #[test]
 fn a_row_past_the_end_clamps_to_the_last_one() {
     let positions = positions(&[("a", 900)]);
-    assert_eq!(positions.row(&"a".to_owned(), 100), 99);
-    assert_eq!(positions.row(&"a".to_owned(), 0), 0);
+    assert_eq!(positions.row(&"a".to_owned(), 100), TopRow::at(99));
+    assert_eq!(positions.row(&"a".to_owned(), 0), TopRow::at(0));
+    // And the top of it: part way into a row that is gone is no part of the last one.
+    let into = TopRow {
+        row: 900,
+        into: Fraction(0x8000),
+    };
+    assert_eq!(into.within(100), TopRow::at(99));
     // And `at` still says what was remembered: only the answer given to a pane is
     // clamped, because only a pane knows what it is holding.
-    assert_eq!(positions.at(&"a".to_owned()), Some(900));
+    assert_eq!(positions.at(&"a".to_owned()), Some(TopRow::at(900)));
+}
+
+/// The top of a pane as a row and how far into it, and back to the pixels it came from:
+/// part way into a row survives, and a whole row is exact however far down it is, which a
+/// row counted in one float is not.
+#[test]
+fn an_offset_comes_back_from_its_row_and_the_part_into_it() {
+    for height in [17.0, 17.5, 23.25] {
+        for pixels in [0.0, 1.0, 7.0, 100.0, 12_345.0, 400_000_000.0] {
+            let top = TopRow::of_offset(pixels, height);
+            assert_eq!(top.offset(height).round(), pixels, "{pixels} at {height}");
+        }
+    }
+    assert_eq!(
+        TopRow::of_offset(35.0 + 8.75, 17.5),
+        TopRow {
+            row: 2,
+            into: Fraction(0x8000)
+        }
+    );
+    // Nothing of a row that has no height, and nothing above the top.
+    assert_eq!(TopRow::of_offset(100.0, 0.0), TopRow::default());
+    assert_eq!(TopRow::of_offset(-5.0, 17.0), TopRow::default());
 }
 
 /// Whether anything went, so a caller with nothing to drop does not re-render every
@@ -70,18 +99,21 @@ fn forgetting_a_tab_leaves_the_others() {
     let mut positions = positions(&[("a", 1), ("b", 2)]);
     positions.forgetting(|tab| tab != "a");
     assert_eq!(positions.at(&"a".to_owned()), None);
-    assert_eq!(positions.at(&"b".to_owned()), Some(2));
+    assert_eq!(positions.at(&"b".to_owned()), Some(TopRow::at(2)));
     assert_eq!(positions.keys().cloned().collect::<Vec<_>>(), ["b"]);
     // And forgetting one that was never there is not an error.
     positions.forgetting(|tab| tab != "c");
-    assert_eq!(positions.at(&"b".to_owned()), Some(2));
+    assert_eq!(positions.at(&"b".to_owned()), Some(TopRow::at(2)));
 }
 
 #[test]
 fn a_closing_binary_forgets_every_position_into_it() {
     let mut positions = positions(&[("lib.a:one", 1), ("some.dll:two", 2), ("lib.a:three", 3)]);
     positions.forgetting(|tab| !tab.starts_with("lib.a:"));
-    assert_eq!(positions.at(&"some.dll:two".to_owned()), Some(2));
+    assert_eq!(
+        positions.at(&"some.dll:two".to_owned()),
+        Some(TopRow::at(2))
+    );
     assert_eq!(positions.at(&"lib.a:one".to_owned()), None);
     assert_eq!(positions.at(&"lib.a:three".to_owned()), None);
 }

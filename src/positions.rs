@@ -15,7 +15,9 @@ use crate::docs::Entry;
 ///
 /// **A row and not a pixel offset**, so it survives a row height that follows the fonts,
 /// a listing that has grown or shrunk under a rebuilt binary, and a file edited since it
-/// was last read. A tab that was never scrolled has no entry here and reads as the top.
+/// was last read. For the two panes it is a [`TopRow`], a row and how far into it, so a
+/// pane left part way into a row comes back there and not snapped to its top. A tab that
+/// was never scrolled has no entry here and reads as the top.
 ///
 /// A `Vec` of pairs and not a `HashMap`, because the key is whatever the tab list holds:
 /// a [`crate::document::Document`] is compared by `Arc` pointer identity where it is a
@@ -82,24 +84,100 @@ impl<T: Clone + PartialEq, V: Clone + PartialEq> Positions<T, V> {
     }
 }
 
-impl<T: Clone + PartialEq> Positions<T> {
+impl<T: Clone + PartialEq> Positions<T, TopRow> {
     /// The row to put `tab` back on, in a pane now holding `length` rows. A saved
     /// position is a hint and not a fact, so this clamps twice: a tab never seen is the
-    /// top, and a row past the end of what the tab holds now is its last row.
-    pub fn row(&self, tab: &T, length: usize) -> usize {
-        self.at(tab).unwrap_or(0).min(length.saturating_sub(1))
+    /// top, and a row past the end of what the tab holds now is the top of its last row.
+    pub fn row(&self, tab: &T, length: usize) -> TopRow {
+        self.at(tab).unwrap_or_default().within(length)
+    }
+}
+
+/// How far into a row, in 65536ths of it: what is kept beside a whole row, so the row
+/// stays exact however far down a listing goes, and the part is exact below a pixel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Fraction(pub u16);
+
+impl Fraction {
+    const WHOLE: f64 = 65536.0;
+
+    /// `part` of `whole`, held to `[0, 1)`: none of a row that has no height.
+    pub fn of(part: f64, whole: f64) -> Fraction {
+        if whole <= 0.0 || !part.is_finite() {
+            return Fraction::default();
+        }
+        let parts = (part / whole * Self::WHOLE).floor();
+        Fraction(parts.clamp(0.0, Self::WHOLE - 1.0) as u16)
+    }
+
+    /// This much of `whole`.
+    pub fn of_whole(self, whole: f64) -> f64 {
+        f64::from(self.0) / Self::WHOLE * whole
+    }
+}
+
+/// Where the top of a pane is: the row there and how far into it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct TopRow {
+    pub row: usize,
+    pub into: Fraction,
+}
+
+impl TopRow {
+    /// The top of `row`.
+    pub fn at(row: usize) -> TopRow {
+        TopRow {
+            row,
+            into: Fraction::default(),
+        }
+    }
+
+    /// The top row of a pane scrolled `pixels` down rows `height` tall.
+    pub fn of_offset(pixels: f64, height: f64) -> TopRow {
+        if height <= 0.0 || pixels <= 0.0 {
+            return TopRow::default();
+        }
+        let row = (pixels / height).floor();
+        TopRow {
+            row: row as usize,
+            into: Fraction::of(pixels - row * height, height),
+        }
+    }
+
+    /// How far down a pane of rows `height` tall is scrolled to put this at its top.
+    pub fn offset(self, height: f64) -> f64 {
+        self.row as f64 * height + self.into.of_whole(height)
+    }
+
+    /// This, in a listing of `length` rows: past its end, the top of its last row.
+    pub fn within(self, length: usize) -> TopRow {
+        let last = length.saturating_sub(1);
+        if self.row > last {
+            TopRow::at(last)
+        } else {
+            self
+        }
     }
 }
 
 /// Where a listing of an object's whole code was left: the placed address at the top of
-/// the pane, and how many rows past that address's row -- a stretch's header, its labels
+/// the pane, and how far past that address's own row -- a stretch's header, its labels
 /// and its first instruction all sit at one address, and the rows are what tell them
-/// apart. The address is what a session saves; the rows are a nicety that does not
-/// survive a restart.
+/// apart -- including how far into the last of them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Spot {
     pub address: u64,
-    pub rows: usize,
+    pub past: TopRow,
+}
+
+impl Spot {
+    /// The address's own row, at its top.
+    pub fn at(address: u64) -> Spot {
+        Spot {
+            address,
+            past: TopRow::default(),
+        }
+    }
 }
 
 /// Which source line each source-driven tab's assembly side is driven from.

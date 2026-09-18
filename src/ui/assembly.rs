@@ -476,8 +476,18 @@ impl Opens {
             Opens::InCode { object, placed } => {
                 show_in_code(doors, object, placed, None, Reach::InPlace);
             }
+            // Landed with the caret on the first instruction, which the pane owes a
+            // reveal: the target opens at its top even where this tab has been there
+            // before and kept a row for it.
             Opens::Symbol(symbol, reach) => {
-                open_document(doors.open, doors.visits, Document::Symbol(symbol), reach);
+                let address = symbol.data.address;
+                let tab = Document::Symbol(symbol);
+                let landing = Landing {
+                    tab,
+                    at: None,
+                    address: Some(address),
+                };
+                land(doors, landing, reach);
             }
             // `show_in_code` leaves the move to `land` where this listing is that code
             // already.
@@ -1209,6 +1219,9 @@ struct InstructionList {
     /// which is very likely on no trail at all), and the file a source-driven tab is
     /// about, which its rows' menus choose a location for.
     asked: Ask,
+    /// The last question the worker answered, which says whether `asked` is the tab's
+    /// question yet ([`use_drawn_place`]).
+    answered: Option<Ask>,
 }
 
 /// The listing row the reveal `owing` asks for goes to, and [`None`] where this listing
@@ -1274,13 +1287,16 @@ impl Component for InstructionList {
         // Where this tab was left, put back when it is switched to and written down as it
         // is scrolled -- and the scroll this pane owes a run, which wins over it.
         let docs = doors.open.docs;
-        // The place the tab is at, which for a source-driven tab is a line of the file
-        // and not the file: two lines of one file reached along one trail are two
-        // entries, each with its own scroll. Read and not peeked, so a step between them
-        // re-renders this pane.
-        let entry = (
+        // The place this listing is for, which for a source-driven tab is a line of the
+        // file and not the file: two lines of one file reached along one trail are two
+        // entries, each with its own scroll.
+        let (entry, fresh) = use_drawn_place(
+            docs,
+            asking.doors.places.driven,
             self.tab,
-            place_at(&docs.read(), self.tab, &asked_of(&self.asked)),
+            &asked_of(&self.asked),
+            true,
+            self.answered.as_ref(),
         );
         use_kept_position(
             asking.doors.places.asm_at,
@@ -1311,9 +1327,8 @@ impl Component for InstructionList {
             None,
         );
         // The caret a door left to be planted on an instruction of this listing, once the
-        // listing is the document it names -- which is the drawn answer's document and
-        // not the tab's, since the pane draws the listing being left until the worker
-        // answers. On the row of the instruction at or below the address, the symbol's
+        // listing is the place the tab is at and the document the caret names: the pane
+        // draws the listing being left until the worker answers. On the row of the instruction at or below the address, the symbol's
         // own; `take_planting` has spent the planting by then, so an address before the
         // first is dropped rather than left. The pane owes the caret its reveal, as it
         // owes a click from outside, and the reveal wins over the kept row in
@@ -1323,8 +1338,12 @@ impl Component for InstructionList {
         // built once, and this list is handed each symbol it draws without being mounted
         // again.
         use_side_effect_with_deps(
-            &(entry.clone(), data.clone()),
-            move |((_, stop), data): &(Entry, AsmData)| {
+            &(entry.clone(), data.clone(), fresh),
+            move |((_, stop), data, fresh): &(Entry, AsmData, bool)| {
+                // Never into the listing being left.
+                if !fresh {
+                    return;
+                }
                 let Some(address) = take_planting(plant, &stop.document) else {
                     return;
                 };
@@ -1532,6 +1551,7 @@ impl AssemblyPane {
             data,
             // The question the *drawn* answer answers, never the one being asked.
             asked: shown.ask.clone(),
+            answered: analysis.answered.clone(),
         })
         .into()
     }

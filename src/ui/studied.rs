@@ -101,6 +101,50 @@ pub(crate) fn ask(active: Option<&Entry>, driven: &Driven) -> Option<Ask> {
     }
 }
 
+/// The place a pane is drawing for, and whether it is the place `tab` is at: what the
+/// pane's scroll is kept under, and whether a caret planted for the tab may go in.
+///
+/// The tab's own place once what the pane draws is that place's. **Not while the worker
+/// is catching up**: a link followed, a step back, a line of a file stepped to or a tab
+/// opened beside moves the tab at once, and the pane goes on drawing what it had. The
+/// offset on screen is that listing's, so it stays under the key it had until the answer
+/// lands. Under the new place, a step back to a long function was clamped to the length
+/// of the short one on screen, and a caret planted for the new place went into the old
+/// listing. A pane with no key yet uses `document` itself, which is on no trail and so
+/// files nothing.
+///
+/// `analysed` says whether what the pane draws comes from the analysis: a file's own tab
+/// and an object's code are always the tab's. Otherwise it is the place's once the last
+/// question the worker answered is the one this place asks ([`ask`]) -- which holds for a
+/// line that compiled to nothing, whose answer leaves the listing up, as well as for one
+/// that replaced it.
+///
+/// `driven` is peeked: the answer that makes a listing the place's changes what the pane
+/// is handed, which draws it again.
+pub(crate) fn use_drawn_place(
+    docs: State<Docs>,
+    driven: State<Driven>,
+    tab: DocId,
+    document: &Document,
+    analysed: bool,
+    answered: Option<&Ask>,
+) -> (Entry, bool) {
+    let held = use_hook(|| Rc::new(RefCell::new(None::<Entry>)));
+    // Read, so a step along the trail draws the pane again.
+    let entry = (tab, place_at(&docs.read(), tab, document));
+    let fresh =
+        !analysed || (answered.is_some() && ask(Some(&entry), &driven.peek()).as_ref() == answered);
+    let mut held = held.borrow_mut();
+    if fresh {
+        *held = Some(entry.clone());
+        return (entry, true);
+    }
+    let drawn = held
+        .clone()
+        .unwrap_or_else(|| (tab, Stop::whole(document.clone())));
+    (drawn, false)
+}
+
 /// A listing, and the question it was worked out for.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Shown {

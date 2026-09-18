@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use analysis::Object;
+use analysis::{Object, Symbol};
 
 use crate::document::Document;
 use crate::order::Order;
@@ -24,14 +24,18 @@ const MAX_ENTRIES: usize = 50;
 /// into either moves what is drawn rather than opening anything, so the trail is the
 /// only record that the reader was somewhere else in it a moment ago. A symbol *is* the
 /// place, and carries neither, nor does a document opened at no place in particular -- a
-/// file a reader asked for by name is the file and not a line of it.
+/// file a reader asked for by name is the file and not a line of it. The one exception
+/// is a symbol's call to itself: following it moves nothing either, so the place it lands
+/// on is an instruction of the symbol ([`Stop::in_symbol`]), and Back comes back to the
+/// call.
 ///
 /// **Where a stop is goes with the kind of document it is in**, so the two are written
-/// together: [`Stop::at`] takes the object whose code the address is in, [`Stop::on`] the
-/// file the line is of, and [`Stop::whole`] neither. Those three are the only ways to
-/// make one, and the place itself is private, so a line of an object's code and an
-/// address in a file are states no caller can build -- which is what lets [`Stop::place`]
-/// hand back the pair and spares every reader an arm for a place that cannot happen.
+/// together: [`Stop::at`] takes the object whose code the address is in,
+/// [`Stop::in_symbol`] the symbol, [`Stop::on`] the file the line is of, and
+/// [`Stop::whole`] none. Those four are the only ways to make one, and the place itself
+/// is private, so a line of an object's code and an address in a file are states no
+/// caller can build -- which is what lets [`Stop::place`] hand back the pair and spares
+/// every reader an arm for a place that cannot happen.
 #[derive(Clone, PartialEq)]
 pub struct Stop {
     pub document: Document,
@@ -42,7 +46,8 @@ pub struct Stop {
 /// The half of a place a [`Stop`] stores; the `document` beside it is the other half.
 #[derive(Clone, Copy, PartialEq)]
 enum Inside {
-    /// A placed address, only ever beside a [`Document::Code`].
+    /// An address, only ever beside a [`Document::Code`], where it is placed, or a
+    /// [`Document::Symbol`], where it is the symbol's own.
     Address(u64),
     /// A line, only ever beside a [`Document::Source`].
     Line(u32),
@@ -61,6 +66,8 @@ pub enum Place<'a> {
     Whole,
     /// A placed address in an object's code, and the object whose code it is.
     Code(&'a Arc<Object>, u64),
+    /// An instruction of a symbol, at the symbol's own address for it.
+    Instruction(u64),
     /// A line of a source file. 1-based, as DWARF's are.
     Source(u32),
 }
@@ -89,6 +96,15 @@ impl Stop {
         }
     }
 
+    /// An instruction of `symbol`, at the symbol's own address for it: where following a
+    /// call it makes to itself lands.
+    pub fn in_symbol(symbol: Symbol, address: u64) -> Stop {
+        Stop {
+            document: Document::Symbol(symbol),
+            place: Some(Inside::Address(address)),
+        }
+    }
+
     /// A place in the source file `file`, on a line. 1-based, as DWARF's are.
     pub fn on(file: Arc<str>, line: u32) -> Stop {
         Stop {
@@ -108,6 +124,7 @@ impl Stop {
     pub fn paired(document: Document, address: Option<u64>, line: Option<u32>) -> Stop {
         match (document, address, line) {
             (Document::Code(object), Some(address), _) => Stop::at(object, address),
+            (Document::Symbol(symbol), Some(address), _) => Stop::in_symbol(symbol, address),
             (Document::Source(file), _, Some(line)) => Stop::on(file, line),
             (document, _, _) => Stop::whole(document),
         }
@@ -119,6 +136,7 @@ impl Stop {
             (Document::Code(object), Some(Inside::Address(address))) => {
                 Place::Code(object, address)
             }
+            (Document::Symbol(_), Some(Inside::Address(address))) => Place::Instruction(address),
             (Document::Source(_), Some(Inside::Line(line))) => Place::Source(line),
             // The constructors write the place beside the document it belongs to and
             // nothing else writes it, so what is left is the documents that carry none.
@@ -131,15 +149,15 @@ impl Stop {
     pub fn line(&self) -> Option<u32> {
         match self.place() {
             Place::Source(line) => Some(line),
-            Place::Whole | Place::Code(..) => None,
+            Place::Whole | Place::Code(..) | Place::Instruction(_) => None,
         }
     }
 
-    /// The placed address this is, for a stop in an object's code, and [`None`] for every
-    /// other place.
+    /// The address this is at, for a stop in an object's code -- placed -- or at an
+    /// instruction of a symbol -- the symbol's own -- and [`None`] for every other place.
     pub fn address(&self) -> Option<u64> {
         match self.place() {
-            Place::Code(_, address) => Some(address),
+            Place::Code(_, address) | Place::Instruction(address) => Some(address),
             Place::Whole | Place::Source(_) => None,
         }
     }

@@ -21,7 +21,7 @@ fn moved(
     holding: Option<&Entry>,
     tab: &Entry,
     known: bool,
-    back_to: usize,
+    back_to: TopRow,
     opening: Option<usize>,
     owner: Option<&Entry>,
 ) -> (bool, Option<Move>) {
@@ -33,11 +33,11 @@ fn moved(
 fn a_pane_still_on_the_tab_it_is_scrolled_for_moves_nothing() {
     let (a, _) = tabs();
     assert_eq!(
-        moved(Some(&a), &a, true, 12, Some(3), Some(&a)),
+        moved(Some(&a), &a, true, TopRow::at(12), Some(3), Some(&a)),
         (true, None)
     );
     assert_eq!(
-        moved(Some(&a), &a, false, 0, Some(3), Some(&a)),
+        moved(Some(&a), &a, false, TopRow::at(0), Some(3), Some(&a)),
         (true, None),
         "and nothing remembered is no reason to open it again"
     );
@@ -47,18 +47,18 @@ fn a_pane_still_on_the_tab_it_is_scrolled_for_moves_nothing() {
 fn a_switch_writes_the_offset_down_under_the_tab_being_left() {
     let (a, b) = tabs();
     assert_eq!(
-        moved(Some(&a), &b, true, 12, Some(3), Some(&a)),
-        (true, Some(Move::Place(12))),
+        moved(Some(&a), &b, true, TopRow::at(12), Some(3), Some(&a)),
+        (true, Some(Move::Place(TopRow::at(12)))),
         "the arriving tab goes back to its own row"
     );
     assert_eq!(
-        moved(Some(&a), &b, false, 0, Some(3), Some(&a)),
+        moved(Some(&a), &b, false, TopRow::at(0), Some(3), Some(&a)),
         (true, Some(Move::Open(3))),
         "a tab seen for the first time opens where the pane says"
     );
     assert_eq!(
-        moved(Some(&a), &b, false, 0, None, Some(&a)),
-        (true, Some(Move::Place(0))),
+        moved(Some(&a), &b, false, TopRow::at(0), None, Some(&a)),
+        (true, Some(Move::Place(TopRow::default()))),
         "and at the top with nothing to say, which still moves"
     );
 }
@@ -67,17 +67,17 @@ fn a_switch_writes_the_offset_down_under_the_tab_being_left() {
 fn the_first_run_writes_nothing_down_for_a_tab_it_is_putting_back() {
     let (a, _) = tabs();
     assert_eq!(
-        moved(None, &a, true, 12, Some(3), None),
-        (true, Some(Move::Place(12))),
+        moved(None, &a, true, TopRow::at(12), Some(3), None),
+        (true, Some(Move::Place(TopRow::at(12)))),
         "a remount or a restored session: nothing to write down"
     );
     assert_eq!(
-        moved(None, &a, false, 0, Some(3), Some(&a)),
+        moved(None, &a, false, TopRow::at(0), Some(3), Some(&a)),
         (true, Some(Move::Open(3))),
         "the ordinary first open of a tab"
     );
     assert_eq!(
-        moved(None, &a, false, 0, None, Some(&a)),
+        moved(None, &a, false, TopRow::at(0), None, Some(&a)),
         (true, None),
         "a `0` is left alone rather than scrolled to"
     );

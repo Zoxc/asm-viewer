@@ -523,6 +523,7 @@ fn every_field_of_a_listing_prop_is_compared() {
         tab,
         data: data.clone(),
         asked: Ask::Symbol(symbol.clone()),
+        answered: None,
     };
     assert!(rows == rows.clone(), "a list of rows differs from itself");
     for (field, changed) in [
@@ -547,6 +548,13 @@ fn every_field_of_a_listing_prop_is_compared() {
             "asked",
             InstructionList {
                 asked: Ask::Symbol(other.clone()),
+                ..rows.clone()
+            },
+        ),
+        (
+            "answered",
+            InstructionList {
+                answered: Some(Ask::Symbol(other.clone())),
                 ..rows.clone()
             },
         ),

@@ -108,10 +108,10 @@ fn session_of(
         Driven::default(),
     );
     for (document, row) in asm {
-        asm_rows.remember(entry(document), *row);
+        asm_rows.remember(entry(document), TopRow::at(*row));
     }
     for (document, row) in src {
-        src_rows.remember(entry(document), *row);
+        src_rows.remember(entry(document), TopRow::at(*row));
     }
     for (document, spot) in places {
         spots.remember(entry(document), *spot);
@@ -235,7 +235,9 @@ fn saved_page(page: Page) -> SavedTab {
 fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
     saved_one(SavedEntry {
         asm_row,
+        asm_into: 0,
         src_row,
+        src_into: 0,
         line: None,
         asm_address: None,
         code_address: None,
@@ -256,8 +258,8 @@ fn restored(document: &Document, asm_row: usize, src_row: usize) -> RestoredTab 
         trail,
         entries: vec![RestoredEntry {
             document: document.clone(),
-            asm_row,
-            src_row,
+            asm_row: TopRow::at(asm_row),
+            src_row: TopRow::at(src_row),
             line: None,
             address: None,
             code_address: None,
@@ -492,8 +494,8 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
         let id = docs.open_trail(trail.clone(), false).expect("a trail");
         let (mut asm, mut src) = (Positions::default(), Positions::default());
         for (index, place) in places(&objects).iter().enumerate() {
-            asm.remember((id, Stop::whole(place.clone())), 10 + index);
-            src.remember((id, Stop::whole(place.clone())), 20 + index);
+            asm.remember((id, Stop::whole(place.clone())), TopRow::at(10 + index));
+            src.remember((id, Stop::whole(place.clone())), TopRow::at(20 + index));
         }
         let session = Session::from_state(
             &objects,
@@ -534,8 +536,8 @@ fn a_tabs_trail_comes_back_with_its_cursor_and_its_rows() {
         for (index, entry) in as_document(&restored[0]).2.iter().enumerate() {
             let place = 2 - index;
             assert!(entry.document == places(&objects)[place]);
-            assert_eq!(entry.asm_row, 10 + place);
-            assert_eq!(entry.src_row, 20 + place);
+            assert_eq!(entry.asm_row, TopRow::at(10 + place));
+            assert_eq!(entry.src_row, TopRow::at(20 + place));
         }
         // What the restore raises is the tab showing the restored active document.
         assert!(session.restore(&objects).active.as_ref() == Some(&current));
@@ -552,7 +554,10 @@ fn each_map_a_place_was_left_in_lands_in_its_own_saved_field() {
     let document = places(&objects)[0].clone();
     let spot = Spot {
         address: 0x40,
-        rows: 3,
+        past: TopRow {
+            row: 3,
+            into: Fraction(0x8000),
+        },
     };
     let session = session_of(
         &objects,
@@ -566,7 +571,13 @@ fn each_map_a_place_was_left_in_lands_in_its_own_saved_field() {
     );
 
     let saved = &session.tabs[0].entries[0];
-    assert_eq!(saved.asm_row, 7, "the assembly side's row");
+    // An object's code keeps its assembly side as a place, and that wins over a row: the
+    // rows past the address and how far into the last.
+    assert_eq!(
+        (saved.asm_row, saved.asm_into),
+        (3, 0x8000),
+        "the rows past the address it was scrolled to"
+    );
     assert_eq!(saved.src_row, 11, "the source side's row");
     assert_eq!(
         saved.asm_address,
@@ -634,7 +645,7 @@ fn a_trail_drops_the_places_that_no_longer_resolve_and_a_tab_left_with_none() {
     let rows: Vec<usize> = as_document(&restored[0])
         .2
         .iter()
-        .map(|entry| entry.asm_row)
+        .map(|entry| entry.asm_row.row)
         .collect();
     assert_eq!(rows, [3, 5]);
 }
@@ -754,6 +765,61 @@ fn open_tabs_that_no_longer_resolve_are_dropped() {
     );
 }
 
+/// How far into a row each side was left survives the file: the part of a row a pane's
+/// row stops short of, and, for an object's code, the rows past the address with it.
+#[test]
+fn the_part_of_a_row_a_place_was_left_into_comes_back() {
+    let objects = objects();
+    let tabs = vec![tab(&objects[0]), tab(&objects[1])];
+    let spot = Spot {
+        address: 0x40,
+        past: TopRow {
+            row: 3,
+            into: Fraction(0x1234),
+        },
+    };
+    let mut session = session_of(
+        &objects,
+        &tabs,
+        &[(&tabs[0], 12)],
+        &[(&tabs[0], 4)],
+        &[(&tabs[1], spot)],
+        &[],
+        Some(&tabs[0]),
+        &Visits::default(),
+    );
+    // The two maps' parts, which `session_of` states in whole rows.
+    let first = &mut session.tabs[0].entries[0];
+    first.asm_into = 0x8000;
+    first.src_into = 0x0010;
+    let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
+
+    let restored = session.restore(&objects).tabs;
+    let entry = &as_document(&restored[0]).2[0];
+    assert_eq!(
+        (entry.asm_row, entry.src_row),
+        (
+            TopRow {
+                row: 12,
+                into: Fraction(0x8000)
+            },
+            TopRow {
+                row: 4,
+                into: Fraction(0x0010)
+            }
+        )
+    );
+    let entry = &as_document(&restored[1]).2[0];
+    assert_eq!(entry.address, Some(0x40));
+    assert_eq!(
+        entry.asm_row,
+        TopRow {
+            row: 3,
+            into: Fraction(0x1234)
+        }
+    );
+}
+
 /// The round trip the app makes: out of the two maps, through TOML, and back into them.
 #[test]
 fn the_rows_come_back_against_the_tabs_they_belong_to() {
@@ -772,7 +838,7 @@ fn the_rows_come_back_against_the_tabs_they_belong_to() {
     );
     let session: Session = toml::from_str(&round_trip(&session)).expect("reading back");
 
-    let (mut asm, mut src): (Positions<Document>, Positions<Document>) =
+    let (mut asm, mut src): (Positions<Document, TopRow>, Positions<Document, TopRow>) =
         (Positions::default(), Positions::default());
     for tab in session.restore(&objects).tabs {
         for entry in as_document(&tab).2 {
@@ -780,11 +846,11 @@ fn the_rows_come_back_against_the_tabs_they_belong_to() {
             src.remember(entry.document.clone(), entry.src_row);
         }
     }
-    assert_eq!(asm.at(&tabs[0]), Some(12));
-    assert_eq!(asm.at(&tabs[1]), Some(900));
-    assert_eq!(src.at(&tabs[1]), Some(4));
+    assert_eq!(asm.at(&tabs[0]), Some(TopRow::at(12)));
+    assert_eq!(asm.at(&tabs[1]), Some(TopRow::at(900)));
+    assert_eq!(src.at(&tabs[1]), Some(TopRow::at(4)));
     // And a hint it is: a listing that has since shrunk clamps to what it holds now.
-    assert_eq!(asm.row(&tabs[1], 100), 99);
+    assert_eq!(asm.row(&tabs[1], 100), TopRow::at(99));
 }
 
 /// A row is a hint and not a fact, so a saved tab that does not name one is a tab at
@@ -929,7 +995,7 @@ fn the_line_a_source_tab_was_driven_from_comes_back() {
     assert!(lines == [(tabs[0].clone(), Some(42)), (tabs[1].clone(), None)]);
     assert_eq!(
         as_document(&session.restore(&objects).tabs[0]).2[0].asm_row,
-        7
+        TopRow::at(7)
     );
 }
 
@@ -1032,7 +1098,7 @@ fn a_page_this_build_does_not_have_is_dropped() {
     let restored = session.restore(&objects).tabs;
     assert_eq!(restored.len(), 2);
     assert!(matches!(restored[0], RestoredTab::Page(Page::Settings)));
-    assert_eq!(as_document(&restored[1]).2[0].asm_row, 3);
+    assert_eq!(as_document(&restored[1]).2[0].asm_row, TopRow::at(3));
     assert_eq!(session.shown_page(), None);
 }
 
@@ -1102,7 +1168,7 @@ fn an_unchanged_binary_is_still_matched_on_the_address() {
     assert_eq!(session.restore(&objects).tabs.len(), 1);
     assert_eq!(
         as_document(&session.restore(&objects).tabs[0]).2[0].asm_row,
-        42
+        TopRow::at(42)
     );
 
     // The same name at an address it is not at, which this file does not explain.
@@ -1214,7 +1280,7 @@ fn a_digest_for_a_binary_that_is_not_open_says_nothing() {
 
     assert_eq!(
         as_document(&session.restore(&objects).tabs[0]).2[0].asm_row,
-        42
+        TopRow::at(42)
     );
 }
 
@@ -1378,7 +1444,7 @@ fn a_code_tabs_address_is_written_before_its_document() {
     let code = Document::Code(objects[1].clone());
     let spot = Spot {
         address: 0x30,
-        rows: 2,
+        past: TopRow::at(2),
     };
 
     let session = session_of(
@@ -1440,16 +1506,10 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
         (id, first.clone()),
         Spot {
             address: 0x10,
-            rows: 3,
+            past: TopRow::at(3),
         },
     );
-    spots.remember(
-        (id, second.clone()),
-        Spot {
-            address: 0x50,
-            rows: 0,
-        },
-    );
+    spots.remember((id, second.clone()), Spot::at(0x50));
 
     let session = Session::from_state(
         &objects,
@@ -1536,10 +1596,7 @@ fn a_saved_place_whose_half_is_not_its_documents_is_the_whole_document() {
 fn a_rebuilt_binary_takes_the_saved_address_with_it() {
     let objects = objects();
     let code = Document::Code(objects[1].clone());
-    let spot = Spot {
-        address: 0x30,
-        rows: 0,
-    };
+    let spot = Spot::at(0x30);
     let session = session_of(
         &objects,
         &[code.clone()],

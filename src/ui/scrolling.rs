@@ -86,6 +86,18 @@ pub(crate) fn reveal_row(
     true
 }
 
+/// The offset a `ScrollController` is set to for `top` to be at the top of a pane of rows
+/// `height` tall, held to `extent`: negative, the view counting down from zero, and
+/// rounded, so the offset read back is the `top` it was worked out from
+/// ([`TopRow::of_offset`]). The one conversion both code panes' kept places make.
+pub(crate) fn scroll_y(top: TopRow, height: f64, extent: f64) -> i32 {
+    -(top
+        .offset(height)
+        .min(extent)
+        .round()
+        .min(f64::from(i32::MAX)) as i32)
+}
+
 /// Bring the row the keyboard is on into view, and only when it is not: no context rows,
 /// unlike [`reveal_row`], since a key repeat that scrolled the view while the row was
 /// still on screen would walk the rows away from under the reader; a row above the view
@@ -194,7 +206,8 @@ struct Kept<R, C> {
 /// a symbol ten lines into a file would open at the top of the file rather than on itself.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Move {
-    Place(usize),
+    /// Part way into the row where the place was left there.
+    Place(TopRow),
     Open(usize),
 }
 
@@ -215,7 +228,7 @@ fn kept_move(
     holding: Option<&Entry>,
     tab: &Entry,
     known: bool,
-    back_to: usize,
+    back_to: TopRow,
     opening: Option<usize>,
 ) -> (Option<Entry>, Option<Move>) {
     match (holding, known) {
@@ -232,7 +245,7 @@ fn kept_move(
             // and not a reveal, since what must not survive the switch is the *outgoing*
             // tab's offset, and a reveal of the top would leave a small one where it can
             // already see row 0.
-            Some(opening.map_or(Move::Place(0), Move::Open)),
+            Some(opening.map_or(Move::Place(TopRow::default()), Move::Open)),
         ),
         // This pane's first run, on a tab it has a row for: a remount or a restored
         // session. Nothing to write down, everything to put back.
@@ -323,7 +336,7 @@ fn kept_move(
 /// it**, which can still be reporting a just-closed tab as open during exactly that run.
 /// The state and not a closure over it, so that rule is stated once.
 pub(crate) fn use_kept_position(
-    mut positions: State<Positions<Entry>>,
+    mut positions: State<Positions<Entry, TopRow>>,
     docs: State<Docs>,
     pane: Pane,
     reveal: impl FnMut() -> Option<usize> + 'static,
@@ -382,10 +395,14 @@ pub(crate) fn use_kept_position(
             if seen > 0.0 && inside != offset {
                 controller.scroll_to_y(inside);
             }
-            // The row at the top of the pane. `code_row_height` and not the list's, this
-            // being a code pane; rounded down, so a row half on screen is the row the reader
-            // is looking at.
-            let row = ((-inside).max(0) as f32 / height) as usize;
+            // The row at the top of the pane, and how far into it: `code_row_height` and not
+            // the list's, this being a code pane. **Taken from the offset as it stands on a
+            // switch**: the extent is the arriving listing's and the offset the one being
+            // left, so a long function left for a short one would be written down at the
+            // short one's end.
+            let row_at =
+                |offset: i32| TopRow::of_offset(f64::from((-offset).max(0)), f64::from(height));
+            let (row, left_at) = (row_at(inside), row_at(offset));
 
             // Borrowed once for the whole run: nothing it calls reaches the cell.
             let mut kept = kept.borrow_mut();
@@ -412,6 +429,7 @@ pub(crate) fn use_kept_position(
                 let still_open = docs.peek().contains(*id, stop);
                 // And only when it has moved: `State::write` notifies whether or not the
                 // value changes, and this runs on every scroll event.
+                let row = if switching { left_at } else { row };
                 let at = positions.peek().at(&owner);
                 if still_open && at != Some(row) {
                     positions.write().remember(owner, row);
@@ -477,11 +495,14 @@ pub(crate) fn use_kept_position(
             // inside the margin at all, that coming out as 0 and reading as nothing to do.
             let top = match kept.owing.take() {
                 Some(Move::Place(row)) => Some(row),
-                Some(Move::Open(row)) => Some(row.saturating_sub(CONTEXT_ROWS as usize)),
+                Some(Move::Open(row)) => {
+                    Some(TopRow::at(row.saturating_sub(CONTEXT_ROWS as usize)))
+                }
                 None => None,
             };
+            // Rounded, so the offset written reads back as the row it was taken from.
             if let Some(row) = top {
-                controller.scroll_to_y(-((row as f32 * height).min(extent) as i32));
+                controller.scroll_to_y(scroll_y(row, f64::from(height), f64::from(extent)));
             }
         },
     );
