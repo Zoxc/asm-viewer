@@ -101,16 +101,16 @@ fn text_of(instruction: &Instruction) -> (Line, Option<Range<usize>>) {
     let mut text = String::new();
     let mut link = None;
     for (piece, kind) in pieces(instruction) {
-        let start = chars::units(&text);
+        let start = text.len();
         text.push_str(piece);
         if kind == Piece::Link {
-            link = Some(start..chars::units(&text));
+            link = Some(start..text.len());
         }
     }
     text.truncate(text.trim_end().len());
-    let units = chars::units(&text);
+    let len = text.len();
     let link = link
-        .map(|link: Range<usize>| link.start.min(units)..link.end.min(units))
+        .map(|link: Range<usize>| link.start.min(len)..link.end.min(len))
         .filter(|link| !link.is_empty());
     (Line::text(text), link)
 }

@@ -16,7 +16,7 @@
 //! [`use_find_steps`] leaves the step for [`use_code_hunt`] to spend.
 
 use super::*;
-use crate::find::{self, Direction};
+use crate::find::Direction;
 
 /// A search through an object's code: what it is looking for, and where it has got to.
 ///
@@ -129,7 +129,7 @@ pub(crate) fn hunt(
                     continue;
                 }
             }
-            let mut hits = find::hits_in(&line, &matcher);
+            let mut hits = matcher.marks(line.as_str());
             if direction == Direction::Back {
                 hits.reverse();
             }

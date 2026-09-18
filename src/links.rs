@@ -37,9 +37,9 @@ use crate::shared::Shared;
 pub struct Link {
     /// 1-based, as every line in the app is.
     pub line: u32,
-    /// The columns of the name on `line`, as byte offsets into it -- the server's own
-    /// units (`lsp::Token`). The pane converts them to the columns it draws in.
-    pub columns: Range<u32>,
+    /// The columns of the name on `line`, as byte offsets into it, as every column in the
+    /// app is (`lsp::Token`).
+    pub columns: Range<usize>,
     /// What following it asks the server, and `None` where there is nothing to follow.
     /// The server's own type, so nothing maps a link's question onto a wire one
     /// (`lsp::Question`).
@@ -89,7 +89,7 @@ impl Links {
 
     /// The name byte `column` is inside on `line`, and `None` where it is over none.
     /// Followed or not: where a name is defined is where a reader asks what refers to it.
-    pub fn at(&self, line: u32, column: u32) -> Option<&Link> {
+    pub fn at(&self, line: u32, column: usize) -> Option<&Link> {
         self.on_line(line)
             .iter()
             .find(|link| link.columns.contains(&column))
@@ -97,7 +97,7 @@ impl Links {
 }
 
 /// The columns of the names among `on_line` that can be followed, in the order they are
-/// drawn: what a row draws as links, once the pane has counted them in its own units.
+/// drawn: what a row draws as links.
 /// Borrowed rather than collected: a row asks on every render.
 ///
 /// Takes what [`Links::on_line`] found rather than looking the line up itself: a row draws
@@ -107,7 +107,7 @@ impl Links {
 /// A function over the slice and not a method: the answer is a run of names in the order
 /// they are drawn, which no single [`Link`] can say, and nothing here is about a whole
 /// [`Links`] either.
-pub fn followed(on_line: &[Link]) -> impl Iterator<Item = &Range<u32>> + '_ {
+pub fn followed(on_line: &[Link]) -> impl Iterator<Item = &Range<usize>> + '_ {
     on_line
         .iter()
         .filter(|link| link.asks.is_some())

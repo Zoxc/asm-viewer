@@ -144,8 +144,7 @@ pub enum Note {
 pub enum Encoding {
     /// A column is a byte offset into the line, which is what the app counts in.
     Utf8,
-    /// A column is a UTF-16 unit, which is what every column crossing this module is
-    /// converted from and to.
+    /// A column is a UTF-16 unit, converted at this module's edge.
     Utf16,
 }
 
@@ -153,7 +152,7 @@ pub enum Encoding {
 /// out in, with one way into the bytes the app counts in and one way onto the wire.
 ///
 /// Its own module, so the range inside is nobody else's. A parser reads one of these out
-/// of an answer and [`Wire::bytes`] is the only way back to a `Range<u32>`, asking for
+/// of an answer and [`Wire::bytes`] is the only way back to a `Range<usize>`, asking for
 /// the [`Encoding`] the handshake agreed on; [`Talk::out`](Talk::out) counts one for a
 /// question and [`Wire::column`] is the only way out of that. So neither conversion can
 /// be skipped -- a byte column written where a wire column goes does not compile -- and
@@ -189,21 +188,22 @@ mod wire {
             self.0.start
         }
 
-        /// The same columns in bytes: `encoding` says whether they already are, and
-        /// `counted` counts them off the line where they are not.
+        /// The same columns in bytes, as the app holds a column: `encoding` says whether
+        /// they already are, and `counted` counts them off the line where they are not.
         ///
         /// The one way out of a `Wire`, and [`Talk::back`](super::Talk::back) is its only
         /// caller.
         pub(super) fn bytes(
             self,
             encoding: Encoding,
-            counted: impl FnOnce(Range<u32>) -> Range<u32>,
-        ) -> Range<u32> {
+            counted: impl FnOnce(Range<usize>) -> Range<usize>,
+        ) -> Range<usize> {
+            let columns = self.0.start as usize..self.0.end as usize;
             match encoding {
                 // Nothing is read where the server took `utf-8`: the numbers are already
                 // the app's.
-                Encoding::Utf8 => self.0,
-                Encoding::Utf16 => counted(self.0),
+                Encoding::Utf8 => columns,
+                Encoding::Utf16 => counted(columns),
             }
         }
     }
@@ -219,7 +219,7 @@ use wire::Wire;
 /// happens here and once. The columns are **byte offsets into that line**, whichever way
 /// the server counted them ([`Encoding`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Place<C = Range<u32>> {
+pub struct Place<C = Range<usize>> {
     pub file: PathBuf,
     pub line: u32,
     /// The columns of the name on `line`, in bytes. Empty where the answer's range spans
@@ -243,7 +243,7 @@ pub struct Place<C = Range<u32>> {
 pub struct Lookup {
     pub file: PathBuf,
     pub line: u32,
-    pub column: u32,
+    pub column: usize,
 }
 
 /// Which of the four questions about a place is being asked.
@@ -312,7 +312,7 @@ impl Question {
 /// rule, and the doc comment under it. A server told nothing sends the same thing as plain
 /// text with its structure flattened, which is why the handshake names the format.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Hovered<C = Range<u32>> {
+pub struct Hovered<C = Range<usize>> {
     pub text: String,
     /// 1-based, as a [`Place`]'s line is and for its reason.
     pub line: u32,
@@ -376,7 +376,7 @@ impl Legend {
 /// The indices are kept rather than the names: a file is thousands of these, the names are
 /// a few dozen, and what asks about one has the legend to hand.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Token<C = Range<u32>> {
+pub struct Token<C = Range<usize>> {
     /// 1-based, as a [`Place`]'s line is and for its reason.
     pub line: u32,
     /// The columns of the name on `line`, in bytes as a [`Place`]'s are, and counted in
@@ -902,15 +902,14 @@ impl<W: Write + Send + 'static> Talk<W> {
     ///
     /// **The one place a [`Wire`] is made for a question**, which is what keeps a byte
     /// column out of [`asked_at`]: what it hands back is the only thing that fits there.
-    fn out(&self, lines: &mut Lines, file: &Path, line: u32, column: u32) -> Wire {
-        if self.encoding == Encoding::Utf8 {
-            return Wire::at(column);
-        }
-        let Some(text) = lines.at(file, line) else {
-            return Wire::at(column);
+    fn out(&self, lines: &mut Lines, file: &Path, line: u32, column: usize) -> Wire {
+        let text = match self.encoding {
+            Encoding::Utf8 => None,
+            Encoding::Utf16 => lines.at(file, line),
         };
-        let at = column as usize;
-        Wire::at(narrowed(chars::columns_of(text, at..at).start))
+        Wire::at(narrowed(
+            text.map_or(column, |text| chars::utf16_of(text, column)),
+        ))
     }
 
     /// The server's columns as bytes: what comes back with an answer. [`Talk::out`]'s
@@ -918,13 +917,13 @@ impl<W: Write + Send + 'static> Talk<W> {
     ///
     /// **The one place a [`Wire`] is unwrapped towards the app**, which is what makes
     /// every parser's columns come through here on their way into an answer.
-    fn back(&self, lines: &mut Lines, file: &Path, line: u32, columns: Wire) -> Range<u32> {
+    fn back(&self, lines: &mut Lines, file: &Path, line: u32, columns: Wire) -> Range<usize> {
         columns.bytes(self.encoding, |columns| {
             let Some(text) = lines.at(file, line) else {
                 return columns;
             };
-            let bytes = chars::bytes_of(text, columns.start as usize..columns.end as usize);
-            narrowed(bytes.start)..narrowed(bytes.end)
+            let start = chars::byte_of_utf16(text, columns.start);
+            start..chars::byte_of_utf16(text, columns.end).max(start)
         })
     }
 
@@ -1005,18 +1004,17 @@ impl<W: Write + Send + 'static> Talk<W> {
 
 /// The lines one answer's columns are counted through, each file read once.
 ///
-/// A column comes in three units, and converting between them takes the line's text: a
-/// byte offset into the line everywhere in the app, whatever the handshake agreed on for
-/// the wire ([`Talk::out`], [`Talk::back`]), and a UTF-16 unit in a pane that draws the
-/// line ([`Lines::drawn`]). The question's own file is one the app has open; an
+/// A column is a byte offset into the line everywhere in the app, and on the wire it is
+/// whatever the handshake agreed on ([`Talk::out`], [`Talk::back`]); converting between
+/// the two takes the line's text. The question's own file is one the app has open; an
 /// answer can name any file at all -- a definition in another crate, a reference in a file
 /// no tab shows -- so the text is read rather than remembered, through the app's one rule
 /// for reading a source file (`source::read_text`). The read blocks, which is why every
 /// question here is a worker's (`src/ui/language.rs`).
 ///
-/// **One of these is built per answer**, and the wire and the drawing are given the same
-/// one (`ui::language::language_work`): a file an answer names twenty times is read once,
-/// and both units are counted off the one text.
+/// **One of these is built per answer**, and the wire and the Locations panel are given
+/// the same one (`ui::language::language_work`): a file an answer names twenty times is
+/// read once.
 pub(crate) struct Lines {
     read: ReadText,
     /// What each file said, a miss included.
@@ -1075,22 +1073,9 @@ impl Lines {
             .or_insert_with(|| read(file).map(Text::of));
         held.as_ref()?.row(row)
     }
-
-    /// A byte range on `line` as the pane drawing that line counts one: the columns a row
-    /// marks, and the caret a door plants.
-    ///
-    /// A file that will not read leaves the numbers alone, which is the right answer for
-    /// a line of ASCII and the nearest one for the rest.
-    pub(crate) fn drawn(&mut self, file: &Path, line: u32, columns: Range<u32>) -> Range<usize> {
-        let bytes = columns.start as usize..columns.end as usize;
-        let Some(text) = self.at(file, line) else {
-            return bytes;
-        };
-        chars::columns_of(text, bytes)
-    }
 }
 
-/// A column as it is held here. A line of four billion bytes is not one this app draws,
+/// A column as the wire holds it. A line of four billion bytes is not one this app draws,
 /// so the count clamps rather than wraps.
 fn narrowed(column: usize) -> u32 {
     u32::try_from(column).unwrap_or(u32::MAX)

@@ -236,7 +236,7 @@ fn every_kind_of_link_is_one_run_of_the_text() {
     let linked_text = |(line, columns): &(Line, Option<Range<usize>>)| {
         columns
             .clone()
-            .map(|columns| line.slice(columns.start, columns.end))
+            .map(|columns| line.slice(columns.start, columns.end).to_owned())
     };
 
     // The padding after the last span is not text, and a row with no link has no run.

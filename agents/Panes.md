@@ -269,10 +269,9 @@ the name under it is defined, `Shift+F12` for what refers to it, `Ctrl+F12` for 
 and `Alt+F12` for the line's own locations. They make the same three calls the menu does --
 `follow_name`, `find_listed`, `find_locations` -- so a key and the item beside it cannot come to
 mean two things; all that differs is where the place comes from, the run's lead read as a place
-instead of the pointer's column. That makes the units the thing to get right: a drawn column is in
-UTF-16 units and a server's is a byte offset (`src/chars.rs`). `name_at_column` is where the one is
-read as the other, and the pointer's `Named::at_column` goes through it too, so the two ways of
-pointing at a name cannot land a column apart. It takes the place as **one value**, the file and
+instead of the pointer's column. `name_at_column` is where a column is
+looked up among the server's names, and the pointer's `Named::at_column` goes through it too, so the
+two ways of pointing at a name cannot land a column apart. It takes the place as **one value**, the file and
 the line together, so neither caller can say where the row is twice and have the two disagree. A caret **on no name** asks nothing about
 one, and with no server there is nobody to ask; the line's locations are about the row and not
 about a name, so they are asked wherever the caret is, exactly as the menu item is offered on
@@ -659,10 +658,9 @@ nothing offers the press Alt has taken away. Alt is read in the render only by t
 pointer is on, and the icon follows the pointer, so a hand over a link Alt has just shut is put
 right by the next move, as it is for Ctrl.
 
-**Every link is text and not an element.** A row's columns are its text counted in units,
-which is what lets a press on a name in the source be counted straight into the byte offset
-the language server is asked at (`chars::bytes_of`, and the links' own columns back the other
-way), and what lets a sweep select across an operand character by character. An operand was
+**Every link is text and not an element.** A row's columns are bytes of its text, which is
+what lets a press on a name in the source be the byte offset the language server is asked at,
+and what lets a sweep select across an operand character by character. An operand was
 once an inline child of the row's paragraph, which the text engine counts as one unit, so a
 sweep could only take it whole. So the door is decided from the column instead: the row's
 `TextLinks` carries the columns of every link in it, whether a press on one is a door now and
@@ -1149,8 +1147,10 @@ read, and a fourth listing, or a fourth chord shared by all three, is one edit.
 (`src/ui/code_row.rs`): the shared width, wash and handlers, with what comes before the text (the
 mark, the arrow gutter, the address, a line number) and the text itself handed in. The text is **one
 `paragraph()`** of spans, a link being one of them. The model is the app's own and
-framework-free. A `Caret` is a row and a column in **UTF-16 units**, the unit skia answers a pointer
-in and takes a highlight in, and a `Line` is the row's text as it is drawn, so a column into what is
+framework-free. A `Caret` is a row and a column in **bytes** of the row's text, as every column in the app
+is. skia answers a pointer and takes a highlight in UTF-16 units, so the probes at the head of
+`src/ui/code_row.rs` convert at its edge, through the row's own text, and nothing past them is
+UTF-16. A `Line` is the row's text as it is drawn, so a column into what is
 drawn is a column into what is copied: `instruction_line`, `source_line` and `code_line` are built from the same
 text the rows draw, and `asm_line` is the address plus the same text -- not a third way of building
 the same string. An instruction's two halves are one walk, `pieces` (`src/ui/assembly.rs`): the
@@ -1167,10 +1167,10 @@ one paragraph nothing is trimmed but the row's own end. `instruction_line` is to
 what a row asking about its neighbour below wants of the row after the last, and what leaves its
 callers no length to check. The module's own tests hold every column of the drawn text to the
 same column of the copy, over an instruction of each kind a row draws differently. freya supplies
-exactly the two primitives a paragraph has anyway: the hit-test behind its `ParagraphHolder`
-(`caret_col`, `char_col`, `word_at`, in `ui/code_row.rs`; `None` before layout where freya's own code would unwrap)
-and the highlight paint (`highlights`, `text_select_bg`, `CursorMode::Expanded` so it fills the
-row). No `use_editable`, no rope of the listing: the editor's model wants one rope and a line per
+exactly the one primitive a paragraph has anyway: the hit-test behind its `ParagraphHolder`
+(`caret_col`, `char_col`, `word_at`, in `ui/code_row.rs`; `None` before layout where freya's own code would unwrap).
+The highlight and the caret are rects of the row's own, placed by a column's x on the device pixel
+grid. No `use_editable`, no rope of the listing: the editor's model wants one rope and a line per
 row, and an object's code is estimated rows that are counted afresh with every answer. **Gutter
 against text**: the mark, the arrow gutter, the address column, the line number, a separator and an
 empty row are gutter. A press there puts the caret at the row's start and makes the sweep go **by rows**
@@ -1271,15 +1271,17 @@ listing ones, and anything else is a gesture this handler was not asked -- `Alt+
 window's step back along the trail (`ui/chords.rs`) and `Ctrl+Page Up` is nothing at all. Reading
 the named key and asking no more than whether Ctrl was held made the first a character back and the
 second a screen, which is a window binding a pane had quietly taken. The motions are framework-free
-and tested against a five-row listing. A step is over a *character*, never a UTF-16 unit, so a
-two-unit character is one step and a column left inside one by a sweep rounds outward as `slice`
-does. A word is a run of one kind, alphanumerics and
+and tested against a five-row listing. A step is over a *character*, never a byte, so a
+multi-byte character is one step and a column left inside one by a stale landing rounds outward as
+`slice` does. A word is a run of one kind, alphanumerics and
 underscores or punctuation, with whitespace passed over first, the rule an editor's Ctrl+arrow
 follows; skia's `get_word_boundary` is **not** used for it (it is what the double press takes, but
 it is a hit-test on a laid-out paragraph and a key move has no row on screen to ask). Left at a
 row's start goes to the row above's end and Right at its end to the row below's start; the listing's
 ends clamp rather than wrap. A vertical move keeps a **goal column**, the column the lead had before
-the first of a run of them, so moving down through a short row and on comes back to it. It lives in
+the first of a run of them, so moving down through a short row and on comes back to it. It is
+counted in **characters** and not bytes: a byte goal carried off a row of `—` onto a row of ASCII
+landed three times as far along, and onto a row of wide characters it landed inside one. It lives in
 `CharSelection` and not `Picked`, since everything that puts the lead at a column of its own (a
 press, a sweep, a sideways key) clears it, and those are all `CharSelection`'s own constructors. The
 lead is clamped to the listing and the row's text first, because a sweep beyond the rows leaves it
@@ -1353,7 +1355,7 @@ movable at all is that the three functions that build a row's line are already p
 `palette()`, which is thread-local and would not survive the crossing.
 
 **What a row *wears* is not that answer.** A drawn row asks the compiled matcher where it hits
-(`Marking::hits`, over `find::hits_in`), as every marked row in the app does. That is drawing and not
+(`Marking::marks`, over `Matcher::marks`), as every marked row in the app does. That is drawing and not
 searching: there is no pass over the listing in it, one `Rc<Matcher>` is shared by every row of a
 render through a memo so the rows are not rebuilt for a render that changed no pattern, and it is the
 only thing an object's code could answer at all, a line there having text only once it has been read.
@@ -1370,9 +1372,9 @@ which is cheap, a bar being patterns, pointers and flags, and those two end in `
 It is `marks::update` and `write_if` (`agents/Worker.md`) again, for a state the reader writes
 rather than a worker.
 
-**A hit is columns, and a match is drawn as rects and never as split spans.** `find::hits_in` matches
-the row's text whole -- an assembly line is drawn one span at a time, so `mov rax` crosses three of
-them -- and counts what the matcher answers in bytes back into columns (`chars::columns_of`). The
+**A hit is columns, and a match is drawn as rects and never as split spans.** `Matcher::marks` is
+asked of the row's text whole -- an assembly line is drawn one span at a time, so `mov rax` crosses
+three of them -- and its byte ranges are the columns as they come. The
 wash is one more always-present sibling in
 `code_row::row`, a single rect holding one child per match, under the selection; freya matches
 siblings by position, so the varying count sits inside a slot that never varies. It is **purple**

@@ -93,29 +93,28 @@ fn copying_joins_each_rows_part_with_newlines() {
     assert_eq!(past.copy(line), "jmp 4\n\n");
 }
 
-/// Columns are UTF-16 units, since that is what the text engine counts in; a column inside
-/// a character two units wide rounds outward rather than cutting it.
+/// Columns are bytes; a column inside a character rounds outward rather than cutting it.
 #[test]
 fn a_slice_never_splits_a_character() {
-    // 'a', then a character that is two units, then 'b'.
+    // 'a', then a character that is four bytes, then 'b'.
     let line = Line::text("a\u{1F600}b");
-    assert_eq!(line.units(), 4);
-    assert_eq!(line.slice(0, 4), "a\u{1F600}b");
-    assert_eq!(line.slice(1, 3), "\u{1F600}");
+    assert_eq!(line.len(), 6);
+    assert_eq!(line.slice(0, 6), "a\u{1F600}b");
+    assert_eq!(line.slice(1, 5), "\u{1F600}");
     // Inside the character, either side: the character comes whole.
-    assert_eq!(line.slice(2, 4), "\u{1F600}b");
+    assert_eq!(line.slice(3, 6), "\u{1F600}b");
     assert_eq!(line.slice(0, 2), "a\u{1F600}");
     assert_eq!(line.slice(1, 1), "");
     // Past the end is the end, and reversed ends are put right.
-    assert_eq!(line.slice(3, 9), "b");
-    assert_eq!(line.slice(4, 1), "\u{1F600}b");
+    assert_eq!(line.slice(5, 9), "b");
+    assert_eq!(line.slice(6, 1), "\u{1F600}b");
 }
 
-/// The row's units, its atoms and a slice all put a column in the same place: the atoms
-/// run end to end from nothing to the row's units, and slicing one atom's columns copies
+/// The row's length, its atoms and a slice all put a column in the same place: the atoms
+/// run end to end from nothing to the row's length, and slicing one atom's columns copies
 /// the one character it spans.
 #[test]
-fn the_units_the_atoms_and_the_slice_put_a_column_in_the_same_place() {
+fn the_length_the_atoms_and_the_slice_put_a_column_in_the_same_place() {
     let line = Line::text("mov a\u{1F600}, +8");
 
     // What each column of the row copies.
@@ -138,9 +137,9 @@ fn the_units_the_atoms_and_the_slice_put_a_column_in_the_same_place() {
         );
         at = atom.end;
     }
-    assert_eq!(at, line.units(), "the atoms end where the row's units do");
-    // The wide character is two columns.
-    assert_eq!(atoms[5].end - atoms[5].start, 2);
+    assert_eq!(at, line.len(), "the atoms end where the row does");
+    // The wide character is four columns.
+    assert_eq!(atoms[5].end - atoms[5].start, 4);
 }
 
 /// A sweep that has left the rows reaches the row on screen nearest the pointer, at the
@@ -214,7 +213,7 @@ fn a_box_the_rows_cannot_be_read_in_reaches_a_row_all_the_same() {
 }
 
 /// The listing the key tests move through: a row of words and punctuation, a short one,
-/// an empty one, one with a character two units wide, and a last.
+/// an empty one, one with a character four bytes wide, and a last.
 fn listing(row: usize) -> Line {
     match row {
         0 => Line::text("mov rax, [rbp-8]"),
@@ -236,11 +235,11 @@ fn moved(selection: CharSelection, motion: Motion, extend: bool) -> CharSelectio
 fn left_and_right_step_by_character_and_cross_rows_at_their_ends() {
     let wide = listing(3).atoms();
     assert_eq!(after(&wide, 0), Some(1));
-    assert_eq!(after(&wide, 1), Some(3), "the wide character is one step");
-    assert_eq!(after(&wide, 2), Some(3), "from inside it, its end");
-    assert_eq!(after(&wide, 4), None);
-    assert_eq!(before(&wide, 4), Some(3));
-    assert_eq!(before(&wide, 3), Some(1));
+    assert_eq!(after(&wide, 1), Some(5), "the wide character is one step");
+    assert_eq!(after(&wide, 2), Some(5), "from inside it, its end");
+    assert_eq!(after(&wide, 6), None);
+    assert_eq!(before(&wide, 6), Some(5));
+    assert_eq!(before(&wide, 5), Some(1));
     assert_eq!(before(&wide, 2), Some(1), "from inside it, its start");
     assert_eq!(before(&wide, 0), None);
 
@@ -320,7 +319,7 @@ fn a_vertical_move_remembers_its_goal_column() {
     let down = moved(down, Motion::Down, false);
     assert_eq!(down.lead(), caret(2, 0));
     let down = moved(down, Motion::Down, false);
-    assert_eq!(down.lead(), caret(3, 4));
+    assert_eq!(down.lead(), caret(3, 6));
     let down = moved(down, Motion::Down, false);
     assert_eq!(down.lead(), caret(4, 10), "the goal column, reached again");
     // And back up the same way.
@@ -332,9 +331,10 @@ fn a_vertical_move_remembers_its_goal_column() {
     let aside = moved(moved(at, Motion::Down, false), Motion::Left, false);
     assert_eq!(aside.lead(), caret(1, 2));
     assert_eq!(moved(aside, Motion::Down, false).lead(), caret(2, 0));
+    // Two characters along, which on the row with the wide character is past it.
     assert_eq!(
         moved(moved(aside, Motion::Down, false), Motion::Down, false).lead(),
-        caret(3, 2)
+        caret(3, 5)
     );
     // So does a sweep.
     let swept = moved(at, Motion::Down, false).extended(caret(1, 1));
@@ -427,6 +427,27 @@ fn a_sweep_by_rows_takes_whole_rows_either_way() {
     );
 }
 
+/// The goal is a count of characters and not of bytes, so a move from a row of wide
+/// characters lands at the same place along an ASCII row, and a move onto one lands on a
+/// character's start and never inside it.
+#[test]
+fn a_vertical_move_keeps_to_characters_and_not_bytes() {
+    let rows = |row: usize| match row {
+        0 => Line::text("\u{2014}\u{2014}\u{2014} x"),
+        _ => Line::text("abcdefghij"),
+    };
+    let move_by = |selection: CharSelection, motion| selection.moved(motion, false, rows, 2, 1);
+
+    // After the three dashes: byte 9, character 3.
+    let down = move_by(CharSelection::at(caret(0, 9)), Motion::Down);
+    assert_eq!(down.lead(), caret(1, 3));
+    // And back: character 3 again, which is byte 9.
+    assert_eq!(move_by(down, Motion::Up).lead(), caret(0, 9));
+    // From one character in on the ASCII row, the start of the second dash.
+    let up = move_by(CharSelection::at(caret(1, 1)), Motion::Up);
+    assert_eq!(up.lead(), caret(0, 3));
+}
+
 /// Mapping a run's rows keeps which end is the caret and keeps the goal column the
 /// vertical moves aim for, and answers `None` where a row has no row any more.
 #[test]
@@ -445,19 +466,18 @@ fn a_mapped_run_keeps_its_lead_and_its_goal() {
     let down = moved(CharSelection::at(caret(0, 10)), Motion::Down, false);
     let mapped = down.mapped(|row| Some(row + 1)).expect("the row answered");
     assert_eq!(mapped.lead(), caret(2, 3));
-    assert_eq!(moved(mapped, Motion::Down, false).lead(), caret(3, 4));
+    assert_eq!(moved(mapped, Motion::Down, false).lead(), caret(3, 6));
 }
 
 // A cursor put where the compiler pointed (`src/ui/pad.rs`).
 
 /// A diagnostic's place is a line and a column the way rustc counts them; a cursor is one
-/// number the way an editor counts it. This is the whole of the conversion, and the unit
-/// is UTF-16 code units because that is what a cursor position is.
+/// byte offset into the text.
 #[test]
 fn a_span_is_a_cursor_position() {
     let source = "fn main() {\n    let x = 1;\n}\n";
 
-    // One-based, both halves: line 2 column 5 is the `l` of `let`, which is char 16.
+    // One-based, both halves: line 2 column 5 is the `l` of `let`, which is byte 16.
     assert_eq!(offset_of(source, 2, 5), 16);
     // The first character of the file, which is where a span with no useful place lands.
     assert_eq!(offset_of(source, 1, 1), 0);
@@ -466,21 +486,19 @@ fn a_span_is_a_cursor_position() {
     assert_eq!(offset_of(source, 4, 1), source.len());
 }
 
-/// A column is counted in characters and a cursor in UTF-16 code units, so a line with an
-/// astral character in it is where the two disagree — one character, two code units. A
-/// cursor placed by character count would sit one place left of the span for every one of
-/// them before it.
+/// A column is counted in characters and an offset in bytes, so a line with a character
+/// outside ASCII in it is where the two disagree.
 #[test]
-fn a_column_is_characters_and_a_cursor_is_code_units() {
-    // `é` is one char and one code unit; `𝄞` is one char and two.
+fn a_column_is_characters_and_an_offset_is_bytes() {
+    // `é` is one char and two bytes; `𝄞` is one char and four.
     let source = "// é𝄞 x\nlet y = 2;\n";
 
     // Column 7 is the `x`: six characters before it — `/`, `/`, ` `, `é`, `𝄞`, ` ` — which
-    // are seven code units, the `𝄞` being two.
-    assert_eq!(offset_of(source, 1, 7), 7);
+    // are ten bytes.
+    assert_eq!(offset_of(source, 1, 7), 10);
     // And the line below starts after the whole of the line above, its break included:
-    // eight characters, nine code units.
-    assert_eq!(offset_of(source, 2, 1), 9);
+    // eight characters, twelve bytes.
+    assert_eq!(offset_of(source, 2, 1), 12);
 }
 
 /// The source is edited under a diagnostic — the reader has usually typed since the build —
@@ -501,104 +519,44 @@ fn a_span_the_source_has_outgrown_is_clamped() {
     assert_eq!(offset_of(source, 0, 0), 0);
 }
 
-// The two units a column is counted in, and the conversion between them
-// (`src/lsp.rs`, `src/ui/source_view.rs`).
+// A byte column as what counts in UTF-16 units counts it, and back (`src/lsp.rs`,
+// `src/ui/code_row.rs`).
 
 /// A line where the two units part company: an emoji is four bytes and two UTF-16 units,
 /// so every column after one is a different number in each. `// ` is three of both.
 const WIDE: &str = "// \u{1f980} helper";
 
 #[test]
-fn a_byte_offset_and_a_column_are_the_same_number_until_a_wide_character() {
+fn a_byte_and_a_unit_are_the_same_number_until_a_wide_character() {
     // Before the crab the two agree, after it they are two apart.
-    assert_eq!(columns_of(WIDE, 0..3), 0..3);
-    assert_eq!(columns_of(WIDE, 8..14), 6..12);
-    assert_eq!(bytes_of(WIDE, 6..12), 8..14);
+    assert_eq!(utf16_of(WIDE, 3), 3);
+    assert_eq!(utf16_of(WIDE, 8), 6);
+    assert_eq!(byte_of_utf16(WIDE, 6), 8);
     // And a line of nothing but ASCII never tells them apart.
-    assert_eq!(columns_of("let x = 1;", 4..5), 4..5);
-    assert_eq!(bytes_of("let x = 1;", 4..5), 4..5);
+    assert_eq!(utf16_of("let x = 1;", 4), 4);
+    assert_eq!(byte_of_utf16("let x = 1;", 4), 4);
 }
 
 #[test]
 fn a_column_inside_a_character_is_that_characters_start() {
-    // Half of the crab, from either side: each end comes back at the start of the
-    // character it is inside, and never at a boundary a slice would panic on. Column 4
-    // is the crab's second unit, so it rounds back to the crab; byte 5 is inside it too.
-    assert_eq!(columns_of(WIDE, 4..6), 3..3);
-    assert_eq!(bytes_of(WIDE, 4..5), 3..7);
-    // The units are what the row draws, so a whole crab is two of them.
-    assert_eq!(columns_of(WIDE, 3..7), 3..5);
+    // Byte 5 is inside the crab, and so is unit 4: each comes back at its start, and
+    // never at a boundary a slice would panic on.
+    assert_eq!(floor(WIDE, 5), 3);
+    assert_eq!(utf16_of(WIDE, 5), 3);
+    assert_eq!(byte_of_utf16(WIDE, 4), 3);
+    // The whole crab is four bytes and two units.
+    assert_eq!(utf16_of(WIDE, 7), 5);
+    assert_eq!(byte_of_utf16(WIDE, 5), 7);
 }
 
 #[test]
-fn a_run_the_line_is_too_short_for_stops_at_its_end() {
+fn a_column_the_line_is_too_short_for_is_its_end() {
     // A line that changed under the answer, and one that has nothing to point at at all.
-    assert_eq!(columns_of(WIDE, 90..99), 12..12);
-    assert_eq!(bytes_of(WIDE, 90..99), 14..14);
-    assert_eq!(columns_of("", 0..4), 0..0);
-    assert_eq!(bytes_of("", 0..4), 0..0);
-    // Ends the wrong way round come back empty at the start: not reversed, which panics
-    // where the range is used, and not empty at the smaller end. Both ends are inside the
-    // line, so this is the reversal and not the clamp above.
-    assert_eq!(columns_of(WIDE, backwards(8, 3)), 6..6);
-    assert_eq!(bytes_of(WIDE, backwards(6, 3)), 8..8);
-}
-
-/// A range whose ends are the wrong way round. One only ever comes from a stale answer,
-/// so it is built from its ends rather than written `8..3`, which reads as a typo and is
-/// an error to clippy.
-fn backwards(start: usize, end: usize) -> Range<usize> {
-    start..end
-}
-
-/// The two ways a cut lands inside a character, side by side: `bytes_of` rounds it back to
-/// the character's start, `slice_of` refuses it, and a caller of `slice_of` can tell the
-/// two cases apart because refusing is the only way it says nothing.
-#[test]
-fn a_cut_inside_a_character_rounds_one_way_and_is_refused_the_other() {
-    // Column 4 is the crab's second unit. `bytes_of` takes the whole crab with it.
-    assert_eq!(bytes_of(WIDE, 0..4), 0..3);
-    assert_eq!(slice_of(WIDE, 0..4), None);
-    // From inside it as well as up to inside it.
-    assert_eq!(bytes_of(WIDE, 4..7), 3..9);
-    assert_eq!(slice_of(WIDE, 4..7), None);
-    // A cut on the boundaries either side of it is the same run for both.
-    assert_eq!(&WIDE[bytes_of(WIDE, 3..5)], "\u{1f980}");
-    assert_eq!(slice_of(WIDE, 3..5), Some("\u{1f980}"));
-    assert_eq!(slice_of(WIDE, 0..3), Some("// "));
-    assert_eq!(slice_of(WIDE, 5..12), Some(" helper"));
-}
-
-/// Nothing to cut is nothing to draw: an empty run and a reversed one both come back
-/// `None`, where `bytes_of` answers an empty range at a place. Past the end is `None` too,
-/// there being no character boundary there to land on.
-#[test]
-fn a_slice_of_nothing_is_refused() {
-    assert_eq!(slice_of(WIDE, 3..3), None);
-    assert_eq!(slice_of(WIDE, backwards(5, 3)), None);
-    assert_eq!(bytes_of(WIDE, backwards(5, 3)), 7..7);
-    assert_eq!(slice_of(WIDE, 0..99), None);
-    assert_eq!(bytes_of(WIDE, 0..99), 0..14);
-    assert_eq!(slice_of("", 0..0), None);
-}
-
-/// The walk both conversions are made of, on its own: it says where the column is *and*
-/// whether the line has that column at all, and a policy is which of the two it keeps.
-/// The byte alone cannot say which, so a walk answering only the byte would let
-/// `slice_of` cut from inside a character, or past the end of the line.
-#[test]
-fn a_column_says_whether_it_is_a_place_in_the_line() {
-    // On a boundary, including the end of the line.
-    assert_eq!(byte_of_column(WIDE, 3), Ok(3));
-    assert_eq!(byte_of_column(WIDE, 5), Ok(7));
-    assert_eq!(byte_of_column(WIDE, 12), Ok(WIDE.len()));
-    assert_eq!(byte_of_column("", 0), Ok(0));
-    // Inside the crab: its start, and not a boundary.
-    assert_eq!(byte_of_column(WIDE, 4), Err(3));
-    // Past the end: the line's length, and not a boundary either. There is no character
-    // there, so the only honest answer is the one a cut can refuse.
-    assert_eq!(byte_of_column(WIDE, 13), Err(WIDE.len()));
-    assert_eq!(byte_of_column("", 1), Err(0));
+    assert_eq!(floor(WIDE, 99), WIDE.len());
+    assert_eq!(utf16_of(WIDE, 99), 12);
+    assert_eq!(byte_of_utf16(WIDE, 99), WIDE.len());
+    assert_eq!(utf16_of("", 4), 0);
+    assert_eq!(byte_of_utf16("", 4), 0);
 }
 
 /// The nth character, in bytes: where an elision cuts, and the string's own length when

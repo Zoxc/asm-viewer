@@ -319,9 +319,8 @@ leaves this list when it is. That is a move made on request, like everything els
   effect are across too. Whether a diagnostic's place can be opened is the build worker's
   answer now (`building::openable`); the row asking it cost a `stat` a diagnostic a frame, and
   a build says two hundred things as readily as two. And the caret a followed definition lands
-  on is counted on the language worker (`follow::Arrival`); the effect that opens the answer
-  read the file to count it, up to 4 ms cold for a megabyte, and for nobody — the pane's own
-  read of that file is the highlighter's worker. And a press on a Search hit asks nothing at
+  on needs no read at all now, the server's column and the pane's both being bytes; the effect
+  that opens the answer read the file to count it, up to 4 ms cold for a megabyte. And a press on a Search hit asks nothing at
   all now: the walk that found it already refuses a symlink and anything past the source
   pane's bound, so the `source::showable` in front of the press was that walk's own question
   put again (`ui::place_row`). A headless test holds each of the three to it, counting
@@ -413,15 +412,14 @@ leaves this list when it is. That is a move made on request, like everything els
   `cargo::Span::offset_in`, `source_row::name_at` — are one pair of functions in
   `src/chars.rs`.
 
-- [ ] Count a drawn row's columns in bytes as well, which needs skia to. `src/chars.rs`
-  measures a place as a row and a column in UTF-16 units because the three calls behind the
-  pointer are skia's — `caret_col`, `caret_x` and `word_at` (`src/ui/code_row.rs`) are
-  `get_glyph_position_at_coordinate`, `get_rects_for_range` and `get_word_boundary` — and skia
-  indexes a paragraph in UTF-16 code units. So `code_row::utf16_slice` and the `len_utf16`
-  loops in `chars.rs` stay, and the source pane converts each way as it draws and as it is
-  pressed. Against doing it: a conversion has to walk the row's *pieces* and not a `str`, an
-  inline link being one unit to skia (U+FFFC) with no UTF-8 spelling. `notes/upstream/freya.md`
-  has the ask.
+- [x] Count a drawn row's columns in bytes as well. A `Caret` is a row and a byte column,
+  and skia's UTF-16 units are converted at its edge: the probes at the head of
+  `src/ui/code_row.rs` (`caret_col`, `caret_x`, `char_col`, `word_at`) and the highlight a
+  list row washes (`parts::marked_units`), each through the row's own text. With no inline
+  piece left in a row since links became runs of its text, that text is a plain `str`. A
+  language server that kept UTF-16 and freya's editor cursor are converted at their own
+  edges the same way. `notes/upstream/freya.md` has the ask that would remove the probes'
+  conversion.
 
 - [ ] Walk a menu, and answer a window, with the keyboard. Every menu the app opens is the
   pointer's alone: the arrows move nothing in one, Enter presses nothing, and the only key any

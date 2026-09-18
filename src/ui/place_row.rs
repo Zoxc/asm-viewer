@@ -19,8 +19,8 @@ pub(crate) trait Place: Clone + PartialEq + 'static {
     fn text(&self) -> &str;
     /// What is marked in the text, as byte ranges into it.
     fn spans(&self) -> &[Range<usize>];
-    /// What opening it picks out, over the file's own line and in the UTF-16 units a
-    /// pane counts columns in. [`None`] leaves a caret at the start of the line.
+    /// What opening it picks out, as byte columns of the file's own line. [`None`]
+    /// leaves a caret at the start of the line.
     fn columns(&self) -> Option<Range<usize>>;
 }
 

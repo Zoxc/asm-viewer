@@ -189,7 +189,7 @@ fn a_modifier_the_legend_does_not_have_is_never_said() {
 #[test]
 fn the_links_of_a_line_are_the_ones_on_it_in_the_order_they_are_drawn() {
     let legend = lsp::Legend::of(&["method"], &[]);
-    let at = |line: u32, from: u32| lsp::Token {
+    let at = |line: u32, from: usize| lsp::Token {
         line,
         columns: from..from + 3,
         kind: 0,
@@ -204,7 +204,7 @@ fn the_links_of_a_line_are_the_ones_on_it_in_the_order_they_are_drawn() {
             .on_line(4)
             .iter()
             .map(|link| link.columns.start)
-            .collect::<Vec<u32>>(),
+            .collect::<Vec<usize>>(),
         vec![2, 9]
     );
     assert_eq!(links.on_line(2).len(), 1);
@@ -234,7 +234,7 @@ fn a_name_with_nothing_to_follow_is_kept_and_is_not_drawn_as_a_link() {
     assert_eq!(
         followed(links.on_line(1))
             .cloned()
-            .collect::<Vec<Range<u32>>>(),
+            .collect::<Vec<Range<usize>>>(),
         vec![8..12]
     );
 }

@@ -1,37 +1,19 @@
-//! What a find bar asks of one code pane: where a pattern hits in a line as it is drawn,
-//! and which hit a step goes to. Framework-free.
+//! What a find bar asks of one code pane: which hit a step goes to. Framework-free.
 //!
-//! Not `filter.rs` and not `fuzzy.rs`. Those two ask a question about a *row* -- does this
-//! name belong in the list, and how well -- and answer yes or no. This one asks where in a
-//! line the pattern is, in the columns a pane counts, because what comes back is washed
-//! and selected in the text itself. The pattern is a [`Matcher`] all the same, so the
-//! three toggles mean one thing in all four boxes.
-//!
-//! **Columns and not bytes.** A pane counts a column in UTF-16 units of the line *as
-//! drawn* (`src/chars.rs`), which is what the caret, the selection and the wash are all
-//! placed by, so that is what a hit is in.
+//! Where a pattern hits in a line is [`Matcher::marks`](crate::filter::Matcher::marks)
+//! asked of the line as it is drawn, so the three toggles mean one thing in all four
+//! boxes. A hit's columns are bytes of that line (`src/chars.rs`), which is what the
+//! caret, the selection and the wash are all placed by.
 
 use std::ops::Range;
 
-use crate::chars::{self, Caret, Line};
-use crate::filter::Matcher;
+use crate::chars::Caret;
 
 /// One hit in a listing: the line it is on and the columns it covers.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Hit {
     pub row: usize,
     pub columns: Range<usize>,
-}
-
-/// Where `matcher` hits in `line`, as columns, in order: the row's text is matched
-/// whole, and what the matcher answers in bytes is counted back into columns.
-pub fn hits_in(line: &Line, matcher: &Matcher) -> Vec<Range<usize>> {
-    let text = line.as_str();
-    matcher
-        .marks(text)
-        .into_iter()
-        .map(|bytes| chars::columns_of(text, bytes))
-        .collect()
 }
 
 /// Which way a step goes. Named here, beside the step itself, so the ask a bar holds, the

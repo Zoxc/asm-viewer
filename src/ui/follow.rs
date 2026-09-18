@@ -24,46 +24,7 @@ pub(crate) struct Follow {
     /// Where the answer said the name is defined, until [`use_follow`] has taken it: the
     /// place the server named, where the press said it should open, and the tab it was
     /// made in.
-    arrived: Option<(Arrival, Reach, Option<DocId>)>,
-}
-
-/// A place a followed answer named, with the caret opening it plants already worked out.
-///
-/// The caret goes on the **name** and not at the head of its line, the reader being taken
-/// there to read it. The server counts that column in bytes ([`lsp::Place`]) where a pane
-/// counts UTF-16 units, so converting takes the line's text -- which is why the answer
-/// carries the caret and not the columns alone. The line is read where the ask is, on the
-/// language worker, for the reason the Locations panel's lines are (`src/references.rs`):
-/// a read blocks, and that is the thread that may block. A file that will not read leaves
-/// the column alone, which is the same column on any line of ASCII.
-#[derive(Clone, PartialEq)]
-pub(crate) struct Arrival {
-    pub(crate) place: lsp::Place,
-    /// An empty run at the name's first column, in the units the source pane draws in: a
-    /// caret there, selecting nothing.
-    pub(crate) caret: Range<usize>,
-}
-
-impl Arrival {
-    /// The places an answer named, each with its caret. `lines` is the answer's own
-    /// reader ([`lsp::Lines`]), the one its columns came back off the wire through, so a
-    /// file is read once however many places name it. It reads with
-    /// [`source::read_text`] on the worker: a path a server answers with is file input,
-    /// and two rules for what a source file is would be two ideas of which files this app
-    /// can show.
-    ///
-    /// Every place is counted, though [`Follow::answer`] opens only the first: which one
-    /// that is, is its rule, and an answer names one place for nearly every name.
-    pub(crate) fn of(places: Vec<lsp::Place>, lines: &mut lsp::Lines) -> Vec<Arrival> {
-        places
-            .into_iter()
-            .map(|place| {
-                let at = place.columns.start;
-                let caret = lines.drawn(&place.file, place.line, at..at);
-                Arrival { place, caret }
-            })
-            .collect()
-    }
+    arrived: Option<(lsp::Place, Reach, Option<DocId>)>,
 }
 
 /// A question put and not yet answered: the [`Ticket`] it went out under, where it was
@@ -92,7 +53,7 @@ impl Follow {
     /// question and opens nothing: the click was a question and never a promise. So does
     /// a **declaration** placed on the line the question was asked on, which is somewhere
     /// the reader already is.
-    pub(crate) fn answer(&mut self, ticket: Ticket, places: &[Arrival]) -> bool {
+    pub(crate) fn answer(&mut self, ticket: Ticket, places: &[lsp::Place]) -> bool {
         let waiting = self.asked.as_ref().filter(|asked| asked.ticket == ticket);
         let Some(asked) = waiting else {
             return false;
@@ -108,15 +69,15 @@ impl Follow {
         // door -- the same file is a different path through `land` and not a different
         // outcome -- and one that lands on the line it was asked from is a name defined
         // where it is used, which is a place like any other.
-        let nowhere = |arrival: &&Arrival| {
+        let nowhere = |place: &&lsp::Place| {
             asked.want == lsp::Followed::Declaration
-                && arrival.place.file == asked.at.file
-                && arrival.place.line == asked.at.line
+                && place.file == asked.at.file
+                && place.line == asked.at.line
         };
         self.arrived = places
             .first()
-            .filter(|arrival| !nowhere(arrival))
-            .map(|arrival| (arrival.clone(), reach, tab));
+            .filter(|place| !nowhere(place))
+            .map(|place| (place.clone(), reach, tab));
         self.asked = None;
         true
     }
@@ -191,7 +152,7 @@ pub(crate) fn follow_link(
     links: &links::Links,
     open: Open,
     at: &LinePos,
-    column: u32,
+    column: usize,
     reach: Reach,
 ) {
     let want = links
@@ -250,7 +211,7 @@ pub(crate) fn use_follow(mut follow: State<Follow>, doors: Doors) {
         // Reading is what wakes this; the write below clears what it read, so the run
         // it wakes finds nothing and stops.
         let arrived = follow.read().arrived.clone();
-        let Some((arrival, reach, tab)) = arrived else {
+        let Some((place, reach, tab)) = arrived else {
             return;
         };
         follow.write().arrived = None;
@@ -271,14 +232,9 @@ pub(crate) fn use_follow(mut follow: State<Follow>, doors: Doors) {
             raise(open, tab);
         }
 
-        // The caret is the worker's, counted off the line it sits on there.
-        let place = &arrival.place;
-        open_source_place(
-            doors,
-            &place.file,
-            place.line,
-            Some(arrival.caret.clone()),
-            reach,
-        );
+        // The caret goes on the name and not at the head of its line, the reader being
+        // taken there to read it.
+        let at = place.columns.start;
+        open_source_place(doors, &place.file, place.line, Some(at..at), reach);
     });
 }

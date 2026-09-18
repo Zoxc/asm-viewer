@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// A place as the server answers one.
-fn place(file: &str, line: u32, columns: Range<u32>) -> lsp::Place {
+fn place(file: &str, line: u32, columns: Range<usize>) -> lsp::Place {
     lsp::Place {
         file: PathBuf::from(file),
         line,
@@ -171,10 +171,9 @@ fn a_line_the_file_does_not_have_is_the_number_alone() {
 }
 
 #[test]
-fn a_name_after_a_wide_character_is_marked_in_bytes_and_counted_in_units() {
-    // The answer's columns are bytes and a pane's are UTF-16 units, and an emoji is
-    // where the two part: four bytes, two units. `// ` is three of each, then the crab,
-    // then a space, so the name begins at byte 8 and at column 6.
+fn a_name_after_a_wide_character_is_marked_in_bytes() {
+    // `// ` is three bytes, then the crab's four, then a space, so the name begins at
+    // byte 8.
     let references = read_with(&[place("/p/src/main.rs", 1, 8..14)], |_| {
         Some("// \u{1f980} helper\n".to_owned())
     });
@@ -184,7 +183,7 @@ fn a_name_after_a_wide_character_is_marked_in_bytes_and_counted_in_units() {
         panic!("the second row is the use");
     };
     assert_eq!(&item.text[item.spans[0].clone()], "helper");
-    assert_eq!(item.columns, 6..12);
+    assert_eq!(item.columns, 8..14);
 }
 
 #[test]

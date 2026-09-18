@@ -482,8 +482,9 @@ the verdict's own line and about no row at all, so drawing it here would only sa
 (`src/main.rs:9:17`, under the message) and the editor has a cursor that can be put there, so the
 place is pressed rather than counted to. The conversion between the two is `Span::offset_in`, a pure
 function of the source text and therefore unit-tested rather than eyeballed. rustc counts a line and
-a column **from one** and counts a column in **characters**; an editor counts a cursor in **UTF-16
-code units** from the start of the text; and lines are separated by `\n` and nothing else, which is
+a column **from one** and counts a column in **characters**; `chars::offset_of` answers a byte
+offset from the start of the text, which the rope turns into the **UTF-16 code units** the editor
+counts its cursor in; and lines are separated by `\n` and nothing else, which is
 rustc's own rule since it normalises `\r\n` before it numbers anything. It is applied to the buffer
 **as it is now** and not to what was compiled, since the reader has usually typed since, so it
 clamps twice and for one reason: a column past the end of its line lands at the end of that line, a

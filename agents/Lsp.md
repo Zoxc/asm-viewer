@@ -251,13 +251,12 @@ it are in `src/lsp.rs` -- `asked_at` counts a question's line down as it goes on
 and an answer's is counted up as it is read. Nothing outside that file holds a line the
 wire's way.
 
-The column is asked about. The protocol's own unit is a UTF-16 code unit, which is what
-skia counts a drawn row in and so what `src/chars.rs` counts in -- but it is not what
-anything else in the app counts in, and a byte offset is what the text itself is indexed
-by. So the handshake declares `positionEncodings: ["utf-8", "utf-16"]`, in that order,
-because the order is the preference and a server takes the first it knows. **Every column
-crossing `src/lsp.rs` is then a byte offset into its line**, whichever the server chose,
-and the app has one meaning for a column outside the drawing.
+The column is asked about. The protocol's own unit is a UTF-16 code unit, but a byte
+offset is what the text itself is indexed by and what every column in the app is
+(`src/chars.rs`). So the handshake declares `positionEncodings: ["utf-8", "utf-16"]`, in
+that order, because the order is the preference and a server takes the first it knows.
+**Every column crossing `src/lsp.rs` is then a byte offset into its line**, whichever the
+server chose, and the app has one meaning for a column.
 
 `positionEncoding` arrived in **3.17**, so a server that says nothing has kept UTF-16 --
 and so has one that answers something this app never offered. Both are read as UTF-16 and
@@ -267,7 +266,7 @@ word nobody said. Never a failure: a server is not broken for being older.
 **The type is what makes each conversion happen.** A column in the server's own units is
 a `Wire`: a newtype whose range belongs to a module of its own, with one way in and one
 way out per direction. A parser reads an answer's columns into one, and `Wire::bytes` is
-the only way back to a `Range<u32>`; it asks for the `Encoding` the handshake agreed on,
+the only way back to a `Range<usize>`; it asks for the `Encoding` the handshake agreed on,
 and `Talk::back` is its one caller. So a parser builds a `Place<Wire>`, a `Hovered<Wire>`
 or a `Token<Wire>`, and the byte-unit `Place`, `Hovered` or `Token` a caller is given
 exists only on the far side of that call. Going out, `Talk::out` is the only thing that
@@ -293,17 +292,13 @@ would otherwise walk that file from the top a hundred times. `Lines` is asked wi
 for it. A file that will not read leaves the number alone, which is the right answer for a
 line of ASCII and the nearest one for the rest. **Where the server took `utf-8` nothing is
 read for the wire at all**: the numbers are already the app's. That is `Talk`'s rule and
-not `Lines`', since the drawing below has to convert whatever the server chose.
+not `Lines`', since the Locations panel below reads its lines whatever the server chose.
 
-The drawing side converts the other way, since skia is what wants units: the source pane
-counts a link's columns into the row it draws and a press back into a byte offset
-(`src/ui/source_row.rs`), and both halves of an answer count theirs on the worker --
-`references::of` for the Locations panel's rows and `Arrival::of` for the caret a followed
-one plants. Both count them with `Lines::drawn`, through **the same `Lines` the answer's
-own columns came back on the wire through**: `language_work` builds one per answer and
-hands it to the question and then to the shape the answer is taken in, so a file an answer
-names is read once and not once per conversion. The conversion itself is
-`chars::columns_of` and `chars::bytes_of` and is written once.
+The Locations panel's rows are read on the worker too (`references::of`), through **the
+same `Lines` the answer's own columns came back on the wire through**: `language_work`
+builds one per answer and hands it to the question and then to the shape the answer is
+taken in, so a file an answer names is read once. The conversion itself is
+`chars::utf16_of` and `chars::byte_of_utf16` and is written once.
 
 An answer that names no column at all is column 0 and not no place at all, the line being
 what opens the file.
@@ -666,14 +661,9 @@ its match with (`agents/Sidebar.md`). A name defined in the file the tab already
 the other path through `land`, which marks the line itself and leaves no landing; what keeps
 the column there is in `agents/Panes.md`, under the doors.
 
-**That column is counted on the worker**, which is what `Arrival` is: the place the server
-named with the caret already worked out. The server counts in bytes and a pane in UTF-16
-units, so converting takes the line's text -- of a file the reader has never opened, since
-that is what a definition usually is. Counting it in the effect that opens the answer was
-up to four milliseconds of the thread that draws for a megabyte, and the defence that it
-was the read the pane would make anyway does not hold: the pane's is the highlighter's
-worker (`agents/Panes.md`), so the UI thread was doing it for nobody. It is read where the
-ask is, once per file, with the same `source::read_text` the Locations panel's lines are.
+**That column is the place's own.** The server counts in bytes and so does a pane, so
+nothing reads the line to plant the caret -- a line of a file the reader has usually never
+opened.
 
 **Which names are links is the server's to say, and it is asked once per file.**
 `textDocument/semanticTokens/full` classifies every name in a file at once -- one request,

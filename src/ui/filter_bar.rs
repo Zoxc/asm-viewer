@@ -606,13 +606,6 @@ impl Marking {
     pub(crate) fn marks(&self, text: &str) -> Vec<Range<usize>> {
         self.0.marks(text)
     }
-
-    /// The columns it matched in a line of code, for a code row to wash. The same
-    /// question as [`marks`](Self::marks) asked of a line rather than a name, so the one
-    /// compiled matcher answers both (`src/find.rs`).
-    pub(crate) fn hits(&self, line: &Line) -> Vec<Range<usize>> {
-        crate::find::hits_in(line, &self.0)
-    }
 }
 
 /// The one compiled filter a sidebar panel has: what it narrows its list with, what its

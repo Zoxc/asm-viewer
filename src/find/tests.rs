@@ -1,64 +1,8 @@
 use super::*;
-use crate::filter::Filter;
-
-/// A pattern as a bar with nothing toggled compiles it.
-fn matcher(pattern: &str) -> Matcher {
-    Filter {
-        pattern: pattern.to_owned(),
-        ..Filter::default()
-    }
-    .matcher()
-}
-
-/// A line of plain text, as the source pane draws one.
-fn text(line: &str) -> Line {
-    Line::text(line)
-}
-
-/// The columns a pattern hits in a line.
-fn hits(line: &Line, pattern: &str) -> Vec<Range<usize>> {
-    hits_in(line, &matcher(pattern))
-}
-
-/// No hits, spelt so the type is known.
-fn none() -> Vec<Range<usize>> {
-    Vec::new()
-}
 
 /// A hit on one row, for the steps below.
 fn hit(row: usize, columns: Range<usize>) -> Hit {
     Hit { row, columns }
-}
-
-#[test]
-fn a_pattern_hits_the_columns_it_covers() {
-    assert_eq!(hits(&text("mov rax, rbx"), "rax"), vec![4..7]);
-    assert_eq!(hits(&text("aaa"), "a"), vec![0..1, 1..2, 2..3]);
-    assert_eq!(hits(&text("mov rax"), "rcx"), none());
-}
-
-/// Nothing typed marks nothing: a wash over every row is not an answer.
-#[test]
-fn an_empty_pattern_hits_nothing() {
-    assert_eq!(hits(&text("mov rax, rbx"), ""), none());
-}
-
-/// A pattern that will not compile hits nothing either, the bar saying why instead.
-#[test]
-fn an_invalid_pattern_hits_nothing() {
-    let filter = Filter {
-        pattern: "(".to_owned(),
-        regex: true,
-        ..Filter::default()
-    };
-    assert_eq!(hits_in(&text("(a)"), &filter.matcher()), none());
-}
-
-/// Columns are UTF-16 units, which is what the caret and the wash are placed by: a
-/// character outside the basic plane is two of them.
-#[test]
-fn columns_are_counted_in_utf16_units() {
-    assert_eq!(hits(&text("\u{1f600}ab"), "ab"), vec![2..4]);
 }
 
 /// A step goes to the next hit and wraps at the end; back goes the other way.

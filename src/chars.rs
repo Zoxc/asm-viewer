@@ -3,22 +3,20 @@
 //! run of **characters**, and the rows it touches are the run of rows -- the place the two
 //! panes point at each other through ([`CharSelection::rows`]).
 //!
-//! A column here is a **UTF-16 unit** into the row's text as the row draws it, which is
-//! the unit the text engine answers a pointer in and takes a highlight in. A row's text is
-//! a [`Line`].
+//! A column here is a **byte offset** into the row's text as the row draws it, as it is
+//! everywhere in the app. A row's text is a [`Line`].
 //!
-//! Everywhere else in the app a column is a **byte offset** into the file's line, which is
-//! what a language server is asked in and answers in (`src/lsp.rs`). So this module owns
-//! both counts and every conversion between them ([`columns_of`], [`bytes_of`], and
-//! [`slice_of`], which refuses a cut the other two would round): the drawing side
-//! converts, and nothing else has to know how a character is counted. [`byte_of_char`] is
-//! the same kind of fact for the count a length written for a reader is in.
+//! Three things outside the app count a column in **UTF-16 units**: the text engine, a
+//! language server that did not take `utf-8`, and freya's editor. Each converts at its own
+//! edge, through [`utf16_of`] and [`byte_of_utf16`], and nothing past that edge is UTF-16.
+//! [`byte_of_char`] and [`offset_of`] are the same kind of fact for the counts a length
+//! written for a reader and a compiler's column are in.
 
 use std::fmt;
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-/// A place in a listing: a row, and a column in UTF-16 units of that row's text. Ordered
+/// A place in a listing: a row, and a column in bytes of that row's text. Ordered
 /// by row first, which is what puts the two ends of a selection in listing order.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Caret {
@@ -39,6 +37,10 @@ pub struct CharSelection {
     /// first of them, kept while the rows passed through are too short to reach it, so
     /// moving down through a short row and on comes back to it. `None` after anything
     /// that puts the lead at a column of its own -- a press, a sweep, a sideways key.
+    ///
+    /// Counted in **characters** and not bytes, so a move from a row of wide characters
+    /// onto a row of ASCII keeps to the same place along it, and always lands on a
+    /// character's start.
     goal: Option<usize>,
 }
 
@@ -159,34 +161,33 @@ impl CharSelection {
         // step over these characters.
         let here_line = line(row);
         let atoms = here_line.atoms();
-        let here_units = here_line.units();
-        let col = self.lead.col.min(here_units);
+        let here_len = here_line.len();
+        let col = self.lead.col.min(here_len);
         let here = Caret { row, col };
-        // How many units a row is: this one from the text already in hand, any other
+        // How many bytes a row is: this one from the text already in hand, any other
         // read for it.
-        let units = |at: usize| {
+        let len = |at: usize| {
             if at == row {
-                here_units
+                here_len
             } else {
-                line(at).units()
+                line(at).len()
             }
         };
         let start_of = |row: usize| Caret { row, col: 0 };
-        let end_of = |row: usize| Caret {
-            row,
-            col: units(row),
-        };
+        let end_of = |row: usize| Caret { row, col: len(row) };
         // A vertical move: to `to`, at the goal column or as near it as the row reaches,
         // and the goal kept for the next.
         let vertical = |to: usize| {
-            let goal = self.goal.unwrap_or(col);
-            (
-                Caret {
-                    row: to,
-                    col: goal.min(units(to)),
-                },
-                Some(goal),
-            )
+            let goal = self.goal.unwrap_or_else(|| {
+                here_line.as_str()[..floor(here_line.as_str(), col)]
+                    .chars()
+                    .count()
+            });
+            let col = match to == row {
+                true => byte_of_char(here_line.as_str(), goal),
+                false => byte_of_char(line(to).as_str(), goal),
+            };
+            (Caret { row: to, col }, Some(goal))
         };
         let page = page.max(1);
 
@@ -275,10 +276,10 @@ impl CharSelection {
         self.rows().contains(&row)
     }
 
-    /// What row `row` draws of the run, as the range of its `units` to highlight: from the
+    /// What row `row` draws of the run, as the range of its `len` bytes to highlight: from the
     /// first end's column on its row, to the second end's on its own, and the whole of
     /// every row between. `None` for a row outside the run, and for an empty run.
-    pub fn of_row(self, row: usize, units: usize) -> Option<(usize, usize)> {
+    pub fn of_row(self, row: usize, len: usize) -> Option<(usize, usize)> {
         if self.is_empty() {
             return None;
         }
@@ -287,15 +288,11 @@ impl CharSelection {
             return None;
         }
         let start = if row == from.row {
-            from.col.min(units)
+            from.col.min(len)
         } else {
             0
         };
-        let end = if row == to.row {
-            to.col.min(units)
-        } else {
-            units
-        };
+        let end = if row == to.row { to.col.min(len) } else { len };
         Some((start, end))
     }
 
@@ -306,62 +303,22 @@ impl CharSelection {
             return String::new();
         }
         let (from, to) = self.ends();
-        (from.row..=to.row)
-            .map(|row| {
-                let line = line(row);
-                let (start, end) = self.of_row(row, line.units()).unwrap_or((0, 0));
-                line.slice(start, end)
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut copied = String::new();
+        for row in from.row..=to.row {
+            if row > from.row {
+                copied.push('\n');
+            }
+            let line = line(row);
+            let (start, end) = self.of_row(row, line.len()).unwrap_or((0, 0));
+            copied.push_str(line.slice(start, end));
+        }
+        copied
     }
 }
 
 /// The column standing for the end of a row's text, whatever its length: clamped to the
-/// row's units wherever a column is drawn or copied.
+/// row's length wherever a column is drawn or copied.
 pub const END: usize = usize::MAX;
-
-/// How many UTF-16 units `text` is: the unit a row's columns are counted in.
-pub fn units(text: &str) -> usize {
-    text.encode_utf16().count()
-}
-
-/// The UTF-16 columns of the byte range `bytes` in `line`: a run of the file's line as
-/// the row drawing it counts one.
-///
-/// Both ends are clamped into the line and rounded **down** to a character boundary, so a
-/// range out of a stale answer names a run of the line rather than panicking
-/// (`AGENTS.md`: never panic on file input, and a server's answer is one).
-pub fn columns_of(line: &str, bytes: Range<usize>) -> Range<usize> {
-    let at = |byte: usize| units(&line[..boundary(line, byte)]);
-    let start = at(bytes.start);
-    start..at(bytes.end).max(start)
-}
-
-/// The byte range of the UTF-16 columns `columns` in `line`: the other way round, and the
-/// same rounding -- a column inside a character two units wide is that character's start.
-pub fn bytes_of(line: &str, columns: Range<usize>) -> Range<usize> {
-    // Round down: the byte `byte_of_column` names, boundary or not.
-    let at = |column| byte_of_column(line, column).unwrap_or_else(|rounded| rounded);
-    let start = at(columns.start);
-    start..at(columns.end).max(start)
-}
-
-/// The text of `line` between the UTF-16 offsets `units`, and `None` where either end
-/// falls inside a character, or where the range is empty or the wrong way round.
-///
-/// The opposite rule to [`bytes_of`]'s, and on purpose. `bytes_of` rounds an end down to
-/// the start of the character it is inside, which is what a run named by a stale answer
-/// wants: somewhere near beats a panic. A cut has to be refusable instead. The one caller
-/// cuts a drawn row's spans at the edges of a link (`cut_at`, `src/ui/code_row.rs`), and a
-/// piece taken from inside a character would shift what the row draws without saying so;
-/// refusing lets the caller keep the span whole.
-pub fn slice_of(line: &str, units: Range<usize>) -> Option<&str> {
-    // Refuse: only a boundary, never a byte `byte_of_column` had to round to.
-    let from = byte_of_column(line, units.start).ok()?;
-    let to = byte_of_column(line, units.end).ok()?;
-    (from < to).then(|| &line[from..to])
-}
 
 /// Where character `nth` of `text` begins in its bytes, and the text's length when it has
 /// no more than `nth` of them: where text kept to `nth` characters is cut.
@@ -369,8 +326,7 @@ pub fn slice_of(line: &str, units: Range<usize>) -> Option<&str> {
 /// One walk, and the answer says both things an elision asks -- where the kept part ends,
 /// and, by being short of `text.len()`, that there is more past it. Always a character
 /// boundary, so the slice it names cannot panic. Counted in `char`s, which is what a
-/// length written for a reader is counted in; a column is UTF-16 units and is
-/// [`bytes_of`]'s business.
+/// length written for a reader is counted in.
 pub fn byte_of_char(text: &str, nth: usize) -> usize {
     text.char_indices()
         .nth(nth)
@@ -378,8 +334,8 @@ pub fn byte_of_char(text: &str, nth: usize) -> usize {
 }
 
 /// The last character boundary of `line` at or before `byte`, and the line's length for a
-/// byte past its end.
-fn boundary(line: &str, byte: usize) -> usize {
+/// byte past its end: a byte column out of a stale answer made into a place in the line.
+pub fn floor(line: &str, byte: usize) -> usize {
     let mut at = byte.min(line.len());
     while !line.is_char_boundary(at) {
         at -= 1;
@@ -387,34 +343,41 @@ fn boundary(line: &str, byte: usize) -> usize {
     at
 }
 
-/// Where UTF-16 column `column` falls in `line`'s bytes: `Ok` where the column is a place
-/// in the line, `Err` where it is not -- the start of the character it is inside, or the
-/// line's length for a column past the end.
-///
-/// **The one walk both conversions are made of**, and the two answers are what a policy
-/// chooses between. [`bytes_of`] takes the byte either way, which rounds a column down;
-/// [`slice_of`] keeps only the `Ok`, which refuses a cut. Each is one line at its own
-/// caller, so a third policy is another line and not another walk.
-fn byte_of_column(line: &str, column: usize) -> Result<usize, usize> {
-    let mut seen = 0;
-    for (at, character) in line.char_indices() {
-        if seen == column {
-            return Ok(at);
-        }
-        if seen + character.len_utf16() > column {
-            return Err(at);
-        }
-        seen += character.len_utf16();
+/// The first character boundary of `line` at or after `byte`, and the line's length for a
+/// byte past its end: [`floor`] the other way.
+pub fn ceil(line: &str, byte: usize) -> usize {
+    let mut at = byte.min(line.len());
+    while !line.is_char_boundary(at) {
+        at += 1;
     }
-    // The end of the line is a place in it; anything past that is not.
-    if seen == column {
-        Ok(line.len())
-    } else {
-        Err(line.len())
-    }
+    at
 }
 
-/// Where the one-based `line` and `column` **rustc** counts in is in `text`, as a UTF-16
+/// Byte column `byte` of `line` as the UTF-16 units something outside the app counts in.
+/// A byte inside a character is that character's start, and one past the end the end.
+pub fn utf16_of(line: &str, byte: usize) -> usize {
+    line[..floor(line, byte)].encode_utf16().count()
+}
+
+/// The byte range `bytes` of `line` as UTF-16 units, each end as [`utf16_of`] counts it.
+pub fn utf16_range(line: &str, bytes: Range<usize>) -> Range<usize> {
+    utf16_of(line, bytes.start)..utf16_of(line, bytes.end)
+}
+
+/// UTF-16 column `unit` of `line` as a byte column: the other way round, and the same
+/// rounding -- a unit inside a character two units wide is that character's start.
+pub fn byte_of_utf16(line: &str, unit: usize) -> usize {
+    let mut seen = 0;
+    for (at, character) in line.char_indices() {
+        seen += character.len_utf16();
+        if seen > unit {
+            return at;
+        }
+    }
+    line.len()
+}
+
+/// Where the one-based `line` and `column` **rustc** counts in is in `text`, as a byte
 /// offset from its start: what an editor moves a cursor to (`src/ui/pad.rs`).
 ///
 /// rustc counts a column in *characters*, so a tab is one and an accented letter is one,
@@ -431,7 +394,7 @@ pub fn offset_of(text: &str, line: usize, column: usize) -> usize {
     let line = line.saturating_sub(1);
     let column = column.saturating_sub(1);
     // A character at a time, since the column being counted from is a character count.
-    let upto = |row: &str, take: usize| row.chars().take(take).map(char::len_utf16).sum::<usize>();
+    let upto = |row: &str, take: usize| byte_of_char(row, take);
 
     let mut offset = 0;
     for (index, row) in text.split_inclusive('\n').enumerate() {
@@ -441,7 +404,7 @@ pub fn offset_of(text: &str, line: usize, column: usize) -> usize {
             let row = row.trim_end_matches('\n').trim_end_matches('\r');
             return offset + upto(row, column);
         }
-        offset += units(row);
+        offset += row.len();
     }
 
     offset
@@ -611,43 +574,29 @@ impl Line {
         &self.0
     }
 
-    /// How many units the text engine counts the row as.
-    pub fn units(&self) -> usize {
-        units(&self.0)
-    }
-
-    /// The row character by character: the columns each spans and the character. **The
-    /// row's one walk**, which the atoms and a slice are both made of, so no two of them
-    /// can put a column in a different place.
-    fn cells(&self) -> impl Iterator<Item = (Range<usize>, char)> + '_ {
-        self.0.chars().scan(0, |col, character| {
-            let start = *col;
-            *col += character.len_utf16();
-            Some((start..*col, character))
-        })
+    /// How many bytes the row is.
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 
     /// The row's characters, each as the columns it spans and what kind it is. What every
-    /// step along the row is a step over, so none can land inside a character two units
-    /// wide.
+    /// step along the row is a step over, so none can land inside a character.
     fn atoms(&self) -> Vec<Atom> {
-        self.cells()
-            .map(|(span, character)| Atom {
-                start: span.start,
-                end: span.end,
+        self.0
+            .char_indices()
+            .map(|(at, character)| Atom {
+                start: at,
+                end: at + character.len_utf8(),
                 class: Class::of(character),
             })
             .collect()
     }
 
-    /// The text between two columns. A column inside a character that is two units wide
-    /// rounds outward, so nothing here can cut a character in half.
-    pub fn slice(&self, from: usize, to: usize) -> String {
+    /// The text between two columns. A column inside a character rounds outward, so
+    /// nothing here can cut a character in half.
+    pub fn slice(&self, from: usize, to: usize) -> &str {
         let (from, to) = (from.min(to), from.max(to));
-        self.cells()
-            .filter(|(span, _)| span.end > from && span.start < to)
-            .map(|(_, character)| character)
-            .collect()
+        &self.0[floor(&self.0, from)..ceil(&self.0, to)]
     }
 }
 

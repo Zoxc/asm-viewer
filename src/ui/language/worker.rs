@@ -113,11 +113,10 @@ pub(crate) enum LspAnswer {
 ///
 /// The kind is the variant and not a field beside it, so a question of one kind cannot
 /// come back as the other's answer, and neither consumer needs an arm for one that did.
-/// Both carry what the lines they name say, since the lines are **read on the worker**:
-/// the read blocks, and that is the thread that may block. A followed answer's is the
-/// caret its opening plants ([`Arrival`]); a listed one's is the text every row draws.
+/// A listed one carries the text of every line it names, **read on the worker**: the read
+/// blocks, and that is the thread that may block.
 pub(crate) enum Reply {
-    Followed(Result<Vec<Arrival>, lsp::Failure>),
+    Followed(Result<Vec<lsp::Place>, lsp::Failure>),
     Listed(Result<references::References, lsp::Failure>),
 }
 
@@ -134,11 +133,7 @@ pub(crate) fn replied(
     lines: &mut lsp::Lines,
 ) -> Reply {
     match want {
-        // The caret each place opens on, counted into the pane's units off the line it
-        // is on.
-        lsp::Question::Followed(_) => {
-            Reply::Followed(places.map(|places| Arrival::of(places, lines)))
-        }
+        lsp::Question::Followed(_) => Reply::Followed(places),
         // Grouped and their lines read with the ask, since that is what the panel draws.
         lsp::Question::Listed(_) => {
             Reply::Listed(places.map(|places| references::of(&places, lines)))

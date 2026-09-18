@@ -583,13 +583,11 @@ it -- the same three fields, and `Label` still has no holder. A flag on `SizedEv
 a `Label::holder`, would do it.
 
 **A paragraph that answers in bytes.** Its hit test and its highlight both speak UTF-16 code
-units (`caret_col`, `highlights`), skia's own unit, so a column of a drawn row is a UTF-16
-unit and cannot be anything else. **Cost:** the app counts a column in bytes everywhere else
--- a language server is asked in them, a line is indexed by them -- so the source pane
-converts each way as it draws and as it is pressed, and a followed definition reads the line
-it lands on to count its caret's column (`src/ui/follow.rs`). The conversion is one function
-each way (`src/chars.rs`) and the cost is a walk of a short line, but it is a walk that a
-byte-offset hit test would remove.
+units (`caret_col`, `highlights`), skia's own unit. **Cost:** the app counts a column in bytes everywhere,
+so every probe of a paragraph converts on the way in and on the way out through the row's
+text (`src/ui/code_row.rs`), and so does a highlight (`ui::parts::marked_units`). The
+conversion is one function each way (`src/chars.rs`) and the cost is a walk of a short line,
+but it is a walk that a byte-offset hit test would remove.
 
 **A `Component` whose key needs saying once.** `KeyExt::key` writes a `DiffKey` and
 `Component::render_key` reads one, but nothing joins them: the built-in elements hold their

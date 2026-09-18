@@ -66,7 +66,7 @@ pub(crate) enum Scope {
     Listed {
         of: lsp::Listed,
         name: String,
-        column: u32,
+        column: usize,
         ticket: Ticket,
     },
 }
@@ -96,7 +96,7 @@ impl Query {
         of: lsp::Listed,
         at: LinePos,
         name: String,
-        column: u32,
+        column: usize,
         ticket: Ticket,
     ) -> Query {
         Query {
@@ -450,7 +450,7 @@ pub(crate) fn find_locations(
 pub(crate) struct NameAt {
     pub(crate) at: LinePos,
     pub(crate) name: String,
-    pub(crate) column: u32,
+    pub(crate) column: usize,
 }
 
 /// Ask the server question `of` about `named`, hold the question, and bring the panel to

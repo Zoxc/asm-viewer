@@ -213,6 +213,9 @@ impl Cutting {
     fn cut(&mut self, rope: &Rope, blocks: &SyntaxBlocks, index: usize) {
         let first = self.ends.len();
         let mut whole = String::new();
+        // The character the next piece starts at: the indentation says only how long it
+        // is, and is read from the rope at this place.
+        let mut at = rope.line_to_char(index);
         for (colour, node) in blocks.get_line(index) {
             match node {
                 // Pushed chunk by chunk rather than through a `String` of its own: the
@@ -221,19 +224,23 @@ impl Cutting {
                     for chunk in rope.slice(range.clone()).chunks() {
                         whole.push_str(chunk);
                     }
+                    at = range.end;
                 }
                 // Leading indentation, handed over as a length so an editor can draw it
-                // as dots. Plain spaces here, this pane showing a file and not editing
-                // one.
+                // as dots. The file's own characters here, this pane showing a file and
+                // not editing one, so a column is the same byte in the row and the file;
+                // a tab is a space, one byte either way.
                 TextNode::LineOfChars { len, .. } => {
-                    for _ in 0..*len {
-                        whole.push(' ');
+                    let end = (at + len).min(rope.len_chars());
+                    for character in rope.slice(at..end).chars() {
+                        whole.push(if character == '\t' { ' ' } else { character });
                     }
+                    at = end;
                 }
             }
-            // A `u32` because the file is one `source::MAX_SIZE` bounds and the
-            // indentation is a space a character, so neither a cut nor the count of the
-            // file's pieces is longer than the file.
+            // A `u32` because the file is one `source::MAX_SIZE` bounds and the row's
+            // text is the file's, so neither a cut nor the count of the file's pieces is
+            // longer than the file.
             self.ends.push(whole.len() as u32);
             let colour = self.colour(*colour);
             self.colours.push(colour);
@@ -501,3 +508,6 @@ pub(crate) fn use_source_asking(
         ask(pending);
     });
 }
+
+#[cfg(test)]
+mod tests;

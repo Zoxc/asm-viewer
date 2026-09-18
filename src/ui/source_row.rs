@@ -150,22 +150,10 @@ keyed!(SourceRow);
 /// of the row's own text -- which is what a menu built from a press calls the name, so
 /// what the reader right-clicked is what the menu says. Columns inside a character name
 /// nothing.
-fn name_at(source: &SourceText, index: usize, columns: &Range<u32>) -> Option<String> {
+fn name_at(source: &SourceText, index: usize, columns: &Range<usize>) -> Option<String> {
     let cut = source.0.text(index);
-    let name = cut
-        .whole
-        .get(columns.start as usize..columns.end as usize)?;
+    let name = cut.whole.get(columns.clone())?;
     (!name.is_empty()).then(|| name.to_owned())
-}
-
-/// A run of a name's byte columns as the UTF-16 units the row `text` is drawn in.
-fn drawn_columns(text: &str, columns: &Range<u32>) -> Range<usize> {
-    chars::columns_of(text, columns.start as usize..columns.end as usize)
-}
-
-/// A column of the row's `text` as the byte offset a language server is asked at.
-fn byte_column(text: &str, column: usize) -> u32 {
-    u32::try_from(chars::bytes_of(text, column..column).start).unwrap_or(u32::MAX)
 }
 
 /// The text row `index` draws, as the clipboard sees a character selection of it.
@@ -178,7 +166,7 @@ pub(crate) fn source_line(source: &SourceText, index: usize) -> Line {
 }
 
 /// What a press, a right-click or the pointer on one of a row's names is answered from:
-/// where the row is, the text its columns are counted through, and the rest of the file
+/// where the row is, and the rest of the file
 /// -- the names the language server placed, and whom to ask about one.
 ///
 /// Cloned once into each closure a row's names need, rather than the same values cloned
@@ -189,25 +177,14 @@ struct Named {
     /// The position this row is, and so the one its questions are about. Lines are
     /// 1-based, as DWARF's are.
     at: LinePos,
-    /// The row's text as it is drawn, which the columns here are counted through: a
-    /// link's are byte offsets into the file's line (`src/links.rs`) and a row's are the
-    /// UTF-16 units the text engine answers in. The drawn text and not the rope's, and
-    /// the two agree wherever a column can land: what the row draws differently is the
-    /// indentation, one space per character of it.
-    text: Arc<str>,
     /// The file this row is a line of, and everything a question about it is put through.
     common: Rc<Common>,
 }
 
 impl Named {
-    /// A run of a name's byte columns as the units this row is drawn in.
-    fn drawn(&self, columns: &Range<u32>) -> Range<usize> {
-        drawn_columns(&self.text, columns)
-    }
-
     /// A column of this row as the place a language server is asked about.
     fn lookup(&self, column: usize) -> Lookup {
-        Lookup::at(&self.at, byte_column(&self.text, column))
+        Lookup::at(&self.at, column)
     }
 
     /// Every name the server placed on this row, in the order they are drawn: the slice
@@ -238,15 +215,13 @@ impl Named {
         let named = self.clone();
         let pointed = self.clone();
         Some(TextLinks {
-            columns: links::followed(on_line)
-                .map(|columns| self.drawn(columns))
-                .collect(),
+            columns: links::followed(on_line).cloned().collect(),
             // Always a door: nothing here is a link until the server has said the name is
             // one, so there is nothing to hold a modifier back for.
             is_link: Rc::new(|| true),
             lit_fg: palette().name_hover_fg,
             follow: Rc::new(move |columns: Range<usize>| {
-                let column = byte_column(&named.text, columns.start);
+                let column = columns.start;
                 follow_link(
                     &server,
                     &named.common.links,
@@ -256,10 +231,7 @@ impl Named {
                     Reach::inside(ctrl),
                 );
             }),
-            names: on_line
-                .iter()
-                .map(|link| self.drawn(&link.columns))
-                .collect(),
+            names: on_line.iter().map(|link| link.columns.clone()).collect(),
             // What the pointer on one of them says, and nothing where there is nobody to
             // write it to.
             on_hover: hover.map(|hover| {
@@ -291,10 +263,9 @@ impl Named {
     }
 }
 
-/// The name at a place in `source`: the line `at` names, and the column -- UTF-16 units,
-/// as every drawn column is -- read as the byte offset a language server counts in
-/// (`src/chars.rs`). [`None`] over no name the server placed, which is what a place on
-/// whitespace, on a keyword or past the end of a row is.
+/// The name at a place in `source`: the line `at` names, and the column. [`None`] over no
+/// name the server placed, which is what a place on whitespace, on a keyword or past the
+/// end of a row is.
 ///
 /// **The place is one value**, so the file and the row cannot be said twice and disagree.
 /// One rule for both ways of pointing at a name: [`Named::at_column`] asks it about the
@@ -307,8 +278,7 @@ fn name_at_column(
     column: usize,
 ) -> Option<NameAt> {
     let row = at.row()?;
-    let cut = source.0.text(row);
-    let link = links.at(at.line, byte_column(&cut.whole, column))?;
+    let link = links.at(at.line, column)?;
     Some(NameAt {
         at: at.clone(),
         name: name_at(source, row, &link.columns)?,
@@ -481,7 +451,6 @@ impl Component for SourceRow {
         let line = Line::text(cut.whole.clone());
         let named = Named {
             at: LinePos::of_row(common.file.clone(), index),
-            text: cut.whole.clone(),
             common: common.clone(),
         };
         // The names on this row, found once: what the row draws as links and what it

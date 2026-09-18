@@ -437,10 +437,10 @@ impl Component for TextRow {
         // one paragraph, and the same one `code_line` copies.
         let mut spans = Vec::new();
         if let Some(mark) = self.text.mark {
-            // Non-breaking, so the engine cannot trim it: it is one unit of the text
-            // either way.
+            // The same text `text_line` copies, a plain space included: the spans add
+            // up to the row's text, byte for byte, which is what its columns count.
             spans.push(
-                Span::new(format!("{mark}\u{a0}"))
+                Span::new(format!("{mark} "))
                     .color(palette().keyword_fg)
                     .font_weight(FontWeight::BOLD)
                     .assembly_font(),
@@ -458,7 +458,7 @@ impl Component for TextRow {
         // door is open, which for a label is while Ctrl is held; without Ctrl the press
         // is the row's, picking it out like any other.
         let line = text_line(self.text.mark, &self.text.text);
-        let whole = 0..line.units();
+        let whole = 0..line.len();
         let links = self.text.opens.clone().map(|data| {
             let symbol = Symbol {
                 object: self.object.clone(),

@@ -94,10 +94,10 @@ pub(crate) struct Landing {
 #[derive(Clone, PartialEq)]
 pub(crate) struct Landed {
     pub(crate) pos: LinePos,
-    /// The characters to select on `pos`'s line, in the UTF-16 units a pane counts
-    /// columns in: a search hit picks out what it matched, and a definition an empty run
-    /// at the name's own column, which is a caret there and nothing selected. `None` for
-    /// the doors that pick out the row and leave the caret at its start.
+    /// The characters to select on `pos`'s line, as byte columns: a search hit picks out
+    /// what it matched, and a definition an empty run at the name's own column, which is
+    /// a caret there and nothing selected. `None` for the doors that pick out the row and
+    /// leave the caret at its start.
     pub(crate) columns: Option<Range<usize>>,
 }
 

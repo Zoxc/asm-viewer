@@ -289,10 +289,9 @@ fn the_spans_are_where_the_matches_are_in_the_text_drawn() {
         .all(|span| &hit.text[span.clone()] == "needle"));
 }
 
-/// A hit knows where its first match is in the **file's** line, in the UTF-16 units a
-/// pane counts columns in: what opening the hit selects. Counted over the whole line, so
-/// the indentation the row does not draw is still in it, and in units and not bytes, so a
-/// multi-byte character before the match does not move it.
+/// A hit knows where its first match is in the **file's** line, in bytes: what opening
+/// the hit selects. Counted over the whole line, so the indentation the row does not draw
+/// is still in it.
 #[test]
 fn a_hit_knows_where_its_match_is_in_the_files_line() {
     let root = temp_dir("columns");
@@ -301,8 +300,8 @@ fn a_hit_knows_where_its_match_is_in_the_files_line() {
     let hits = found(&root, "needle");
 
     assert!(hits.len() == 1);
-    // Two spaces, `\u{e9}` (one unit), an emoji (two) and a space: the match starts at 6.
-    assert!(hits[0].1.columns == Some(6..12), "{:?}", hits[0].1.columns);
+    // Two spaces, `\u{e9}` (two bytes), an emoji (four) and a space: the match starts at 9.
+    assert!(hits[0].1.columns == Some(9..15), "{:?}", hits[0].1.columns);
 }
 
 /// A line longer than the bound is cut on a character boundary, and a match past the cut

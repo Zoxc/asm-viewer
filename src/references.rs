@@ -20,7 +20,6 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::Path;
 
-use crate::chars;
 use crate::grouped::{self, Grouped};
 use crate::lsp;
 
@@ -29,10 +28,8 @@ use crate::lsp;
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Reference {
     pub line: u32,
-    /// Where the name is in the **file's own line**, in the UTF-16 units a pane counts
-    /// columns in: what opening the reference selects there. The server's own columns are
-    /// bytes (`lsp::Place`), and this is the one place they are converted, the line
-    /// having been read here anyway. Kept apart from `spans`, which are offsets into the
+    /// Where the name is in the **file's own line**, as byte columns: what opening the
+    /// reference selects there. Kept apart from `spans`, which are offsets into the
     /// text a row draws and say nothing about the whitespace trimmed off the front of it
     /// (`search::Hit`'s rule, for its reason).
     pub columns: Range<usize>,
@@ -84,15 +81,13 @@ pub fn of(places: &[lsp::Place], lines: &mut lsp::Lines) -> References {
 /// the row is then the number alone, which is what it would be for a file that would not
 /// read at all.
 fn reference(place: &lsp::Place, line: Option<&str>) -> Reference {
-    let bytes = place.columns.start as usize..place.columns.end as usize;
+    let bytes = place.columns.clone();
     let (columns, text, spans) = match line {
         Some(line) => {
             let name = span_of(line, bytes.clone());
             let (text, spans) = grouped::drawn(line, name.into_iter().collect());
-            (chars::columns_of(line, bytes), text, spans)
+            (bytes, text, spans)
         }
-        // No line to count in, so the bytes stand: the right answer for a line of ASCII
-        // and the nearest one for the rest.
         None => (bytes, String::new(), Vec::new()),
     };
     Reference {

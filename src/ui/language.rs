@@ -469,8 +469,8 @@ impl Lookup {
     /// own, which is why this sits here and the type it makes sits with the rest of the
     /// protocol. Both units go through untouched -- the line is 1-based on either side
     /// (`lsp::Lookup`), and `column` is already a byte offset into the row, which is what
-    /// a column is everywhere but the drawing.
-    pub(crate) fn at(at: &LinePos, column: u32) -> Lookup {
+    /// a column is everywhere.
+    pub(crate) fn at(at: &LinePos, column: usize) -> Lookup {
         Lookup {
             file: PathBuf::from(&*at.file),
             line: at.line,

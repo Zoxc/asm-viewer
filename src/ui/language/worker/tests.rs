@@ -2,13 +2,10 @@
 
 use super::*;
 
-/// Each of the four questions comes back in the shape its consumer takes, and **both
-/// shapes are read on the worker**: the caret a followed answer opens on, and the text of
-/// every line a listed one names. A followed answer handed to the panel, or a listed one
-/// to `ui::follow`, would leave a real mismatch looking like nothing found.
-///
-/// The line has a two-byte character ahead of the name, so a caret that had not been
-/// converted would sit a column to the right of it.
+/// Each of the four questions comes back in the shape its consumer takes: the places a
+/// followed answer names, and the text of every line a listed one names, read on the
+/// worker. A followed answer handed to the panel, or a listed one to `ui::follow`, would
+/// leave a real mismatch looking like nothing found.
 #[test]
 fn an_answer_comes_back_in_the_shape_the_question_was_asked_in() {
     let place = lsp::Place {
@@ -32,15 +29,7 @@ fn an_answer_comes_back_in_the_shape_the_question_was_asked_in() {
         let Reply::Followed(Ok(places)) = reply else {
             panic!("a followed question is answered with places");
         };
-        let [arrival] = &places[..] else {
-            panic!("one place in, one place out");
-        };
-        assert_eq!(arrival.place, place);
-        assert_eq!(
-            arrival.caret,
-            8..8,
-            "the caret is the name's column in the pane's own units"
-        );
+        assert_eq!(places, [place.clone()], "one place in, one place out");
     }
 
     for want in [lsp::Listed::Implementations, lsp::Listed::References] {

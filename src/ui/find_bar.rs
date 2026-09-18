@@ -82,7 +82,8 @@ pub(crate) fn look(listed: &Searchable, filter: &Filter) -> Vec<Hit> {
     let mut hits = Vec::new();
     let mut push = |row: usize, line: &Line| {
         hits.extend(
-            find::hits_in(line, &matcher)
+            matcher
+                .marks(line.as_str())
                 .into_iter()
                 .map(|columns| Hit { row, columns }),
         );
@@ -806,7 +807,9 @@ fn seed_of(marks: &Marks, pane: Pane, text: impl Fn(usize) -> Line) -> Option<St
     if from.row != to.row {
         return None;
     }
-    Some(text(from.row).slice(from.col, to.col)).filter(|seed| !seed.is_empty())
+    let line = text(from.row);
+    let seed = line.slice(from.col, to.col);
+    (!seed.is_empty()).then(|| seed.to_owned())
 }
 
 /// Make the step the bar over `at` asked for: move to the next hit, pick it out, and bring

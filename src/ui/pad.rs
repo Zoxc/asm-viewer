@@ -1142,9 +1142,11 @@ pub(crate) fn jump_to_span(mut text: State<PadBuffers>, pad: &PadId, span: &carg
     // guard hazard this repo's headless tests were first written for.
     drop(buffers);
 
-    let offset = chars::offset_of(&source, span.line, span.column);
+    let byte = chars::offset_of(&source, span.line, span.column);
     let mut buffers = text.write();
     let editor = buffers.get_mut(pad);
+    // The editor counts its cursor in UTF-16 units, which the rope converts to.
+    let offset = editor.rope.char_to_utf16_cu(editor.rope.byte_to_char(byte));
     editor.clear_selection();
     editor.move_cursor_to(offset);
 }

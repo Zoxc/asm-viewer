@@ -17,7 +17,7 @@ impl Legend {
 
 /// A place in the file every question here is about, in the app's units: the line
 /// 1-based, as a [`Lookup`]'s is, and the column a byte offset into it.
-fn at(line: u32, column: u32) -> Lookup {
+fn at(line: u32, column: usize) -> Lookup {
     Lookup {
         file: PathBuf::from("/p/src/main.rs"),
         line,
@@ -634,8 +634,8 @@ fn counts_answer_reads(path: &Path) -> Option<String> {
 }
 
 /// **One answer reads each file it names once.** The columns come back off the wire
-/// through the answer's own reader, and the rows drawn from them are counted through the
-/// same one, so a file is opened once however many conversions the answer needs.
+/// through the answer's own reader, and the rows drawn from them take their text from the
+/// same one, so a file is opened once however many lines of it the answer needs.
 #[test]
 fn one_answer_reads_each_file_it_names_once() {
     ANSWER_READS.store(0, Ordering::SeqCst);
@@ -674,11 +674,11 @@ fn one_answer_reads_each_file_it_names_once() {
     );
 
     // What came back off the wire: the server's units as the app's bytes.
-    let columns: Vec<Range<u32>> = found.iter().map(|place| place.columns.clone()).collect();
+    let columns: Vec<Range<usize>> = found.iter().map(|place| place.columns.clone()).collect();
     assert_eq!(columns, [8..14, 12..18]);
 
-    // And the same places as the panel draws them, counted back into the units a row is
-    // drawn in -- through the reader the wire's own conversion has already filled.
+    // And the same places as the panel draws them, through the reader the wire's own
+    // conversion has already filled.
     let references = crate::references::of(&found, &mut lines);
     let drawn: Vec<Range<usize>> = references
         .rows(&crate::filter::Matcher::Everything)
@@ -688,12 +688,12 @@ fn one_answer_reads_each_file_it_names_once() {
             crate::grouped::Row::File { .. } => None,
         })
         .collect();
-    assert_eq!(drawn, [6..12, 8..14]);
+    assert_eq!(drawn, [8..14, 12..18]);
 
     assert_eq!(
         ANSWER_READS.load(Ordering::SeqCst),
         1,
-        "the wire and the drawing count off one text"
+        "the wire and the drawing read one text"
     );
 }
 

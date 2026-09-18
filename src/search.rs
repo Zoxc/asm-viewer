@@ -13,7 +13,6 @@
 //! The pattern is [`Filter::grep_matcher`], built beside the sidebar's own builder and
 //! out of the same expression, so a toggle means one thing in both places.
 
-use crate::chars;
 use crate::filter::Filter;
 use crate::grouped::{self, Grouped};
 use grep_matcher::Matcher as _;
@@ -65,10 +64,10 @@ pub struct Hit {
     /// Where the matches are in `text`, as byte ranges into it. Empty when the cut left
     /// none of them in view.
     pub spans: Vec<Range<usize>>,
-    /// The first match's place in the **file's own line**, in the UTF-16 units a pane
-    /// counts columns in (`chars::columns_of`): what opening the hit picks out in the
-    /// source. Kept apart from `spans`, which are offsets into the text a row draws and
-    /// say nothing about the whitespace trimmed off the front of it.
+    /// The first match's place in the **file's own line**, as byte columns: what opening
+    /// the hit picks out in the source. Kept apart from `spans`, which are offsets into
+    /// the text a row draws and say nothing about the whitespace trimmed off the front of
+    /// it.
     pub columns: Option<Range<usize>>,
 }
 
@@ -211,9 +210,7 @@ fn hit_from(matcher: &RegexMatcher, line: &[u8], number: u64) -> Hit {
 
     // The first match is the one a press on the row goes to, and it is wanted whole and
     // over the file's line, where the spans below are cut down to what the row draws.
-    let first = spans.first().cloned();
-
-    let columns = first.map(|found| chars::columns_of(&text, found));
+    let columns = spans.first().cloned();
     let (text, spans) = grouped::drawn(&text, spans);
 
     Hit {

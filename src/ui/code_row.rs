@@ -84,80 +84,93 @@ fn set_icon(icon: CursorIcon) {
     });
 }
 
+// The probes below are the text engine's edge. skia counts a column in UTF-16 units, so
+// `caret_col`, `edges` and `word_at` convert on the way in and on the way out through the
+// row's own text (`line`), and every column the probes hand back is a byte offset into it.
+// `ui::parts::marked_units` is the same edge for a highlight.
+
 /// The column of a laid-out paragraph under a point `x`, `y` in its own logical
-/// coordinates, in the UTF-16 units the text engine counts in. A point left of the text is
-/// column 0 and one right of it is the end. `None` before the paragraph has been laid out,
-/// which is a holder freya's own code unwraps and which a press cannot reach, the row
-/// having nothing to press on until it is drawn.
-fn caret_col(holder: &ParagraphHolder, x: f32, y: f32) -> Option<usize> {
+/// coordinates. A point left of the text is column 0 and one right of it is the end.
+/// `None` before the paragraph has been laid out, which is a holder freya's own code
+/// unwraps and which a press cannot reach, the row having nothing to press on until it is
+/// drawn.
+fn caret_col(holder: &ParagraphHolder, line: &str, x: f32, y: f32) -> Option<usize> {
     let inner = holder.0.borrow();
     let inner = inner.as_ref()?;
     let scale = inner.scale_factor as f32;
     let at = inner
         .paragraph
         .get_glyph_position_at_coordinate(((x * scale) as i32, (y * scale) as i32));
-    Some(at.position.max(0) as usize)
+    Some(chars::byte_of_utf16(line, at.position.max(0) as usize))
+}
+
+/// The left and right edges skia draws the bytes `from..to` of `line` between, in device
+/// pixels, where it draws them at all.
+fn edges(inner: &ParagraphHolderInner, line: &str, from: usize, to: usize) -> Option<(f32, f32)> {
+    inner
+        .paragraph
+        .get_rects_for_range(
+            chars::utf16_range(line, from..to),
+            RectHeightStyle::Tight,
+            RectWidthStyle::Tight,
+        )
+        .first()
+        .map(|text| (text.rect.left, text.rect.right))
 }
 
 /// Where column `col` of a laid-out paragraph is, in logical pixels from its left edge: the
 /// left of the character there, or the right of the last one for the column past the end,
 /// and 0 for an empty text. `None` before layout, as [`caret_col`] is.
-fn caret_x(holder: &ParagraphHolder, col: usize) -> Option<f32> {
+fn caret_x(holder: &ParagraphHolder, line: &str, col: usize) -> Option<f32> {
     let inner = holder.0.borrow();
     let inner = inner.as_ref()?;
-    let scale = inner.scale_factor as f32;
-    let rects = |from: usize, to: usize| {
-        inner
-            .paragraph
-            .get_rects_for_range(from..to, RectHeightStyle::Tight, RectWidthStyle::Tight)
+    let col = chars::floor(line, col);
+    let after = line[col..].chars().next().map(|c| col + c.len_utf8());
+    let before = line[..col].chars().next_back().map(|c| col - c.len_utf8());
+    let x = match after.and_then(|after| edges(inner, line, col, after)) {
+        Some((left, _)) => left,
+        None => before
+            .and_then(|before| edges(inner, line, before, col))
+            .map_or(0.0, |(_, right)| right),
     };
-    let x = match rects(col, col + 1).first() {
-        Some(text) => text.rect.left,
-        None => match col
-            .checked_sub(1)
-            .and_then(|before| rects(before, col).first().map(|text| text.rect.right))
-        {
-            Some(right) => right,
-            None => 0.0,
-        },
-    };
-    Some(x / scale)
+    Some(x / inner.scale_factor as f32)
 }
 
 /// The character under a point `x`, `y` of a laid-out paragraph, as the column it starts
 /// at: what a press or the pointer is *on*, where [`caret_col`] is the nearest boundary.
 /// Over the half of a character nearer the boundary after it -- the right half in a
 /// left-to-right run, the left half in a right-to-left one -- the nearest boundary is that
-/// one. So the character is the one ending at the boundary if its box holds `x`, one unit
-/// wide or two, and the one starting there if not. Past the end it is the end, which is
-/// no character. `None` before layout.
-fn char_col(holder: &ParagraphHolder, x: f32, y: f32) -> Option<usize> {
-    let col = caret_col(holder, x, y)?;
+/// one. So the character is the one ending at the boundary if its box holds `x`, and the
+/// one starting there if not. Past the end it is the end, which is no character. `None`
+/// before layout.
+fn char_col(holder: &ParagraphHolder, line: &str, x: f32, y: f32) -> Option<usize> {
+    let col = caret_col(holder, line, x, y)?;
     let inner = holder.0.borrow();
     let inner = inner.as_ref()?;
     let x = x * inner.scale_factor as f32;
-    let holds = |from: usize| {
-        inner
-            .paragraph
-            .get_rects_for_range(from..col, RectHeightStyle::Tight, RectWidthStyle::Tight)
-            .iter()
-            .any(|text| text.rect.left <= x && x < text.rect.right)
-    };
-    let before = (1..=2)
-        .filter_map(|width| col.checked_sub(width))
-        .find(|&from| holds(from));
+    let before = line[..col]
+        .chars()
+        .next_back()
+        .map(|c| col - c.len_utf8())
+        .filter(|&from| {
+            edges(inner, line, from, col).is_some_and(|(left, right)| left <= x && x < right)
+        });
     Some(before.unwrap_or(col))
 }
 
 /// The word around column `col` of a laid-out paragraph, as the text engine divides
 /// words; `None` before layout, as [`caret_col`] is.
-fn word_at(holder: &ParagraphHolder, col: usize) -> Option<(usize, usize)> {
+fn word_at(holder: &ParagraphHolder, line: &str, col: usize) -> Option<(usize, usize)> {
     let inner = holder.0.borrow();
     let inner = inner.as_ref()?;
+    let unit = chars::utf16_of(line, col);
     let range = inner
         .paragraph
-        .get_word_boundary(col.min(u32::MAX as usize) as u32);
-    Some((range.start, range.end))
+        .get_word_boundary(unit.min(u32::MAX as usize) as u32);
+    Some((
+        chars::byte_of_utf16(line, range.start),
+        chars::byte_of_utf16(line, range.end),
+    ))
 }
 
 /// The right button's half of a `pointer_down`, as the press a context menu opens from,
@@ -325,6 +338,7 @@ pub(crate) struct Listing {
 #[derive(Clone)]
 pub(crate) struct RowText {
     holder: Weak<RefCell<Option<ParagraphHolderInner>>>,
+    line: Rc<RefCell<Line>>,
     text_x: Rc<Cell<f32>>,
 }
 
@@ -470,7 +484,8 @@ impl Listing {
         let Some(holder) = text.holder.upgrade() else {
             return 0;
         };
-        caret_col(&ParagraphHolder(holder), x, 0.0).unwrap_or(0)
+        let line = text.line.borrow();
+        caret_col(&ParagraphHolder(holder), line.as_str(), x, 0.0).unwrap_or(0)
     }
 }
 
@@ -505,6 +520,10 @@ struct RowCells {
     /// The laid-out paragraph, for the pointer to be answered in columns. One per row, as
     /// freya's own editor keeps one per line.
     holder: State<ParagraphHolder>,
+    /// The text the paragraph was last laid out with: what a column the text engine
+    /// answers in is converted through, for a handler and for a sweep off the row. The
+    /// render reads the same text out of `laid`.
+    line: Rc<RefCell<Line>>,
     /// Where the row was laid out, and where its paragraph was, so a pointer location
     /// relative to the row can be made relative to the text. Cells and not states:
     /// nothing renders from them, and the difference between the two is scroll-invariant.
@@ -517,9 +536,12 @@ struct RowCells {
     /// Which of the row's names the pointer is on. A cell and not a state: hovering a
     /// name changes nothing this row draws, and only the box is redrawn for it.
     named: Rc<Cell<Option<usize>>>,
-    /// Whether the paragraph has been laid out, which is when the holder can answer where
-    /// a column is: the caret is drawn from the render after that.
-    laid: State<bool>,
+    /// The text the paragraph was last laid out with, and `None` before it has been, when
+    /// the holder cannot yet answer where a column is. Written from the paragraph's
+    /// `on_sized` and never from a render: a render that changes the text hands the
+    /// holder a new paragraph only after it has drawn, so the marks it places are for the
+    /// old text, and the layout of the new one writes this and draws them again.
+    laid: State<Option<Line>>,
     /// Whether the row has text at all. A row without answers no column.
     has_text: bool,
 }
@@ -528,11 +550,12 @@ struct RowCells {
 fn use_row_cells(has_text: bool) -> RowCells {
     RowCells {
         holder: use_state(ParagraphHolder::default),
+        line: use_hook(|| Rc::new(RefCell::new(Line::default()))),
         row_x: use_hook(|| Rc::new(Cell::new(0.0f32))),
         text_x: use_hook(|| Rc::new(Cell::new(0.0f32))),
         row_y: use_hook(|| Rc::new(Cell::new(f32::NAN))),
         named: use_hook(|| Rc::new(Cell::new(None))),
-        laid: use_state(|| false),
+        laid: use_state(|| None),
         has_text,
     }
 }
@@ -544,13 +567,28 @@ impl RowCells {
         &self,
         at: CursorPoint,
         left: Option<usize>,
-        probe: fn(&ParagraphHolder, f32, f32) -> Option<usize>,
+        probe: fn(&ParagraphHolder, &str, f32, f32) -> Option<usize>,
     ) -> Option<usize> {
         let x = self.x_into_text(at)?;
         match x < 0.0 {
             true => left,
-            false => probe(&self.holder.read(), x, at.y as f32),
+            false => probe(
+                &self.holder.read(),
+                self.line.borrow().as_str(),
+                x,
+                at.y as f32,
+            ),
         }
+    }
+
+    /// The word around column `col`, as the text engine divides words.
+    fn word(&self, col: usize) -> Option<(usize, usize)> {
+        word_at(&self.holder.read(), self.line.borrow().as_str(), col)
+    }
+
+    /// Where column `col` is, from the paragraph's left edge.
+    fn text_x_of(&self, col: usize) -> Option<f32> {
+        caret_x(&self.holder.read(), self.line.borrow().as_str(), col)
     }
 
     /// The column a press lands on: `None` left of the text, which is the gutter and
@@ -582,23 +620,24 @@ impl RowCells {
             .then(|| at.x as f32 - (self.text_x.get() - self.row_x.get()))
     }
 
-    /// Where column `col` of a row `units` long is, from the row's padded edge, once the
-    /// paragraph has been laid out and the holder can say.
-    fn column_x(&self, col: usize, units: usize) -> Option<f32> {
-        (*self.laid.read()).then_some(())?;
-        let x = caret_x(&self.holder.read(), col.min(units))?;
+    /// Where column `col` of a row `len` bytes long is, from the row's padded edge, once
+    /// the paragraph has been laid out and the holder can say.
+    fn column_x(&self, col: usize, len: usize) -> Option<f32> {
+        let laid = self.laid.read();
+        let line = laid.as_ref()?;
+        let x = caret_x(&self.holder.read(), line.as_str(), col.min(len))?;
         Some(self.text_x.get() - self.row_x.get() - ROW_PAD + x)
     }
 
-    /// The device pixel span columns `from..to` of a row `units` long cover, once the
+    /// The device pixel span columns `from..to` of a row `len` bytes long cover, once the
     /// paragraph is laid out: [`None`] before that, and for a span that covers nothing.
     ///
     /// The one place the rule for a box over a run of a row's own text is written -- the
     /// selection's, the lit link's and every find hit's -- so all three are on the grid the
     /// same way and all three answer nothing before layout.
-    fn span(&self, grid: Grid, from: usize, to: usize, units: usize) -> Option<Stroke> {
-        let (from, to) = (from.min(units), to.min(units));
-        let (left, right) = (self.column_x(from, units)?, self.column_x(to, units)?);
+    fn span(&self, grid: Grid, from: usize, to: usize, len: usize) -> Option<Stroke> {
+        let (from, to) = (from.min(len), to.min(len));
+        let (left, right) = (self.column_x(from, len)?, self.column_x(to, len)?);
         (right > left).then(|| grid.span(left, right))
     }
 
@@ -610,6 +649,7 @@ impl RowCells {
         }
         let lent = RowText {
             holder: Rc::downgrade(&self.holder.read().0),
+            line: self.line.clone(),
             text_x: self.text_x.clone(),
         };
         listing.texts.borrow_mut().insert(row, lent);
@@ -694,15 +734,15 @@ pub(crate) fn code_row(
         .as_ref()
         .map_or(palette().name_hover_fg, |links| links.lit_fg);
     let drawn = text.map(|text| {
-        let units = text.line.units();
-        let (selected, caret) = marks(&cells, &listing, grid, text.chars, units);
-        let wash = lit_box(&cells, grid, columns.as_ref(), units, lit_fg);
+        let len = text.line.len();
+        let (selected, caret) = marks(&cells, &listing, grid, text.chars, len);
+        let wash = lit_box(&cells, grid, columns.as_ref(), len, lit_fg);
         let finds = text
             .marking
             .as_ref()
-            .map(|marking| marking.hits(&text.line))
+            .map(|marking| marking.marks(text.line.as_str()))
             .unwrap_or_default();
-        let matched = found(&cells, grid, &finds, units);
+        let matched = found(&cells, grid, &finds, len);
         (
             wash,
             matched,
@@ -788,8 +828,7 @@ fn tell_hover(cells: &RowCells, links: Rc<TextLinks>) -> Rc<dyn Fn(Option<usize>
         let Some(columns) = on.and_then(|on| links.names.get(on)).cloned() else {
             return tell(Under::Off);
         };
-        let holder = cells.holder.read();
-        let edge = |column| caret_x(&holder, column).map(|x| cells.text_x.get() + x);
+        let edge = |column| cells.text_x_of(column).map(|x| cells.text_x.get() + x);
         // A row whose paragraph is not laid out yet answers no column, and a box placed
         // against nothing would be drawn in the window's corner.
         let (Some(left), Some(right)) = (edge(columns.start), edge(columns.end)) else {
@@ -829,7 +868,7 @@ fn marks(
     listing: &Listing,
     grid: Grid,
     chars: RowChars,
-    units: usize,
+    len: usize,
 ) -> (Rect, Rect) {
     // The highlight: a rect of the row's own from the first column's x to the last's, the
     // row's whole height, on the grid -- so one row's meets the next's on a pixel edge. An
@@ -837,12 +876,12 @@ fn marks(
     let selected = chars.highlight.and_then(|(from, to)| {
         // The stub is this mark's own rule and the only thing it does not share with the
         // other two: an empty row has one column, so `span` answers nothing for it.
-        let span = match units == 0 {
+        let span = match len == 0 {
             true => {
-                let left = cells.column_x(0, units)?;
+                let left = cells.column_x(0, len)?;
                 grid.span(left, left + code_row_height() / 4.0)
             }
-            false => cells.span(grid, from, to, units)?,
+            false => cells.span(grid, from, to, len)?,
         };
         Some(box_over(span, 0.0, code_row_height()).background(palette().text_select_bg))
     });
@@ -851,7 +890,7 @@ fn marks(
     // out: a stroke of the row's own, on the device pixel grid, where the engine's would
     // sit on the glyph's fractional edge and two pixels wide. Drawn over a selection too,
     // at its lead: it is where the next key moves from.
-    let at = chars.cursor.and_then(|col| cells.column_x(col, units));
+    let at = chars.cursor.and_then(|col| cells.column_x(col, len));
     if let Some(x) = at {
         bring_caret_into_view(listing, cells.row_x.get(), cells.row_x.get() + ROW_PAD + x);
     }
@@ -914,13 +953,13 @@ fn lit_box(
     cells: &RowCells,
     grid: Grid,
     columns: Option<&Range<usize>>,
-    units: usize,
+    len: usize,
     lit_fg: Color,
 ) -> Rect {
     let Some(columns) = columns else {
         return nothing();
     };
-    let Some(span) = cells.span(grid, columns.start, columns.end, units) else {
+    let Some(span) = cells.span(grid, columns.start, columns.end, len) else {
         return nothing();
     };
     link_chrome(
@@ -936,10 +975,10 @@ fn lit_box(
 /// children: freya matches siblings by position, and a count that changes with what is
 /// typed would move the paragraph along and remount it (see the children at the foot of
 /// [`row`]). The slot itself is always there, empty when nothing matched.
-fn found(cells: &RowCells, grid: Grid, finds: &[Range<usize>], units: usize) -> Rect {
+fn found(cells: &RowCells, grid: Grid, finds: &[Range<usize>], len: usize) -> Rect {
     let washes: Vec<Element> = finds
         .iter()
-        .filter_map(|columns| cells.span(grid, columns.start, columns.end, units))
+        .filter_map(|columns| cells.span(grid, columns.start, columns.end, len))
         .map(|span| {
             box_over(span, 0.0, code_row_height())
                 .background(palette().find_bg)
@@ -958,7 +997,8 @@ fn text_paragraph(
     lit: Option<&Range<usize>>,
     lit_fg: Color,
 ) -> Paragraph {
-    let (text_x, mut laid) = (cells.text_x.clone(), cells.laid);
+    let (text_x, mut laid, line) = (cells.text_x.clone(), cells.laid, cells.line.clone());
+    let drawn = text.line.clone();
     let columns = links.as_ref().map_or(&[][..], |links| &links.columns[..]);
     paragraph()
         .max_lines(1)
@@ -968,7 +1008,8 @@ fn text_paragraph(
         .holder(cells.holder.read().clone())
         .on_sized(move |e: Event<SizedEventData>| {
             text_x.set(e.area.min_x());
-            laid.set_if_modified(true);
+            line.replace(drawn.clone());
+            laid.set_if_modified(Some(drawn.clone()));
         })
         .vertical_align(VerticalAlign::Center)
         .spans_iter(light(cut_at(text.spans, columns), lit, lit_fg).into_iter())
@@ -1063,8 +1104,7 @@ fn on_down(
                 (links.follow)(link);
                 return;
             }
-            let press =
-                at.map(|col| pressed(presses, col, |col| word_at(&cells.holder.read(), col)));
+            let press = at.map(|col| pressed(presses, col, |col| cells.word(col)));
             mark_press(marked, *shift.peek(), pane, file.clone(), row, press);
             return;
         }
@@ -1143,8 +1183,8 @@ fn on_move(
 /// separately, and the widest row a listing has drawn only ever grows (`src/ui/width.rs`):
 /// a cut that came and went with the pointer would widen the listing for good.
 ///
-/// Columns are UTF-16 units, and a boundary inside a character is not one: a split there
-/// would cut a `char` in half, so the span is left whole.
+/// Columns are bytes, and a boundary inside a character is not one: a split there would
+/// cut a `char` in half, so the span is left whole.
 ///
 /// **`links` must be ascending and must not overlap.** The spans are walked left to right
 /// and so are the edges, once for the whole row rather than once per span, so an edge
@@ -1167,8 +1207,8 @@ pub(crate) fn cut_at(spans: Vec<Span<'static>>, links: &[Range<usize>]) -> Vec<S
         .flat_map(|link| [link.start, link.end])
         .peekable();
     for span in spans {
-        let units = chars::units(&span.text);
-        let (from, to) = (column, column + units);
+        let len = span.text.len();
+        let (from, to) = (column, column + len);
         column = to;
         // What is behind this span is behind every span after it.
         while edges.next_if(|edge| *edge <= from).is_some() {}
@@ -1189,8 +1229,8 @@ pub(crate) fn cut_at(spans: Vec<Span<'static>>, links: &[Range<usize>]) -> Vec<S
             }
         });
         let mut at = 0;
-        for edge in inside.chain(std::iter::once(units)) {
-            let Some(piece) = chars::slice_of(&span.text, at..edge) else {
+        for edge in inside.chain(std::iter::once(len)) {
+            let Some(piece) = span.text.get(at..edge).filter(|piece| !piece.is_empty()) else {
                 continue;
             };
             at = edge;
@@ -1233,9 +1273,8 @@ fn light(
     spans
         .into_iter()
         .map(|span| {
-            let units = chars::units(&span.text);
             let at = column;
-            column += units;
+            column += span.text.len();
             match at >= columns.start && column <= columns.end && at < column {
                 true => span.color(lit_fg),
                 false => span,

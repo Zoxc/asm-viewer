@@ -6293,7 +6293,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
 }
 
 /// A uses answer as the panel takes one: the question, and the places the server named.
-fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<u32>)]) -> Located {
+fn found_references(at: LinePos, name: &str, places: &[(&str, u32, Range<usize>)]) -> Located {
     let query = Query::listed(
         lsp::Listed::References,
         at,
@@ -6595,7 +6595,7 @@ fn label_area(test: &TestingRunner, text: &str) -> Option<Area> {
 /// `area`. The listing's font is fixed-width, so a column is a column's width along the
 /// paragraph, and the arithmetic is exact enough to land inside a name.
 fn run_area(area: Area, text: &str, at: usize, run: &str) -> Area {
-    let units = |text: &str| text.encode_utf16().count() as f32;
+    let units = |text: &str| text.chars().count() as f32;
     let unit = area.width() / units(text);
     Area::new(
         (area.min_x() + units(&text[..at]) * unit, area.min_y()).into(),
@@ -6731,28 +6731,27 @@ fn a_link_across_two_spans_cuts_only_at_its_own_edges() {
     assert_eq!(texts_of(&cut), vec!["x = ", "Vec", "::new", "()"]);
 }
 
-/// The columns are UTF-16 units, so a character outside the basic plane is two of them
-/// and the boundaries inside a span are not every number. A cut that would fall between
-/// the halves of one is not made -- a `char` is never sliced down the middle -- and the
-/// cuts around it still are.
+/// The columns are bytes, so a character outside ASCII is more than one of them and the
+/// boundaries inside a span are not every number. A cut that would fall inside one is not
+/// made -- a `char` is never sliced down the middle -- and the cuts around it still are.
 #[test]
 fn a_cut_inside_a_character_is_not_made() {
-    // `\u{1f600}` is two UTF-16 units, so this span is 1 + 2 + 1 = 4 units wide and the
-    // only boundaries in it are 1 and 3.
+    // `\u{1f600}` is four bytes, so this span is 1 + 4 + 1 = 6 bytes wide and the only
+    // boundaries in it are 1 and 5.
     let head = spans_of(&["a\u{1f600}b"]);
 
-    // A run beginning between its halves is cut where it ends, and not where it begins.
+    // A run beginning inside it is cut where it ends, and not where it begins.
     assert_eq!(
-        texts_of(&cut_at(head.clone(), &[2..3])),
+        texts_of(&cut_at(head.clone(), &[2..5])),
         vec!["a\u{1f600}", "b"]
     );
     // A run on the character's own edges is cut on both.
     assert_eq!(
-        texts_of(&cut_at(head.clone(), &[1..3])),
+        texts_of(&cut_at(head.clone(), &[1..5])),
         vec!["a", "\u{1f600}", "b"]
     );
     // Whatever is cut, the row still draws the text it was given.
-    for links in [vec![2..3], vec![1..3], vec![0..2], vec![2..4]] {
+    for links in [vec![2..5], vec![1..5], vec![0..3], vec![3..6]] {
         assert_eq!(
             texts_of(&cut_at(head.clone(), &links)).concat(),
             "a\u{1f600}b"
@@ -7891,7 +7890,7 @@ fn linking_harness() -> impl IntoElement {
 /// still offered on.
 fn calling_links() -> links::Links {
     let legend = lsp::Legend::of(&["function", "variable"], &["declaration"]);
-    let token = |line: u32, columns: Range<u32>, kind: u32, modifiers: u32| lsp::Token {
+    let token = |line: u32, columns: Range<usize>, kind: u32, modifiers: u32| lsp::Token {
         line,
         columns,
         kind,
@@ -8241,17 +8240,15 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
     );
 }
 
-/// **The caret is counted on the worker, and the UI thread reads nothing.** The server's
-/// column is a byte offset into its line and a pane counts UTF-16 units, so converting it
-/// takes the line's text -- of a file the reader has never opened, which is a read of up
-/// to the source cache's whole bound. It happens where the ask does.
+/// **The caret a definition plants takes no read on the UI thread.** The server's column
+/// is a byte offset into its line, as a pane's is, so the caret is the server's column and
+/// nothing reads the line of a file the reader has never opened.
 ///
 /// So the definition is a real file with a two-byte character ahead of the name: the caret
 /// lands on the name, and the count of what this thread asked the filesystem does not
-/// move. Both halves are needed -- a conversion that never happened would leave the count
-/// still and the caret a column out.
+/// move.
 #[test]
-fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
+fn the_caret_a_definition_plants_reads_nothing_on_the_ui_thread() {
     let (file, seeded) = calling_file("caret-worker");
     let _ = &seeded;
     // A file on disk and not in the cache, since a cached one is not read at all and
@@ -8261,8 +8258,7 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
         std::process::id()
     )));
     let defined = directory.join("helper.rs");
-    // `helper` begins at byte 19 of the first line and at column 18, the `ø` before it
-    // being two bytes and one unit.
+    // `helper` begins at byte 19 of the first line, the `ø` before it being two bytes.
     std::fs::write(&defined, "let ø = 0; pub fn helper() {}\n").expect("the file is written");
     let place = lsp::Place {
         file: defined.clone(),
@@ -8313,7 +8309,7 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
         .expect("the definition's line was not picked out");
     assert_eq!(
         picked.chars.lead(),
-        Caret { row: 0, col: 18 },
+        Caret { row: 0, col: 19 },
         "the caret is not on the name"
     );
 }
@@ -8383,7 +8379,7 @@ fn two_calling_file(name: &str) -> (Arc<str>, Seeded) {
 /// the second line.
 fn two_calling_links() -> links::Links {
     let legend = lsp::Legend::of(&["function"], &[]);
-    let call = |columns: Range<u32>| lsp::Token {
+    let call = |columns: Range<usize>| lsp::Token {
         line: 2,
         columns,
         kind: 0,
@@ -8785,7 +8781,7 @@ fn hover_says_whether_a_write_is_owed() {
 
 /// A name for the pointer to be on: the same place drawn in the same box, so two calls
 /// with the same column are the same name.
-fn hovered_name(column: u32) -> Pointed {
+fn hovered_name(column: usize) -> Pointed {
     Pointed {
         at: Lookup {
             file: PathBuf::from("/p/src/main.rs"),
@@ -10673,14 +10669,14 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
 
 /// A press after a character wider than one byte asks about the **byte** it is at.
 ///
-/// A row is drawn in UTF-16 units, since that is what the text engine counts in, and a
-/// language server is asked in bytes (`src/lsp.rs`): `é` is one unit and two bytes, so a
-/// name after one is a different number in each, and a pane that let the two stand for
-/// each other would ask about a place a little to the left of the name.
+/// The text engine answers a pointer in UTF-16 units and a pane counts bytes
+/// (`src/ui/code_row.rs`): `é` is one unit and two bytes, so a name after one is a
+/// different number in each, and a probe that let the two stand for each other would ask
+/// about a place a little to the left of the name.
 #[test]
 fn a_press_after_a_wide_character_asks_at_its_byte() {
     let directory = Seeded::directory("wide");
-    // The second row draws `    // é helper(1);`: `helper` is at byte 10 and at column 9.
+    // The second row draws `    // é helper(1);`: `helper` is at byte 10 and at unit 9.
     let file = directory.named("calls.rs", "fn main() {\n    // é helper(1);\n}\n");
     let legend = lsp::Legend::of(&["function"], &["declaration"]);
     let links = links::Links::of(
@@ -10708,7 +10704,7 @@ fn a_press_after_a_wide_character_asks_at_its_byte() {
     settle(&mut test);
 
     let (asked, _want) = next_ask(&mut test, &asks).expect("the press asked the server");
-    assert_eq!(asked.column, 10, "the byte and not the column");
+    assert_eq!(asked.column, 10, "the byte and not the unit");
 }
 
 /// With no server there is nothing to ask, so a press on the same name is a press on the
@@ -20813,7 +20809,7 @@ fn a_press_left_of_a_rows_text_picks_the_row_out_and_one_on_it_puts_a_caret() {
     );
     let col = picked.chars.lead().col;
     assert!(
-        col > 0 && col < text.encode_utf16().count(),
+        col > 0 && col < text.len(),
         "the caret is at column {col} of {text:?}, not where the press landed"
     );
 }
@@ -21470,7 +21466,7 @@ fn a_gap_row_is_marked_as_data() {
     );
     settle(&mut test);
     let drawn = labels(&test);
-    assert!(drawn.contains(&"dq\u{a0}".to_string()), "{drawn:?}");
+    assert!(drawn.contains(&"dq ".to_string()), "{drawn:?}");
     assert!(
         drawn
             .iter()
@@ -22381,7 +22377,7 @@ fn a_stretch_let_go_under_the_rows_on_screen_still_draws_as_it_was() {
     let sections = roots.sectioned.reading;
     let mut sections = sections;
     settle(&mut test);
-    assert!(labels(&test).contains(&"dq\u{a0}".to_string()));
+    assert!(labels(&test).contains(&"dq ".to_string()));
 
     // The answer that lets stretch 0 go: the same skeleton, nothing held, a new generation.
     let mut let_go = Reading::of(Some(object.clone()));
@@ -22392,12 +22388,12 @@ fn a_stretch_let_go_under_the_rows_on_screen_still_draws_as_it_was() {
     // gap rows were drawn against a reading that no longer held them.
     test.sync_and_update();
     assert!(
-        labels(&test).contains(&"dq\u{a0}".to_string()),
+        labels(&test).contains(&"dq ".to_string()),
         "drawn from the old rows still"
     );
     settle(&mut test);
     assert!(
-        !labels(&test).contains(&"dq\u{a0}".to_string()),
+        !labels(&test).contains(&"dq ".to_string()),
         "the rows caught up with the reading"
     );
 }
@@ -23872,7 +23868,6 @@ fn a_sweep_selects_across_a_link_and_a_press_still_opens_it() {
     let start = line
         .to_string()
         .rfind(name)
-        .map(|at| line.to_string()[..at].encode_utf16().count())
         .expect("the copy holds the name");
 
     let (mut test, roots) = TestingRunner::new(
@@ -23885,7 +23880,7 @@ fn a_sweep_selects_across_a_link_and_a_press_still_opens_it() {
     let marked = roots.doors.marked;
     settle(&mut test);
     let link = link_area(&test, name).expect("the link is drawn");
-    let unit = link.width() / name.encode_utf16().count() as f32;
+    let unit = link.width() / name.chars().count() as f32;
 
     // From the column before the link to the one after it: every character of it picked
     // out, and none of it followed.
@@ -23911,7 +23906,7 @@ fn a_sweep_selects_across_a_link_and_a_press_still_opens_it() {
     assert_eq!(picked.chars.rows(), row..=row);
     let (from, to) = picked.chars.ends();
     assert!(
-        from.col < start && to.col > start + name.encode_utf16().count() - 1,
+        from.col < start && to.col > start + name.len() - 1,
         "the sweep did not cross the link's text: {from:?} {to:?} around {start}"
     );
     assert!(
@@ -24107,7 +24102,7 @@ fn a_double_press_takes_the_word_under_it() {
             Caret { row: 0, col: 0 },
             Caret {
                 row: 0,
-                col: text.encode_utf16().count()
+                col: text.len()
             }
         )
     );
@@ -24125,11 +24120,11 @@ fn an_instruction_line_past_the_listing_is_empty() {
         .expect("sum_to decodes");
     let past = assembly.instructions.len();
     assert!(
-        instruction_line(&assembly, past - 1).units() > 0,
+        instruction_line(&assembly, past - 1).len() > 0,
         "the last instruction has text"
     );
-    assert!(instruction_line(&assembly, past).units() == 0);
-    assert!(instruction_line(&assembly, usize::MAX).units() == 0);
+    assert!(instruction_line(&assembly, past).len() == 0);
+    assert!(instruction_line(&assembly, usize::MAX).len() == 0);
 }
 
 /// The listing under half a pixel of something above it: what the real window does to it
@@ -24331,7 +24326,7 @@ fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
     settle(&mut test);
     let drawn = paragraphs(&test);
     let (first, third) = (drawn[0].0, drawn[2].0);
-    let first_units = drawn[0].1.encode_utf16().count();
+    let first_len = drawn[0].1.len();
     let middle = |area: Area| (area.origin.y + area.height() / 2.0) as f64;
 
     test.move_cursor(left_of(&first));
@@ -24377,7 +24372,7 @@ fn a_sweep_carries_on_beyond_the_rows_the_pane_and_the_window() {
     settle(&mut test);
     let lead = marked.peek().assembly.clone().unwrap().chars.lead();
     assert_eq!(lead.row, 0);
-    assert!(lead.col > 0 && lead.col < first_units, "{lead:?}");
+    assert!(lead.col > 0 && lead.col < first_len, "{lead:?}");
     let drawn = paragraphs(&test);
     assert!(drawn[0]
         .2
@@ -25312,7 +25307,7 @@ fn the_keys_move_the_caret_along_a_row_the_worker_decoded() {
         marked.peek().assembly.clone().unwrap().chars.lead(),
         Caret {
             row,
-            col: text.encode_utf16().count()
+            col: text.len()
         }
     );
     let caret = carets(&test);
@@ -25410,7 +25405,7 @@ fn a_sweep_held_past_the_panes_side_scrolls_the_view_sideways() {
         .map(|(i, r)| (i, r.clone()))
         .unwrap();
     assert!(area.max_x() > 320.0, "{area:?}");
-    let units = text.encode_utf16().count();
+    let len = text.len();
     let at = (
         (area.origin.x + 2.0) as f64,
         (area.origin.y + area.height() / 2.0) as f64,
@@ -25422,7 +25417,7 @@ fn a_sweep_held_past_the_panes_side_scrolls_the_view_sideways() {
     settle(&mut test);
     let lead = marked.peek().assembly.clone().unwrap().chars.lead();
     assert_eq!(lead.row, row);
-    assert!(lead.col > 0 && lead.col < units, "{lead:?} against {units}");
+    assert!(lead.col > 0 && lead.col < len, "{lead:?} against {len}");
     let edge = lead.col;
 
     // Held there: the rows slide left and the run reaches further along the row.
@@ -27348,7 +27343,7 @@ fn a_step_picks_out_the_match_and_the_rows_wear_the_wash() {
     assert_eq!(from.row, to.row, "the run crossed rows");
     assert_eq!(
         to.col - from.col,
-        crate::chars::units(&mnemonic),
+        mnemonic.len(),
         "the run is not the match"
     );
     assert!(
@@ -27460,7 +27455,7 @@ fn f3_steps_the_find_bar_with_the_keyboard_still_in_the_pane() {
     assert_eq!(from.row, to.row, "the run crossed rows");
     assert_eq!(
         to.col - from.col,
-        crate::chars::units(&mnemonic),
+        mnemonic.len(),
         "the run is not the match"
     );
 

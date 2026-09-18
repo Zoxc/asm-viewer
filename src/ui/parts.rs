@@ -574,9 +574,8 @@ pub(crate) fn one_line(text: String) -> Paragraph {
 }
 
 /// What a search or a filter matched in `text`, as the pairs a paragraph highlights by:
-/// **UTF-16 units**, which is what skia indexes a paragraph in and what a column is
-/// counted in everywhere else that meets it (`src/chars.rs`). Byte ranges in, since
-/// everything outside the text engine is bytes.
+/// **UTF-16 units**, which is what skia indexes a paragraph in. Byte ranges in, since
+/// everything outside the text engine is bytes (`src/chars.rs`).
 ///
 /// A mark that is not on a character boundary, or runs off the end, is dropped rather than
 /// panicking: these come from a regex over the same string, but a row draws a *cut* line
@@ -590,10 +589,8 @@ pub(crate) fn marked_units(text: &str, marks: &[Range<usize>]) -> Vec<(usize, us
                 && text.is_char_boundary(mark.end)
         })
         .map(|mark| {
-            (
-                chars::units(&text[..mark.start]),
-                chars::units(&text[..mark.end]),
-            )
+            let units = chars::utf16_range(text, mark.clone());
+            (units.start, units.end)
         })
         .collect()
 }

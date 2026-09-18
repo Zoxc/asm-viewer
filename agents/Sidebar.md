@@ -378,9 +378,9 @@ the file and letting the pane say what is wrong with it is the honest answer -- 
 would silently swallow a move inside a tab already open. It lands on the **match** and not just
 its line: a `Landing` carries the columns to select, and `line_pick` makes them the row's
 `CharSelection` where a door naming no columns leaves a caret at column 0. So
-Ctrl+C there copies the match, `copy_text` preferring characters to rows. The columns are the
-*file's* line in UTF-16 units, counted before the line is trimmed for drawing and counted in units
-rather than bytes, or a multi-byte character ahead of the match would move it. What matched is drawn
+Ctrl+C there copies the match, `copy_text` preferring characters to rows. The columns are bytes of the
+*file's* line, counted before the line is trimmed for drawing, so the indentation the row does not
+draw is still in them. What matched is drawn
 as a **wash behind it**, `match_bg`'s desaturated green -- the paragraph's own highlight, since a
 span carries a colour and a weight and no fill of its own. It was a bold orange on the characters,
 which made a match a thing of its own rather than a place in a line and cut the row's text into
@@ -592,8 +592,8 @@ the same -- whether a place can be pressed says nothing about how long it is.
 **Pressing one is `open_source_place`** (`agents/Panes.md`), the arrival every door into a place
 in a file makes, so a file the reader already has open under another spelling opens in that tab
 and not a second one. What the press cannot carry is the column: cargo counts one in characters
-and a landing's are UTF-16 units along the line, which only the text of the line converts
-between, and this pane has no text.
+and a landing's are bytes along the line, which only the text of the line converts between,
+and this pane has no text.
 
 The **debug-lines offer** is why the profile and the manifest are read together. Release is the
 default profile, since a reader inspecting a binary is usually asking what the optimiser did, and

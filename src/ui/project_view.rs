@@ -223,9 +223,9 @@ impl Component for ArtifactRow {
 /// already open under another spelling is the tab this opens in, and the assembly side is
 /// driven from that line.
 ///
-/// The **column** is not carried. cargo counts one in characters and a landing's are UTF-16
-/// units along the line, which only the text of the line converts between; this pane has no
-/// text, so the caret lands at the start of the line.
+/// The **column** is not carried. cargo counts one in characters and a landing's are bytes
+/// along the line, which only the text of the line converts between; this pane has no text,
+/// so the caret lands at the start of the line.
 ///
 /// cargo spells the file relative to where it ran, so the place is the project's directory
 /// joined with it, and which of those files may be opened is [`Builds::sources`], picked

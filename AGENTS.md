@@ -223,12 +223,11 @@ command.
   group each is started in, the handle that stops it, the one list a shutdown walks, the
   pipes read on threads of their own, and a run's output cut into rows.
 - `src/pixels.rs` — the device pixel grid, and a stroke put on it by its edges.
-- `src/chars.rs` — the run a sweep over a listing selects: a place is a row and a column in
-  UTF-16 units, a row's text is pieces, and what each row draws, what the rows it touches
-  are, and what it copies. Also every conversion between those units and the byte offsets a
-  column is everywhere else, the cut that refuses to fall inside a character among them;
-  where the nth character of a string begins; and where a compiler's line and column put a
-  cursor.
+- `src/chars.rs` — the run a sweep over a listing selects: a place is a row and a byte
+  column, and what each row draws, what the rows it touches are, and what it copies. Also
+  the two conversions to and from the UTF-16 units the text engine, a language server and
+  freya's editor count in, each made at that edge; where the nth character of a string
+  begins; and where a compiler's line and column put a cursor.
 - `src/section.rs` — the rows a listing of an object's whole code is made of: estimated before
   a stretch is decoded, the symbol's own after, and an address for every one.
 - `src/document.rs` — what the reader has open: an object, a symbol, a source file, or an
