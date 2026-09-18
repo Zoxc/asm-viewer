@@ -51,8 +51,7 @@ source, every pad's output -- and `write_if`'s clone per batch would copy all of
 lines that just arrived. `Searched` is not `Clone` at all, which puts that in the type: nothing can copy the
 hits, `write_if` and the panel's render included. The rule is still the type's; only the writing differs. `Builds` would be a fourth, and
 answers differently: the build it holds and the files that build names are behind `Arc`s, so a
-clone is a few pointers and the plain shape holds -- here, and in the Project view's render
-(`agents/Sidebar.md`).
+clone is a few pointers and the plain shape holds.
 
 **A state is asked through one effect, and that effect is written once** (`use_asking`,
 `src/ui/worker.rs`). Every worker is fed the same way: a view writes what it wants into a state --

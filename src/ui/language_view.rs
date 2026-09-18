@@ -46,10 +46,8 @@ impl Component for ServerButton {
         let proj = use_consume::<Proj>().0;
         let jobs = use_consume::<LspJobs>();
 
-        // The reads, and with them the subscriptions. Bound to lets of their own and
-        // dropped here: the press below writes the very state this looked at.
-        let held = language.read().clone();
-        let open = proj.read().clone();
+        let held = language.read();
+        let open = proj.read();
         let directory = open.workspace();
 
         // With no directory there is nothing to run a server over.

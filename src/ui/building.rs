@@ -46,10 +46,9 @@ pub(crate) struct Builds {
     pub(crate) building: bool,
     /// The last build, whatever came of it.
     ///
-    /// Shared, because the cargo section clones this whole state to draw it and a keystroke
-    /// in any of the pane's boxes is a redraw: a build says two hundred things as readily as
-    /// two, each with the text the compiler rendered for it, so a copy per frame is hundreds
-    /// of kilobytes for nothing. [`Builds::finished`] wraps it once.
+    /// Shared, because an answer is written by copying the whole state (`finished`), and a
+    /// build says two hundred things as readily as two, each with the text the compiler
+    /// rendered for it. [`Builds::finished`] wraps it once.
     pub(crate) built: Option<Arc<cargo::Run>>,
     /// What the worker's last read of the manifest came back with.
     pub(crate) manifest: Manifest,

@@ -438,10 +438,7 @@ struct CargoSection {
 impl Component for CargoSection {
     fn render(&self) -> impl IntoElement {
         let mut proj = use_consume::<Proj>().0;
-        // What there is to build, and what to build it with. The read subscribes this
-        // component to the build, so a finished one redraws the rows below.
         let build = use_consume::<Building>().0;
-        let held = build.read().clone();
         let jobs = use_consume::<BuildJobs>();
         let PlaceStates { doors, ctrl } = self.places;
         // The two fields this draws, each a memo: `Proj` is written by every keystroke in
@@ -467,6 +464,10 @@ impl Component for CargoSection {
             }
         });
 
+        // What there is to build, and what to build it with. After the hooks, so no guard
+        // is held while one runs; the read subscribes this component to the build, so a
+        // finished one redraws the rows below.
+        let held = build.read();
         let artifacts: Vec<Element> = held
             .artifacts()
             .iter()
@@ -612,10 +613,9 @@ impl Component for LanguageSection {
     fn render(&self) -> impl IntoElement {
         let proj = use_consume::<Proj>().0;
         let language = use_consume::<Talking>().0;
-        // Read into a value of its own: the presses below write the state this looked at.
-        let spoken = language.read().clone();
         let lsp = use_consume::<LspJobs>();
-        let open = proj.read().clone();
+        let spoken = language.read();
+        let open = proj.read();
         let directory = open.workspace();
 
         section(

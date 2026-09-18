@@ -530,11 +530,9 @@ draws those fields -- the language server's section and its control in the top b
 the Directory box also what follows the directory. Outside this pane that spares the chip in the
 top bar and the Files and Search panels
 (`a_keystroke_in_the_program_box_draws_neither_the_chip_nor_the_files_panel`). This is the pane
-the reader types into, so a redraw is kept cheap too: the cargo section clones the whole of
-`Builds` to draw it, and its two large
-fields are behind `Arc`s (`Builds::built`, `Builds::sources`). A build says two hundred things as
-readily as two, each carrying the text the compiler rendered for it, and none of that is copied per
-keystroke. The two states a diagnostic's press reaches for are the page's, consumed once in
+the reader types into, so a redraw is kept cheap too: each section draws from a guard on the state
+it reads, not from a copy. A guard held in a render is safe, since nothing there writes and a press
+handler runs after the render has dropped it; a guard held into a write is not. The two states a diagnostic's press reaches for are the page's, consumed once in
 `ProjectTab` and handed to the cargo section as `PlaceStates`: that section renders again on every
 word the worker says, and reaching for a context is a hook. It compares equal always, so carrying it
 costs the section no render.
