@@ -19894,6 +19894,42 @@ fn a_code_tab_draws_its_labels_and_empty_rows_before_a_byte_is_decoded() {
     );
 }
 
+/// An answer landing counts the rows of the stretches held and no others: the estimate
+/// for the rest is counted once per skeleton. In the app's own binary that is one chunk's
+/// worth of stretches in place of some 190k, on the UI thread, per answer.
+#[test]
+fn an_answer_counts_the_rows_of_the_stretches_held_and_no_others() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let (mut sections, built) = (roots.sectioned.reading, roots.sectioned.rows);
+    settle(&mut test);
+    let code = sections.peek().code.clone().expect("the skeleton");
+    assert!(code.sections()[0].listing.stretches().len() > 1);
+
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: Some(code.clone()),
+        window: vec![1],
+    };
+    let Answer::Code { decoded, .. } = answer(Question::Code(ask.clone())) else {
+        panic!("a window is answered with code");
+    };
+    let before = section::stretches_counted();
+    assert!(sections.write().take(&ask, code, decoded));
+    settle(&mut test);
+
+    let held = built.peek().as_ref().map(|built| built.reading.held.len());
+    assert_eq!(held, Some(1), "the rows were not counted afresh");
+    assert_eq!(section::stretches_counted() - before, 1);
+}
+
 /// When a stretch above the viewport decodes, its guess is replaced by its rows and the
 /// row under the reader stays where it is: the view keeps its place by address.
 #[test]

@@ -255,6 +255,7 @@ impl Reading {
     }
 
     /// The body of stretch `flat`, if it has been decoded: what `Rows::new` asks.
+    #[cfg(test)]
     pub(crate) fn body(&self, flat: usize) -> Option<Body> {
         self.held.get(&flat).map(|stretched| stretched.body())
     }

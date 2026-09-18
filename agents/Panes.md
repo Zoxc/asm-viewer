@@ -1022,7 +1022,12 @@ a gap, and nothing would have said so. Two effects do the rest. `use_kept_place`
 place
 (`agents/UI.md`, `Places::code_at`), plants a door's caret once there are rows to plant it in (the planting
 paragraph above), and rebuilds the rows whenever the reading's generation changes, in the one run
-that also moves the controller to where the place now is. **Which place, and whether it is kept at
+that also moves the controller to where the place now is. **The rebuild costs what is held, not the
+listing**: `section::Layout` is every stretch's estimate, counted once per skeleton and kept in the
+`Built` to be reused, and `Rows::over` lays the held stretches over it -- a decoded stretch's start
+is the layout's moved by what the decoded ones before it changed. Counted whole per answer, the app's
+own binary (190k stretches) cost 120 ms of UI thread in a debug build and 4 ms in release for every
+chunk of 8; laid over, under 1 ms in debug (`section::stretches_counted` pins it). **Which place, and whether it is kept at
 all, is the listing's `Placing`**: a tab's is an entry on its trail, and the Scratchpad's is no
 entry at all. The page has no `DocId`, so the hook is handed `None` and has nothing to file
 anything under. Under a made-up id it would hold the `Arc<Object>` its document points into with
@@ -1438,7 +1443,7 @@ and at what address is the part that drifts, and a kind added to `Kind` was an a
 loop in the walk with nothing linking them, so the walk would silently not search what the reader
 sees. Now one `StretchRows::kinds` states the order and one `line_at` the text, and a new kind
 reaches both together (`the_walk_over_an_objects_code_holds_every_line_the_pane_draws` pins it).
-`StretchRows` is public for this: `Rows::new` walks every stretch of the whole skeleton, so a `Rows`
+`StretchRows` is public for this: `Layout::new` walks every stretch of the whole skeleton, so a `Rows`
 per stretch would make the walk quadratic in a binary with 115k of them, but one stretch's rows cost
 one stretch. The walk pays a `Lanes` layout per stretch it decodes, which is what tells an
 instruction row from a separator; the decode beside it is far the larger cost.

@@ -15,7 +15,7 @@
 use super::*;
 use crate::counter;
 use crate::positions::Spot;
-use crate::section::{Body, Kind, Row, Rows, StretchRows, GAP_BYTES_PER_ROW};
+use crate::section::{Body, Kind, Layout, Row, Rows, StretchRows, GAP_BYTES_PER_ROW};
 use analysis::Stretch;
 
 /// How many screens above and below the viewport are decoded ahead, so that a page up or
@@ -1231,8 +1231,20 @@ fn rebuild(
         }
         return None;
     };
+    // The layout is counted once per skeleton; an answer lays only what is held over it.
+    let layout = step
+        .before
+        .as_ref()
+        .map(|before| before.rows.layout())
+        .filter(|layout| Arc::ptr_eq(layout.code(), &code))
+        .cloned()
+        .unwrap_or_else(|| Arc::new(Layout::new(code)));
+    let decoded = reading
+        .held
+        .iter()
+        .map(|(&flat, stretched)| (flat, stretched.body()));
     let built = Arc::new(Built {
-        rows: Rows::new(code, |flat| reading.body(flat)),
+        rows: Rows::over(layout, decoded),
         reading: (*reading).clone(),
     });
     held.built = Some(step.generation);

@@ -21,6 +21,7 @@
 //! object's layout put it, so two functions of a relocatable object, both at 0 in the file,
 //! draw at two addresses and the listing reads as one.
 
+use crate::counter;
 use crate::lanes::Lanes;
 use analysis::{Assembly, CodeListing, Place, Placed, Stretch};
 use std::{ops::Range, sync::Arc};
@@ -41,7 +42,7 @@ pub struct Body {
     /// with no bytes.
     pub assembly: Option<Arc<Assembly>>,
     pub lanes: Arc<Lanes>,
-    /// Widened to the whole stretch where nothing was decoded ([`Rows::new`]).
+    /// Widened to the whole stretch where nothing was decoded ([`BodyRows::of`]).
     pub gap: Option<Range<u64>>,
 }
 
@@ -111,10 +112,11 @@ pub enum Kind {
 
 /// One stretch's share of the rows: what it draws, and where in the listing it draws it.
 ///
-/// [`Rows`] holds one per stretch and counts the whole listing out of them. It is also
-/// the way in for a reader holding **one** stretch and no listing: the search that walks
-/// an object's code decodes a stretch, reads it and lets it go, and a [`Rows`] per
-/// stretch would build the whole skeleton each time (`ui/section_view.rs`).
+/// [`Layout`] holds one per stretch, and [`Rows`] one per decoded stretch laid over it.
+/// It is also the way in for a reader holding **one** stretch and no listing: the search
+/// that walks an object's code decodes a stretch, reads it and lets it go, and a
+/// [`Layout`] per stretch would count the whole skeleton each time
+/// (`ui/section_view.rs`).
 pub struct StretchRows {
     /// The placed address the stretch starts at, and how many bytes it covers.
     start: u64,
@@ -171,6 +173,12 @@ impl BodyRows {
     }
 }
 
+counter!(
+    /// Test-only: how many stretches this thread has counted the rows of. An answer
+    /// landing counts the stretches held and not the listing, which pins that.
+    pub fn stretches_counted() = STRETCHES_COUNTED
+);
+
 impl StretchRows {
     /// The rows stretch `flat` of the listing draws, given whatever was decoded for it.
     /// `place` says whether it opens its section, which is a header row, and `flat`
@@ -183,6 +191,8 @@ impl StretchRows {
         flat: usize,
         decoded: Option<Body>,
     ) -> StretchRows {
+        #[cfg(test)]
+        STRETCHES_COUNTED.set(STRETCHES_COUNTED.get() + 1);
         StretchRows {
             start: placed.place(stretch.range.start),
             bytes: stretch_bytes(stretch),
@@ -360,39 +370,33 @@ impl Flat {
     }
 }
 
-/// One [`StretchRows`] per stretch of the listing, in flat order; `decoded` answers for
-/// the stretches -- by that index -- that have been.
-fn stretch_rows(flat_index: &Flat, decoded: impl Fn(usize) -> Option<Body>) -> Vec<StretchRows> {
-    let mut stretches = Vec::with_capacity(flat_index.count());
-    for (section, placed) in flat_index.code().sections().iter().enumerate() {
-        for (index, stretch) in placed.listing.stretches().iter().enumerate() {
-            let flat = stretches.len();
-            let place = Place {
-                section,
-                stretch: index,
-            };
-            stretches.push(StretchRows::of(placed, stretch, place, flat, decoded(flat)));
-        }
-    }
-    stretches
-}
-
-/// Every row of one object's code listing, worked out from the skeleton and whichever
-/// stretches have been decoded.
-pub struct Rows {
+/// The rows of one object's code listing with nothing decoded: every stretch's estimate,
+/// counted once per skeleton. [`Rows`] lays the stretches that have been decoded over it,
+/// so an answer landing costs the stretches held and not every stretch of the object --
+/// which in the app's own binary is some 190k.
+pub struct Layout {
     /// The listing, and its stretches numbered: what a row's `stretch` indexes.
     flat: Flat,
+    /// One per stretch, in flat order, none of them decoded.
     stretches: Vec<StretchRows>,
     /// `starts[i]` is the first row of stretch `i`; one more entry holds the total.
     starts: Vec<usize>,
 }
 
-impl Rows {
-    /// The rows for `code`, with `decoded` answering for the stretches -- by flat index --
-    /// that have been.
-    pub fn new(code: Arc<CodeListing>, decoded: impl Fn(usize) -> Option<Body>) -> Self {
+impl Layout {
+    pub fn new(code: Arc<CodeListing>) -> Self {
         let flat = Flat::new(code);
-        let stretches = stretch_rows(&flat, decoded);
+        let mut stretches = Vec::with_capacity(flat.count());
+        for (section, placed) in flat.code().sections().iter().enumerate() {
+            for (index, stretch) in placed.listing.stretches().iter().enumerate() {
+                let place = Place {
+                    section,
+                    stretch: index,
+                };
+                let at = stretches.len();
+                stretches.push(StretchRows::of(placed, stretch, place, at, None));
+            }
+        }
         let starts = starts(stretches.iter().map(StretchRows::rows));
         Self {
             flat,
@@ -404,6 +408,107 @@ impl Rows {
     pub fn code(&self) -> &Arc<CodeListing> {
         self.flat.code()
     }
+}
+
+/// A decoded stretch laid over the [`Layout`]: its rows, and the row after its last.
+struct Decoded {
+    flat: usize,
+    rows: StretchRows,
+    end: usize,
+}
+
+/// Every row of one object's code listing, worked out from the skeleton and whichever
+/// stretches have been decoded.
+pub struct Rows {
+    layout: Arc<Layout>,
+    /// The decoded stretches, in flat order.
+    decoded: Vec<Decoded>,
+}
+
+impl Rows {
+    /// The rows for `code`, with `decoded` answering for the stretches -- by flat index --
+    /// that have been. Asks about every stretch: the app lays what it holds over a
+    /// [`Layout`] it keeps instead ([`Rows::over`]).
+    #[cfg(test)]
+    pub fn new(code: Arc<CodeListing>, decoded: impl Fn(usize) -> Option<Body>) -> Self {
+        let layout = Arc::new(Layout::new(code));
+        let bodies: Vec<(usize, Body)> = (0..layout.flat.count())
+            .filter_map(|flat| Some((flat, decoded(flat)?)))
+            .collect();
+        Self::over(layout, bodies)
+    }
+
+    /// `layout`'s rows with `decoded` -- bodies by flat index -- laid over it. Costs the
+    /// stretches decoded, not the listing.
+    pub fn over(layout: Arc<Layout>, decoded: impl IntoIterator<Item = (usize, Body)>) -> Self {
+        let mut bodies: Vec<(usize, Body)> = decoded.into_iter().collect();
+        bodies.sort_by_key(|(flat, _)| *flat);
+        bodies.dedup_by_key(|(flat, _)| *flat);
+        let mut rows = Self {
+            layout,
+            decoded: Vec::with_capacity(bodies.len()),
+        };
+        for (flat, body) in bodies {
+            let Some((place, stretch)) = rows.layout.flat.stretch(flat) else {
+                continue;
+            };
+            let Some(placed) = rows.code().sections().get(place.section) else {
+                continue;
+            };
+            let stretch_rows = StretchRows::of(placed, stretch, place, flat, Some(body));
+            // Every stretch decoded so far is before this one, so its start is final.
+            let end = rows.start(flat).saturating_add(stretch_rows.rows());
+            rows.decoded.push(Decoded {
+                flat,
+                rows: stretch_rows,
+                end,
+            });
+        }
+        rows
+    }
+
+    /// The layout the rows were laid over, for the next answer's rows to be laid over too.
+    pub fn layout(&self) -> &Arc<Layout> {
+        &self.layout
+    }
+
+    /// The first row of stretch `flat`, or the listing's length for the flat index one
+    /// past the last: the layout's, moved by what the decoded stretches before it changed.
+    fn start(&self, flat: usize) -> usize {
+        let base = self
+            .layout
+            .starts
+            .get(flat)
+            .copied()
+            .unwrap_or(self.layout_len());
+        let before = self.decoded.partition_point(|decoded| decoded.flat < flat);
+        let Some(last) = before.checked_sub(1).map(|at| &self.decoded[at]) else {
+            return base;
+        };
+        // What the layout counts from the end of that stretch to this one's start, which
+        // no decoded stretch between the two has changed.
+        let end_then = self.layout.starts[last.flat + 1];
+        last.end.saturating_add(base.saturating_sub(end_then))
+    }
+
+    fn layout_len(&self) -> usize {
+        *self.layout.starts.last().unwrap_or(&0)
+    }
+
+    /// Stretch `flat`'s rows: the decoded ones where it has been, else the layout's.
+    fn stretch_rows(&self, flat: usize) -> Option<&StretchRows> {
+        match self
+            .decoded
+            .binary_search_by_key(&flat, |decoded| decoded.flat)
+        {
+            Ok(at) => Some(&self.decoded[at].rows),
+            Err(_) => self.layout.stretches.get(flat),
+        }
+    }
+
+    pub fn code(&self) -> &Arc<CodeListing> {
+        self.layout.code()
+    }
 
     /// The placed section stretch `flat` is in.
     pub fn placed_of(&self, flat: usize) -> Option<&analysis::Placed> {
@@ -412,39 +517,39 @@ impl Rows {
 
     /// How many rows the listing has, estimates included.
     pub fn len(&self) -> usize {
-        *self.starts.last().unwrap_or(&0)
+        self.start(self.layout.flat.count())
     }
 
     /// The stretch at flat index `flat`, as the crate names it.
     pub fn place(&self, flat: usize) -> Option<Place> {
-        self.flat.place(flat)
+        self.layout.flat.place(flat)
     }
 
     /// The stretch at flat index `flat`.
     pub fn stretch(&self, flat: usize) -> Option<&Stretch> {
-        Some(self.flat.stretch(flat)?.1)
+        Some(self.layout.flat.stretch(flat)?.1)
     }
 
     /// The row a stretch's body starts at, after its header and labels: what its lanes'
     /// rows are relative to.
     pub fn body_start(&self, flat: usize) -> Option<usize> {
-        let stretch = self.stretches.get(flat)?;
-        Some(self.starts[flat] + stretch.above())
+        let stretch = self.stretch_rows(flat)?;
+        Some(self.start(flat) + stretch.above())
     }
 
     /// What was decoded for stretch `flat`, if anything was.
     pub fn body(&self, flat: usize) -> Option<&Body> {
-        self.stretches.get(flat)?.body()
+        self.stretch_rows(flat)?.body()
     }
 
     /// What the stretch adds to its symbol's own addresses.
     pub fn bias(&self, flat: usize) -> Option<u64> {
-        Some(self.stretches.get(flat)?.bias)
+        Some(self.stretch_rows(flat)?.bias)
     }
 
     /// The placed address stretch `flat` starts at.
     pub fn start_of(&self, flat: usize) -> Option<u64> {
-        Some(self.stretches.get(flat)?.start)
+        Some(self.stretch_rows(flat)?.start)
     }
 
     /// Which stretch row `row` is in.
@@ -453,17 +558,26 @@ impl Rows {
             return None;
         }
         // The last start at or before `row`; `starts` has one entry past the stretches.
-        let after = self.starts.partition_point(|&start| start <= row);
-        after
-            .checked_sub(1)
-            .filter(|&flat| flat < self.stretches.len())
+        // The last stretch starting at or before `row`, which steps over a stretch of no
+        // rows; `start` answers for one flat index past the stretches.
+        let count = self.layout.flat.count();
+        let (mut low, mut high) = (0, count + 1);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if self.start(middle) <= row {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        low.checked_sub(1).filter(|&flat| flat < count)
     }
 
     /// What row `row` draws.
     pub fn row(&self, row: usize) -> Option<Row> {
         let flat = self.stretch_of(row)?;
-        let stretch = &self.stretches[flat];
-        let local = row - self.starts[flat];
+        let stretch = self.stretch_rows(flat)?;
+        let local = row - self.start(flat);
         let kind = match stretch.heading().nth(local) {
             Some(kind) => kind,
             None => stretch.body_kind(local - stretch.above())?,
@@ -484,7 +598,7 @@ impl Rows {
             stretch: flat,
             kind,
         } = self.row(row)?;
-        let stretch = &self.stretches[flat];
+        let stretch = self.stretch_rows(flat)?;
         Some(match kind {
             Kind::Header => self.placed_of(flat)?.range().start,
             Kind::Rule | Kind::Space { .. } | Kind::Label(_) => stretch.start,
@@ -522,9 +636,9 @@ impl Rows {
     /// an address keeps how many rows past this it was, so the top row being a stretch's
     /// first instruction comes back as that row and not as the label two rows up.
     pub fn row_for(&self, address: u64) -> Option<usize> {
-        let flat = self.flat.index(self.code().at(address)?)?;
-        let stretch = &self.stretches[flat];
-        let first = self.starts[flat];
+        let flat = self.layout.flat.index(self.code().at(address)?)?;
+        let stretch = self.stretch_rows(flat)?;
+        let first = self.start(flat);
         if address <= stretch.start {
             return Some(first);
         }
@@ -569,7 +683,7 @@ impl Rows {
         if row >= body {
             return Some(row);
         }
-        (body < self.starts[flat + 1]).then_some(body)
+        (body < self.start(flat + 1)).then_some(body)
     }
 
     /// The stretches whose rows intersect `rows`, as a range of flat indices.
@@ -600,7 +714,7 @@ impl Rows {
         let mut wanted: Vec<(usize, usize)> = wanted
             .filter(|&flat| !held(flat))
             .map(|flat| {
-                let rows = self.starts[flat]..self.starts[flat + 1];
+                let rows = self.start(flat)..self.start(flat + 1);
                 // How far the stretch is from the middle of the view, and none if the
                 // middle is inside it.
                 let distance = if rows.contains(&centre) {

@@ -42,7 +42,7 @@ fn decode(object: &Object, code: &CodeListing, rows: &Rows, flat: usize) -> Body
 /// The rows stretch `flat` takes, header and labels included: a question only these
 /// tests ask, off the prefix sums.
 fn rows_of(rows: &Rows, flat: usize) -> Range<usize> {
-    rows.starts[flat]..rows.starts[flat + 1]
+    rows.start(flat)..rows.start(flat + 1)
 }
 
 fn nothing_decoded(code: Arc<CodeListing>) -> Rows {
@@ -116,7 +116,7 @@ fn a_stretch_nobody_decoded_is_a_run_of_empty_rows_sized_by_its_bytes() {
     let (_, code) = split();
     let rows = nothing_decoded(code.clone());
 
-    assert_eq!(rows.stretches.len(), 3);
+    assert_eq!(rows.layout.flat.count(), 3);
     let mut expected = 0;
     for (flat, placed) in code.sections().iter().enumerate() {
         let stretch = &placed.listing.stretches()[0];
@@ -158,10 +158,10 @@ fn a_rule_and_a_blank_stand_over_every_stretch_and_a_blank_under_every_header() 
     let object = fixture("line_fixture.o");
     let code = Arc::new(CodeListing::new(&object));
     let rows = nothing_decoded(code);
-    assert!(rows.stretches.len() > 2, "the fixture's layout moved");
+    assert!(rows.layout.flat.count() > 2, "the fixture's layout moved");
     let kinds = kinds(&rows);
 
-    for flat in 0..rows.stretches.len() {
+    for flat in 0..rows.layout.flat.count() {
         let first = rows_of(&rows, flat).start;
         let over = 2 * usize::from(flat > 0);
         if flat == 0 {
@@ -199,9 +199,9 @@ fn the_rows_above_a_body_are_counted_as_they_are_drawn() {
     let object = fixture("line_fixture.o");
     let code = Arc::new(CodeListing::new(&object));
     let rows = nothing_decoded(code);
-    assert!(rows.stretches.len() > 2, "the fixture's layout moved");
+    assert!(rows.layout.flat.count() > 2, "the fixture's layout moved");
 
-    for flat in 0..rows.stretches.len() {
+    for flat in 0..rows.layout.flat.count() {
         let range = rows_of(&rows, flat);
         let body = rows.body_start(flat).expect("the stretch has a body");
         assert!(range.contains(&body), "stretch {flat}'s body is outside it");
@@ -305,10 +305,10 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
         ("half decoded", &half),
         ("with a gap", &with_gap),
     ] {
-        for flat in 0..rows.stretches.len() {
+        for flat in 0..rows.layout.flat.count() {
             let range = rows_of(rows, flat);
             let start = rows.start_of(flat).unwrap();
-            let end = start + rows.stretches[flat].bytes;
+            let end = start + rows.stretch_rows(flat).unwrap().bytes;
             for address in start..end {
                 let expected = if address == start {
                     range.start
@@ -357,9 +357,9 @@ fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
     let half = Rows::new(code.clone(), |flat| (flat == 1).then(|| body.clone()));
 
     for (name, rows) in [("estimated", &empty), ("half decoded", &half)] {
-        for flat in 0..rows.stretches.len() {
+        for flat in 0..rows.layout.flat.count() {
             let start = rows.start_of(flat).unwrap();
-            let end = start + rows.stretches[flat].bytes;
+            let end = start + rows.stretch_rows(flat).unwrap().bytes;
             let body = rows.body_start(flat).unwrap();
             assert_ne!(
                 rows.row_for(start),
