@@ -166,8 +166,15 @@ while the box had text would be woken by every file the reader opens.
 subscription is to a whole state and not to a field of one, and the row the keyboard is on lives
 in `Finder` beside the box, so a memo reading that state was woken by every arrow press: while
 the ranking was still here, a held Down ranked the walk at the keyboard's repeat rate and the
-overlay froze. `Asking` carries only the four things the list depends on, so it does run per
+overlay froze. `Asking` carries only the three things the list depends on, so it does run per
 press and hands back what it handed back before, and `set_if_modified` stops there.
+
+**The overlay is a gate and the panel is a component under it.** `FinderOverlay` stays mounted at
+the root for the whole run and reads nothing but `open`, through a memo; `FinderPanel`, with the
+box, the scroll controller, the memos and the focus effect, is mounted only while the finder is
+open. The walk goes on writing `Finder` after a close, up to ten times a second on a large
+project, and an overlay reading the whole state rendered for each write only to draw nothing.
+A panel mounted per open also starts its scroll at the top, where `open_finder` puts the row.
 
 **A file the finder opens obeys `Reach::outside`**, the rule every row outside the panes follows:
 the preview tab, or, with Ctrl held, a tab of its own that stays. It used to open `NewTab` whatever

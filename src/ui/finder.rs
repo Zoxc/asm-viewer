@@ -396,8 +396,8 @@ async fn take_rows(finder: State<Finder>, answers: async_channel::Receiver<Answe
     }
 }
 
-/// What the list is drawn from: whether the finder is drawn at all, what is in the box,
-/// where the walk is of, and the worker's last answer.
+/// What the list is drawn from: what is in the box, where the walk is of, and the
+/// worker's last answer.
 ///
 /// A memo of its own between [`Finder`] and the list, because a subscription is to a
 /// whole state and not to a field of one. The row the keyboard is on lives in `Finder`
@@ -406,7 +406,6 @@ async fn take_rows(finder: State<Finder>, answers: async_channel::Receiver<Answe
 /// `set_if_modified` stops there.
 #[derive(PartialEq)]
 pub(crate) struct Asking {
-    open: bool,
     typed: String,
     root: Option<PathBuf>,
     listed: Listed,
@@ -415,7 +414,6 @@ pub(crate) struct Asking {
 /// What the finder is asking for, as the state stands.
 pub(crate) fn asking(state: &Finder) -> Asking {
     Asking {
-        open: state.open,
         typed: state.typed.clone(),
         root: state.root.clone(),
         listed: state.listed.clone(),
@@ -497,12 +495,28 @@ fn recent(asking: &Asking, visits: &Visits) -> Listed {
     }
 }
 
-/// The overlay: the box, and the files under it. Mounted at the root and drawn as nothing
-/// at all until Ctrl+P.
+/// The overlay: mounted at the root, and drawing [`FinderPanel`] only while the finder is
+/// open.
+///
+/// Subscribed to `open` alone, through a memo: the walk goes on writing `Finder` after the
+/// finder closes, and a closed overlay reading the whole state would render for each write.
 #[derive(PartialEq)]
 pub(crate) struct FinderOverlay;
 
 impl Component for FinderOverlay {
+    fn render(&self) -> impl IntoElement {
+        let finder = use_consume::<Finding>().0;
+        let open = use_memo(move || finder.read().open);
+        rect().maybe_child(open().then_some(FinderPanel))
+    }
+}
+
+/// The box, and the files under it. Mounted afresh for every open, so its scroll starts at
+/// the top, where `open_finder` puts the row.
+#[derive(PartialEq)]
+struct FinderPanel;
+
+impl Component for FinderPanel {
     fn render(&self) -> impl IntoElement {
         let finder = use_consume::<Finding>().0;
         let states = use_project_states();
@@ -517,15 +531,9 @@ impl Component for FinderOverlay {
         // thirteenth press, and Enter opens a file the reader never saw named.
         let list = use_scroll_controller(ScrollConfig::default);
 
-        // Every hook first and the early return below them: the overlay is drawn for a
-        // fraction of the run, and a hook it skipped would be a hook the next render has
-        // in a different place.
         let asking = use_memo(move || asking(&finder.read()));
         let listed = use_memo(move || {
             let asking = asking.read();
-            if !asking.open {
-                return Listed::default();
-            }
             // The visits are read on this branch alone, because reading a state is what
             // subscribes this memo to it: a file being opened writes the visits, and a
             // memo subscribed to them while the box had text would be woken by every one.
@@ -536,26 +544,22 @@ impl Component for FinderOverlay {
         });
 
         let state = finder.read().clone();
-        // The caret in the box, asked for whenever the box does not have it and the
-        // overlay is up. When it opens, the box has no node to focus until then --
-        // `reach_search`'s own reason for asking through the state. After that it is a
-        // press on a row: a row cannot hold the keyboard, and freya takes the focus out
-        // of the panel **after** the row's handler has run, so an Alt+press would leave a
-        // finder nobody could type in and the row it picked drawn as a list nobody is in.
-        // Both states are read and not peeked, which is what subscribes the effect, and
-        // the focus is what it has to be woken by. Asking in the handler instead is too
-        // early: the platform's focus is written at the end of the pass that handler ran
-        // in, so the ask is made while the box still counts as focused and
-        // `request_focus` declines it.
+        // The caret in the box, asked for whenever the box does not have it. On open, the
+        // box has no node to focus until the panel is drawn -- `reach_search`'s own reason
+        // for asking through the state. After that it is a press on a row: a row cannot
+        // hold the keyboard, and freya takes the focus out of the panel **after** the
+        // row's handler has run, so an Alt+press would leave a finder nobody could type in
+        // and the row it picked drawn as a list nobody is in. Both states are read and not
+        // peeked, which is what subscribes the effect, and the focus is what it has to be
+        // woken by. Asking in the handler instead is too early: the platform's focus is
+        // written at the end of the pass that handler ran in, so the ask is made while the
+        // box still counts as focused and `request_focus` declines it.
         use_side_effect(move || {
             let focused = box_id.is_focused();
             if finder.read().open && !focused {
                 box_id.request_focus();
             }
         });
-        if !state.open {
-            return rect().into_element();
-        }
 
         // The list as the panel is about to draw it. The key handler below is handed
         // this same list, so it moves and opens the rows the reader is looking at.
