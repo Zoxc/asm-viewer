@@ -95,23 +95,26 @@ pub(crate) fn use_sectioned() -> Sectioned {
 
 /// Claim `object` as the listing that is no tab, for as long as this scope is mounted.
 /// See [`Sectioned::beside`].
+///
+/// Claimed once, as the scope mounts, so **the caller must be keyed by the object**: a new
+/// object is a new scope, whose drop lets go of the claim this one made.
 pub(crate) fn use_code_beside(mut beside: State<Option<Arc<Object>>>, object: &Arc<Object>) {
-    // By pointer identity and written from the render, so a rebuild's new object is
-    // claimed the moment the pane draws it. `set_if_modified` would compare `Option`s by
-    // value, which for an object is every byte of the file.
-    let claimed = beside
-        .peek()
-        .as_ref()
-        .is_some_and(|held| Arc::ptr_eq(held, object));
-    if !claimed {
-        beside.set(Some(object.clone()));
-    }
-    let object = object.clone();
+    let claimed = use_hook({
+        let object = object.clone();
+        move || {
+            beside.set(Some(object.clone()));
+            object
+        }
+    });
+    debug_assert!(
+        Arc::ptr_eq(&claimed, object),
+        "use_code_beside's caller is not keyed by its object"
+    );
     use_drop(move || {
         let mine = beside
             .peek()
             .as_ref()
-            .is_some_and(|held| Arc::ptr_eq(held, &object));
+            .is_some_and(|held| Arc::ptr_eq(held, &claimed));
         if mine {
             beside.set(None);
         }
