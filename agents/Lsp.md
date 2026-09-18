@@ -390,6 +390,12 @@ app knows the language, and the extension itself where the reader named one it d
 which is what the specification says to send, and which a server that does not know it
 ignores.
 
+**Both boxes are read at the press** and held with the running server (`Serving`), as the
+program already was. What they say after that is a draft for the next start. Read live,
+deleting one letter of `rust-analyzer` made it a program of the project's own, and every
+file the app knows was opened with the rust-analyzer still running, then closed again when
+the letter came back.
+
 **Nothing is sent to a server that says it takes no documents**, which unlike the semantic
 tokens beside it is asked and not assumed: `textDocumentSync` is in the specification,
 every server answers it, and a `didOpen` to a server that declined them is a client it may

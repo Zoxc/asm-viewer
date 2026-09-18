@@ -80,16 +80,21 @@ impl OpenProject {
         given(&self.language_server).is_some()
     }
 
-    /// The extensions the reader named for that server, as they wrote them and in that
-    /// order, with the dots off. Anything is a separator: what is wanted is the
-    /// extensions, and `c, h` and `c h` and `.c .h` are all somebody saying the same
-    /// thing.
-    pub(crate) fn server_files(&self) -> Vec<String> {
-        self.language_files
+    /// What a server started now would be started as: the program, and the extensions
+    /// the reader named for it, as they wrote them and in that order, with the dots off.
+    /// Anything is a separator: what is wanted is the extensions, and `c, h` and `c h` and
+    /// `.c .h` are all somebody saying the same thing.
+    pub(crate) fn serving(&self) -> Serving {
+        let files = self
+            .language_files
             .split(|letter: char| !letter.is_alphanumeric() && letter != '+' && letter != '#')
             .filter(|extension| !extension.is_empty())
             .map(str::to_owned)
-            .collect()
+            .collect();
+        Serving {
+            program: self.server(),
+            files,
+        }
     }
 
     /// What of this reaches the project file. Trimmed, so a box holding nothing but spaces

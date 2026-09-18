@@ -149,7 +149,10 @@ impl Component for TrustPrompt {
                     .spacing(2.0)
                     .child(
                         label()
-                            .text(format!("Let {} read this directory?", asking.program))
+                            .text(format!(
+                                "Let {} read this directory?",
+                                asking.serving.program
+                            ))
                             .color(palette().text_fg),
                     )
                     .child(

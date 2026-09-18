@@ -6629,14 +6629,16 @@ fn link_centre(test: &TestingRunner, text: &str) -> (f64, f64) {
     )
 }
 
-/// A server that is running and has answered what the file's names are.
+/// A server that is running, started as the project's boxes say, and has answered what
+/// the file's names are.
 ///
 /// Setting the state is not enough on its own: a link is drawn because the server said
 /// the name is one, and saying so is a question sent to the worker and an answer coming
 /// back, which is two turns of the loop and not one.
 fn serving(test: &mut TestingRunner, roots: &Roots) {
+    let serving = roots.states.proj.peek().serving();
     let mut language = roots.language;
-    language.write().state = Lsp::running_to_nothing();
+    language.write().state = Lsp::running_as(serving);
     served(test, roots);
 }
 
@@ -7843,7 +7845,7 @@ fn linking_harness() -> impl IntoElement {
         move |job| work(job),
     );
     let opened = use_consume::<Documents>().0;
-    use_opened(language, opened, states.open, states.proj, jobs.clone());
+    use_opened(language, opened, states.open, jobs.clone());
     use_linking(
         language,
         linked,
@@ -9756,6 +9758,43 @@ fn a_file_the_server_is_not_for_is_neither_opened_nor_asked_about() {
     );
 }
 
+/// **What the Project page's boxes say is for the next start.** The server running was
+/// started with what they said at the press, so typing in them changes nothing it is told.
+/// Judged by the draft, one letter off `rust-analyzer` made it a program of the project's
+/// own, and every file the app knows went to the running rust-analyzer.
+#[test]
+fn typing_in_the_server_boxes_leaves_the_running_server_alone() {
+    let directory = Seeded::directory("draft-boxes");
+    let file = directory.named("add.c", "int bump(int n) {\n    return n + 1;\n}\n");
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+    let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
+        std::iter::from_fn(|| next_job(asks))
+            .filter(|job| matches!(job, AskedOfServer::Opened(_) | AskedOfServer::Closed(_)))
+            .collect()
+    };
+    assert!(told(&asks).is_empty(), "a C file went to rust-analyzer");
+
+    // The reader deletes one letter of the program, then types in the Files box.
+    let mut proj = states.proj;
+    proj.write().language_server = "rust-analyze".to_owned();
+    settle(&mut test);
+    proj.write().language_files = "c".to_owned();
+    settle(&mut test);
+    assert!(
+        told(&asks).is_empty(),
+        "what the boxes say now reached the server that is running"
+    );
+}
+
 /// The project says which of its files the server is for, since the app knows the program
 /// and not what it serves: a C project on clangd is told about its C files, where the
 /// default server is told about Rust and nothing else.
@@ -9783,14 +9822,15 @@ fn a_project_names_the_files_its_server_is_for() {
         "a C file went to a server nobody said was for C"
     );
 
-    // The project names them, in whatever spelling: this is a reader typing into the box.
+    // The project names them, in whatever spelling: this is a reader typing into the box,
+    // which is for the next start.
     {
         let mut proj = states.proj;
         let mut open = proj.write();
         open.language_server = "clangd".to_owned();
         open.language_files = ".c, .h".to_owned();
     }
-    settle(&mut test);
+    serving(&mut test, &roots);
     assert_eq!(
         told(&asks),
         [AskedOfServer::Opened(file.clone())],
@@ -9826,6 +9866,7 @@ fn a_file_is_asked_about_only_once_the_server_says_it_has_settled() {
                 working: false,
                 settled: Some(false),
             },
+            serving: OpenProject::default().serving(),
         };
     }
     // As above: a question this should not have put would go out from an effect on this
@@ -9846,6 +9887,7 @@ fn a_file_is_asked_about_only_once_the_server_says_it_has_settled() {
             working: false,
             settled: Some(true),
         },
+        serving: OpenProject::default().serving(),
     };
     assert_eq!(
         until_tokens(&mut test, &asks).as_deref(),

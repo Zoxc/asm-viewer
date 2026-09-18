@@ -21,12 +21,19 @@ impl Language {
 
 impl Lsp {
     /// A server that is running, over a handle with no process behind it
-    /// ([`process::Handle::to_nothing`]). For the tests: what they are about is the state
-    /// the app holds, and none of them starts a program.
+    /// ([`process::Handle::to_nothing`]), started as a project that names no server would
+    /// start it. For the tests: what they are about is the state the app holds, and none
+    /// of them starts a program.
     pub(crate) fn running_to_nothing() -> Lsp {
+        Lsp::running_as(OpenProject::default().serving())
+    }
+
+    /// The same, started as `serving`.
+    pub(crate) fn running_as(serving: Serving) -> Lsp {
         Lsp::Running {
             server: process::Handle::to_nothing(),
             said: Remarks::default(),
+            serving,
         }
     }
 }
@@ -34,7 +41,7 @@ impl Lsp {
 fn asking() -> Asking {
     Asking {
         directory: PathBuf::from("/project"),
-        program: "rust-analyzer".to_owned(),
+        serving: OpenProject::default().serving(),
     }
 }
 
@@ -95,7 +102,9 @@ fn a_start_counts_the_run_up_and_says_what_to_start_it_with() {
         run: 2,
         ..Language::default()
     };
-    let started = state.starting().expect("there is a server to start");
+    let started = state
+        .starting(asking().serving)
+        .expect("there is a server to start");
     assert_eq!(started.0, 3, "the run an answer will be matched by");
     assert_eq!(state.run, 3);
     assert!(matches!(state.state, Lsp::Starting { .. }));
@@ -107,7 +116,7 @@ fn a_settings_file_that_could_not_be_read_starts_nothing() {
         settings: Some(Err(lsp::Unreadable::NotAnObject)),
         ..Language::default()
     };
-    assert!(state.starting().is_none());
+    assert!(state.starting(asking().serving).is_none());
     assert!(
         matches!(state.state, Lsp::Failed(_)),
         "and the control says why"
@@ -137,6 +146,7 @@ fn an_unanswered_question_goes_with_the_server_and_the_settings_stay() {
         state: Lsp::Starting {
             server: None,
             said: Remarks::default(),
+            serving: asking().serving,
         },
         asking: Some(asking()),
         settings: settings.clone(),

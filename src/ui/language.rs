@@ -57,11 +57,13 @@ pub(crate) enum Lsp {
     Starting {
         server: Option<process::Handle>,
         said: Remarks,
+        serving: Serving,
     },
     /// Answering, and `server` is what ends it.
     Running {
         server: process::Handle,
         said: Remarks,
+        serving: Serving,
     },
     /// It could not be started, or it stopped answering. What it says is the reason,
     /// which the control shows and nothing else does.
@@ -164,6 +166,14 @@ impl Lsp {
         }
     }
 
+    /// What the server was started for, where there is one.
+    pub(crate) fn serving(&self) -> Option<&Serving> {
+        match self {
+            Lsp::Starting { serving, .. } | Lsp::Running { serving, .. } => Some(serving),
+            Lsp::Off | Lsp::Failed(_) => None,
+        }
+    }
+
     /// What ends the server, where there is one to end.
     fn handle(&self) -> Option<&process::Handle> {
         match self {
@@ -174,6 +184,18 @@ impl Lsp {
     }
 }
 
+/// What a server is started as: the program, and the extensions the project named for
+/// it.
+///
+/// Read off the Project view's boxes at the press and held while the server runs. What
+/// the boxes say after that is for the next start, so typing in them opens and closes
+/// nothing with the server that is running.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Serving {
+    pub(crate) program: String,
+    pub(crate) files: Vec<String>,
+}
+
 /// A start the reader has not agreed to yet: what would be run, and where.
 ///
 /// Held rather than worked out again when they answer: the question named a directory,
@@ -181,7 +203,7 @@ impl Lsp {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Asking {
     pub(crate) directory: PathBuf,
-    pub(crate) program: String,
+    pub(crate) serving: Serving,
 }
 
 /// The language server as the app holds it.
@@ -322,11 +344,17 @@ impl Language {
         }
         let said = self.state.said().cloned().unwrap_or_default();
         let handle = match &mut self.state {
-            Lsp::Starting { server, .. } => server.take(),
+            Lsp::Starting {
+                server, serving, ..
+            } => server.take().map(|server| (server, serving.clone())),
             _ => None,
         };
         self.state = match (started, handle) {
-            (Ok(()), Some(server)) => Lsp::Running { server, said },
+            (Ok(()), Some((server, serving))) => Lsp::Running {
+                server,
+                said,
+                serving,
+            },
             (Ok(()), None) => Lsp::Failed("it started with no handle to end it".to_owned()),
             (Err(failure), _) => Lsp::Failed(failure.to_string()),
         };
@@ -383,15 +411,15 @@ impl Language {
     }
 
     /// Start over: whatever is running is stopped, the run is counted up, and the control
-    /// says it is starting. Answers with the run to start under and the settings to start
-    /// it with.
+    /// says it is starting `serving`. Answers with the run to start under and the settings
+    /// to start it with.
     ///
     /// **A settings file that could not be read starts nothing** ([`None`]): what it would
     /// otherwise reach the server as is a name it ignores or a path that is not there, and
     /// a server reading the wrong project is worse than one that says why it did not
     /// start. Not read yet is nothing to lay over the defaults: the read follows the
     /// project, and answers long before a press can reach here.
-    fn starting(&mut self) -> Option<(u64, lsp::Settings)> {
+    fn starting(&mut self, serving: Serving) -> Option<(u64, lsp::Settings)> {
         let ready = match &self.settings {
             Some(Err(why)) => Err(why.to_string()),
             Some(Ok(settings)) => Ok(settings.clone()),
@@ -409,6 +437,7 @@ impl Language {
                 self.state = Lsp::Starting {
                     server: None,
                     said: Remarks::default(),
+                    serving,
                 };
                 Some((self.run, settings))
             }
@@ -824,7 +853,7 @@ pub(crate) fn use_language_with(
 /// The project rather than a directory and a program: both presses that reach here are
 /// about the project that is open, and what is asked about has to be what would run.
 pub(crate) fn start_server(language: State<Language>, proj: State<OpenProject>, jobs: &LspJobs) {
-    // Three fields out of one read, and not a clone of the whole project. The read ends
+    // Four fields out of one read, and not a clone of the whole project. The read ends
     // with the block, before either path below writes.
     let (asking, trusted) = {
         let open = proj.peek();
@@ -834,7 +863,7 @@ pub(crate) fn start_server(language: State<Language>, proj: State<OpenProject>, 
         };
         let asking = Asking {
             directory,
-            program: open.server(),
+            serving: open.serving(),
         };
         (asking, open.trusted)
     };
@@ -871,7 +900,7 @@ pub(crate) fn toggle_server(language: State<Language>, proj: State<OpenProject>,
 fn run_server(mut language: State<Language>, jobs: &LspJobs, asking: Asking) {
     // Bound before the write, as ever; the start it answers with is sent after it.
     let mut next = language.peek().clone();
-    let starting = next.starting();
+    let starting = next.starting(asking.serving.clone());
     language.set(next);
     let Some((run, settings)) = starting else {
         return;
@@ -879,7 +908,7 @@ fn run_server(mut language: State<Language>, jobs: &LspJobs, asking: Asking) {
     jobs.send(LspJob::Start {
         run,
         directory: asking.directory,
-        program: asking.program,
+        program: asking.serving.program,
         settings,
         notes: jobs.notes.clone(),
         spawned: jobs.spawned.clone(),

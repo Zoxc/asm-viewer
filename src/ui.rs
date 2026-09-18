@@ -835,7 +835,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     let jobs = use_language(language, follow, located, linked, hover, proj);
     // What a name followed in the source opens, which the answer above fills in.
     use_follow(follow, doors);
-    use_opened(language, opened, open, proj, jobs.clone());
+    use_opened(language, opened, open, jobs.clone());
     use_linking(language, linked, showing, opened, jobs.clone());
     use_hovering(language, hover, jobs.clone());
 

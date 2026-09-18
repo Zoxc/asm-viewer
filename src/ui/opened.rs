@@ -105,7 +105,8 @@ impl Opened {
 /// neither opened nor asked about.
 ///
 /// Which files those are is the **project's** to say, the app knowing the program and not
-/// what it serves: the extensions named in the Project view, in the reader's own spelling.
+/// what it serves: the extensions named in the Project view, in the reader's own spelling,
+/// as they were when the server started ([`Serving`]).
 /// Where they named none it is the program's own answer -- the one program this app knows
 /// by name is Rust's, and a project that named its own gets asked about whatever it opens,
 /// that being the reader's business.
@@ -114,15 +115,19 @@ impl Opened {
 /// the extension itself where the reader named one it does not: the specification says to
 /// send the extension for a language it has no name for, and a server that does not know
 /// the identifier ignores the file, which is what it would have done anyway.
-fn spoken_as(chosen: &[String], program: &str, path: &Path) -> Option<String> {
+fn spoken_as(serving: &Serving, path: &Path) -> Option<String> {
+    let Serving {
+        program,
+        files: chosen,
+    } = serving;
     let known = languages::Language::of(path);
     let extension = path.extension().and_then(|extension| extension.to_str());
     if chosen.is_empty() {
         let known = known?;
         // The one program this app knows by name is Rust's (`languages::Language::server`);
         // anything else is the project's own.
-        return match languages::Language::Rust.server() == Some(program) {
-            true => (known.server() == Some(program)).then(|| known.spoken().to_owned()),
+        return match languages::Language::Rust.server() == Some(program.as_str()) {
+            true => (known.server() == Some(program.as_str())).then(|| known.spoken().to_owned()),
             false => Some(known.spoken().to_owned()),
         };
     }
@@ -135,7 +140,7 @@ fn spoken_as(chosen: &[String], program: &str, path: &Path) -> Option<String> {
 
 /// Every open tab's source file the project's server is for, in the reader's own order,
 /// each with what the server is told it is.
-fn shown(open: Open, chosen: &[String], program: &str) -> Vec<(Arc<str>, String)> {
+fn shown(open: Open, serving: &Serving) -> Vec<(Arc<str>, String)> {
     let strip = open.strip.read();
     let docs = open.docs.read();
     strip
@@ -148,7 +153,7 @@ fn shown(open: Open, chosen: &[String], program: &str) -> Vec<(Arc<str>, String)
             Document::Object(..) | Document::Symbol(..) | Document::Code(..) => None,
         })
         .filter_map(|file| {
-            let spoken = spoken_as(chosen, program, Path::new(&*file))?;
+            let spoken = spoken_as(serving, Path::new(&*file))?;
             Some((file, spoken))
         })
         .collect()
@@ -164,22 +169,21 @@ pub(crate) fn use_opened(
     language: State<Language>,
     opened: State<Opened>,
     open: Open,
-    proj: State<OpenProject>,
     jobs: LspJobs,
 ) {
     use_side_effect(move || {
-        // Every one of these is read and not peeked: a tab opened or closed, a server
-        // started, and a project whose server is another program are each half of what
-        // this is about.
-        let held = language.read().clone();
-        let held_project = proj.read();
-        let (program, chosen) = (held_project.server(), held_project.server_files());
-        drop(held_project);
-        if !held.started() {
+        // Both read and not peeked: a tab opened or closed and a server started are each
+        // half of what this is about. Which files the server is for is what it was started
+        // with, and not what the Project view's boxes say now.
+        let (run, serving) = {
+            let held = language.read();
+            (held.run, held.state.serving().cloned())
+        };
+        let Some(serving) = serving else {
             write_if(opened, |waiting| waiting.forget());
             return;
-        }
-        let shown = shown(open, &chosen, &program);
+        };
+        let shown = shown(open, &serving);
         // One read, bound before any write: the three lists are all cut out of what it
         // said.
         let told = opened.read().clone();
@@ -193,12 +197,12 @@ pub(crate) fn use_opened(
         for (file, spoken) in &stale {
             jobs.send(LspJob::Closed { file: file.clone() });
             jobs.send(LspJob::Opened {
-                run: held.run,
+                run,
                 language: spoken.clone(),
                 file: file.clone(),
             });
         }
-        let (opening, closing) = told.against(held.run, &shown);
+        let (opening, closing) = told.against(run, &shown);
         // The whole stale list and not the pairs above: an entry naming a file the reader
         // has since closed is one the write below drops, and there is nothing to send for
         // it.
@@ -210,7 +214,7 @@ pub(crate) fn use_opened(
         }
         for (file, spoken) in opening {
             jobs.send(LspJob::Opened {
-                run: held.run,
+                run,
                 language: spoken,
                 file,
             });
@@ -218,7 +222,7 @@ pub(crate) fn use_opened(
         // Written after the sends, as ever.
         let mut opened = opened;
         opened.set(Opened {
-            run: held.run,
+            run,
             files: shown.into_iter().map(|(file, _)| file).collect(),
             stale: Vec::new(),
         });
