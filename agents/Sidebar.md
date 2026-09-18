@@ -449,16 +449,19 @@ a file *is* is not judged here: not by extension (this project's own binaries ha
 reading its head, which was tried and taken out because it made the view a second opinion about what
 an object is, and the parser already has the one that counts. So a press opens anything the source
 cache would read (`source::showable`: a regular file within `source::MAX_SIZE`, asked of the
-metadata and never of the bytes), as `open_document` on a `Document::Source` spelled as **the
-project directory joined with each entry's own name, never canonicalised**. That gate is not a
+metadata and never of the bytes), as a `Document::Source` named by **`spelling`**: the project
+directory joined with each entry's own name, unless a tab is open on that file under another
+spelling, in which case the row opens in that tab. Nothing is canonicalised -- `spelling` picks
+a spelling the app uses already. That gate is not a
 copy of the cache's rule but the call the cache itself makes before it reads, so it cannot fall
 behind: a refusal added to the reader is one every press already obeys. Both of those rules
 live in `open_source_file` (`ui/documents.rs`) and are written nowhere else: the finder's
 Enter and its rows are the same door (`agents/Finding.md`).
 `compiled_from` matches a file on the exact string `addr2line` renders, `DW_AT_comp_dir` joined
-with the file entry, so a tree-opened file matches the debug info's, and
-shares a tab with a companion-opened one, exactly when the project directory is the directory the
-build ran in. Opening a binary is a deliberate act, so it is every file row's right-click, whose one
+with the file entry, so a tree-opened file *is spelled* the debug info's way exactly when the
+project directory is the directory the build ran in. It shares a tab with a companion-opened
+one more often than that: where the companion's tab is open already, `spelling` reduces both
+paths and the row takes that tab. Opening a binary is a deliberate act, so it is every file row's right-click, whose one
 item is **Open file**: `open_binaries` on that path, the toolbar's call, where `object` decides
 whether anything parses and a file that does not leaves nothing behind but a `…` row that goes when
 the load ends. When the path is already loaded or loading the item is instead the Objects row's own

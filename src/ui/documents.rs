@@ -13,9 +13,9 @@
 //!
 //! The doors into a *place* are here too: [`open_source_place`] for a file and a line,
 //! [`show_in_code`] and [`open_as_symbol`] for an address in an object's code. Each builds
-//! a [`Landing`] and goes through [`land`]. A path a server answered with is named by the
-//! spelling an open tab already has for that file ([`spelling`]), so one file reached two
-//! ways is one tab.
+//! a [`Landing`] and goes through [`land`]. A path a door is handed -- a server's answer,
+//! a row off a listing of the filesystem -- is named by the spelling an open tab already
+//! has for that file ([`spelling`]), so one file reached two ways is one tab.
 //!
 //! The window's tab keys are answered here too, and each of them is one of those doors
 //! and not a second way round it: [`step_tab`] and [`show_nth`] work out which tab the
@@ -108,9 +108,13 @@ impl Reach {
 /// else. **A file the source pane would refuse opens nothing at all**
 /// (`source::showable`, the reader's own first step: a regular file within the bound the
 /// source cache reads, and not a symlink to one), so a press cannot make a tab that only
-/// says why it is empty. And the document is named by `path`'s own spelling, **never
-/// canonicalised**, since a [`Document::Source`] and a [`LinePos`] are compared as text:
-/// reduced here, a line the debug info names would be picked out in nothing
+/// says why it is empty. And the document is named by [`spelling`]: a row's path is the
+/// project directory as the reader typed it joined with each entry's own name, so a
+/// directory typed with a `..` or reached through a symlink spells a file the reader may
+/// have open already a second way, and a [`Document::Source`] is compared as text.
+///
+/// Nothing is **canonicalised**: [`spelling`] answers with a spelling the app already
+/// uses, and reducing one here would be a line the debug info names picked out in nothing
 /// (`src/project.rs`).
 ///
 /// A path that names a *place* -- a hit, a reference, a definition -- goes through
@@ -120,7 +124,7 @@ pub(crate) fn open_source_file(states: ProjectStates, path: &Path, reach: Reach)
     if !showable(path) {
         return false;
     }
-    let file = Document::Source(Arc::from(&*path.to_string_lossy()));
+    let file = Document::Source(spelling(states.open, path));
     open_document(states.open, states.visits, file, reach).is_some()
 }
 

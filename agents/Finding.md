@@ -178,7 +178,8 @@ So the rule is the shared one, and it is one rule for both doors and one functio
 two ways: `Reach::outside_keyed` takes the modifiers off the key event and `Reach::outside` the
 `Ctrl` state for the row, a freya pointer event carrying none. Otherwise it is the Files row's door
 exactly, `open_source_file` (`ui/documents.rs`): the same guard on what the source pane would
-refuse, and the same uncanonicalised spelling of the path.
+refuse, and the same naming -- the spelling an open tab already has for that file, and the path's
+own where no tab has one.
 
 **The chord is answered at the root**, in `root_key_down`, which stays the window's one
 `on_global_key_down` — a second one would replace it and take the modifier tracking with it,

@@ -22984,6 +22984,52 @@ fn a_source_row_opens_a_source_driven_tab() {
         .any(|entry| *entry == document));
 }
 
+/// **A Files row opens in the tab the file is already in.** A row's path is the project
+/// directory as the reader typed it joined with each entry's own name, so a directory
+/// typed with a `..` -- or reached through a symlink -- spells a file the reader may
+/// already have open a second way. A `Document::Source` is compared as text, so that
+/// second spelling is a second tab of one file, splitting its trail and its positions.
+///
+/// `spelling` is where one file reached two ways is made one tab, and it is no more this
+/// row's rule than any other door's.
+#[test]
+fn a_source_row_opens_in_the_tab_the_file_is_already_in() {
+    let directory = run_directory_under(line!(), "project");
+    std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
+    let path = directory.join("x.c");
+    std::fs::write(&path, "int x;\n").expect("writing the source");
+    let open_as = Document::Source(Arc::from(&*path.to_string_lossy()));
+    // The project directory spelled through a child and back out, which only
+    // `canonicalize` reduces: the row under it is the file the reader has open.
+    let stepped = directory.join("sub").join("..");
+    assert_ne!(
+        stepped.join("x.c"),
+        path,
+        "the two spellings are one path without asking anybody"
+    );
+
+    let (mut test, states) = TestingRunner::new(
+        files_harness,
+        (300., 400.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let mut proj = states.proj;
+    proj.write().workspace_text = stepped.to_string_lossy().into_owned();
+    settle(&mut test);
+
+    // The reader has the file open already, under the spelling with no `..` in it.
+    open_document(states.open, states.visits, open_as.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    press(&mut test, "x.c");
+
+    assert!(
+        open_documents(states.open) == [open_as],
+        "the row opened a second tab of a file the reader already had open"
+    );
+}
+
 /// A file's menu offers "Open file", which loads it the way the toolbar's Open does --
 /// the parser deciding whether it is an object -- and once it is loaded offers "Close
 /// file" instead, so a path is never opened twice.
