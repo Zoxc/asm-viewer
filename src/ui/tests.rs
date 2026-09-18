@@ -32391,6 +32391,52 @@ fn a_keystroke_in_one_find_bar_draws_neither_the_other_pane_nor_its_bar() {
     );
 }
 
+/// **A write to another bar draws no row of a listing with a bar open.** The rows wear the
+/// matcher `use_marking` compiles, compared by its `Rc`, and the memo reading the bar's filter
+/// wakes on every write to `Finds`. Compiled there, each write was a new `Rc` and every row
+/// was drawn again.
+///
+/// Fails with the compile put back in the memo that reads the table.
+#[test]
+fn a_write_to_another_find_bar_draws_no_row_of_a_marked_listing() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+    let (mut test, finds) = TestingRunner::new(
+        listing_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| {
+            runner
+                .provide_root_context(move || listing_states(shown))
+                .finds
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    let mine = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let elsewhere = (Placing::Pad, Pane::Assembly);
+    open_find(finds, mine, None, None);
+    edit_find(finds, mine, |bar| bar.filter.pattern.push_str("mov"));
+    open_find(finds, elsewhere, None, None);
+    settle(&mut test);
+    let drawn = assembly::instruction_rows_drawn();
+    assert!(drawn > 0, "the harness drew no instruction row");
+
+    edit_find(finds, elsewhere, |bar| bar.filter.pattern.push('a'));
+    settle(&mut test);
+    assert_eq!(
+        assembly::instruction_rows_drawn(),
+        drawn,
+        "a character typed in another bar drew this listing's rows again"
+    );
+}
+
 /// How many find bars are drawn, by the placeholder each empty box says.
 fn bars_open(test: &TestingRunner) -> usize {
     labels(test).iter().filter(|text| *text == "Find").count()

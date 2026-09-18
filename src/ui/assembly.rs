@@ -1163,8 +1163,16 @@ fn instruction_menu(
     })
 }
 
+counter!(
+    /// Test-only: how many times this thread has drawn an instruction row.
+    pub(crate) fn instruction_rows_drawn() = INSTRUCTION_ROWS_DRAWN
+);
+
 impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
+        #[cfg(test)]
+        INSTRUCTION_ROWS_DRAWN.set(INSTRUCTION_ROWS_DRAWN.get() + 1);
+
         // Where this row points on the source side. Worked out once here rather than in
         // each of the handlers, which all need the same answer.
         let at = self.data.position(self.index);

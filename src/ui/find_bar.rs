@@ -225,9 +225,8 @@ impl Find {
 /// the reader left it: what was typed lasts as long as the tab is open.
 ///
 /// **Written only where it changed.** A `set` notifies whether or not it changed anything,
-/// and this is the state a keystroke in a find box writes: every mounted listing's rows
-/// wear the matcher [`use_marking`] compiles, and the memo makes a fresh `Rc` each time it
-/// recomputes, so a write for nothing redraws every row of every listing open. Hence the
+/// and this is the state a keystroke in a find box writes: every bar, every listing's
+/// [`use_marking`] and every effect over a bar wakes on any write to it. Hence the
 /// `PartialEq` -- cheap, a bar being patterns, pointers and flags -- and hence a writer
 /// that can leave the table as it was ending in `set_if_modified`. It is the rule
 /// `marks::update` and `write_if` (`ui/worker.rs`) state, for a state the reader writes.
@@ -267,23 +266,30 @@ impl Finds {
     }
 }
 
-/// The compiled matcher `at`'s rows wash themselves with: made once per render of the
-/// list and shared by every row of it, since compiling a regex per row is not free.
+/// The compiled matcher `at`'s rows wash themselves with: made once per pattern and shared by every row of it, since compiling a regex per row is not free.
 /// `None` where no bar is open, which is what leaves a listing with no bar over it
 /// untouched -- and what a pane mounted without the context draws with.
 ///
-/// A `Memo`, so a render that changed nothing about the pattern hands the rows the same
-/// one and leaves their props as they were. `at` goes through `use_reactive`: a memo's
+/// Two memos, so the regex is compiled only when this bar's pattern changes. The first
+/// reads the whole table, as every read of one does, and wakes on every write to it -- a
+/// keystroke in another bar, a step, each progress word of a hunt -- but it notifies only
+/// when this bar's filter changed. The second compiles, and every compile is a new `Rc`
+/// that redraws every row of the listing. `at` goes through `use_reactive`: a memo's
 /// callback is built once, and a switch of tab hands this list another `at` without
 /// mounting it again (`ui/split.rs`).
 pub(crate) fn use_marking(at: Where) -> Option<Marking> {
     let finds = try_consume_context::<Looking>().map(|looking| looking.0);
     let at = use_reactive(&at);
-    let marking = use_memo(move || {
+    let filter = use_memo(move || {
         let at = *at.read();
         let bars = finds?.read();
-        bars.open(&at)
-            .then(|| Marking::new(bars.get(&at).filter.matcher()))
+        bars.open(&at).then(|| bars.get(&at).filter.clone())
+    });
+    let marking = use_memo(move || {
+        filter
+            .read()
+            .as_ref()
+            .map(|filter| Marking::new(filter.matcher()))
     });
     marking.read().clone()
 }

@@ -1366,9 +1366,15 @@ only thing an object's code could answer at all, a line there having text only o
 The count and the steps come from the worker's answer; the two cannot disagree, being the same
 matcher over the same line.
 
-**A write to `Finds` that changed nothing is not made.** That memo recomputes on every write to the
-table, not on every write that moved a pattern, and each recompute is a fresh `Rc`, which is not
-equal to the last: one write for nothing redraws every row of every listing open. The table is
+**The matcher is compiled when the bar's filter changes, not when the table does.** There is no
+reading one key of a table: the memo that reads a bar's filter wakes on every write to `Finds` --
+a keystroke in the other pane's bar, a step, each progress word of a hunt. Each compile is a fresh
+`Rc`, which is not equal to the last and redraws every row of the listing. So `use_marking` is two
+memos: the first clones the bar's `Filter` and notifies only when it changed, and the second
+compiles from that.
+
+**A write to `Finds` that changed nothing is not made.** Every bar, every listing's first memo and
+every effect over a bar still wakes on a write. The table is
 written on each keystroke in a find box, and two of its writers could leave it as it was --
 `edit_find`, whose closure returns early when the box writes back what the bar already holds, and
 `open_find`, for a Ctrl+F over a bar already open with nothing to seed it. So `Finds` is compared,
