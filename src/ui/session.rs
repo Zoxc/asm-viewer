@@ -326,13 +326,11 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
     // What the last build produced, which the next build replaces. A project whose
     // binaries are all gone still knows what it built.
     let mut build = states.build;
-    let mut next = build.peek().clone();
-    next.previous = session
+    build.write().previous = session
         .cargo
         .as_ref()
         .map(|cargo| cargo.artifacts.clone())
         .unwrap_or_default();
-    build.set(next);
 
     let ProjectStates {
         objects,
