@@ -216,10 +216,13 @@ pub(crate) fn field_label_width() -> f32 {
 /// is the pane's edge, which does not move when the reader enlarges the text.
 pub(crate) const PAGE_PAD: Gaps = Gaps::new_symmetric(8.0, 12.0);
 
-/// The gap between one section of a page and the next, and between a section's heading and
-/// the rows under it. One number for both, so a page reads as a column of rows and not as
-/// two rhythms.
+/// The gap between a section's heading and the rows under it, and between one row and the
+/// next.
 pub(crate) const SECTION_GAP: f32 = 6.0;
+
+/// The gap between one section of a page and the next: wider than [`SECTION_GAP`], so each
+/// heading reads as the start of a group rather than one more row.
+pub(crate) const SECTION_SPACE: f32 = 18.0;
 
 /// How wide a window that says something and offers a button or two is (`notice`,
 /// `src/ui/parts.rs`): a state directory's path with a file name at the end of it, which

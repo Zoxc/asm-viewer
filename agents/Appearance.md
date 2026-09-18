@@ -270,9 +270,10 @@ the square and `BAR_PILL_PAD` at each end. What lights it with the pointer elsew
 hover wash held while a menu the button opened is up, or `toggle_on_bg` for a toggle that is on. It
 was written out eight times, each a little differently -- one with `main_align`/`cross_align` where
 the rest said `.center()`, one with no corner at all -- which is what happened to the list row before
-`list_row`. A page's **body** is drawn by `page` over `page_column` -- which is not `page_row`, the
+`list_row`. A section heading's action is a `HeadingButton`, a glyph and a word in a `bar_pill`: a raised
+`Button` outweighed the heading it stood in. A page's **body** is drawn by `page` over `page_column` -- which is not `page_row`, the
 table saying what a `Page` *is* (`agents/UI.md`): the pane's ground, a scroll, and a column of
-`section`s `SECTION_GAP` apart inside `PAGE_PAD`, where the margins and the gap were six copies of
+`section`s `SECTION_SPACE` apart inside `PAGE_PAD`, their rows `SECTION_GAP` apart, where the margins and the gap were six copies of
 two literals and two pages set a font and a colour the root had already set. And a window that asks
 or tells is `notice`: `NOTICE_WIDTH` wide with `NOTICE_PAD` of air, over `Popup` for the overlay, the
 dim, the press outside and Escape. The four of those kept the same 520 under three private names,

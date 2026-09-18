@@ -492,16 +492,20 @@ impl Component for CargoSection {
             "Cargo build",
             directory.clone().map(|directory| {
                 let jobs = jobs.clone();
-                Button::new()
-                    // Two builds cannot go at once: the second would compile what
-                    // the first is writing.
-                    .enabled(held.manifest.path.is_some() && !held.building)
-                    .on_press(move |_| start_build(build, &jobs, directory.clone(), profile))
-                    .child(match held.building {
+                HeadingButton {
+                    icon: ("hammer", lucide::hammer()),
+                    text: match held.building {
                         true => cargo::BUILDING,
                         false => "Build",
-                    })
-                    .into_element()
+                    },
+                    // Two builds cannot go at once: the second would compile what the
+                    // first is writing.
+                    live: held.manifest.path.is_some() && !held.building,
+                    press: EventHandler::new(move |_| {
+                        start_build(build, &jobs, directory.clone(), profile)
+                    }),
+                }
+                .into_element()
             }),
         )
         .child(match &held.manifest.path {
@@ -621,20 +625,25 @@ impl Component for LanguageSection {
             Some({
                 let lsp = lsp.clone();
                 let started = spoken.started();
-                Button::new()
+                HeadingButton {
+                    icon: match started {
+                        true => ("square", lucide::square()),
+                        false => ("play", lucide::play()),
+                    },
+                    text: match started {
+                        true => "Stop",
+                        false => "Start",
+                    },
                     // Nothing to run one over is the one state neither press has an
                     // answer to.
-                    .enabled(directory.is_some())
+                    live: directory.is_some(),
                     // The toggle the top bar's control and the window's chord press,
                     // which is what asks the state again at the press and puts the
                     // question first where the reader has not agreed to the directory
                     // yet. The `started` above is the caption and nothing else.
-                    .on_press(move |_| toggle_server(language, proj, &lsp))
-                    .child(match started {
-                        true => "Stop",
-                        false => "Start",
-                    })
-                    .into_element()
+                    press: EventHandler::new(move |_| toggle_server(language, proj, &lsp)),
+                }
+                .into_element()
             }),
         )
         // Which program, named rather than assumed: a project on a toolchain of its
@@ -742,10 +751,13 @@ impl Component for RecentsSection {
         section(
             "Recent projects",
             Some(
-                Button::new()
-                    .on_press(move |_| new_project(states))
-                    .child("New project")
-                    .into_element(),
+                HeadingButton {
+                    icon: ("plus", lucide::plus()),
+                    text: "New project",
+                    live: true,
+                    press: EventHandler::new(move |_| new_project(states)),
+                }
+                .into_element(),
             ),
         )
         .child(rows_or(others, "No other projects"))

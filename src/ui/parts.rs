@@ -691,9 +691,9 @@ pub(crate) fn given(text: &str) -> Option<&str> {
 pub(crate) fn section_heading(text: &str, action: Option<Element>) -> impl IntoElement {
     rect()
         .width(Size::fill())
-        // Padded rather than a fixed row height: a section's action is a `Button`, which
-        // is taller than a row, and a fixed height would draw the rule through it.
-        .padding(Gaps::new_symmetric(2.0, 0.0))
+        // Padded rather than a fixed row height: a section's action is a button, which is
+        // taller than a row, and a fixed height would draw the rule through it.
+        .padding(Gaps::new_symmetric(4.0, 0.0))
         .horizontal()
         .cross_align(Alignment::Center)
         .content(Content::Flex)
@@ -706,6 +706,42 @@ pub(crate) fn section_heading(text: &str, action: Option<Element>) -> impl IntoE
         .maybe_child(action)
 }
 
+/// A heading's action: a glyph and a word in the bar's own [`bar_pill`], flat until the
+/// pointer is on it, rather than a raised `Button` that outweighs the heading it stands in.
+/// The glyph is what says "a button" where the pill has no wash.
+///
+/// `live` is whether a press would do anything; a dead one is dimmed and does not light.
+/// The press is handed in, so this re-renders whenever the section does, [`PlaceTarget`]'s
+/// bargain.
+#[derive(Clone, PartialEq)]
+pub(crate) struct HeadingButton {
+    /// The glyph, as [`glyph`] takes one, drawn in the word's colour so it dims with it.
+    pub(crate) icon: (&'static str, Bytes),
+    pub(crate) text: &'static str,
+    pub(crate) live: bool,
+    pub(crate) press: EventHandler<Event<PressEventData>>,
+}
+
+impl Component for HeadingButton {
+    fn render(&self) -> impl IntoElement {
+        let hovering = use_state(|| false);
+        let press = self.press.clone();
+        let colour = match self.live {
+            true => palette().text_fg,
+            false => dimmed(palette().text_fg, palette().pane_bg),
+        };
+
+        bar_pill(hovering, self.live, Glow::No)
+            .maybe(self.live, |button| {
+                button.on_press(move |e: Event<PressEventData>| press.call(e))
+            })
+            .horizontal()
+            .spacing(4.0)
+            .child(glyph_in(self.icon.clone(), colour))
+            .child(label().text(self.text).max_lines(1).color(colour))
+    }
+}
+
 /// One section of a page: its heading with the section's own action on the right, and
 /// room under it for the rows the caller adds, [`SECTION_GAP`] apart.
 pub(crate) fn section(title: &str, action: Option<Element>) -> Rect {
@@ -716,7 +752,7 @@ pub(crate) fn section(title: &str, action: Option<Element>) -> Rect {
 }
 
 /// The column a page's sections stand in: as wide as the page, with the page's own margins
-/// round it and [`SECTION_GAP`] between one section and the next.
+/// round it and [`SECTION_SPACE`] between one section and the next.
 ///
 /// Apart from [`page`] because not every page is one scroll: the Shortcuts page keeps its
 /// filter box above the scroll, and the Scratchpad's column stands beside a split and is
@@ -725,7 +761,7 @@ pub(crate) fn page_column() -> Rect {
     rect()
         .width(Size::fill())
         .padding(PAGE_PAD)
-        .spacing(SECTION_GAP)
+        .spacing(SECTION_SPACE)
 }
 
 /// A page: the pane's ground, whatever stands above the scroll, and the scroll the body is
