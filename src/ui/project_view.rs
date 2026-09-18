@@ -346,7 +346,7 @@ impl Component for IdentitySection {
 
         section("Project", None)
             // The box writes straight into `Proj`, so a keystroke is a state change the
-            // save observer sees and the project file is written at once.
+            // save observer sees, and the project file is written once the typing stops.
             .child(field_row(
                 "Directory",
                 value_row()
@@ -538,8 +538,8 @@ impl Component for CargoSection {
                         choice(
                             &[(Profile::Debug, "Debug"), (Profile::Release, "Release")],
                             profile,
-                            // Straight into `Proj`, so the save observer sees it like a
-                            // rename and `project.toml` is written at once.
+                            // Straight into `Proj`, so the save observer sees it like
+                            // a keystroke in a box and `project.toml` follows.
                             move |chosen| proj.write().profile = chosen,
                         ),
                     ))

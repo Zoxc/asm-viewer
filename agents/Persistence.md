@@ -104,7 +104,8 @@ the disk ahead of the data, and the file the next launch reads is then zero byte
 tail -- one that will not parse, so the rescue moves the reader's project or session aside and
 hands back a default, which is the very loss the dance exists to prevent. The directory entry is
 left unsynced: losing the rename costs the last save, where losing the data costs the file. One
-fsync per save, at most one every 30 s.
+fsync per save: the session's at most one every 30 s, and a box typed in -- the Project page's
+three, the font family -- writes once the typing stops and not per keystroke.
 
 **A project is its project file's path.** `ProjectId` is not where a project is but *which* one it
 is: sixty-four random bits in the file, written as sixteen hex digits, and carried by every file the
@@ -221,7 +222,8 @@ baseline without it would read the state the app boots into as a change.
 
 **Each project is two files, and the line between them is the one the save policy already drew.**
 `<project>.avproj` is what the user *said* (`name`, `directory`, `binaries`, `bookmarks`) and is
-written **at once**, because a binaries change is what `Saves` writes immediately.
+written **at once**, because a binaries change is what `Saves` writes immediately; a detail
+typed in follows half a second after the typing stops.
 `<project>.avproj.session` beside it is what the app *noticed* (`digests`, `active`, `active_page`,
 `tabs` with their trails, `history`, the record of visits) and is the file rewritten every thirty
 seconds. The session takes the project file's whole name and not its stem, so the two sort together
@@ -284,7 +286,7 @@ a copy in here would be a second copy to keep in step with the one the user edit
 
 **Bookmarks are the project file's** (`src/bookmarks.rs`; the panel over them is
 `agents/Sidebar.md`'s). A bookmark is a place the reader chose to be able to come back to, which is
-the deliberate side of the split, so the list is written at once like the directory. It is a
+the deliberate side of the split, so the list is written at once. It is a
 `SavedDocument` with the **name it was made under** beside it, because a saved symbol carries only
 its mangled name and a bookmark whose binary is closed has nothing else to be drawn by. A place
 that can spell its own name keeps none: a symbol the *app* named rather than the file is saved as
@@ -416,14 +418,24 @@ serde reads a flattened field out of a buffer, which `toml` can put no span on, 
 `directory = 7` is reported at line 1 rather than where it is, where `id = 7` beside it still names
 its place. The session is the exception -- it has to be built to be compared, and it
 is kept when it differs. A change to the `binaries` writes **both files immediately**.
-A change to the user-given `details` (the directory, the server, the profile) or to the
-`bookmarks` writes **the project file alone**, since neither lets go of a binary and so neither
-can leave the two files disagreeing. A change to only the session marks it **pending**: a tab is
+A change to the `bookmarks` writes **the project file alone**, since it lets go of no binary and
+so cannot leave the two files disagreeing. A change to the user-given `details` (the directory,
+the server, the files, the profile) is the project file alone for the same reason, but it is
+**owed** rather than written: three of the four are boxes, and a box changes them once per
+keystroke, each write an fsync on the UI thread. `Saves::owed_project` holds it and `flush`
+writes it, so every flush -- the close hook's, `switch`'s, `put_in`'s -- takes it along; the
+save observer also calls `flush_project` once `Proj` has been still for `SETTLE` (`Settle`,
+`src/ui/session.rs`). A write that does go at once, for the binaries or the bookmarks, carries
+the details the app holds, so it clears what is owed, and details changed back owe nothing.
+The owed write is policy-side and not a debounce in front of `record` so that no flush can miss
+it: a Save pressed straight after typing keeps what was typed.
+A change to only the session marks it **pending**: a tab is
 expressed against the binaries rather than the other way round, costs one click to remake, and
 arrives on every navigation, since `open_document` pushes onto a trail or opens a tab on the way
 to each change of document. Nothing in `record` has to *say* which is which: which file a field
 lives in is what decides it, and the `Option<Session>` beside the `Project` in the `Recorded` it
-hands back is how it says which half it decided. `flush()` writes the pending session, on a 30s
+hands back is how it says which half it decided. `flush()` writes what is owed, then the pending
+session, on a 30s
 timer and from the window's close hook, which is the one exit hook freya 0.4 has
 (`WindowConfig::with_on_close`, a `Send` callback that cannot read any `State`, which is exactly
 why the policy is a static).
@@ -535,8 +547,9 @@ desktop's current answer copied into the file. An unspecified field is therefore
 mistake an inherited value for a chosen one, and the settings page can show the difference. Sizes
 are stored in **points**, the unit the desktops answer in, so an override and the value it overrides
 are comparable; `fonts.rs` converts once at the end. There is **no `Saves`-shaped policy and
-deliberately no second autosave timer**: a settings change is already
-as rare as a deliberate action, so `Settings::save` is public and writes at once. **Resolving
+no autosave timer**, only the font family box's reason for waiting: a change is **owed**
+(`Settings::owe`, a static holding the newest settings and their store) and `settings::flush`
+writes it, once the changes settle (`Settle`) and from the close hook. **Resolving
 `Theme::Desktop` is deliberately not this module's job**: "which theme does the desktop prefer" is a
 question for whatever owns the window, so `settings.rs` holds only the choice and stays
 framework-free, and `ui/palette.rs` puts the two together (`resolve_appearance`). It once spawned a
@@ -568,9 +581,9 @@ Three things the hook's own position decides. It runs **before the unwind**, so 
 `analysis::guard::guarded()` whether the panic is one the crate catches on purpose: those are
 written down and nothing else happens, since nothing has gone wrong with the app. It runs on the
 panicking thread while that thread still holds whatever it held, and `std::sync::Mutex` is not
-reentrant, so the shutdown -- `shutdown::before_exit`, the projects flushed and then every child
-the app started stopped -- goes on **a thread of its own** and reaches the lock only once the
-unwind has let it go. And it is installed from `ui::app`'s first render rather than from `main`,
+reentrant, so the shutdown -- `shutdown::before_exit`, the project and the settings flushed and
+then every child the app started stopped -- goes on **a thread of its own** and reaches the lock
+only once the unwind has let it go. And it is installed from `ui::app`'s first render rather than from `main`,
 which is freya's doing (`notes/upstream/freya.md`): a hook set before `launch` is the inner one,
 and freya's box would be up and the process gone before ours ran. The app's workers are named
 (`thread::Builder::name`) for the one reason that the box then says which of them died.

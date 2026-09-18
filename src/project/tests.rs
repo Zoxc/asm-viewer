@@ -38,20 +38,21 @@ fn putting_a_project_somewhere_carries_the_id_and_the_session() {
     let from = start_new(&store).expect("a project is started");
     assert_eq!(fs::read(&from).expect("the claimed file"), b"");
 
-    // A session worth carrying across, left pending until the flush inside `put_in`.
-    record(
-        &Details::default(),
-        &[],
-        false,
-        &[],
-        session_with(Some("a.o")),
-    );
+    // A session worth carrying across, left pending until the flush inside `put_in`, and
+    // a directory typed in, owed to that flush too: a Save pressed straight after typing
+    // keeps what was typed.
+    let typed = Details {
+        directory: Some(PathBuf::from("/src/kernel")),
+        ..Details::default()
+    };
+    record(&typed, &[], false, &[], session_with(Some("a.o")));
 
     let to = base.join(format!("kernel.{PROJECT_EXTENSION}"));
     assert!(put_in(&store, &to, Put::Move), "the project was written");
 
     let (project, session) = load_project(&store, &to).expect("the project reads back");
     assert!(project.id.is_some(), "the id the app gave it");
+    assert_eq!(project.details, typed, "the directory came with it");
     assert_eq!(
         session.active,
         Some(saved_object("a.o")),

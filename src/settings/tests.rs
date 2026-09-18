@@ -146,3 +146,23 @@ fn a_size_the_app_cannot_draw_at_is_no_size() {
     // Large but drawable, so the reader gets what they asked for.
     assert_eq!(points(MAX_POINTS), Some(MAX_POINTS));
 }
+
+/// What is owed is written by the next flush, the newest of it only, and once. The one
+/// test that goes through the `OWED` static.
+#[test]
+fn a_flush_writes_the_settings_last_owed_once() {
+    let directory = directory(line!());
+    let store = Store::at(&directory);
+    fs::create_dir_all(&directory).expect("creating the test directory");
+
+    Settings::default().owe(&store);
+    settings().owe(&store);
+    assert!(!directory.join(FILE_NAME).exists(), "owing is not writing");
+
+    flush();
+    assert_eq!(Settings::load(&store), settings());
+
+    fs::remove_file(directory.join(FILE_NAME)).expect("the file written");
+    flush();
+    assert!(!directory.join(FILE_NAME).exists(), "written twice");
+}

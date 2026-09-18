@@ -25,6 +25,13 @@ fn flushed(saves: &mut Saves) -> Option<Session> {
     Some(session)
 }
 
+/// The same for the project file a change to the details owes.
+fn owed(saves: &mut Saves) -> Option<Project> {
+    let project = saves.take_owed_project()?;
+    saves.wrote_project(&project, false);
+    Some(project)
+}
+
 /// `record` with the details the project already has, so every test using this is asking
 /// about a change to the binaries or the session and nothing else. The rename tests spell
 /// theirs out.
@@ -363,7 +370,8 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
         &[],
         Session::default(),
     );
-    let (project, session) = landed(&mut saves, decided).expect("a write");
+    assert!(decided.is_none(), "owed to the flush");
+    let project = owed(&mut saves).expect("a write");
     assert_eq!(
         project.details.directory,
         Some(PathBuf::from("/src/kernel"))
@@ -373,7 +381,6 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
         paths(&["/tmp/lib.a"]),
         "the listed binaries, not the half-read list"
     );
-    assert_eq!(session, None);
 
     // The load ends, and this is the record that has to put the second binary on disk.
     let (project, _) = recorded(
@@ -385,11 +392,11 @@ fn a_detail_changed_mid_load_leaves_the_binaries_baseline_behind() {
     assert_eq!(project.binaries, paths(&["/tmp/lib.a", "/tmp/some.dll"]));
 }
 
-/// A change to what the user said is on disk before the next click, and is a project-file
-/// write and nothing else: it lets go of no binary and so cannot leave the two files
-/// disagreeing.
+/// A change to what the user said is owed to the next flush rather than written at once,
+/// since a box typed in makes one per keystroke. It is a project-file write and nothing
+/// else: it lets go of no binary and so cannot leave the two files disagreeing.
 #[test]
-fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
+fn a_detail_is_owed_to_the_flush_and_leaves_the_session_pending() {
     let mut saves = Saves::default();
     written(&mut saves, &["/tmp/lib.a"], None);
     // A selection, pending as ever.
@@ -408,21 +415,20 @@ fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
         &[],
         session_with(Some("a.o")),
     );
-    let written = landed(&mut saves, decided).expect("a write");
+    assert!(decided.is_none(), "nothing written at once");
     assert_eq!(
-        written.0,
-        Project {
+        owed(&mut saves),
+        Some(Project {
             id: None,
             details: named.clone(),
             binaries: paths(&["/tmp/lib.a"]),
             bookmarks: Vec::new(),
-        }
+        })
     );
-    // The session was not owed, and is still pending: the change did not take it along.
-    assert_eq!(written.1, None);
+    // The session is still pending: the change did not take it along.
     assert_eq!(flushed(&mut saves), Some(session_with(Some("a.o"))));
 
-    // And the same directory recorded again is not a second write.
+    // And the same directory recorded again owes nothing.
     let decided = saves.record(
         &named,
         &paths(&["/tmp/lib.a"]),
@@ -431,6 +437,64 @@ fn a_detail_is_written_at_once_and_leaves_the_session_pending() {
         session_with(Some("a.o")),
     );
     assert_eq!(landed(&mut saves, decided), None);
+    assert_eq!(owed(&mut saves), None);
+}
+
+/// A detail typed and typed back before the flush owes nothing: the file already holds it.
+#[test]
+fn a_detail_changed_back_owes_nothing() {
+    let mut saves = Saves::default();
+    let named = Details {
+        directory: Some(PathBuf::from("/src/kernel")),
+        ..Details::default()
+    };
+    assert!(saves
+        .record(&named, &[], false, &[], Session::default())
+        .is_none());
+    assert!(saves
+        .record(&Details::default(), &[], false, &[], Session::default())
+        .is_none());
+    assert_eq!(owed(&mut saves), None);
+}
+
+/// A write that goes out at once carries the details the app holds, so it takes the owed
+/// write with it: a flush after it must not write an older project over a newer one.
+#[test]
+fn a_write_at_once_takes_the_owed_details_along() {
+    let mut saves = Saves::default();
+    let named = Details {
+        directory: Some(PathBuf::from("/src/kernel")),
+        ..Details::default()
+    };
+    saves.record(&named, &[], false, &[], Session::default());
+
+    let decided = saves.record(
+        &named,
+        &paths(&["/tmp/lib.a"]),
+        false,
+        &[],
+        Session::default(),
+    );
+    let (project, _) = landed(&mut saves, decided).expect("a write");
+    assert_eq!(project.details, named);
+    assert_eq!(project.binaries, paths(&["/tmp/lib.a"]));
+    assert_eq!(owed(&mut saves), None);
+}
+
+/// An owed write that failed is owed again, for the close hook's flush to find.
+#[test]
+fn an_owed_project_whose_write_failed_is_still_owed() {
+    let mut saves = Saves::default();
+    let named = Details {
+        directory: Some(PathBuf::from("/src/kernel")),
+        ..Details::default()
+    };
+    saves.record(&named, &[], false, &[], Session::default());
+
+    let failed = saves.take_owed_project().expect("a project to write");
+    saves.owes_project(failed);
+    assert_eq!(owed(&mut saves).map(|project| project.details), Some(named));
+    assert_eq!(owed(&mut saves), None);
 }
 
 /// Clearing a detail writes the key away rather than leaving the old one on disk.
@@ -451,9 +515,9 @@ fn clearing_a_detail_is_a_change_too() {
     );
 
     let decided = saves.record(&Details::default(), &[], false, &[], Session::default());
-    let written = landed(&mut saves, decided).expect("a write");
-    assert_eq!(written.0.details.directory, None);
-    assert_eq!(written.1, None);
+    assert!(decided.is_none());
+    let project = owed(&mut saves).expect("a write");
+    assert_eq!(project.details.directory, None);
 }
 
 /// A detail changed while the binaries are still being parsed writes back the list the file
@@ -481,13 +545,13 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
         language_files: None,
         cargo: None,
     };
-    let decided = saves.record(&named, &[], true, &[], Session::default());
-    let written = landed(&mut saves, decided).expect("a write");
+    saves.record(&named, &[], true, &[], Session::default());
+    let project = owed(&mut saves).expect("a write");
     assert_eq!(
-        written.0.details.directory,
+        project.details.directory,
         Some(PathBuf::from("/src/kernel"))
     );
-    assert_eq!(written.0.binaries, loaded.binaries);
+    assert_eq!(project.binaries, loaded.binaries);
 
     // Once the parse lands the write *is* about the binaries, which is the one kind that
     // may replace the list.
@@ -602,11 +666,11 @@ fn a_session_whose_write_failed_is_still_owed() {
 }
 
 /// The user-given half of a project is compared **field by field**, so a change to any
-/// one of the four is a write of `project.toml` on its own and the same details again are
-/// no write at all. A field left out of the comparison would read as "nothing changed"
+/// one of the four owes a write of `project.toml` on its own and the same details again
+/// owe nothing. A field left out of the comparison would read as "nothing changed"
 /// and be lost until something else was written.
 #[test]
-fn a_change_to_any_one_detail_is_written_and_the_same_one_again_is_not() {
+fn a_change_to_any_one_detail_is_owed_and_the_same_one_again_is_not() {
     for change in [
         Details {
             directory: Some(PathBuf::from("/src/kernel")),
@@ -629,12 +693,12 @@ fn a_change_to_any_one_detail_is_written_and_the_same_one_again_is_not() {
     ] {
         let mut saves = Saves::default();
         let decided = saves.record(&change, &[], false, &[], Session::default());
-        let (project, session) = landed(&mut saves, decided).expect("a write");
+        assert!(decided.is_none(), "the project file alone: {change:?}");
+        let project = owed(&mut saves).expect("a write");
         assert_eq!(project.details, change, "{change:?}");
-        assert_eq!(session, None, "the project file alone: {change:?}");
 
-        let again = saves.record(&change, &[], false, &[], Session::default());
-        assert_eq!(landed(&mut saves, again), None, "written twice: {change:?}");
+        saves.record(&change, &[], false, &[], Session::default());
+        assert_eq!(owed(&mut saves), None, "written twice: {change:?}");
     }
 }
 

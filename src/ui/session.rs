@@ -6,8 +6,8 @@
 use super::*;
 
 /// The whole of the wiring between the settings and what they are settings of: the
-/// appearance, the fonts, and `settings.toml`. The write is handed in because
-/// [`Settings::save`] writes the machine's real settings file, so a test that mounted
+/// appearance, the fonts, and `settings.toml`. The write is handed in because the app's
+/// ([`Settings::owe`]) ends in the machine's real settings file, so a test that mounted
 /// this would be editing the settings of whoever ran it.
 pub(crate) fn use_settings_with(
     prefs: State<EditedSettings>,
@@ -30,6 +30,32 @@ pub(crate) fn use_settings_with(
             save(settings);
         }
     });
+}
+
+/// How long a box must go untyped in before what was typed is written: long enough to
+/// cover the gap between two keystrokes, short enough that the write still follows the
+/// typing. What is owed meanwhile is written by the close hook all the same.
+pub(crate) const SETTLE: Duration = Duration::from_millis(500);
+
+/// A write put off until the calls asking for it stop: each [`Settle::after`] takes the
+/// place of the one before, so a burst of them writes once. Made in a hook; called from
+/// an effect or a handler, whose scope the waiting task belongs to.
+#[derive(Clone, Default)]
+pub(crate) struct Settle(Rc<std::cell::Cell<u64>>);
+
+impl Settle {
+    /// Call `write` once `wait` has passed with no later call.
+    pub(crate) fn after(&self, wait: Duration, write: fn()) {
+        let asked = self.0.get().wrapping_add(1);
+        self.0.set(asked);
+        let latest = self.0.clone();
+        spawn(async move {
+            Timer::after(wait).await;
+            if latest.get() == asked {
+                write();
+            }
+        });
+    }
 }
 
 /// Tell the save policy what the session looks like, whenever it changes.
@@ -59,6 +85,14 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
         build,
         arranged,
     } = states;
+
+    // A change to the details is owed rather than written (`project::record`), since a
+    // box typed in changes them once per keystroke. It is written once they settle.
+    let settling = use_hook(Settle::default);
+    use_side_effect(move || {
+        let _subscribed = proj.read();
+        settling.after(SETTLE, project::flush_project);
+    });
 
     use_side_effect(move || {
         // Reading these subscribes the effect to them: any change re-runs it.

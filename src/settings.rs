@@ -6,11 +6,32 @@
 //! which is written as an absent key rather than as an empty string or a copy of the
 //! desktop's current answer.
 
+use std::sync::{Mutex, MutexGuard};
+
 use serde::{Deserialize, Serialize};
 
 use crate::store::Store;
 
 const FILE_NAME: &str = "settings.toml";
+
+/// Settings changed but not yet written, and the store they go in. A `static` for
+/// `project::saves`' reason: the window's close hook, which is outside the component tree,
+/// has to be able to write them.
+static OWED: Mutex<Option<(Store, Settings)>> = Mutex::new(None);
+
+fn owed() -> MutexGuard<'static, Option<(Store, Settings)>> {
+    OWED.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// Write out the settings last owed, if any. Called once the reader has stopped changing
+/// them, and before the process ends. The lock is held across the write, so an older
+/// answer cannot land after a newer one.
+pub fn flush() {
+    let mut owed = owed();
+    if let Some((store, settings)) = owed.take() {
+        settings.save(&store);
+    }
+}
 
 /// Everything the user can set.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -91,7 +112,7 @@ pub enum Theme {
 impl Settings {
     /// Read the stored settings. A missing or unreadable file is the default; one that
     /// will not parse is that too, and is moved aside first ([`Store::read`]), because the
-    /// next [`Settings::save`] would write over it.
+    /// next write would go over it.
     ///
     /// The file sits beside `recents.toml` and above the projects, since a setting is the
     /// user's and not any one project's.
@@ -99,10 +120,14 @@ impl Settings {
         store.read(FILE_NAME).unwrap_or_default()
     }
 
-    /// Write the settings out at once — a settings change is already as rare as a
-    /// deliberate action, so there is no `Saves`-shaped policy and no autosave timer.
-    /// Any IO failure is logged and swallowed.
-    pub fn save(&self, store: &Store) {
+    /// Note these as the settings to write at the next [`flush`], in place of any owed
+    /// before. A box typed in changes them once per keystroke, and each write is an fsync.
+    pub fn owe(&self, store: &Store) {
+        *owed() = Some((store.clone(), self.clone()));
+    }
+
+    /// Write the settings out. Any IO failure is logged and swallowed.
+    fn save(&self, store: &Store) {
         store.save(FILE_NAME, self);
     }
 }

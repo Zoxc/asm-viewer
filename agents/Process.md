@@ -90,8 +90,8 @@ pruned every finished one -- so a stopped handle sat there until something else 
 language server stopped and never started again was still on the list at the shutdown, where
 `stop_all` signalled a pid the system was free to have handed on.
 
-`shutdown::before_exit` is the whole of the end of the process: the projects flushed, then
-`stop_all`. Two calls and one list, so the sequence cannot be half-copied. The window's close hook
+`shutdown::before_exit` is the whole of the end of the process: the project and the settings
+flushed, then `stop_all`. One list, so the sequence cannot be half-copied. The window's close hook
 and the panic hook's shutdown thread are the two ways the app comes down and both call it; the
 30-second autosave in the Project view calls `flush` alone, a switch not being an exit.
 

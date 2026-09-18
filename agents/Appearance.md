@@ -292,7 +292,10 @@ currently says** rather than against what was loaded, `Saves`'
 rule: a fixed baseline would leave the file holding the middle answer when a reader changes a
 setting and changes it back, and comparing at all is what stops a run that never opened the page
 from creating `settings.toml`. `use_settings_with` takes the write as an argument, since the real
-one edits the settings of whoever runs the tests.
+one edits the settings of whoever runs the tests. The app's does not write at once: the family is
+a text box, one change per keystroke, so it owes the settings (`Settings::owe`) and writes them
+once the changes settle and from the close hook (`agents/Persistence.md`). The fonts and the
+theme still follow every change.
 
 Each of the two font sections is drawn from one `FontHalf`, built by `half(prefs, which)` off a
 selector naming which font it is about. It was six arguments, five of which named the same half of

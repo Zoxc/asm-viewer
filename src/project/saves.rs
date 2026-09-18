@@ -95,9 +95,12 @@ pub(super) struct Saves {
     /// Seeded whole by `opened`, and moved with the baseline by [`Saves::wrote_session`].
     /// [`super::put_in`] asks what the files hold, so it reads this one.
     stored: Session,
-    /// A newer session that has not been written yet. Only ever a *session*: a change to
-    /// the other file is written at once.
+    /// A newer session that has not been written yet.
     pending: Option<Session>,
+    /// A `project.toml` owed for a change to the details alone, written by the next flush
+    /// rather than at once: a box being typed in changes them on every keystroke. A write
+    /// for the binaries or the bookmarks takes it along, since it carries the details too.
+    owed_project: Option<Project>,
 }
 
 impl Saves {
@@ -135,6 +138,7 @@ impl Saves {
             ..session.clone()
         };
         self.pending = None;
+        self.owed_project = None;
     }
 
     /// What a [`super::put_in`] writes into the place it is putting the project: the file
@@ -172,11 +176,12 @@ impl Saves {
     ///
     /// A **binaries** change goes to disk at once and carries whatever session was
     /// pending with it, which is what keeps `session.toml` from ever naming a tab into a
-    /// binary `project.toml` no longer lists. A **rename** is immediate too but writes
-    /// `project.toml` alone, since it lets go of no binary, and so is a change to the
-    /// **bookmarks**, for the same reason. Everything else — a selection, a tab, a history
-    /// entry — only marks the session pending. Nothing here has to say which is which:
-    /// which file a field lives in is what decides it.
+    /// binary `project.toml` no longer lists. A change to the **bookmarks** is immediate
+    /// too but writes `project.toml` alone, since it lets go of no binary. A change to the
+    /// **details** alone is owed to the next flush rather than written: it lets go of no
+    /// binary either, and arrives once per keystroke in a box. Everything else — a
+    /// selection, a tab, a history entry — only marks the session pending. Nothing here
+    /// has to say which is which: which file a field lives in is what decides it.
     ///
     /// While a load is in flight neither `binaries` nor `session` is the app's own: the
     /// list is the part of it that has landed, and the session has no tabs until a
@@ -227,9 +232,18 @@ impl Saves {
             }
         };
 
-        if !binaries_changed && !details_changed && !bookmarks_changed {
+        if !binaries_changed && !bookmarks_changed {
+            // The details alone, or nothing: owed, or no longer owed where they have been
+            // changed back to what the file holds.
+            self.owed_project = details_changed.then(|| Project {
+                id: self.written.id,
+                details: details.clone(),
+                ..self.written.clone()
+            });
             return None;
         }
+        // This write carries the details, so nothing is owed for them any more.
+        self.owed_project = None;
 
         Some(Recorded {
             project: Project {
@@ -254,6 +268,17 @@ impl Saves {
     /// left behind would only be dropped.
     pub(super) fn take_owing(&mut self) -> Option<Session> {
         self.pending.take()
+    }
+
+    /// Take the `project.toml` a change to the details owes, for [`Saves::take_owing`]'s
+    /// reason. It keeps the binaries the file holds, so its write moves only `written`.
+    pub(super) fn take_owed_project(&mut self) -> Option<Project> {
+        self.owed_project.take()
+    }
+
+    /// Its write did not happen: owed again, for the next flush.
+    pub(super) fn owes_project(&mut self, project: Project) {
+        self.owed_project = Some(project);
     }
 
     /// Note that `project` reached `project.toml`: it is now what the file holds. The
@@ -284,6 +309,9 @@ impl Saves {
         self.stored.id = id;
         if let Some(pending) = &mut self.pending {
             pending.id = id;
+        }
+        if let Some(owed) = &mut self.owed_project {
+            owed.id = id;
         }
     }
 

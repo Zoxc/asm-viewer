@@ -758,9 +758,13 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // first render, before any child, so the first frame is already in them; every later
     // change is the effect's.
     use_hook(|| set_fonts(fonts::resolve(&settings)));
+    // Owed at once, so the close hook has it, and written once the changes settle: the
+    // font family box changes the settings once per keystroke.
+    let settling = use_hook(Settle::default);
     use_settings_with(prefs, move |settings: &Settings| {
         if let Some(store) = store.peek().as_ref() {
-            settings.save(store);
+            settings.owe(store);
+            settling.after(SETTLE, crate::settings::flush);
         }
     });
     // freya's own components read their colours from its `Theme` rather than from the

@@ -12,9 +12,9 @@
 //! - [`saves`] — what the two files last held, and when the next write happens.
 //!
 //! **A project is its project file's path.** The file is what the user said (directory,
-//! binaries, bookmarks) and is written at once; beside it, named after it, is the session
-//! the app noticed (tabs with their trails and rows, active document, visits, digests),
-//! written on a timer. An *unsaved* project is one whose file is under the app's own
+//! binaries, bookmarks) and is written at once, or once the reader stops typing in a box;
+//! beside it, named after it, is the session the app noticed (tabs with their trails and
+//! rows, active document, visits, digests), written on a timer. An *unsaved* project is one whose file is under the app's own
 //! `projects/`; nothing else distinguishes it from one the reader gave a place.
 //! The *when* of saving is [`saves::Saves`]: [`record`] writes or marks pending, [`flush`]
 //! writes what is pending.
@@ -199,7 +199,7 @@ pub enum Put {
 /// directory would be a claim about *that* tree. The session beside it holds absolute paths
 /// and is only carried across.
 ///
-/// The pending session is flushed **first**, while [`saves::Saves`] still points at the old place,
+/// What is pending is flushed **first**, while [`saves::Saves`] still points at the old place,
 /// and what travels is then what [`saves::Saves`] holds: `written` and `stored` are the two files
 /// as they now stand, so neither is read back. That saves two reads and a parse under the
 /// lock, on the UI thread, and drops a failure a Save has no business having -- a project
@@ -313,10 +313,12 @@ pub fn record(
     }
 }
 
-/// Write out anything recorded but not yet written. A no-op when nothing has changed,
-/// which is what makes it safe to call on a timer.
+/// Write out anything recorded but not yet written: the project file a change to the
+/// details owes, then the pending session. A no-op when nothing has changed, which is what
+/// makes it safe to call on a timer.
 pub fn flush() {
     let mut saves = saves();
+    write_owed_project(&mut saves);
     let Some(session) = saves.take_owing() else {
         return;
     };
@@ -328,6 +330,27 @@ pub fn flush() {
     match write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {
         true => saves.wrote_session(session),
         false => saves.owes_session(session),
+    }
+}
+
+/// Write out the project file a change to the details owes, and nothing else: what the UI
+/// calls once the reader has stopped typing, the session keeping to its own timer.
+pub fn flush_project() {
+    write_owed_project(&mut saves());
+}
+
+fn write_owed_project(saves: &mut Saves) {
+    let Some(project) = saves.take_owed_project() else {
+        return;
+    };
+    let Some((store, file)) = writing_into(saves) else {
+        log::warn!("no state directory to save the project in");
+        saves.owes_project(project);
+        return;
+    };
+    match write_or_warn(&file, |path| project.save_to(&store, path)) {
+        true => saves.wrote_project(&project, false),
+        false => saves.owes_project(project),
     }
 }
 

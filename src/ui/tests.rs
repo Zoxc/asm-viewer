@@ -14846,6 +14846,53 @@ fn a_scroll_view_and_its_rows_agree_at_every_font_size() {
     }
 }
 
+/// How many writes a [`Settle`] has let through.
+static SETTLED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn settled() -> usize {
+    SETTLED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A box's text, as far as the harness below is concerned.
+#[derive(Clone, Copy)]
+struct Typed(State<u32>);
+
+fn settle_harness() -> impl IntoElement {
+    let typed = use_consume::<Typed>().0;
+    let settling = use_hook(Settle::default);
+    use_side_effect(move || {
+        let _subscribed = typed.read();
+        settling.after(Duration::from_millis(30), || {
+            SETTLED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+    });
+    rect()
+}
+
+/// A burst of changes is one write, made once they stop: what keeps a keystroke in the
+/// Project page's boxes or the font box from writing a file of its own.
+#[test]
+fn a_burst_of_changes_settles_into_one_write() {
+    let (mut test, typed) = TestingRunner::new(
+        settle_harness,
+        (100., 100.).into(),
+        |runner| runner.provide_root_context(|| Typed(State::create(0))).0,
+        1.,
+    );
+    let mut typed = typed;
+    test.sync_and_update();
+    test.poll_n(Duration::from_millis(20), 4);
+    let mounted = settled();
+
+    for _ in 0..3 {
+        *typed.write() += 1;
+        test.sync_and_update();
+    }
+    assert_eq!(settled(), mounted, "written before the changes stopped");
+    test.poll_n(Duration::from_millis(20), 4);
+    assert_eq!(settled(), mounted + 1);
+}
+
 /// Everything the settings write, recorded rather than performed.
 #[derive(Clone, Copy)]
 struct Saved(State<Vec<Settings>>);
