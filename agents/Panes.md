@@ -788,7 +788,8 @@ nearest the guess, one row off the instruction. So a place already kept for a ro
 gave and a derived one alike, and the carry across a recount goes through the kept place before the
 derived one. **In a symbol's listing**
 `InstructionList`'s planting effect, keyed on the entry the drawn answer is of (not the tab's
-document, since the pane draws the listing being left until the worker answers), plants it on the
+document, since the pane draws the listing being left until the worker answers) and on the listing
+itself, which a switch of tab hands the same scope without mounting it again, plants it on the
 row of the instruction at or below the address and owes the pane the reveal, `Owed::by(Assembly)`,
 which `use_kept_position` pays first and over the kept row as it pays any reveal; there the reveal
 is authoritative, a symbol's tab having no place by address. So either listing spends the planting

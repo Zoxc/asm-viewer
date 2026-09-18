@@ -22284,6 +22284,55 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
     );
 }
 
+/// **A planting lands in the listing on screen, and not the one the pane was mounted
+/// with.** A switch of tab re-renders the symbol's listing with the new one rather than
+/// mounting it again (`ui/split.rs`), so an effect that captured the first listing looks
+/// the address up in that symbol's instructions.
+#[test]
+fn a_planting_lands_in_the_listing_drawn_now() {
+    let (first, first_studied) = studied_named("sum_to");
+    let (second, second_studied) = studied_named("twice");
+    let (mut test, roots) = TestingRunner::new(
+        doors_harness,
+        (600., 400.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let (doors, states) = (roots.doors, roots.states);
+    settle(&mut test);
+
+    show_studied(roots.analysis, &first, &first_studied);
+    open_document(
+        states.open,
+        states.visits,
+        Document::Symbol(first.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    let two = Document::Symbol(second.clone());
+    show_studied(roots.analysis, &second, &second_studied);
+    open_document(states.open, states.visits, two.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    // `twice` is before `sum_to` in the fixture, so the first listing holds no row for it.
+    let address = second_studied
+        .assembly
+        .as_ref()
+        .expect("twice decodes")
+        .instructions[1]
+        .address;
+    let mut plant = doors.plant;
+    plant.set(Some(Planting { tab: two, address }));
+    settle(&mut test);
+    let picked = doors
+        .marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("no caret was planted");
+    assert_eq!(picked.chars.lead().row, second_studied.lanes.row_of(1));
+}
+
 /// The Assembly pane over an object's code as `app()` mounts it: the pane first, and the
 /// reading following the active document a beat later through `use_reading_of`.
 fn app_like_code_harness() -> impl IntoElement {

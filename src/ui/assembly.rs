@@ -1338,9 +1338,12 @@ impl Component for InstructionList {
         // owes a click from outside, and the reveal wins over the kept row in
         // `use_kept_position`, as a reveal does.
         let plant = doors.plant;
-        use_side_effect_with_deps(&entry, {
-            let data = data.clone();
-            move |(_, stop): &Entry| {
+        // The listing is in the deps with the entry, and not captured: the callback is
+        // built once, and this list is handed each symbol it draws without being mounted
+        // again.
+        use_side_effect_with_deps(
+            &(entry.clone(), data.clone()),
+            move |((_, stop), data): &(Entry, AsmData)| {
                 let Some(address) = take_planting(plant, &stop.document) else {
                     return;
                 };
@@ -1354,8 +1357,8 @@ impl Component for InstructionList {
                     data.lanes().row_of(index),
                     Owed::by(Pane::Assembly),
                 );
-            }
-        });
+            },
+        );
         // The picked-out run is listing rows and the edges speak instructions;
         // `Studied::touching` crosses between the two. Base 0: a symbol read alone is
         // drawn from the listing's first row. A run that is one separator lights nothing.
