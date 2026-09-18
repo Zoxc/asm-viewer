@@ -51,7 +51,7 @@ pub(crate) enum Unit {
 /// out again in a `use_drop`, so a container that is unmounted -- the tab off screen, the
 /// window's body rebuilt as a project arrives -- comes back at the initial sizes under new
 /// panel ids. What survives is the number here, fed in as `initial_size` ([`panel_size`])
-/// and written back as the handle is dragged ([`follow`]).
+/// and written back as the handle is dragged ([`use_follow`]).
 ///
 /// One value and not a pair of contexts per split: the three are the document's
 /// ([`DocumentSplit`]), the sidebar's ([`SidebarSplit`]) and the Scratchpad's
@@ -59,7 +59,7 @@ pub(crate) enum Unit {
 /// three lines rather than by three copies of the clamp.
 ///
 /// [`panel_size`]: Split::panel_size
-/// [`follow`]: Split::follow
+/// [`use_follow`]: Split::use_follow
 #[derive(Clone, Copy)]
 pub(crate) struct Split {
     /// The number the app holds across the container's unmount, in [`Split::unit`].
@@ -96,7 +96,7 @@ impl Split {
     /// **A hook**, so every caller calls it while rendering and calls it unconditionally,
     /// above whatever early return it has: the document's split here, the Scratchpad's
     /// (`src/ui/pad_view.rs`) and the sidebar's (`src/ui/no_project.rs`).
-    pub(crate) fn follow(self) {
+    pub(crate) fn use_follow(self) {
         let (context, mut size) = (self.context, self.size);
         use_side_effect(move || {
             let live = context.read().panels.first().map(|panel| panel.size);
@@ -112,7 +112,7 @@ impl Split {
     ///
     /// **A `peek` and never a `read`**: `initial_size` is consulted once, in the panel's
     /// own `use_hook` at mount, so subscribing to it would be a subscription to nothing --
-    /// and a loop with [`Split::follow`].
+    /// and a loop with [`Split::use_follow`].
     pub(crate) fn panel_size(self) -> PanelSize {
         let size = self.size.peek().clamp(self.floor, self.ceiling);
         match self.unit {
@@ -290,7 +290,7 @@ impl Component for DocumentBody {
 
         // Where the reader last left the handle, written back as they drag it. Above the
         // early return below, as a hook has to be.
-        split.follow();
+        split.use_follow();
 
         // Not reachable -- the tab and the table entry are closed together -- but a render
         // is no place to panic.

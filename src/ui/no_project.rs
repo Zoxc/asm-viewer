@@ -31,7 +31,7 @@ impl Component for WindowBody {
         let any_tabs = use_memo(move || !strip.read().tabs().is_empty());
         // Above the early return, as a hook has to be: the width is followed here rather
         // than beside the container, which is only built when a project is open.
-        split.follow();
+        split.use_follow();
 
         if !opened() {
             // Settings and the Scratchpad are nobody's project's, so they open with none --

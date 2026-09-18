@@ -845,9 +845,9 @@ fed in as `initial_size` and written back out while the split is on screen. That
 of the app's three splits is: the document's (`DocumentSplit`), the Scratchpad's (`PadSplit`) and
 the sidebar's (`SidebarSplit`) -- that last one in pixels where the other two are percentages,
 since its panel is a literal width. A `Split` carries the bounds it is dragged within, so
-`follow()` writes the drag back and `panel_size()`/`rest()` hand the two panels their sizes: three
-consumers and no clamp restated at any of them. `follow` is a hook, called unconditionally and
-above any early return; `panel_size` `peek`s and never `read`s, `initial_size` being consulted
+`use_follow()` writes the drag back and `panel_size()`/`rest()` hand the two panels their sizes:
+three consumers and no clamp restated at any of them. `use_follow` is a hook, called
+unconditionally and above any early return; `panel_size` `peek`s and never `read`s, `initial_size` being consulted
 once in the panel's own `use_hook`, so a `read` there would subscribe to nothing and loop with the
 effect. It is one number for the app and not one per
 document: per-document would be a third `Positions`-shaped map to forget in `close_tab`, for a

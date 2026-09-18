@@ -1241,7 +1241,7 @@ impl Component for ScratchpadTab {
         let said = use_consume::<Follows>().0;
         let following = following(Placing::Pad, None, &said.read());
         // Where the reader left the handle, written back as they drag it.
-        split.follow();
+        split.use_follow();
 
         // The reader's own side of the split: the file, then what the compiler said about
         // the file directly above it, then what the program it built printed.
