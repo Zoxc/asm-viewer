@@ -70,20 +70,26 @@ impl SymbolData {
     /// [`estimate_size`](Self::estimate_size) before its cap: the bytes from this symbol to
     /// the next in the section, or to the section's end. [`None`] for a symbol outside every
     /// code section's bytes ([`SymbolData::code_place`]).
+    ///
+    /// **Every address here is a placed one** ([`SymbolData::placed`]), the symbol's own
+    /// included, because the index it reads is: two spaces in one derivation would each
+    /// have to be spotted by eye, and a bias forgotten between them is invisible on a
+    /// linked image and wrong on every relocatable object. Only the answer leaves, and a
+    /// count of bytes is the same number in either space.
     fn derived(&self, object: &Object) -> Option<u64> {
         let section = self.section.as_ref()?;
         let placed = self.code_place()?;
         let range = section.placed_range()?;
 
-        // Where the section's bytes stop. [`None`] only for a section placed so near the end
-        // of the address space that it does not fit in it.
+        // Where the section's bytes stop, placed as the rest is. [`None`] only for a section
+        // placed so near the end of the address space that it does not fit in it.
         let end = section
             .data
             .as_ref()
             .map_or(0, Vec::len)
             .try_into()
             .ok()
-            .and_then(|length: u64| section.address.checked_add(length));
+            .and_then(|length: u64| range.start.checked_add(length));
 
         // The next symbol is the first entry at a greater address, so a second name at this
         // one bounds nothing, and it counts only inside this section's bytes: past them, the
@@ -94,14 +100,13 @@ impl SymbolData {
         let next = all
             .get(after)
             .map(|&(next, ..)| next)
-            .filter(|next| range.contains(next))
-            .and_then(|next| next.checked_sub(section.bias));
+            .filter(|next| range.contains(next));
         let next = match next {
             Some(next) => next,
             None => end?,
         };
 
-        next.checked_sub(self.address)
+        next.checked_sub(placed)
     }
 
     /// A length the file states, bounded by the next symbol. A listing is one stretch per

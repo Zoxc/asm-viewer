@@ -144,7 +144,11 @@ bytes, whose last entry is the answer. The debug sections are relocated straight
 patched. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in `Object::placed`,
 **clipped to the section's own bytes**. The index holds only symbols inside a code section's bytes,
 since an address is a number out of the file and one wild `st_value` would otherwise cost the symbol
-*above* it its listing rather than only itself. Declared sizes are frequently 0 in ELF/COFF, which is why the derivation exists at all.
+*above* it its listing rather than only itself. The derivation is in **placed** addresses throughout,
+the symbol's own included, because the index it reads is: it used to take the bias back off the next
+symbol so the subtraction could meet `st_value`, which put five addresses in two spaces inside thirty
+lines. Only the count of bytes leaves, and that is the same number either way. Declared sizes are
+frequently 0 in ELF/COFF, which is why the derivation exists at all.
 `SymbolData::extent` is the answer that is actually used, and has three
 answers in order. First, **the end the unwind table states**, where an entry covers the address,
 whatever named the symbol. That is the image's own statement, to its loader, of the very bytes the
@@ -577,9 +581,9 @@ printed no address of its own -- and the loop decides which operand it belongs t
 
 **A linked image's calls resolve by address**, since the linker consumed the relocations that named
 their targets and left the displacement as the answer. Where no relocation covers an instruction and
-it is a direct near `call`, the backend asks `Code::symbol_at` for the text symbol that **starts
-exactly** at the address the encoding names, and hands it out as the same `Operand::SymbolName` a
-relocated call gets: the resolver substitutes the name for the operand, `write_symbol` records the
+it is a direct near `call`, the backend asks `Code::symbol_at_local` for the text symbol that
+**starts exactly** at the address the encoding names, and hands it out as the same
+`Operand::SymbolName` a relocated call gets: the resolver substitutes the name for the operand, `write_symbol` records the
 span, and the UI's `DoorLabel` draws it with no change of its own. Three limits, each deliberate.
 *Exact start only*: a call into the middle of a function
 stays the number it is, and a target no symbol starts at (a PLT stub, a stripped static) stays plain
@@ -587,7 +591,11 @@ text. *Same section*: the index is by placed address (`Section::bias` added), wh
 relocatable object's all-at-0 code sections distinct places, but a displacement past a section's end
 still lands in the placed space on some other section's function, so the hit has to be in the
 instruction's own section; `tests/linked_call.rs` pins a two-section object whose call would
-otherwise name the other's. *Calls only*: an unconditional `jmp` out of the symbol is a tail call
+otherwise name the other's. **Each of the two is named for the space it takes**: they are one
+question a bias apart with the same signature, and while both were `symbol_at` a caller holding
+a section-local address and reaching for `Object`'s got an answer rather than an error -- the
+right one on a linked image, where every bias is 0, and some other section's function on every
+relocatable object. *Calls only*: an unconditional `jmp` out of the symbol is a tail call
 and could be named the same way, but its displacement is an `Operand::Branch`'s, so making it a link
 to a function is the item of its own that `notes/Goals.md` says it is. The relocation still wins
 where there is one: a relocated call whose target is a section symbol
@@ -595,8 +603,8 @@ keeps `None`, since its displacement is a placeholder whatever address it happen
 names for one address answer the first by name, the order `symbols_sorted` has.
 
 **One index of an object's code symbols by place** (`Object::placed`, a `PlacedSymbols`) answers
-four questions: a call's name (`symbol_at`), where an estimate stops, a listing's labels and the
-source index's ranges. Each used to keep or rebuild its own copy, sorted with its own rule for two
+four questions: a call's name (`symbol_at_placed`), where an estimate stops, a listing's labels and
+the source index's ranges. Each used to keep or rebuild its own copy, sorted with its own rule for two
 symbols at one address. It is `(placed address, SymbolIndex, Arc<SymbolData>)` sorted by address and
 then index, both names at one address kept, side by side in the file's order. It holds a symbol only
 where its section is `Section::code` and its address is inside the section's bytes

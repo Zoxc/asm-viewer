@@ -71,7 +71,7 @@ impl Disassembler for X86 {
                 Some(relocation) => relocation.target,
                 // No relocation, so the displacement is real: in a linked image it is the
                 // function a call reaches, and a symbol starting exactly there is its name.
-                None => call_target(&instruction).and_then(|target| code.symbol_at(target)),
+                None => call_target(&instruction).and_then(|target| code.symbol_at_local(target)),
             };
 
             // The resolver takes the name, so at most one operand is substituted however

@@ -71,8 +71,8 @@ pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
 /// that is in a section.
 ///
 /// Placed ([`SymbolData::placed`]), which is the section's bias added: that is the space
-/// the listing of a whole object's code draws in and the space `symbol_at` answers in, so a
-/// place worked out here names the row a reader would land on.
+/// the listing of a whole object's code draws in and the space `symbol_at_placed` answers
+/// in, so a place worked out here names the row a reader would land on.
 ///
 /// For an answer of [`Object::symbols_from_lines`] this is its first symbol's place, since
 /// the crate answers in placed order and every symbol it names is in a section. It is still

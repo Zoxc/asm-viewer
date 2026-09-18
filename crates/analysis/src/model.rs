@@ -123,12 +123,14 @@ impl Object {
     /// for one address answer the first by name — the order `symbols_sorted` holds — so the
     /// answer is the same however the map behind them was iterated.
     ///
-    /// The address alone is only a key with the bias in it: in a relocatable object every
-    /// code section starts at 0. A caller holding an address in a section's own terms adds
-    /// the section's bias first, and one that knows which section the address is in checks
-    /// the answer is in it too — the bias makes two sections two places, but a number past
-    /// one section's end is still just a number.
-    pub fn symbol_at(&self, placed: u64) -> Option<&Arc<SymbolData>> {
+    /// **Named for the space it answers in**, as `Code::symbol_at_local` is for its own:
+    /// the address alone is only a key with the bias in it, and in a relocatable object
+    /// every code section starts at 0. A caller holding an address in a section's own terms
+    /// adds the section's bias first, which is all `Code::symbol_at_local` does, and one
+    /// that knows which section the address is in checks the answer is in it too — the bias
+    /// makes two sections two places, but a number past one section's end is still just a
+    /// number.
+    pub fn symbol_at_placed(&self, placed: u64) -> Option<&Arc<SymbolData>> {
         let all = self.placed_symbols();
         let start = all.partition_point(|&(address, ..)| address < placed);
         let end = all.partition_point(|&(address, ..)| address <= placed);
@@ -415,8 +417,8 @@ impl SymbolData {
     /// `address`, one of this symbol's own, in the one address space every section of the
     /// object shares: [`Section::bias`] added, and nothing added for a symbol in no section,
     /// which is in no listing either. That is the space a listing of all the object's code
-    /// draws in and the space `symbol_at` answers in, so anything naming a row has to place
-    /// an address the same way.
+    /// draws in and the space `symbol_at_placed` answers in, so anything naming a row has
+    /// to place an address the same way.
     ///
     /// `wrapping_add` and not `checked_add`, as `line::relocate` adds the same bias:
     /// agreeing with it matters more than an overflow the biases cannot produce, the layout

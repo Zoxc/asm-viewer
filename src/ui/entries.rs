@@ -16,7 +16,7 @@ use super::*;
 /// that tells two of them apart.
 pub(crate) fn stop_text(stop: &Stop) -> String {
     match stop.place() {
-        Place::Code(object, address) => match object.symbol_at(address) {
+        Place::Code(object, address) => match object.symbol_at_placed(address) {
             Some(symbol) => short_name(symbol.display()),
             None => Names::of(&stop.document).text,
         },

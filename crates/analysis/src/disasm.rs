@@ -108,14 +108,18 @@ impl<'a> Code<'a> {
     /// one a branch's encoding names — where one does. The other way a target gets a name:
     /// in a linked image the relocations are gone and the displacement is the answer.
     ///
-    /// The object's index is by *placed* address, so the section's bias goes on first, and
-    /// the hit has to be in this section: with every code section of a relocatable object
-    /// at 0, a displacement past this section's end lands on some other section's function
-    /// in the placed space, and that is not where the call goes. A target nothing starts at
-    /// is [`None`], and the operand stays the number it is.
-    pub fn symbol_at(&self, address: u64) -> Option<Arc<SymbolData>> {
+    /// **Named for the space it takes**, as [`Object::symbol_at_placed`] is for its own,
+    /// the two being the same question a bias apart. The object's index is by *placed*
+    /// address, so the section's bias goes on first, and the hit has to be in this section:
+    /// with every code section of a relocatable object at 0, a displacement past this
+    /// section's end lands on some other section's function in the placed space, and that
+    /// is not where the call goes. A target nothing starts at is [`None`], and the operand
+    /// stays the number it is.
+    pub fn symbol_at_local(&self, address: u64) -> Option<Arc<SymbolData>> {
         let section = self.section?;
-        let symbol = self.object.symbol_at(address.wrapping_add(section.bias))?;
+        let symbol = self
+            .object
+            .symbol_at_placed(address.wrapping_add(section.bias))?;
         let home = symbol.section.as_ref()?;
         std::ptr::eq(Arc::as_ptr(home), section).then(|| symbol.clone())
     }
