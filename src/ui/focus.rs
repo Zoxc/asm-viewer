@@ -267,8 +267,9 @@ fn moved_off(
 /// not.
 ///
 /// At the root and keyed on the states that say *which listing*, **never on the listings
-/// themselves**: `AsmData` carries an `Arc<Lanes>` rebuilt every render, so an effect
-/// inside each list would fire on every render and wipe the run the press just started.
+/// themselves**. A list's listing changes on a switch of place as much as on a
+/// replacement, and an effect inside the list could not tell the two apart; the code
+/// listing's rows change again with every stretch decoded under the run.
 ///
 /// **Neither run is dropped here on a change of the active entry.** A switch of place is
 /// [`use_land`]'s: it saves the runs of the place being left and puts back the arriving

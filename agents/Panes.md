@@ -1127,8 +1127,9 @@ is `pointer_move`, not `pointer_over`, which freya fires once on entry whatever 
 (`notes/upstream/freya.md`). Shift is watched globally at the root, because a freya pointer event
 carries no modifiers at all. The key handlers are on each pane's own focusable box and deliberately
 not global, or a Ctrl+C meant for a filter box would come back as a page of disassembly. Runs are
-dropped by `use_clear_marks` at the root, not by an effect inside each list: `AsmData` carries an
-`Arc<Lanes>` rebuilt every render, so that effect would wipe the run the press just started. What is
+dropped by `use_clear_marks` at the root, keyed on the question and the file, not by an effect
+inside each list keyed on its listing: a list's listing changes on a switch of place as much as on
+a replacement, and the code listing's rows change with every stretch decoded. What is
 copied is what the row draws: `asm_line` (address plus the instruction with the target's name in its
 operand), the rope's own line for source, tabs and all, and, in an object's code, each kind of row
 as it draws (`row_line`), a separator and an empty row as the blank line they are. That listing's

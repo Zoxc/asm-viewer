@@ -90,7 +90,7 @@ impl Split {
     /// Follow the handle: what the reader drags it to becomes the number this holds,
     /// which is what carries the size across the container's own unmount.
     ///
-    /// Reading the context is what subscribes the caller to the drag, and
+    /// The effect reads the context, which is what subscribes it to the drag, and
     /// `set_if_modified` keeps the panels' registration at mount from waking anything.
     ///
     /// **A hook**, so every caller calls it while rendering and calls it unconditionally,
