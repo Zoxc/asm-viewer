@@ -8,6 +8,7 @@
 //! (`src/ui/dock.rs`), where a panel is furniture the reader may arrange.
 
 use super::*;
+use crate::counter;
 
 mod scroll;
 pub(crate) use scroll::*;
@@ -49,7 +50,7 @@ enum Mark {
 /// without taking room from the name.
 ///
 /// A stateless helper rather than a component, so no hook runs here: the hover is the
-/// caller's `use_state`, handed over to be read and written, and [`dragged`] passes `None`
+/// caller's `use_state`, handed over to be read and written, and [`DraggedChip`] passes `None`
 /// for it, having nothing to hover. The × is a control of its own for the same reason and
 /// arrives as a [`Tab`], which is all the identity a close needs. The caller adds the
 /// press, the menu and the tooltip; the frame, the padding and the spacing are here, once,
@@ -268,7 +269,7 @@ fn tabs_menu(open: Open, tabs: &[Tab], active: Option<Tab>, mut close: State<boo
         let docs = open.docs.read();
         tabs.iter()
             .map(|tab| {
-                let (icon, names) = tab_drawn(*tab, &docs);
+                let (icon, names) = tab_drawn(*tab, shown(*tab, &docs));
                 (*tab, elide(&names.text), icon)
             })
             .collect()
@@ -310,16 +311,22 @@ fn tabs_menu(open: Open, tabs: &[Tab], active: Option<Tab>, mut close: State<boo
         })
 }
 
-/// What a tab is called and drawn as, out of one look at the table: a page's own title and
-/// glyph, or the document's [`Names`] and kind. Not elided here -- the chip decides how
-/// much of a name it has room for.
-fn tab_drawn(tab: Tab, docs: &Docs) -> (Element, Names) {
+/// What a tab is called and drawn as: a page's own title and glyph, or the [`Names`] and
+/// kind of the document it shows, which is `None` for a page or a closed tab. Not elided
+/// here -- the chip decides how much of a name it has room for.
+fn tab_drawn(tab: Tab, document: Option<&Document>) -> (Element, Names) {
+    match (tab, document) {
+        (Tab::Page(page), _) => (page_icon(page), Names::page(page.title())),
+        (Tab::Document(_), Some(document)) => (entry_icon(document), Names::of(document)),
+        (Tab::Document(_), None) => (rect().into_element(), Names::default()),
+    }
+}
+
+/// The document `tab` shows now, if it is a document's tab still open.
+fn shown(tab: Tab, docs: &Docs) -> Option<&Document> {
     match tab {
-        Tab::Page(page) => (page_icon(page), Names::page(page.title())),
-        Tab::Document(id) => match docs.get(id) {
-            Some(document) => (entry_icon(document), Names::of(document)),
-            None => (rect().into_element(), Names::default()),
-        },
+        Tab::Document(id) => docs.get(id),
+        Tab::Page(_) => None,
     }
 }
 
@@ -343,8 +350,17 @@ pub(crate) struct TabHeader {
 
 keyed!(TabHeader);
 
+counter!(
+    /// Test-only: how many chips this thread has drawn. The bar holds one per open tab,
+    /// and a chip drawn again draws what it drew before.
+    pub(crate) fn chips_drawn() = CHIPS_DRAWN
+);
+
 impl Component for TabHeader {
     fn render(&self) -> impl IntoElement {
+        #[cfg(test)]
+        CHIPS_DRAWN.set(CHIPS_DRAWN.get() + 1);
+
         let hovering = use_state(|| false);
         // Consumed here, in the render, for the menu: its handler may not run a hook.
         let states = use_project_states();
@@ -364,20 +380,24 @@ impl Component for TabHeader {
             false => Mark::Plain,
         };
 
-        // What the chip is called and whether it is the temporal one, out of one read: the
-        // chip follows the trail's current entry, so navigating in place renames it. A
-        // page's name is its own, and leaving the table unread keeps a page's chip out of
-        // every re-render a document causes.
-        let (icon, names, temporal) = match tab {
-            Tab::Page(page) => (page_icon(page), Names::page(page.title()), false),
+        // The document the chip shows and whether it is the temporal one: the chip follows
+        // the trail's current entry, so navigating in place renames it. **A memo over this
+        // chip's own entry and not a read of the table**, which is written by every push
+        // onto any tab's trail: read here, every chip in the bar was drawn again for each.
+        // Safe to capture `tab` because the bar keys a chip by it. A page's chip reads
+        // nothing, its name being its own.
+        let docs = open.docs;
+        let entry = use_memo(move || match tab {
             Tab::Document(id) => {
-                let docs = open.docs.read();
-                // What it draws and what hovering it says out of one name: on a symbol's
-                // tab the first is the short spelling of the second.
-                let (icon, names) = tab_drawn(tab, &docs);
-                (icon, names, docs.temporal() == Some(id))
+                let docs = docs.read();
+                (docs.get(id).cloned(), docs.temporal() == Some(id))
             }
-        };
+            Tab::Page(_) => (None, false),
+        });
+        let (document, temporal) = entry.read().clone();
+        // What it draws and what hovering it says out of one name: on a symbol's tab the
+        // first is the short spelling of the second.
+        let (icon, names) = tab_drawn(tab, document.as_ref());
         let Names { text, tooltip, .. } = names;
 
         name_tooltip(
@@ -497,9 +517,6 @@ impl Component for TabBar {
             }
         });
 
-        // The table, for the copies that follow the cursor: taken off the same `Open` as
-        // the strip, a hook not being allowed in the loop that builds the chips.
-        let docs = open.docs;
         let chips: Vec<Element> = tabs
             .iter()
             .enumerate()
@@ -525,7 +542,7 @@ impl Component for TabBar {
                         })
                         .child(
                             DragZone::new(tab, header.into_element())
-                                .drag_element(dragged(tab, &docs.read())),
+                                .drag_element(DraggedChip { tab }.into_element()),
                         )
                         .into_element(),
                 )
@@ -622,21 +639,32 @@ fn drop_zone(
 /// The copy of a chip that follows the cursor while it is being dragged: the chip itself,
 /// on the ground a drop lands on, with nothing that answers a pointer. As `dock.rs` draws
 /// a panel's, so the padding and the spacing cannot drift from the bar's.
-fn dragged(tab: Tab, docs: &Docs) -> Element {
-    let (icon, names) = tab_drawn(tab, docs);
-    rect()
-        .interactive(false)
-        .overflow(Overflow::Clip)
-        .child(chip(
-            icon,
-            &names.text,
-            Mark::Dragging,
-            false,
-            false,
-            None,
-            None,
-        ))
-        .into_element()
+///
+/// **A component, so the table is read in its own render**: `DragZone` mounts it only
+/// while a drag is under way, so the bar reads nothing of [`Docs`] and a wheel tick over
+/// it names no tab.
+#[derive(Clone, Copy, PartialEq)]
+struct DraggedChip {
+    tab: Tab,
+}
+
+impl Component for DraggedChip {
+    fn render(&self) -> impl IntoElement {
+        let docs = use_open().docs;
+        let (icon, names) = tab_drawn(self.tab, shown(self.tab, &docs.read()));
+        rect()
+            .interactive(false)
+            .overflow(Overflow::Clip)
+            .child(chip(
+                icon,
+                &names.text,
+                Mark::Dragging,
+                false,
+                false,
+                None,
+                None,
+            ))
+    }
 }
 
 /// The content area: the bar, and under it the tab on screen -- a document's two panes, a

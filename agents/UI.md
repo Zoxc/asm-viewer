@@ -557,13 +557,18 @@ bar through intermediate states: `Strip::close` takes the predicate, works the l
 A tab's header is `chip`, hover state and × included, wrapped in a `TabHeader` that owns the hover
 and is keyed by its tab. **One `chip` draws every one of them**, the copy that follows the cursor
 while a tab is dragged included: what varies is a `Mark` -- a chip like any other, the tab on screen
-with whether the keyboard is inside it, or that copy -- so `dragged` wraps `chip` rather than
+with whether the keyboard is inside it, or that copy -- so `DraggedChip` wraps `chip` rather than
 spelling the frame a second time, as `dock.rs` draws a panel's from `panel_label`. Where a drop
 would land is not one of the marks but a flag beside it: that rule is on another edge and is worn
 with any of them, the tab on screen being the one a reader most often drags. What a tab is called and
 the glyph before it are one `tab_drawn`, which the chip, the tab list and the drag copy all read: a
 page's own title and glyph, or the document's `Names` and kind. A chip draws `text` and says
-`tooltip`, and for a symbol's tab those are one name cut two ways. **The chip activates its own tab**, freya's docking having
+`tooltip`, and for a symbol's tab those are one name cut two ways. **A chip reads its own entry
+through a memo** and not the table: `Docs` is written by every push onto any trail, a press on a
+sidebar row among them, and a chip reading it was drawn again for each, one per open tab
+(`a_push_onto_one_trail_draws_no_other_chip`). The drag copy is `DraggedChip`, a component that
+reads the table in its own render, because `DragZone` mounts it only during a drag; built by the
+bar, it had every tab named on every wheel tick over the strip. **The chip activates its own tab**, freya's docking having
 been what did that before -- it wraps a header in a `DropZone` around a
 `rect().on_press(set_active)` around a `DragZone` -- so the press handler calls `raise_tab` and then
 asks whether it was a **double press**
@@ -589,7 +594,7 @@ listing with no run draws no caret, so the arrows, Home, End and Ctrl+C would ha
 and a pane that had just been handed the keyboard would read as though it had not. Only the ask does
 this, never a press -- a press in a pane says where the caret goes, including the press under the
 last row that deliberately picks nothing out. The temporal tab is told from one that stays by its
-name being **italic** (`font_slant`) and by nothing else, the chip reading the flag out of the table
+name being **italic** (`font_slant`) and by nothing else, the chip reading the flag through the same memo
 beside the document. Every tab has a ×, pages included, because there is a way back to one now: the
 **menu at the top left of the window** (`PagesButton`), which is the whole of it. It lists all three
 and marks the ones that are open rather than listing only the closed ones -- a menu whose rows come

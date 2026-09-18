@@ -32616,6 +32616,45 @@ fn a_pick_made_in_one_list_draws_no_row_of_another() {
     );
 }
 
+/// **A push onto one tab's trail draws no other chip.** Every write to `Docs` is a push
+/// onto some trail -- each press on a sidebar row pushes onto the temporal tab's -- and a
+/// chip that read the table was drawn again for every one of them, as many chips as the
+/// reader has tabs. Each reads its own entry through a memo, so only the chip whose name
+/// changed is drawn.
+///
+/// Fails on the read of the table put back.
+#[test]
+fn a_push_onto_one_trail_draws_no_other_chip() {
+    let (mut test, states) = TestingRunner::new(
+        bar_harness,
+        (600., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let file = |name: &str| Document::Source(Arc::from(format!("/src/{name}.rs").as_str()));
+    open_document(states.open, states.visits, file("kept0"), Reach::NewTab);
+    open_document(states.open, states.visits, file("kept1"), Reach::NewTab);
+    open_document(states.open, states.visits, file("preview0"), Reach::Preview);
+    settle(&mut test);
+    assert!(
+        label_area(&test, "preview0.rs").is_some(),
+        "the preview is drawn"
+    );
+
+    let before = strip::chips_drawn();
+    open_document(states.open, states.visits, file("preview1"), Reach::Preview);
+    settle(&mut test);
+    assert!(
+        label_area(&test, "preview1.rs").is_some(),
+        "the temporal chip was not renamed"
+    );
+    assert_eq!(
+        strip::chips_drawn() - before,
+        1,
+        "a push onto the temporal tab's trail drew the chips it says nothing about"
+    );
+}
+
 /// **A sweep growing draws no name in the pane's bar again.** A control the sweep passes
 /// over asks whether one is under way before it answers the pointer, and the answer is two
 /// bools out of a state that is written on every pointer move that grows a run: read off
