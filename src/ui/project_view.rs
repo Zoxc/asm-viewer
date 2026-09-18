@@ -301,7 +301,7 @@ impl Component for RecentRow {
         let recent = &self.recent;
 
         // What the project is called, which is what its file is called.
-        let text = project::label(&recent.path);
+        let text = recent.label.clone();
         // What is known about it without opening it, out of its own file.
         let about = match &recent.directory {
             Some(directory) => directory.to_string_lossy().into_owned(),
@@ -826,7 +826,11 @@ impl Component for ChipButton {
                     Doing::Close => close_project(states),
                     Doing::Save => ask_where_to_save(states, project::Put::Move),
                     Doing::Delete => {
-                        let name = states.proj.peek().file.as_deref().map(project::label);
+                        let store = states.store.peek().clone();
+                        let file = states.proj.peek().file.clone();
+                        let name = file
+                            .zip(store)
+                            .map(|(file, store)| project::label(&store, &file));
                         deleting.set(name);
                     }
                 })
@@ -855,10 +859,12 @@ impl Component for ProjectChip {
         let open = use_open();
         // Read and not peeked: the bar follows the project being saved, closed or opened.
         let file = use_consume::<ProjFile>().0.read().clone();
-        let Some(file) = file else {
+        let store = use_consume::<Storage>().0.peek().clone();
+        // No store is a run that opens no project.
+        let (Some(file), Some(store)) = (file, store) else {
             return rect().into_element();
         };
-        let unsaved = project::unsaved(&file);
+        let unsaved = project::unsaved(&store, &file);
 
         rect()
             .horizontal()
@@ -868,7 +874,11 @@ impl Component for ProjectChip {
                 file.to_string_lossy().into_owned(),
                 bar_pill(hovering, true, Glow::No)
                     .on_press(move |_| show_page(open, Page::Project))
-                    .child(label().text(elide(&project::label(&file))).max_lines(1)),
+                    .child(
+                        label()
+                            .text(elide(&project::label(&store, &file)))
+                            .max_lines(1),
+                    ),
             ))
             .maybe(!unsaved, |chip| {
                 chip.child(ChipButton {

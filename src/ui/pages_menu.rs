@@ -203,7 +203,11 @@ fn main_menu(
     close: State<bool>,
 ) -> Menu {
     let open = states.proj.peek().file.clone();
-    let unsaved = open.as_deref().is_some_and(project::unsaved);
+    let store = states.store.peek().clone();
+    let unsaved = open
+        .as_deref()
+        .zip(store.as_ref())
+        .is_some_and(|(file, store)| project::unsaved(store, file));
 
     let mut menu = Menu::new()
         .child(menu_row(
@@ -305,7 +309,7 @@ pub(crate) fn recents_submenu(
         .iter()
         .map(|recent| {
             let path = recent.path.clone();
-            menu_row(&project::label(&recent.path), None, close, move || {
+            menu_row(&recent.label, None, close, move || {
                 switch_project(states, rescued, unopened, path.clone())
             })
             .key(recent.path.to_string_lossy().into_owned())

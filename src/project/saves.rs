@@ -19,8 +19,9 @@ use super::Put;
 
 /// Whether the project at `path` is one the app is keeping for want of anywhere else: an
 /// **unsaved** project. Being under `projects/` is the whole of it, since that is the one
-/// place the app puts a project the reader has not given a place.
-pub(super) fn is_unsaved(store: &Store, path: &Path) -> bool {
+/// place the app puts a project the reader has not given a place. What a view asks before
+/// drawing a Save where a close would be.
+pub fn unsaved(store: &Store, path: &Path) -> bool {
     path.starts_with(store.projects())
 }
 
@@ -37,7 +38,7 @@ pub(super) fn unsaved_project(store: &Store) -> Option<PathBuf> {
 /// The number an unsaved project's file is named by. `None` for a project the reader gave
 /// a place, which is called by that file instead.
 pub(super) fn unsaved_number(store: &Store, path: &Path) -> Option<String> {
-    match is_unsaved(store, path) {
+    match unsaved(store, path) {
         true => Some(path.file_stem()?.to_string_lossy().into_owned()),
         false => None,
     }

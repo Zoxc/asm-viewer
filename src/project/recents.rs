@@ -81,6 +81,8 @@ pub struct Recent {
     /// The project file: what a project is, what it is called by, and what opening this
     /// row opens.
     pub path: PathBuf,
+    /// What the project is called ([`super::label`]).
+    pub label: String,
     pub directory: Option<PathBuf>,
     pub binaries: usize,
 }
@@ -100,6 +102,7 @@ pub fn recent_projects(store: &Store) -> Vec<Recent> {
             }
             let project = Project::load_from(&path).unwrap_or_default();
             Some(Recent {
+                label: super::label(store, &path),
                 path,
                 directory: project.details.directory,
                 binaries: project.binaries.len(),

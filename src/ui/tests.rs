@@ -902,8 +902,9 @@ fn the_bar_offers_a_close_or_a_save_and_a_delete() {
     assert_eq!(chip_buttons(&test), 1, "a close and nothing else");
 
     // One the app is keeping is called by its number, and has the two things that can
-    // become of it instead.
-    let store = Store::open().expect("a state directory");
+    // become of it instead. Kept in the store the harness was given, which is the one the
+    // chip asks.
+    let store = Store::at(test_store());
     proj.set(OpenProject {
         file: Some(store.projects().join("1.avproj")),
         ..OpenProject::default()

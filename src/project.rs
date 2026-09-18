@@ -50,7 +50,7 @@ pub use saves::*;
 
 use files::session_beside;
 use recents::{forget, load_recents, remember};
-use saves::{is_unsaved, saves, unsaved_number, unsaved_project, write_or_warn, writing_into};
+use saves::{saves, unsaved_number, unsaved_project, write_or_warn, writing_into};
 
 /// Whether `path` is a project file at all, which is the whole of what is asked of one
 /// before it is opened: the extension and nothing else, so a file can be recognised without
@@ -59,21 +59,11 @@ pub fn is_project_file(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == PROJECT_EXTENSION)
 }
 
-/// Whether the project kept at `path` is one the app is keeping for want of anywhere else.
-/// The question a view asks before drawing a Save where a close would be.
-///
-/// One of the two here that open the store themselves rather than being handed one: both
-/// are asked of a *path* while something is being drawn, by views that have no file to
-/// write and so nothing else to want a store for. The lookup is an environment read.
-pub fn unsaved(path: &Path) -> bool {
-    Store::open().is_some_and(|store| is_unsaved(&store, path))
-}
-
 /// What to call the project kept at `path`: the file's name, or `Unsaved project 3` for one
 /// the app is keeping for want of anywhere else. The whole of the naming rule, and here
 /// rather than in a view because more than one draws it.
-pub fn label(path: &Path) -> String {
-    if let Some(number) = Store::open().and_then(|store| unsaved_number(&store, path)) {
+pub fn label(store: &Store, path: &Path) -> String {
+    if let Some(number) = unsaved_number(store, path) {
         return format!("Unsaved project {number}");
     }
     path.file_name()
@@ -257,7 +247,7 @@ pub fn delete() -> bool {
     let Some((store, path)) = writing_into(&saves) else {
         return false;
     };
-    if !is_unsaved(&store, &path) {
+    if !unsaved(&store, &path) {
         log::warn!("{} is not the app's to delete", path.display());
         return false;
     }
