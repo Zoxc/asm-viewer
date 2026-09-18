@@ -500,8 +500,11 @@ The pair sits at the corner so it stays under the same one however many neighbou
 step would be a second set of rules about tabs, selection and recording, and both walk **the trail
 of the tab on screen** and no other. **It reads `Active` and the table rather than peeking them**,
 which is the whole of how the pair stays current: a switch of tab, a push onto any trail, a close
-that drops entries and every move of a cursor, the one the button itself just made included, repaint
-both. It reads `Active` and not the strip, or the pair would repaint whenever a tab moved along the
+that drops entries and every move of a cursor, the one the button itself just made included, ask
+both again. The reads are in a memo whose value is the destination's text, so a button is drawn
+again only when that changes and not for every push onto a trail of a tab not on screen
+(`a_push_onto_a_tab_not_on_screen_draws_no_history_button`). It reads
+`Active` and not the strip, or the pair would repaint whenever a tab moved along the
 bar, which is the whole reason `Active` is a memo. A button with nothing in its direction is **dimmed rather
 than hidden**, the first disabled drawing in this app: hiding it would slide the other one under the
 pointer, and a reader who has been nowhere yet would never learn the pair is there. Disabled is the

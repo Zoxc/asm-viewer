@@ -1938,6 +1938,51 @@ fn a_history_button_with_nowhere_to_go_is_still_drawn() {
     );
 }
 
+/// **A push onto a tab not on screen draws neither history button again.** The pair walks
+/// the trail of the tab on screen, and read off `Docs` it was woken by every write to any
+/// trail. A memo over where each would land wakes a button only when that changes.
+///
+/// Fails on the read of the table put back.
+#[test]
+fn a_push_onto_a_tab_not_on_screen_draws_no_history_button() {
+    let (mut test, states) = TestingRunner::new(
+        nav_harness,
+        (200., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let file = |name: &str| Document::Source(Arc::from(format!("/src/{name}.rs").as_str()));
+    open_document(states.open, states.visits, file("behind"), Reach::NewTab);
+    let behind = states.open.ids()[0];
+    open_document(states.open, states.visits, file("left"), Reach::NewTab);
+    open_document(states.open, states.visits, file("shown"), Reach::InPlace);
+    settle(&mut test);
+
+    // The back button, as an element: whether it is the same one is whether it rendered.
+    // Live, so it carries a press handler, which never compares equal: a disabled one
+    // drawn again comes out equal and the diff keeps the old element.
+    let side = toggle_size();
+    let button = |test: &TestingRunner| {
+        test.find(|node, element| {
+            let area = node.layout().area;
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            (area.origin.x == 0.0 && area.width() == side && area.height() == side && handled)
+                .then(|| node.element())
+        })
+        .expect("the back button is drawn")
+    };
+    let before = button(&test);
+    let mut docs = states.open.docs;
+    docs.write().push(behind, Stop::whole(file("elsewhere")));
+    settle(&mut test);
+    assert!(
+        Rc::ptr_eq(&before, &button(&test)),
+        "a push onto a tab not on screen drew the back button again"
+    );
+}
+
 /// Pressing a chip puts the keyboard in the tab as well as showing it, so what the reader
 /// chose is what the arrow keys and Ctrl+C are about. The mark over the chip is how it
 /// says so.

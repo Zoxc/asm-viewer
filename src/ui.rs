@@ -207,10 +207,10 @@ pub(crate) use worker::*;
 /// the trail of the tab on screen, drawn as the chevron pointing that way, with the entry
 /// it would land on in its tooltip.
 ///
-/// **It reads `Active` and the table rather than peeking them**, and that is the whole of
-/// how the pair stays current: a switch of tab, a push onto any trail, a close that drops
-/// entries, and every move of a cursor -- the one this button itself just made included
-/// -- repaints both. `Active` and not the strip: reading the strip would repaint the pair
+/// **A memo reads `Active` and the table rather than peeking them**, and that is the whole
+/// of how the pair stays current: a switch of tab, a push onto any trail, a close that
+/// drops entries, and every move of a cursor -- the one this button itself just made
+/// included -- asks both again, and a button whose destination changed is drawn again. `Active` and not the strip: reading the strip would repaint the pair
 /// whenever a tab moved along the bar, which is why `Active` is a memo at all.
 ///
 /// A button with nothing in its direction is **dimmed rather than hidden**. Hiding it would
@@ -241,9 +241,11 @@ impl Component for NavButton {
             )
         };
 
-        // The reads, and with them the subscriptions. Bound to a `let` of their own and
-        // dropped here: the press below writes the very state this looked at.
-        let destination = {
+        // The reads, in a memo whose value is what the button draws: `Docs` is written by
+        // every push onto any trail, and the button is drawn again only when where it would
+        // land changes. `nav` is fixed for the button's life, the pair always being built
+        // in the same order.
+        let destination = use_memo(move || {
             let docs = open.docs.read();
             active
                 .read()
@@ -251,7 +253,8 @@ impl Component for NavButton {
                 .and_then(|(id, _)| docs.trail(*id))
                 .and_then(|trail| nav.destination(trail))
                 .map(stop_text)
-        };
+        });
+        let destination = destination.read().clone();
         let live = destination.is_some();
         let tooltip = match &destination {
             Some(name) => format!("{word} to {name}"),
