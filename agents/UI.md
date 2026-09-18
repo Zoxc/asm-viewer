@@ -79,6 +79,16 @@ same `Arc` and the prop is a pointer compare. **A memo's callback is built once*
 `use_hook`, so a prop it reads goes through `use_reactive` and never into the closure -- the
 rule `use_side_effect_with_deps` is written for, and the same trap.
 
+**A memo is one task behind the state it reads.** `Memo::create` recomputes in a task the write
+wakes, and the runner polls tasks only once no scope is dirty (`freya-core-0.4.3`,
+`lifecycle/memo.rs`, `runner.rs`'s `handle_events`), so a scope woken by the write renders first
+with the memo's old value. A memo that only draws costs at most a frame, which is all the strip's do
+(`TabHeader`, `ContentArea`, `TabListButton`) and the history buttons'. **Never feed
+one into an effect's deps**: the render hands the effect the memo's old value beside the fresh
+state, and the effect acts on the pair. A memo over
+`place_at(..)` fed to `use_kept_place` planted the caret under the old stop
+(`show_in_unified_view_keeps_the_rows_before_the_instruction`). Read the state itself there.
+
 **An effect's callback runs inside a `ReactiveContext`, so every `.read()` it makes at any depth
 subscribes it** -- the deps are one more subscription and not the whole of what wakes it. Where an
 effect has to tell a change from its own mount, `use_on_change` (`src/ui/state.rs`) is the one hook

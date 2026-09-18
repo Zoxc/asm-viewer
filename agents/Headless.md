@@ -349,6 +349,9 @@ reads `a` and writes `b`:
 | yes | renders; `b` unchanged | effect runs; `b == 9` |
 | no | effect runs; `b == 9` | — |
 
+A memo in `b`'s place behaves the same: a scope reading `a` and the memo renders a pass with the
+memo's old value (`agents/UI.md`).
+
 **An effect that writes what it reads never yields.** The loop is `run(); notified().await`, and a
 write of its own leaves that wait already resolved, so the task is polled for ever inside one
 `sync_and_update` and the test hangs rather than fails -- which is what an effect writing the
