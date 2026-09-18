@@ -35708,7 +35708,7 @@ thread_local! {
 
 /// What `root_key_down` takes beside the project's own bundle and the modifiers: where
 /// the keyboard can be put, the language server with the worker it is spoken to through,
-/// and the two flags saying whether a following pane is up.
+/// and whether each place's following pane is up.
 #[derive(Clone)]
 struct RootStates {
     keyboard: Keyboard,
