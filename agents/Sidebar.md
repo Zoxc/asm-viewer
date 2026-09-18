@@ -407,6 +407,11 @@ first, as `raise_tab` asks `Strip::would_raise`: a write notifies whether or not
 and a dock write re-renders the docking area and every group in it. That is not the chords, which
 a reader presses by hand, but the questions -- every Enter in the Search box and every Alt+F12 goes
 through `raise_panel`, and after the first the panel it names is already on top.
+**The press on a header goes through the same guard**, which meant taking the press off freya:
+its `DockPanelView` wraps every header in a press that writes the dock whatever is showing
+(`notes/upstream/freya.md`), so clicking the tab of the panel you are reading rebuilt the whole
+docking area. `PanelHeader` answers the press itself and stops it before freya's rect, which is an
+ancestor of it.
 
 **A raise that does change something redraws two headers, not seven.** `PanelHeader`
 (`ui/dock.rs`) is a component keyed by its panel and told whether it is the one on top, as

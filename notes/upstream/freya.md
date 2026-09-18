@@ -273,6 +273,41 @@ document's split -- are its own `ResizableContainer`s, where it passes a control
 A `.controller(..)` on the containers `render_node` builds, or a size on `DockNode::Split`,
 would do it.
 
+## A press on a dock tab writes the dock whether or not it changes anything
+
+`DockPanelView` wraps every header the app renders in a rect whose press calls
+`controller.write().set_active(panel_id, tab_id)` unconditionally (`docking.rs:503-509`).
+`set_active` answers whether it found the tab and not whether it moved one, and the write
+notifies either way -- so pressing the tab of the panel you are already reading re-renders
+the docking area and every group in it. That is the no-op write `raise_panel` guards on the
+app's own path (`src/ui/dock.rs`), unguarded on freya's.
+
+**Cost:** the app answers the press on its own header and stops it
+(`PanelHeader`, `src/ui/dock.rs`): `e.stop_propagation()` before freya's rect, which is an
+ancestor, and `raise_panel` for the raise, which writes only when the panel was not on top.
+The event's `propagate` flag is shared down one path and read between nodes
+(`freya-core-0.4.3/src/runner.rs:330`, `:519`), so a deeper handler's stop is honoured, and
+freya's drag is unaffected: `DragZone` listens to `pointer_down` and the globals, never to
+the press (`drag_drop.rs:119-144`). Pinned by
+`pressing_the_header_of_the_panel_on_top_writes_nothing`. A `set_active` write made only
+when the active tab changes would remove the workaround.
+
+## `DockPanelView` never compares equal, so any dock write rebuilds every group
+
+`impl PartialEq for DockPanelView` returns `false` whatever it is handed
+(`docking.rs:455-459`), and `render_node` builds one per `DockNode::Panel` (`:424`). So a
+write to the dock rebuilds every group of it, including the groups it did not touch, and
+whatever a group's header reads of the dock makes no difference to what wakes it.
+
+**Cost:** the app draws a panel's header and a panel's body as components of its own
+(`PanelHeader`, the `Panel` bodies, `src/ui/dock.rs`), each keyed and each with a derived
+`PartialEq`, so freya's rebuild reaches a diff and stops there: a raise redraws the two
+headers whose top changed and no others
+(`a_raise_redraws_only_the_headers_it_changed`, `agents/Sidebar.md`). The rebuild itself
+cannot be avoided from here -- nothing outside the crate builds those nodes. Not reported
+yet; a `PartialEq` over the panel, the controller and the renderers would do it, the first
+being the only one that changes.
+
 ## A hook-order error names the innocent hook and blames the wrong rule
 
 `use_hook` reads the value at the scope's `current_value` and `downcast_ref`s it to the type

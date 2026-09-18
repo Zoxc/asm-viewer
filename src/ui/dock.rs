@@ -463,7 +463,7 @@ impl DockingModel for DockArea {
 }
 
 /// A panel's tab header, and the copy of one that follows the cursor while it is dragged.
-fn panel_label(panel: Panel, background: Color) -> impl IntoElement {
+fn panel_label(panel: Panel, background: Color) -> Rect {
     rect()
         .height(Size::px(list_row_height()))
         .horizontal()
@@ -486,6 +486,11 @@ fn panel_label(panel: Panel, background: Color) -> impl IntoElement {
 /// reads the tree to lay it out, and its `DockPanelView` never compares equal. A
 /// component is diffed instead, so a raise redraws the two headers whose top changed and
 /// leaves the rest alone.
+///
+/// **The press is answered here and goes no further.** freya wraps every header in a rect
+/// whose press writes the dock whatever is showing, which is the no-op write
+/// [`raise_panel`] guards, unguarded (`notes/upstream/freya.md`). This one raises through
+/// that guard and stops the event, so freya's never runs.
 #[derive(Clone, PartialEq)]
 struct PanelHeader {
     panel: Panel,
@@ -502,6 +507,8 @@ impl Component for PanelHeader {
     fn render(&self) -> impl IntoElement {
         #[cfg(test)]
         HEADERS.set(HEADERS.get() + 1);
+        let dock = use_consume::<SidebarDock>().0;
+        let panel = self.panel;
         let background = if self.landing {
             palette().selected_bg
         } else if self.active {
@@ -509,7 +516,12 @@ impl Component for PanelHeader {
         } else {
             Color::TRANSPARENT
         };
-        panel_label(self.panel, background)
+        panel_label(self.panel, background).on_press(move |e: Event<PressEventData>| {
+            // Stopped before freya's own press on the rect around this one, which writes
+            // the dock for a panel that is showing already.
+            e.stop_propagation();
+            raise_panel(dock, panel);
+        })
     }
 
     fn render_key(&self) -> DiffKey {

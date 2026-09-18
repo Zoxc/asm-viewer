@@ -34842,6 +34842,81 @@ fn raising_the_panel_already_on_top_redraws_nothing() {
     );
 }
 
+/// The real dock, with the dock-reading row beside it: a press lands on a real header,
+/// and the row says whether the dock was written.
+fn header_press_harness() -> impl IntoElement {
+    let dock = use_consume::<SidebarDock>().0;
+    rect()
+        .expanded()
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .child(docking_area(dock)),
+        )
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(1.0))
+                .child(DockRow),
+        )
+}
+
+/// **A press on the header of the panel already on top writes nothing.** freya wraps every
+/// header in a rect whose press calls `set_active` whatever is showing, so clicking the
+/// tab of the panel you are reading re-renders the docking area and every group in it --
+/// `raise_panel`'s guarded write, unguarded. `PanelHeader` answers the press itself and
+/// stops it, so freya's never runs.
+///
+/// Fails on the header without a press of its own, where freya's wrote the dock for every
+/// click on a tab.
+#[test]
+fn pressing_the_header_of_the_panel_on_top_writes_nothing() {
+    let drawn = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = || drawn.load(std::sync::atomic::Ordering::Relaxed);
+    let (mut test, dock) = TestingRunner::new(
+        header_press_harness,
+        (500., 500.).into(),
+        {
+            let drawn = drawn.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || DockDrawn(drawn));
+                runner.provide_root_context(|| {
+                    // Search behind Objects, so the first press has something to change.
+                    let mut dock = test_roots().states.arranged.dock;
+                    dock.set(DockArea::column(vec![vec![Panel::Objects, Panel::Search]]));
+                    dock
+                })
+            }
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    // The panel behind: this press raises it, and the row that reads the dock is redrawn.
+    let search = centre_of(&test, "Search");
+    press_at(&mut test, search);
+    settle(&mut test);
+    assert!(
+        dock.peek().is_active(Panel::Search),
+        "the press on the header behind raised nothing"
+    );
+    let raised = counted();
+
+    // The same header again, now the panel on top.
+    press_at(&mut test, search);
+    settle(&mut test);
+    assert_eq!(
+        counted(),
+        raised,
+        "a press on the header of the panel already on top wrote the dock"
+    );
+    assert!(
+        dock.peek().is_active(Panel::Search),
+        "the guarded press took the panel off the top"
+    );
+}
+
 /// The sidebar's dock and nothing else, so what is counted below is the real headers.
 fn panel_headers_harness() -> impl IntoElement {
     let dock = use_consume::<SidebarDock>().0;
