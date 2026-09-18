@@ -23100,6 +23100,78 @@ fn switching_between_two_objects_code_tabs_asks_for_the_second() {
     assert!(asked.code.is_none());
 }
 
+/// The content area as `app()` mounts it, with the reading following the active document
+/// through `use_reading_of`. The tab on screen goes through the area's own memo, which
+/// puts the pane's re-render behind the reading's reset, as in the app.
+fn content_code_harness() -> impl IntoElement {
+    let active = use_consume::<Active>().0;
+    let objects = use_consume::<Objects>().0;
+    use_reading_of(active, objects, use_sectioned());
+    ContentArea
+}
+
+/// The second object's first answer draws its rows, whatever generation the first
+/// object's rows were counted at. A switch of code tab re-renders the pane rather than
+/// mounting it again, and each object's reading counts from nought, so here both first
+/// answers are generation 1: rows kept by the generation alone took the second for one
+/// already drawn, and the second tab stayed empty.
+#[test]
+fn a_second_objects_first_answer_draws_its_rows_whatever_its_generation() {
+    let (_path, objects) = fixture_objects(2);
+    let (first, second) = (objects[0].clone(), objects[1].clone());
+    let (mut test, roots) = TestingRunner::new(
+        content_code_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(|| code_states(Reading::default())),
+        1.,
+    );
+    let (states, sectioned) = (roots.states, roots.sectioned);
+    let reading = sectioned.reading;
+    let mut open = states.objects;
+    open.write().extend([first.clone(), second.clone()]);
+    settle(&mut test);
+
+    // Each tab's first answer is its skeleton, taken as the worker's is.
+    let answer = move |object: &Arc<Object>| {
+        let mut reading = reading;
+        let code = skeleton(object);
+        let ask = CodeAsk {
+            object: object.clone(),
+            code: None,
+            window: vec![],
+        };
+        assert!(reading.write().take(&ask, code, vec![]));
+    };
+
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(first.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    settle(&mut test);
+    answer(&first);
+    settle(&mut test);
+    assert!(sectioned.peek_rows_of(&first).is_some());
+
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(second.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    settle(&mut test);
+    assert!(reading.peek().is_about(&second));
+    answer(&second);
+    settle(&mut test);
+    assert!(
+        sectioned.peek_rows_of(&second).is_some(),
+        "the second object's rows were never drawn"
+    );
+}
+
 /// The rows are rebuilt a pass after an answer lands, and for that pass the pane can read
 /// a reading newer than the rows on screen. A stretch the answer let go of is still drawn
 /// from the old rows, and has to be drawn from what it was counted from: against the new
@@ -28803,11 +28875,8 @@ fn a_walks_match_lands_only_in_the_object_it_walked() {
 
     // The pane moves in place to the second object's code.
     marked.write().assembly = None;
-    // A generation past the first's, which is what the view counts its rows afresh on.
-    let mut moved = reading_of(&second, &[]);
     let mut reading = sectioned.reading;
-    moved.generation = reading.peek().generation + 1;
-    reading.set(moved);
+    reading.set(reading_of(&second, &[]));
     pump(&mut test, |_| sectioned.peek_rows_of(&second).is_some());
 
     // The first walk's match, said again under an id the pane has not landed.

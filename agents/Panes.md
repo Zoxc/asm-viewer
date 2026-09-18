@@ -1037,8 +1037,12 @@ that draw the rows instead, the gap rows were keyed by a catch-all: a new kind w
 a gap, and nothing would have said so. Two effects do the rest. `use_kept_place` keeps the reader's
 place
 (`agents/UI.md`, `Places::code_at`), plants a door's caret once there are rows to plant it in (the planting
-paragraph above), and rebuilds the rows whenever the reading's generation changes, in the one run
-that also moves the controller to where the place now is. **The rebuild costs what is held, not the
+paragraph above), and rebuilds the rows whenever the reading's object or generation changes, in the
+one run that also moves the controller to where the place now is. The object as well: every object's
+reading counts from nought, and a pane moved in place to another object's code -- a switch between
+two code tabs re-renders it rather than mounting it again -- can see that object's first answer at
+the very generation the old rows were counted at, and kept by the generation alone it stayed empty.
+**The rebuild costs what is held, not the
 listing**: `section::Layout` is every stretch's estimate, and it is the skeleton itself, counted
 once on the worker with the first ask. `Rows::over` lays the held stretches over it -- a decoded
 stretch's start is the layout's moved by what the decoded ones before it changed. Counted whole per

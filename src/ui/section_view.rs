@@ -17,6 +17,7 @@ use crate::counter;
 use crate::positions::Spot;
 use crate::section::{Body, Kind, Row, Rows, StretchRows, GAP_BYTES_PER_ROW};
 use analysis::Stretch;
+use std::sync::Weak;
 
 /// How many screens above and below the viewport are decoded ahead, so that a page up or
 /// down lands on rows already there and empty rows are seen only by a reader outrunning
@@ -925,7 +926,12 @@ struct Held {
     /// showing. Both, since two tabs can show one stop.
     tab: Option<DocId>,
     stop: Option<Stop>,
-    built: Option<u64>,
+    /// The object and the reading generation the rows were counted at. The object too,
+    /// since every object's reading counts from nought: a pane moved in place to another
+    /// object's code can see that one's first answer at the generation the old rows were
+    /// counted at. By `Weak`, which holds no bytes and keeps any other object off the
+    /// address.
+    built: Option<(Weak<Object>, u64)>,
     /// The place last derived from the offset, to tell a scroll from a write made
     /// from outside.
     derived: Option<Spot>,
@@ -985,9 +991,10 @@ struct Step<'a> {
     tab: Option<Entry>,
     /// What the listing is showing, tab or no tab: what a planting names.
     stop: &'a Stop,
-    /// The reading generation the rows are counted at.
+    /// The object and the reading generation the rows are counted at.
+    object: &'a Arc<Object>,
     generation: u64,
-    /// The rows are counted afresh this run, the generation having changed.
+    /// The rows are counted afresh this run, the object or the generation having changed.
     rebuilt: bool,
     /// The tab is not the one the last run was for.
     switching: bool,
@@ -1118,8 +1125,11 @@ fn use_kept_place(
             // The place the maps are keyed by, where this listing is a tab's at all.
             let entry = tab.map(|tab| (tab, stop.clone()));
             let mut step = Step {
+                object,
                 generation,
-                rebuilt: state.built != Some(generation),
+                rebuilt: !state.built.as_ref().is_some_and(|(of, at)| {
+                    *at == generation && std::ptr::eq(of.as_ptr(), Arc::as_ptr(object))
+                }),
                 switching: state.tab != *tab || state.stop.as_ref() != Some(stop),
                 before: rows.peek().clone(),
                 kept: entry.as_ref().and_then(|tab| marks_at.peek().at(tab)),
@@ -1238,7 +1248,7 @@ fn rebuild(
         rows: Rows::over(layout, decoded),
         reading: (*reading).clone(),
     });
-    held.built = Some(step.generation);
+    held.built = Some((Arc::downgrade(step.object), step.generation));
     if let Some(before) = step.before.as_ref() {
         carry_assembly(marked, |row| {
             let spot = step
