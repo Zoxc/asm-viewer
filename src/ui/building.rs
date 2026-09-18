@@ -327,7 +327,7 @@ fn finished(
         forget_source_under(&directory);
         // And the language server is holding the text from before it, for every file of
         // the reader's the build rewrote: it answers about what it was given until it is
-        // told otherwise (`src/ui/linking.rs`).
+        // told otherwise (`src/ui/opened.rs`).
         write_if(opened, |waiting| waiting.reread(&directory));
     }
 

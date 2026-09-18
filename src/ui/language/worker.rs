@@ -53,7 +53,7 @@ pub(crate) enum LspJob {
     ///
     /// The text is not carried: the file is read on the worker, which is the thread that
     /// may block, and read at all only for a server that takes documents. The language is,
-    /// since what a file is told to be is the project's to say (`src/ui/linking.rs`).
+    /// since what a file is told to be is the project's to say (`src/ui/opened.rs`).
     Opened {
         run: u64,
         file: Arc<str>,

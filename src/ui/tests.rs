@@ -9577,6 +9577,67 @@ fn a_file_read_afresh_is_opened_with_the_server_again() {
     );
 }
 
+/// **A server that is stopped leaves the app holding none of its documents.** The set is
+/// what the next server is told to open and what it is held to have already; the process
+/// these files were open in is gone, so none of it is true of anything any more. Kept
+/// over the stop, a build under no server would mark those files stale, and the server
+/// started after it would be sent a `didClose` for a file it had never been given --
+/// which is a client a server may call broken.
+#[test]
+fn a_server_that_is_stopped_leaves_the_app_holding_none_of_its_files() {
+    let (file, directory) = calling_file("stop-forgets");
+    let (mut test, roots, asking, asks) =
+        mount_linking_classifying(|| Ok(calling_links()), |_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let mut language = roots.language;
+    let opened = roots.opened;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
+        std::iter::from_fn(|| next_job(asks))
+            .filter(|job| matches!(job, AskedOfServer::Opened(_) | AskedOfServer::Closed(_)))
+            .collect()
+    };
+    assert_eq!(told(&asks), [AskedOfServer::Opened(file.clone())]);
+    let run = language.peek().run;
+    assert!(opened.peek().holds(run, &file), "the file was not opened");
+
+    // The reader stops the server.
+    let jobs = asking.read().clone().expect("the worker");
+    stop_server(language, &jobs);
+    for _ in 0..20 {
+        settle(&mut test);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        !opened.peek().holds(run, &file),
+        "the app is still holding a file open with a server that has gone"
+    );
+
+    // A build with no server running has nothing of the reader's to mark stale.
+    let mut waiting = opened.peek().clone();
+    assert!(
+        !waiting.reread(&directory),
+        "a build under no server found a file to give a dead one again"
+    );
+
+    // And the next server is told to open the file, with nothing to close first.
+    serving(&mut test, &mut language);
+    assert_eq!(
+        told(&asks),
+        [AskedOfServer::Opened(file.clone())],
+        "the new server was not told which file the reader has open, or was told to \
+         close one it had never been given"
+    );
+}
+
 /// **A file of another language is not the server's business.** rust-analyzer, asked about
 /// a C file, reads it as Rust and answers with what a Rust lexer made of it -- measured, a
 /// small C file came back with three `struct` tokens and a `property`, every one of which

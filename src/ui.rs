@@ -142,6 +142,8 @@ mod metrics;
 pub(crate) use metrics::*;
 mod no_project;
 pub(crate) use no_project::*;
+mod opened;
+pub(crate) use opened::*;
 mod pad;
 pub(crate) use pad::*;
 mod pad_view;

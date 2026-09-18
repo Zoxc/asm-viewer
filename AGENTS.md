@@ -286,8 +286,11 @@ command.
   put to, the question itself, and where its answer opens, with the caret it lands on.
 - `src/ui/linking.rs` — which names in the file the Source pane is showing are links: what
   it has asked the server, what came back, and why the asking waits until the server is
-  ready; and which files the server has been told the reader has open, which is what makes
-  it answer about them.
+  ready.
+- `src/ui/opened.rs` — which files the server has been told the reader has open, which is
+  what makes it answer about them: the set and the run it was sent to, which files a
+  project's server is for at all, what a build rewrote under them, and the effect that
+  sends the difference.
 - `src/ui/coded.rs` — which lines of the file the Source pane is showing produced code:
   what the gutter marks, the objects that answer was worked out over, and the question
   asked again whenever either changes.

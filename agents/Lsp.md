@@ -361,11 +361,18 @@ the client owns the documents it shows, and a server answers about the text it w
 until it is told the file has closed -- so opening is the normal path and reading the disk
 is the courtesy.
 
-**What is opened is what the reader has in tabs**, which is what an editor does: `Opened`
-holds the set and the run it was sent to, `use_opened` diffs it against the source
-documents in the strip, and a server that has been restarted holds nothing so everything
-open is new. Measured, opening is nearly free: 41 files in **7 ms**, and one megabyte of
-the server's memory against the 686 it takes to sit there.
+**What is opened is what the reader has in tabs**, which is what an editor does
+(`src/ui/opened.rs`): `Opened` holds the set and the run it was sent to, `use_opened`
+diffs it against the source documents in the strip, and a server that has been restarted
+holds nothing so everything open is new. A server that has *stopped* leaves the app
+holding nothing either: a build under no server would otherwise mark those files stale,
+and the server started after it would be sent a `didClose` for a file it had never been
+given. Measured, opening is nearly free: 41 files in **7 ms**, and one megabyte of the
+server's memory against the 686 it takes to sit there.
+
+A file is carried about **with the identifier it is to be opened under**, from the walk of
+the strip to the send: one pass works out both, and the files to open, to close and to
+hand over again are cut out of that one list.
 
 **Only files the server is for.** A server answers about a file whatever language it is:
 asked about a C file, rust-analyzer reads it as Rust and answers with what a Rust lexer
