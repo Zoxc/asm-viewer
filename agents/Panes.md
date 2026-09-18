@@ -282,7 +282,8 @@ states a row's menu writes with them -- are consumed in the *list's* render and 
 data, a handler being no place to call a hook: `RowStates` for the handles the root provides
 (`agents/UI.md`) and `Common` for the rest of what every row of the file shares, the text, the
 names the server placed and whom to ask about one. A row that reached for them itself paid nine
-context walks a render for a right-click that almost never comes. The four wrap the listing's whole keyboard (`use_listing_keys`) from the outside rather than
+context walks a render for a right-click that almost never comes. The assembly side has a
+third, `LinkStates`, for the label inside a row rather than the row (`agents/UI.md`). The four wrap the listing's whole keyboard (`use_listing_keys`) from the outside rather than
 sitting between the find bar's chords and the listing's own keys: the three sets of keys are
 disjoint, so which is asked first settles nothing.
 

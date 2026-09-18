@@ -517,7 +517,10 @@ writing straight into it, but not the binaries -- and this is the pane the reade
 redraw is kept cheap: the cargo section clones the whole of `Builds` to draw it, and its two large
 fields are behind `Arc`s (`Builds::built`, `Builds::sources`). A build says two hundred things as
 readily as two, each carrying the text the compiler rendered for it, and none of that is copied per
-keystroke.
+keystroke. The two states a diagnostic's press reaches for are the page's, consumed once in
+`ProjectTab` and handed to the cargo section as `PlaceStates`: that section renders again on every
+word the worker says, and reaching for a context is a hook. It compares equal always, so carrying it
+costs the section no render.
 
 **The Project view is also where the project is built** (`src/ui/building.rs` over
 `src/cargo.rs`), under a heading naming the tool rather than the act, since the pane has
@@ -703,7 +706,9 @@ rows keep is now kept by every list. Two facts a row used to state
 itself went with it -- which panel's pick a symbol row answers to, and which a search hit does --
 because the pane a row is drawn in is that panel by construction. The file finder keeps its own
 (`FoundRow`, `agents/Finding.md`): it is not a panel, has no pane and no pick of this kind, so
-none of this bundle fits it.
+none of this bundle fits it. The Search panel's own Enter takes `doors` and `ctrl` off
+`pane.states` as well, rather than consuming the two a second line below the hook that already
+holds them.
 
 **What a list lights is its own pick.** A lit row used to be one fact -- the row *is* what the tab
 on screen shows -- so four lists lit one row each, four lit none, and there was no way to point at a

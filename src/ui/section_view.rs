@@ -87,6 +87,9 @@ struct SectionRows {
     marking: Option<Marking>,
     /// What a row's menu writes, consumed once by the list: see [`RowStates`].
     asking: RowStates,
+    /// What a link in a row's text reaches for, consumed once by the list too: see
+    /// [`LinkStates`].
+    links: LinkStates,
 }
 
 impl PartialEq for SectionRows {
@@ -101,8 +104,8 @@ impl PartialEq for SectionRows {
             // view alone, as Left, Right, Home and End doing nothing.
             && self.chars == other.chars
             && self.marking == other.marking
-        // `asking` compares equal always -- handles the root never replaces -- so it is
-        // left out.
+        // `asking` and `links` compare equal always -- handles the root never replaces
+        // -- so they are left out.
     }
 }
 
@@ -654,6 +657,9 @@ impl Component for SectionList {
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
+        // What a link in a row's text reaches for, consumed here and carried to the
+        // labels: a handler may not run a hook, and a label is one per linked operand.
+        let links = use_link_states(doors, &list);
         let (controller, viewport) = (list.controller, list.viewport());
         // What the find bar over this pane is looking for, for every row to wash. It
         // searches no listing: an object's code is decoded a stretch at a time, so a step
@@ -829,6 +835,7 @@ impl Component for SectionList {
                 chars,
                 marking,
                 asking,
+                links,
             },
             build_row,
         )
@@ -912,6 +919,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             InstructionRow::at(
                 asm,
                 data.asking,
+                data.links.clone(),
                 index,
                 i,
                 paired,

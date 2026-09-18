@@ -11,6 +11,7 @@
 //! row's own top edge and not a gap above it.
 
 use super::*;
+use crate::counter;
 
 /// The address column, as every row of every listing draws it and copies it: sixteen
 /// upper-case hex digits and the space after them.
@@ -360,6 +361,9 @@ struct AsmRows {
     data: AsmData,
     /// What a row's menu writes, consumed once by the list: see [`RowStates`].
     asking: RowStates,
+    /// What a link in a row's text reaches for, consumed once by the list too: see
+    /// [`LinkStates`].
+    links: LinkStates,
     /// The source pane's picked-out run, or `None` when there is none.
     pair: Option<Picked>,
     /// The edges starting or ending at a picked-out row, which every row the gutter
@@ -667,6 +671,50 @@ impl Door {
     }
 }
 
+/// What a press on a linked operand reaches for: the two modifiers the label lights
+/// itself by, where the door leads, and the list's own scroll and box.
+///
+/// **Consumed where the list renders and carried down to the labels as data.** Reaching
+/// for a context is a hook, and there is one label per linked operand of every row on
+/// screen -- the most-made component in the app, rebuilt as every scroll recycles a row
+/// -- so a label that consumed these itself paid four context walks a render for a press
+/// that almost never comes.
+///
+/// The handles are the root's and the [`Listing`] the box's, none of them ever replaced,
+/// so this **compares equal always**: a label holding one is not re-rendered for it.
+///
+/// `doors` is [`RowStates`]'s, taken off the bundle the rows already carry rather than
+/// reached for again, so the row's menu and its links cannot come to disagree about
+/// where a door leads.
+#[derive(Clone)]
+pub(crate) struct LinkStates {
+    /// Whether Ctrl is held, which is what makes a label a door.
+    ctrl: State<bool>,
+    /// Whether Alt is held, which shuts every door in every pane.
+    alt: State<bool>,
+    /// Where a press on the link goes.
+    doors: Doors,
+    /// The list's own scroll and its measured height, which `reveal_row` needs at the
+    /// moment of the press rather than at the render that drew the label.
+    listing: Listing,
+}
+
+impl PartialEq for LinkStates {
+    fn eq(&self, _: &LinkStates) -> bool {
+        true
+    }
+}
+
+/// What a listing's links reach for, as the list drawing them sees it.
+pub(crate) fn use_link_states(doors: Doors, list: &ListBox) -> LinkStates {
+    LinkStates {
+        ctrl: use_consume::<Ctrl>().0,
+        alt: use_consume::<Alt>().0,
+        doors,
+        listing: list.listing(),
+    }
+}
+
 /// One of an instruction's operands drawn as a link: what it says, and where a press on
 /// it goes.
 #[derive(Clone, PartialEq)]
@@ -675,6 +723,9 @@ struct DoorLabel {
     /// the reader is pressing.
     text: String,
     door: Door,
+    /// What the light and the press reach for, told to the label by the list: a handler
+    /// may not run a hook, and compares equal always ([`LinkStates`]).
+    states: LinkStates,
 }
 
 impl DoorLabel {
@@ -682,8 +733,9 @@ impl DoorLabel {
     /// pointer's icon asking the label's own rule for whether a press is a door, so the
     /// hand is over exactly what is drawn as a link. Alt shuts it, as it shuts the light
     /// and the press.
-    fn inline(self, ctrl: State<bool>, alt: State<bool>) -> InlineLink {
+    fn inline(self) -> InlineLink {
         let door = self.door.clone();
+        let (ctrl, alt) = (self.states.ctrl, self.states.alt);
         InlineLink {
             element: self.into_element(),
             is_link: Rc::new(move || !*alt.peek() && door.open_now(|| *ctrl.peek())),
@@ -691,15 +743,26 @@ impl DoorLabel {
     }
 }
 
+counter!(
+    /// Test-only: how many linked operands this thread has drawn. A label drawn again
+    /// draws exactly what it drew before, so the render is the one place the question
+    /// can be answered from.
+    pub(crate) fn links_drawn() = LINKS_DRAWN
+);
+
 impl Component for DoorLabel {
     fn render(&self) -> impl IntoElement {
+        #[cfg(test)]
+        LINKS_DRAWN.set(LINKS_DRAWN.get() + 1);
+
         let mut hovering = use_state(|| false);
-        let ctrl = use_consume::<Ctrl>().0;
-        let alt = use_consume::<Alt>().0;
-        let doors = use_doors();
-        // The list's own scroll and its measured height, which `reveal_row` needs at the
-        // moment of the press rather than at the render that drew this label.
-        let listing = use_consume::<Listing>();
+        let LinkStates {
+            ctrl,
+            alt,
+            doors,
+            ref listing,
+        } = self.states;
+        let listing = listing.clone();
         let door = self.door.clone();
         let (rest, lit_fg) = door.colours();
         // Alt, read while the pointer is on the label and not otherwise, so a label
@@ -1006,6 +1069,9 @@ pub(crate) struct InstructionRow {
     /// and a row reaching for these itself paid six context walks a render for a
     /// right-click. Compares equal always, so it costs the row no render ([`RowStates`]).
     pub(crate) asking: RowStates,
+    /// What a link in this row's text reaches for, told to it by the list for the same
+    /// reason and with the same rule ([`LinkStates`]).
+    pub(crate) links: LinkStates,
     /// Which instruction this row draws.
     pub(crate) index: usize,
     /// Which row of the listing it is drawn in, which is `index` plus every separator
@@ -1048,6 +1114,7 @@ impl InstructionRow {
     pub(crate) fn at(
         data: AsmData,
         asking: RowStates,
+        links: LinkStates,
         index: usize,
         row: usize,
         paired: Option<Edges>,
@@ -1062,6 +1129,7 @@ impl InstructionRow {
             },
             data,
             asking,
+            links,
             index,
             row,
             paired,
@@ -1087,15 +1155,14 @@ impl InstructionRow {
 /// the padding to the operand column, which is drawn in non-breaking spaces -- one unit
 /// each, as a plain space is. The tests hold the two to each other.
 ///
-/// `ctrl` and `alt` are handed in and not reached for: they are the row's, consumed once
-/// in its render, and this is not a component.
+/// `states` is handed in and not reached for: it is the list's, consumed once where the
+/// rows are built, and this is not a component.
 fn instruction_text(
     data: &AsmData,
     index: usize,
     chars: RowChars,
     marking: Option<&Marking>,
-    ctrl: State<bool>,
-    alt: State<bool>,
+    states: &LinkStates,
 ) -> Text<Option<InlineLink>> {
     let instruction = &data.assembly().instructions[index];
     let (head, link, tail) = split(instruction, linked(data.assembly(), index));
@@ -1130,8 +1197,9 @@ fn instruction_text(
             DoorLabel {
                 text: link.text.to_owned(),
                 door,
+                states: states.clone(),
             }
-            .inline(ctrl, alt)
+            .inline()
         })
     });
     let appended = matches!(
@@ -1284,11 +1352,6 @@ fn instruction_menu(
 
 impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
-        // Ctrl and Alt as a link's icon asks them: peeked from a handler, where the label
-        // reads them and is drawn again as they change.
-        let ctrl = use_consume::<Ctrl>().0;
-        let alt = use_consume::<Alt>().0;
-
         // Where this row points on the source side. Worked out once here rather than in
         // each of the handlers, which all need the same answer.
         let at = self.data.position(self.index);
@@ -1319,8 +1382,7 @@ impl Component for InstructionRow {
                 self.index,
                 self.chars,
                 self.marking.as_ref(),
-                ctrl,
-                alt,
+                &self.links,
             )),
             Some(instruction_menu(self.asking, &self.data, self.index, at)),
         )
@@ -1399,6 +1461,9 @@ impl Component for InstructionList {
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
+        // What a link in a row's text reaches for, consumed here and carried to the
+        // labels: a handler may not run a hook, and a label is one per linked operand.
+        let links = use_link_states(doors, &list);
         // What the find bar over this pane is looking for, for every row to wash, and
         // what it searches, claimed for as long as these rows are drawn.
         let at = (Placing::Tab(self.tab), Pane::Assembly);
@@ -1529,6 +1594,7 @@ impl Component for InstructionList {
             AsmRows {
                 data,
                 asking,
+                links,
                 pair,
                 touching,
                 chars,
@@ -1565,6 +1631,7 @@ fn asm_row(i: usize, rows: &AsmRows) -> Element {
     InstructionRow::at(
         rows.data.clone(),
         rows.asking,
+        rows.links.clone(),
         index,
         i,
         paired,

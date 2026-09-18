@@ -195,6 +195,16 @@ leads. **It is what a press is handed whole**: `Landings`, the narrower set a sy
 took, was `doors`, `ctrl` and the places dug out of `project`, and with `places` on `Doors` it
 narrowed to nothing the callee did not already have. `press_location` and `symbol_keys` take the
 pane's `ListStates` itself, so there is one set and no second way to build one.
+`LinkStates` (`assembly.rs`) is the third of these and the smallest: the two modifiers a
+linked operand lights itself by, the `Doors` a press on it goes through, and the `Listing`
+`reveal_row` reads at the press. `DoorLabel` is the most-made component in the app -- one per
+linked operand of every row on screen, rebuilt as a scroll recycles a row -- and it reached for
+four contexts a render, three of them wanted only by the press. `use_link_states` gathers it in
+each of the two listings' renders, beside `use_row_states`, and takes `doors` off that bundle
+rather than reaching for it again, so a row's menu and the links in it cannot disagree about
+where a door leads. It rides down with the rows and compares equal always
+(`what_a_links_press_reaches_for_costs_the_label_no_render`), which is a counter and not an
+element: a label whose scope is kept still has its node rebuilt when the row around it renders.
 A handle may sit in more than one bundle: `Doors` and `ProjectStates` both carry `Open` and
 `Places`, `RowStates` and `ListStates` carry `Doors`, `ListStates` carries `Picking` and
 `ProjectStates`, and `Doors` carries the runs `Marked` hands the panes. Two routes to one
@@ -989,7 +999,7 @@ field -- a prop that stops re-rendering for it. Most rows are that shape (`Archi
 out: the row's `key`, and the states it holds -- one of its own, or a bundle of them. Neither
 changes what is drawn. A key is a function of the row's other fields, a `State` compares by the box
 it is -- its own `eq` and not `Writable`'s -- so two rows built by one list hold the same one, and
-`RowStates` and `ListStates` compare equal always.
+`RowStates`, `ListStates` and `LinkStates` compare equal always.
 `a_second_file_leaves_the_rows_already_drawn_alone` pins it: a second file landing on the
 Objects list leaves the rows already drawn un-rendered. **A list of rows is a `Shared`**
 (`src/shared.rs`), the rule written once rather than once per list: an `Arc<[T]>` equal only to the

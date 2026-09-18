@@ -400,10 +400,35 @@ impl Component for BinariesSection {
     }
 }
 
+/// What a diagnostic's place is pressed to reach.
+///
+/// **Consumed where the page renders and carried to the section as data.** Reaching for
+/// a context is a hook, and the section renders again on every word the build worker
+/// says, for a press that comes when the reader goes to the file.
+///
+/// The handles are the root's and are never replaced, so this **compares equal always**:
+/// the section holding one is not re-rendered for it.
+#[derive(Clone, Copy)]
+struct PlaceStates {
+    doors: Doors,
+    /// Whether Ctrl is held, which is whether the file opens in a tab of its own.
+    ctrl: State<bool>,
+}
+
+impl PartialEq for PlaceStates {
+    fn eq(&self, _: &PlaceStates) -> bool {
+        true
+    }
+}
+
 /// Building the project's own workspace: what cargo is run over, with what, and what it
 /// said. The manifest is read here: it is this section's own question.
 #[derive(PartialEq)]
-struct CargoSection;
+struct CargoSection {
+    /// What a diagnostic's press reaches for, consumed once by the page: a handler may
+    /// not run a hook ([`PlaceStates`]).
+    places: PlaceStates,
+}
 
 impl Component for CargoSection {
     fn render(&self) -> impl IntoElement {
@@ -413,11 +438,7 @@ impl Component for CargoSection {
         let build = use_consume::<Building>().0;
         let held = build.read().clone();
         let jobs = use_consume::<BuildJobs>();
-        // What a diagnostic's place is pressed to reach. Consumed here and handed to
-        // `source_place`: a hook may only be called while a component renders, and there
-        // is one place per diagnostic.
-        let doors = use_doors();
-        let ctrl = use_consume::<Ctrl>().0;
+        let PlaceStates { doors, ctrl } = self.places;
         let open = proj.read().clone();
         let directory = open.workspace();
         let profile = open.profile;
@@ -756,12 +777,19 @@ pub(crate) struct ProjectTab;
 
 impl Component for ProjectTab {
     fn render(&self) -> impl IntoElement {
+        // What a diagnostic's place is pressed to reach, consumed here and handed down:
+        // the section below it renders again on every word the build worker says, and a
+        // hook may only be called while a component renders ([`PlaceStates`]).
+        let places = PlaceStates {
+            doors: use_doors(),
+            ctrl: use_consume::<Ctrl>().0,
+        };
         page(
             None,
             page_column()
                 .child(IdentitySection)
                 .child(BinariesSection)
-                .child(CargoSection)
+                .child(CargoSection { places })
                 .child(LanguageSection)
                 .child(RecentsSection),
         )

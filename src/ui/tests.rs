@@ -18922,6 +18922,75 @@ fn what_an_instruction_rows_menu_reaches_for_costs_the_row_no_render() {
     );
 }
 
+/// **What a press on a linked operand reaches for is the list's to consume**
+/// ([`LinkStates`]), and a label carrying it is not re-rendered for it. A label is one
+/// per linked operand of every row on screen and is rebuilt as every scroll recycles a
+/// row, so it is the most-made component in the app; it reached for four contexts a
+/// render, three of them wanted only by a press.
+///
+/// A run picked out on the label's own row re-renders that row -- the wash and the
+/// columns are its own -- and says nothing about the link in it. Made to fail first with
+/// a [`LinkStates`] that compares unequal, which is a render a label for handles the root
+/// never replaces.
+///
+/// Headless because nothing shows either way: the label draws the same thing, and only
+/// the element freya rebuilt says whether the scope rendered again.
+#[test]
+fn what_a_links_press_reaches_for_costs_the_label_no_render() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+    let (mut test, marked) = TestingRunner::new(
+        listing_harness,
+        (900., 600.).into(),
+        move |runner: &mut _| {
+            runner
+                .provide_root_context(move || listing_states(shown))
+                .doors
+                .marked
+        },
+        1.,
+    );
+    let mut marked = marked;
+    settle(&mut test);
+
+    // `sum_to` calls `add`, and the relocation's name in that operand is the link. The
+    // row it is drawn in is the box a whole row tall around the name, which is what the
+    // run below has to reach for this to be measuring anything.
+    let row = |test: &TestingRunner| {
+        let name = label_area(test, "add").expect("the relocation's name is drawn");
+        test.find(|node, _element| {
+            let area = node.layout().area;
+            let around = area.min_y() <= name.min_y() && name.max_y() <= area.max_y();
+            (around && area.height() == code_row_height()).then(|| node.element())
+        })
+        .expect("the name is drawn in a row of the listing")
+    };
+
+    let (before, drawn) = (row(&test), assembly::links_drawn());
+    // A run over the name's own row, which is row 12 of the listing: the fifth
+    // instruction after the separator at 4Bh.
+    marked.set(Marks {
+        assembly: Some(picked_row(12, "line_fixture.c", Owed::default())),
+        source: None,
+    });
+    settle(&mut test);
+    assert!(
+        !Rc::ptr_eq(&before, &row(&test)),
+        "the run never reached the row the link is in, so nothing here was measured"
+    );
+    assert_eq!(
+        assembly::links_drawn(),
+        drawn,
+        "a run picked out in the row drew the link inside it again"
+    );
+}
+
 /// The Source pane's gutter marks every line of the file that produced code, and nothing
 /// else: a reader scanning it can tell those from the lines that produced none without
 /// picking anything out. The set is the file's own, answered for the whole file, so it is

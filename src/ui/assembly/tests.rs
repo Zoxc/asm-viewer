@@ -21,6 +21,19 @@ fn in_runtime(body: impl FnOnce()) {
     );
 }
 
+/// What a link reaches for, built the way the root and a list build it: every root
+/// context made here, since `roots` is the one list of them, and a [`Listing`] with no
+/// box behind it, nothing here being pressed.
+fn link_states() -> LinkStates {
+    let roots = roots(None, &Settings::default());
+    LinkStates {
+        ctrl: roots.keys.ctrl,
+        alt: roots.keys.alt,
+        doors: roots.doors,
+        listing: Listing::detached(),
+    }
+}
+
 fn span(text: &str, kind: SpanKind) -> (String, SpanKind) {
     (text.to_owned(), kind)
 }
@@ -188,12 +201,12 @@ fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
     let data = AsmData::of(studied, In::Alone { subject: None }).expect("the fixture decodes");
 
     in_runtime(|| {
-        // The modifiers a row is drawn with, as the root provides them: nothing here
-        // holds one, and a link only peeks them when the pointer reaches it.
-        let held = provide_modifiers();
+        // What a link is handed, as the list hands it: the root's own contexts, and a
+        // listing with no box behind it -- nothing here presses one, and a label only
+        // peeks the modifiers when the pointer reaches it.
+        let states = link_states();
         for index in 0..data.assembly().instructions.len() {
-            let text =
-                instruction_text(&data, index, RowChars::default(), None, held.ctrl, held.alt);
+            let text = instruction_text(&data, index, RowChars::default(), None, &states);
             let (drawn, copied) = (drawn(&text), &text.line);
 
             for col in 0..copied.units() {

@@ -51,6 +51,14 @@ pub(crate) fn use_widest() -> Widest {
     Widest(use_state(|| (0, 0.0)))
 }
 
+#[cfg(test)]
+impl Widest {
+    /// One with no list behind it, made in the root scope: for a test that draws no rows.
+    pub(crate) fn detached() -> Widest {
+        Widest(State::create((0, 0.0)))
+    }
+}
+
 impl Widest {
     /// The key a listing is held under: the identity of what outlives its rows -- the
     /// disassembly, the highlighted file, the object -- under the fixed-width font's size,

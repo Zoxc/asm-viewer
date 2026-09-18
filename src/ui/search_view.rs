@@ -187,10 +187,10 @@ impl Component for SearchPanel {
         let dock = use_consume::<SidebarDock>().0;
         let proj = use_consume::<Proj>().0;
         let pane = use_list_pane(Panel::Search);
-        // What Enter on a row reaches through, consumed here because the handler that
-        // uses them runs no hook.
-        let doors = use_doors();
-        let ctrl = use_consume::<Ctrl>().0;
+        // What Enter on a row reaches through, which the pane has already consumed for
+        // its rows: taken off that bundle rather than reached for again, so the panel's
+        // keys and its rows cannot come to open a hit two ways ([`ListStates`]).
+        let ListStates { doors, ctrl, .. } = pane.states;
         // The box is the panel's own and not the session's, as a filter is; it starts as
         // whatever was last searched for, so a panel dragged between areas or reached
         // again keeps saying what is on screen under it.

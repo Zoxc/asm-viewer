@@ -436,6 +436,21 @@ pub(crate) struct RowText {
     text_x: Rc<Cell<f32>>,
 }
 
+#[cfg(test)]
+impl Listing {
+    /// One with no box behind it: nothing measured, nothing lent, and a scroll nobody
+    /// moves. For a test that calls what a row's text is built from without drawing a
+    /// list to build it in.
+    pub(crate) fn detached() -> Listing {
+        Listing::new(
+            ScrollController::new(0, 0, Vec::new()),
+            Widest::detached(),
+            State::create(0.0),
+            State::create(0.0),
+        )
+    }
+}
+
 impl Listing {
     /// A fresh list, with nothing lent yet and no listing drawn. The two states are
     /// handed in rather than made here, this being called once from inside a hook's
