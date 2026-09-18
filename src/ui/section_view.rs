@@ -673,7 +673,11 @@ impl Component for SectionList {
         };
         use_kept_place(
             doors,
-            docs,
+            sectioned,
+            controller,
+            tab,
+            &stop,
+            &object,
             // The scroll this pane owes: to its own run's first row, or to the source
             // pane's run, the row of the first instruction compiled from one of its
             // lines, in whichever held stretch has one. Left owed while none does -- the
@@ -691,12 +695,6 @@ impl Component for SectionList {
                 reveal_made(marked, Pane::Assembly);
                 true
             },
-            reading,
-            rows,
-            controller,
-            tab,
-            &stop,
-            &object,
         );
         use_window(sectioned, controller, viewport, &object);
 
@@ -1070,23 +1068,22 @@ impl At {
 ///
 /// `tab` is [`None`] for a listing that is no tab -- the Scratchpad's -- which has
 /// nothing to file a place or a run under and so has none written for it; `stop` is what
-/// the listing is showing either way. `docs` says whether the place is still open, which
-/// is what a write down here is allowed for, and is asked of the state itself for the
-/// reason [`use_kept_position`] gives. `object` is the pane's, and a dep for the reason
+/// the listing is showing either way. `doors.open.docs` says whether the place is still
+/// open, which is what a write down here is allowed for, and is asked of the state itself
+/// for the reason [`use_kept_position`] gives. `object` is the pane's, and a dep for the reason
 /// [`use_window`] gives: the reading is read in the effect, which is what wakes it as an
 /// answer lands, and only a reading of `object` has rows for it.
 fn use_kept_place(
     doors: Doors,
-    docs: State<Docs>,
-    mut reveal: impl FnMut(&mut ScrollController, &Built) -> bool + 'static,
-    reading: State<Reading>,
-    mut rows: State<Option<Arc<Built>>>,
+    sectioned: Sectioned,
     mut controller: ScrollController,
     tab: Option<DocId>,
     stop: &Stop,
     object: &Arc<Object>,
+    mut reveal: impl FnMut(&mut ScrollController, &Built) -> bool + 'static,
 ) {
-    let (marked, plant) = (doors.marked, doors.plant);
+    let (marked, plant, docs) = (doors.marked, doors.plant, doors.open.docs);
+    let (reading, mut rows) = (sectioned.reading, sectioned.rows);
     let (code_at, marks_at) = (doors.places.code_at, doors.places.marks_at);
     let held = use_hook(|| Rc::new(RefCell::new(Held::default())));
 
