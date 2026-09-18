@@ -62,7 +62,7 @@ impl Place for references::Reference {
 
 /// Which panel's answer a row belongs to: the state its fold is written to, and which
 /// panel's pick it is drawn against.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Folding {
     /// The Search panel's hits.
     Hits(State<Searched>),
@@ -90,8 +90,12 @@ impl Folding {
 }
 
 /// One row of a grouped answer: a file, or one of the places under it.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct PlaceRow<T> {
+    /// A [`Hit`] and a [`references::Reference`] are both [`Eq`], so two item rows holding
+    /// the same `Arc` compare equal without reading it. The file's path and name are `Arc`s
+    /// for the copying and compare by what they say, which is what a row must be redrawn
+    /// for (`src/grouped.rs`).
     pub(crate) row: Row<T>,
     pub(crate) folding: Folding,
     /// Where this row is in the list as it is drawn, which is what the arrows step and
@@ -154,18 +158,6 @@ pub(crate) fn press_place<T: Place>(
             );
             Pressed::Opened
         }
-    }
-}
-
-/// The row and where it is are the whole of what is drawn: the states in [`Folding`] and
-/// in [`ListStates`] compare equal whatever they hold, and a row never moves from one
-/// panel to the other. A [`Hit`] and a [`references::Reference`] are both [`Eq`], so two
-/// item rows holding the same `Arc` compare equal without reading it. The file's path and
-/// name are `Arc`s for the copying and compare by what they say, which is what a row must
-/// be redrawn for (`src/grouped.rs`).
-impl<T: PartialEq> PartialEq for PlaceRow<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.row == other.row && self.at == other.at
     }
 }
 

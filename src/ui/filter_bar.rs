@@ -74,23 +74,14 @@ impl Toggle {
     }
 }
 
-/// One toggle button. Whether it is on is a prop rather than something read here, so that
-/// typing a character re-renders the bar and none of the toggles.
-#[derive(Clone)]
+/// One toggle button.
+#[derive(Clone, PartialEq)]
 pub(crate) struct FilterToggle {
     pub(crate) filter: State<Filter>,
     pub(crate) toggle: Toggle,
+    /// Whether it is on: a prop rather than read off the filter here, so that typing a
+    /// character re-renders the bar and none of the toggles.
     pub(crate) on: bool,
-}
-
-/// Written out because the filter cannot be compared: a `State` compares by the box it is
-/// and never by what is in it, so a derive would put a line there that reads as a
-/// comparison of the filter and is not one. Nothing is lost by leaving it out -- the
-/// toggle only writes the filter, and `on` is what says it has to be drawn again.
-impl PartialEq for FilterToggle {
-    fn eq(&self, other: &Self) -> bool {
-        self.toggle == other.toggle && self.on == other.on
-    }
 }
 
 impl Component for FilterToggle {
@@ -121,7 +112,7 @@ impl Component for FilterToggle {
 
 /// The filter over one of the sidebar lists: a text box, and the three toggles that say
 /// how to read what is in it. The state it edits arrives as a prop, never as a context.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct FilterBar {
     filter: State<Filter>,
     /// The box's own id, minted by the pane so the rows' handler can ask for it.
@@ -132,19 +123,6 @@ struct FilterBar {
     /// list with. A prop and not compiled here: the reason the bar prints has to be the
     /// reason the list refused.
     error: Option<String>,
-}
-
-/// Written out because the filter cannot be compared: a `State` compares by the box it is
-/// and never by what is in it, so a derive would put a line there that reads as a
-/// comparison and is not. What makes the bar draw again is reading the filter in
-/// `render`, which is what subscribes it. The error is compared: it is what the box is
-/// coloured by.
-impl PartialEq for FilterBar {
-    fn eq(&self, other: &Self) -> bool {
-        self.a11y == other.a11y
-            && self.placeholder == other.placeholder
-            && self.error == other.error
-    }
 }
 
 impl Component for FilterBar {
