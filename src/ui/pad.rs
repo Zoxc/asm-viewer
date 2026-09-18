@@ -325,8 +325,9 @@ impl Pads {
     /// What `name` owes the disk, with its baseline moved to it, or `None` where the disk
     /// already has what is on screen.
     ///
-    /// The one comparison, with two callers: the save effect, for the pad being typed
-    /// into, and a switch, for the pad being left. The baseline moves to what is handed
+    /// The one comparison, with three callers: the mirror, for an edit to the source; the
+    /// save effect, for any other change to the pad on screen; and a switch, for the pad
+    /// being left. The baseline moves to what is handed
     /// back, so a reader who changes a row and changes it back writes again. Nothing is
     /// owed by a pad whose disk copy has not been read yet ([`PadState::opened`]).
     ///
@@ -1027,7 +1028,15 @@ pub(crate) fn use_scratchpad_with(
                 pad.write().unopened(&name, failure);
             }
             PadAnswer::Saved { pad: name, failure } => {
-                pad.write().saved(&name, failure);
+                // Written only where it changes something: a save is answered per
+                // keystroke, and a write draws every piece of the page again.
+                let changed = pad
+                    .peek()
+                    .get(&name)
+                    .is_some_and(|state| state.unsaved != failure);
+                if changed {
+                    pad.write().saved(&name, failure);
+                }
             }
             PadAnswer::Built {
                 pad: name,
@@ -1078,27 +1087,42 @@ pub(crate) fn use_scratchpad_with(
     // writes through its `Writable` for a cursor move as much as for an edit -- which is
     // what `use_driving_cursor` in `pad_view.rs` relies on -- so a copy taken to compare
     // would be the reader's whole file allocated and dropped per arrow key.
-    use_side_effect(move || {
-        let buffers = text.read();
-        let shown = pad.peek().shown().clone();
-        if !buffers.holds(&shown) {
-            return;
-        }
-        let editor = buffers.get(&shown);
-        let typed = (editor.rope != pad.peek().state().scratchpad.source).then(|| {
-            #[cfg(test)]
-            MIRRORED.set(MIRRORED.get() + 1);
-            editor.rope.to_string()
-        });
-        drop(buffers);
+    //
+    // An edit is saved under the same guard, so a keystroke is one write to `Pads` and not
+    // two. The save effect below still runs on it, and finds nothing owed.
+    use_side_effect({
+        let jobs = jobs.clone();
+        move || {
+            let buffers = text.read();
+            let shown = pad.peek().shown().clone();
+            if !buffers.holds(&shown) {
+                return;
+            }
+            let editor = buffers.get(&shown);
+            let typed = (editor.rope != pad.peek().state().scratchpad.source).then(|| {
+                #[cfg(test)]
+                MIRRORED.set(MIRRORED.get() + 1);
+                editor.rope.to_string()
+            });
+            drop(buffers);
 
-        if let Some(typed) = typed {
-            pad.write().state_mut().scratchpad.source = typed;
+            let Some(typed) = typed else {
+                return;
+            };
+            let saving = {
+                let mut pads = pad.write();
+                pads.state_mut().scratchpad.source = typed;
+                pads.unsaved_change(&shown)
+            };
+            if let Some(scratchpad) = saving {
+                jobs.jobs.send(PadJob::Save(scratchpad));
+            }
         }
     });
 
-    // The model onto the disk. The shown pad for the same reason: nothing else can change
-    // under a keystroke, and a switch flushes the pad it is leaving on its way out.
+    // The model onto the disk: a crate row or the name, an edit to the source being saved
+    // by the mirror. The shown pad for the same reason: nothing else can change under a
+    // keystroke, and a switch flushes the pad it is leaving on its way out.
     use_side_effect({
         let jobs = jobs.clone();
         move || {

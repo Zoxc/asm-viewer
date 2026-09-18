@@ -392,10 +392,13 @@ what makes the reader's own switch draw the right text.
 
 **Switching pads writes the one being left before it opens the next, and through the worker.** The
 jobs are one ordered queue, so a save queued ahead of the arriving pad's read lands ahead of it. A
-save left to the effect would not: the mirror into the model and the write out of it are two
-effects, the second woken by the first, so a click landing between them would leave the last
-keystroke unwritten. `Pads::unsaved_change` is the one comparison behind both callers, the effect
-for the pad being typed into and `show_pad` for the pad being left. A pad already read is shown
+save left to the effect would not: the effect is woken by the change it writes out, so a click
+landing between the two would leave that change unwritten. `Pads::unsaved_change` is the one
+comparison behind every caller: the save effect, `show_pad` for the pad being left, and the mirror
+of the editor into the model, which saves an edit under the guard it writes it with. Every piece
+of the page reads `Pads`, so each write draws all of them again, and a keystroke used to be three:
+the mirror's, the save's and the save's answer. It is one now, the answer writing only where it
+changes `PadState::unsaved`. A pad already read is shown
 from what is held and is never read a second time. **The question's rule is `Pads::show`'s**: it
 draws the pad and answers the one to ask the worker for, which is `None` for a pad whose disk has
 been read, so the four doors in -- the listing, a pad just made, a delete coming back to the next

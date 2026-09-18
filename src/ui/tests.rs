@@ -18253,6 +18253,54 @@ fn a_runs_lines_draw_no_other_piece_of_the_page() {
     );
 }
 
+/// **A keystroke draws the page once.** Every piece of it reads `Pads`, so each write to it
+/// draws all of them again. A keystroke was three writes: the mirror, the save's baseline
+/// and the save's answer.
+#[test]
+fn a_keystroke_draws_the_page_once() {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open(scratchpad) => PadAnswer::Opened {
+                scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+    let mut pad = roots.pad;
+    let text = roots.pad_text;
+
+    pump(&mut test, |_| pad.peek().state().opened());
+    settle(&mut test);
+
+    // What one write to `Pads` draws.
+    let before = pieces_drawn();
+    let _ = pad.write();
+    settle(&mut test);
+    let once = pieces_drawn() - before;
+    assert!(once > 0, "a write to `Pads` drew nothing");
+
+    let before = pieces_drawn();
+    edit_shown(text, pad, |editor| editor.rope.insert(0, "// typed\n"));
+    pump(&mut test, |_| {
+        pad.peek().state().scratchpad.source.starts_with("// typed")
+    });
+    settle(&mut test);
+    // And the tab once more, for the buffer it reads.
+    assert_eq!(
+        pieces_drawn() - before,
+        once + 1,
+        "a keystroke drew the page more than once"
+    );
+}
+
 /// **Nothing runs while a build does**, and the rule is `request_run`'s rather than the
 /// Run button's `enabled`: cargo is writing over the very executable a run would start,
 /// and a run begun mid-build is not one that build's own `stop_run` has taken down.
