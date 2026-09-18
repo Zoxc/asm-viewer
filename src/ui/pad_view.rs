@@ -819,8 +819,9 @@ fn use_driving_cursor(
             let line = LinePos::line_of(buffers.get(pad).cursor_row());
             drop(buffers);
 
-            // Bound to a `let` of its own before the write below, the read's guard living to
-            // the end of the statement it is in.
+            // A read and not a peek: it is what wakes this when `use_land` wipes the run,
+            // so the drive says its line again. Bound to a `let` of its own before the
+            // write below, the read's guard living to the end of the statement it is in.
             let standing = marked
                 .read()
                 .source
