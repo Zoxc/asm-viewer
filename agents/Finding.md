@@ -138,7 +138,7 @@ nothing, where a plain press opens the file.
 Enter and that press are the one door, `open_found`, which closes the panel itself rather than
 leaving each caller to. It is drawn in the selection while the box holds the keyboard, which it does
 from the moment the chord opens the finder, and in the grey a list not being typed in draws its pick
-with -- so the finder needs no rule of its own for either, only the box handed down as `RowsBox`.
+with -- so the finder needs no rule of its own for either, only its box handed to each row.
 
 **The list follows that row.** The panel is `FINDER_ROWS` tall and the arrows walk past it, so the
 list is given a `ScrollController` and each move ends in `reveal_caret` -- the code panes' own

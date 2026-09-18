@@ -737,7 +737,7 @@ there is an `Arc` behind it, and the table is one per `Panel`, held at the root 
 is not its dock tab's is unmounted. **The keyboard picks the colour**: the list holding it draws its
 pick in `text_select_bg`, the code panes' own selection, and every other list draws its in
 `selected_bg`'s grey, so what the next key would act on is the one thing in blue. What answers for a
-list is the focusable rows box its pane already mints for Ctrl+F, handed down as `RowsBox`; the
+list is the focusable rows box its pane already mints for Ctrl+F, carried to the rows in `Picking`; the
 Files tree, which has no filter bar to mint one, grew one of its own. **The row asks as it draws,
 and not the pane**: `is_focused` reads the platform's own state, so asking is what subscribes, and a
 pane that asked would have every mounted panel re-rendered by a focus move anywhere in the app -- a

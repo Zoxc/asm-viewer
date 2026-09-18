@@ -206,7 +206,7 @@ impl Component for FilterBar {
 #[derive(Clone, Copy)]
 pub(crate) struct ListPane {
     /// The rows' own node: what a press focuses, what the keys are answered on, and what
-    /// [`RowsBox`] hands down so a row knows whether the keyboard is in its list.
+    /// a row asks whether the keyboard is in its list ([`Picking::drawn`]).
     rows: AccessibilityId,
     /// The filter box over them, where the pane has one.
     box_id: AccessibilityId,
@@ -226,9 +226,6 @@ pub(crate) struct ListPane {
 /// The box for the list `panel` draws.
 pub(crate) fn use_list_pane(panel: Panel) -> ListPane {
     let rows = use_hook(AccessibilityId::new_unique);
-    // Provided rather than passed as a prop: it is one fact about the pane and every row
-    // of every list in it wants it (`ui/picks.rs`).
-    use_provide_context(|| RowsBox(rows));
     let box_id = use_hook(AccessibilityId::new_unique);
     // Which of the two a chord that reaches this panel puts the keyboard in
     // ([`Panel::filters`]), registered here and not by whichever of `filtered`, `plain`
@@ -240,7 +237,7 @@ pub(crate) fn use_list_pane(panel: Panel) -> ListPane {
         box_id,
         controller: use_scroll_controller(ScrollConfig::default),
         viewport: use_state(|| 0.0f32),
-        states: use_list_states(panel),
+        states: use_list_states(panel, rows),
     }
 }
 

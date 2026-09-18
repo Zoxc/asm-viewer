@@ -508,11 +508,10 @@ impl Component for FinderOverlay {
         let states = use_project_states();
         let visits = states.visits;
         let keyboard = use_consume::<Keyboard>().0;
-        let box_id = use_hook(AccessibilityId::new_unique);
         // The panel's one focusable node is its box, so it is the box that answers for
         // the list under it: the rows are drawn live while the reader is typing at them,
         // and in the grey if the keyboard has gone elsewhere (`ui/picks.rs`).
-        use_provide_context(|| RowsBox(box_id));
+        let box_id = use_hook(AccessibilityId::new_unique);
         // The list's own scroll. The arrows move a row the view knows nothing about, so
         // without a controller to follow it the row goes under the panel's edge at the
         // thirteenth press, and Enter opens a file the reader never saw named.
@@ -582,12 +581,13 @@ impl Component for FinderOverlay {
                     VirtualScrollView::new_with_data_controlled(
                         // The rows alone: a row draws one of them and nothing about the
                         // query they were picked out for, which is the panel's business.
-                        (drawn.rows.clone(), at),
-                        |index, (found, at): &(Shared<Row>, usize)| {
+                        (drawn.rows.clone(), at, box_id),
+                        |index, (found, at, box_id): &(Shared<Row>, usize, AccessibilityId)| {
                             FoundRow {
                                 rows: found.clone(),
                                 index,
                                 on_row: index == *at,
+                                box_id: *box_id,
                                 key: DiffKey::None,
                             }
                             .key(&index)
@@ -867,6 +867,8 @@ struct FoundRow {
     index: usize,
     /// Whether the keyboard is on this row.
     on_row: bool,
+    /// The finder's box, which answers for whether the keyboard is in the list.
+    box_id: AccessibilityId,
     key: DiffKey,
 }
 
@@ -904,7 +906,7 @@ impl Component for FoundRow {
             fitted.cut(),
             file.path.display().to_string(),
             // The keyboard's row is what is picked out here; the pointer's is the hover.
-            list_row(hovering, chosen(self.on_row, keyboard_in_list()))
+            list_row(hovering, chosen(self.on_row, self.box_id.is_focused()))
                 .on_press(move |_| {
                     // Alt says this press is not a door, as it does on a link and in
                     // every list: the row is picked out and the finder stays open. The

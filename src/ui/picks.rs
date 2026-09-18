@@ -20,7 +20,8 @@
 //! grey. So a reader looking at three panels at once can tell the list they are typing in
 //! from the two remembering where they were, and the blue means the same thing in a list
 //! as in the code -- what the next key acts on. The box that answers for a list is the one
-//! its pane made focusable ([`RowsBox`]), which is the pane's rows and not its filter box.
+//! its pane made focusable, which is the pane's rows and not its filter box, and which the
+//! list's [`Picking`] carries to every row.
 //!
 //! **The pick is the list's cursor**, which is what makes a list something the keyboard can
 //! be used in: Up and Down move it ([`Picking::stepped`]), Home, End and the two page keys
@@ -105,11 +106,6 @@ pub(crate) struct PickedRow {
 #[derive(Clone, Copy)]
 pub(crate) struct Picks(pub(crate) State<HashMap<Panel, PickedRow>>);
 
-/// The focusable box a list's rows are in, provided by the pane that mints it so that a
-/// row can ask whether the keyboard is in the list it is being drawn in.
-#[derive(Clone, Copy)]
-pub(crate) struct RowsBox(pub(crate) AccessibilityId);
-
 /// How a list row is picked out: what [`list_row`] draws it with.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Chosen {
@@ -119,21 +115,6 @@ pub(crate) enum Chosen {
     Idle,
     /// Picked out in the list the keyboard is in.
     Live,
-}
-
-/// The box that answers for the list being drawn, where there is one.
-///
-/// `try_consume_context` and not [`use_consume`]: it is not a hook, so a row outside any
-/// list -- which is how a test mounts one on its own -- draws as a list nobody is typing
-/// in rather than panicking.
-pub(crate) fn rows_box() -> Option<AccessibilityId> {
-    try_consume_context::<RowsBox>().map(|rows| rows.0)
-}
-
-/// Whether the keyboard is in the list being drawn. Asking is what subscribes the row to
-/// the focus moving, `is_focused` reading the platform's own state (`ui/keyboard.rs`).
-pub(crate) fn keyboard_in_list() -> bool {
-    rows_box().is_some_and(|rows| rows.is_focused())
 }
 
 /// A row that is picked out, drawn for where the keyboard is.
@@ -358,6 +339,9 @@ pub(crate) struct Picking {
     alt: State<bool>,
     keyboard: State<Keys>,
     panel: Panel,
+    /// The focusable box the list's rows are in, which is what answers for whether the
+    /// keyboard is in the list.
+    rows: AccessibilityId,
 }
 
 /// The pick of the panel a row is in, minted once on the pane every panel draws its list
@@ -371,7 +355,7 @@ pub(crate) struct Picking {
 /// row of every panel on the list of what a press or an arrow step in one of them wakes.
 /// A memo notifies only when this panel's own entry changes. It is made here because the
 /// panel is the pane's and not the row's, so there is one per list and not one per row.
-pub(crate) fn use_picking(panel: Panel) -> Picking {
+pub(crate) fn use_picking(panel: Panel, rows: AccessibilityId) -> Picking {
     let picks = use_consume::<Picks>().0;
     Picking {
         picks,
@@ -379,6 +363,7 @@ pub(crate) fn use_picking(panel: Panel) -> Picking {
         alt: use_consume::<Alt>().0,
         keyboard: use_consume::<Keyboard>().0,
         panel,
+        rows,
     }
 }
 
@@ -387,17 +372,18 @@ impl Picking {
     /// `shown` -- whether this row is what the tab on screen is showing -- where it has
     /// not. A list with no document behind its rows passes `false`.
     ///
-    /// Called only while a row renders, which is why [`keyboard_in_list`] is asked here
-    /// and not in [`use_picking`]: the read subscribes the scope asking, and the pane
-    /// draws nothing from the answer. Asked there, a focus move anywhere in the app would
-    /// re-render every mounted panel for rows that wake on their own.
+    /// Called only while a row renders, which is why whether the keyboard is in the list
+    /// is asked here and not in [`use_picking`]: `is_focused` reads the platform's own
+    /// state, so the read subscribes the scope asking, and the pane draws nothing from the
+    /// answer. Asked there, a focus move anywhere in the app would re-render every mounted
+    /// panel for rows that wake on their own.
     pub(crate) fn drawn(&self, pick: &Pick, shown: bool) -> Chosen {
         let picked = self.picked.read();
         let selected = match picked.as_ref() {
             Some(picked) => &picked.pick == pick,
             None => shown,
         };
-        chosen(selected, keyboard_in_list())
+        chosen(selected, self.rows.is_focused())
     }
 
     /// A press on the row, which is `at` in the list as it is drawn: pick it out, and then

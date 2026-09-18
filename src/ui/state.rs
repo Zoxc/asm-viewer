@@ -611,9 +611,9 @@ impl PartialEq for ListStates {
 }
 
 /// What a list's rows reach for, as the pane drawing them sees it.
-pub(crate) fn use_list_states(panel: Panel) -> ListStates {
+pub(crate) fn use_list_states(panel: Panel, rows: AccessibilityId) -> ListStates {
     ListStates {
-        picking: use_picking(panel),
+        picking: use_picking(panel, rows),
         doors: use_doors(),
         ctrl: use_consume::<Ctrl>().0,
         project: use_project_states(),
