@@ -65,7 +65,6 @@ impl Component for EntryRow {
             picking,
             ctrl,
             project: states,
-            unopened,
             ..
         } = self.states;
         let at = self.at;
@@ -121,9 +120,7 @@ impl Component for EntryRow {
                             let path = path.clone();
                             menu.child(
                                 MenuButton::new()
-                                    .on_press(move |_| {
-                                        switch_project(states, unopened, path.to_path_buf())
-                                    })
+                                    .on_press(move |_| switch_project(states, path.to_path_buf()))
                                     .child("Open as project"),
                             )
                         })

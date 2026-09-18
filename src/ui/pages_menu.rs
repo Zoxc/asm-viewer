@@ -134,7 +134,6 @@ impl Component for PagesButton {
         let mut asked = use_state(|| false);
         let alt = use_consume::<Alt>().0;
         let states = use_project_states();
-        let unopened = use_consume::<Unopened>().0;
         let recents = use_consume::<Recents>().0;
         // The pages this run offers, each with whether it is open already: one list of
         // pairs, so the mark cannot come to be about a different page than the row it is
@@ -181,7 +180,7 @@ impl Component for PagesButton {
                 showing.set(!was);
             },
             move || {
-                main_menu(states, unopened, &recents, &pages, showing)
+                main_menu(states, &recents, &pages, showing)
                     .on_close(move |_| showing.set(false))
                     .into_element()
             },
@@ -193,7 +192,6 @@ impl Component for PagesButton {
 /// which is what lets it leave out the items that would do nothing.
 fn main_menu(
     states: ProjectStates,
-    unopened: State<Option<project::Failure>>,
     recents: &[Recent],
     // The pages this run has, each with whether it is open already, asked for by the
     // caller ([`PagesButton`]).
@@ -212,9 +210,9 @@ fn main_menu(
             "Open a project...",
             Some(shortcuts::key!(OpenProject)),
             close,
-            move || ask_for_a_project(states, unopened),
+            move || ask_for_a_project(states),
         ))
-        .child(recents_submenu(states, unopened, recents, close))
+        .child(recents_submenu(states, recents, close))
         .child(menu_row(
             "Open a directory as a project...",
             None,
@@ -279,7 +277,6 @@ fn main_menu(
 /// (`notes/upstream/freya.md`).
 pub(crate) fn recents_submenu(
     states: ProjectStates,
-    unopened: State<Option<project::Failure>>,
     recents: &[Recent],
     close: State<bool>,
 ) -> Element {
@@ -307,7 +304,7 @@ pub(crate) fn recents_submenu(
         .map(|recent| {
             let path = recent.path.clone();
             menu_row(&recent.label, None, close, move || {
-                switch_project(states, unopened, path.clone())
+                switch_project(states, path.clone())
             })
             .key(recent.path.to_string_lossy().into_owned())
             .into_element()

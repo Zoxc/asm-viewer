@@ -197,7 +197,9 @@ never touched. A closer still takes `Places` on its own, being no door; what a c
 is `Places::forgetting`'s and is unchanged by the handles being reachable through `Doors` too.
 `ProjectStates` (`state.rs`) is what a project owns, since a project switch closes all of it and
 reopens all of it -- `marks_at` for the closing and not the reopening, being the one part
-`session.toml` never sees. `Server` (`follow.rs`) is whom a question about a name is put to --
+`session.toml` never sees. It also carries three handles that are not a project's own, because
+every way into or out of a project needs them: `store`, `arranged`, which a restore writes, and
+`unopened`, which every way in reports a project that would not open into. `Server` (`follow.rs`) is whom a question about a name is put to --
 the control's state, where a followed name's answer lands, and the way to the worker -- and is
 the one bundle taken with a `try_use_`: a pane may be mounted with no server, and one with any
 part of it missing draws no links at all. It is `Clone` and not `Copy`, `LspJobs` carrying
@@ -211,8 +213,7 @@ consume them itself, at one walk per mount; the list does it so there is one set
 `ListStates` (`state.rs`) is the same thing for the lists
 outside the code panes: the pick (`picking`), the door a press goes through (`doors`, `ctrl`), the
 project's own states (`project`, which is where a bookmark and the objects it is judged against
-come from) and what goes with those wherever a project is switched (`unopened`).
-It is gathered by `use_list_states` on the pane every panel already mints (`use_list_pane`), rides
+come from, and what a file row's "Open as project" switches with). It is gathered by `use_list_states` on the pane every panel already mints (`use_list_pane`), rides
 to the rows in `ListPane::virtual_rows`, and compares equal always for `RowStates`'s reason. It is
 a **union**: no list's rows read all of it, and what they share is most of it, where a bundle per
 list would be six of them and six ways for two rows of one panel to disagree about where a press
@@ -356,9 +357,8 @@ So `root_key_down` takes the **bundles** -- `ProjectStates`, which carries `Open
 -- and not a state per binding, which is what it did with two chords and could not go on doing:
 the states a chord wants are the states its door wants, so a parameter per key would have grown
 the list by one on every binding. What is still handed in by name is what belongs to no bundle:
-where the keyboard can be put (`Keys`, which the panel chords ask through), the finder, the two
-windows a project that would not open puts up, and the language server with the worker it is
-spoken to through.
+where the keyboard can be put (`Keys`, which the panel chords ask through), the finder, and the
+language server with the worker it is spoken to through.
 
 The rows are handed to the view as `&'static Gesture`, which is why `SECTIONS` is a `static`
 and not a `const` -- a `const` is a value copied into each place it is named rather than one

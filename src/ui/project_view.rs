@@ -295,7 +295,6 @@ impl Component for RecentRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let states = use_project_states();
-        let unopened = use_consume::<Unopened>().0;
         let path = self.recent.path.clone();
         let recent = &self.recent;
 
@@ -313,7 +312,7 @@ impl Component for RecentRow {
         extra_tooltip(
             recent.path.to_string_lossy().into_owned(),
             list_row(hovering, Chosen::No)
-                .on_press(move |_| switch_project(states, unopened, path.clone()))
+                .on_press(move |_| switch_project(states, path.clone()))
                 .child(one_line(text).width(Size::flex(1.0)))
                 .child(dim_line(about)),
         )

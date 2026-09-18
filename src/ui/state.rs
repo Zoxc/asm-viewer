@@ -475,6 +475,9 @@ pub(crate) struct ProjectStates {
     /// Where the project's own files go. Not a project's state either, and here for
     /// `arranged`'s reason: everything that opens, saves or leaves a project needs it.
     pub(crate) store: State<Option<Store>>,
+    /// The project that would not open, for [`UnopenedPopup`]. Here for `store`'s reason:
+    /// every way into a project reports into it.
+    pub(crate) unopened: State<Option<project::Failure>>,
     pub(crate) objects: State<Vec<Arc<Object>>>,
     /// The files on their way into `objects`. Leaving a project abandons them too,
     /// including the ones that have produced nothing yet and so are not in `objects` to be
@@ -598,9 +601,6 @@ pub(crate) struct ListStates {
     /// The project's own states: what a bookmark is added to and judged live against, and
     /// what a binary is closed out of.
     pub(crate) project: ProjectStates,
-    /// What goes with [`ProjectStates`] wherever a project is switched, which is what a
-    /// file row's "Open as project" does.
-    pub(crate) unopened: State<Option<project::Failure>>,
 }
 
 impl PartialEq for ListStates {
@@ -616,7 +616,6 @@ pub(crate) fn use_list_states(panel: Panel) -> ListStates {
         doors: use_doors(),
         ctrl: use_consume::<Ctrl>().0,
         project: use_project_states(),
-        unopened: use_consume::<Unopened>().0,
     }
 }
 

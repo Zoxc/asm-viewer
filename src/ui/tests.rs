@@ -1185,7 +1185,6 @@ fn a_page_picked_with_no_project_opens_as_a_tab() {
 /// ran it happened to have projects.
 fn empty_recents_harness() -> impl IntoElement {
     let states = use_project_states();
-    let unopened = use_consume::<Unopened>().0;
     let close = use_state(|| true);
 
     rect().expanded().child(
@@ -1196,7 +1195,7 @@ fn empty_recents_harness() -> impl IntoElement {
                 close,
                 || {},
             ))
-            .child(recents_submenu(states, unopened, &[], close)),
+            .child(recents_submenu(states, &[], close)),
     )
 }
 
@@ -29272,7 +29271,6 @@ fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
             with_dock(states, dock),
             held.keyboard,
             finder,
-            held.unopened,
             held.language,
             &held.jobs,
             held.follows,
@@ -34483,7 +34481,6 @@ fn press_finder_chord(
         with_dock(*states, dock),
         root_key_states().keyboard,
         finder,
-        root_key_states().unopened,
         root_key_states().language,
         &root_key_states().jobs,
         root_key_states().follows,
@@ -35643,13 +35640,11 @@ thread_local! {
 }
 
 /// What `root_key_down` takes beside the project's own bundle and the modifiers: where
-/// the keyboard can be put, the window a project that would not open puts up, the
-/// language server with the worker it is spoken to through, and the two flags saying
-/// whether a following pane is up.
+/// the keyboard can be put, the language server with the worker it is spoken to through,
+/// and the two flags saying whether a following pane is up.
 #[derive(Clone)]
 struct RootStates {
     keyboard: State<Keys>,
-    unopened: State<Option<project::Failure>>,
     language: State<Language>,
     jobs: LspJobs,
     /// Whether each place's following pane is up -- a tab's and the Scratchpad's alike:
@@ -35664,7 +35659,6 @@ struct RootStates {
 fn use_root_key_states() {
     let proj = use_consume::<Proj>().0;
     let keyboard = use_consume::<Keyboard>().0;
-    let unopened = use_consume::<Unopened>().0;
     let language = use_consume::<Talking>().0;
     let follow = use_consume::<Following>().0;
     let located = use_consume::<Locations>().0;
@@ -35676,7 +35670,6 @@ fn use_root_key_states() {
         ROOT_STATES.with_borrow_mut(|held| {
             *held = Some(RootStates {
                 keyboard,
-                unopened,
                 language,
                 jobs,
                 follows,
@@ -35721,7 +35714,6 @@ impl Component for ChordKeys {
         rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
             let RootStates {
                 keyboard,
-                unopened,
                 language,
                 jobs,
                 follows,
@@ -35731,7 +35723,6 @@ impl Component for ChordKeys {
                 states,
                 keyboard,
                 finder,
-                unopened,
                 language,
                 &jobs,
                 follows,
@@ -36362,7 +36353,6 @@ fn reaching_harness() -> impl IntoElement {
                 with_dock(states, dock),
                 root.keyboard,
                 finder,
-                root.unopened,
                 root.language,
                 &root.jobs,
                 root.follows,

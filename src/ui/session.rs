@@ -144,6 +144,7 @@ fn record_now(states: ProjectStates) {
         // Where the files go is `project::record`'s own, out of what the policy was
         // pointed at when the project was opened.
         store: _,
+        unopened: _,
         objects,
         loading,
         open,
@@ -245,8 +246,7 @@ fn store_for(states: ProjectStates, path: &Path) -> Result<Store, project::Failu
 /// Reopen the last project -- its name, binaries, tabs and selection -- once, at startup.
 /// Which project that is, is `project::reopen`'s answer.
 pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<PathBuf>) {
-    // Outside the hook, a hook running inside another being what it is.
-    let mut unopened = use_consume::<Unopened>().0;
+    let mut unopened = states.unopened;
     use_hook(move || {
         // What the app was given beats what it was last in. A file that will not parse
         // opens nothing and is said so, the same as one picked from a menu would be: it is
@@ -557,11 +557,8 @@ pub(crate) async fn name_moved(store: Store, mut rescued: State<Vec<PathBuf>>) {
 /// re-points every baseline while the policy still points at it, and only then is the app
 /// emptied -- so the save observer, woken by a notify after this handler, sees one
 /// settled state that matches the baseline and writes nothing.
-pub(crate) fn switch_project(
-    states: ProjectStates,
-    mut unopened: State<Option<project::Failure>>,
-    path: PathBuf,
-) {
+pub(crate) fn switch_project(states: ProjectStates, path: PathBuf) {
+    let mut unopened = states.unopened;
     let switched = store_for(states, &path).and_then(|store| project::switch(&store, &path));
     let (project, session) = match switched {
         Ok(both) => both,
@@ -640,13 +637,13 @@ pub(crate) fn binaries_dialog(title: &str) -> AsyncFileDialog {
 }
 
 /// Ask for a project file and open it in place of the one on screen.
-pub(crate) fn ask_for_a_project(states: ProjectStates, unopened: State<Option<project::Failure>>) {
+pub(crate) fn ask_for_a_project(states: ProjectStates) {
     ask_file(
         AsyncFileDialog::new()
             .set_title("Open a project...")
             .add_filter("Project", &[project::PROJECT_EXTENSION]),
         AskFor::File,
-        move |path| switch_project(states, unopened, path),
+        move |path| switch_project(states, path),
     );
 }
 

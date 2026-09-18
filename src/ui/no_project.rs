@@ -71,7 +71,6 @@ pub(crate) struct NoProject;
 impl Component for NoProject {
     fn render(&self) -> impl IntoElement {
         let states = use_project_states();
-        let unopened = use_consume::<Unopened>().0;
         let recents = use_consume::<Recents>().0.read().clone();
 
         let rows: Vec<Element> = recents
@@ -96,7 +95,7 @@ impl Component for NoProject {
                             .spacing(SECTION_GAP)
                             .child(
                                 Button::new()
-                                    .on_press(move |_| ask_for_a_project(states, unopened))
+                                    .on_press(move |_| ask_for_a_project(states))
                                     .child("Project file..."),
                             )
                             .child(

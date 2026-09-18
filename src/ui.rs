@@ -328,16 +328,14 @@ fn toolbar() -> impl IntoElement {
 /// door onto something the app already has, so the states it wants are the states those
 /// doors want, and a parameter per key would grow this list by one on every binding
 /// added. What is passed by hand is what belongs to no bundle: where the keyboard can be
-/// put, the finder, the window a project that would not open puts up, the language
-/// server with the worker it is spoken to through, and the flags saying whether each
-/// place's following pane is up.
+/// put, the finder, the language server with the worker it is spoken to through, and the
+/// flags saying whether each place's following pane is up.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn root_key_down(
     keys: ModifierKeys,
     states: ProjectStates,
     keyboard: State<Keys>,
     finder: State<Finder>,
-    unopened: State<Option<project::Failure>>,
     language: State<Language>,
     jobs: &LspJobs,
     follows: State<HashMap<Placing, bool>>,
@@ -393,7 +391,7 @@ pub(crate) fn root_key_down(
 
         // The window's own doors. `show_page` for the two pages, which opens one beside
         // the tab on screen and raises one already open -- what the pages menu's row does.
-        Chord::OpenProject => ask_for_a_project(states, unopened),
+        Chord::OpenProject => ask_for_a_project(states),
         Chord::Settings => show_page(open, Page::Settings),
         Chord::Shortcuts => show_page(open, Page::Shortcuts),
         Chord::Server => toggle_server(language, proj, jobs),
@@ -446,7 +444,6 @@ pub(crate) struct Roots {
     /// The keyboard, the three modifiers a door reads among its five states.
     pub(crate) keys: ModifierKeys,
     pub(crate) asking: State<Option<String>>,
-    pub(crate) unopened: State<Option<project::Failure>>,
     pub(crate) finder: State<Finder>,
     pub(crate) analysis: State<Analyzed>,
     pub(crate) located: State<Located>,
@@ -625,6 +622,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     let states = provide(ProjectStates {
         proj,
         store,
+        unopened,
         objects,
         loading,
         open,
@@ -691,7 +689,6 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         doors,
         keys,
         asking,
-        unopened,
         finder,
         analysis,
         located,
@@ -738,7 +735,6 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         doors,
         keys,
         asking,
-        unopened,
         finder,
         analysis,
         located,
@@ -758,6 +754,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     let ProjectStates {
         proj,
         store,
+        unopened,
         objects,
         open,
         places,
@@ -898,7 +895,6 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
                 states,
                 keyboard,
                 finder,
-                unopened,
                 language,
                 &jobs,
                 follows,
