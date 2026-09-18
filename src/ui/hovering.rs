@@ -69,7 +69,7 @@ pub(crate) struct Hover {
     /// about the one name from going out.
     asked: Option<(Ticket, Lookup)>,
     /// What came back, and which place it was about.
-    said: Option<(Lookup, String)>,
+    said: Option<(Lookup, Arc<str>)>,
 }
 
 impl Hover {
@@ -211,13 +211,13 @@ impl Hover {
         // A name the server has nothing to say about is a name with no box, and not a
         // question to ask again: `pending` is answered by the empty answer as much as by
         // a full one.
-        self.said = Some((about, said.unwrap_or_default()));
+        self.said = Some((about, Arc::from(said.unwrap_or_default())));
         true
     }
 
     /// What the box draws: the name it is about and the server's words, once the pointer
     /// is on one of the two and there is something to say.
-    pub(crate) fn showing(&self) -> Option<(&Pointed, &str)> {
+    pub(crate) fn showing(&self) -> Option<(&Pointed, &Arc<str>)> {
         let about = self.about.as_ref()?;
         if !about.on_name && !about.in_box {
             return None;
@@ -226,7 +226,7 @@ impl Hover {
             .said
             .as_ref()
             .filter(|(at, _)| *at == about.pointed.at)?;
-        (!said.is_empty()).then_some((&about.pointed, said.as_str()))
+        (!said.is_empty()).then_some((&about.pointed, said))
     }
 }
 

@@ -60,6 +60,10 @@ pub(crate) fn hover_place(name: Area, window: Size2D, tallest: f32) -> HoverPlac
 
 /// The box, and nothing at all until the server has said something about a name the
 /// pointer is on.
+///
+/// Only the gate: it reads the whole [`Hover`], which a pointer moving over a name writes
+/// on every move until an answer lands, and hands on the two things the box draws. The
+/// box is [`HoverCard`], which the diff skips while those two are unchanged.
 #[derive(Clone, PartialEq)]
 pub(crate) struct HoverBox;
 
@@ -68,15 +72,12 @@ impl Component for HoverBox {
         let hover = use_consume::<Hovering>().0;
         // Above the two early returns below, as a hook has to be.
         let sweeping = use_sweeping();
-        // How tall the answer is when nothing is holding it in, which is what says
-        // whether there is anything to scroll. Measured rather than asked for: a scroll
-        // view is `fill` by default, and one inside a box as tall as what it holds is the
-        // two asking each other how tall they are; sized from its content instead, torin
-        // clamps what it reports holding and the view believes it has nothing to scroll.
-        let mut measured = use_state(|| None::<f32>);
 
-        let held = hover.read().clone();
-        let Some((about, said)) = held.showing() else {
+        let shown = hover
+            .read()
+            .showing()
+            .map(|(about, said)| (about.clone(), said.clone()));
+        let Some((about, said)) = shown else {
             return rect().into_element();
         };
         // Not while a menu is open, which is what freya's own tooltip does, and not while
@@ -85,6 +86,46 @@ impl Component for HoverBox {
         if ContextMenu::is_open() || sweeping {
             return rect().into_element();
         }
+
+        // Keyed by the answer, so each one is measured afresh before it is shown.
+        let key = Arc::as_ptr(&said).cast::<u8>().addr();
+        HoverCard {
+            about,
+            said,
+            key: DiffKey::None,
+        }
+        .key(key)
+        .into_element()
+    }
+}
+
+/// The box itself, about one name and one answer.
+#[derive(Clone)]
+pub(crate) struct HoverCard {
+    about: Pointed,
+    said: Arc<str>,
+    key: DiffKey,
+}
+
+impl PartialEq for HoverCard {
+    fn eq(&self, other: &Self) -> bool {
+        self.about == other.about && Arc::ptr_eq(&self.said, &other.said) && self.key == other.key
+    }
+}
+
+keyed!(HoverCard);
+
+impl Component for HoverCard {
+    fn render(&self) -> impl IntoElement {
+        let hover = use_consume::<Hovering>().0;
+        // How tall the answer is when nothing is holding it in, which is what says
+        // whether there is anything to scroll. Measured rather than asked for: a scroll
+        // view is `fill` by default, and one inside a box as tall as what it holds is the
+        // two asking each other how tall they are; sized from its content instead, torin
+        // clamps what it reports holding and the view believes it has nothing to scroll.
+        // One answer's height: the card is keyed by the answer.
+        let mut measured = use_state(|| None::<f32>);
+        let (about, said) = (&self.about, &self.said);
 
         let place = hover_place(about.drawn, window_size(), hover_height());
         let position = match place.over {
@@ -162,11 +203,15 @@ impl Component for HoverBox {
                                 measured.set_if_modified(Some(e.area.height()));
                             })
                             .child(
-                                MarkdownViewer::new(said.to_owned())
+                                MarkdownViewer::new(said.to_string())
                                     .code_editor_font_family(fonts().mono.family()),
                             ),
                     ),
             )
             .into_element()
+    }
+
+    fn render_key(&self) -> DiffKey {
+        self.keyed()
     }
 }

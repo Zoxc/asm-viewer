@@ -744,7 +744,10 @@ box sized from its content nor to size itself from its own (`notes/upstream/frey
 answer is drawn once at the full height the box may have, a rect around it reports what that
 came to, and the view is given that height or the limit, whichever is less. Two passes, and
 the second settles -- the first drawn at nothing, since a short answer would otherwise be a
-box that flashed tall and shrank.
+box that flashed tall and shrank. **Every answer**, and not only the first: the measured box is
+`HoverCard`, keyed by the answer's `Arc`, so each answer starts unmeasured rather than drawn at
+the last one's height. `HoverBox` above it is the gate, and reads the whole `Hover`, which a
+pointer moving over a name writes on every move; the card compares equal across those.
 
 **Above the name wherever the box fits, and not merely where there is more room.** A window
 is taller under a name than over it nearly everywhere, so "more room" put the box below

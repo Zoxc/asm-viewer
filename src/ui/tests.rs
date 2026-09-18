@@ -9054,6 +9054,78 @@ fn the_box_draws_the_answer_as_markdown() {
     );
 }
 
+fn hover_box_harness() -> impl IntoElement {
+    rect().expanded().child(HoverBox)
+}
+
+/// How opaque the hover box is drawn, by its box as [`hover_box`] finds it.
+fn hover_box_opacity(test: &TestingRunner) -> Option<f32> {
+    let pane = palette().pane_bg;
+    test.find_many(move |node, element| {
+        let boxed = element.style().background == Fill::Color(pane)
+            && node.layout().area.width() == HOVER_WIDTH;
+        boxed.then(|| {
+            element
+                .effect()
+                .and_then(|effect| effect.opacity)
+                .unwrap_or(1.0)
+        })
+    })
+    .into_iter()
+    .next()
+}
+
+/// **Every answer is measured before it is shown**, and not only the first the app is
+/// given: a box that kept the last answer's height drew the next one at it, cut short or
+/// padded out, for the frame before its own was measured.
+#[test]
+fn each_answer_is_measured_before_the_box_shows_it() {
+    let (mut test, hover) = TestingRunner::new(
+        hover_box_harness,
+        (600., 400.).into(),
+        |runner: &mut _| {
+            runner.provide_root_context(|| {
+                test_roots();
+                use_consume::<Hovering>().0
+            })
+        },
+        1.,
+    );
+    let answer = |column: usize, said: &str| {
+        let name = hovered_name(column);
+        let at = name.at.clone();
+        let said = said.to_owned();
+        write_if(hover, move |held| {
+            held.enter(name);
+            held.asking(ticket(1, column as u64), at);
+            held.answer(ticket(1, column as u64), Some(said))
+        });
+    };
+
+    answer(3, "short");
+    settle(&mut test);
+    assert_eq!(
+        hover_box_opacity(&test),
+        Some(1.0),
+        "the first answer is not shown"
+    );
+
+    // Another name, and an answer taller than the first.
+    answer(5, &"a line\n\n".repeat(20));
+    test.sync_and_update();
+    assert_eq!(
+        hover_box_opacity(&test),
+        Some(0.0),
+        "the second answer was shown at the first one's height"
+    );
+    settle(&mut test);
+    assert_eq!(
+        hover_box_opacity(&test),
+        Some(1.0),
+        "the second answer is not shown"
+    );
+}
+
 /// A short answer makes a short box: it is as tall as what it holds, and only an answer
 /// with more in it than the box may be tall reaches that limit.
 #[test]
