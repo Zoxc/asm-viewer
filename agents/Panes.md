@@ -1435,6 +1435,19 @@ per stretch would make the walk quadratic in a binary with 115k of them, but one
 one stretch. The walk pays a `Lanes` layout per stretch it decodes, which is what tells an
 instruction row from a separator; the decode beside it is far the larger cost.
 
+**The find hooks take the bar and the listing as deps, never as captures.** `use_marking`,
+`use_searching`, `use_find_steps` and `use_code_hunt` each build their closures once, and a listing
+is not mounted again by a switch between two tabs of one kind or by following a call in place
+(`src/ui/split.rs`). Captured, the tab's `Where` washed the rows with the first tab's pattern and
+left a step asked of the second bar unspent, and the claimed listing stayed the first symbol's
+after a call was followed. So `at` and the listing reach each effect through its deps or
+`use_reactive`, and what cannot be compared -- `use_find_steps`'s reveal, which carries the
+listing's length -- is held in a cell each render writes, as `use_kept_position` holds its answers.
+A walk's id is drawn from one count for the whole app, and the list keeps the ids it has started a
+walk for: a switch away from a walking bar and back hands the walk effect the same walk again, and
+its first taker is still running. A switch leaves the bar it left with its claim: that tab still
+draws that listing.
+
 **The match is landed by the pane and not through a `Planting`.** A planting is spent by
 `use_kept_place`, whose effect wakes on the document changing or the reading's generation moving --
 which is exactly what a door does and exactly what a find does not: the tab is already on top and

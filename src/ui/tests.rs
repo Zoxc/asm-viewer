@@ -27821,6 +27821,216 @@ fn a_run_inside_one_line_seeds_the_box_and_one_across_lines_does_not() {
     );
 }
 
+/// [`doors_harness`] with the find worker behind it: the pane over the active tab, never
+/// mounted again by a switch of tab, and a bar over it that can be answered.
+fn find_doors_harness() -> impl IntoElement {
+    use_find(use_consume::<Looking>().0);
+    doors_harness()
+}
+
+/// A symbol of the fixture by name, with what the worker makes of it.
+fn studied_named(name: &str) -> (Symbol, Studied) {
+    let symbol = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == name)
+        .expect("the fixture holds the symbol");
+    let studied = Studied::new(symbol.clone());
+    (symbol, studied)
+}
+
+/// `studied` in the analysis, as the worker's answer about `symbol`.
+fn show_studied(mut analysis: State<Analyzed>, symbol: &Symbol, studied: &Studied) {
+    analysis.set(Analyzed {
+        shown: Some(Shown {
+            ask: Ask::Symbol(symbol.clone()),
+            studied: studied.clone(),
+        }),
+        ..Analyzed::default()
+    });
+}
+
+/// What a bar over `studied`'s listing searches.
+fn searchable_of(studied: &Studied) -> Searchable {
+    Searchable::Symbol {
+        assembly: studied.assembly.clone().expect("the symbol decodes"),
+        lanes: studied.lanes.clone(),
+    }
+}
+
+/// **A switch between two symbol tabs moves the listing's find hooks to the second tab's
+/// bar.** A switch is not a remount (`ui/split.rs`), so the listing's scope lives on with
+/// the new tab's props: a hook that captured the first tab's bar washes the rows with that
+/// bar's pattern and leaves a step asked of the second bar unspent.
+#[test]
+fn a_switch_of_symbol_tab_moves_the_find_to_the_second_tabs_bar() {
+    let (first, first_studied) = studied_named("sum_to");
+    let (second, second_studied) = studied_named("twice");
+    let (mut test, roots) = TestingRunner::new(
+        find_doors_harness,
+        (600., 600.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let states = roots.states;
+    let finds = states.places.finds;
+    settle(&mut test);
+
+    // The first tab, drawn: the listing is mounted over it.
+    let one = Document::Symbol(first.clone());
+    show_studied(roots.analysis, &first, &first_studied);
+    open_document(states.open, states.visits, one.clone(), Reach::NewTab);
+    settle(&mut test);
+    // Then the second, beside it: the same listing re-rendered with the second tab.
+    let two = Document::Symbol(second.clone());
+    show_studied(roots.analysis, &second, &second_studied);
+    open_document(states.open, states.visits, two.clone(), Reach::NewTab);
+    settle(&mut test);
+    let tab = |document| {
+        (
+            Placing::Tab(tab_showing(&states, document).unwrap()),
+            Pane::Assembly,
+        )
+    };
+    let (at_one, at_two) = (tab(&one), tab(&two));
+    assert!(at_one != at_two);
+
+    // A bar over each, the first on nothing the listing draws.
+    let word = drawn_twice(&test);
+    open_find(
+        finds,
+        at_one,
+        Some("nothing_is_called_this".to_owned()),
+        Some(searchable_of(&first_studied)),
+    );
+    open_find(
+        finds,
+        at_two,
+        Some(word.clone()),
+        Some(searchable_of(&second_studied)),
+    );
+    settle(&mut test);
+    assert!(
+        !rects_with(&test, palette().find_bg).is_empty(),
+        "the rows do not wear the second tab's pattern"
+    );
+
+    find_answered(&mut test, finds, at_two, &word);
+    edit_find(finds, at_two, |bar| {
+        bar.step = Some(crate::find::Direction::Forward)
+    });
+    settle(&mut test);
+    let bar = finds.peek().get(&at_two).clone();
+    assert!(
+        bar.step.is_none(),
+        "the step asked of the second tab's bar was never spent"
+    );
+    assert!(bar.at.is_some(), "the step went to no match");
+}
+
+/// **A listing that moves to another symbol inside one tab claims it for the bar.** Following
+/// a call re-renders the listing with the new symbol, and an open bar has to search that
+/// one: a claim that captured the first listing claims it again, and the bar goes on
+/// washing and stepping through the previous function's hits.
+#[test]
+fn a_listing_navigated_in_place_claims_the_new_symbol_for_its_bar() {
+    let (first, first_studied) = studied_named("sum_to");
+    let (second, second_studied) = studied_named("twice");
+    let (mut test, roots) = TestingRunner::new(
+        find_doors_harness,
+        (600., 600.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let states = roots.states;
+    let finds = states.places.finds;
+    settle(&mut test);
+
+    let one = Document::Symbol(first.clone());
+    show_studied(roots.analysis, &first, &first_studied);
+    open_document(states.open, states.visits, one.clone(), Reach::NewTab);
+    settle(&mut test);
+    let tab = tab_showing(&states, &one).expect("the tab is open");
+    let at = (Placing::Tab(tab), Pane::Assembly);
+    open_find(
+        finds,
+        at,
+        Some("mov".to_owned()),
+        Some(searchable_of(&first_studied)),
+    );
+    settle(&mut test);
+
+    let two = Document::Symbol(second.clone());
+    show_studied(roots.analysis, &second, &second_studied);
+    open_document(states.open, states.visits, two.clone(), Reach::InPlace);
+    settle(&mut test);
+    assert_eq!(
+        tab_showing(&states, &two),
+        Some(tab),
+        "the step made another tab"
+    );
+    let listing = finds.peek().get(&at).listing.as_ref().map(Searchable::id);
+    assert_eq!(
+        listing,
+        Some(searchable_of(&second_studied).id()),
+        "the bar still searches the symbol the tab was on"
+    );
+}
+
+/// **A switch between two code tabs moves the walk to the second tab's bar.** The step
+/// over an object's code is spent by the walk's own effect, whose scope a switch of tab
+/// re-renders rather than mounts again (`ui/split.rs`); one that captured the first tab's
+/// bar never sees a step asked of the second.
+#[test]
+fn a_switch_of_code_tab_walks_for_the_second_tabs_bar() {
+    let (_path, objects) = fixture_objects(2);
+    let (first, second) = (objects[0].clone(), objects[1].clone());
+    let (mut test, roots) = TestingRunner::new(
+        switched_code_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(|| code_states(Reading::default())),
+        1.,
+    );
+    let states = roots.states;
+    let finds = states.places.finds;
+    let mut open = states.objects;
+    open.write().extend([first.clone(), second.clone()]);
+    settle(&mut test);
+
+    let one = Document::Code(first.clone());
+    open_document(states.open, states.visits, one.clone(), Reach::NewTab);
+    settle(&mut test);
+    let two = Document::Code(second.clone());
+    open_document(states.open, states.visits, two.clone(), Reach::NewTab);
+    settle(&mut test);
+    let at = (
+        Placing::Tab(tab_showing(&states, &two).expect("the tab is open")),
+        Pane::Assembly,
+    );
+
+    open_find(finds, at, Some("sum_to".to_owned()), None);
+    edit_find(finds, at, |bar| {
+        bar.step = Some(crate::find::Direction::Forward)
+    });
+    settle(&mut test);
+    let bar = finds.peek().get(&at).clone();
+    assert!(
+        bar.step.is_none(),
+        "the step asked of the second tab's bar was never spent"
+    );
+    assert!(
+        bar.hunt.is_some(),
+        "no walk was started for the second tab's bar"
+    );
+    pump(&mut test, |_| {
+        finds
+            .peek()
+            .get(&at)
+            .hunt
+            .as_ref()
+            .is_some_and(|hunt| !hunt.walking())
+    });
+}
+
 /// An object's code with the find worker and the walk behind it.
 fn code_find_harness() -> impl IntoElement {
     use_find(use_consume::<Looking>().0);

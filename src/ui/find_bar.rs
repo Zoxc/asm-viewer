@@ -29,6 +29,7 @@ use super::*;
 // freya's prelude has a layout `Direction` this file never asks for (`ui.rs` on `Panel`).
 use crate::counter;
 use crate::find::{self, Direction, Hit};
+use std::cell::Cell;
 
 /// Which bar: the listing it is drawn in -- a tab, or the scratchpad's -- and which of the
 /// two panes.
@@ -272,10 +273,14 @@ impl Finds {
 /// untouched -- and what a pane mounted without the context draws with.
 ///
 /// A `Memo`, so a render that changed nothing about the pattern hands the rows the same
-/// one and leaves their props as they were.
+/// one and leaves their props as they were. `at` goes through `use_reactive`: a memo's
+/// callback is built once, and a switch of tab hands this list another `at` without
+/// mounting it again (`ui/split.rs`).
 pub(crate) fn use_marking(at: Where) -> Option<Marking> {
     let finds = try_consume_context::<Looking>().map(|looking| looking.0);
+    let at = use_reactive(&at);
     let marking = use_memo(move || {
+        let at = *at.read();
         let bars = finds?.read();
         bars.open(&at)
             .then(|| Marking::new(bars.get(&at).filter.matcher()))
@@ -344,9 +349,14 @@ pub(crate) fn edit_find(mut finds: State<Finds>, at: Where, edit: impl FnOnce(&m
 ///
 /// A list mounted without the context -- a harness drawing one listing and nothing else --
 /// claims nothing and has no bar.
+///
+/// **What is claimed is what the render hands in**, never what the scope was mounted with:
+/// a switch of tab re-renders the list with another `at`, and following a call re-renders
+/// it with another listing (`ui/split.rs`). A switch leaves the claim on the bar it left:
+/// that tab still draws that listing.
 pub(crate) fn use_searching(at: Where, searchable: Option<Searchable>) {
     let finds = try_consume_context::<Looking>().map(|looking| looking.0);
-    let claim = move |listing: Option<Searchable>| {
+    let claim = move |at: Where, listing: Option<Searchable>| {
         let Some(mut finds) = finds else {
             return;
         };
@@ -365,10 +375,14 @@ pub(crate) fn use_searching(at: Where, searchable: Option<Searchable>) {
         bar.reset();
         finds.set(next);
     };
-    let held = claim.clone();
-    let id = searchable.as_ref().map(Searchable::id);
-    use_side_effect_with_deps(&id, move |_: &Option<usize>| held(searchable.clone()));
-    use_drop(move || claim(None));
+    // The bar the drop lets go of: the one this list is over now.
+    let over = use_hook(|| Rc::new(Cell::new(at)));
+    over.set(at);
+    use_side_effect_with_deps(
+        &(at, searchable),
+        move |(at, listing): &(Where, Option<Searchable>)| claim(*at, listing.clone()),
+    );
+    use_drop(move || claim(over.get(), None));
 }
 
 /// The slot a pane keeps for its find bar: the bar over `at` where one is open, and
@@ -823,46 +837,58 @@ fn seed_of(marks: &Marks, pane: Pane, text: impl Fn(usize) -> Line) -> Option<St
 /// this for all three listings, a hook having to run on every render, and an object's code
 /// is searched by walking it rather than by a pass over a listing the pane holds: that step
 /// is [`use_code_hunt`]'s, and the two tell theirs apart by whether there is a listing.
-pub(crate) fn use_find_steps(
+pub(crate) fn use_find_steps<R: FnMut(usize) + 'static>(
     at: Where,
     marked: State<Marks>,
     file: Option<Arc<str>>,
-    mut reveal: impl FnMut(usize) + 'static,
+    reveal: R,
 ) {
     let finds = try_consume_context::<Looking>().map(|looking| looking.0);
-    use_side_effect(move || {
-        let Some(mut finds) = finds else {
-            return;
-        };
-        // Bound before the write below, the read being a guard.
-        let bar = finds.read().get(&at).clone();
-        let Some(direction) = bar.step.filter(|_| bar.listing.is_some()) else {
-            return;
-        };
-        // Where the pane is, for a first step: the caret, or the top of the listing where
-        // there is no run at all.
-        let caret = marked
-            .peek()
-            .of(at.1)
-            .as_ref()
-            .map(|picked| picked.chars.lead())
-            .unwrap_or(Caret { row: 0, col: 0 });
-        let hits = bar.hits().cloned();
-        let next = hits
-            .as_ref()
-            .and_then(|hits| find::step(hits, bar.at, caret, direction));
+    // The reveal this render made, which knows how long the listing is now. The effect's
+    // callback is built once, so a reveal it captured would clamp against the first
+    // listing's rows; `at` and `file` come in as its deps for the same reason.
+    let latest = use_hook(|| Rc::new(RefCell::new(None::<R>)));
+    *latest.borrow_mut() = Some(reveal);
+    use_side_effect_with_deps(
+        &(at, file),
+        move |(at, file): &(Where, Option<Arc<str>>)| {
+            let at = *at;
+            let Some(mut finds) = finds else {
+                return;
+            };
+            // Bound before the write below, the read being a guard.
+            let bar = finds.read().get(&at).clone();
+            let Some(direction) = bar.step.filter(|_| bar.listing.is_some()) else {
+                return;
+            };
+            // Where the pane is, for a first step: the caret, or the top of the listing
+            // where there is no run at all.
+            let caret = marked
+                .peek()
+                .of(at.1)
+                .as_ref()
+                .map(|picked| picked.chars.lead())
+                .unwrap_or(Caret { row: 0, col: 0 });
+            let hits = bar.hits().cloned();
+            let next = hits
+                .as_ref()
+                .and_then(|hits| find::step(hits, bar.at, caret, direction));
 
-        let mut state = finds.peek().clone();
-        let entry = state.get_mut(&at);
-        entry.step = None;
-        entry.at = next;
-        finds.set(state);
+            let mut state = finds.peek().clone();
+            let entry = state.get_mut(&at);
+            entry.step = None;
+            entry.at = next;
+            finds.set(state);
 
-        // A pattern nothing matched moves nothing: the bar says so instead.
-        let Some(hit) = next.and_then(|next| hits.as_ref().and_then(|hits| hits.get(next))) else {
-            return;
-        };
-        mark_columns(marked, at.1, file.clone(), hit.row, hit.columns.clone());
-        reveal(hit.row);
-    });
+            // A pattern nothing matched moves nothing: the bar says so instead.
+            let Some(hit) = next.and_then(|next| hits.as_ref().and_then(|hits| hits.get(next)))
+            else {
+                return;
+            };
+            mark_columns(marked, at.1, file.clone(), hit.row, hit.columns.clone());
+            if let Some(reveal) = latest.borrow_mut().as_mut() {
+                reveal(hit.row);
+            }
+        },
+    );
 }

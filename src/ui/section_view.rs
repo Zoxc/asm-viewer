@@ -731,7 +731,7 @@ impl Component for SectionList {
             use_code_hunt(
                 at,
                 self.object.clone(),
-                reading.code.clone(),
+                reading_state,
                 move || {
                     // Where the pane is, as an address; the top of the code where there
                     // is no run in it yet.

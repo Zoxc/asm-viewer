@@ -17,6 +17,7 @@
 
 use super::*;
 use crate::find::Direction;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A search through an object's code: what it is looking for, and where it has got to.
 ///
@@ -153,18 +154,21 @@ pub(crate) fn hunt(
 /// `from` is where the pane is, as an address; a listing with no caret in it yet starts at
 /// the top. `land` is given the match, and is the section view's own: only it can put a
 /// caret on the row an address is in, the rows being counted afresh as stretches decode.
+///
+/// **`at` and `object` reach every effect through its deps**, never as a capture: an
+/// effect's callback is built once, and a switch of tab re-renders this list with another
+/// tab's rather than mounting it again (`ui/split.rs`).
 pub(crate) fn use_code_hunt(
     at: Where,
     object: Arc<Object>,
-    code: Option<Arc<CodeListing>>,
+    reading: State<Reading>,
     from: impl Fn() -> u64 + 'static,
     mut land: impl FnMut(u64, Range<usize>) -> bool + 'static,
 ) {
     let finds = try_consume_context::<Looking>().map(|looking| looking.0);
-    let mut walks = use_state(|| 0u64);
 
     // A step over an object's code starts a walk rather than moving through an answer.
-    use_side_effect(move || {
+    use_side_effect_with_deps(&at, move |&at: &Where| {
         let Some(finds) = finds else {
             return;
         };
@@ -173,8 +177,7 @@ pub(crate) fn use_code_hunt(
         let Some(direction) = bar.step.filter(|_| bar.listing.is_none()) else {
             return;
         };
-        let id = walks.peek().wrapping_add(1);
-        walks.set(id);
+        let id = WALKS.fetch_add(1, Ordering::Relaxed);
         let from = from();
         edit_find(finds, at, move |bar| {
             bar.step = None;
@@ -191,25 +194,42 @@ pub(crate) fn use_code_hunt(
     // The walk itself. A memo over which walk it is, not a read: every word it says about
     // its progress is a write to the state below, and an effect reading that would start
     // a walk per word.
+    let over = use_reactive(&at);
     let asked = use_memo(move || {
+        let at = *over.read();
         let finds = finds?;
         let bar = finds.read();
         let hunt = bar.get(&at).hunt.as_ref()?;
         hunt.walking()
-            .then_some((hunt.id, hunt.filter.clone(), hunt.from, hunt.direction))
+            .then_some((at, hunt.id, hunt.filter.clone(), hunt.from, hunt.direction))
     });
     let started = asked.read().clone();
+    // The walks this scope has started. A switch away from a tab mid-walk and back again
+    // hands the effect that walk a second time, and its taker is still running: the task
+    // lives as long as this scope.
+    let taking = use_hook(|| Rc::new(RefCell::new(HashSet::<u64>::new())));
     use_side_effect_with_deps(
-        &started,
-        move |walk: &Option<(u64, Filter, u64, Direction)>| {
-            let (Some((id, filter, from, direction)), Some(finds)) = (walk.clone(), finds) else {
+        &(started, ByPtr(object)),
+        move |(walk, ByPtr(object)): &(Option<Walk>, ByPtr<Object>)| {
+            let (Some((at, id, filter, from, direction)), Some(finds)) = (walk.clone(), finds)
+            else {
                 return;
             };
+            if !taking.borrow_mut().insert(id) {
+                return;
+            }
             let object = object.clone();
-            let code = code.clone();
+            // The skeleton the view already has, where the reading is this object's.
+            let code = {
+                let reading = reading.peek();
+                reading
+                    .is_about(&object)
+                    .then(|| reading.code.clone())
+                    .flatten()
+            };
             let events = stream("the code search", Some(64), move |emit| {
-                // The skeleton the view already has, or one built here: it is free
-                // (`CodeListing`), and a walk asked for before the view has one must not wait.
+                // Or one built here: it is free (`CodeListing`), and a walk asked for
+                // before the view has one must not wait.
                 let code = code.unwrap_or_else(|| Arc::new(CodeListing::new(&object)));
                 hunt(&object, &code, &filter, from, direction, emit);
             });
@@ -220,11 +240,11 @@ pub(crate) fn use_code_hunt(
     // The match, landed once. The walk that found it is remembered, so an effect woken
     // again -- by the pane's own rows arriving, say -- does not land it a second time.
     let mut landed = use_state(|| None::<u64>);
-    use_side_effect(move || {
+    use_side_effect_with_deps(&at, move |at: &Where| {
         let Some(finds) = finds else {
             return;
         };
-        let hunt = finds.read().get(&at).hunt.clone();
+        let hunt = finds.read().get(at).hunt.clone();
         let Some(hunt) = hunt else {
             return;
         };
@@ -241,6 +261,14 @@ pub(crate) fn use_code_hunt(
         }
     });
 }
+
+/// A walk as a step starts it: the bar it is for, which walk, the pattern, where it
+/// starts and which way it goes.
+type Walk = (Where, u64, Filter, u64, Direction);
+
+/// Where the next walk's id comes from: one count for every listing, so no two walks
+/// anywhere share an id, and a list mounted again cannot reuse one a bar still holds.
+static WALKS: AtomicU64 = AtomicU64::new(0);
 
 /// Take what a walk says, for as long as it is the walk the bar is on.
 ///
