@@ -20026,6 +20026,42 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     assert_eq!(picked.chars.rows(), now..=now);
 }
 
+/// **An answer draws the listing once**: the rows it brings, and nothing before them. The
+/// listing read the whole reading to learn its generation, so an answer drew it twice, the
+/// first time with the old rows.
+#[test]
+fn an_answer_draws_the_listing_once() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let mut sections = roots.sectioned.reading;
+    let rows = roots.sectioned.rows;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(object.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+
+    let before = section_view::listings_drawn();
+    let mut decoded = reading_of(&object, &[0]);
+    decoded.generation = sections.peek().generation + 1;
+    sections.set(decoded);
+    settle(&mut test);
+    settle(&mut test);
+    let drawn = rows.peek().clone().expect("the rows were built");
+    assert_eq!(drawn.reading.generation, sections.peek().generation);
+    assert_eq!(section_view::listings_drawn() - before, 1);
+}
+
 /// A run carried across a recount keeps the caret at the end it was swept to, and the
 /// rows it lights with it. The carry used to rebuild the characters out of `ends()`,
 /// which answers the two ends in listing order and says nothing about which is the lead,

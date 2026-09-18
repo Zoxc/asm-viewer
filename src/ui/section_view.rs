@@ -13,6 +13,7 @@
 //! -- and asks for it through `Window`, which the analysis worker's sender reads.
 
 use super::*;
+use crate::counter;
 use crate::positions::Spot;
 use crate::section::{Body, Kind, Row, Rows, StretchRows, GAP_BYTES_PER_ROW};
 use analysis::Stretch;
@@ -615,12 +616,18 @@ impl PartialEq for SectionList {
     }
 }
 
+counter!(
+    /// Test-only: how many times this thread has drawn an object's code listing, the
+    /// heaviest component in the pane, so what wakes it is worth pinning.
+    pub(crate) fn listings_drawn() = LISTINGS_DRAWN
+);
+
 impl Component for SectionList {
     fn render(&self) -> impl IntoElement {
+        #[cfg(test)]
+        LISTINGS_DRAWN.set(LISTINGS_DRAWN.get() + 1);
         let sectioned = use_sectioned();
-        let reading_state = sectioned.reading;
-        // Reading it is what redraws the listing as answers land.
-        let reading = reading_state.read().clone();
+        let reading = sectioned.reading;
         let marked = use_consume::<Marked>().0;
         let chars = chars_of(marked, Pane::Assembly);
         let pair = pair_of(marked, Pane::Assembly);
@@ -654,7 +661,6 @@ impl Component for SectionList {
         let rows = sectioned.rows;
 
         let object = self.object.clone();
-        let generation = reading.is_about(&object).then_some(reading.generation);
         // The place on the trail this listing is showing, which is what its position and
         // its runs are kept under: two stops in one object's code are two places, and
         // stepping between them is what Back does inside a listing. Read and not peeked,
@@ -691,12 +697,12 @@ impl Component for SectionList {
                 reveal_made(marked, Pane::Assembly);
                 true
             },
-            reading_state,
+            reading,
             rows,
             controller,
             tab,
             &stop,
-            generation,
+            &object,
         );
         use_window(sectioned, controller, viewport, &object);
 
@@ -731,7 +737,7 @@ impl Component for SectionList {
             use_code_hunt(
                 at,
                 self.object.clone(),
-                reading_state,
+                reading,
                 move || {
                     // Where the pane is, as an address; the top of the code where there
                     // is no run in it yet.
@@ -1075,7 +1081,9 @@ impl At {
 /// nothing to file a place or a run under and so has none written for it; `stop` is what
 /// the listing is showing either way. `docs` says whether the place is still open, which
 /// is what a write down here is allowed for, and is asked of the state itself for the
-/// reason [`use_kept_position`] gives.
+/// reason [`use_kept_position`] gives. `object` is the pane's, and a dep for the reason
+/// [`use_window`] gives: the reading is read in the effect, which is what wakes it as an
+/// answer lands, and only a reading of `object` has rows for it.
 fn use_kept_place(
     doors: Doors,
     docs: State<Docs>,
@@ -1085,17 +1093,23 @@ fn use_kept_place(
     mut controller: ScrollController,
     tab: Option<DocId>,
     stop: &Stop,
-    generation: Option<u64>,
+    object: &Arc<Object>,
 ) {
     let (marked, plant) = (doors.marked, doors.plant);
     let (code_at, marks_at) = (doors.places.code_at, doors.places.marks_at);
     let held = use_hook(|| Rc::new(RefCell::new(Held::default())));
 
     use_side_effect_with_deps(
-        &(tab, stop.clone(), generation),
-        move |(tab, stop, generation): &(Option<DocId>, Stop, Option<u64>)| {
+        &(tab, stop.clone(), ByPtr(object.clone())),
+        move |(tab, stop, ByPtr(object)): &(Option<DocId>, Stop, ByPtr<Object>)| {
             // Subscribes this effect to the pane's scroll, so it comes before any return.
             let (_, offset) = <(i32, i32)>::from(controller);
+            // And to the reading, so an answer wakes this effect and not the listing: the
+            // listing draws the rows this publishes.
+            let generation = {
+                let reading = reading.read();
+                reading.is_about(object).then_some(reading.generation)
+            };
             // In `f64`: a listing of a large binary is millions of rows, tens of millions
             // of pixels down, past where an `f32` holds a pixel, and a row worked out
             // and read back through one would not agree with itself.
@@ -1104,7 +1118,7 @@ fn use_kept_place(
             let to_offset =
                 |rows: f64| -> i32 { -((rows * height).round().min(i32::MAX as f64) as i32) };
 
-            let Some(generation) = *generation else {
+            let Some(generation) = generation else {
                 if rows.peek().is_some() {
                     rows.set(None);
                 }
