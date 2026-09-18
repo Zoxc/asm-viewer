@@ -1,5 +1,7 @@
-//! The menus a right-click opens over a tab, over a file row and over a sidebar row, and
-//! the two items more than one menu is built of.
+//! The menus a right-click opens over a tab, over a file row and over a sidebar row, the
+//! items more than one menu is built of, and the pieces they are all drawn from: a row,
+//! what its text says, the mark after it, the line between two groups, and the button a
+//! menu hangs under.
 //!
 //! A menu is **built per press**, closing over whatever was under the pointer, and its
 //! states come in as arguments because it is made in an event handler, where no hook may
@@ -191,4 +193,154 @@ pub(crate) fn reveal_item(path: PathBuf) -> MenuButton {
     MenuButton::new()
         .on_press(move |_| reveal::reveal(path.clone()))
         .child("Show in file manager")
+}
+
+/// One row of a menu: a word, the key it has where it has one, and what pressing it
+/// does. A helper and not a component, the hover being `MenuItem`'s own.
+pub(crate) fn menu_row(
+    text: &str,
+    key: Option<&'static str>,
+    mut close: State<bool>,
+    mut act: impl FnMut() + 'static,
+) -> MenuButton {
+    MenuButton::new()
+        .on_press(move |_| {
+            act();
+            close.set(false);
+        })
+        .child(menu_label(text, key))
+}
+
+/// **What every menu item's text is drawn as**: what the item does, and -- where the
+/// gesture has a key where the menu was opened -- how that key is pressed, after the name
+/// and a step back from it.
+///
+/// The spelling is never written here. It comes from `shortcuts::key!`, the list the
+/// Shortcuts page draws (`src/shortcuts.rs`), so a menu and that page cannot come to say
+/// different things. An item with no key is the bare label it always was.
+pub(crate) fn menu_label(text: impl Into<String>, key: Option<&'static str>) -> Element {
+    match key {
+        None => item_name(text.into(), None).into_element(),
+        Some(key) => marked_label(text.into(), key, None),
+    }
+}
+
+/// The name of a menu row, in `colour` where it is not the menu's own.
+fn item_name(text: String, colour: Option<Color>) -> Label {
+    label()
+        .text(text)
+        .max_lines(1)
+        .map(colour, |name, colour| name.color(colour))
+}
+
+/// A menu row's name with a mark after it: the arrow on a row that opens a submenu, or
+/// the key on a row that has one. One treatment for the two, so they sit alike.
+///
+/// **After the name and not out at the row's own end**, which is where a desktop menu puts
+/// it. A row here is a `MenuItem` -- `fill_minimum` inside a container that fits its
+/// content -- so a child asking to fill takes the *window* and drags the menu out to it,
+/// and nothing in the row can learn how wide the widest row made the menu
+/// (`notes/upstream/freya.md`). [`MENU_MARK_GAP`] is what keeps the mark from reading as
+/// part of the word.
+///
+/// `colour` is the dim row's, which is drawn in place of a live one and has to look like
+/// it; a live row inherits the menu's own and is handed `None`. The mark is a step back
+/// from the name either way, being about the row rather than part of what it says.
+fn marked_label(text: String, mark: &str, colour: Option<Color>) -> Element {
+    rect()
+        .horizontal()
+        .cross_align(Alignment::Center)
+        .spacing(MENU_MARK_GAP)
+        .child(item_name(text, colour))
+        .child(
+            label()
+                .text(mark.to_owned())
+                .max_lines(1)
+                .color(colour.unwrap_or_else(|| palette().address_fg)),
+        )
+        .into_element()
+}
+
+/// What freya lays a `MenuItem` out at, so a row of the app's own beside them lines up.
+/// Neither is reachable from the theme, so both are written here and pinned by a test.
+pub(crate) const MENU_ROW_WIDTH: f32 = 105.0;
+pub(crate) const MENU_ROW_PADDING: (f32, f32) = (6.0, 12.0);
+
+/// The mark on a row that opens a submenu: freya's `SubMenu` draws none, so such a row is
+/// otherwise the twin of one that acts. The glyph the Files tree folds with, so the app
+/// points one way everywhere.
+const SUBMENU_ARROW: &str = "\u{25b8}";
+
+/// One of those rows: the name, and the arrow after it -- [`marked_label`] with the arrow
+/// as its mark, the treatment a key beside an item is drawn with too.
+pub(crate) fn submenu_label(text: &str, colour: Option<Color>) -> Element {
+    marked_label(text.to_owned(), SUBMENU_ARROW, colour)
+}
+
+/// A line between two groups of the menu. freya has no separator, and a `Menu` takes any
+/// child, so it is a rect a pixel high in the colour the panes are divided by.
+pub(crate) fn menu_rule() -> Element {
+    rect()
+        .width(Size::fill())
+        .height(Size::px(1.0))
+        .margin(Gaps::new_symmetric(4.0, 0.0))
+        .background(palette().hairline)
+        .into_element()
+}
+
+/// A button that opens a menu under itself: [`bar_button`] lit while the menu is up or the
+/// pointer is on it, and the menu hung from the button's bottom edge, closed by `Menu`'s
+/// own press-outside. The position is **vertical only**; which way the menu opens is
+/// `MenuContainer`'s own overflow correction, so a button at either end of the bar opens
+/// its menu into the window.
+///
+/// **The popup is positioned by hand** rather than through `ContextMenu`, which pins a
+/// menu's top-left corner to the pointer and clamps to nothing -- opened from a button at
+/// the right-hand edge of the bar it would draw off the side of the window.
+///
+/// **No guard against `Menu`'s own close-on-any-global-press**, and none is needed: global
+/// listeners are snapshotted when the event is measured, before any handler runs, so the
+/// menu this press opens is not in that batch. A popup opened from a `*_down` handler is
+/// the case that does need the swallow; copying it here ate the first press outside the
+/// menu.
+///
+/// A helper and not a component: `hovering` and `showing` are the caller's, a hook running
+/// only where one renders. `press` is what the press does with `showing`, so a caller that
+/// reads a modifier at that moment ([`PagesButton`]) can. The box is the caller's too --
+/// the tab list's is as wide as the chips' close column and as tall as the bar it is
+/// pinned to the end of, where the pages menu is a toolbar square.
+pub(crate) fn dropdown(
+    size: (f32, f32),
+    tooltip: &str,
+    icon: Element,
+    hovering: State<bool>,
+    showing: State<bool>,
+    press: impl FnMut(Event<PressEventData>) + 'static,
+    menu: impl FnOnce() -> Element,
+) -> Element {
+    let (width, height) = size;
+    let glow = match showing() {
+        true => Glow::Open,
+        false => Glow::No,
+    };
+    let button = extra_tooltip(
+        tooltip.to_owned(),
+        bar_button(hovering, true, glow)
+            .width(Size::px(width))
+            .height(Size::px(height))
+            .on_press(press)
+            .child(icon),
+    );
+
+    rect()
+        .width(Size::px(width))
+        .height(Size::px(height))
+        .child(button)
+        .maybe_child(showing().then(|| {
+            rect()
+                .position(Position::new_absolute().top(height))
+                .child(menu())
+                .into_element()
+        }))
+        .into_element()
 }

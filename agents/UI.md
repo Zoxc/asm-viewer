@@ -355,7 +355,7 @@ the mapping runs. Each tab has one glyph that tells the two apart. One strip rat
 kind is what lets the history record a visited file and the session keep the strip's interleaved
 order.
 
-**A page is one row of a table**, `page_row` (`src/ui/strip.rs`), the shape `Panel::row` settled and
+**A page is one row of a table**, `page_row` (`src/ui/pages_menu.rs`), the shape `Panel::row` settled and
 for its reason: the glyph, the window's key where it has one, the body, and the three rules the rest
 of the app has about the page -- whether it is a reading of a project, whether the pages menu offers
 it only with Alt held, and which second pane it has. The glyph and the body are `fn() -> Element`,
@@ -701,7 +701,7 @@ happens to re-render that view, and reading its
 position from an effect is a loop, since a write notifies every reader and the callback it reads
 through counts as one (`notes/upstream/freya.md`).
 
-**The measurements and the rules over them are one `Bar`** (`src/ui/strip.rs`): the four states and
+**The measurements and the rules over them are one `Bar`** (`src/ui/strip/scroll.rs`): the four states and
 the count, with a method apiece for what a chip's measurement means, what the strip's own means,
 what the row's means, the wheel, a drag held at an edge, and the scroll all of them end in. Each
 carries the reason it is what it is, and `TabBar::render` is left as hooks, the bar, the reveal, the

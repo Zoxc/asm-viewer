@@ -146,6 +146,8 @@ mod pad;
 pub(crate) use pad::*;
 mod pad_view;
 pub(crate) use pad_view::*;
+mod pages_menu;
+pub(crate) use pages_menu::*;
 mod palette;
 pub(crate) use palette::*;
 mod parts;
@@ -402,7 +404,7 @@ pub(crate) fn root_key_down(
         // The pane that follows the one on screen, put away or brought back: the toggle on
         // the leading bar, pressed by key. A document tab writes the flag under its own
         // `Placing`; which pages have a second pane at all is the page table's
-        // (`page_following`, `ui/strip.rs`).
+        // (`page_following`, `ui/pages_menu.rs`).
         Chord::OtherPane => {
             let showing = strip.peek().active();
             let of = match showing {

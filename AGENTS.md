@@ -338,8 +338,12 @@ command.
 - `src/ui/loading.rs` — reading binaries onto the objects list: the one path anything is
   ever added by, the one thread, the batches, and which load an answer belongs to.
 - `src/ui/menus.rs` — the menus a right-click opens over a tab, over a file row and over a
-  sidebar row, and the two items more than one menu is built of. Each is built per press,
-  in an event handler.
+  sidebar row, the items more than one menu is built of, and the pieces they are all drawn
+  from: a row, what its text says, the mark after it, the line between two groups, and the
+  button a menu hangs under. Each menu is built per press, in an event handler.
+- `src/ui/pages_menu.rs` — the menu at the top left of the window: the ways in and out of a
+  project, the projects there have been under one row of it, and the pages under them; and
+  the table saying what each page is drawn as.
 - `src/ui/sidebar.rs` — the three lists a binary is browsed with, and the rows each is built of.
 - `src/ui/building.rs` — building the project's own workspace: what is held about it, the one
   worker thread, which binaries a finished build replaces, and which of the files its
@@ -372,7 +376,9 @@ command.
 - `src/ui/dock.rs` — the sidebar's dock: what a panel is, every panel there is, and the groups
   they can be arranged in.
 - `src/ui/strip.rs` — the app's own tab bar: the chips, the × on one, the list of every open
-  tab, the body under it all, and the table saying what each page is drawn as.
+  tab, and the body under it all.
+- `src/ui/strip/scroll.rs` — the bar's own scrolling: where every chip has been measured to,
+  how far the row of them is slid, and every rule over the two.
 - `src/ui/project_view.rs` — which project is open: the project's own fields, its binaries,
   the cargo build, the language server and the other projects, five sections each redrawn on
   its own; the chip in the top bar that opens the page, with the buttons that close, save

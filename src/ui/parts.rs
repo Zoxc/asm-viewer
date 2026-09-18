@@ -732,7 +732,7 @@ pub(crate) fn page_column() -> Rect {
 }
 
 /// A page: the pane's ground, whatever stands above the scroll, and the scroll the body is
-/// in. Nothing to do with `page_row` (`src/ui/strip.rs`), which is the table saying what a
+/// in. Nothing to do with `page_row` (`src/ui/pages_menu.rs`), which is the table saying what a
 /// [`Page`] is; this is how any page's body is drawn, the Scratchpad's pane included.
 ///
 /// Nothing sets the font or the text colour here. The root sets both once and every page
