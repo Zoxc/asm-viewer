@@ -158,6 +158,43 @@ fn facts(heading: &Heading) -> Vec<Element> {
     }
 }
 
+/// The bar's disclosure triangle: the Objects tree's own idiom, down to the mark, in a
+/// fixed column, which is the toggle where a name is a copy.
+///
+/// A component of its own so its hover wash re-renders the triangle and not the bar.
+#[derive(Clone, PartialEq)]
+struct BarDisclosure {
+    tab: DocId,
+    open: bool,
+}
+
+impl Component for BarDisclosure {
+    fn render(&self) -> impl IntoElement {
+        let mut expanded = use_consume::<Expanded>().0;
+        let mut hovering = use_state(|| false);
+        let tab = self.tab;
+
+        CursorArea::new().child(
+            rect()
+                .width(Size::px(chevron_width()))
+                .height(Size::px(list_row_height()))
+                .main_align(Alignment::Center)
+                .maybe(hovering(), |column| {
+                    column.background(palette().toggle_hover_bg)
+                })
+                .on_pointer_over(move |_| hovering.set_if_modified(true))
+                .on_pointer_out(move |_| hovering.set_if_modified(false))
+                .on_press(move |_| {
+                    let mut expanded = expanded.write();
+                    if !expanded.remove(&tab) {
+                        expanded.insert(tab);
+                    }
+                })
+                .child(disclosure(Some(self.open))),
+        )
+    }
+}
+
 /// The bar over the Assembly pane, naming what that pane is drawing, and the section it
 /// expands into.
 ///
@@ -185,7 +222,6 @@ pub(crate) struct SymbolBar {
 impl Component for SymbolBar {
     fn render(&self) -> impl IntoElement {
         let expanded = use_consume::<Expanded>().0;
-        let mut hovering = use_state(|| false);
         let open = expanded.read().contains(&self.tab);
         // The mangled row only where there is a demangling: `display()` falls back to the
         // mangled name, so a symbol that was never mangled would otherwise be named twice.
@@ -215,32 +251,6 @@ impl Component for SymbolBar {
             .into()],
         };
 
-        // The objects tree's own disclosure idiom, down to the mark: a triangle in a
-        // fixed column, which is the toggle where a name is a copy.
-        let triangle = {
-            let mut expanded = expanded;
-            let tab = self.tab;
-
-            CursorArea::new().child(
-                rect()
-                    .width(Size::px(chevron_width()))
-                    .height(Size::px(list_row_height()))
-                    .main_align(Alignment::Center)
-                    .maybe(hovering(), |column| {
-                        column.background(palette().toggle_hover_bg)
-                    })
-                    .on_pointer_over(move |_| hovering.set_if_modified(true))
-                    .on_pointer_out(move |_| hovering.set_if_modified(false))
-                    .on_press(move |_| {
-                        let mut expanded = expanded.write();
-                        if !expanded.remove(&tab) {
-                            expanded.insert(tab);
-                        }
-                    })
-                    .child(disclosure(Some(open))),
-            )
-        };
-
         rect()
             .width(Size::fill())
             .horizontal()
@@ -252,7 +262,14 @@ impl Component for SymbolBar {
             .border(bottom_hairline())
             // The triangle takes the first row's height and no more, so it sits beside the
             // demangled name rather than centred down a bar that has grown a section.
-            .child(rect().width(Size::px(chevron_width())).child(triangle))
+            .child(
+                rect()
+                    .width(Size::px(chevron_width()))
+                    .child(BarDisclosure {
+                        tab: self.tab,
+                        open,
+                    }),
+            )
             .child(
                 // A box of its own and not the names as the `flex` child directly: a flex
                 // child is measured from its content first, so a label placed there takes
