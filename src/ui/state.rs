@@ -11,8 +11,9 @@
 //! **A bundle is a context of its own**, provided once by `app()` and taken in one
 //! `use_consume`, so a state added to a group is a field and not a parameter threaded
 //! through every function of the group. A handle may sit in more than one bundle:
-//! [`Doors`] and [`ProjectStates`] both carry [`Open`], and [`Doors`] carries the runs
-//! [`Marked`] hands the panes.
+//! [`Doors`] and [`ProjectStates`] both carry [`Open`] and [`Places`], and [`Doors`]
+//! carries the runs [`Marked`] hands the panes. They are the root's own handles either
+//! way, taken in one render, so no route to one can disagree with another.
 //!
 //! [`RowStates`] and [`ListStates`] are the two bundles that are **not** contexts. Each is
 //! gathered from half a dozen of them where a list renders -- a code listing's by
@@ -517,12 +518,11 @@ pub(crate) struct Arrangement {
 /// a row holding one is not re-rendered for it, where a bundle compared field by field
 /// would trade the lookups for a render.
 ///
-/// One bundle for both panes. The Source rows read the first four and the instruction
-/// rows all six, and the two menus therefore cannot come to reach for one state two ways.
+/// One bundle for both panes. The Source rows read the first three and the instruction
+/// rows all five, and the two menus therefore cannot come to reach for one state two ways.
 #[derive(Clone, Copy)]
 pub(crate) struct RowStates {
     pub(crate) doors: Doors,
-    pub(crate) places: Places,
     /// Where a question about a line, a name or a function is answered.
     pub(crate) located: State<Located>,
     /// The dock the Locations panel is brought to the front of.
@@ -543,7 +543,6 @@ impl PartialEq for RowStates {
 pub(crate) fn use_row_states() -> RowStates {
     RowStates {
         doors: use_doors(),
-        places: use_places(),
         located: use_consume::<Locations>().0,
         dock: use_consume::<SidebarDock>().0,
         bookmarked: use_consume::<Bookmarked>().0,
@@ -566,11 +565,15 @@ pub(crate) fn use_row_states() -> RowStates {
 /// A union: no list's rows read all of it, and what they share is most of it. The
 /// alternative is a bundle per list, which is six of these and six ways for two rows of
 /// one panel to disagree about where a press leads.
+///
+/// **A press is handed it whole** ([`press_location`], [`symbol_keys`]) and never a set
+/// built beside it, so a panel's rows and its Enter cannot be given two.
 #[derive(Clone, Copy)]
 pub(crate) struct ListStates {
     /// The list's own pick: what a row draws itself against, and what a press writes.
     pub(crate) picking: Picking,
-    /// The door a press on a row goes through.
+    /// The door a press on a row goes through, which carries the places a chosen symbol
+    /// is written to ([`Doors::places`]).
     pub(crate) doors: Doors,
     /// Whether Ctrl is held, which is whether a press opens a tab of its own.
     pub(crate) ctrl: State<bool>,
@@ -586,18 +589,6 @@ pub(crate) struct ListStates {
 impl PartialEq for ListStates {
     fn eq(&self, _: &ListStates) -> bool {
         true
-    }
-}
-
-impl ListStates {
-    /// What a press in either list of symbols reaches through. Built from these rather
-    /// than consumed beside them, so a row and its panel's Enter cannot be handed two.
-    pub(crate) fn landings(&self) -> Landings {
-        Landings {
-            doors: self.doors,
-            places: self.project.places,
-            ctrl: self.ctrl,
-        }
     }
 }
 

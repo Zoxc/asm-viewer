@@ -301,7 +301,7 @@ impl SymbolPress {
 
     /// What pressing the row for `symbol` does, which is what Enter on the row the arrows
     /// left the pick on does.
-    fn goes(&self, to: Landings, symbol: Symbol) -> Pressed {
+    fn goes(&self, to: ListStates, symbol: Symbol) -> Pressed {
         match self {
             SymbolPress::Open => opened(to.doors, to.ctrl, Document::Symbol(symbol)),
             SymbolPress::Located { asked_at, subject } => {
@@ -324,7 +324,7 @@ impl Component for SymbolRow {
         // Every door a press of either list goes through, and the two states the menu
         // needs. Never read: 115k rows subscribed to the bookmarks would re-render the
         // whole list on every bookmark made.
-        let to = self.states.landings();
+        let to = self.states;
         let bookmarked = self.states.project.bookmarks;
         let objects = self.states.project.objects;
         let press = self.press.clone();
@@ -397,7 +397,7 @@ pub(crate) fn use_filtered_symbols(
 /// ([`SymbolPress::goes`]).
 pub(crate) fn symbol_keys(
     filtered: Filtered<Symbol>,
-    to: Landings,
+    to: ListStates,
     press: SymbolPress,
 ) -> ListKeys {
     ListKeys::over(
@@ -729,7 +729,7 @@ impl Component for SymbolsPanel {
         let pane = use_list_pane(Panel::Symbols);
         // What a press and Enter on a row both reach through: the pane's, so the rows and
         // the keys cannot be handed two sets.
-        let to = pane.states.landings();
+        let to = pane.states;
         // The one compiled filter: what narrows the list below, what the rows mark with,
         // and what the bar prints for a pattern that will not compile.
         let marking = use_list_marking(filter);

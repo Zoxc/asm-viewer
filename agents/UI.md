@@ -161,10 +161,15 @@ each pane when it was last shown, put back with the place and never saved) and `
 the five and leak the `Arc<Object>` a key holds. It is handed the ids `Open::close_tabs`
 answered, so what a closer forgets is what it closed; a closing binary's extra clause -- the
 entries it takes off the trails that stand -- is all a closer says itself.
-`Doors` (`focus.rs`) is what a door out of one place into another is given: `open`, `visits`
-(everywhere the reader has been), `marked`, `land`
+`Doors` (`focus.rs`) is what a door out of one place into another is given: `open`, `places`,
+`visits` (everywhere the reader has been), `marked`, `land`
 (a line and an instruction to select the moment a document arrives) and `plant` (the instruction
 half of that, left for the listing that draws the document, its rows coming after it).
+**`places` is a field because it was threaded, not used**: the doors into a place read it --
+`open_source_place` writes the line the assembly side follows, `show_in_code` the address a
+code tab was left at -- and the functions between a press and them carried a `Places` they
+never touched. A closer still takes `Places` on its own, being no door; what a close forgets
+is `Places::forgetting`'s and is unchanged by the handles being reachable through `Doors` too.
 `ProjectStates` (`state.rs`) is what a project owns, since a project switch closes all of it and
 reopens all of it -- `marks_at` for the closing and not the reopening, being the one part
 `session.toml` never sees. `Server` (`follow.rs`) is whom a question about a name is put to --
@@ -172,9 +177,9 @@ the control's state, where a followed name's answer lands, and the way to the wo
 the one bundle taken with a `try_use_`: a pane may be mounted with no server, and one with any
 part of it missing draws no links at all. It is `Clone` and not `Copy`, `LspJobs` carrying
 channels. `RowStates` (`state.rs`) is what a code row's menu writes and what the Source pane's
-caret questions are answered through: `doors`, `places`, where an answer lands (`located`, `dock`)
+caret questions are answered through: `doors`, where an answer lands (`located`, `dock`)
 and what a bookmark is added to (`bookmarked`, `objects`). It is the one that is **not provided**
-as a context of its own -- `use_row_states` gathers it from six of them, in the list's render, and
+as a context of its own -- `use_row_states` gathers it from five of them, in the list's render, and
 it travels to the rows as data, a handler being no place to call a hook. It compares **equal
 always**, so a row holding one is not re-rendered for handles the root never replaces; that is what
 makes carrying it cheaper than reaching for it, which was six lookups a row a render on the
@@ -186,9 +191,15 @@ It is gathered by `use_list_states` on the pane every panel already mints (`use_
 to the rows in `ListPane::virtual_rows`, and compares equal always for `RowStates`'s reason. It is
 a **union**: no list's rows read all of it, and what they share is most of it, where a bundle per
 list would be six of them and six ways for two rows of one panel to disagree about where a press
-leads. A handle may sit in more than one bundle: `Doors` and `ProjectStates` both carry `Open`,
-`RowStates` carries `Doors` and `Places`, `ListStates` carries `Doors`, `Picking` and
-`ProjectStates`, and `Doors` carries the runs `Marked` hands the panes.
+leads. **It is what a press is handed whole**: `Landings`, the narrower set a symbol row's press
+took, was `doors`, `ctrl` and the places dug out of `project`, and with `places` on `Doors` it
+narrowed to nothing the callee did not already have. `press_location` and `symbol_keys` take the
+pane's `ListStates` itself, so there is one set and no second way to build one.
+A handle may sit in more than one bundle: `Doors` and `ProjectStates` both carry `Open` and
+`Places`, `RowStates` and `ListStates` carry `Doors`, `ListStates` carries `Picking` and
+`ProjectStates`, and `Doors` carries the runs `Marked` hands the panes. Two routes to one
+handle are two copies of it, taken in the same render, so neither can go stale against the
+other.
 
 **The bar says which project is open, and the controls beside the name are not one control**
 (`ProjectChip`, `src/ui/project_view.rs`). A project the reader gave a place needs only to be

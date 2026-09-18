@@ -642,10 +642,10 @@ impl Component for SectionList {
         let chars = chars_of(marked, Pane::Assembly);
         let pair = pair_of(marked, Pane::Assembly);
         // What the rows' menus write, consumed here and carried to them: a handler may not
-        // run a hook. Two of its fields are the bundles the place-keeping hook below is
-        // given, and the id table this listing's entry is read out of comes with them.
+        // run a hook. One of its fields is the bundle the place-keeping hook below is
+        // given, and the id table this listing's entry is read out of comes with it.
         let asking = use_row_states();
-        let (doors, places) = (asking.doors, asking.places);
+        let doors = asking.doors;
         let docs = doors.open.docs;
         // The listing these rows are of, held under the object's identity and not the
         // rows': `Built` is made afresh as every stretch lands, and the listing is the
@@ -688,7 +688,6 @@ impl Component for SectionList {
         };
         use_kept_place(
             doors,
-            places,
             docs,
             // The scroll this pane owes: to its own run's first row, or to the source
             // pane's run, the row of the first instruction compiled from one of its
@@ -1091,7 +1090,6 @@ impl At {
 /// reason [`use_kept_position`] gives.
 fn use_kept_place(
     doors: Doors,
-    places: Places,
     docs: State<Docs>,
     mut reveal: impl FnMut(&mut ScrollController, &Built) -> bool + 'static,
     reading: State<Reading>,
@@ -1102,7 +1100,7 @@ fn use_kept_place(
     generation: Option<u64>,
 ) {
     let (marked, plant) = (doors.marked, doors.plant);
-    let (code_at, marks_at) = (places.code_at, places.marks_at);
+    let (code_at, marks_at) = (doors.places.code_at, doors.places.marks_at);
     let held = use_hook(|| Rc::new(RefCell::new(Held::default())));
 
     use_side_effect_with_deps(

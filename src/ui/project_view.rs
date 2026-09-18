@@ -242,7 +242,6 @@ impl Component for ArtifactRow {
 /// diagnostic.
 fn source_place(
     doors: Doors,
-    places: Places,
     ctrl: State<bool>,
     build: &Builds,
     directory: Option<&Path>,
@@ -268,7 +267,7 @@ fn source_place(
             text,
             press: target.map(|file| {
                 EventHandler::new(move |_| {
-                    open_source_place(doors, places, &file, line, None, Reach::outside(ctrl));
+                    open_source_place(doors, &file, line, None, Reach::outside(ctrl));
                 })
             }),
         }
@@ -418,7 +417,6 @@ impl Component for CargoSection {
         // `source_place`: a hook may only be called while a component renders, and there
         // is one place per diagnostic.
         let doors = use_doors();
-        let places = use_places();
         let ctrl = use_consume::<Ctrl>().0;
         let open = proj.read().clone();
         let directory = open.workspace();
@@ -459,8 +457,7 @@ impl Component for CargoSection {
             .diagnostics()
             .iter()
             .map(|diagnostic| {
-                let place =
-                    source_place(doors, places, ctrl, &held, directory.as_deref(), diagnostic);
+                let place = source_place(doors, ctrl, &held, directory.as_deref(), diagnostic);
                 diagnostic_block(diagnostic, place)
             })
             .collect();

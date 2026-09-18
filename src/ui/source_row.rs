@@ -396,7 +396,6 @@ pub(crate) fn caret_questions(
 fn source_menu(named: Named) -> RowMenu {
     let RowStates {
         doors,
-        places,
         located,
         dock,
         ..
@@ -443,7 +442,7 @@ fn source_menu(named: Named) -> RowMenu {
             let (line, name) = (at.line, source::name_of(Path::new(&*file)));
             MenuButton::new()
                 .on_press(move |_| {
-                    open_source_place(doors, places, Path::new(&*file), line, None, Reach::NewTab)
+                    open_source_place(doors, Path::new(&*file), line, None, Reach::NewTab)
                 })
                 .child(format!("Open {name}"))
         }));
@@ -548,7 +547,7 @@ impl Component for SourceRow {
         // other side shows; the row is picked out by `pointer_down` either way.
         .maybe(common.drives.is_some(), |el| {
             let (drives, docs) = (common.drives, common.asking.doors.open.docs);
-            let driven = common.asking.places.driven;
+            let driven = common.asking.doors.places.driven;
             el.on_press(move |_| {
                 if let Some(tab) = drives {
                     drive(docs, driven, tab, &at);

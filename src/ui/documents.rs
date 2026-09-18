@@ -441,6 +441,7 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         marked,
         land: mut land_at,
         mut plant,
+        ..
     } = doors;
     let stop = stop_of(&landing);
     // One question of the strip and the table, and not two: the id and the document come
@@ -583,7 +584,6 @@ pub(crate) fn land_on(doors: Doors, id: DocId, at: LinePos) {
 /// row, a finder row -- is [`open_source_file`]'s instead.
 pub(crate) fn open_source_place(
     doors: Doors,
-    places: Places,
     path: &Path,
     line: u32,
     columns: Option<Range<usize>>,
@@ -614,7 +614,7 @@ pub(crate) fn open_source_place(
     };
     // Bound to a `let` of its own, so the table's guard is gone before the write.
     let entry = place_at(&open.docs.peek(), id, &document);
-    let mut driven = places.driven;
+    let mut driven = doors.places.driven;
     driven.write().remember((id, entry), line);
 }
 
@@ -702,7 +702,6 @@ fn reduced(path: &Path) -> Option<PathBuf> {
 /// or below the address, and moved onto the instruction itself once its stretch decodes.
 pub(crate) fn show_in_code(
     doors: Doors,
-    places: Places,
     object: Arc<Object>,
     address: u64,
     at: Option<LinePos>,
@@ -724,7 +723,7 @@ pub(crate) fn show_in_code(
         reach,
     );
     if let Some(id) = id {
-        let mut code_at = places.code_at;
+        let mut code_at = doors.places.code_at;
         code_at
             .write()
             .remember((id, stop), Spot { address, rows: 0 });

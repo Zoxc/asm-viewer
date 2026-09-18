@@ -168,7 +168,7 @@ impl Component for SourceList {
         // re-renders this pane and the hook sees the switch.
         let entry = (self.tab, place_at(&docs.read(), self.tab, &self.document));
         use_kept_position(
-            asking.places.src_at,
+            asking.doors.places.src_at,
             docs,
             Pane::Source,
             {

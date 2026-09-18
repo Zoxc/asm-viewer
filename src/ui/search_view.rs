@@ -190,7 +190,6 @@ impl Component for SearchPanel {
         // What Enter on a row reaches through, consumed here because the handler that
         // uses them runs no hook.
         let doors = use_doors();
-        let places = use_places();
         let ctrl = use_consume::<Ctrl>().0;
         // The box is the panel's own and not the session's, as a filter is; it starts as
         // whatever was last searched for, so a panel dragged between areas or reached
@@ -247,7 +246,7 @@ impl Component for SearchPanel {
         // The rows the arrows step and Enter presses: a `SearchRows` is the rows behind an
         // `Arc`, so handing them over is a pointer.
         let keys = ListKeys::over(rows.clone(), place_pick, move |row| {
-            press_place(doors, places, ctrl, Folding::Hits(searched), row)
+            press_place(doors, ctrl, Folding::Hits(searched), row)
         });
         let body: Element = match (&directory, &asked) {
             (None, _) => placeholder("No project directory. Set one in the Project view."),

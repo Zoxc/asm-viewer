@@ -420,6 +420,7 @@ fn a_landing_an_unmeasured_pane_could_not_go_to_is_not_counted_as_gone_to() {
                             strip: State::create(Strip::default()),
                             docs,
                         },
+                        places: Places::create(),
                         visits: State::create(Visits::default()),
                         marked: State::create(Marks::default()),
                         land: State::create(None),
@@ -6147,7 +6148,7 @@ fn the_marks_question_is_asked_per_file_and_again_when_a_binary_arrives() {
 /// row's press is answered by it.
 fn locations_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), use_places(), active, use_sectioned());
+    use_land(use_doors(), active, use_sectioned());
 
     rect().expanded().child(LocationsPanel)
 }
@@ -7750,10 +7751,9 @@ fn linking_harness() -> impl IntoElement {
     use_hook(move || asking.set(Some(jobs)));
 
     let doors = use_doors();
-    let places = use_places();
     let active = use_consume::<Active>().0;
-    use_land(doors, places, active, use_sectioned());
-    use_follow(follow, doors, places);
+    use_land(doors, active, use_sectioned());
+    use_follow(follow, doors);
 
     let file = use_consume::<SubjectFile>().0;
     let document = Document::Source(file);
@@ -19103,7 +19103,7 @@ fn bare_harness() -> impl IntoElement {
 /// the caret it plants is what these tests ask about.
 fn code_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), use_places(), active, use_sectioned());
+    use_land(use_doors(), active, use_sectioned());
 
     let reading = use_sectioned().reading;
     let object = reading.read().object.clone();
@@ -20164,14 +20164,7 @@ fn show_in_unified_view_keeps_the_rows_before_the_instruction() {
         .expect("the listing is long enough");
     let at = rows.row_for(address).expect("the address has a row");
 
-    show_in_code(
-        doors,
-        states.places,
-        object.clone(),
-        address,
-        None,
-        Reach::NewTab,
-    );
+    show_in_code(doors, object.clone(), address, None, Reach::NewTab);
     settle(&mut test);
     settle(&mut test);
 
@@ -20209,14 +20202,7 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     assert_eq!(address_labels(&test)[0], "0000000000000000 ");
     let visits = states.visits.peek().entries().len();
 
-    show_in_code(
-        doors,
-        states.places,
-        object.clone(),
-        0x30,
-        None,
-        Reach::NewTab,
-    );
+    show_in_code(doors, object.clone(), 0x30, None, Reach::NewTab);
     settle(&mut test);
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000030 ");
@@ -21392,7 +21378,7 @@ fn doors_harness() -> impl IntoElement {
     let open = use_open();
     let objects = use_consume::<Objects>().0;
     let sectioned = use_sectioned();
-    use_land(use_doors(), use_places(), active, sectioned);
+    use_land(use_doors(), active, sectioned);
     use_reading_of(active, objects, sectioned);
 
     let entry = {
@@ -21415,7 +21401,7 @@ fn door_panes_harness() -> impl IntoElement {
     let open = use_open();
     let objects = use_consume::<Objects>().0;
     let sectioned = use_sectioned();
-    use_land(use_doors(), use_places(), active, sectioned);
+    use_land(use_doors(), active, sectioned);
     use_reading_of(active, objects, sectioned);
 
     let id = {
@@ -21481,7 +21467,6 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
 
     show_in_code(
         doors,
-        states.places,
         object.clone(),
         address,
         Some(at.clone()),
@@ -21589,7 +21574,6 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
 
     show_in_code(
         doors,
-        states.places,
         object.clone(),
         address,
         studied.position(index),
@@ -25620,7 +25604,7 @@ fn navigating_harness() -> impl IntoElement {
     let places = use_places();
     let active = use_consume::<Active>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(doors, places, active, use_sectioned());
+    use_land(doors, active, use_sectioned());
     use_clear_marks(
         active,
         super::analyzed::Asked {
@@ -25894,7 +25878,7 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
 /// state and needs no pane to say what it is.
 fn land_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), use_places(), active, use_sectioned());
+    use_land(use_doors(), active, use_sectioned());
 
     rect().expanded()
 }
@@ -26052,7 +26036,7 @@ fn code_navigating_harness() -> impl IntoElement {
     let places = use_places();
     let active = use_consume::<Active>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(doors, places, active, use_sectioned());
+    use_land(doors, active, use_sectioned());
     use_clear_marks(
         active,
         super::analyzed::Asked {
@@ -27618,7 +27602,7 @@ fn search_harness() -> impl IntoElement {
     // What spends the landing a hit's press leaves, as `app()` does: without it a row
     // opens its tab and picks nothing out.
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), use_places(), active, use_sectioned());
+    use_land(use_doors(), active, use_sectioned());
 
     rect().expanded().child(SearchPanel)
 }
@@ -31059,7 +31043,7 @@ fn the_project_views_button_asks_before_it_starts_too() {
 /// door from outside a document reaches, and what answers it.
 fn landing_panes_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), use_places(), active, use_sectioned());
+    use_land(use_doors(), active, use_sectioned());
     panes_harness()
 }
 

@@ -135,7 +135,6 @@ pub(crate) fn place_pick<T: Place>(row: &Row<T>) -> Pick {
 /// Shared by the press and by Enter on the row the arrows left the pick on.
 pub(crate) fn press_place<T: Place>(
     doors: Doors,
-    places: Places,
     ctrl: State<bool>,
     folding: Folding,
     row: &Row<T>,
@@ -148,7 +147,6 @@ pub(crate) fn press_place<T: Place>(
         Row::Item { path, item } => {
             open_source_place(
                 doors,
-                places,
                 path,
                 item.line(),
                 item.columns(),
@@ -180,10 +178,8 @@ impl<T: Place> Component for PlaceRow<T> {
             picking,
             doors,
             ctrl,
-            project,
             ..
         } = self.states;
-        let places = project.places;
 
         let folding = self.folding;
         let at = self.at;
@@ -201,7 +197,7 @@ impl<T: Place> Component for PlaceRow<T> {
             list_row(hovering, picking.drawn(&pick, false))
                 .on_press(move |_| {
                     picking.press(pick.clone(), at, || {
-                        press_place(doors, places, ctrl, folding, &pressed)
+                        press_place(doors, ctrl, folding, &pressed)
                     });
                 })
                 .children(row_children(&row)),

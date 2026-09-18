@@ -197,19 +197,25 @@ impl Kept {
 }
 
 /// What a door out of one place into another is given, in one `Copy` bundle: where things
-/// are open, the record of visits, the runs the two panes have picked out, and the two
-/// halves of a landing left for the arrival.
+/// are open, everything kept per place, the record of visits, the runs the two panes have
+/// picked out, and the two halves of a landing left for the arrival.
 ///
 /// Not an incidental grouping. [`documents::land`] is the one path a door takes, and every
-/// door passes it these five -- so a sixth thing a landing needs is a field here and
+/// door passes it these six -- so a seventh thing a landing needs is a field here and
 /// nothing at a call site. Provided once by `app()` and taken in one [`use_doors`], which
 /// is why a door's handler is the landing it is about and not six lines of preamble.
 ///
-/// A bundle does not own its handles: `marked` is the state [`Marked`] hands the panes,
-/// and `open` the [`Open`] [`ProjectStates`] carries.
+/// A bundle does not own its handles: `marked` is the state [`Marked`] hands the panes, and
+/// `open` and `places` the ones [`ProjectStates`] carries. A closer takes [`Places`] on its
+/// own, having no door to go through -- what a close forgets is [`Places::forgetting`]'s and
+/// is unchanged by the handles being reachable here too.
 #[derive(Clone, Copy)]
 pub(crate) struct Doors {
     pub(crate) open: Open,
+    /// Everything kept per place. The two doors into a *place* write one down after they
+    /// land -- the line a tab's assembly side follows, the address a code tab was left at
+    /// -- and [`use_land`] puts back what the arriving place kept.
+    pub(crate) places: Places,
     pub(crate) visits: State<Visits>,
     pub(crate) marked: State<Marks>,
     /// The landing asked for. `None` almost always: it is set in the handler that opens a
@@ -836,14 +842,10 @@ struct Step {
 /// ([`take_kept`]), and write the two runs ([`source_run`], [`assembly_run`]). Each stage
 /// is a function over the [`Step`] they share -- what one stage tells the next is a field
 /// of it -- and the rule a stage keeps is written on the stage.
-pub(crate) fn use_land(
-    doors: Doors,
-    places: Places,
-    active: Memo<Option<Entry>>,
-    sectioned: Sectioned,
-) {
+pub(crate) fn use_land(doors: Doors, active: Memo<Option<Entry>>, sectioned: Sectioned) {
     let Doors {
         open,
+        places,
         mut marked,
         land: landing,
         plant,

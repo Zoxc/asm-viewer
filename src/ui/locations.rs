@@ -665,7 +665,7 @@ impl Component for LocationsPanel {
         // What a press reaches through, whichever kind of row it is on and whether it
         // came from the pointer or from Enter: the pane's, which is the same set its rows
         // are handed.
-        let to = pane.states.landings();
+        let to = pane.states;
 
         let marking = marking.read().clone();
 
@@ -691,7 +691,7 @@ impl Component for LocationsPanel {
                 // The rows the arrows step and Enter presses: a `ReferenceRows` is the
                 // rows behind an `Arc`, so handing them over is a pointer.
                 let keys = ListKeys::over(used.clone(), place_pick, move |row| {
-                    press_place(to.doors, to.places, to.ctrl, Folding::Places(located), row)
+                    press_place(to.doors, to.ctrl, Folding::Places(located), row)
                 });
                 let body = match count {
                     0 => placeholder(format!("No {} {}", query.words().1, query.spell())),
@@ -740,20 +740,6 @@ impl Component for LocationsPanel {
     }
 }
 
-/// Everything a press in a list reaches through: what a door is given, the places a
-/// chosen symbol is written to, and whether Ctrl is held. One set for the whole panel --
-/// both kinds of row, and Enter on either -- rather than a trio each caller lists again.
-/// The Symbols panel takes the same set, its rows being these rows (`ui/sidebar.rs`).
-///
-/// Built out of the pane's [`ListStates`] ([`ListStates::landings`]) and never consumed
-/// beside it, so a panel's rows and its keys cannot be handed two.
-#[derive(Clone, Copy)]
-pub(crate) struct Landings {
-    pub(crate) doors: Doors,
-    pub(crate) places: Places,
-    pub(crate) ctrl: State<bool>,
-}
-
 /// Which door a location row's press goes through, decided before anything is opened.
 enum Chosen {
     /// The symbol alone, the answer naming no line to open it on.
@@ -788,16 +774,12 @@ fn chosen(docs: &Docs, at: Option<LinePos>, subject: Option<Subject>) -> Chosen 
 /// answer and cannot outlive it. `subject` is the source-driven tab the question was asked
 /// from, where it is still open and still on the file.
 pub(crate) fn press_location(
-    to: Landings,
+    to: ListStates,
     at: Option<LinePos>,
     subject: Option<Subject>,
     symbol: Symbol,
 ) -> Pressed {
-    let Landings {
-        doors,
-        places,
-        ctrl,
-    } = to;
+    let ListStates { doors, ctrl, .. } = to;
     let open = doors.open;
     let symbol_tab = Document::Symbol(symbol.clone());
     // Bound to a `let` so the table's guard is gone before `driven` is written.
@@ -813,7 +795,7 @@ pub(crate) fn press_location(
         Chosen::Driving { entry, at } => {
             let id = entry.0;
             {
-                let mut driven = places.driven;
+                let mut driven = doors.places.driven;
                 let mut driven = driven.write();
                 driven.remember(entry.clone(), at.line);
                 driven.choose(entry, symbol);

@@ -244,7 +244,7 @@ pub(crate) fn follow_name(
 /// Open what the answer named. Called once, at the root, beside `use_land`.
 ///
 /// The arrival itself is [`open_source_place`], which a row of the references panel makes too.
-pub(crate) fn use_follow(mut follow: State<Follow>, doors: Doors, places: Places) {
+pub(crate) fn use_follow(mut follow: State<Follow>, doors: Doors) {
     let open = doors.open;
     use_side_effect(move || {
         // Reading is what wakes this; the write below clears what it read, so the run
@@ -275,7 +275,6 @@ pub(crate) fn use_follow(mut follow: State<Follow>, doors: Doors, places: Places
         let place = &arrival.place;
         open_source_place(
             doors,
-            places,
             &place.file,
             place.line,
             Some(arrival.caret.clone()),

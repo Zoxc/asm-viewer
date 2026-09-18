@@ -566,10 +566,11 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     context(Shortcuts, Filter::default());
     let bookmarks = context(Bookmarked, Bookmarks::default());
     let marked = context(Marked, Marks::default());
-    // What a door is given: the two states it shares with the rest of the app, and the two
-    // halves of a landing, which it owns.
+    // What a door is given: the three states it shares with the rest of the app, and the
+    // two halves of a landing, which it owns.
     let doors = provide(Doors {
         open,
+        places,
         visits: State::create(Visits::default()),
         marked,
         land: State::create(None),
@@ -768,7 +769,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // on screen -- which is why it is handed `open` -- and on the caret that pane wants.
     use_keyboard_asked(keyboard, open, marked);
     use_save_on_change(states);
-    use_land(doors, places, active, sectioned);
+    use_land(doors, active, sectioned);
     use_periodic_save();
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.
@@ -827,7 +828,7 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
 
     let jobs = use_language(language, follow, located, linked, hover, proj);
     // What a name followed in the source opens, which the answer above fills in.
-    use_follow(follow, doors, places);
+    use_follow(follow, doors);
     use_opened(language, opened, open, proj, jobs.clone());
     use_linking(language, linked, showing, opened, jobs.clone());
     use_hovering(language, hover, jobs.clone());

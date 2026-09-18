@@ -563,10 +563,10 @@ impl Opens {
     /// `listing` is the list's own scroll and box, read at the press rather than at the
     /// render that drew the label, so a row moved to is a row of the listing on screen
     /// now.
-    fn go(self, doors: Doors, places: Places, listing: &Listing) {
+    fn go(self, doors: Doors, listing: &Listing) {
         match self {
             Opens::InCode { object, placed } => {
-                show_in_code(doors, places, object, placed, None, Reach::InPlace);
+                show_in_code(doors, object, placed, None, Reach::InPlace);
             }
             Opens::Symbol(symbol, reach) => {
                 open_document(doors.open, doors.visits, Document::Symbol(symbol), reach);
@@ -578,7 +578,7 @@ impl Opens {
                 address,
                 reach,
             } => {
-                show_in_code(doors, places, object, address, None, reach);
+                show_in_code(doors, object, address, None, reach);
             }
             Opens::Nothing => {}
             Opens::Row { to, at } => {
@@ -697,7 +697,6 @@ impl Component for DoorLabel {
         let ctrl = use_consume::<Ctrl>().0;
         let alt = use_consume::<Alt>().0;
         let doors = use_doors();
-        let places = use_places();
         // The list's own scroll and its measured height, which `reveal_row` needs at the
         // moment of the press rather than at the render that drew this label.
         let listing = use_consume::<Listing>();
@@ -725,7 +724,7 @@ impl Component for DoorLabel {
                 // Or the press bubbles into the row, which would pin the line the
                 // instruction being left came from.
                 e.stop_propagation();
-                opens.go(doors, places, &listing);
+                opens.go(doors, &listing);
             })
             .child(label().text(self.text.clone()).max_lines(1).color(if lit {
                 lit_fg
@@ -1209,7 +1208,6 @@ fn instruction_menu(
 ) -> RowMenu {
     let RowStates {
         doors,
-        places,
         located,
         dock,
         bookmarked,
@@ -1261,14 +1259,7 @@ fn instruction_menu(
             let at = at.clone();
             MenuButton::new()
                 .on_press(move |_| {
-                    show_in_code(
-                        doors,
-                        places,
-                        object.clone(),
-                        address,
-                        at.clone(),
-                        Reach::NewTab,
-                    )
+                    show_in_code(doors, object.clone(), address, at.clone(), Reach::NewTab)
                 })
                 .child("Show in unified view")
         }));
@@ -1433,7 +1424,7 @@ impl Component for InstructionList {
             place_at(&docs.read(), self.tab, &asked_of(&self.asked)),
         );
         use_kept_position(
-            asking.places.asm_at,
+            asking.doors.places.asm_at,
             docs,
             Pane::Assembly,
             {
