@@ -466,7 +466,7 @@ where the reveal can satisfy itself, which `reveal_row` cannot in a viewport too
 row and its `CONTEXT_ROWS`: the source pane of a tab opened from a door froze the app at 100% of a
 core with one row drawn. Where the viewport is tall enough the same loop is silent, and shows only
 as a pane that will not stay where the reader scrolls it. **Cost:** the hook remembers the landing
-it has gone to, for as long as that landing is on its way (`src/ui/focus.rs`), pinned by
+it has gone to, for as long as that landing is on its way (`src/ui/scrolling.rs`), pinned by
 `a_landing_is_gone_to_once_and_does_not_drag_the_pane_back`. Anything else here that both reads a
 scroll and writes one needs a bound of its own; re-rendering is not one.
 

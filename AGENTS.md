@@ -282,6 +282,10 @@ command.
 - `src/ui/focus.rs` — a place in a file, the landing a click from outside the panes makes,
   `Doors` (what every door out of one place into another is given), what each tab keeps of
   where it was left and of its runs, and the effects that spend a landing.
+- `src/ui/scrolling.rs` — keeping each pane scrolled where its place was left, and bringing
+  a row into view: the row a tab is left at, written down as the reader scrolls and put back
+  as the tab comes round, and the two reveals -- a click's, with the rows kept above it, and
+  the keyboard's, which moves only for a row off screen.
 - `src/ui/follow.rs` — following a name in the source to what it names: whom the question is
   put to, the question itself, and where its answer opens, with the caret it lands on.
 - `src/ui/linking.rs` — which names in the file the Source pane is showing are links: what

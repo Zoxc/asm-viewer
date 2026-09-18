@@ -168,6 +168,8 @@ mod reading;
 pub(crate) use reading::*;
 mod rescued_view;
 pub(crate) use rescued_view::*;
+mod scrolling;
+pub(crate) use scrolling::*;
 mod search_view;
 pub(crate) use search_view::*;
 mod section_view;

@@ -143,7 +143,7 @@ with -- so the finder needs no rule of its own for either, only the box handed d
 **The list follows that row.** The panel is `FINDER_ROWS` tall and the arrows walk past it, so the
 list is given a `ScrollController` and each move ends in `reveal_caret` -- the code panes' own
 rule, which takes the row height because a list row and a code row are measured in different
-fonts. It is called here directly and not through `caret_reveal` (`ui/focus.rs`), which is that
+fonts. It is called here directly and not through `caret_reveal` (`ui/scrolling.rs`), which is that
 rule with a code row's height and a pane's viewport state already bound. Without it the highlight went under the panel's edge at the thirteenth press while Enter
 went on opening the row it was on: a file the reader never saw named.
 
