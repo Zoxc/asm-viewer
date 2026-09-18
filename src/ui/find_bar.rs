@@ -608,7 +608,10 @@ impl Component for FindBar {
             }
         });
 
-        let error = typed.matcher().error().map(str::to_owned);
+        // Compiled once per pattern: the bar is drawn on every write to its entry, which
+        // is each progress word of a hunt.
+        let marking = use_list_marking(filter);
+        let error = marking.read().matcher().error().map(str::to_owned);
         let step = move |direction| edit_find(finds, at, move |bar| bar.step = Some(direction));
         let close = move || {
             close_find(finds, at);
@@ -685,7 +688,7 @@ impl Component for FindBar {
                     }))
                     .child(
                         label()
-                            .text(counted(&bar))
+                            .text(counted(&bar, error.is_some()))
                             .color(faded(palette().text_fg, palette().header_bg))
                             .max_lines(1),
                     )
@@ -712,7 +715,9 @@ impl Component for FindBar {
 /// Nothing at all where there is no answer yet: a bar just opened, and one over a listing
 /// the worker has not been asked about, would otherwise say "No matches" about a search
 /// that has not run.
-fn counted(bar: &Find) -> String {
+///
+/// `broken` is whether the pattern in the box will not compile, as the error under it says.
+fn counted(bar: &Find, broken: bool) -> String {
     // An object's code has no count: it is read a piece at a time, so what there is to
     // say is how far the walk has got, and that one came back with nothing.
     if let Some(hunt) = &bar.hunt {
@@ -724,10 +729,7 @@ fn counted(bar: &Find) -> String {
     }
     // A pattern that will not compile has the error under the box already; a count beside
     // it saying nothing matched would read as an answer about the pattern.
-    let Some(hits) = bar
-        .hits()
-        .filter(|_| bar.filter.matcher().error().is_none())
-    else {
+    let Some(hits) = bar.hits().filter(|_| !broken) else {
         return String::new();
     };
     match (bar.at, hits.len()) {

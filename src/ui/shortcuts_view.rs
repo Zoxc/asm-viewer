@@ -25,11 +25,8 @@ impl Component for ShortcutsTab {
         // scope owned would be emptied by a glance at another tab (`Shortcuts`,
         // `src/ui/state.rs`).
         let filter = use_consume::<Shortcuts>().0;
-        let current = filter.read().clone();
-        // Compiled here and handed down, so the rows are filtered once per render rather
-        // than once per section: a `Regex` is not `PartialEq` and cannot live in a state.
-        let matcher = current.matcher();
-        let listed = shortcuts::matching(&matcher);
+        let marking = use_list_marking(filter);
+        let listed = shortcuts::matching(marking.read().matcher());
         let nothing = listed.is_empty();
 
         page(

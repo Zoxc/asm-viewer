@@ -608,13 +608,14 @@ impl Marking {
     }
 }
 
-/// The one compiled filter a sidebar panel has: what it narrows its list with, what its
-/// rows mark with, and what its bar prints when the pattern will not compile.
+/// The one compiled filter a box held in a `State` has: what a sidebar panel narrows its
+/// list with, what its rows mark with, and what its bar prints when the pattern will not
+/// compile. A find bar's box and the Shortcuts page's take theirs here too.
 ///
 /// A memo, so the regex is compiled when the pattern changes and not when the list does.
 /// A panel redraws most while its box is being typed in, which is exactly when compiling
-/// is not free. [`use_marking`] is the same hook for a find bar, whose filter is held in
-/// a context rather than a state.
+/// is not free. [`use_marking`] is the same hook for the rows under a find bar, whose
+/// filter is held in a table rather than a state.
 ///
 /// The memo and not the [`Marking`] in it: a panel narrows its list in a memo of its own,
 /// and a memo reading a plain value captured from an earlier render would never see the
