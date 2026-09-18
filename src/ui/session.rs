@@ -245,19 +245,19 @@ fn store_for(states: ProjectStates, path: &Path) -> Result<Store, project::Failu
 
 /// Reopen the last project -- its name, binaries, tabs and selection -- once, at startup.
 /// Which project that is, is `project::reopen`'s answer.
-pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<PathBuf>) {
+pub(crate) fn use_restore_on_startup(states: ProjectStates, opening: Option<&Path>) {
     let mut unopened = states.unopened;
     use_hook(move || {
         // What the app was given beats what it was last in. A file that will not parse
         // opens nothing and is said so, the same as one picked from a menu would be: it is
         // the reader's own file and is left exactly as it is.
-        let opened = match &opening {
+        let opened = match opening {
             Some(path) => Some(
                 // The path the app was given, put beside the two halves so every branch
                 // here answers the same shape; `open_at` does not touch it.
                 store_for(states, path)
                     .and_then(|store| project::open_at(&store, path))
-                    .map(|(project, session)| (path.clone(), project, session)),
+                    .map(|(project, session)| (path.to_path_buf(), project, session)),
             ),
             // With nowhere to keep anything there is nothing to reopen and nothing to say:
             // a startup that would have reopened a project has the empty screen to show

@@ -880,8 +880,7 @@ fn the_bar_offers_a_close_or_a_save_and_a_delete() {
         chip_harness,
         (400., 100.).into(),
         |runner: &mut _| {
-            let roots = runner.provide_root_context(test_roots);
-            (roots.states, roots.asking)
+            runner.provide_root_context(|| (test_roots().states, consume_context::<Deleting>().0))
         },
         1.,
     );

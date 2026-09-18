@@ -443,7 +443,6 @@ pub(crate) struct Roots {
     pub(crate) doors: Doors,
     /// The keyboard, the three modifiers a door reads among its five states.
     pub(crate) keys: ModifierKeys,
-    pub(crate) asking: State<Option<String>>,
     pub(crate) finder: State<Finder>,
     pub(crate) analysis: State<Analyzed>,
     pub(crate) located: State<Located>,
@@ -600,7 +599,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     provide(Workspace(Memo::create(move || proj.read().workspace())));
     // Whether a delete is being asked about. At the root, since the control that asks is
     // in the bar and the window that answers is over everything.
-    let asking = context(Deleting, None);
+    context(Deleting, None);
     // And which project would not open, for the window that says so.
     let unopened = context(Unopened, None);
     // Where each file that would not parse was moved to. Empty here, and filled by a task
@@ -688,7 +687,6 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         states,
         doors,
         keys,
-        asking,
         finder,
         analysis,
         located,
@@ -710,7 +708,17 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
 /// The whole window. `opening` is the project named on the command line, where there was
 /// one: it is opened in place of the project last open, and `main` has already answered for
 /// a path that is not a project file at all.
-pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
+pub struct Viewer {
+    pub opening: Option<PathBuf>,
+}
+
+impl App for Viewer {
+    fn render(&self) -> impl IntoElement {
+        app(self.opening.as_deref())
+    }
+}
+
+fn app(opening: Option<&Path>) -> impl IntoElement {
     // The store this run keeps its files in, the panic hook over it, and what the settings
     // file said, in that order and in one hook.
     //
@@ -734,7 +742,6 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         states,
         doors,
         keys,
-        asking,
         finder,
         analysis,
         located,
@@ -754,7 +761,6 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     let ProjectStates {
         proj,
         store,
-        unopened,
         objects,
         open,
         places,
@@ -910,13 +916,9 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         // Over everything, and drawn as nothing at all until a file has been moved aside.
         .child(RescuedPopup)
         // The same, until a delete is asked about.
-        .child(DeleteProjectPopup {
-            asking: asking.read().clone(),
-        })
+        .child(DeleteProjectPopup)
         // And until a project the reader asked for would not open.
-        .child(UnopenedPopup {
-            naming: unopened.read().clone(),
-        })
+        .child(UnopenedPopup)
         // The same, until Ctrl+P. Over the window and not in a pane, so it is reached
         // from wherever the reader is.
         .child(FinderOverlay)

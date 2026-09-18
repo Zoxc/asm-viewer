@@ -896,15 +896,14 @@ impl Component for ProjectChip {
 /// The window that says a project would not open. Drawn as nothing at all until there is
 /// something to say, the way `RescuedPopup` is.
 #[derive(PartialEq)]
-pub(crate) struct UnopenedPopup {
-    pub(crate) naming: Option<project::Failure>,
-}
+pub(crate) struct UnopenedPopup;
 
 impl Component for UnopenedPopup {
     fn render(&self) -> impl IntoElement {
         let mut unopened = use_consume::<Unopened>().0;
+        let naming = unopened.read().clone();
 
-        notice(move |_| unopened.set(None)).map(self.naming.clone(), |popup, failure| {
+        notice(move |_| unopened.set(None)).map(naming, |popup, failure| {
             popup
                 .child(
                     notice_body()
@@ -946,16 +945,15 @@ impl Component for UnopenedPopup {
 /// -- and an empty `Popup` draws nothing at all, so with nothing to ask this lays out as
 /// nothing.
 #[derive(PartialEq)]
-pub(crate) struct DeleteProjectPopup {
-    pub(crate) asking: Option<String>,
-}
+pub(crate) struct DeleteProjectPopup;
 
 impl Component for DeleteProjectPopup {
     fn render(&self) -> impl IntoElement {
         let states = use_project_states();
         let mut deleting = use_consume::<Deleting>().0;
+        let asking = deleting.read().clone();
 
-        notice(move |_| deleting.set(None)).map(self.asking.clone(), |popup, name| {
+        notice(move |_| deleting.set(None)).map(asking, |popup, name| {
             popup
                 .child(
                     notice_body()

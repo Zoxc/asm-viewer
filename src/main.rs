@@ -108,7 +108,7 @@ fn main() {
 
     launch(
         LaunchConfig::new().with_window(
-            WindowConfig::new(move || ui::app(opening.clone()))
+            WindowConfig::new_app(ui::Viewer { opening })
                 .with_title(APP_NAME)
                 .with_size(1200., 800.)
                 // The only exit hook freya 0.4 offers, and it is a `Send` callback outside
