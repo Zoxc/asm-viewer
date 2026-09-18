@@ -43,6 +43,12 @@ fn a_project_in_app_storage_is_remembered_relative_to_it() {
         text.contains(&format!("{PROJECTS_DIR}/1.{PROJECT_EXTENSION}")),
         "the unsaved project was not written relative to the store: {text}"
     );
+    // Relative and not merely ending that way: an absolute path holds the tail above too,
+    // so the store's own prefix is what says which of the two was written.
+    assert!(
+        !text.contains(&base.to_string_lossy().into_owned()),
+        "the unsaved project was written by its whole path: {text}"
+    );
     assert!(text.contains("/src/kernel/kernel.avproj"), "{text}");
 
     // And back: what the file holds is read as the paths the app works in.

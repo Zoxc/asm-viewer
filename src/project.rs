@@ -210,23 +210,11 @@ pub enum Put {
 pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
     flush();
     let mut saves = saves();
-    let Some(from) = saves.open.clone() else {
+    let Some((from, project, session)) = saves.to_put(put) else {
         log::warn!("no project to save");
         return false;
     };
-
-    let id = match put {
-        Put::Copy => ProjectId::new(),
-        Put::Move => saves.written.id,
-    };
-    let project = Project {
-        id,
-        ..saves.written.clone()
-    };
-    let session = Session {
-        id,
-        ..saves.stored.clone()
-    };
+    let id = project.id;
 
     if !write_or_warn(path, |path| project.save_to(store, path)) {
         return false;
@@ -266,7 +254,7 @@ pub fn close() {
 /// project being about to go.
 pub fn delete() -> bool {
     let mut saves = saves();
-    let (Some(store), Some(path)) = (saves.store.clone(), saves.open.clone()) else {
+    let Some((store, path)) = writing_into(&saves) else {
         return false;
     };
     if !is_unsaved(&store, &path) {

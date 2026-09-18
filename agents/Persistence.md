@@ -185,6 +185,13 @@ stays, and the two files it came from go. `Saves::moved_to` then moves the id an
 else -- only *where* the project is has changed, so every other baseline still describes what
 the app is holding.
 
+**What travels comes out of one accessor**, `Saves::to_put`: the file the project is in now,
+and the two files as they stand under the id the put gives them. `put_in` stayed in
+`project.rs` -- it deletes the reader's files and rewrites the recent order, which is the
+lifecycle's work and not "when a write happens" -- so without it the baselines it reads had
+to be open to the parent module. `delete` reads the same way, through `writing_into`, and no
+baseline is public.
+
 **`close` and `delete` both end with `Saves::closed`**, which is every baseline back to what
 the app boots into: the caller is about to empty the app, and a baseline still describing the
 project just left would read that emptying as a change and write it back into it -- the same
@@ -226,7 +233,7 @@ which project the open file holds; `Saves::record` puts it on the session before
 against the baseline, so the stamp cannot read as a change, and builds the `Project` with it. The
 writes take both halves as it handed them back. They used to stamp each again, for a project whose
 file was claimed by the first write and given its id then; ids are minted in `start_new` and
-`put_in` now, and `saves` is held under one lock from the decision to the write, so a second stamp
+`Saves::to_put` now, and `saves` is held under one lock from the decision to the write, so a second stamp
 could only put back what the first one wrote. Nothing in the UI knows the id, which is why nothing
 in the UI can get it wrong.
 

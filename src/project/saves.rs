@@ -15,6 +15,7 @@ use crate::bookmarks::Bookmark;
 use crate::store::Store;
 
 use super::files::{Details, Project, ProjectId, Session, PROJECT_EXTENSION};
+use super::Put;
 
 /// Whether the project at `path` is one the app is keeping for want of anywhere else: an
 /// **unsaved** project. Being under `projects/` is the whole of it, since that is the one
@@ -59,11 +60,11 @@ pub(super) struct Saves {
     /// Where the app's own files go, taken from the store the run opened when a project
     /// was entered. Held so that [`super::record`] and [`super::flush`] — a timer and a close hook,
     /// neither of them in the component tree — have one without being handed one.
-    pub(super) store: Option<Store>,
+    store: Option<Store>,
     /// The project file everything is written into, or `None` until one has been reopened
     /// or created. Otherwise claimed on the first write that has anything to say, so a run
     /// where nothing was ever opened leaves no file behind.
-    pub(super) open: Option<PathBuf>,
+    open: Option<PathBuf>,
     /// `project.toml` as last written: the baseline every change is measured against, and
     /// where a write that is not about the binaries takes them from.
     ///
@@ -73,7 +74,7 @@ pub(super) struct Saves {
     /// Seeded whole by [`Saves::opened`], where the two below are pointedly empty,
     /// because every baseline is the state the app boots into and only this one is
     /// restored synchronously.
-    pub(super) written: Project,
+    written: Project,
     /// The binaries the app was last seen holding, out of a moment when nothing was
     /// loading. Empty to start with, deliberately not the ones loaded at startup: they
     /// arrive asynchronously, so a baseline holding them would read the still-empty boot
@@ -93,7 +94,7 @@ pub(super) struct Saves {
     ///
     /// Seeded whole by `opened`, and moved with the baseline by [`Saves::wrote_session`].
     /// [`super::put_in`] asks what the files hold, so it reads this one.
-    pub(super) stored: Session,
+    stored: Session,
     /// A newer session that has not been written yet. Only ever a *session*: a change to
     /// the other file is written at once.
     pending: Option<Session>,
@@ -134,6 +135,35 @@ impl Saves {
             ..session.clone()
         };
         self.pending = None;
+    }
+
+    /// What a [`super::put_in`] writes into the place it is putting the project: the file
+    /// the project is in now, and the two files as they stand under the id the put gives
+    /// them -- a fresh one for a copy, since the two are afterwards two projects, and the
+    /// project's own for a move. [`None`] where there is no project open.
+    ///
+    /// The baselines and not the files read back: `written` and `stored` are what the two
+    /// files hold this instant, the pending session having been flushed first
+    /// ([`super::put_in`], which says why that is the truer answer).
+    ///
+    /// The id is stamped here for [`Saves::record`]'s reason: which project a file is for
+    /// belongs to the policy, and this is the one other place a write is made up from the
+    /// baselines rather than from what the app is holding.
+    pub(super) fn to_put(&self, put: Put) -> Option<(PathBuf, Project, Session)> {
+        let from = self.open.clone()?;
+        let id = match put {
+            Put::Copy => ProjectId::new(),
+            Put::Move => self.written.id,
+        };
+        let project = Project {
+            id,
+            ..self.written.clone()
+        };
+        let session = Session {
+            id,
+            ..self.stored.clone()
+        };
+        Some((from, project, session))
     }
 
     /// Take note of the state the app is now in. Hands back the `project.toml` to write
@@ -291,9 +321,9 @@ pub(super) fn saves() -> MutexGuard<'static, Saves> {
     SAVES.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-/// The store and the project file to write, or `None` when there is no project to write
-/// into — in which case nothing is written and nothing is made. The session goes beside
-/// the file.
+/// The store and the project file the app is in, or `None` when it is in none — in which
+/// case nothing is written and nothing is made. The session goes beside the file. Also
+/// what a delete takes away.
 pub(super) fn writing_into(saves: &Saves) -> Option<(Store, PathBuf)> {
     Some((saves.store.clone()?, saves.open.clone()?))
 }
