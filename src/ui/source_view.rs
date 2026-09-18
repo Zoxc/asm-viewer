@@ -419,6 +419,17 @@ pub(crate) fn source_side(
     }
 }
 
+/// What of `marks` [`source_side`] reads: the file of each run and the row the assembly
+/// pane's run started on. A sweep moves none of them.
+fn side_marks(marks: &Marks) -> (Option<Arc<str>>, Option<usize>, Option<Arc<str>>) {
+    let assembly = marks.assembly.as_ref();
+    (
+        assembly.and_then(|picked| picked.file.clone()),
+        assembly.map(|picked| picked.chars.anchor().row),
+        marks.source.as_ref().and_then(|picked| picked.file.clone()),
+    )
+}
+
 /// The positions the assembly pane's picked-out run `pair` was compiled from, for the
 /// listing the pane draws beside `document`: the object's code for a code tab, read
 /// through the reading's rows, and the drawn symbol's listing otherwise.
@@ -486,8 +497,15 @@ pub(crate) struct SourcePane {
     pub(crate) document: Document,
 }
 
+counter!(
+    /// Test-only: how many times this thread has drawn a Source pane, bar and all.
+    pub(crate) fn source_panes_drawn() = SOURCE_PANES_DRAWN
+);
+
 impl Component for SourcePane {
     fn render(&self) -> impl IntoElement {
+        #[cfg(test)]
+        SOURCE_PANES_DRAWN.set(SOURCE_PANES_DRAWN.get() + 1);
         let marked = use_consume::<Marked>().0;
         // Whether a sweep is under way, for the header not to answer the pointer during one.
         let sweeping = use_sweeping();
@@ -496,18 +514,23 @@ impl Component for SourcePane {
         let ctrl = use_consume::<Ctrl>().0;
         let analysis = use_consume::<Analysis>().0;
         let sectioned = use_sectioned();
-        // **Borrowed and not cloned.** This pane is drawn again on every move of a sweep
-        // in either pane and on every word from the worker, and both states are whole
-        // answers -- a listing and its question, and the two runs with their files. So
-        // the guards are bound here, spent, and dropped; the side that comes out of them
-        // is owned, and every later read of the analysis is a scope of its own. Reading
-        // them is also what subscribes this tab to the two, so the pane fills in when a
-        // newly selected symbol's line info is worked out.
+        // What of the two runs [`source_side`] reads, as the subscription to them: a
+        // sweep in either pane writes `Marks` on every pointer move and moves none of it.
+        // Only subscribed through: the side itself is worked out of a peek below, the
+        // memo being a task behind and the side feeding the effects under it.
+        let _ = use_memo(move || side_marks(&marked.read())).read();
+        // **Borrowed and not cloned.** This pane is drawn again on every word from the
+        // worker, and both states are whole answers -- a listing and its question, and
+        // the two runs with their files. So the guards are bound here, spent, and
+        // dropped; the side that comes out of them is owned, and every later read of the
+        // analysis is a scope of its own. Reading the analysis is also what subscribes
+        // this tab to it, so the pane fills in when a newly selected symbol's line info
+        // is worked out.
         //
         // The tab's own document and not `Active`, which is a memo and a beat behind:
         // this pane is only ever mounted for the tab it belongs to.
         let side = {
-            let (analysis, marks) = (analysis.read(), marked.read());
+            let (analysis, marks) = (analysis.read(), marked.peek());
             // Peeked and not read: the line a code tab opens at is read out of the rows,
             // and a window of them decoding must not draw the pane again.
             let built = self

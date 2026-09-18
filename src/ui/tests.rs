@@ -19381,6 +19381,86 @@ fn a_sweep_in_the_source_pane_does_not_work_its_pair_out_again() {
     );
 }
 
+/// **A sweep in either pane does not draw the Source pane again.** The pane reads the two
+/// runs for which file it is showing, and a sweep writes them on every pointer move; what
+/// it needs of them -- the file of each, and the row the assembly run started on -- moves
+/// only on a press. The rows under it still follow the sweep: they read the runs
+/// themselves.
+///
+/// Fails on the pane reading `Marks` whole.
+#[test]
+fn a_sweep_in_either_pane_does_not_draw_the_source_pane_again() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let directory = Seeded::directory("sweep-bar");
+    let text: String = (1..=20).map(|n| format!("int line_{n}(void);\n")).collect();
+    let file = directory.named("swept.c", &text);
+    let mut studied = Studied::new(sum_to.clone());
+    studied.lines.file = Some(file.clone());
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied,
+    };
+    let (mut test, (states, marked)) = TestingRunner::new(
+        source_pane_harness,
+        (500., 600.).into(),
+        |runner| {
+            runner.provide_root_context(|| Mounted(State::create(true)));
+            let roots = runner.provide_root_context(move || listing_states(shown));
+            (roots.states, roots.doors.marked)
+        },
+        1.,
+    );
+    open_document(
+        states.open,
+        states.visits,
+        Document::Symbol(sum_to),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    settle(&mut test);
+
+    for pane in [Pane::Source, Pane::Assembly] {
+        mark_press(
+            marked,
+            false,
+            pane,
+            Some(file.clone()),
+            2,
+            Some(Press::At(0)),
+        );
+        settle(&mut test);
+        let drawn = source_view::source_panes_drawn();
+        for row in 3..=5 {
+            mark_drag(marked, pane, row, Some(2));
+            settle(&mut test);
+        }
+        assert_eq!(
+            source_view::source_panes_drawn(),
+            drawn,
+            "a sweep in the {} pane drew the Source pane again",
+            if pane == Pane::Source {
+                "Source"
+            } else {
+                "Assembly"
+            }
+        );
+        mark_release(marked);
+        settle(&mut test);
+    }
+    assert_eq!(
+        marked
+            .peek()
+            .source
+            .as_ref()
+            .map(|picked| picked.chars.rows()),
+        Some(2..=5),
+        "the sweep in the Source pane picked nothing out"
+    );
+}
+
 /// Which of the code rows whose gutters read `numbers` come through `change` as the very
 /// scopes they were.
 ///

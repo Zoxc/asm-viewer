@@ -64,10 +64,15 @@ stretch has one and leaves owed while none does; the stretch may not be decoded 
 that decodes it wakes the effect again.
 
 **The pane draws both states through a guard and copies neither.** It is drawn again on every
-move of a sweep in either pane -- it reads the runs -- and on every word from the worker, and
-`Analyzed` is a whole answer: a listing, the symbol it is of, and the questions either side of it.
-So the two guards are bound around the one call that wants both (`source_side`), spent and
-dropped, and every later read of the analysis is a short scope of its own. `Analyzed`'s `Clone`
+word from the worker, and `Analyzed` is a whole answer: a listing, the symbol it is of, and the
+questions either side of it. So the two guards are bound around the one call that wants both
+(`source_side`), spent and dropped, and every later read of the analysis is a short scope of its
+own. **A sweep does not draw the pane again**: `Marks` is written on every pointer move, and all
+`source_side` reads of it is the file of each run and the row the assembly run started on, which
+only a press moves. The pane subscribes through a memo over those three and reads `Marks` by a
+peek (`a_sweep_in_either_pane_does_not_draw_the_source_pane_again`). The peek and not the memo's
+value, because the side feeds the `ShowingFile` effect and the rows' landing, and a memo is a task
+behind (`agents/UI.md`). `Analyzed`'s `Clone`
 counts itself (`studied::copies`), as `Grouped`'s does (`agents/Sidebar.md`), so a headless test
 can say a sweep copied nothing. The Assembly pane holds its guard for the whole render, which
 writes nothing, and an answer landing copies nothing either

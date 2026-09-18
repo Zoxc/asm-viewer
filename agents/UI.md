@@ -66,12 +66,12 @@ dependency rows arrange (`agents/Scratchpad.md`), and never by handing it a new 
 render.** The child reads the same state the parent did and is woken with it, so the work moves
 without shrinking. Measured when a pane was cut up for exactly that reason, and every piece went
 on redrawing together. What would cut it is a `use_memo` between the state and the component, so
-the component subscribes to the part it draws rather than to the state it came out of. No pane
-has yet been slow enough to want one -- so a split done for a render count is a split that buys
-nothing, and the reason to make one is that the pieces read better.
+the component subscribes to the part it draws rather than to the state it came out of, as the
+Source pane does for the runs (`agents/Panes.md`). Without one, a split done for a render count
+buys nothing, and the reason to make one is that the pieces read better.
 
-**A memo inside a component cuts the work of a render rather than the render.** The source pane
-still wakes for every write to `Marks`, its own run being in there, but what the pair costs is a
+**A memo inside a component cuts the work of a render rather than the render.** The source rows
+still wake for every write to `Marks`, their own run being in there, but what the pair costs is a
 walk over the drawn listing's line info, and a memo over the other pane's run spares it every
 wake that left that run alone (`agents/Panes.md`). It buys the rows something else: a memo hands
 the same value back where the new one compares equal, so a set that came out as it was is the
@@ -87,7 +87,10 @@ with the memo's old value. A memo that only draws costs at most a frame, which i
 one into an effect's deps**: the render hands the effect the memo's old value beside the fresh
 state, and the effect acts on the pair. A memo over
 `place_at(..)` fed to `use_kept_place` planted the caret under the old stop
-(`show_in_unified_view_keeps_the_rows_before_the_instruction`). Read the state itself there.
+(`show_in_unified_view_keeps_the_rows_before_the_instruction`). Read the state itself there. A
+memo can still be the *subscription*: read it for the wake, and work the value out of a peek of
+the state, as the Source pane does with the runs. That render comes a task late, but what it
+hands its effects is current.
 
 **An effect's callback runs inside a `ReactiveContext`, so every `.read()` it makes at any depth
 subscribes it** -- the deps are one more subscription and not the whole of what wakes it. Where an
