@@ -118,6 +118,8 @@ mod hover_view;
 pub(crate) use hover_view::*;
 mod hovering;
 pub(crate) use hovering::*;
+mod hunt;
+pub(crate) use hunt::*;
 mod keyboard;
 pub(crate) use keyboard::*;
 mod keys;

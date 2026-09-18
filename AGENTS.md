@@ -326,6 +326,11 @@ command.
   place it keeps as an address, the window it asks for, and `stretch_texts`, the one
   statement of what a stretch's rows say, which the search that walks the code reads too.
 - `src/ui/filter_bar.rs` — one filter bar, its three toggles, and the pane its list is drawn in.
+- `src/ui/find_bar.rs` — find in a code pane: the bar under one, what each is asking, and
+  the worker that searches a listing the pane holds entire.
+- `src/ui/hunt.rs` — the same over an object's code, which no pane holds entire: a step
+  reads on from where the reader is, stretch by stretch, for the next match. Which of the
+  two a bar is, is whether it has a listing.
 - `src/ui/language.rs` — whether a language server is running, what the project's own
   settings said, and the presses that start it, stop it and put a question to it;
   `language/worker.rs` is the blocking half -- the jobs, the answers, which of them a newer

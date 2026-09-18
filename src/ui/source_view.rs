@@ -138,7 +138,7 @@ impl Component for SourceList {
         // One value for the claim and for the chord below, which have to name the same
         // listing: an answer is judged by `Searchable::id`.
         let searchable = Searchable::Source(self.source.clone());
-        use_searching(at, searchable.clone());
+        use_searching(at, Some(searchable.clone()));
         let (controller, viewport) = (list.controller, list.viewport());
 
         // Which of this file's names are links, which is the server's to say and not the
@@ -217,7 +217,7 @@ impl Component for SourceList {
             Some(self.file.clone()),
             &list,
             length,
-            searchable,
+            Some(searchable),
             ListingText {
                 line: Rc::new({
                     let source = self.source.clone();

@@ -1395,13 +1395,19 @@ starts from where the reader is looking rather than from the top. **Which way it
 asked, and the two buttons, the `F3` pair and the walk through an object's code carry the same name.
 As an `Option<bool>` it left a reader at `Some(true)` to go and find out what true was.
 
-**An object's code is walked, not passed over.** It is read a piece at a time, so there is no
-listing to search whole and nothing to count: a step asks for the *next* match from where the pane
-is, and the whole of the answer is one address (`hunt`, `use_code_hunt`). The two takers of a step
-divide the bar between them by one question, `Searchable::walked`: `use_listing_keys` calls
-`use_find_steps` for all three listings, a hook having to run on every render, and it leaves a walked
-listing's step where it is for `use_code_hunt` to spend. Without that it spends the step first --
-finds no hits, since there are none to find -- and a step over an object's code walks nowhere. The walk is the one-shot
+**An object's code is walked, not passed over** (`src/ui/hunt.rs`). It is read a piece at a time,
+so there is no listing to search whole and nothing to count: a step asks for the *next* match from
+where the pane is, and the whole of the answer is one address. **A bar over it has no listing at
+all** (`Find::listing`), and that one fact divides the two mechanisms: the find worker is asked
+nothing, and `use_find_steps` -- which `use_listing_keys` calls for all three listings, a hook
+having to run on every render -- leaves the step for `use_code_hunt`. Without the question it spends
+the step first, finds no hits, there being none to find, and a step over an object's code walks
+nowhere. The section view mounts the two hooks in the order that hides that, so the question is
+pinned on the hook alone (`a_step_on_a_bar_with_no_listing_is_left_where_it_is`). It used to be
+asked of a `Searchable::Code`, which made "an object's code" a third kind of listing a pane searches
+whole and then had `look` decline to search it. A new pattern gives the walk up, since its answer is
+about the pattern it was asked with: one `Find::reset`, which both doors to a pattern go through --
+the box, and a Ctrl+F seeding a bar already open. The walk is the one-shot
 `stream` shape the Search panel has -- the receiver dropping is what calls it off -- and it decodes
 each stretch exactly as the view's own window ask does and **throws it away again**: what comes back
 is an address, so walking a whole object leaves the app's memory where it found it and the landing

@@ -253,7 +253,7 @@ fn line_at(
 ///
 /// **The one statement of what a stretch says.** The pane draws it a row at a time
 /// through [`Rows`], which counts its rows out of the very same [`StretchRows`]. The
-/// search that walks an object's code (`find_bar.rs`) has no [`Rows`] -- it decodes a
+/// search that walks an object's code (`hunt.rs`) has no [`Rows`] -- it decodes a
 /// stretch, reads it and lets it go, and a [`Rows`] per stretch would build the whole
 /// skeleton each time -- so it takes a whole stretch from here. A row kind added to
 /// [`Kind`] therefore reaches the walk with the pane, and a search can neither find what
@@ -655,15 +655,14 @@ impl Component for SectionList {
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
         let (controller, viewport) = (list.controller, list.viewport());
-        // What the find bar over this pane is looking for, for every row to wash, and
-        // what it searches, claimed for as long as these rows are drawn: an object's code
-        // is walked rather than passed over, so the bar has no count over it.
+        // What the find bar over this pane is looking for, for every row to wash. It
+        // searches no listing: an object's code is decoded a stretch at a time, so a step
+        // over it walks on for the next match (`hunt.rs`) and the bar has no count. That
+        // claim is made all the same, so a bar left over a symbol's listing by the pane
+        // this one replaced gives that listing up.
         let at = (self.place, Pane::Assembly);
         let marking = use_marking(at);
-        // One value for the claim and for the chord below, which have to name the same
-        // listing: an answer is judged by `Searchable::id`.
-        let searchable = Searchable::Code(self.object.clone());
-        use_searching(at, searchable.clone());
+        use_searching(at, None);
         // The rows, produced by the place-keeping effect and rendered from here, so that
         // new rows and the offset that keeps the reader's place under them land together.
         let rows = sectioned.rows;
@@ -739,7 +738,7 @@ impl Component for SectionList {
 
         // The walk a step over this listing asks for, and where the match it finds lands:
         // an object's code is read a piece at a time, so a step reads on rather than
-        // stepping through an answer the pane holds (`find_bar.rs`).
+        // stepping through an answer the pane holds (`hunt.rs`).
         {
             let (caret, held) = (marked, rows);
             let mut controller = controller;
@@ -788,7 +787,7 @@ impl Component for SectionList {
 
         // The bar's chords, the step it asks for and the listing's own keys, all of it
         // wired once (`use_listing_keys`). The step over an object's code is the walk
-        // above's and not the hook's: `use_find_steps` leaves a walked listing alone.
+        // above's and not the hook's: `use_find_steps` leaves a bar with no listing alone.
         let on_key_down = use_listing_keys(
             at,
             marked,
@@ -797,7 +796,7 @@ impl Component for SectionList {
             None,
             &list,
             length,
-            searchable,
+            None,
             ListingText {
                 line: Rc::new({
                     let rows = built.clone();

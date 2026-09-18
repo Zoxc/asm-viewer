@@ -550,7 +550,8 @@ pub(crate) struct ListingText {
 /// `file` is what this listing's rows are rows of -- the source list's own file, and `None`
 /// for the two assembly listings, where a run's file is the row's own. `searchable` is the
 /// listing the chords name, which must be the one [`use_searching`] claimed: an answer is
-/// judged by `Searchable::id`.
+/// judged by `Searchable::id`. It is [`None`] over an object's code, which is walked rather
+/// than searched whole (`hunt.rs`), and that is what leaves the step to [`use_code_hunt`].
 ///
 /// The pane is `at.1` and asked for nowhere else: the run a key moves and the run a seed is
 /// taken from are one run, and two arguments could name two panes.
@@ -560,7 +561,7 @@ pub(crate) fn use_listing_keys(
     file: Option<Arc<str>>,
     list: &ListBox,
     length: usize,
-    searchable: Searchable,
+    searchable: Option<Searchable>,
     rows: ListingText,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
     let viewport = list.viewport();

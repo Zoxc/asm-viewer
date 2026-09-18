@@ -26618,16 +26618,17 @@ fn a_find_write_that_changed_nothing_redraws_nothing() {
     );
     let finds = roots.finds;
     let at = marking_at();
-    let listing = Searchable::Code(fixture_symbols()[0].object.clone());
     settle(&mut test);
 
-    open_find(finds, at, Some("sum".to_owned()), listing.clone());
+    // A bar over an object's code: no listing at all, that being walked and not searched
+    // whole. What a bar holds is all this is about, so no worker is wanted.
+    open_find(finds, at, Some("sum".to_owned()), None);
     settle(&mut test);
     assert!(finds.peek().open(&at), "the bar never opened");
     let opened = counted();
 
     // A Ctrl+F over a bar already open with nothing to seed it: the bar is left as it was.
-    open_find(finds, at, None, listing);
+    open_find(finds, at, None, None);
     settle(&mut test);
     assert_eq!(counted(), opened, "an opening that changed nothing redrew");
 
@@ -26811,19 +26812,13 @@ fn a_find_bars_box_follows_the_pane_it_is_over() {
         1.,
     );
 
-    // A bar over each pane, each searched for something of its own. An object's code is
-    // the listing that is walked rather than passed over, so no worker is wanted here:
-    // what a bar holds is all this is about.
-    let object = fixture_symbols()[0].object.clone();
+    // A bar over each pane, each searched for something of its own. Neither has a listing,
+    // as a bar over an object's code has none, so no worker is wanted here: what a bar
+    // holds is all this is about.
     let finds = roots.finds;
     let pattern = |text: &str| Some(text.to_owned());
-    open_find(
-        finds,
-        first,
-        pattern("alpha"),
-        Searchable::Code(object.clone()),
-    );
-    open_find(finds, second, pattern("beta"), Searchable::Code(object));
+    open_find(finds, first, pattern("alpha"), None);
+    open_find(finds, second, pattern("beta"), None);
     settle(&mut test);
     assert!(
         labels(&test).iter().any(|text| text == "alpha"),
@@ -27393,11 +27388,12 @@ fn a_step_through_an_objects_code_walks_on_until_it_finds_a_match() {
         finds
             .peek()
             .get(&at)
-            .hunt()
+            .hunt
+            .as_ref()
             .is_some_and(|hunt| !hunt.walking())
     });
 
-    let hunt = finds.peek().get(&at).hunt().cloned().expect("a walk");
+    let hunt = finds.peek().get(&at).hunt.clone().expect("a walk");
     let Walked::Found(_, columns) = hunt.walked else {
         panic!("the walk did not find sum_to: {:?}", hunt.walked);
     };
@@ -27442,11 +27438,12 @@ fn a_walk_that_finds_nothing_says_so_and_stops() {
         finds
             .peek()
             .get(&at)
-            .hunt()
+            .hunt
+            .as_ref()
             .is_some_and(|hunt| !hunt.walking())
     });
 
-    let hunt = finds.peek().get(&at).hunt().cloned().expect("a walk");
+    let hunt = finds.peek().get(&at).hunt.clone().expect("a walk");
     assert_eq!(
         hunt.walked,
         Walked::Nothing,
@@ -27457,6 +27454,101 @@ fn a_walk_that_finds_nothing_says_so_and_stops() {
         "the bar did not say the walk found nothing: {:?}",
         labels(&test)
     );
+}
+
+/// **A Ctrl+F that re-seeds the box gives up the walk under it.** A walk's answer is about
+/// the pattern it was asked with, and a bar over an object's code has nothing else to draw:
+/// left where it was, the bar would go on saying how far a walk for a pattern the reader
+/// has typed past had got. `open_find` is the one door that changes a pattern without going
+/// through the box, so it owes the same `Find::reset` the box's own writer does.
+///
+/// Fails on an `open_find` that only clears which hit the pane is on.
+#[test]
+fn a_re_seeded_find_bar_gives_up_the_walk_under_it() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, roots) = TestingRunner::new(
+        code_find_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let finds = states.places.finds;
+
+    open_find_bar(&mut test);
+    test.write_text("sum_to");
+    test.press_key(Key::Named(NamedKey::Enter));
+    pump(&mut test, || {
+        finds
+            .peek()
+            .get(&at)
+            .hunt
+            .as_ref()
+            .is_some_and(|hunt| !hunt.walking())
+    });
+
+    // The reader picks something else out and presses Ctrl+F over it, which seeds the box
+    // the bar already holds.
+    open_find(finds, at, Some("gamma".to_owned()), None);
+    settle(&mut test);
+    let bar = finds.peek().get(&at).clone();
+    assert_eq!(bar.filter.pattern, "gamma", "the box was not re-seeded");
+    assert!(
+        bar.hunt.is_none(),
+        "the bar kept a walk for the pattern before it: {:?}",
+        bar.hunt.map(|hunt| hunt.walked)
+    );
+}
+
+/// The bar over an object's code has no listing, and **that** is what leaves its step for
+/// the walk to spend (`hunt.rs`). `use_listing_keys` calls `use_find_steps` for all three
+/// listings, a hook having to run on every render, so a hook that spent every step would
+/// spend this one -- finding no hits, there being none to find -- and a step over an
+/// object's code would walk nowhere.
+///
+/// **Asked of the hook alone**, because the app's own ordering hides the mistake: the
+/// section view mounts `use_code_hunt` before `use_listing_keys`, so the walk takes the
+/// step first whether or not this hook would have. Fails on a `use_find_steps` that does
+/// not ask whether the bar has a listing.
+#[test]
+fn a_step_on_a_bar_with_no_listing_is_left_where_it_is() {
+    let at = marking_at();
+    let (mut test, roots) = TestingRunner::new(
+        || {
+            let marked = use_consume::<Marked>().0;
+            use_find_steps(marking_at(), marked, None, |_| {});
+            rect().expanded()
+        },
+        (200., 200.).into(),
+        move |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let finds = roots.finds;
+    settle(&mut test);
+
+    let step = |test: &mut TestingRunner| {
+        edit_find(finds, at, |bar| {
+            bar.step = Some(crate::find::Direction::Forward)
+        });
+        settle(test);
+        finds.peek().get(&at).step
+    };
+
+    // A bar over an object's code: open, and with no listing at all.
+    open_find(finds, at, Some("sum".to_owned()), None);
+    assert_eq!(
+        step(&mut test),
+        Some(crate::find::Direction::Forward),
+        "the step the walk was to spend was spent here"
+    );
+
+    // One over a listing, which this hook does spend -- hits or, as here, none.
+    open_find(finds, at, None, Some(other_listing()));
+    assert_eq!(step(&mut test), None, "a listing's own step was not spent");
 }
 
 /// Ctrl+F reaches a filter box only from the list it filters: with nothing focused the

@@ -1403,7 +1403,7 @@ impl Component for InstructionList {
         // what it searches, claimed for as long as these rows are drawn.
         let at = (Placing::Tab(self.tab), Pane::Assembly);
         let marking = use_marking(at);
-        use_searching(at, self.data.searchable());
+        use_searching(at, Some(self.data.searchable()));
         let (controller, viewport) = (list.controller, list.viewport());
 
         let data = self.data.clone();
@@ -1497,7 +1497,7 @@ impl Component for InstructionList {
             None,
             &list,
             length,
-            data.searchable(),
+            Some(data.searchable()),
             ListingText {
                 line: Rc::new({
                     let (assembly, lanes) = (data.assembly().clone(), data.lanes().clone());
