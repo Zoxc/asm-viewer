@@ -656,7 +656,7 @@ against a live session bus -- the handler runs as `dolphin --new-window --select
 first and `--new-window <path>` for the second. `xdg-open`, the last word when no D-Bus call
 answers, picks nothing out and can only open a window, so it opens the window each call above ends
 at -- a file's folder, and a folder itself. **When nothing answers the reader gets a box saying so**, the app's own and not a second copy of
-one: `panics::message_box` is the level, the title and the text, and both callers show what it
+one: `dialog::message_box` is the level, the title and the text, and both callers show what it
 hands back. They pressed something, and an item that does nothing at all leaves them
 wondering whether the app heard.
 
@@ -988,8 +988,9 @@ Nor do the three structs that are one `Arc` and nothing else -- `SourceText`, `O
 of them its name and the reason it states for comparing by pointer.
 
 
-**The crash box is the desktop's own, and it has to be**, which is why the box lives in
-`crate::panics` and `crate::reveal` asks it for one. `crate::panics`'s hook runs on the
+**The crash box is the desktop's own, and it has to be**, which is why it is `crate::dialog`, a
+module of its own that `crate::panics` and `crate::reveal` each ask for one rather than one of
+them asking the other. `crate::panics`'s hook runs on the
 panicking thread *before* the unwind, so when the UI thread is the one that died the app is inside
 its own render, inside winit's `run_app` callback, with no frame to draw a window of its own in.
 `rfd` works there because on every platform it hands the box to something that is not us: on Linux

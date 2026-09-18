@@ -151,6 +151,9 @@ command.
 - `src/store.rs` — everything the app stores: the directory it goes in and the variable that
   names it, the atomic write, the read that moves a file aside rather than let the next write
   replace it, the claim of a free name, and how much of a recent order a file is written with.
+- `src/dialog.rs` — the box the app says something in outside its own window: the
+  desktop's own, which a panic can put up where there is no frame left to draw in, and
+  which will not scroll -- so what goes in one is capped by the caller.
 - `src/reveal.rs` — showing a file or a folder in the desktop's file manager: the
   programs each platform is asked with, in the order they are tried, and the thread they
   are run on.

@@ -2,6 +2,7 @@ mod bookmarks;
 mod cargo;
 mod chars;
 mod compiled;
+mod dialog;
 mod docs;
 mod document;
 mod files;
