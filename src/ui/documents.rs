@@ -14,8 +14,9 @@
 //! The doors into a *place* are here too: [`open_source_place`] for a file and a line,
 //! [`show_in_code`] and [`open_as_symbol`] for an address in an object's code. Each builds
 //! a [`Landing`] and goes through [`land`]. A path a door is handed -- a server's answer,
-//! a row off a listing of the filesystem -- is named by the spelling an open tab already
-//! has for that file ([`spelling`]), so one file reached two ways is one tab.
+//! a row off a listing of the filesystem, the companion the Source pane's bar names -- is
+//! named by the spelling an open tab already has for that file ([`spelling`]), so one file
+//! reached two ways is one tab.
 //!
 //! The window's tab keys are answered here too, and each of them is one of those doors
 //! and not a second way round it: [`step_tab`] and [`show_nth`] work out which tab the
@@ -108,24 +109,35 @@ impl Reach {
 /// else. **A file the source pane would refuse opens nothing at all**
 /// (`source::showable`, the reader's own first step: a regular file within the bound the
 /// source cache reads, and not a symlink to one), so a press cannot make a tab that only
-/// says why it is empty. And the document is named by [`spelling`]: a row's path is the
-/// project directory as the reader typed it joined with each entry's own name, so a
-/// directory typed with a `..` or reached through a symlink spells a file the reader may
-/// have open already a second way, and a [`Document::Source`] is compared as text.
-///
-/// Nothing is **canonicalised**: [`spelling`] answers with a spelling the app already
-/// uses, and reducing one here would be a line the debug info names picked out in nothing
-/// (`src/project.rs`).
+/// says why it is empty. The naming is [`open_source_tab`]'s.
 ///
 /// A path that names a *place* -- a hit, a reference, a definition -- goes through
 /// [`open_source_place`] instead, which lands on the line and drives the assembly side
 /// from it.
 pub(crate) fn open_source_file(states: ProjectStates, path: &Path, reach: Reach) -> bool {
-    if !showable(path) {
-        return false;
-    }
-    let file = Document::Source(spelling(states.open, path));
-    open_document(states.open, states.visits, file, reach).is_some()
+    showable(path) && open_source_tab(states.open, states.visits, path, reach).is_some()
+}
+
+/// Open the file at `path` as a source tab, the way `reach` says. The tab it landed in.
+///
+/// **Where a path with no line to land on is named**, by [`spelling`]: the spelling an
+/// open tab already has for that file, and `path`'s own where no tab has one. A
+/// [`Document::Source`] is compared as text, so a file spelled a second way is a second
+/// tab of it, splitting its trail and its positions -- and the two doors here are handed
+/// exactly the spellings that disagree. A Files row and a finder row carry the project
+/// directory as the reader typed it, which a `..` or a symlink puts beside the reader's
+/// other spelling of one file; the Source pane's bar carries what the debug info said.
+///
+/// Nothing is **canonicalised**: [`spelling`] answers with a spelling the app uses
+/// already, and reducing one here would be a line the debug info names picked out in
+/// nothing (`src/project.rs`).
+pub(crate) fn open_source_tab(
+    open: Open,
+    visits: State<Visits>,
+    path: &Path,
+    reach: Reach,
+) -> Option<DocId> {
+    open_document(open, visits, Document::Source(spelling(open, path)), reach)
 }
 
 /// Open `target` the way `reach` says, make the tab it lands in the active one, and

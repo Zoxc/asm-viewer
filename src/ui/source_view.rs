@@ -345,9 +345,9 @@ impl SourceSide {
         matches!(self, SourceSide::Companion { .. })
     }
 
-    /// The file as a source-driven tab: what the bar draws its glyph from, and what its
-    /// name opens where the name is a door. The same as [`SourceSide::document`] for a
-    /// subject, which is why a subject's name is not one.
+    /// The file as a source-driven tab: what the bar draws its glyph from. The same as
+    /// [`SourceSide::document`] for a subject, which is why a subject's name is not a
+    /// door.
     pub(crate) fn as_source(&self) -> Document {
         Document::Source(self.file().clone())
     }

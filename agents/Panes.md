@@ -90,6 +90,9 @@ not the symbol's own file, the last being a landing's doing, which comes with a 
 for the last part of a path and nothing else in the window says which file is up. Pressing a **companion's** name opens that file as a source-driven tab, as pressing a source
 file's row in the Files view does (`agents/Sidebar.md`); until the source search lands those are the
 two doors into one. A **subject** is that tab already, so its name is a name and nothing to press.
+Both go through `open_source_tab`, which names the document by `spelling` -- what the bar carries
+is the *debug info's* path, and that is exactly the spelling that disagrees with the reader's own,
+so without the rule a file already open opened a second time in a second tab.
 **The pane a tab is not driven from opens as a tab of its own, from a row's menu.** The second
 thing a tab holds had a door on one side only: pressing a companion's name opened that file, where
 the symbol a source-driven tab's assembly side draws could be reached only through the Symbols

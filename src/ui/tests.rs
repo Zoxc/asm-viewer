@@ -10787,6 +10787,84 @@ fn a_companions_line_opens_the_file_it_is_in() {
     assert!(!drawn.contains(&entry), "{drawn:?}");
 }
 
+/// **The companion's name in the bar opens in the tab the file is already in.** That name
+/// is the file the *debug info* named -- `DW_AT_comp_dir` joined with the file entry --
+/// and those are exactly the paths that disagree with the reader's own spelling of one
+/// file. A `Document::Source` is compared as text, so the debug info's spelling would be a
+/// second tab of a file already open, splitting its trail and its positions.
+///
+/// The same pane's row menu opens the same file through `open_source_place`, which names
+/// it by `spelling`. Two doors into one file in one pane, so both go through the rule.
+#[test]
+fn a_companions_name_opens_in_the_tab_the_file_is_already_in() {
+    let directory = Temporary::directory(std::env::temp_dir().join(format!(
+        "assembly-viewer-companion-spelling-test-{}",
+        std::process::id()
+    )));
+    std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
+    let path = directory.join("door.c");
+    std::fs::write(&path, "int add(int a, int b)\n{\n    return a + b;\n}\n")
+        .expect("writing the source file");
+    let open_as: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    // What the debug info says, spelled through a child and back out: one path with the
+    // one above, which only `canonicalize` reduces.
+    let named: Arc<str> = Arc::from(
+        directory
+            .join("sub")
+            .join("..")
+            .join("door.c")
+            .to_str()
+            .expect("a utf-8 temporary path"),
+    );
+    assert_ne!(
+        Path::new(&*named),
+        Path::new(&*open_as),
+        "the two spellings are one path without asking anybody"
+    );
+
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let symbol = Document::Symbol(sum_to.clone());
+    let shown = {
+        let mut studied = Studied::new(sum_to.clone());
+        studied.lines.file = Some(named.clone());
+        Shown {
+            ask: Ask::Symbol(sum_to.clone()),
+            studied,
+        }
+    };
+
+    let (mut test, roots) = TestingRunner::new(
+        companion_menu_harness,
+        (500., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let states = roots.states;
+    let mut ctrl = roots.keys.ctrl;
+
+    // The reader has the file open already, under the spelling with no `..` in it, and is
+    // reading the symbol beside it.
+    let opened = Document::Source(open_as);
+    open_document(states.open, states.visits, opened.clone(), Reach::NewTab);
+    open_document(states.open, states.visits, symbol.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    // Ctrl held, so the press asks for a tab of its own and a tab already showing the
+    // file is raised instead of a second one being opened.
+    ctrl.set(true);
+    let name = centre_of(&test, "door.c");
+    press_at(&mut test, name);
+    settle(&mut test);
+
+    assert!(
+        open_documents(states.open) == [opened, symbol],
+        "the bar opened a second tab of a file the reader already had open"
+    );
+}
+
 /// A source row inside a function offers that function's instances beside the line's
 /// locations, and choosing them asks for the function's lines from that row, chosen for
 /// the tab; a row outside any function offers the line alone.
