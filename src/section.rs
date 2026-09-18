@@ -371,7 +371,7 @@ impl Flat {
 }
 
 /// The rows of one object's code listing with nothing decoded: every stretch's estimate,
-/// counted once per skeleton. [`Rows`] lays the stretches that have been decoded over it,
+/// counted once, on the worker, and the skeleton the view and the worker share. [`Rows`] lays the stretches that have been decoded over it,
 /// so an answer landing costs the stretches held and not every stretch of the object --
 /// which in the app's own binary is some 190k.
 pub struct Layout {
@@ -407,6 +407,10 @@ impl Layout {
 
     pub fn code(&self) -> &Arc<CodeListing> {
         self.flat.code()
+    }
+
+    pub fn flat(&self) -> &Flat {
+        &self.flat
     }
 }
 

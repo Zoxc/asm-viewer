@@ -5743,7 +5743,7 @@ fn a_window_lands_in_the_reading_with_the_skeleton() {
         .code
         .clone()
         .expect("the skeleton came with the answer");
-    assert_eq!(code.sections().len(), 1);
+    assert_eq!(code.code().sections().len(), 1);
     assert_eq!(landed.held.keys().copied().collect::<Vec<_>>(), [1, 2]);
     assert_eq!(landed.generation, 1);
     // The second stretch is `twice`, decoded exactly as its own tab would be.
@@ -5786,7 +5786,7 @@ fn a_window_is_decoded_a_chunk_at_a_time() {
         decoded.iter().map(|(flat, _)| *flat).collect::<Vec<_>>(),
         window[..CHUNK]
     );
-    assert_eq!(code.sections().len(), 1);
+    assert_eq!(code.code().sections().len(), 1);
     // A stretch the listing has no place for is skipped, not answered.
     let Answer::Code { decoded, .. } = answer(Question::Code(CodeAsk {
         object,
@@ -5879,7 +5879,7 @@ fn a_window_answer_for_a_reading_that_moved_on_is_dropped() {
 fn a_stretch_far_from_the_window_is_let_go() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
-    let code = Arc::new(CodeListing::new(&object));
+    let code = skeleton(&object);
     let empty = || Stretched {
         code: None,
         gap: None,
@@ -5913,7 +5913,7 @@ fn a_stretch_far_from_the_window_is_let_go() {
     assert_eq!(reading.generation, 3);
 
     // An answer with another skeleton is not this reading's.
-    let other = Arc::new(CodeListing::new(&object));
+    let other = skeleton(&object);
     assert!(!reading.take(&ask(vec![1]), other, vec![(1, empty())]));
     assert_eq!(reading.generation, 3);
 }
@@ -20011,10 +20011,15 @@ fn code_states(reading: Reading) -> Roots {
     roots
 }
 
+/// `object`'s skeleton, as the worker builds it.
+fn skeleton(object: &Arc<Object>) -> Arc<section::Layout> {
+    Arc::new(section::Layout::new(Arc::new(CodeListing::new(object))))
+}
+
 /// A reading of `object`'s code with its skeleton and the stretches in `held` decoded the
 /// way the worker decodes them.
 fn reading_of(object: &Arc<Object>, held: &[usize]) -> Reading {
-    let code = Arc::new(CodeListing::new(object));
+    let code = skeleton(object);
     let mut reading = Reading::of(Some(object.clone()));
     let decoded: Vec<(usize, Stretched)> = held
         .iter()
@@ -20041,7 +20046,7 @@ fn reading_of(object: &Arc<Object>, held: &[usize]) -> Reading {
 /// The rows of `reading` as the view counts them.
 fn rows_of(reading: &Reading) -> Arc<Rows> {
     let code = reading.code.clone().expect("the reading has a skeleton");
-    Arc::new(Rows::new(code, |flat| reading.body(flat)))
+    Arc::new(Rows::new(code.code().clone(), |flat| reading.body(flat)))
 }
 
 /// The address labels drawn, top to bottom.
@@ -20109,14 +20114,15 @@ fn a_code_tab_draws_its_labels_and_empty_rows_before_a_byte_is_decoded() {
     );
 }
 
-/// An answer landing counts the rows of the stretches held and no others: the estimate
-/// for the rest is counted once per skeleton. In the app's own binary that is one chunk's
-/// worth of stretches in place of some 190k, on the UI thread, per answer.
+/// An answer landing counts the rows of the stretches held and no others, even the first,
+/// which brings the skeleton: the estimate for the rest is counted with the skeleton, on
+/// the worker. In the app's own binary that is one chunk's worth of stretches in place of
+/// some 190k on the UI thread.
 #[test]
 fn an_answer_counts_the_rows_of_the_stretches_held_and_no_others() {
     let (_path, objects) = fixture_objects(1);
     let object = objects[0].clone();
-    let reading = reading_of(&object, &[]);
+    let reading = Reading::of(Some(object.clone()));
     let (mut test, roots) = TestingRunner::new(
         code_harness,
         (600., 300.).into(),
@@ -20125,23 +20131,24 @@ fn an_answer_counts_the_rows_of_the_stretches_held_and_no_others() {
     );
     let (mut sections, built) = (roots.sectioned.reading, roots.sectioned.rows);
     settle(&mut test);
-    let code = sections.peek().code.clone().expect("the skeleton");
-    assert!(code.sections()[0].listing.stretches().len() > 1);
 
+    // The worker's half, on this thread: the counter is the thread's own, so it is read
+    // after.
     let ask = CodeAsk {
         object: object.clone(),
-        code: Some(code.clone()),
+        code: None,
         window: vec![1],
     };
-    let Answer::Code { decoded, .. } = answer(Question::Code(ask.clone())) else {
+    let Answer::Code { decoded, code, .. } = answer(Question::Code(ask.clone())) else {
         panic!("a window is answered with code");
     };
+    assert!(code.code().sections()[0].listing.stretches().len() > 1);
     let before = section::stretches_counted();
     assert!(sections.write().take(&ask, code, decoded));
     settle(&mut test);
 
     let held = built.peek().as_ref().map(|built| built.reading.held.len());
-    assert_eq!(held, Some(1), "the rows were not counted afresh");
+    assert_eq!(held, Some(1), "the rows were not counted");
     assert_eq!(section::stretches_counted() - before, 1);
 }
 
@@ -20393,7 +20400,11 @@ fn the_pane_beside_an_objects_code_opens_on_the_pressed_rows_line() {
     // The rows the pressed row's line is read out of, as the section view leaves them.
     let held = reading_of(&object, &[0, 1, 2]);
     let rows = Rows::new(
-        held.code.clone().expect("the reading has a skeleton"),
+        held.code
+            .as_ref()
+            .expect("the reading has a skeleton")
+            .code()
+            .clone(),
         |flat| held.body(flat),
     );
     let built = Arc::new(Built {
@@ -27285,7 +27296,12 @@ fn a_kept_run_is_carried_when_the_rows_on_screen_are_of_another_generation() {
     let mut decoded = reading_of(&object, &[0]);
     decoded.generation = guessed.generation + 1;
     let rows = Rows::new(
-        decoded.code.clone().expect("the reading has a skeleton"),
+        decoded
+            .code
+            .as_ref()
+            .expect("the reading has a skeleton")
+            .code()
+            .clone(),
         |flat| decoded.body(flat),
     );
     let built = Arc::new(Built {

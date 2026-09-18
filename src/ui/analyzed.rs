@@ -128,7 +128,7 @@ pub(crate) enum Answer {
     /// flat index: the first [`CHUNK`] the ask named that the listing has.
     Code {
         ask: CodeAsk,
-        code: Arc<CodeListing>,
+        code: Arc<crate::section::Layout>,
         decoded: Vec<(usize, Stretched)>,
     },
 }

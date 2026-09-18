@@ -15,7 +15,7 @@
 use super::*;
 use crate::counter;
 use crate::positions::Spot;
-use crate::section::{Body, Kind, Layout, Row, Rows, StretchRows, GAP_BYTES_PER_ROW};
+use crate::section::{Body, Kind, Row, Rows, StretchRows, GAP_BYTES_PER_ROW};
 use analysis::Stretch;
 
 /// How many screens above and below the viewport are decoded ahead, so that a page up or
@@ -1222,20 +1222,14 @@ fn rebuild(
         return step.before.clone();
     }
     let reading = reading.peek();
-    let Some(code) = reading.code.clone() else {
+    // The layout is counted with the skeleton, on the worker; an answer lays only what is
+    // held over it.
+    let Some(layout) = reading.code.clone() else {
         if step.before.is_some() {
             rows.set(None);
         }
         return None;
     };
-    // The layout is counted once per skeleton; an answer lays only what is held over it.
-    let layout = step
-        .before
-        .as_ref()
-        .map(|before| before.rows.layout())
-        .filter(|layout| Arc::ptr_eq(layout.code(), &code))
-        .cloned()
-        .unwrap_or_else(|| Arc::new(Layout::new(code)));
     let decoded = reading
         .held
         .iter()
@@ -1539,7 +1533,7 @@ fn use_window(
             );
             let ask = (!wanted.is_empty()).then(|| CodeAsk {
                 object: object.clone(),
-                code: Some(rows.code().clone()),
+                code: Some(rows.rows.layout().clone()),
                 window: wanted,
             });
             window.set_if_modified(ask);

@@ -287,7 +287,7 @@ pub(crate) fn use_code_hunt(
                 let reading = reading.peek();
                 reading
                     .is_about(&object)
-                    .then(|| reading.code.clone())
+                    .then(|| reading.code.as_ref().map(|layout| layout.code().clone()))
                     .flatten()
             };
             let events = stream("the code search", Some(64), move |emit| {

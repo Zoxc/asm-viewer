@@ -1,7 +1,7 @@
 //! What the worker has decoded of an object's code for the section view, and the window
 //! of it the view is asking for next.
 //!
-//! A listing of a whole object's code is read in **windows**: the skeleton is free
+//! A listing of a whole object's code is read in **windows**: the skeleton decodes nothing
 //! (`CodeListing`, `agents/Analysis.md`) and every stretch of it is decoded only when the
 //! reader is near it. The answers land here, in [`Reading`], and never in [`Analyzed`]:
 //! that state is one symbol's, and everything reading it -- the symbol bar, the source
@@ -13,7 +13,7 @@
 //! `Analyzed`'s own rule for a symbol.
 
 use super::*;
-use crate::section::Body;
+use crate::section::{Body, Layout};
 use analysis::{CodeListing, Gap};
 use std::collections::BTreeMap;
 
@@ -143,11 +143,12 @@ pub(crate) fn holding(
 /// `window` is the stretches wanted, by flat index over every section
 /// (`section::Flat`), **nearest the reader first**: the worker takes the first
 /// [`CHUNK`] of them. `code` is the skeleton once the view has one and `None` on the first
-/// ask, when the worker builds it and answers with it.
+/// ask, when the worker builds it and answers with it. It is a [`Layout`], every stretch's
+/// rows estimated, so the worker counts them and not the UI thread.
 #[derive(Clone)]
 pub(crate) struct CodeAsk {
     pub(crate) object: Arc<Object>,
-    pub(crate) code: Option<Arc<CodeListing>>,
+    pub(crate) code: Option<Arc<Layout>>,
     pub(crate) window: Vec<usize>,
 }
 
@@ -165,12 +166,12 @@ impl CodeAsk {
     ///
     /// A pure function of the object and the stretches, touching no UI state, which is
     /// what lets the worker run it on a plain thread.
-    pub(crate) fn decode(&self) -> (Arc<CodeListing>, Vec<(usize, Stretched)>) {
-        let code = self
+    pub(crate) fn decode(&self) -> (Arc<Layout>, Vec<(usize, Stretched)>) {
+        let layout = self
             .code
             .clone()
-            .unwrap_or_else(|| Arc::new(CodeListing::new(&self.object)));
-        let index = section::Flat::new(code.clone());
+            .unwrap_or_else(|| Arc::new(Layout::new(Arc::new(CodeListing::new(&self.object)))));
+        let (index, code) = (layout.flat(), layout.code());
         let decoded = self
             .window
             .iter()
@@ -199,7 +200,7 @@ impl CodeAsk {
                 ))
             })
             .collect();
-        (code, decoded)
+        (layout, decoded)
     }
 }
 
@@ -234,7 +235,7 @@ pub(crate) struct Reading {
     /// top. Everything below is about this object and is dropped with it.
     pub(crate) object: Option<Arc<Object>>,
     /// The skeleton, once the first answer has brought it.
-    pub(crate) code: Option<Arc<CodeListing>>,
+    pub(crate) code: Option<Arc<Layout>>,
     /// The decoded stretches, by flat index.
     pub(crate) held: BTreeMap<usize, Arc<Stretched>>,
     /// Bumped whenever `code` or `held` changes: what the view's rows are keyed on.
@@ -273,7 +274,7 @@ impl Reading {
     pub(crate) fn take(
         &mut self,
         ask: &CodeAsk,
-        code: Arc<CodeListing>,
+        code: Arc<Layout>,
         decoded: Vec<(usize, Stretched)>,
     ) -> bool {
         if !self.is_about(&ask.object) {

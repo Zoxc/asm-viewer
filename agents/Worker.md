@@ -109,8 +109,9 @@ stretches wanted by flat index, **nearest the reader first**. A flat index numbe
 stretches end to end, and `section::Flat` is the one mapping between it and the crate's `Place`. It
 hands over the stretch along with the place, so nothing indexes the listing with a place it was
 given a line earlier; the worker builds one over the skeleton, and the rows the view draws are
-counted over another. The skeleton (`CodeListing`, free to
-build) is built on the worker with the first ask and answered with it. The decode is
+counted over another. The skeleton is the `CodeListing`, free to build, with every stretch's rows
+estimated over it (`section::Layout`), which is not free: it is built on the worker with the first
+ask and answered with it, so the UI thread never counts the whole listing. The decode is
 `CodeAsk::decode`, in `reading.rs` beside the rest of the mechanism rather than in `answer`, which
 calls it and names the answer. A stretch goes through the crate's own `CodeListing::decode` and then
 `Studied::with_assembly`, which does the rest of what `Studied::new` does over a listing already in
