@@ -359,10 +359,21 @@ state it reads to subscribe has to compare under `peek` to avoid (`save_if_chang
 therefore settles somewhere between *n* and *2n* passes, and which it is depends on what the
 components happen to read, which is not knowable at the call site. That is the entire reason this
 repo writes `for _ in 0..4 { test.sync_and_update(); }` rather than a number it can justify, and why
-`pump(&mut test, || ready())` exists for anything with a worker thread behind it: a channel and a
-thread make the count genuinely unbounded, so the test loops until the condition holds (and then
-four more, for the hops the condition itself starts) and fails loudly at 200 rather than asserting
-on whatever happened to have arrived.
+`pump(&mut test, |test| ready(test))` exists for anything with a worker thread behind it: a channel
+and a thread make the count genuinely unbounded, so the test loops until the condition holds (and
+then four more, for the hops the condition itself starts) and fails loudly at a deadline rather than
+asserting on whatever happened to have arrived.
+
+**`pump`'s condition is handed the runner, so a test waits for the thing it is about to assert.**
+A worker files its answer where the app keeps it and only then sends the word that wakes the pane,
+so "the parse is in the cache" is true several hops before "the pane has drawn it", and a fixed
+count of passes across that gap is a sleep: enough on an idle machine and not on a loaded one.
+`the_source_pane_waits_for_the_file_to_be_read` waited on `highlighted()` and asserted on the
+gutter, and drew nothing that way in a loaded run of the whole suite. Held still, with a reader
+that files its parse and then waits a quarter of a second before answering, the old condition fails
+every run and a wait on the rows passes every run. Where the assertion is that something is *not*
+drawn there is nothing to wait for, and the condition stays the state the answer landed in. The
+deadline (`PATIENCE`) is wall clock, since what is waited out is another thread being scheduled.
 
 **A pass count is not a wait.** `sync_and_update` costs microseconds, so a loop of them gives a
 thread on another core no time at all; only `pump`, `poll` and `poll_n` sleep. Six of the
@@ -372,11 +383,14 @@ condition and never on a number.
 
 **What to wait on where the answer changes nothing.** Usually it is a state the answer sets, and
 that covers the jobs behind it too: a worker is one ordered thread, so an answer that has landed
-means every job up to it was recorded. Where the answer sets nothing there is no such state, and
-the condition is the job itself: `pump(&mut test, || !asks.is_empty())`. A scratchpad's delete is that
-case -- the app lets go of the pad before it asks, and all that comes back is an acknowledgement --
-and both delete tests read the recorded job straight off a `settle`. Under load one run in five
-found the channel still empty.
+means every job up to it was recorded, and the passes after it are the test's own thread and not a
+race. Where the answer sets nothing there is no such state, and the condition is the job itself. A
+scratchpad's delete is that case: the app lets go of the pad before it asks, and all that comes
+back is an acknowledgement. **Wait for that job and not for the channel**, which is `asked_until`:
+a wait for anything at all, followed by one `try_recv`, asserts that the job the test is about was
+also the first to arrive, and what else the press queued is not the test's question. A job is
+recorded on the worker's own thread, so under load it arrives when that thread is scheduled and in
+whatever order the app queued it.
 
 **A timer the test starts goes on running between its assertions.** A sweep held past a pane's edge
 scrolls the view every `AUTOSCROLL_TICK`, and every pass after that costs real time, so whatever the

@@ -4233,7 +4233,7 @@ fn objects_reach_the_sidebar_as_they_are_parsed() {
         sender
             .send_blocking(Progress::Parsed(object.clone()))
             .expect("the app is still listening");
-        pump(&mut test, || states.objects.peek().len() == arrived + 1);
+        pump(&mut test, |_| states.objects.peek().len() == arrived + 1);
         assert_eq!(
             reading(&states),
             [("line_fixture.o".to_owned(), arrived + 1, true)],
@@ -4247,7 +4247,7 @@ fn objects_reach_the_sidebar_as_they_are_parsed() {
     sender
         .send_blocking(Progress::Finished(path.clone()))
         .expect("the app is still listening");
-    pump(&mut test, || !states.loading.peek().is_loading(&path));
+    pump(&mut test, |_| !states.loading.peek().is_loading(&path));
 
     // Done, so the ordinary rules take over: three objects out of one file is an
     // archive-shaped row.
@@ -4297,7 +4297,7 @@ fn a_file_being_read_draws_the_row_it_will_be_when_it_is_read() {
     sender
         .send_blocking(Progress::Finished(path.clone()))
         .expect("the app is still listening");
-    pump(&mut test, || !states.loading.peek().is_loading(&path));
+    pump(&mut test, |_| !states.loading.peek().is_loading(&path));
     settle(&mut test);
 
     // Read: the format tag, the count of what came out of it, and a triangle to fold it.
@@ -4337,7 +4337,7 @@ fn two_loads_at_once_keep_a_file_to_one_row() {
         senders[*load]
             .send_blocking(Progress::Parsed((*object).clone()))
             .expect("the app is still listening");
-        pump(&mut test, || states.objects.peek().len() == landed + 1);
+        pump(&mut test, |_| states.objects.peek().len() == landed + 1);
     }
 
     assert_eq!(
@@ -4354,7 +4354,7 @@ fn two_loads_at_once_keep_a_file_to_one_row() {
             .send_blocking(Progress::Finished(path.clone()))
             .expect("the app is still listening");
     }
-    pump(&mut test, || states.loading.peek().is_empty());
+    pump(&mut test, |_| states.loading.peek().is_empty());
 
     assert_eq!(
         reading(&states),
@@ -4377,7 +4377,7 @@ fn a_file_closed_while_it_is_read_takes_the_rest_of_its_objects_with_it() {
     sender
         .send_blocking(Progress::Parsed(objects[0].clone()))
         .expect("the app is still listening");
-    pump(&mut test, || states.objects.peek().len() == 1);
+    pump(&mut test, |_| states.objects.peek().len() == 1);
 
     close_binary(states, &path);
     test.sync_and_update();
@@ -4717,19 +4717,40 @@ fn source_text(path: &Path) -> Option<SourceText> {
 /// change and the state it ends in, so how many turns that takes is not something a test
 /// can know, only that it is finite. Failing loudly, since "the answer never came" and
 /// "the answer was wrong" are different bugs.
-fn pump(test: &mut TestingRunner, ready: impl Fn() -> bool) {
-    for _ in 0..200 {
+///
+/// **`ready` is handed the runner, so a test waits for the thing it is about to assert**
+/// and not for a proxy of it. A worker files its answer on its own thread and only then
+/// sends the word that wakes the pane, so "the parse is in the cache" is true several hops
+/// before "the pane has drawn it", and a fixed count of passes across that gap is a sleep:
+/// enough on an idle machine and not on a loaded one. Where the assertion is that
+/// something is *not* drawn there is nothing to wait for, and the condition stays the
+/// state the answer landed in.
+#[track_caller]
+fn pump(test: &mut TestingRunner, mut ready: impl FnMut(&TestingRunner) -> bool) {
+    let until = Instant::now() + PATIENCE;
+    loop {
         test.sync_and_update();
-        if ready() {
+        if ready(test) {
+            // The hops the condition itself starts: a state read in a render, a row
+            // measured a pass after it is built.
             for _ in 0..4 {
                 test.sync_and_update();
             }
             return;
         }
+        assert!(
+            Instant::now() < until,
+            "what this test is waiting for never happened, in {PATIENCE:?}"
+        );
         std::thread::sleep(Duration::from_millis(2));
     }
-    panic!("the worker's answer never landed");
 }
+
+/// How long [`pump`] waits before calling a worker stuck. A deadline and not a count of
+/// turns: what it is waiting out is another thread being scheduled, which is wall clock
+/// and not passes. Long enough that a loaded machine never reaches it, short enough that
+/// a test which will never answer still fails rather than hangs.
+const PATIENCE: Duration = Duration::from_secs(20);
 
 /// The committed gcc fixture the analysis crate is pinned against, parsed the way the app
 /// parses it: small, real DWARF, three functions.
@@ -4791,7 +4812,7 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
 
     // The first click. The worker takes it and stops inside it.
     asking.set(Some(Ask::Symbol(first.clone())));
-    pump(&mut test, || !starts.is_empty());
+    pump(&mut test, |_| !starts.is_empty());
     assert!(starts.recv_blocking().expect("the worker started") == first);
     assert!(
         analysis.peek().shown.is_none(),
@@ -4817,7 +4838,7 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
 
     // And the answer that is wanted lands.
     gate.send_blocking(()).expect("the gate");
-    pump(&mut test, || analysis.peek().shown.is_some());
+    pump(&mut test, |_| analysis.peek().shown.is_some());
 
     let state = analysis.peek().clone();
     let shown = state.shown.expect("the second symbol was analysed");
@@ -4851,7 +4872,7 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
     test.sync_and_update();
 
     asking.set(Some(Ask::Symbol(symbol.clone())));
-    pump(&mut test, || analysis.peek().shown.is_some());
+    pump(&mut test, |_| analysis.peek().shown.is_some());
 
     let state = analysis.peek().clone();
     let shown = state.shown.expect("the symbol was analysed");
@@ -4961,7 +4982,7 @@ fn a_source_line_answers_with_the_symbol_it_was_compiled_into() {
         at: at.clone(),
         chosen: None,
     }));
-    pump(&mut test, || analysis.peek().shown.is_some());
+    pump(&mut test, |_| analysis.peek().shown.is_some());
 
     let state = analysis.peek().clone();
     let shown = state.shown.expect("the line was resolved");
@@ -5035,7 +5056,7 @@ fn a_line_of_the_symbol_on_screen_is_answered_with_the_listing_on_screen() {
         chosen: None,
     };
     asking.set(Some(source(&first)));
-    pump(&mut test, || analysis.peek().shown.is_some());
+    pump(&mut test, |_| analysis.peek().shown.is_some());
     let before = analysis
         .peek()
         .shown
@@ -5044,7 +5065,7 @@ fn a_line_of_the_symbol_on_screen_is_answered_with_the_listing_on_screen() {
         .studied;
 
     asking.set(Some(source(&next)));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         analysis.peek().answered == Some(source(&next))
     });
 
@@ -5115,13 +5136,13 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
         at: at.clone(),
         chosen: None,
     }));
-    pump(&mut test, || analysis.peek().shown.is_some());
+    pump(&mut test, |_| analysis.peek().shown.is_some());
 
     asking.set(Some(Ask::Source {
         at: barren.clone(),
         chosen: None,
     }));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         analysis.peek().answered
             == Some(Ask::Source {
                 at: barren.clone(),
@@ -5146,7 +5167,7 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
     // The symbol's own tab, opened and left: the listing is not worked out again, it is
     // retagged, and the file tab's question then reads as another tab's.
     asking.set(Some(Ask::Symbol(wanted.clone())));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         analysis.peek().answered == Some(Ask::Symbol(wanted.clone()))
     });
     let retagged = analysis.peek().shown.clone().expect("the listing was kept");
@@ -5162,7 +5183,7 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
         chosen: None,
     };
     asking.set(Some(ask_for(&barren)));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         analysis.peek().answered == Some(ask_for(&barren))
     });
     let kept = analysis.peek().shown.clone();
@@ -5178,7 +5199,7 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
         line: 1,
     };
     asking.set(Some(ask_for(&elsewhere)));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         analysis.peek().answered == Some(ask_for(&elsewhere))
     });
     assert!(
@@ -5212,7 +5233,7 @@ fn held_inside(open: Arc<Object>, first: Ask, second: Ask) -> Analyzed {
         .send_blocking(())
         .expect("the first question's permit");
     asking.set(Some(first));
-    pump(&mut test, || analysis.peek().shown.is_some());
+    pump(&mut test, |_| analysis.peek().shown.is_some());
 
     // The second question, which the worker takes and stops inside. Waited out rather
     // than watched for: what marks it slow is a timer the request started.
@@ -5508,7 +5529,7 @@ fn a_window_lands_in_the_reading_with_the_skeleton() {
     window.set(Some(ask.clone()));
     // Pending while the worker has it and idle once the answer lands; on a loaded machine
     // the two can be one pump apart, so only the landing is waited for.
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         reading.peek().pending.is_none() && reading.peek().code.is_some()
     });
 
@@ -5607,7 +5628,7 @@ fn a_window_answer_for_a_reading_that_moved_on_is_dropped() {
         code: None,
         window: vec![0],
     }));
-    pump(&mut test, || !starts.is_empty());
+    pump(&mut test, |_| !starts.is_empty());
     starts.recv_blocking().expect("the worker started");
 
     // Meanwhile the reader is reading the second object's code.
@@ -5632,7 +5653,7 @@ fn a_window_answer_for_a_reading_that_moved_on_is_dropped() {
         code: None,
         window: vec![0],
     }));
-    pump(&mut test, || !starts.is_empty());
+    pump(&mut test, |_| !starts.is_empty());
     starts.recv_blocking().expect("the worker started");
     open.write().retain(|object| !Arc::ptr_eq(object, &second));
     settle(&mut test);
@@ -5720,7 +5741,7 @@ fn a_lines_locations_come_back_from_every_open_object() {
 
     located.write().asked = Some(Query::line(at.clone()));
     assert!(located.peek().pending() == Some(&Query::line(at.clone())));
-    pump(&mut test, || located.peek().found.is_some());
+    pump(&mut test, |_| located.peek().found.is_some());
 
     let state = located.peek().clone();
     assert!(state.pending().is_none());
@@ -5748,7 +5769,7 @@ fn a_lines_locations_come_back_from_every_open_object() {
         line: 999_999,
     };
     located.write().asked = Some(Query::line(barren.clone()));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         located
             .peek()
             .found
@@ -5809,7 +5830,7 @@ fn locations_for_a_line_no_longer_asked_about_are_dropped() {
     settle(&mut test);
 
     located.write().asked = Some(first.clone());
-    pump(&mut test, || !starts.is_empty());
+    pump(&mut test, |_| !starts.is_empty());
     assert!(starts.recv_blocking().expect("the worker started") == first);
 
     located.write().asked = Some(second.clone());
@@ -5825,7 +5846,7 @@ fn locations_for_a_line_no_longer_asked_about_are_dropped() {
     assert!(located.peek().pending() == Some(&second));
 
     gate.send_blocking(()).expect("the gate");
-    pump(&mut test, || located.peek().found.is_some());
+    pump(&mut test, |_| located.peek().found.is_some());
     assert!(located.peek().found.as_ref().expect("answered").of == second);
     assert!(located.peek().pending().is_none());
 }
@@ -5877,10 +5898,10 @@ fn a_locate_being_worked_is_not_sent_again_by_a_write_beside_it() {
 
     // An answer to start from, so the panel is holding symbols out of the open binary.
     located.write().asked = Some(first.clone());
-    pump(&mut test, || !starts.is_empty());
+    pump(&mut test, |_| !starts.is_empty());
     assert!(starts.recv_blocking().expect("the worker started") == first);
     gate.send_blocking(()).expect("the gate");
-    pump(&mut test, || located.peek().found.is_some());
+    pump(&mut test, |_| located.peek().found.is_some());
     assert!(!located
         .peek()
         .found
@@ -5892,7 +5913,7 @@ fn a_locate_being_worked_is_not_sent_again_by_a_write_beside_it() {
 
     // The next question, held inside the worker.
     located.write().asked = Some(second.clone());
-    pump(&mut test, || !starts.is_empty());
+    pump(&mut test, |_| !starts.is_empty());
     assert!(starts.recv_blocking().expect("the worker started") == second);
 
     // And, while it is being worked, the write beside it: the binary the first answer's
@@ -5901,7 +5922,7 @@ fn a_locate_being_worked_is_not_sent_again_by_a_write_beside_it() {
     settle(&mut test);
 
     gate.send_blocking(()).expect("the gate");
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         located
             .peek()
             .found
@@ -5953,7 +5974,7 @@ fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
 
     // The job the worker is held inside, then the two behind it.
     asking.set(Some(Ask::Symbol(symbols[1].clone())));
-    pump(&mut test, || !starts.is_empty());
+    pump(&mut test, |_| !starts.is_empty());
     starts.recv_blocking().expect("the worker started");
     located.write().asked = Some(Query::line(at.clone()));
     asking.set(Some(Ask::Symbol(symbol.clone())));
@@ -5963,7 +5984,7 @@ fn a_locate_behind_a_symbol_in_the_queue_cancels_neither() {
     for _ in 0..3 {
         gate.send_blocking(()).expect("the gate");
     }
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         located.peek().found.is_some()
             && analysis
                 .peek()
@@ -6007,7 +6028,7 @@ fn closing_a_binary_takes_its_locations_with_it() {
     test.sync_and_update();
 
     located.write().asked = Some(Query::line(at.clone()));
-    pump(&mut test, || located.peek().found.is_some());
+    pump(&mut test, |_| located.peek().found.is_some());
     assert_eq!(
         located
             .peek()
@@ -6106,7 +6127,7 @@ fn the_marks_question_is_asked_per_file_and_again_when_a_binary_arrives() {
 
     // The pane says what it is showing, which is the whole of how it asks.
     showing.set(Some(file.clone()));
-    pump(&mut test, || coded.peek().found.is_some());
+    pump(&mut test, |_| coded.peek().found.is_some());
     assert_eq!(
         starts.recv_blocking().expect("the worker was asked"),
         (file.clone(), 0),
@@ -6125,7 +6146,7 @@ fn the_marks_question_is_asked_per_file_and_again_when_a_binary_arrives() {
 
     // The binary arrives, which the answer in hand can say nothing about.
     objects.set(vec![symbol.object.clone()]);
-    pump(&mut test, || coded.peek().over.len() == 1);
+    pump(&mut test, |_| coded.peek().over.len() == 1);
     assert_eq!(
         starts.recv_blocking().expect("the worker was asked again"),
         (file, 1),
@@ -7209,7 +7230,7 @@ fn a_chosen_symbol_wins_the_pick_for_its_line() {
         at: at.clone(),
         chosen: None,
     }));
-    pump(&mut test, || analysis.peek().shown.is_some());
+    pump(&mut test, |_| analysis.peek().shown.is_some());
     assert!(
         analysis
             .peek()
@@ -7227,7 +7248,7 @@ fn a_chosen_symbol_wins_the_pick_for_its_line() {
         chosen: Some(twin.clone()),
     };
     asking.set(Some(chosen.clone()));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         analysis.peek().answered == Some(chosen.clone())
     });
     assert!(
@@ -7247,7 +7268,7 @@ fn a_chosen_symbol_wins_the_pick_for_its_line() {
         chosen: Some(other),
     };
     asking.set(Some(elsewhere.clone()));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         analysis.peek().answered == Some(elsewhere.clone())
     });
     assert!(
@@ -7480,7 +7501,7 @@ fn an_instance_query_answers_each_symbol_once() {
 
     located.write().asked = Some(query.clone());
     assert!(located.peek().pending() == Some(&query));
-    pump(&mut test, || located.peek().found.is_some());
+    pump(&mut test, |_| located.peek().found.is_some());
     let found = located.peek().found.clone().expect("answered");
     assert!(found.of == query);
     assert!(found.of.at == at);
@@ -7495,7 +7516,7 @@ fn an_instance_query_answers_each_symbol_once() {
     // The one function alone, and the lines nothing was compiled from.
     let query = Query::function(at.clone(), &function("sum_to", 31..=39));
     located.write().asked = Some(query.clone());
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         located
             .peek()
             .found
@@ -7508,7 +7529,7 @@ fn an_instance_query_answers_each_symbol_once() {
 
     let query = Query::function(at.clone(), &function("comment", 1..=19));
     located.write().asked = Some(query.clone());
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         located
             .peek()
             .found
@@ -7958,7 +7979,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    pump(&mut test, || states.open.active() != Some(calling.clone()));
+    pump(&mut test, |_| states.open.active() != Some(calling.clone()));
 
     let opened: Arc<str> = Arc::from(defined.to_str().expect("a utf-8 temporary path"));
     let document = Document::Source(opened.clone());
@@ -8072,7 +8093,7 @@ fn a_definition_answer_from_another_run_opens_nothing() {
     // And the control: the other call, answered under its own ticket.
     let second = word_point(&test, "two");
     press_at(&mut test, second);
-    pump(&mut test, || states.open.active() != Some(calling.clone()));
+    pump(&mut test, |_| states.open.active() != Some(calling.clone()));
     let opened = |path: &Path| Document::Source(Arc::from(path.to_str().expect("a utf-8 path")));
     assert!(
         states.open.active() == Some(opened(&directory.join("two.rs"))),
@@ -8117,7 +8138,7 @@ fn a_definition_answer_puts_the_caret_on_the_name_it_names() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    pump(&mut test, || roots.doors.marked.peek().source.is_some());
+    pump(&mut test, |_| roots.doors.marked.peek().source.is_some());
 
     let picked = roots
         .doors
@@ -8194,7 +8215,7 @@ fn the_caret_a_definition_plants_is_counted_off_the_ui_thread() {
     let call = word_point(&test, "helper");
     let before = source::touches();
     press_at(&mut test, call);
-    pump(&mut test, || roots.doors.marked.peek().source.is_some());
+    pump(&mut test, |_| roots.doors.marked.peek().source.is_some());
 
     assert_eq!(
         source::touches(),
@@ -8253,7 +8274,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    pump(&mut test, || roots.doors.marked.peek().source.is_some());
+    pump(&mut test, |_| roots.doors.marked.peek().source.is_some());
 
     let picked = roots
         .doors
@@ -8354,7 +8375,7 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
     settle(&mut test);
 
     let _ = release.send_blocking(());
-    pump(&mut test, || states.open.active() != Some(calling.clone()));
+    pump(&mut test, |_| states.open.active() != Some(calling.clone()));
 
     let opened = |path: &Path| Document::Source(Arc::from(path.to_str().expect("a utf-8 path")));
     assert!(
@@ -8427,7 +8448,7 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
     assert!(states.open.now().map(|(id, _)| id) == Some(other));
 
     let _ = release.send_blocking(());
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         states.open.active() != Some(elsewhere.clone())
     });
 
@@ -9212,7 +9233,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         states
             .open
             .now()
@@ -9290,7 +9311,7 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
 
     let call = word_point(&test, "helper");
     press_at(&mut test, call);
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         states
             .open
             .now()
@@ -10459,7 +10480,7 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
     press_at(&mut test, entry);
     // Waited for rather than counted in passes: two workers stand between the press and
     // the panel, and how many turns they take is not something a test can know.
-    pump(&mut test, || roots.located.peek().found.is_some());
+    pump(&mut test, |_| roots.located.peek().found.is_some());
 
     let state = roots.located.peek().clone();
     assert!(
@@ -10901,7 +10922,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
     find_locations(located, sidebar, Query::line(at.clone()), None);
     assert!(on_top(sidebar, Panel::Locations));
     assert!(located.peek().pending() == Some(&Query::line(at.clone())));
-    pump(&mut test, || located.peek().found.is_some());
+    pump(&mut test, |_| located.peek().found.is_some());
     let found = located.peek().found.clone().expect("answered");
     assert!(found.of.at == at);
     assert_eq!(found.symbols().expect("symbols").len(), 1);
@@ -10926,7 +10947,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
     );
     find_locations(located, sidebar, Query::line(at.clone()), None);
     assert!(located.peek().pending() == Some(&Query::line(at.clone())));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         located
             .peek()
             .found
@@ -10991,7 +11012,7 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
         at: barren.clone(),
         chosen: None,
     }));
-    pump(&mut test, || !starts.is_empty());
+    pump(&mut test, |_| !starts.is_empty());
     assert!(starts.recv_blocking().expect("the worker started") == barren);
 
     // Clicked past while the first is still being worked on.
@@ -11010,7 +11031,7 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
     );
 
     gate.send_blocking(()).expect("the gate");
-    pump(&mut test, || analysis.peek().shown.is_some());
+    pump(&mut test, |_| analysis.peek().shown.is_some());
     assert!(seen.peek().len() == 1);
     assert!(seen.peek()[0] == wanted);
     // Two `Arc<str>`s of one path are one question, or every tab switch would re-resolve.
@@ -11093,7 +11114,7 @@ fn closing_a_binary_lets_go_of_the_listing_it_answered() {
         at: at.clone(),
         chosen: None,
     }));
-    pump(&mut test, || analysis.peek().shown.is_some());
+    pump(&mut test, |_| analysis.peek().shown.is_some());
     assert!(Arc::strong_count(&object) > before, "the listing holds it");
 
     // What `close_binary` does to the objects, which is the whole of what this can see
@@ -11103,7 +11124,7 @@ fn closing_a_binary_lets_go_of_the_listing_it_answered() {
     // Waited on the *answer* and not on the listing going: the listing goes the moment
     // the effect sees the objects change, and the question it then asks again is what
     // this is about.
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         let held = analysis.peek();
         held.answered.is_some() && held.pending.is_none()
     });
@@ -11626,7 +11647,6 @@ fn reading_file_harness(file: &Arc<str>) -> (TestingRunner, async_channel::Sende
 fn the_source_pane_waits_for_the_file_to_be_read() {
     let directory = Seeded::directory("waiting");
     let file = directory.named("waited.rs", "fn main() {}\nfn other() {}\n");
-    let path = PathBuf::from(&*file);
     let (mut test, gate) = reading_file_harness(&file);
 
     assert!(
@@ -11640,7 +11660,10 @@ fn the_source_pane_waits_for_the_file_to_be_read() {
     );
 
     gate.send_blocking(()).expect("the reader is waiting");
-    pump(&mut test, || highlighted().contains_key(&path));
+    // The rows and not the cache the parse lands in first: the reader files it on its own
+    // thread and only then sends the answer the pane wakes for, so a wait on the cache is
+    // a wait that ends several hops before what is asserted here.
+    pump(&mut test, |test| !gutter_lines(test).is_empty());
     assert_eq!(gutter_lines(&test), vec![1, 2]);
 
     // What this test read, and not the cache: it is the process's, and another test's
@@ -14799,6 +14822,31 @@ enum Asked {
     Run,
 }
 
+/// Pump until the worker has been handed a job `wanted` answers for, and hand back every
+/// job it recorded up to and including that one.
+///
+/// **A job is taken off the queue and recorded on the worker's own thread**, so waiting
+/// for the channel to hold *something* and then reading one job off it says only that a
+/// job arrived: that it is the one the test is about is a second assertion, about what
+/// else the app had queued. A delete sends the open of the pad behind it from the same
+/// call, and a save is owed from wherever the reader last typed. Wait for the job, and
+/// what came with it is in hand to be asserted about or ignored.
+#[track_caller]
+fn asked_until(
+    test: &mut TestingRunner,
+    asks: &async_channel::Receiver<Asked>,
+    wanted: impl Fn(&Asked) -> bool,
+) -> Vec<Asked> {
+    let mut asked = Vec::new();
+    pump(test, |_| {
+        while let Ok(job) = asks.try_recv() {
+            asked.push(job);
+        }
+        asked.iter().any(&wanted)
+    });
+    asked
+}
+
 /// The scratchpad wiring and nothing else: no pane, since what is under test is which
 /// jobs the worker is handed and what its answers do to the app.
 fn scratchpad_harness() -> impl IntoElement {
@@ -15050,7 +15098,7 @@ fn the_front_of_the_order_is_the_pad_that_opens() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     assert_eq!(pad.peek().shown().as_str(), "second");
     assert_eq!(shown_rope(text, pad), "// second\n");
@@ -15103,7 +15151,7 @@ fn a_listing_longer_than_the_order_file_is_drawn_whole() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     assert_eq!(
         pad.peek().order.entries().len(),
@@ -15147,7 +15195,7 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     assert_eq!(asks.try_recv(), Ok(Asked::List));
     assert_eq!(asks.try_recv(), Ok(Asked::Open("one".to_owned())));
 
@@ -15161,7 +15209,7 @@ fn switching_writes_the_pad_being_left_before_it_opens_the_next() {
     let mut pad = pad;
     pad.write().state_mut().scratchpad.source = "// edited\n".to_owned();
     show_pad(pad, &jobs, two.clone());
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         pad.peek().shown() == &two && pad.peek().state().opened()
     });
 
@@ -15233,7 +15281,7 @@ fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
     let text = roots.pad_text;
 
     // The listing has landed and the front of the order is shown, its read on the worker.
-    pump(&mut test, || pad.peek().shown().as_str() == "one");
+    pump(&mut test, |_| pad.peek().shown().as_str() == "one");
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     let (one, two) = (pad_id("one"), pad_id("two"));
 
@@ -15245,7 +15293,7 @@ fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
 
     // The first read lands and the reader types into what it put on screen.
     letting.send_blocking(()).expect("the worker is waiting");
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         pad.peek().get(&one).is_some_and(|state| state.opened())
     });
     assert_eq!(
@@ -15254,17 +15302,17 @@ fn a_pad_asked_for_twice_before_it_arrives_is_read_once() {
 "
     );
     edit_shown(text, pad, |editor| editor.rope.insert(0, "// typed\n"));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         pad.peek().state().scratchpad.source.starts_with("// typed")
     });
 
     // The other pad's read, and then the second read of this one.
     letting.send_blocking(()).expect("the worker is waiting");
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         pad.peek().get(&two).is_some_and(|state| state.opened())
     });
     letting.send_blocking(()).expect("the worker is waiting");
-    pump(&mut test, || pad.peek().state().unsaved.is_some());
+    pump(&mut test, |_| pad.peek().state().unsaved.is_some());
 
     let typed = "// typed\n// one\n";
     assert_eq!(shown_rope(text, pad), typed, "the older text was put back");
@@ -15314,7 +15362,7 @@ fn the_panel_draws_names_and_never_ids() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     let drawn = labels(&test);
     assert!(
@@ -15364,15 +15412,15 @@ fn a_new_pad_is_written_and_shown_at_once() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     assert_eq!(pad.peek().shown().as_str(), "pad");
     while asks.try_recv().is_ok() {}
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_new_pad(&jobs);
-    pump(&mut test, || pad.peek().shown().as_str() == "pad-1");
+    pump(&mut test, |_| pad.peek().shown().as_str() == "pad-1");
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     assert_eq!(asks.try_recv(), Ok(Asked::New));
     // Read straight back: the worker wrote the package on the way, and reading it is what
@@ -15417,18 +15465,18 @@ fn a_refusal_is_kept_and_the_next_one_replaces_it() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_new_pad(&jobs);
-    pump(&mut test, || pad.peek().refused.is_some());
+    pump(&mut test, |_| pad.peek().refused.is_some());
     let said = pad.peek().refused.clone().expect("a sentence");
     assert!(said.starts_with("Not made:"), "{said}");
 
     // The pad is let go of here whatever the worker answers, so what the refusal says is
     // that the package is still on the disk and not that the pad came back.
     request_delete_pad(pad, text, &jobs, pad_id("one"));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         pad.peek()
             .refused
             .as_deref()
@@ -15461,17 +15509,17 @@ fn renaming_a_pad_is_a_save_and_moves_nothing() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     while asks.try_recv().is_ok() {}
 
     // What the box does, which is all a rename is now.
     let mut pad = pad;
     pad.write().state_mut().scratchpad.name = "two".to_owned();
-    pump(&mut test, || !asks.is_empty());
+    let asked = asked_until(&mut test, &asks, |job| matches!(job, Asked::Save(_)));
 
     // Written out by the ordinary save, under the id it was always filed under -- and a
     // name another pad already has is simply a name another pad already has.
-    assert_eq!(asks.try_recv(), Ok(Asked::Save("// one\n".to_owned())));
+    assert_eq!(asked, vec![Asked::Save("// one\n".to_owned())]);
     assert!(asks.is_empty());
     assert_eq!(pad.peek().shown().as_str(), "one");
     assert_eq!(pad.peek().state().scratchpad.name, "two");
@@ -15512,7 +15560,7 @@ fn a_delete_is_asked_for_before_anything_goes() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     while asks.try_recv().is_ok() {}
 
     // The row of the pad that is *not* on screen, since any row can be asked about.
@@ -15576,7 +15624,7 @@ fn the_delete_question_says_where_the_asked_about_pad_is() {
         .clone()
         .expect("a store to keep pads in");
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     // The row of the pad that is not on screen.
     let row = centre_of(&test, "<two>");
@@ -15597,18 +15645,25 @@ fn the_delete_question_says_where_the_asked_about_pad_is() {
     );
 }
 
-/// Say yes on the pane's own delete question, and wait for the job the press sent.
+/// Say yes on the pane's own delete question, and wait for `pad`'s delete to be asked of
+/// the worker.
 ///
 /// A press and not a call to `request_delete_pad`, because the press is what the two tests
 /// below are about. The job it sends is taken off the queue and recorded on the worker's
 /// thread, so what says it has been is the record arriving and never a count of passes:
 /// under load that thread is not scheduled inside the eight of a `settle`
 /// (`agents/Headless.md`).
-fn confirm_delete(test: &mut TestingRunner, asks: &async_channel::Receiver<Asked>) {
+///
+/// **The delete itself and not the first job to arrive**, which is a second assertion the
+/// test is not about ([`asked_until`]).
+#[track_caller]
+fn confirm_delete(test: &mut TestingRunner, asks: &async_channel::Receiver<Asked>, pad: &PadId) {
     let at = centre_of(test, "Delete");
     press_at(test, at);
     settle(test);
-    pump(test, || !asks.is_empty());
+
+    let wanted = Asked::Delete(pad.as_str().to_owned());
+    asked_until(test, asks, |job| *job == wanted);
 }
 
 /// Confirming a delete does not take the editor down with the buffer it lets go of.
@@ -15641,7 +15696,7 @@ fn confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from() {
     let mut pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     let (one, two) = (pad_id("one"), pad_id("two"));
     assert!(text.peek().holds(&one), "the shown pad has a buffer");
     while asks.try_recv().is_ok() {}
@@ -15651,25 +15706,23 @@ fn confirming_a_delete_does_not_crash_the_editor_it_takes_the_buffer_from() {
     // overlay is still over the row.
     pad.write().confirming = Some(one.clone());
     settle(&mut test);
-    confirm_delete(&mut test, &asks);
+    confirm_delete(&mut test, &asks, &one);
 
     assert!(!text.peek().holds(&one));
     assert!(pad.peek().get(&one).is_none());
-    assert_eq!(asks.try_recv(), Ok(Asked::Delete("one".to_owned())));
 
     // The pad behind it, read and drawn -- and then deleted in its turn, this time as the
     // last one, which comes back to the pad a first run holds.
-    pump(&mut test, || text.peek().holds(&two));
+    pump(&mut test, |_| text.peek().holds(&two));
     assert_eq!(pad.peek().shown(), &two);
     while asks.try_recv().is_ok() {}
 
     pad.write().confirming = Some(two.clone());
     settle(&mut test);
-    confirm_delete(&mut test, &asks);
+    confirm_delete(&mut test, &asks, &two);
 
     assert!(!text.peek().holds(&two));
     assert_eq!(pad.peek().shown().as_str(), crate::scratchpad::DEFAULT_ID);
-    assert_eq!(asks.try_recv(), Ok(Asked::Delete("two".to_owned())));
 }
 
 /// The source of two pads, so a test can tell from the screen which one the editor is
@@ -15714,13 +15767,13 @@ fn coming_back_to_a_pad_already_read_draws_its_own_buffer() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     let (one, two) = (pad_id("one"), pad_id("two"));
     assert!(drawn_source(&test).contains("// pad one"));
 
     let row = centre_of(&test, "<two>");
     press_at(&mut test, row);
-    pump(&mut test, || text.peek().holds(&two));
+    pump(&mut test, |_| text.peek().holds(&two));
     assert!(drawn_source(&test).contains("// pad two"));
 
     // Back to the first, whose buffer is still held: no gap, and so no remount.
@@ -15764,12 +15817,12 @@ fn deleting_a_pad_that_is_not_shown_leaves_the_editor_standing() {
     let mut pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     let (one, two) = (pad_id("one"), pad_id("two"));
 
     let row = centre_of(&test, "<two>");
     press_at(&mut test, row);
-    pump(&mut test, || text.peek().holds(&two));
+    pump(&mut test, |_| text.peek().holds(&two));
     let row = centre_of(&test, "<one>");
     press_at(&mut test, row);
     settle(&mut test);
@@ -15779,10 +15832,9 @@ fn deleting_a_pad_that_is_not_shown_leaves_the_editor_standing() {
     // tests above already pin.
     pad.write().confirming = Some(two.clone());
     settle(&mut test);
-    confirm_delete(&mut test, &asks);
+    confirm_delete(&mut test, &asks, &two);
 
     assert!(!text.peek().holds(&two));
-    assert_eq!(asks.try_recv(), Ok(Asked::Delete("two".to_owned())));
 
     // The pad on screen is untouched, and so is what the editor draws of it.
     assert_eq!(pad.peek().shown(), &one);
@@ -16006,7 +16058,7 @@ fn a_scratchpad_is_read_before_anything_is_written_over_it() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     assert_eq!(pad.peek().state().scratchpad, saved);
     // The editor is holding it too, which is the half a reader can see.
@@ -16046,7 +16098,7 @@ fn a_pad_that_will_not_load_is_left_unopened_and_never_written() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().unsaved.is_some());
+    pump(&mut test, |_| pad.peek().state().unsaved.is_some());
 
     let shown = pad.peek().shown().clone();
     assert!(!pad.peek().state().opened());
@@ -16086,7 +16138,7 @@ fn a_pad_that_will_not_load_is_not_built_over_either() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().unsaved.is_some());
+    pump(&mut test, |_| pad.peek().state().unsaved.is_some());
     assert!(!pad.peek().state().opened());
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
@@ -16128,13 +16180,13 @@ fn the_mirror_copies_the_editor_only_where_it_has_changed() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     settle(&mut test);
 
     // An edit: the one copy is the text that is stored.
     let before = super::pad::mirrored();
     edit_shown(text, pad, |editor| editor.rope.insert(0, "// typed\n"));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         pad.peek().state().scratchpad.source.starts_with("// typed")
     });
     settle(&mut test);
@@ -16179,7 +16231,7 @@ fn an_edit_is_written_and_a_bad_row_is_counted() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     assert_eq!(asks.try_recv(), Ok(Asked::List));
     assert_eq!(
         asks.try_recv(),
@@ -16188,10 +16240,10 @@ fn an_edit_is_written_and_a_bad_row_is_counted() {
 
     // Typing: the rope is what the keyboard edits and the model is what is written.
     edit_shown(text, pad, |editor| editor.rope.insert(0, "// typed\n"));
-    pump(&mut test, || !asks.is_empty());
+    let asked = asked_until(&mut test, &asks, |job| matches!(job, Asked::Save(_)));
 
     let typed = format!("// typed\n{}", crate::scratchpad::DEFAULT_SOURCE);
-    assert_eq!(asks.try_recv(), Ok(Asked::Save(typed.clone())));
+    assert_eq!(asked, vec![Asked::Save(typed.clone())]);
     assert_eq!(pad.peek().state().scratchpad.source, typed);
     assert!(pad.peek().state().unsaved.is_none());
 
@@ -16204,7 +16256,7 @@ fn an_edit_is_written_and_a_bad_row_is_counted() {
         scratchpad.add_dependency("anyhow", "1.0.86");
         scratchpad.add_dependency("", "")
     };
-    pump(&mut test, || pad.peek().state().unsaved.is_some());
+    pump(&mut test, |_| pad.peek().state().unsaved.is_some());
 
     assert_eq!(pad.peek().state().unsaved, Some(Failure::Dependencies(1)));
 
@@ -16216,7 +16268,7 @@ fn an_edit_is_written_and_a_bad_row_is_counted() {
         row.name = "rand".to_owned();
         row.version = "0.8".to_owned();
     }
-    pump(&mut test, || pad.peek().state().unsaved.is_none());
+    pump(&mut test, |_| pad.peek().state().unsaved.is_none());
 }
 
 /// The mark against a dependency row comes from `Scratchpad::problems`, asked about what
@@ -16245,7 +16297,7 @@ fn a_bad_row_is_marked_from_what_is_typed_and_not_from_a_refusal() {
         });
     let mut pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     while asks.try_recv().is_ok() {}
 
     // A row that names no crate, written straight into the model the reader types into.
@@ -16254,7 +16306,7 @@ fn a_bad_row_is_marked_from_what_is_typed_and_not_from_a_refusal() {
         .scratchpad
         .add_dependency("", "1.0.86");
     // The save this edit asks for, taken by the disk without a word.
-    pump(&mut test, || !asks.is_empty());
+    asked_until(&mut test, &asks, |job| matches!(job, Asked::Save(_)));
 
     let drawn = labels(&test);
     assert!(
@@ -16302,7 +16354,7 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
     let states = roots.states;
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     assert_eq!(asks.try_recv(), Ok(Asked::List));
     assert_eq!(
         asks.try_recv(),
@@ -16315,7 +16367,7 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
     request_build(pad, &jobs);
     assert!(pad.peek().state().building);
 
-    pump(&mut test, || !pad.peek().state().building);
+    pump(&mut test, |_| !pad.peek().state().building);
     assert!(matches!(
         pad.peek().state().built,
         Some(Ok(Build {
@@ -16375,7 +16427,7 @@ fn the_scratchpad_says_there_is_nothing_built_yet() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     assert!(
         labels(&test).contains(&"Nothing built yet".to_owned()),
         "the pane said nothing about having nothing to show: {:?}",
@@ -16410,10 +16462,10 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
-    pump(&mut test, || pad.peek().state().program.is_some());
+    pump(&mut test, |_| pad.peek().state().program.is_some());
 
     let object = pad
         .peek()
@@ -16474,10 +16526,10 @@ fn the_scratchpads_listing_leaves_nothing_in_the_maps_a_closer_walks() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
-    pump(&mut test, || pad.peek().state().program.is_some());
+    pump(&mut test, |_| pad.peek().state().program.is_some());
 
     // Every pass the listing takes: the skeleton, the stretch that decodes under it, and
     // the run each of them wakes. The first of those passes is where a place would be
@@ -16520,7 +16572,7 @@ fn the_scratchpads_listing_can_be_put_away() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     assert!(
         labels(&test).contains(&"Nothing built yet".to_owned()),
         "the listing's side was not up to begin with"
@@ -16602,10 +16654,10 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
     let text = roots.pad_text;
     let marked = roots.doors.marked;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
-    pump(&mut test, || pad.peek().state().program.is_some());
+    pump(&mut test, |_| pad.peek().state().program.is_some());
 
     // The fixture's own source file and a line it has code for, said the way its debug
     // info says them -- which is what the pad would learn from a program of its own.
@@ -16727,10 +16779,10 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
-    pump(&mut test, || pad.peek().state().program.is_some());
+    pump(&mut test, |_| pad.peek().state().program.is_some());
 
     let said = |test: &TestingRunner| labels(test).contains(&STALE_PROGRAM.to_owned());
     assert!(
@@ -16740,7 +16792,7 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
 
     // A keystroke, mirrored into the model by the wiring's own effect.
     edit_shown(text, pad, |editor| editor.rope.insert(0, "// typed\n"));
-    pump(&mut test, || pad.peek().state().out_of_date());
+    pump(&mut test, |_| pad.peek().state().out_of_date());
     assert!(said(&test), "an edit since the build said nothing");
 
     // A rename is not an edit: cargo compiles nothing from it.
@@ -16759,7 +16811,7 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
         .as_ref()
         .map(|program| program.object.clone());
     request_build(pad, &jobs);
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         matches!(
             pad.peek().state().built,
             Some(Ok(Build {
@@ -16786,7 +16838,7 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
     // And building what is on screen makes it current.
     refuse.store(false, std::sync::atomic::Ordering::SeqCst);
     request_build(pad, &jobs);
-    pump(&mut test, || !pad.peek().state().out_of_date());
+    pump(&mut test, |_| !pad.peek().state().out_of_date());
     assert!(
         !said(&test),
         "the listing is still out of date after a build"
@@ -16832,7 +16884,7 @@ fn a_pad_built_in_an_earlier_run_opens_on_its_program() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().program.is_some());
+    pump(&mut test, |_| pad.peek().state().program.is_some());
     assert!(
         !labels(&test).contains(&"Nothing built yet".to_owned()),
         "the pad opened on nothing though its package named a program"
@@ -16850,7 +16902,7 @@ fn a_pad_built_in_an_earlier_run_opens_on_its_program() {
         .scratchpad
         .source
         .push_str("// typed\n");
-    pump(&mut test, || pad.peek().state().out_of_date());
+    pump(&mut test, |_| pad.peek().state().out_of_date());
     assert!(
         labels(&test).contains(&STALE_PROGRAM.to_owned()),
         "a restored program says nothing about the source having moved on"
@@ -16898,7 +16950,7 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     let one = pad.peek().shown().clone();
     while asks.try_recv().is_ok() {}
 
@@ -16906,10 +16958,10 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
     request_build(pad, &jobs);
     // The job is recorded before it is answered, so this is the worker inside the build:
     // whatever is queued now waits for it.
-    pump(&mut test, || !asks.is_empty());
+    let asked = asked_until(&mut test, &asks, |job| matches!(job, Asked::Build(_)));
     assert_eq!(
-        asks.try_recv(),
-        Ok(Asked::Build(pad.peek().state().scratchpad.source.clone()))
+        asked,
+        vec![Asked::Build(pad.peek().state().scratchpad.source.clone())]
     );
 
     request_delete_pad(pad, text, &jobs, one.clone());
@@ -16917,7 +16969,7 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
 
     // The pad behind it, read after the delete and so after the build: waiting for it here
     // is waiting for the build's answer to have been dealt with.
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         pad.peek().shown().as_str() == "two" && pad.peek().state().opened()
     });
     settle(&mut test);
@@ -16967,12 +17019,12 @@ fn a_finished_pad_build_forgets_the_directory_it_built_in() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     highlighted().insert(source.clone(), Some(stand_in.0.clone()));
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
-    pump(&mut test, || !pad.peek().state().building);
+    pump(&mut test, |_| !pad.peek().state().building);
 
     assert!(
         !highlighted().contains_key(&source),
@@ -17013,7 +17065,7 @@ fn mount_rows(rows: &[&str], focus: &str) -> (TestingRunner, State<Pads>, Vec<Ro
             PadJob::Run { .. } => unreachable!("this test never runs"),
         });
     let mut pad = roots.pad;
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     let ids: Vec<RowId> = {
         let mut pads = pad.write();
@@ -17192,7 +17244,7 @@ fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     // Line 3, column 5 of `DEFAULT_SOURCE` is the `x` of `x * 3 + 1`.
     let mut pad = pad;
@@ -17279,7 +17331,7 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     let mut pad = pad;
     pad.write().state_mut().built = Some(pad_built(
@@ -17358,7 +17410,7 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     let mut pad = pad;
     pad.write().state_mut().built = Some(pad_built(
@@ -17484,13 +17536,13 @@ fn a_run_that_cannot_start_says_why() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     already_built(pad, fixture_artifact());
     test.sync_and_update();
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_run(pad, &jobs);
-    pump(&mut test, || !pad.peek().state().is_running());
+    pump(&mut test, |_| !pad.peek().state().is_running());
 
     let verdict = pad.peek().state().run_verdict().expect("a verdict");
     assert!(
@@ -17531,7 +17583,7 @@ fn a_request_copies_no_more_of_the_pad_than_it_sends() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     already_built(pad, fixture_artifact());
     test.sync_and_update();
     let jobs = asking.peek().clone().expect("the wiring handed one back");
@@ -17608,26 +17660,26 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     already_built(pad, fixture_artifact());
     test.sync_and_update();
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_run(pad, &jobs);
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         !emitters.lock().expect("the emitters").is_empty()
     });
 
     let mut first = emitters.lock().expect("the emitters").remove(0);
     first(run_line("one"));
     first(run_line("two"));
-    pump(&mut test, || pad.peek().state().output.len() == 2);
+    pump(&mut test, |_| pad.peek().state().output.len() == 2);
     assert_eq!(output_lines(pad), ["one", "two"]);
 
     // The next run: the number moves on and the output starts empty, so what the run
     // before it goes on writing is for nobody.
     request_run(pad, &jobs);
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         emitters.lock().expect("the emitters").len() == 1
     });
     assert!(output_lines(pad).is_empty(), "the run did not start afresh");
@@ -17650,12 +17702,12 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
     let mut second = emitters.lock().expect("the emitters").remove(0);
     first(run_line("later still"));
     second(run_line("after"));
-    pump(&mut test, || pad.peek().state().output.len() == 1);
+    pump(&mut test, |_| pad.peek().state().output.len() == 1);
     assert_eq!(output_lines(pad), ["after"]);
 
     // And this run's own ending is its own.
     second(RunEvent::Ended(Ended::Exited(Some(0))));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         matches!(pad.peek().state().run_state, RunState::Over(_))
     });
     assert_eq!(output_lines(pad), ["after"]);
@@ -17694,7 +17746,7 @@ fn a_run_asked_for_during_a_build_starts_nothing() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     already_built(pad, fixture_artifact());
     test.sync_and_update();
 
@@ -17752,7 +17804,7 @@ fn the_pads_build_chord_is_refused_while_a_build_is_on() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     already_built(pad, fixture_artifact());
     test.sync_and_update();
     while asks.try_recv().is_ok() {}
@@ -17822,7 +17874,7 @@ fn the_pads_run_and_new_chords_press_its_buttons() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
     // A build the app already has, so that there is an executable to run without a
     // compiler: no test in this repo runs cargo.
     already_built(pad, fixture_artifact());
@@ -17842,7 +17894,7 @@ fn the_pads_run_and_new_chords_press_its_buttons() {
 
     let (key, modifiers) = Chord::NewPad.pressed();
     key_with(&mut test, key, modifiers);
-    pump(&mut test, || pad.peek().shown().as_str() == "pad-1");
+    pump(&mut test, |_| pad.peek().shown().as_str() == "pad-1");
     assert!(
         std::iter::from_fn(|| asks.try_recv().ok()).any(|asked| asked == Asked::New),
         "Ctrl+N asked the worker for no pad"
@@ -18006,7 +18058,7 @@ fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
         });
     let pad = roots.pad;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     // Two errors of the same shape: one that fits and one that cannot. The rendered block
     // of the second is the `-->` line a span carries, which is the line the goal is about.
@@ -22951,7 +23003,7 @@ fn an_object_row_opens_from_its_menu() {
     assert!(label_area(&test, "Close file").is_none());
     press(&mut test, "Open file");
     let objects = states.objects;
-    pump(&mut test, || !objects.peek().is_empty());
+    pump(&mut test, |_| !objects.peek().is_empty());
     assert!(objects.peek().iter().all(|object| object.path == path));
 
     let row = centre_of(&test, "fixture.o");
@@ -26558,7 +26610,7 @@ fn open_find_bar(test: &mut TestingRunner) {
 /// merely an answer: the box is written a character at a time, and an answer about what it
 /// held two keystrokes ago is one the pane has already moved on from.
 fn find_answered(test: &mut TestingRunner, finds: State<Finds>, at: Where, pattern: &str) {
-    pump(test, || {
+    pump(test, |_| {
         let bar = finds.peek().get(&at).clone();
         bar.filter.pattern == pattern && bar.hits().is_some()
     });
@@ -27228,7 +27280,7 @@ fn a_keystroke_in_the_find_bar_leaves_the_step_buttons_alone() {
 
     let (back, forward) = (button(&test, "\u{2039}"), button(&test, "\u{203a}"));
     test.write_text("z");
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         finds.peek().get(&at).filter.pattern == format!("{mnemonic}z")
     });
     settle(&mut test);
@@ -27384,7 +27436,7 @@ fn a_step_through_an_objects_code_walks_on_until_it_finds_a_match() {
     open_find_bar(&mut test);
     test.write_text("sum_to");
     test.press_key(Key::Named(NamedKey::Enter));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         finds
             .peek()
             .get(&at)
@@ -27434,7 +27486,7 @@ fn a_walk_that_finds_nothing_says_so_and_stops() {
     open_find_bar(&mut test);
     test.write_text("nothing_is_called_this");
     test.press_key(Key::Named(NamedKey::Enter));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         finds
             .peek()
             .get(&at)
@@ -27482,7 +27534,7 @@ fn a_re_seeded_find_bar_gives_up_the_walk_under_it() {
     open_find_bar(&mut test);
     test.write_text("sum_to");
     test.press_key(Key::Named(NamedKey::Enter));
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         finds
             .peek()
             .get(&at)
@@ -27818,7 +27870,7 @@ fn hits_arrive_under_their_file_and_fold() {
 
     ask_for(&states, dock, &directory, "hit");
     let searched = states.searched;
-    pump(&mut test, || !searched.peek().running);
+    pump(&mut test, |_| !searched.peek().running);
 
     let shown = labels(&test);
     assert!(shown.iter().any(|label| label == "one.rs"), "{shown:?}");
@@ -27857,7 +27909,7 @@ fn drawing_the_hits_copies_none_of_them() {
     let copied = crate::grouped::copies();
     ask_for(&states, dock, &directory, "hit");
     let searched = states.searched;
-    pump(&mut test, || !searched.peek().running);
+    pump(&mut test, |_| !searched.peek().running);
 
     let shown = labels(&test);
     assert!(
@@ -27895,11 +27947,11 @@ fn a_hit_from_a_replaced_search_is_dropped() {
 
     let searched = states.searched;
     ask_for(&states, dock, &directory, "slow");
-    pump(&mut test, || searched.peek().hits.count() == 1);
+    pump(&mut test, |_| searched.peek().hits.count() == 1);
     assert!(labels(&test).iter().any(|label| label == "early answer"));
 
     ask_for(&states, dock, &directory, "other");
-    pump(&mut test, || !searched.peek().running);
+    pump(&mut test, |_| !searched.peek().running);
     assert!(labels(&test).iter().any(|label| label == "other answer"));
 
     // The first walk goes on and answers into a channel nobody is taking from.
@@ -27952,14 +28004,14 @@ fn a_walk_of_the_project_left_cannot_answer_into_the_next() {
 
     let searched = states.searched;
     ask_for(&states, dock, &directory, "left");
-    pump(&mut test, || searched.peek().hits.count() == 1);
+    pump(&mut test, |_| searched.peek().hits.count() == 1);
     assert!(labels(&test).iter().any(|label| label == "the old project"));
 
     // The project left, and one search asked of the one that replaced it.
     clear_project(states);
     settle(&mut test);
     ask_for(&states, dock, &directory, "new");
-    pump(&mut test, || searched.peek().hits.count() == 1);
+    pump(&mut test, |_| searched.peek().hits.count() == 1);
     assert!(labels(&test).iter().any(|label| label == "the new project"));
 
     // The old walk goes on, and answers to the number it was given.
@@ -28161,7 +28213,7 @@ fn enter_in_the_box_asks_for_what_is_in_it() {
     key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::default());
     settle(&mut test);
     println!("after enter: {:?}", labels(&test));
-    pump(&mut test, || !searched.peek().running);
+    pump(&mut test, |_| !searched.peek().running);
 
     assert!(searched
         .peek()
@@ -28443,7 +28495,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
-    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
     assert_eq!(asks.try_recv(), Ok(AskedToBuild::Read));
 
     // The file cargo would be run over, named rather than left to be worked out from the
@@ -28471,7 +28523,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
     );
     assert!(states.build.peek().building);
 
-    pump(&mut test, || !states.build.peek().building);
+    pump(&mut test, |_| !states.build.peek().building);
     assert_eq!(asks.try_recv(), Ok(AskedToBuild::Build));
     assert!(
         asks.is_empty(),
@@ -28491,7 +28543,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
 
     let row = centre_of(&test, &artifact.to_string_lossy());
     press_at(&mut test, row);
-    pump(&mut test, || !states.objects.peek().is_empty());
+    pump(&mut test, |_| !states.objects.peek().is_empty());
     assert!(states
         .objects
         .peek()
@@ -28609,7 +28661,7 @@ fn an_artifact_load_survives_the_view_being_left() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
-    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     start_build(
@@ -28618,7 +28670,7 @@ fn an_artifact_load_survives_the_view_being_left() {
         PathBuf::from("/work/app"),
         Profile::Release,
     );
-    pump(&mut test, || !states.build.peek().building);
+    pump(&mut test, |_| !states.build.peek().building);
 
     // The one press: it starts the load and leaves the view, the wrapper's handler and the
     // row's own being two listeners on the same event.
@@ -28689,7 +28741,7 @@ fn a_finished_build_forgets_the_workspace_sources() {
         directory.to_path_buf(),
         Profile::Release,
     );
-    pump(&mut test, || !states.build.peek().building);
+    pump(&mut test, |_| !states.build.peek().building);
 
     assert_eq!(
         drawn(),
@@ -28749,7 +28801,7 @@ fn a_build_replaces_what_the_build_before_it_produced() {
     start_build(build, &jobs, PathBuf::from("/work/app"), Profile::Release);
     // Both halves: the close empties the list for that path a beat before the reopen
     // fills it, and waiting only for "different" would land in that gap.
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         let now = held(&artifact);
         !build.peek().building && !now.is_empty() && now != before_built
     });
@@ -28788,7 +28840,7 @@ fn a_directory_with_no_manifest_builds_nothing() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/not-a-workspace".to_owned();
-    pump(&mut test, || states.build.peek().manifest.path.is_none());
+    pump(&mut test, |_| states.build.peek().manifest.path.is_none());
 
     let drawn = labels(&test);
     assert!(
@@ -28846,7 +28898,7 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
-    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
 
     let drawn = labels(&test);
     assert!(
@@ -28863,7 +28915,7 @@ fn a_profile_with_no_debug_lines_offers_them_and_the_offer_goes() {
 
     let button = centre_of(&test, "Turn on");
     press_at(&mut test, button);
-    pump(&mut test, || states.build.peek().manifest.debug_lines);
+    pump(&mut test, |_| states.build.peek().manifest.debug_lines);
 
     let drawn = labels(&test);
     assert!(
@@ -28896,11 +28948,11 @@ fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = "/work/app".to_owned();
-    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
 
     let button = centre_of(&test, "Turn on");
     press_at(&mut test, button);
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         states.build.peek().manifest.edit_refused.is_some()
     });
 
@@ -28922,7 +28974,7 @@ fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
     // one asks again.
     let debug = centre_of(&test, "Debug");
     press_at(&mut test, debug);
-    pump(&mut test, || {
+    pump(&mut test, |_| {
         states.build.peek().manifest.edit_refused.is_none()
     });
 
@@ -29033,7 +29085,7 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
     // The section is drawn once the manifest has been read, which is a worker's answer away.
-    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
     let mut build = states.build;
     // Both halves of what the worker answers with: the run, and the diagnostic files it
     // picked out as ones this pane may open (`building::openable`).
@@ -29118,7 +29170,7 @@ fn a_diagnostics_place_opens_in_the_tab_the_file_is_already_in() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = stepped.to_string_lossy().into_owned();
-    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
     let mut build = states.build;
     build.write().built = Some(Arc::new(run));
     build.write().sources = Arc::new(HashSet::from([file]));
@@ -29182,7 +29234,7 @@ fn a_place_under_the_directory_keeps_its_path_where_it_cannot_be_opened() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
-    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
     // The run alone: the worker named neither file as one this pane may open, the one under
     // the directory not being a file the source cache would read.
     let mut build = states.build;
@@ -29248,7 +29300,7 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
-    pump(&mut test, || states.build.peek().manifest.path.is_some());
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
 
     let mut build = states.build;
     build.write().built = Some(Arc::new(run));
@@ -30292,7 +30344,7 @@ fn the_project_view_lists_the_settings_the_project_gave_the_server() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
-    pump(&mut test, || !language.peek().overrides().is_empty());
+    pump(&mut test, |_| !language.peek().overrides().is_empty());
 
     let drawn = labels(&test);
     assert!(
@@ -30332,7 +30384,7 @@ fn the_project_view_says_why_a_settings_file_could_not_be_used() {
 
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
-    pump(&mut test, || language.peek().unreadable().is_some());
+    pump(&mut test, |_| language.peek().unreadable().is_some());
 
     let drawn = labels(&test);
     assert!(
@@ -30537,7 +30589,7 @@ fn a_start_carries_the_projects_own_settings() {
     let states = roots.states;
     let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
-    pump(&mut test, || !language.peek().overrides().is_empty());
+    pump(&mut test, |_| !language.peek().overrides().is_empty());
 
     press_at(&mut test, the_control());
     until_server(&mut test, language, running);
@@ -30567,7 +30619,7 @@ fn a_settings_file_that_could_not_be_read_starts_nothing() {
     let states = roots.states;
     let language = roots.language;
     with_a_directory(&mut test, &states, "/p");
-    pump(&mut test, || language.peek().unreadable().is_some());
+    pump(&mut test, |_| language.peek().unreadable().is_some());
 
     press_at(&mut test, the_control());
     settle(&mut test);
@@ -32849,7 +32901,7 @@ fn type_into_finder(test: &mut TestingRunner, finder: State<Finder>, text: &str)
 
 /// Wait for the worker to answer what the box says, and for the panel to draw it.
 fn finder_answered(test: &mut TestingRunner, finder: State<Finder>) {
-    pump(test, || {
+    pump(test, |_| {
         let typed = finder.peek().typed.clone();
         finder.peek().listed.answers(&typed)
     });
@@ -32905,7 +32957,7 @@ fn the_chord_opens_the_finder_over_the_project_files() {
     );
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "s");
 
     let rows = finder_rows(&test);
@@ -32931,7 +32983,7 @@ fn an_empty_box_lists_the_files_opened_most_recently() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     assert!(
         labels(&test)
             .iter()
@@ -32973,7 +33025,7 @@ fn alt_in_the_finder_moves_to_the_row_and_opens_nothing() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "s");
 
     // Whichever of the two rows the keyboard is not on: the ranking decides which, and
@@ -33033,7 +33085,7 @@ fn a_pick_and_a_press_open_the_row_and_close_the_finder() {
     };
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
 
     // The row the keyboard is not on, so the Alt+press has somewhere to move it.
@@ -33060,7 +33112,7 @@ fn a_pick_and_a_press_open_the_row_and_close_the_finder() {
 
     // The other door, a plain press on a row: the same open and the same close behind it.
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
     let other = finder_rows_drawn(&test)
         .into_iter()
@@ -33088,7 +33140,7 @@ fn a_row_is_the_name_and_then_the_directories_above_it() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "s");
 
     let rows = finder_rows(&test);
@@ -33112,7 +33164,7 @@ fn typing_narrows_the_list_to_the_characters_in_order() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "srcuivw");
 
     let rows = finder_rows(&test);
@@ -33145,7 +33197,7 @@ fn enter_opens_the_selected_file_in_the_preview_tab() {
     let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     // Typed, so the list is the walk's and not the places visited. Which of the two rows
     // is first is the matcher's business and pinned in its own tests; this reads it.
     type_into_finder(&mut test, finder, "rs");
@@ -33166,7 +33218,7 @@ fn enter_opens_the_selected_file_in_the_preview_tab() {
     // The row under it, opened the same way: into the same preview tab, which takes the
     // first file's place.
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
     key_with(
         &mut test,
@@ -33209,7 +33261,7 @@ fn ctrl_enter_opens_a_file_in_a_tab_the_next_row_does_not_take_back() {
     let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
     let rows = finder_rows(&test);
     assert_eq!(rows.len(), 2, "{rows:?}");
@@ -33228,7 +33280,7 @@ fn ctrl_enter_opens_a_file_in_a_tab_the_next_row_does_not_take_back() {
     // The row under it, opened the ordinary way: a preview tab of its own, with the first
     // file's tab left exactly where it was.
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
     key_with(
         &mut test,
@@ -33262,7 +33314,7 @@ fn down_stops_at_the_last_row_so_up_moves_at_once() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
     let rows = finder_rows(&test);
     assert_eq!(rows.len(), 3, "{rows:?}");
@@ -33306,7 +33358,7 @@ fn the_list_scrolls_to_the_row_the_keyboard_is_on() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
     let first = finder_rows(&test);
     assert!(
@@ -33355,7 +33407,7 @@ fn a_page_moves_the_finder_a_screen_of_files() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
     // The screenful the panel drew before the key: the list is longer than it, which is
     // the whole of what makes a page differ from an arrow.
@@ -33406,7 +33458,7 @@ fn home_and_end_move_to_the_first_file_and_the_last() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "rs");
     let screen = finder_rows(&test);
 
@@ -33437,7 +33489,7 @@ fn escape_closes_the_finder_and_keeps_nothing_typed() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "first");
     assert_eq!(finder.peek().typed, "first");
 
@@ -33469,7 +33521,7 @@ fn the_second_open_shows_the_files_the_first_walk_found() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "kept");
     assert!(finder_rows(&test).iter().any(|row| row == "kept.rs"));
 
@@ -33540,7 +33592,7 @@ fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
     let pad = roots.pad;
     let text = roots.pad_text;
 
-    pump(&mut test, || pad.peek().state().opened());
+    pump(&mut test, |_| pad.peek().state().opened());
 
     let editor = centre_of(&test, "fn");
     press_at(&mut test, editor);
@@ -33561,7 +33613,7 @@ fn the_windows_chords_are_declined_by_the_finder_box() {
             let _ = emit(WalkEvent::Finished);
         });
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
 
     every_chord_into_a_box(&mut test, |_| finder.peek().typed.clone());
 }
@@ -33577,7 +33629,7 @@ fn the_box_fills_the_panel_with_air_around_it() {
             let _ = emit(WalkEvent::Finished);
         });
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
 
     let drawn = label_area(&test, "Find a file").expect("the box is drawn");
     // The panel is centred across the window the runner was given.
@@ -33604,7 +33656,7 @@ fn a_press_outside_the_panel_closes_the_finder() {
             let _ = emit(WalkEvent::Finished);
         });
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     assert!(finder.peek().open);
 
     // Near the bottom of the window, well under the panel.
@@ -33647,7 +33699,7 @@ fn a_file_outside_the_project_is_not_listed() {
         );
     }
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
 
     assert_eq!(
         finder_rows(&test),
@@ -33668,7 +33720,7 @@ fn pressing_a_row_opens_its_file() {
     std::fs::write(directory.join("kept.rs"), "fn one() {}\n").expect("writing the file");
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
     type_into_finder(&mut test, finder, "kept");
 
     // By its whole name: the box above the list holds what was typed, and a row is one
@@ -33744,7 +33796,7 @@ fn nothing_is_said_of_a_query_the_worker_has_not_answered() {
         });
 
     press_finder_chord(&states, finder, keys, dock);
-    pump(&mut test, || !finder.peek().walking);
+    pump(&mut test, |_| !finder.peek().walking);
 
     // The walk is over, so nothing is being read; the query is simply not answered yet.
     test.write_text("zzz");
