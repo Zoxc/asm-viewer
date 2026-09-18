@@ -2615,6 +2615,62 @@ fn alt_held_as_the_menu_opens_is_what_offers_the_debug_page() {
     );
 }
 
+/// **A guarded panic's file shows on the Debug page as soon as it is raised.** The app
+/// goes on after one, so the page is still open, and it is the only place that file is
+/// named. The page read the list once per render and nothing rendered it again, so the
+/// file stayed missing until the page was reopened.
+///
+/// The hook is not installed in a test (it is one per process), so the file is written
+/// here, as the hook would have written it before the press returned.
+#[test]
+fn a_guarded_panics_file_is_listed_on_the_debug_page_at_once() {
+    let directory = Temporary::directory(
+        std::env::temp_dir().join(format!("assembly-viewer-debug-page-{}", std::process::id())),
+    );
+    let store = Store::at(directory.to_path_buf());
+    let panics = store.panics();
+    let (mut test, ()) = TestingRunner::new(
+        || page_body(Page::Debug),
+        (500., 500.).into(),
+        move |runner: &mut _| {
+            let store = store.clone();
+            runner.provide_root_context(move || {
+                roots(Some(store), &Settings::default());
+            });
+        },
+        1.,
+    );
+    settle(&mut test);
+    assert!(labels(&test).contains(&"Nothing has panicked.".to_owned()));
+
+    std::fs::create_dir_all(&panics).expect("the panics directory is writable");
+    std::fs::write(panics.join("2026-09-18_12-00-00.txt"), "a record")
+        .expect("writing the panic file");
+    let drawn = labels_with_areas(&test);
+    let row = drawn
+        .iter()
+        .find_map(|(text, area)| (text == "Inside analysis::guard").then_some(*area))
+        .expect("the guarded panic's row is on the page");
+    let button = drawn
+        .iter()
+        .find_map(|(text, area)| {
+            (text == "Panic" && area.min_y() <= row.center().y && row.center().y <= area.max_y())
+                .then_some(*area)
+        })
+        .expect("the guarded panic's button is on its row");
+    press_at(
+        &mut test,
+        (button.center().x as f64, button.center().y as f64),
+    );
+    settle(&mut test);
+
+    assert!(
+        labels(&test).contains(&"2026-09-18_12-00-00.txt".to_owned()),
+        "the file the press left is not listed: {:?}",
+        labels(&test)
+    );
+}
+
 #[test]
 fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
     let (mut test, states) = TestingRunner::new(

@@ -27,6 +27,7 @@ pub(crate) struct DebugTab;
 impl Component for DebugTab {
     fn render(&self) -> impl IntoElement {
         let store = use_consume::<Storage>().0;
+        let mut files = use_state(|| recorded(store));
         page(
             None,
             page_column()
@@ -42,15 +43,24 @@ impl Component for DebugTab {
                             panic!("a panic asked for on the Debug page")
                         }))
                         .child(panic_row("On a worker thread", |_| panic_off_thread()))
-                        .child(panic_row("Inside analysis::guard", |_| {
+                        .child(panic_row("Inside analysis::guard", move |_| {
                             analysis::guard::guard(|| {
                                 panic!("a guarded panic asked for on the Debug page")
                             });
+                            // The hook ran on this thread before the unwind, so the
+                            // file is on disk now.
+                            files.set(recorded(store));
                         })),
                 )
                 .child(
-                    section("Panic files", None)
-                        .child(rows_or(recorded_rows(store), "Nothing has panicked.")),
+                    section("Panic files", None).child(rows_or(
+                        files
+                            .read()
+                            .iter()
+                            .map(|path| FileRow { path: path.clone() }.into_element())
+                            .collect(),
+                        "Nothing has panicked.",
+                    )),
                 ),
         )
     }
@@ -70,22 +80,17 @@ fn panic_row(name: &str, press: impl FnMut(Event<PressEventData>) + 'static) -> 
         .child(Button::new().on_press(press).child("Panic"))
 }
 
-/// A row per run that has panicked, newest first. The line for none is `rows_or`'s, as
-/// every other section's is.
+/// Every panic file there is, newest first.
 ///
-/// **Read on every render and not held.** The list changes when this app panics, which is
-/// the one moment nothing here will be redrawn afterwards; and it is one `read_dir` of a
-/// directory with a handful of files in it, on a page nobody has open by accident.
-fn recorded_rows(store: State<Option<Store>>) -> Vec<Element> {
-    let files = store
+/// **Read on the mount and after the guarded press**, and held in between: the page's
+/// other two panics end the app. A guarded panic in a worker while the page is open is
+/// listed the next time the page opens.
+fn recorded(store: State<Option<Store>>) -> Vec<PathBuf> {
+    store
         .peek()
         .as_ref()
         .map(crate::panics::recorded)
-        .unwrap_or_default();
-    files
-        .into_iter()
-        .map(|path| FileRow { path }.into_element())
-        .collect()
+        .unwrap_or_default()
 }
 
 /// One panic file: what it is called, and a press that shows it in the file manager.
