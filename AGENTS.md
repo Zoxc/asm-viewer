@@ -355,8 +355,13 @@ command.
   the hooks a list opens with and the rect it closes around its rows.
 - `src/ui/assembly.rs` — the assembly side of a document: the rows, the gutter, the pane.
 - `src/ui/symbol_bar.rs` — the bar over that pane naming what it is drawing, and its section.
-- `src/ui/source_view.rs` — the source side of one, the bar over it, and which file it is
-  showing: the one fact the reader, the gutter's marks and the links are each asked about.
+- `src/ui/source_view.rs` — the source side of one: the list of rows, which file it is
+  showing, and the pane that decides. Also `ShowingFile`, that file as the one fact the
+  reader, the gutter's marks and the links are each asked about.
+- `src/ui/source_row.rs` — one row of that list: the line as it is drawn, the names the
+  language server placed on it, and what a press, a menu or the F12 family asks about one.
+- `src/ui/source_bar.rs` — the bar over that pane naming the file, and what it says over a
+  file the binary was not built from.
 - `src/ui/split.rs` — one document drawn: which side leads, and which panes a tab has, with
   the control on the leading pane's bar that puts the other away. Also `Split`, what each of
   the app's three resizable splits is: the number it holds across the container's unmount, the

@@ -85,9 +85,9 @@ always did: an object with no line info, a prologue DWARF places on no line, a s
 (whose subject is a **file** the reader opened, and files open at the top), and a companion that is
 not the symbol's own file, the last being a landing's doing, which comes with a reveal of its own.
 
-**The Source pane has a bar naming the file it is showing**, a subject and a companion alike: a
-tab's chip has room for the last part of a path and nothing else in the window says which file is
-up. Pressing a **companion's** name opens that file as a source-driven tab, as pressing a source
+**The Source pane has a bar naming the file it is showing**, a subject and a companion alike
+(`src/ui/source_bar.rs`, the opposite number of the Assembly pane's own bar): a tab's chip has room
+for the last part of a path and nothing else in the window says which file is up. Pressing a **companion's** name opens that file as a source-driven tab, as pressing a source
 file's row in the Files view does (`agents/Sidebar.md`); until the source search lands those are the
 two doors into one. A **subject** is that tab already, so its name is a name and nothing to press.
 **The pane a tab is not driven from opens as a tab of its own, from a row's menu.** The second
@@ -373,8 +373,8 @@ before it ended, where a `Vec<(Color, Range<usize>)>` a line was 24 bytes a piec
 of its own. `Highlighted::pieces` is what puts a row back together from them, and the `u8` cannot
 run out on a theme: past 256 colours a piece keeps the last one taken (`Cutting::colour`).
 
-Measured over `source_view.rs`, 1350 lines and 60 KB, in a debug build: 13.5 allocations a row and
-0.77 ms a render when a row cut its own line, 6.5 and 0.10 ms once it did not. Cutting the file
+Measured over a 1350-line, 60 KB file of this repo's own Rust, in a debug build: 13.5 allocations a
+row and 0.77 ms a render when a row cut its own line, 6.5 and 0.10 ms once it did not. Cutting the file
 costs 30 ms on top of a 180 ms parse. What it holds is 127 KB -- 59 KB of text, the indentation as
 the spaces a row draws; 36 KB for the file's 7221 pieces; and 24 bytes a line for the rest -- where
 a `Vec` of spans a line came to some 290 KB, 370 KB of it allocated, a `Vec` growing in powers of

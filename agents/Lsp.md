@@ -291,7 +291,7 @@ not `Lines`', since the drawing below has to convert whatever the server chose.
 
 The drawing side converts the other way, since skia is what wants units: the source pane
 counts a link's columns into the row it draws and a press back into a byte offset
-(`src/ui/source_view.rs`), and both halves of an answer count theirs on the worker --
+(`src/ui/source_row.rs`), and both halves of an answer count theirs on the worker --
 `references::of` for the Locations panel's rows and `Arrival::of` for the caret a followed
 one plants. Both count them with `Lines::drawn`, through **the same `Lines` the answer's
 own columns came back on the wire through**: `language_work` builds one per answer and

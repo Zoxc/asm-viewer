@@ -410,7 +410,7 @@ leaves this list when it is. That is a move made on request, like everything els
   handshake asks for `positionEncoding: utf-8` and converts where a server keeps UTF-16, so
   every column crossing `src/lsp.rs` is a byte offset into its line; the four converters that
   each had their own arithmetic — `search::units`, `references::bytes_of`,
-  `cargo::Span::offset_in`, `source_view::name_at` — are one pair of functions in
+  `cargo::Span::offset_in`, `source_row::name_at` — are one pair of functions in
   `src/chars.rs`.
 
 - [ ] Count a drawn row's columns in bytes as well, which needs skia to. `src/chars.rs`
