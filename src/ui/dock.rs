@@ -149,16 +149,11 @@ impl Panel {
 /// Bring `panel` to the front of whichever group holds it: what a panel that answers a
 /// question asked somewhere else does before it answers.
 ///
-/// Asked before it is written, as `raise_tab` asks [`Strip::would_raise`]: `State::write`
-/// notifies whether or not the value changed, and a dock write re-renders the docking
-/// area and every group in it. Every search and every locations question comes through
-/// here, and after the first the panel it names is already on top.
-pub(crate) fn raise_panel(mut dock: State<DockArea>, panel: Panel) {
-    // Bound in a statement of its own: the write below is to the state this read.
-    let raising = !dock.peek().is_active(panel);
-    if raising {
-        dock.write().show_panel(panel);
-    }
+/// Written only where [`DockArea::show_panel`] changed anything: a dock write re-renders
+/// the docking area and every group in it. Every search and every locations question comes
+/// through here, and after the first the panel it names is already on top.
+pub(crate) fn raise_panel(dock: State<DockArea>, panel: Panel) {
+    write_if(dock, |dock| dock.show_panel(panel));
 }
 
 /// Bring `panel` to the front **and put the keyboard in it**: what each of the four
@@ -334,7 +329,8 @@ impl DockArea {
         }
     }
 
-    /// Bring `panel` to the top of whichever group holds it, answering whether one does.
+    /// Bring `panel` to the top of whichever group holds it. Whether that changed anything:
+    /// false where no group holds it, or where it is already on top.
     pub(crate) fn show_panel(&mut self, panel: Panel) -> bool {
         let Some((panel_id, _)) = self.tree.find_tab(&panel) else {
             return false;
@@ -455,7 +451,7 @@ impl DockingModel for DockArea {
         let Some(group) = self.tree.panel_mut(&panel_id) else {
             return false;
         };
-        if !group.tabs.contains(&panel) {
+        if !group.tabs.contains(&panel) || group.active_tab_id == Some(panel) {
             return false;
         }
         group.active_tab_id = Some(panel);

@@ -260,9 +260,11 @@ impl Finds {
 
     /// Let go of every bar whose tab `keep` answers false for. What a closer owes
     /// ([`Places::forgetting`]): a bar holds the listing it is about, which is the file's
-    /// bytes or the symbol's.
-    pub(crate) fn forgetting(&mut self, keep: impl Fn(&Placing) -> bool) {
+    /// bytes or the symbol's. Whether any went.
+    pub(crate) fn forgetting(&mut self, keep: impl Fn(&Placing) -> bool) -> bool {
+        let before = self.bars.len();
         self.bars.retain(|(placing, _), _| keep(placing));
+        self.bars.len() != before
     }
 }
 

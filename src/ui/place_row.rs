@@ -74,18 +74,9 @@ impl Folding {
     /// Fold the file at `path` in the answer this row is part of, or unfold it.
     fn toggle(self, path: &Path) {
         match self {
-            Folding::Hits(mut searched) => {
-                searched.write().hits.toggle(path);
-            }
-            Folding::Places(mut located) => {
-                // Bound to a `let` of its own, so the guard the read hands back is gone
-                // before the write.
-                let mut next = located.peek().clone();
-                if next.fold(path) {
-                    located.set(next);
-                }
-            }
-        }
+            Folding::Hits(searched) => write_if(searched, |searched| searched.hits.toggle(path)),
+            Folding::Places(located) => write_if(located, |located| located.fold(path)),
+        };
     }
 }
 

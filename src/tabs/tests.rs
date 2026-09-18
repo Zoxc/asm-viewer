@@ -70,19 +70,19 @@ fn showing_an_open_tab_only_raises_it() {
     assert_eq!(strip.active(), Some(tabs[0]));
 }
 
-/// `would_raise` is what `raise_tab` asks before it writes (`src/ui/documents.rs`), and
-/// it says no twice over: for a tab that is not open, and for the one already on screen.
-/// A tab that is not open is not shown either.
+/// What `raise` answers is whether `raise_tab` writes (`src/ui/documents.rs`), and it
+/// says no twice over: for a tab that is not open, and for the one already on screen. A
+/// tab that is not open is not shown either.
 #[test]
-fn raising_says_when_it_would_change_what_is_on_screen() {
+fn raising_says_when_it_changed_what_is_on_screen() {
     let (mut strip, tabs, _docs) = strip(3);
     let page = Tab::Page(Page::Settings);
     strip.raise(tabs[0]);
-    assert!(!strip.would_raise(tabs[0]), "already on screen");
-    assert!(!strip.would_raise(page), "not open");
-    assert!(strip.would_raise(tabs[1]));
-    strip.raise(page);
+    assert!(!strip.raise(tabs[0]), "already on screen");
+    assert!(!strip.raise(page), "not open");
     assert_eq!(strip.active(), Some(tabs[0]));
+    assert!(strip.raise(tabs[1]));
+    assert_eq!(strip.active(), Some(tabs[1]));
 }
 
 /// `has_others` is what a chip's menu asks before it draws the close-others row

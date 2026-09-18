@@ -346,7 +346,7 @@ per caller, so the × on a chip and the tab menu's Close row press the same one.
 trail keys are the `navigate` the mouse's side buttons and the toolbar's two chevrons already
 call. The two pages are `show_page`, what the pages menu's row does, so one opens beside the
 tab on screen and one already open is raised -- and the page already on screen is left alone, the
-door asking that itself as `raise_tab` asks `Strip::would_raise`. And the server chord is `toggle_server`
+door asking that itself as `raise_tab` asks `Strip::raise`. And the server chord is `toggle_server`
 (`ui/language.rs`), pulled out of the control in the top bar so that a key and a button cannot
 come to mean different things. The four panel chords are `reach_panel` (`ui/dock.rs`), which
 raises a panel and asks for the keyboard to go into the box it registered -- one door for
@@ -743,8 +743,8 @@ why the list is **pruned**: an entry is dropped once its tab is no longer open, 
 hold a place per tab the session ever opened. The tab on screen is never one of those, so the
 reveal still finds what it looks for. The list is a `Positions<Tab, (f32, f32)>`
 (`src/positions.rs`), the same map the panes keep their places in, so the find, the upsert, the
-pruning and the ask before it are `at`, `remember`, `forgetting` and `would_forget`, and not a
-hand-rolled copy of them. It is provided at the root (`Chipped`) rather than kept in the bar: the
+pruning are `at`, `remember` and `forgetting`, which says whether it dropped anything so the
+effect writes only then, and not a hand-rolled copy of them. It is provided at the root (`Chipped`) rather than kept in the bar: the
 bar is mounted at most once, so it is the same one state either way, and at the root a test can
 read what the bar still holds a place for, which a component's own state gives nobody. The row's
 own measurement puts a shorter bar back inside its end, `scroll_by` clamping only as it moves, so a

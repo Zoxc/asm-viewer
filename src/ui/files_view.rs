@@ -23,8 +23,7 @@ struct EntryRow {
 /// Fold the directory at `path`, or read it: the one writer of the tree, for the press
 /// and for Left and Right alike.
 fn toggle_directory(tree: State<Option<FileTree>>, path: &Path) {
-    // `write_if`'s shape: a path that is not in the tree, or a file, changes nothing and
-    // wakes nothing.
+    // A path that is not in the tree, or a file, changes nothing and wakes nothing.
     write_if(tree, |tree| {
         tree.as_mut().is_some_and(|tree| tree.toggle(path))
     });

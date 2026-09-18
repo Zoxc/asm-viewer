@@ -163,19 +163,16 @@ pub(crate) fn open_document(
 /// move inside one is not a new place to have been.
 pub(crate) fn open_stop(
     open: Open,
-    mut visits: State<Visits>,
+    visits: State<Visits>,
     stop: Stop,
     reach: Reach,
 ) -> Option<DocId> {
-    let mut docs = open.docs;
+    let docs = open.docs;
     let target = stop.document.clone();
 
-    // Recorded whatever else happens, and only when it changes the record: `State::write`
-    // notifies whether or not the value changes, and re-opening the place at the top must
-    // not wake the History panel.
-    if visits.peek().would_touch(&target) {
-        visits.write().record(target.clone());
-    }
+    // Recorded whatever else happens, and written only when it changes the record:
+    // re-opening the place at the top must not wake the History panel.
+    write_if(visits, |visits| visits.record(target.clone()));
 
     // The tab on screen and the tab showing the target, the tab on screen preferred when
     // it is one of several: two tabs can show one place.
@@ -194,8 +191,8 @@ pub(crate) fn open_stop(
     let in_place = reach == Reach::InPlace && active.is_some();
     if let Some(id) = showing.filter(|_| !in_place) {
         moved_to(open, id, &stop);
-        if reach != Reach::Preview && temporal == Some(id) {
-            docs.write().promote(id);
+        if reach != Reach::Preview {
+            write_if(docs, |docs| docs.promote(id));
         }
         raise(open, id);
         return Some(id);
@@ -209,20 +206,20 @@ pub(crate) fn open_stop(
             // a different one. Otherwise nothing is pushed, and a write would wake every
             // header.
             let moved = match at.document != target {
-                true => docs.write().push(id, stop),
+                true => write_if(docs, |docs| docs.push(id, stop)),
                 false => moved_to(open, id, &stop),
             };
             // A link followed inside the temporal tab is the reader reading in it,
             // whether it left the document or moved within one.
             if moved {
-                docs.write().promote(id);
+                write_if(docs, |docs| docs.promote(id));
             }
             Some(id)
         }
         Reach::InPlace | Reach::NewTab => Some(open.open_tab(stop, false)),
         Reach::Preview => match temporal {
             Some(id) => {
-                docs.write().push(id, stop);
+                write_if(docs, |docs| docs.push(id, stop));
                 raise(open, id);
                 Some(id)
             }
@@ -241,15 +238,10 @@ pub(crate) fn raise(open: Open, id: DocId) {
 /// The same for any tab, a page included: what pressing a chip does, and what the bar's
 /// own menu does with the row that was picked.
 ///
-/// Asked before it is written: `State::write` notifies whether or not the value changes,
-/// so re-raising the tab already on screen must not reach for it. The question itself is
-/// [`Strip::would_raise`], the strip's own.
+/// Written only where [`Strip::raise`] says it changed anything, so re-raising the tab
+/// already on screen wakes nothing.
 pub(crate) fn raise_tab(open: Open, tab: Tab) {
-    let mut strip = open.strip;
-    let raising = strip.peek().would_raise(tab);
-    if raising {
-        strip.write().raise(tab);
-    }
+    write_if(open.strip, |strip| strip.raise(tab));
 }
 
 /// Show the tab a step along the bar lands on: the key's twin of pressing the chip
@@ -549,13 +541,7 @@ fn moved_to(open: Open, id: DocId, stop: &Stop) -> bool {
     if !stop.inside() {
         return false;
     }
-    // Bound before the write, as ever.
-    let current = open.docs.peek().current(id).cloned();
-    if current.as_ref() == Some(stop) {
-        return false;
-    }
-    let mut docs = open.docs;
-    docs.write().push(id, stop.clone())
+    write_if(open.docs, |docs| docs.push(id, stop.clone()))
 }
 
 /// Raise the open tab `id` on `at`: what a Locations row does for the source-driven tab

@@ -96,13 +96,9 @@ impl Docs {
     }
 
     /// Put `stop` onto the trail of `id`. Whether it went: false for a closed tab, which
-    /// has no trail to go on.
+    /// has no trail to go on, and for the place the tab is at ([`History::push`]).
     pub fn push(&mut self, id: DocId, stop: Stop) -> bool {
-        let Some(trail) = self.open.get_mut(&id) else {
-            return false;
-        };
-        trail.push(stop);
-        true
+        self.open.get_mut(&id).is_some_and(|trail| trail.push(stop))
     }
 
     /// The tab showing `document` now, or `None` when no tab does. The lowest id where
@@ -139,11 +135,13 @@ impl Docs {
     }
 
     /// Make `id` a tab that stays, if it was the temporal one; nothing else changes, the
-    /// tab keeping its slot and its trail.
-    pub fn promote(&mut self, id: DocId) {
-        if self.temporal == Some(id) {
+    /// tab keeping its slot and its trail. Whether it was.
+    pub fn promote(&mut self, id: DocId) -> bool {
+        let temporal = self.temporal == Some(id);
+        if temporal {
             self.temporal = None;
         }
+        temporal
     }
 
     /// Take every entry `keep` rejects off every trail, each cursor carried the way

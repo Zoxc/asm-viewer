@@ -240,30 +240,26 @@ impl History {
         self.entries.get(self.cursor)
     }
 
-    /// Whether [`History::push`] would record `stop`. False for the entry already under
-    /// the cursor, which is what stops back/forward from re-recording where they have
-    /// just moved it. Not [`Order::would_touch`], which asks about the front: the cursor
-    /// is where the reader is, and the front is only where they were last.
-    pub fn would_push(&self, stop: &Stop) -> bool {
-        self.current() != Some(stop)
-    }
-
-    /// Record `stop` as the newest entry and put the cursor on it. A no-op when
-    /// [`History::would_push`] is false.
+    /// Record `stop` as the newest entry and put the cursor on it, and say whether it
+    /// was recorded. Not for the entry already under the cursor, which is what stops
+    /// back/forward from re-recording where they have just moved it. Not
+    /// [`Order::touch`]'s test, which asks about the front: the cursor is where the reader
+    /// is, and the front is only where they were last.
     ///
     /// Anything in front of the cursor is abandoned first, so the cursor's own entry is
     /// the newest before `stop` goes in front of it and the cursor is `0` however the
     /// list was arranged. An equal entry still behind it is bumped rather than
     /// duplicated, and the cap then drops the oldest.
-    pub fn push(&mut self, stop: impl Into<Stop>) {
+    pub fn push(&mut self, stop: impl Into<Stop>) -> bool {
         let stop = stop.into();
-        if !self.would_push(&stop) {
-            return;
+        if self.current() == Some(&stop) {
+            return false;
         }
 
         self.entries.drop_newer_than(self.cursor);
         self.entries.touch_within(stop, MAX_ENTRIES);
         self.cursor = 0;
+        true
     }
 
     /// The index of the entry the cursor is on, or `None` before anything has been

@@ -63,23 +63,16 @@ impl<T: Clone + PartialEq, V: Clone + PartialEq> Positions<T, V> {
         self.at.iter().map(|(open, _)| open)
     }
 
-    /// Whether [`forgetting`](Positions::forgetting) would drop anything, asked before
-    /// the write: a `State::write` re-renders every reader whether or not it changed the
-    /// map. The half of a pair the other models here all have -- `Order::would_touch`,
-    /// `History::would_push`, `Strip::would_raise` -- so a caller writes its predicate
-    /// once and hands it to both.
-    pub fn would_forget(&self, keep: impl Fn(&T) -> bool) -> bool {
-        self.at.iter().any(|(open, _)| !keep(open))
-    }
-
     /// Forget every position `keep` answers false for: a closing tab's, or a closing
-    /// binary's.
+    /// binary's. Whether any went, so a caller holding the state writes only then.
     ///
     /// Not an optimisation: a [`crate::document::Document`] that is a place in a binary
     /// holds the `Arc<Object>` it points into, so a position kept for a closed tab would
     /// hold that binary's bytes for as long as the app ran.
-    pub fn forgetting(&mut self, keep: impl Fn(&T) -> bool) {
+    pub fn forgetting(&mut self, keep: impl Fn(&T) -> bool) -> bool {
+        let before = self.at.len();
         self.at.retain(|(open, _)| keep(open));
+        self.at.len() != before
     }
 
     /// The same, asked of the value: for a map where it is the value and not the key that
@@ -159,10 +152,11 @@ impl Driven {
     /// its own entries and a closing binary with the entries it takes off the surviving
     /// tabs' trails. For the line, consistency and not [`Positions::forgetting`]'s reason
     /// -- a [`crate::document::Document::Source`] key holds no `Arc<Object>`; for the
-    /// choice, that reason.
-    pub fn forgetting(&mut self, keep: impl Fn(&Entry) -> bool) {
-        self.from.forgetting(&keep);
-        self.chosen.forgetting(&keep);
+    /// choice, that reason. Whether anything went.
+    pub fn forgetting(&mut self, keep: impl Fn(&Entry) -> bool) -> bool {
+        let from = self.from.forgetting(&keep);
+        let chosen = self.chosen.forgetting(&keep);
+        from || chosen
     }
 
     /// Let go of every choice into the file at `path`, because it is closing: a

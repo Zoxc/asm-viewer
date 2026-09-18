@@ -166,24 +166,16 @@ impl Strip {
             .map_or(self.tabs.len(), |index| index + 1)
     }
 
-    /// Whether raising `tab` would change what is on screen: it is open, and it is not
-    /// the tab already showing.
-    ///
-    /// The question a caller asks before it writes, a `State::write` notifying whether
-    /// or not the value changed (`raise_tab`, `src/ui/documents.rs`).
-    pub fn would_raise(&self, tab: Tab) -> bool {
-        self.contains(tab) && self.active != Some(tab)
-    }
-
-    /// Make an open tab the one on screen. A tab that is not open is not shown: the tab
-    /// on screen is one of the open ones.
-    ///
-    /// This writes for the tab already showing too. Waking nothing for that one is
-    /// [`Strip::would_raise`], asked before the write by the caller holding the state.
-    pub fn raise(&mut self, tab: Tab) {
-        if self.contains(tab) {
+    /// Make an open tab the one on screen, and say whether that changed what is on
+    /// screen. A tab that is not open is not shown: the tab on screen is one of the open
+    /// ones. Nor is the tab already showing raised again, so a caller holding the state
+    /// writes only where this says so (`raise_tab`, `src/ui/documents.rs`).
+    pub fn raise(&mut self, tab: Tab) -> bool {
+        let raising = self.contains(tab) && self.active != Some(tab);
+        if raising {
             self.active = Some(tab);
         }
+        raising
     }
 
     /// The tab a step along the bar lands on, **wrapping at both ends**: after the last
@@ -192,7 +184,7 @@ impl Strip {
     ///
     /// Which tab and not the raise itself, so this stays the bar's rule and nothing
     /// else: what is on screen is changed through `raise_tab` (`src/ui/documents.rs`),
-    /// which asks [`Strip::would_raise`] before it writes.
+    /// which writes only where [`Strip::raise`] changed anything.
     pub fn stepped(&self, along: Along) -> Option<Tab> {
         let active = self.active?;
         let at = self.tabs.iter().position(|open| *open == active)?;

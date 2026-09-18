@@ -980,9 +980,8 @@ pub(crate) fn use_scratchpad_with(
         move |job| Some(work(job)),
         // Each answer is the state's to take, and what a taken one leaves the task to do
         // -- a pad to open, a buffer to make, a directory whose source is now stale -- is
-        // what the method answers with. The writes are through the guard and not by
-        // [`write_if`]: what is held is every pad's own source, output and program, and a
-        // clone of all of it per answer would be paid for a keystroke at a time.
+        // what the method answers with. So the writes are through the guard and not by
+        // [`write_if`], which wants to be told whether anything changed.
         move |answer, requests| match answer {
             PadAnswer::Listed(listing) => {
                 // Bound out of a statement of its own, so the guard is gone before the

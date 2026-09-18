@@ -317,9 +317,9 @@ returns the moment the search is no longer the one being asked for. Returning dr
 the walk's next send fails, and it breaks where it stands. That one rule covers a second search, a
 project switched away from (`clear_project` empties the state), and the app closing. Whether a batch
 is this search's is `Searched::take`'s to say, and it says so **before taking any of it** and not at
-the end of the loop, or the old walk's last batch lands under the new question. It is the one taker
-that writes through the guard rather than through `write_if`: what is held is up to `MAX_HITS`
-hits, and a clone per batch would copy every one of them to add the few that just arrived. `clear_project` **bumps** the id rather than setting it back to nothing: a walk of
+the end of the loop, or the old walk's last batch lands under the new question. The batch goes in
+through `write_if`, which edits the hits where they are: what is held is up to `MAX_HITS` hits, and
+the batch adds only the few that just arrived. `clear_project` **bumps** the id rather than setting it back to nothing: a walk of
 the project being left is parked in its receiver and learns nothing until its next batch, so a
 counter that restarted at zero would hand the new project the very numbers that walk still answers
 to, and its hits -- files outside the new directory -- would land under the new question. `Loads`
@@ -415,9 +415,9 @@ hand on the mouse; a chord for a panel already on top raises nothing and still f
 take the focus itself, an inactive dock tab being unmounted -- the box has no node until the raise
 has been drawn -- so it leaves an ask behind it.
 
-**A raise that would change nothing is not written.** `raise_panel` asks `DockArea::is_active`
-first, as `raise_tab` asks `Strip::would_raise`: a write notifies whether or not the value changed,
-and a dock write re-renders the docking area and every group in it. That is not the chords, which
+**A raise that would change nothing is not written.** `raise_panel` writes through `write_if`, and
+`DockArea::show_panel` says false for a panel already on top, as `Strip::raise` does for
+`raise_tab`: a dock write re-renders the docking area and every group in it. That is not the chords, which
 a reader presses by hand, but the questions -- every Enter in the Search box and every Alt+F12 goes
 through `raise_panel`, and after the first the panel it names is already on top.
 **The press on a header goes through the same guard**, which meant taking the press off freya:

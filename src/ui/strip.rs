@@ -453,12 +453,7 @@ impl Component for TabHeader {
                 if !EventsCombos::pressed(mouse.global_location).is_double() {
                     return;
                 }
-                // Peeked in a statement of its own, so the guard is gone before the write.
-                let temporal = open.docs.peek().temporal() == Some(id);
-                if temporal {
-                    let mut docs = open.docs;
-                    docs.write().promote(id);
-                }
+                write_if(open.docs, |docs| docs.promote(id));
             }),
         )
     }
@@ -514,12 +509,9 @@ impl Component for TabBar {
         // the rest of the session. It is dropped once its tab is no longer open, which
         // costs the reveal nothing: the tab on screen is one of these.
         use_side_effect_with_deps(&tabs, move |tabs: &Vec<Tab>| {
-            let mut places = bar.places;
-            let keep = |tab: &Tab| tabs.contains(tab);
-            let closed = places.peek().would_forget(&keep);
-            if closed {
-                places.write().forgetting(&keep);
-            }
+            write_if(bar.places, |places| {
+                places.forgetting(|tab| tabs.contains(tab))
+            });
         });
 
         let chips: Vec<Element> = tabs

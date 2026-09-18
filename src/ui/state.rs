@@ -304,8 +304,9 @@ impl Places {
     }
 
     /// Let go of everything the tabs in `closed` kept -- their entries and their find
-    /// bars -- and of every entry `also` answers false for, in all six maps and under one
-    /// write each. What every closer ends with, and the whole of what it owes.
+    /// bars -- and of every entry `also` answers false for, in all six maps: one write
+    /// each, and only to a map that held something to let go of. What every closer ends
+    /// with, and the whole of what it owes.
     ///
     /// The list and not a predicate, because it is the answer [`Open::close_tabs`] gave:
     /// what a closer forgets is what it closed, and the two cannot drift. `also` is the
@@ -314,26 +315,26 @@ impl Places {
     pub(crate) fn forgetting(self, closed: &[DocId], also: impl Fn(&Entry) -> bool) {
         let keep = |entry: &Entry| !closed.contains(&entry.0) && also(entry);
         let Places {
-            mut asm_at,
-            mut src_at,
-            mut code_at,
-            mut marks_at,
-            mut driven,
-            mut finds,
+            asm_at,
+            src_at,
+            code_at,
+            marks_at,
+            driven,
+            finds,
         } = self;
         // The scratchpad's listing is no tab and closes with the app, so it is kept
         // whatever a closer says about the tabs.
-        finds.write().forgetting(|placing| match placing {
-            Placing::Tab(tab) => !closed.contains(tab),
-            Placing::Pad => true,
+        write_if(finds, |finds| {
+            finds.forgetting(|placing| match placing {
+                Placing::Tab(tab) => !closed.contains(tab),
+                Placing::Pad => true,
+            })
         });
-        asm_at.write().forgetting(&keep);
-        src_at.write().forgetting(&keep);
-        code_at.write().forgetting(&keep);
-        marks_at.write().forgetting(&keep);
-        // One guard rather than one write per tab: a write notifies whether or not it
-        // changed anything, and a dozen tabs closing is one change.
-        driven.write().forgetting(&keep);
+        write_if(asm_at, |at| at.forgetting(&keep));
+        write_if(src_at, |at| at.forgetting(&keep));
+        write_if(code_at, |at| at.forgetting(&keep));
+        write_if(marks_at, |at| at.forgetting(&keep));
+        write_if(driven, |driven| driven.forgetting(&keep));
     }
 }
 

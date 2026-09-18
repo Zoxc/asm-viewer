@@ -107,8 +107,7 @@ fn navigating_back_does_not_re_record_where_it_landed() {
     history.push(b);
 
     let landed = history.back().expect("an older entry");
-    assert!(!history.would_push(&landed));
-    history.push(landed);
+    assert!(!history.push(landed));
 
     assert!(history.current() == Some(&a));
     assert!(history.ahead().is_some());
@@ -200,7 +199,7 @@ fn restoring_collapses_duplicates_onto_the_newest_occurrence() {
     assert!(history.current() == Some(&a));
     assert!(history.cursor() == Some(0));
     assert!(history.ahead().is_none());
-    assert!(!history.would_push(&a));
+    assert!(!history.clone().push(a.clone()));
 
     // Every occurrence collapses, not just the first pair.
     let history = History::restored(vec![a.clone(), b.clone(), a.clone(), b.clone()], 3);
@@ -310,7 +309,7 @@ fn restoring_keeps_the_newest_entries_and_carries_the_cursor() {
     assert!(history.current() == Some(&entries[cursor]));
     assert!(history.cursor() == Some(cursor));
     assert!(history.ahead().is_some());
-    assert!(!history.would_push(&entries[cursor]));
+    assert!(!history.clone().push(entries[cursor].clone()));
 
     // A cursor so deep in the back stack that the trim drops its entry: it lands on the
     // oldest survivor rather than out of range.

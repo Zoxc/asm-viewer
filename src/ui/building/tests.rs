@@ -70,8 +70,8 @@ fn a_build_that_produced_nothing_leaves_the_previous_list_standing() {
 /// **A clone of the state shares the build rather than copying it.** The cargo section
 /// clones the whole of `Builds` to draw it, and a keystroke in any of the pane's boxes is a
 /// redraw: a build that said two hundred things would copy every diagnostic and the text
-/// the compiler rendered for it, hundreds of kilobytes, per character typed. The worker's
-/// hooks clone it too, to write two fields ([`write_if`]).
+/// the compiler rendered for it, hundreds of kilobytes, per character typed. Taking a
+/// finished build and restoring a session clone it too, to write a field or two.
 ///
 /// The sharing itself is what is asserted: the diagnostics a clone reads are the same
 /// allocation, and so is the set of files it may open.

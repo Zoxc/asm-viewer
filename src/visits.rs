@@ -27,10 +27,10 @@ impl Visits {
     }
 
     /// Put `document` at the top, moving it there if it is already recorded, and enforce
-    /// the cap. [`Order::would_touch`] says in advance whether it would change anything,
-    /// so a caller can skip a write that would wake the panel for nothing.
-    pub fn record(&mut self, document: Document) {
-        self.touch_within(document, MAX_VISITS);
+    /// the cap. Whether anything changed, so a caller can skip a write that would wake
+    /// the panel for nothing.
+    pub fn record(&mut self, document: Document) -> bool {
+        self.touch_within(document, MAX_VISITS)
     }
 }
 

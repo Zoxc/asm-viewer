@@ -102,17 +102,11 @@ impl<T: PartialEq> Order<T> {
         order
     }
 
-    /// Whether [`Order::touch`] would change anything: false for the entry already at the
-    /// front, so a caller can ask before making a write nothing would come of.
-    pub fn would_touch(&self, entry: &T) -> bool {
-        self.first() != Some(entry)
-    }
-
     /// Put `entry` at the front, moving it there if it is already in the list, and say
-    /// whether that changed anything.
+    /// whether that changed anything: false for the entry already at the front.
     pub fn touch(&mut self, entry: impl Into<T>) -> bool {
         let entry = entry.into();
-        if !self.would_touch(&entry) {
+        if self.first() == Some(&entry) {
             return false;
         }
         self.order.retain(|other| *other != entry);

@@ -41,17 +41,17 @@ the eleven worker states holds what was asked and what was answered, and the rul
 the two are that state's own methods -- `Analyzed::take`, `Located::take`, `Coded::take`,
 `Reading::take`, `Linked::answer`, `Follow::answer`, `Searched::take`, `Finder::take`, the seven
 `Pads` answers, `Builds::finished`, and `Language`'s transitions -- each answering whether it took
-anything. `write_if` (`src/ui/worker.rs`) is what the hooks are left with: peek into a binding of
-its own, since a read guard held across a write panics; judge; set only where the judge says so,
-since a write notifies whether or not it changed anything. So "an answer already in flight when the
-file closed is not taken" is a unit test of five lines rather than an app mounted under
-`freya-testing` driving a fake worker. Three states write through the guard instead, and for one
-reason: what `Searched`, `Pads` and `Runs` hold *is* the answer -- ten thousand hits, every pad's
-source, every pad's output -- and `write_if`'s clone per batch would copy all of it to add the few
-lines that just arrived. `Searched` is not `Clone` at all, which puts that in the type: nothing can copy the
-hits, `write_if` and the panel's render included. The rule is still the type's; only the writing differs. `Builds` would be a fourth, and
-answers differently: the build it holds and the files that build names are behind `Arc`s, so a
-clone is a few pointers and the plain shape holds.
+anything. `write_if` (`src/ui/worker.rs`) is what the hooks are left with: freya's own
+`Writable::write_if`, which hands the judge the state in place under a guard that notifies nobody,
+and notifies only where the judge says it changed something. So "an answer already in flight when
+the file closed is not taken" is a unit test of five lines rather than an app mounted under
+`freya-testing` driving a fake worker. The state is judged where it is and never copied: a copy
+per batch would copy all ten thousand of a search's hits to add the few that just arrived. The cost
+is a rule every judge keeps: one that answers `false` leaves the state as it found it, since nothing
+throws its edits away. `Pads` and `Runs` write through the guard for another reason: their methods
+answer with what the task is to do next, not with whether anything changed. `Builds::finished`
+answers the same way, and clones the state to take it: the build it holds and the files that build
+names are behind `Arc`s, so the clone is a few pointers.
 
 **A state is asked through one effect, and that effect is written once** (`use_asking`,
 `src/ui/worker.rs`). Every worker is fed the same way: a view writes what it wants into a state --

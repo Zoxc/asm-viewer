@@ -157,20 +157,13 @@ pub(crate) fn use_search_with(
 /// large tree answers in thousands. Whether a batch is this search's is
 /// [`Searched::take`]'s to say, and it says so before taking any of it, or the last batch
 /// of the old search would land in the new one's rows.
-///
-/// **Written through the guard and not by [`write_if`]**: what is held is the answer
-/// itself, up to [`crate::search::MAX_HITS`] of it, and a clone per batch would copy every
-/// hit found so far to add the few that have just arrived. The one batch that costs a
-/// render for nothing is the first of a search the reader has replaced, and the return
-/// below is the last thing this task does.
 async fn take_hits(
-    mut searched: State<Searched>,
+    searched: State<Searched>,
     id: u64,
     events: async_channel::Receiver<SearchEvent>,
 ) {
     while let Some(batch) = next_batch(&events).await {
-        let mut state = searched.write();
-        if !state.take(id, batch) {
+        if !write_if(searched, |state| state.take(id, batch)) {
             // Returning drops the receiver, which is what stops the walk behind it.
             return;
         }
