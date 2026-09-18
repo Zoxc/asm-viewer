@@ -1313,7 +1313,7 @@ and the motion makes one of none. Nothing edits: no Backspace, no typing.
 **Ctrl+F over a code pane is the pane's own, and the bar it opens is the pane's own too**
 (`src/ui/find_bar.rs`). The chord already meant "the filter box over this list" in the sidebar and
 was answered there on the *rows* node rather than at the root, deliberately leaving it free inside a
-code pane (`filter_bar.rs`); this takes it up. `find_chord` wraps `on_listing_key` rather than being
+code pane (`filter_bar.rs`); this takes it up. `use_find_chord` wraps `on_listing_key` rather than being
 folded into it, so a listing's keys stay the whole of what `marks.rs` says they are, and
 `use_listing_keys` is the one place the wrap is made. **The seed is the run picked out within one
 line**, taken through `ListingText::text`, which is the closure a copy of characters is taken

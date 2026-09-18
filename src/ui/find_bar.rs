@@ -791,14 +791,17 @@ impl Component for StepButton {
 /// A step is the same one [`FindBar`]'s Enter asks for -- the bar owns it, and this only
 /// puts the ask in -- and it is [`edit_find`] that makes a pane with no bar do nothing at
 /// all: there is no entry to write the ask into.
-pub(crate) fn find_chord(
+///
+/// A hook, reaching for [`Looking`], so [`use_listing_keys`] calls it once and on every
+/// render.
+pub(crate) fn use_find_chord(
     at: Where,
     marked: State<Marks>,
     listing: Option<Searchable>,
     text: Rc<dyn Fn(usize) -> Line>,
     mut keys: impl FnMut(Event<KeyboardEventData>) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
-    let finds = try_consume_context::<Looking>().map(|looking| looking.0);
+    let finds = use_try_consume::<Looking>().map(|looking| looking.0);
     move |e: Event<KeyboardEventData>| {
         let Some(finds) = finds else {
             return keys(e);

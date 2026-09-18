@@ -560,7 +560,8 @@ pub(crate) struct ListingText {
 /// `InstructionList`, `SectionRows`): the find bar's chords over the listing's own keys, the
 /// step the bar asked for made in the rows, and one [`caret_reveal`] for both.
 ///
-/// A hook, [`use_find_steps`] being one, so a list calls it once and on every render.
+/// A hook, [`use_find_steps`] and [`use_find_chord`] being hooks, so a list calls it once and
+/// on every render.
 ///
 /// `file` is what this listing's rows are rows of -- the source list's own file, and `None`
 /// for the two assembly listings, where a run's file is the row's own. `searchable` is the
@@ -585,7 +586,7 @@ pub(crate) fn use_listing_keys(
     // far to scroll to reach one.
     use_find_steps(at, marked, file.clone(), reveal);
     let seed = rows.text.clone();
-    find_chord(
+    use_find_chord(
         at,
         marked,
         searchable,
