@@ -205,7 +205,7 @@ fn main_menu(
         .zip(store.as_ref())
         .is_some_and(|(file, store)| project::unsaved(store, file));
 
-    let mut menu = Menu::new()
+    Menu::new()
         .child(menu_row(
             "Open a project...",
             Some(shortcuts::key!(OpenProject)),
@@ -224,51 +224,49 @@ fn main_menu(
             None,
             close,
             move || ask_for_a_binary(states),
-        ));
-
-    if open.is_some() && !unsaved {
-        menu = menu.child(menu_row("Save as...", None, close, move || {
-            ask_where_to_save(states, project::Put::Copy)
-        }));
-    }
-    if open.is_some() {
-        menu = menu.child(menu_row("Close project", None, close, move || {
-            close_project(states)
-        }));
-    }
-
-    menu.child(menu_rule()).children(
-        pages
-            .iter()
-            .copied()
-            // A page that is a reading of a project has nothing to draw with none open
-            // ([`PageRow::needs_project`]).
-            .filter(|(page, _)| !page_row(*page).needs_project || open.is_some())
-            .map(|(page, open_already)| {
-                let opened = states.open;
-                let mut close = close;
-                let row = page_row(page);
-                MenuItem::new()
-                    .selected(open_already)
-                    .on_press(move |_| {
-                        // The page door and not a write of the strip: a page opens beside
-                        // the tab on screen, the way anything else the reader opens does,
-                        // and one already showing is left alone (`show_page`).
-                        show_page(opened, page);
-                        close.set(false);
-                    })
-                    .child(
-                        rect()
-                            .horizontal()
-                            .cross_align(Alignment::Center)
-                            .spacing(6.0)
-                            .child((row.icon)())
-                            .child(menu_label(page.title(), row.key)),
-                    )
-                    .into_element()
+        ))
+        .maybe_child((open.is_some() && !unsaved).then(|| {
+            menu_row("Save as...", None, close, move || {
+                ask_where_to_save(states, project::Put::Copy)
             })
-            .collect::<Vec<Element>>(),
-    )
+        }))
+        .maybe_child(
+            open.is_some()
+                .then(|| menu_row("Close project", None, close, move || close_project(states))),
+        )
+        .child(menu_rule())
+        .children(
+            pages
+                .iter()
+                .copied()
+                // A page that is a reading of a project has nothing to draw with none open
+                // ([`PageRow::needs_project`]).
+                .filter(|(page, _)| !page_row(*page).needs_project || open.is_some())
+                .map(|(page, open_already)| {
+                    let opened = states.open;
+                    let mut close = close;
+                    let row = page_row(page);
+                    MenuItem::new()
+                        .selected(open_already)
+                        .on_press(move |_| {
+                            // The page door and not a write of the strip: a page opens beside
+                            // the tab on screen, the way anything else the reader opens does,
+                            // and one already showing is left alone (`show_page`).
+                            show_page(opened, page);
+                            close.set(false);
+                        })
+                        .child(
+                            rect()
+                                .horizontal()
+                                .cross_align(Alignment::Center)
+                                .spacing(6.0)
+                                .child((row.icon)())
+                                .child(menu_label(page.title(), row.key)),
+                        )
+                        .into_element()
+                })
+                .collect::<Vec<Element>>(),
+        )
 }
 
 /// The projects there have been, under one row of the menu. **Keyed by how many there
