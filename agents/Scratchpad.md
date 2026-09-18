@@ -356,7 +356,7 @@ looking at the pad and nowhere else -- a build begun from a document tab shows n
 neither the button saying "Building..." nor the diagnostics it ends in being on screen. A build
 that comes back also **forgets what the panes have read of the pad's package**, which is written to the same
 `src/main.rs` every time and would otherwise be drawn as it was first read for the life of the
-process (`forget_source_under`, `agents/Panes.md`). The root it forgets under is the directory the
+process (`Sourced::forget_under`, `agents/Panes.md`). The root it forgets under is the directory the
 worker built in, carried back on the answer: the thread that wrote the files says where they are,
 rather than the UI opening a second `Store` and deriving the same path from it.
 

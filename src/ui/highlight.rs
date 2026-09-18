@@ -15,8 +15,8 @@
 //! which of its lines have code -- are then asked at once rather than one behind the other.
 //!
 //! **The answer is the cache and the state is the knock on the door.** [`HIGHLIGHTED`] is
-//! where a parse lands, misses included; [`Sourced`] carries the file the pane wants and a
-//! count of the answers, since nothing re-renders for a write to a `static`. That is what
+//! where a parse lands, misses included; [`Sourced`] carries a count of the changes to it,
+//! filed or forgotten, since nothing re-renders for a write to a `static`. That is what
 //! keeps a file the reader has already seen instant: the pane finds it in the cache as it
 //! renders, with no question asked and no frame lost.
 //!
@@ -302,10 +302,8 @@ pub(crate) fn highlighted() -> MutexGuard<'static, HashMap<PathBuf, Option<Arc<H
 /// was parsed from. Neither can go without the other, a parsed copy holding the old text
 /// in a `Rope` of its own.
 ///
-/// **A build calls this**, with the directory it built (`ui/building.rs`, `ui/pad.rs`).
-/// Both maps are keyed by path alone and neither is ever checked against the disk, so
-/// without it the first text read for a file is the text every later render draws --
-/// however often the file is rewritten, which a scratchpad's is on every build.
+/// **The caches alone**, which wakes nothing: a build goes through [`Sourced::forget_under`],
+/// which also has the panes read again. This is what a test cleans up with.
 ///
 /// The reading is a thread's, so a read that began before this and lands after it would
 /// put back what was just forgotten. `source::forgotten_since` is what says it happened,
@@ -348,16 +346,17 @@ pub(crate) struct Sourcing(pub(crate) State<Sourced>);
 /// What has been asked of the reader and what it has answered.
 ///
 /// There is no field holding the parse: it goes into the cache, where a file the reader
-/// has seen before is already sitting. Reading a `static` wakes nothing, so [`answers`]
-/// is the write that says to look in it again -- a count and not the file answered for,
+/// has seen before is already sitting. Reading a `static` wakes nothing, so [`changes`]
+/// is the write that says to look in it again -- a count and not the file changed,
 /// because one file read twice (forgotten by a build, read afresh) has to be as much of a
-/// change as two different ones.
+/// change as two different ones. **Every writer of the cache bumps it**: the reader's
+/// answer, and a build's forget.
 ///
-/// [`answers`]: Sourced::answers
+/// [`changes`]: Sourced::changes
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Sourced {
-    /// How many files the reader has answered for.
-    answers: u64,
+    /// How many times the cache has changed: a file filed, or files forgotten.
+    changes: u64,
 }
 
 impl Sourced {
@@ -383,9 +382,9 @@ impl Sourced {
     /// A miss answers for every appearance -- a file that is not there is not there in
     /// either theme -- so it is asked about once and not again.
     ///
-    /// It reads no field, and is a method for what reading the state does: an answer
-    /// bumps [`Sourced::answers`], which is what has the effect below look in the cache
-    /// again.
+    /// It reads no field, and is a method for what reading the state does: an answer or
+    /// a forget bumps [`Sourced::changes`], which is what has the effect below look in
+    /// the cache again.
     fn pending(&self, showing: &Arc<str>, appearance: Appearance) -> Option<SourceAsk> {
         let file = PathBuf::from(&**showing);
         let owed = match highlighted().get(&file) {
@@ -400,7 +399,22 @@ impl Sourced {
     /// effect below look in the cache again. The count and not the file, an answer
     /// carrying nothing.
     pub(crate) fn answered(&mut self) {
-        self.answers = self.answers.wrapping_add(1);
+        self.changes = self.changes.wrapping_add(1);
+    }
+
+    /// Forget every file under `root` ([`forget_source_under`]), and say so.
+    ///
+    /// **A build calls this**, with the directory it built (`ui/building.rs`, `ui/pad.rs`).
+    /// Both caches are keyed by path alone and neither is ever checked against the disk,
+    /// so without it the first text read for a file is the text every later render draws
+    /// -- however often the file is rewritten, which a scratchpad's is on every build.
+    ///
+    /// The bump is what has a pane showing one of those files ask for it again. Without
+    /// it the pane's next render finds nothing in the cache and draws nothing, with no
+    /// question asked.
+    pub(crate) fn forget_under(&mut self, root: &Path) {
+        forget_source_under(root);
+        self.changes = self.changes.wrapping_add(1);
     }
 }
 
@@ -485,7 +499,7 @@ pub(crate) fn use_source_reading_with(
 ///
 /// **The one asking effect that is not [`use_asking`]'s**, and the reason is the answer:
 /// a read that filed nothing -- the file forgotten under it, [`read`]'s bounded giving up
-/// -- leaves the same question owed, and what asks it again is the answer count going up.
+/// -- leaves the same question owed, and what asks it again is the change count going up.
 /// Read through a memo the question would be unchanged, nothing would wake, and the pane
 /// would wait on a file nobody is reading. [`Sourced::pending`] reading no field of the
 /// state is the same thing said at the method.

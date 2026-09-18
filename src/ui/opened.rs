@@ -38,7 +38,7 @@ impl Opened {
     /// answer about the text it was given until it is told otherwise, so a file rewritten
     /// under an open tab -- which a build does, and a scratchpad's on every build -- is a
     /// file the server goes on answering about as it was. The app re-reads such files in
-    /// one place (`forget_source_under`), and this is that place told.
+    /// one place (`Sourced::forget_under`), and this is that place told.
     pub(crate) fn reread(&mut self, root: &Path) -> bool {
         let stale: Vec<Arc<str>> = self
             .files

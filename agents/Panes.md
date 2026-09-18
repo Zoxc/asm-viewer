@@ -398,10 +398,13 @@ blank every source pane on a switch. That is also what makes a theme switch a fi
 **Neither that cache nor the text under it is ever checked against the disk**, both being keyed by
 path alone: a `stat` on the way in would be a `stat` per render, since the pane asks on every one.
 So a **build** forgets them. A finished build of the project's workspace or of a scratchpad drops
-every entry under the directory it built (`forget_source_under`, `ui/building.rs`, `ui/pad.rs`),
+every entry under the directory it built (`Sourced::forget_under`, `ui/building.rs`, `ui/pad.rs`),
 whatever the build came to -- a build that failed is as much a sign the files have changed as one
 that did not, and a build is the only word the app gets that they have. Nothing else re-reads a
-file for the life of the process. Since the reading is a thread's, a build can now finish *during*
+file for the life of the process. The forget bumps the same count the reader's answer does: the
+cache is a `static`, and emptying it wakes nothing, so a pane showing one of those files would
+render next to an empty entry and draw nothing, with no question asked, until the reader moved
+to another file. Since the reading is a thread's, a build can now finish *during*
 one: `source::forgotten` counts the forgets and names the last sixteen directories, and a read
 whose file was forgotten under it is made again rather than filed, so the pane cannot be left
 drawing the text from before the build. Until this, a rebuilt scratchpad drew the text from before the

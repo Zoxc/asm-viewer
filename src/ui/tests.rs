@@ -15131,7 +15131,8 @@ fn scratchpad_wiring() {
     let text = use_consume::<PadText>().0;
     let work = use_consume::<Working>().0;
     let mut asking = use_consume::<Asking>().0;
-    let jobs = use_scratchpad_with(pad, text, move |job| work(job));
+    let sourced = use_consume::<Sourcing>().0;
+    let jobs = use_scratchpad_with(pad, text, sourced, move |job| work(job));
     use_hook(move || asking.set(Some(jobs)));
 }
 
@@ -28733,7 +28734,8 @@ fn build_wiring() {
     let mut asking = use_consume::<BuildAsking>().0;
 
     let opened = use_consume::<Documents>().0;
-    let jobs = use_building_with(states.build, states, opened, move |job| work(job));
+    let sourced = use_consume::<Sourcing>().0;
+    let jobs = use_building_with(states.build, states, opened, sourced, move |job| work(job));
     use_hook(move || asking.set(Some(jobs)));
 }
 
@@ -29108,6 +29110,81 @@ fn a_finished_build_forgets_the_workspace_sources() {
         drawn(),
         "fn two() {}\n",
         "the build left the pane reading the text from before it"
+    );
+
+    forget_source_under(&directory);
+}
+
+/// The Source pane over a source-driven tab, with the build wiring beside it: what a
+/// finished build does to a pane that is showing a workspace file.
+fn built_source_harness() -> impl IntoElement {
+    build_wiring();
+    source_menu_harness()
+}
+
+/// A finished build forgets the workspace's sources, and a pane showing one of them reads
+/// it again. Forgetting empties a `static`, which wakes nothing on its own: without a write
+/// saying so, the pane's next render finds nothing to draw and stays blank.
+#[test]
+fn a_source_pane_reads_its_file_again_after_a_build() {
+    let directory = run_directory(line!());
+    let path = directory.join("main.rs");
+    std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
+    let file: Arc<str> = Arc::from(path.to_string_lossy());
+
+    let (mut test, (states, asking)) = TestingRunner::new(
+        built_source_harness,
+        (500., 400.).into(),
+        {
+            let file = file.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || {
+                    provide(SubjectFile(file.clone()));
+                    provide(BuildWorking(Arc::new(|job: BuildJob| match job.what {
+                        BuildWhat::Build => done(built(&[])),
+                        _ => BuildAnswer::Read(Manifest {
+                            path: None,
+                            profiles: None,
+                            debug_lines: true,
+                            edit_refused: None,
+                        }),
+                    })));
+                    let asking = provide(BuildAsking(State::create(None))).0;
+                    (test_roots().states, asking)
+                })
+            }
+        },
+        1.,
+    );
+    let mut proj = states.proj;
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    let drawn = |test: &TestingRunner| labels(test).concat();
+    assert!(drawn(&test).contains("one"), "{:?}", labels(&test));
+
+    std::fs::write(&path, b"fn two() {}\n").expect("writing the source file");
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    start_build(
+        states.build,
+        &jobs,
+        directory.to_path_buf(),
+        Profile::Release,
+    );
+    pump(&mut test, |_| !states.build.peek().building);
+    // Anything else that renders the pane again: a press on its first row.
+    press_at(&mut test, (100., 30.));
+    settle(&mut test);
+
+    assert!(
+        drawn(&test).contains("two"),
+        "the pane went blank after the build: {:?}",
+        labels(&test)
     );
 
     forget_source_under(&directory);

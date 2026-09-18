@@ -273,8 +273,9 @@ pub(crate) fn use_building(
     build: State<Builds>,
     states: ProjectStates,
     opened: State<Opened>,
+    sourced: State<Sourced>,
 ) -> BuildJobs {
-    use_building_with(build, states, opened, build_work)
+    use_building_with(build, states, opened, sourced, build_work)
 }
 
 /// The same, with the work an argument: the seam a test drives the whole mechanism
@@ -283,6 +284,7 @@ pub(crate) fn use_building_with(
     build: State<Builds>,
     states: ProjectStates,
     opened: State<Opened>,
+    sourced: State<Sourced>,
     work: impl Fn(BuildJob) -> BuildAnswer + Send + 'static,
 ) -> BuildJobs {
     let jobs = use_worker(
@@ -295,7 +297,9 @@ pub(crate) fn use_building_with(
             BuildAnswer::Read(said) => {
                 write_if(build, |next| next.read(said));
             }
-            BuildAnswer::Done { run, sources } => finished(build, states, opened, run, sources),
+            BuildAnswer::Done { run, sources } => {
+                finished(build, states, opened, sourced, run, sources)
+            }
         },
     );
 
@@ -316,6 +320,7 @@ fn finished(
     mut build: State<Builds>,
     states: ProjectStates,
     opened: State<Opened>,
+    mut sourced: State<Sourced>,
     run: cargo::Run,
     sources: HashSet<PathBuf>,
 ) {
@@ -324,7 +329,7 @@ fn finished(
     // files have changed just as one that did not.
     let directory = states.proj.peek().workspace();
     if let Some(directory) = directory {
-        forget_source_under(&directory);
+        sourced.write().forget_under(&directory);
         // And the language server is holding the text from before it, for every file of
         // the reader's the build rewrote: it answers about what it was given until it is
         // told otherwise (`src/ui/opened.rs`).

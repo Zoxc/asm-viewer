@@ -86,7 +86,7 @@ the mark for it are one call (`Analyzed::asked` answers with the question and re
 pass), the objects it is asked of have no equality for a memo to compare, and the send is followed
 by the `SLOW_ANALYSIS` timer. And the source reader's (`use_source_asking`), where the answer is
 what asks again: a read that filed nothing -- the file forgotten under it, `read`'s bounded giving
-up -- leaves the same question owed, and what wakes the effect is the answer count going up.
+up -- leaves the same question owed, and what wakes the effect is the change count going up.
 `Sourced::pending` reads no field of the state at all, so reading it *is* the subscription and
 nothing else; through a memo the question would be unchanged, nothing would wake, and the pane
 would wait on a file nobody is reading.

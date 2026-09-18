@@ -827,10 +827,10 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // Here and not in the overlay: the walk fills a list that is kept between opens, and
     // has to go on after the overlay it was started from is closed.
     use_finder_with(finder, |root, emit| crate::walk::walk_files(root, emit));
-    use_scratchpad_with(pad, pad_text, pad_work);
+    use_scratchpad_with(pad, pad_text, sourced, pad_work);
     // After the scratchpad and before the server: a build says which files it rewrote,
     // and the server holds the text it was given until it is told otherwise.
-    use_building(build, states, opened);
+    use_building(build, states, opened, sourced);
 
     let jobs = use_language(language, follow, located, linked, hover, proj);
     // What a name followed in the source opens, which the answer above fills in.

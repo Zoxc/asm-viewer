@@ -871,6 +871,7 @@ pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
 pub(crate) fn use_scratchpad_with(
     mut pad: State<Pads>,
     mut text: State<PadBuffers>,
+    mut sourced: State<Sourced>,
     work: impl Fn(PadJob) -> PadAnswer + Send + 'static,
 ) -> PadJobs {
     // What a running program is saying, on a channel of the app's own and taken by a task
@@ -990,7 +991,7 @@ pub(crate) fn use_scratchpad_with(
                 // last time, so what a pane has read of this pad is the version before
                 // it. The directory is the one the build ran in.
                 if let (true, Some(directory)) = (taken, directory) {
-                    forget_source_under(&directory);
+                    sourced.write().forget_under(&directory);
                 }
             }
             PadAnswer::Started {

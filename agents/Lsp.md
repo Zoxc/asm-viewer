@@ -408,7 +408,7 @@ and edits nothing, so a version that counted would only ever count re-reads.
 whole of it. The server answers about the text it was handed until told otherwise, so a
 build that rewrites a file under an open tab leaves it answering about the version before
 -- names at columns that have moved, a hover describing what a line used to say. The app
-re-reads in one place (`forget_source_under`, a build and a scratchpad's build), and that
+re-reads in one place (`Sourced::forget_under`, a build and a scratchpad's build), and that
 place marks the open files under the directory stale; the effect that keeps the server's
 set in step sends the pair. Closed and opened rather than a change notification, because
 the app has one version of a file to give and no history of edits to describe.
