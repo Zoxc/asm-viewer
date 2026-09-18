@@ -21,6 +21,7 @@
 //! has built one.
 
 use super::*;
+use crate::counter;
 use std::cell::Cell;
 
 /// How much of a dependency row the crate name takes against the version beside it.
@@ -84,21 +85,12 @@ struct DependencyRow {
 
 keyed!(DependencyRow);
 
-/// Test-only: how many dependency rows this thread has drawn.
-///
-/// A row that was drawn again draws exactly what it drew before, so the render is the one
-/// place the question can be answered from -- what `source::touches` does for a
-/// filesystem call. A thread-local because `freya-testing` runs the app on the test's own
-/// thread. Nothing resets it: a test takes the count before and after what it is about.
-#[cfg(test)]
-pub(crate) fn rows_drawn() -> usize {
-    ROWS_DRAWN.get()
-}
-
-#[cfg(test)]
-thread_local! {
-    static ROWS_DRAWN: Cell<usize> = const { Cell::new(0) };
-}
+counter!(
+    /// Test-only: how many dependency rows this thread has drawn. A row that was drawn
+    /// again draws exactly what it drew before, so the render is the one place the
+    /// question can be answered from.
+    pub(crate) fn rows_drawn() = ROWS_DRAWN
+);
 
 impl Component for DependencyRow {
     fn render(&self) -> impl IntoElement {

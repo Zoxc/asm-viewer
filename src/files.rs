@@ -24,6 +24,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::counter;
 use crate::shared::Shared;
 use crate::source;
 use crate::walk;
@@ -236,36 +237,19 @@ fn hold(name: &str, path: PathBuf) -> (Arc<str>, Arc<Path>) {
     (Arc::from(name), Arc::from(path))
 }
 
-/// Test-only: how many names and paths this thread has allocated for a tree.
-///
-/// [`reads`]'s shape and its reason: one entry is counted once, however many rows are built
-/// from it, so a test can settle that flattening the tree again allocated nothing. Nothing
-/// resets it -- a test takes the count before and after what it is about.
-#[cfg(test)]
-pub fn allocations() -> usize {
-    ALLOCATIONS.get()
-}
+counter!(
+    /// Test-only: how many names and paths this thread has allocated for a tree. One
+    /// entry is counted once, however many rows are built from it, so a test can settle
+    /// that flattening the tree again allocated nothing.
+    pub fn allocations() = ALLOCATIONS
+);
 
-#[cfg(test)]
-thread_local! {
-    static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Test-only: how many directories this thread has read into a tree.
-///
-/// Every level a tree holds comes from [`read_level`], so counting there counts them all.
-/// A thread-local because `freya-testing` runs the whole app on the test's own thread,
-/// which is what lets a headless test settle how often the view read the root. Nothing
-/// resets it -- a test takes the count before and after what it is about.
-#[cfg(test)]
-pub fn reads() -> usize {
-    READS.get()
-}
-
-#[cfg(test)]
-thread_local! {
-    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+counter!(
+    /// Test-only: how many directories this thread has read into a tree. Every level a
+    /// tree holds comes from [`read_level`], so counting there counts them all, which is
+    /// what settles how often the view read the root.
+    pub fn reads() = READS
+);
 
 #[cfg(test)]
 mod tests;

@@ -6,6 +6,7 @@
 //! to name one in this area at all.
 
 use super::*;
+use crate::counter;
 
 /// One of the sidebar's panels. A panel is a **persistent pane** rather than a slot the
 /// selection drives, so each renders itself off the state it is about and subscribes to it
@@ -529,21 +530,12 @@ impl Component for PanelHeader {
     }
 }
 
-/// Test-only: how many panel headers this thread has drawn.
-///
-/// A thread-local, `freya-testing` running the whole app on the test's own thread, which
-/// makes this the one way to settle which headers a raise redrew: a header that was
-/// skipped and one that came out the same are the same tree. Nothing resets it -- a test
-/// takes the count before and after what it is about.
-#[cfg(test)]
-pub(crate) fn headers_drawn() -> usize {
-    HEADERS.get()
-}
-
-#[cfg(test)]
-thread_local! {
-    static HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+counter!(
+    /// Test-only: how many panel headers this thread has drawn, which settles which
+    /// headers a raise redrew: a header that was skipped and one that came out the same
+    /// are the same tree.
+    pub(crate) fn headers_drawn() = HEADERS
+);
 
 /// The header freya asks for, filled in from what the dock says about that panel. The
 /// read subscribes the group, which the docking area over it has subscribed already: what

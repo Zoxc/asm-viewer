@@ -15,6 +15,8 @@ use std::{
     sync::{Arc, LazyLock, Mutex, MutexGuard},
 };
 
+use crate::counter;
+
 /// The largest file this will read into memory. A bound on what a bad path can cost, not a
 /// guess at what source looks like: a debug-info string that happens to name a disk image
 /// must not be loaded to find that out.
@@ -130,22 +132,13 @@ fn contents(path: &Path) -> Option<(Vec<u8>, String)> {
     Some((bytes, text))
 }
 
-/// Test-only: how many times this thread has asked the filesystem about a source file.
-///
-/// Every read and every gate above goes through [`showable`], so counting there counts
-/// them all. A thread-local because `freya-testing` runs the whole app on the test's own
-/// thread, which makes this the one thing that can settle what no other test here can:
-/// that a render or an effect made no filesystem call at all. Nothing resets it -- a test
-/// takes the count before and after what it is about.
-#[cfg(test)]
-pub fn touches() -> usize {
-    TOUCHES.get()
-}
-
-#[cfg(test)]
-thread_local! {
-    static TOUCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+counter!(
+    /// Test-only: how many times this thread has asked the filesystem about a source
+    /// file. Every read and every gate above goes through [`showable`], so counting
+    /// there counts them all -- which settles what no other test here can, that a render
+    /// or an effect made no filesystem call at all.
+    pub fn touches() = TOUCHES
+);
 
 /// Every path asked about so far and what came back, `None` included. A `static` so that
 /// two panes asking for one file get the same `Arc` rather than two copies of a megabyte.

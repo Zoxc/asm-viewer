@@ -12,6 +12,7 @@
 //! out, and before they have picked one out at all.
 
 use super::*;
+use crate::counter;
 
 /// Everything every row of the file shares: the text they are cut from, which file it is
 /// -- a row picked out is a line of a file, and a line number is not a place on its own --
@@ -1021,20 +1022,11 @@ fn paired_lines(
         .collect()
 }
 
-/// Test-only: how many times this thread has worked out a source pane's paired lines.
-///
-/// A thread-local, `freya-testing` running the whole app on the test's own thread, which
-/// makes this the one way to settle that a render made no such walk. Nothing resets it --
-/// a test takes the count before and after what it is about.
-#[cfg(test)]
-pub(crate) fn pairings() -> usize {
-    PAIRINGS.get()
-}
-
-#[cfg(test)]
-thread_local! {
-    static PAIRINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+counter!(
+    /// Test-only: how many times this thread has worked out a source pane's paired
+    /// lines, which is what says a render made no such walk.
+    pub(crate) fn pairings() = PAIRINGS
+);
 
 /// The file the Source pane is showing, shared through context, and nothing else: the one
 /// fact the reader, the gutter's marks and the links are each asked about.

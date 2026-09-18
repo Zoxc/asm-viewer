@@ -46,6 +46,46 @@ mod walk;
 
 use freya::prelude::*;
 
+/// A test-only counter: how many times this thread did the thing the module counts.
+///
+/// The three pieces every counter in the app is made of, written once -- the cell, the
+/// reader that answers it, and the `#[cfg(test)]` on both:
+///
+/// ```ignore
+/// counter!(
+///     /// Test-only: how many times this thread has asked the filesystem about a file.
+///     pub fn touches() = TOUCHES
+/// );
+/// ```
+///
+/// **The bump stays where the thing is done**, one `#[cfg(test)]` line at the top of it:
+/// `TOUCHES.set(TOUCHES.get() + 1);`. That line is what keeps the count out of a release
+/// build, and what a reader of that function sees.
+///
+/// A counter is a thread-local because `freya-testing` runs the whole app on the test's
+/// own thread, which makes one the only way to settle that a render read no file, copied
+/// nothing, or drew no row twice. Nothing resets a counter: a test takes the count before
+/// and after what it is about.
+///
+/// At the crate root because four of the modules that count are not under `ui`, and
+/// nothing outside the UI may reach into it.
+macro_rules! counter {
+    ($(#[$doc:meta])* $vis:vis fn $reader:ident() = $cell:ident) => {
+        $(#[$doc])*
+        #[cfg(test)]
+        $vis fn $reader() -> usize {
+            $cell.get()
+        }
+
+        #[cfg(test)]
+        thread_local! {
+            static $cell: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        }
+    };
+}
+
+pub(crate) use counter;
+
 /// What the app is called, wherever it is spelled: the window's title, the title over a
 /// box the reader is shown, and the name the language server is told its client has.
 pub const APP_NAME: &str = "Assembly Viewer";

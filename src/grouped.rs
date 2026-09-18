@@ -28,6 +28,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::chars;
+use crate::counter;
 use crate::filter::Matcher;
 use crate::shared::Shared;
 
@@ -51,21 +52,11 @@ impl<T: Clone> Clone for Grouped<T> {
     }
 }
 
-/// Test-only: how many whole answers this thread has copied.
-///
-/// [`crate::source::touches`]'s shape and its reason. A thread-local, because
-/// `freya-testing` runs the whole app on the test's own thread, which makes this the one
-/// thing that can settle that a render copied nothing. Nothing resets it -- a test takes
-/// the count before and after what it is about.
-#[cfg(test)]
-pub fn copies() -> usize {
-    COPIES.get()
-}
-
-#[cfg(test)]
-thread_local! {
-    static COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+counter!(
+    /// Test-only: how many whole answers this thread has copied, which is what says a
+    /// render copied none.
+    pub fn copies() = COPIES
+);
 
 /// One file and what was found in it.
 #[derive(Clone, PartialEq, Eq, Debug)]

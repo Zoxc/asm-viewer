@@ -16,6 +16,7 @@
 //! while another pad is on screen.
 
 use super::*;
+use crate::counter;
 
 /// Every scratchpad the app is holding, and which one is shown. A root context, since a
 /// dock tab that is not the active one in its panel is unmounted and neither the buffer
@@ -1338,21 +1339,11 @@ fn stop_run_of(mut pad: State<Pads>, name: &PadId) {
     }
 }
 
-/// Test-only: how many times the mirror above has copied the editor's text.
-///
-/// [`crate::grouped::copies`]'s shape and its reason. A thread-local, because
-/// `freya-testing` runs the whole app on the test's own thread, which makes this the one
-/// thing that can settle that a cursor move copied nothing. Nothing resets it -- a test
-/// takes the count before and after what it is about.
-#[cfg(test)]
-pub(crate) fn mirrored() -> usize {
-    MIRRORED.get()
-}
-
-#[cfg(test)]
-thread_local! {
-    static MIRRORED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+counter!(
+    /// Test-only: how many times the mirror above has copied the editor's text, which is
+    /// what says a cursor move copied nothing.
+    pub(crate) fn mirrored() = MIRRORED
+);
 
 #[cfg(test)]
 mod tests;

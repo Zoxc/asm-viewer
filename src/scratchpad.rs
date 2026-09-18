@@ -17,6 +17,7 @@ use std::{
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::cargo;
+use crate::counter;
 use crate::order::Order;
 use crate::process::{self, RunEvent};
 use crate::store::{write_atomically, Store, RECENTS_FILE};
@@ -237,21 +238,11 @@ impl Clone for Scratchpad {
     }
 }
 
-/// Test-only: how many scratchpads this thread has copied.
-///
-/// [`crate::grouped::copies`]'s shape and its reason. A thread-local, because
-/// `freya-testing` runs the whole app on the test's own thread, which makes this the one
-/// thing that can settle that a request copied nothing. Nothing resets it -- a test takes
-/// the count before and after what it is about.
-#[cfg(test)]
-pub fn copies() -> usize {
-    COPIES.get()
-}
-
-#[cfg(test)]
-thread_local! {
-    static COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+counter!(
+    /// Test-only: how many scratchpads this thread has copied, which is what says a
+    /// request copied none.
+    pub fn copies() = COPIES
+);
 
 /// What a build left behind: where cargo put it, and what it was a build *of*.
 ///

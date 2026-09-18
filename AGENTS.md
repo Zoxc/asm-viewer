@@ -563,8 +563,11 @@ feature there with the substitute, so a release that brings it is noticed.
 `freya-testing` runs the whole app headless on the test's own thread. The binary's suite runs in
 under two seconds, so a test written to settle one point costs less than a `cargo run` and a
 look. It can be asked about any control, drag, scroll, keyboard binding, laid-out size, worker
-answer, or which component re-rendered, and, through `source::touches`, how many times the
-thread that draws asked the filesystem about a source file; it cannot say how anything
-*looks*, measure text, or observe the platform. Keep the tests that pin a mechanism and delete the ones that only proved
+answer, or which component re-rendered, and, through a **counter**, how many times the
+thread that draws did something it should not have -- read a file (`source::touches`),
+copy a whole answer (`grouped::copies`), draw a row again (`ui::pad_view::rows_drawn`).
+A counter is one `counter!` call (`src/main.rs`) and one `#[cfg(test)]` bump where the
+thing is done; there are ten. It cannot say how anything *looks*, measure text, or
+observe the platform. Keep the tests that pin a mechanism and delete the ones that only proved
 the code just written does what it says. A headless test has to be made to fail first on the
 mechanism it claims to test. The rest is in `agents/UI.md` and `agents/Headless.md`.
