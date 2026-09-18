@@ -81,8 +81,8 @@ sit there too, which put a state's read-or-peek decisions eight hundred lines fr
 are about and cost the hook a parameter per foreign state.
 
 **Two questions keep an effect of their own, and both say why.** The listing's: what is pending and
-the mark for it are one call (`Analyzed::asked` answers with the question and records it in the same
-pass), the objects it is asked of have no equality for a memo to compare, and the send is followed
+the mark for it are one call (`Analyzed::asked` answers with the question, records it in the same
+pass and says whether that changed anything, so the effect writes through `write_if` as the answers do), the objects it is asked of have no equality for a memo to compare, and the send is followed
 by the `SLOW_ANALYSIS` timer. And the source reader's (`use_source_asking`), where the answer is
 what asks again: a read that filed nothing -- the file forgotten under it, `read`'s bounded giving
 up -- leaves the same question owed, and what wakes the effect is the change count going up.

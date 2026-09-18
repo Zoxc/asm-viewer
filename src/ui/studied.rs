@@ -280,24 +280,23 @@ impl Analyzed {
         if wanted != Some(&ask) {
             return false;
         }
-        // What is held, kept to compare against: an answer the effect has already
-        // settled -- a listing retagged while this one was in flight -- leaves everything
-        // as it was, and must not cost a render for it.
-        let before = self.clone();
-
+        // Each field says whether it moved, so that an answer the effect has already
+        // settled -- a listing retagged while this one was in flight -- costs no render.
         let landed = studied.map(|studied| Shown {
             ask: ask.clone(),
             studied,
         });
         let landed = landed.filter(|shown| shown.still_open(open));
 
+        let mut changed = false;
         if self.waiting() == Some(&ask) {
             self.pending = None;
+            changed = true;
         }
-        self.answered = Some(ask.clone());
+        changed |= put(&mut self.answered, Some(ask.clone()));
 
         match landed {
-            Some(shown) => self.shown = Some(shown),
+            Some(shown) => changed |= put(&mut self.shown, Some(shown)),
             // A question that named no symbol leaves the listing that is up -- the click
             // lights no pair in it and nothing else, which is what says it landed nowhere
             // -- but **only one this line may be left looking at** ([`keeps_listing`]),
@@ -305,16 +304,17 @@ impl Analyzed {
             // for good.
             None => {
                 if !keeps_listing(self.shown.as_ref(), &ask) {
-                    self.shown = None;
+                    changed |= self.shown.take().is_some();
                 }
             }
         }
 
-        *self != before
+        changed
     }
 
     /// Bring this up to date with the question `ask`, asked over the binaries `open`, and
-    /// answer with the question the worker is owed -- [`None`] where it is owed none.
+    /// answer with the question the worker is owed -- [`None`] where it is owed none --
+    /// and whether anything changed, so the effect writes only then ([`write_if`]).
     ///
     /// Three things happen here and each is a rule of its own. A listing whose binary has
     /// been closed is not in hand whatever question it answered, so it goes and the
@@ -334,22 +334,25 @@ impl Analyzed {
         ask: Option<&Ask>,
         open: &[Arc<Object>],
         visits: &Visits,
-    ) -> Option<Question> {
+    ) -> (Option<Question>, bool) {
         let Some(ask) = ask else {
             // Not a place with a listing: nothing to work out and nothing to wait for.
             // Anything still in flight is dropped when it lands.
+            let changed = *self != Analyzed::default();
             *self = Analyzed::default();
-            return None;
+            return (None, changed);
         };
 
         // Dropped here rather than by `close_binary`, so that a close, a rebuild and a
         // project switch are one line instead of three.
+        let mut changed = false;
         if self
             .shown
             .as_ref()
             .is_some_and(|shown| !shown.still_open(open))
         {
             *self = Analyzed::default();
+            changed = true;
         }
 
         let held = self.shown.as_ref().is_some_and(|shown| shown.answers(ask))
@@ -358,14 +361,14 @@ impl Analyzed {
             // Retagged, so the same listing is not asked for again under its new
             // question, and so nothing goes on saying it is waiting.
             if let Some(shown) = self.shown.as_mut().filter(|shown| shown.answers(ask)) {
-                shown.ask = ask.clone();
+                changed |= put(&mut shown.ask, ask.clone());
             }
-            self.answered = Some(ask.clone());
-            self.pending = None;
-            return None;
+            changed |= put(&mut self.answered, Some(ask.clone()));
+            changed |= self.pending.take().is_some();
+            return (None, changed);
         }
         if self.waiting() == Some(ask) {
-            return None;
+            return (None, changed);
         }
 
         let question = match ask {
@@ -379,7 +382,7 @@ impl Analyzed {
             },
         };
         self.pending = Some(Pending::asked(ask.clone()));
-        Some(question)
+        (Some(question), true)
     }
 
     /// The question the worker is working on, and nothing while it is idle.
@@ -400,6 +403,16 @@ impl Analyzed {
         pending.slow = true;
         true
     }
+}
+
+/// Write `value` into `slot`, and whether that changed it: how [`Analyzed::take`] and
+/// [`Analyzed::asked`] say what they did without a copy of the whole state to compare.
+fn put<T: PartialEq>(slot: &mut T, value: T) -> bool {
+    if *slot == value {
+        return false;
+    }
+    *slot = value;
+    true
 }
 
 /// Everything worked out about one symbol, in one value because it is worked out in one

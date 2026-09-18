@@ -5056,7 +5056,8 @@ fn an_answer_for_a_symbol_no_longer_selected_is_dropped() {
 
 /// The happy path, over the real work rather than a gate: a symbol selected comes back
 /// disassembled, with the line info and the file the Source pane draws beside it,
-/// and with the panes told about it exactly once.
+/// and with the panes told about it exactly once. Neither the ask nor the answer copies
+/// the whole state to see whether it changed ([`copies`](crate::ui::studied::copies)).
 #[test]
 fn a_selected_symbol_comes_back_disassembled_and_mapped() {
     let symbol = fixture_symbols()
@@ -5073,8 +5074,14 @@ fn a_selected_symbol_comes_back_disassembled_and_mapped() {
     let analysis = roots.analysis;
     test.sync_and_update();
 
+    let copied = crate::ui::studied::copies();
     asking.set(Some(Ask::Symbol(symbol.clone())));
     pump(&mut test, |_| analysis.peek().shown.is_some());
+    assert_eq!(
+        crate::ui::studied::copies(),
+        copied,
+        "the ask or the answer copied the whole state"
+    );
 
     let state = analysis.peek().clone();
     let shown = state.shown.expect("the symbol was analysed");

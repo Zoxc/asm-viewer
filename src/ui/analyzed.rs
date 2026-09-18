@@ -242,7 +242,7 @@ pub(crate) fn use_analysis_with(
     objects: State<Vec<Arc<Object>>>,
     sectioned: Sectioned,
     visits: State<Visits>,
-    mut analysis: State<Analyzed>,
+    analysis: State<Analyzed>,
     located: State<Located>,
     coded: State<Coded>,
     showing: State<Option<Arc<str>>>,
@@ -314,9 +314,12 @@ pub(crate) fn use_analysis_with(
         // is the writing and the sending. The visits are **peeked**, not read: the
         // ranking is an input to an answer and a visit must not re-ask a question that
         // has been answered.
-        let mut next = analysis.peek().clone();
-        let question = next.asked(current.as_ref(), &open, &visits.peek());
-        analysis.set_if_modified(next);
+        let mut question = None;
+        write_if(analysis, |held| {
+            let (asked, changed) = held.asked(current.as_ref(), &open, &visits.peek());
+            question = asked;
+            changed
+        });
 
         let (Some(ask), Some(question)) = (current, question) else {
             return;

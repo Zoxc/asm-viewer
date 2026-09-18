@@ -142,7 +142,7 @@ fn a_listing_that_answers_the_new_question_is_retagged_rather_than_asked_for_aga
         ..Analyzed::default()
     };
     let visits = Visits::default();
-    let question = state.asked(Some(&outright), &[object], &visits);
+    let (question, _) = state.asked(Some(&outright), &[object], &visits);
     assert!(question.is_none(), "nothing is asked for a listing in hand");
     assert!(
         state.shown.expect("the listing is kept").ask == outright,
@@ -162,7 +162,7 @@ fn a_listing_whose_binary_has_closed_is_asked_for_again_out_of_what_is_left() {
         ..Analyzed::default()
     };
     let visits = Visits::default();
-    let question = state.asked(Some(&line), &[], &visits);
+    let (question, _) = state.asked(Some(&line), &[], &visits);
     assert!(
         matches!(question, Some(Question::Resolve { .. })),
         "the question is asked again"
@@ -183,7 +183,10 @@ fn a_question_already_on_its_way_is_not_asked_twice() {
         ..Analyzed::default()
     };
     let visits = Visits::default();
-    assert!(state.asked(Some(&ask), &[object], &visits).is_none());
+    assert!(
+        matches!(state.asked(Some(&ask), &[object], &visits), (None, false)),
+        "and asking it again changes nothing"
+    );
 }
 
 #[test]
@@ -195,7 +198,7 @@ fn a_place_with_no_listing_leaves_nothing_waiting() {
         ..Analyzed::default()
     };
     let visits = Visits::default();
-    assert!(state.asked(None, &[object], &visits).is_none());
+    assert!(state.asked(None, &[object], &visits).0.is_none());
     assert!(state.pending.is_none(), "the wait outlived the question");
 }
 
