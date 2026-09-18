@@ -28746,6 +28746,81 @@ fn a_step_through_an_objects_code_walks_on_until_it_finds_a_match() {
     );
 }
 
+/// **A walk's match lands only in the code of the object it walked.** A pane that moves in
+/// place to another object's code is re-rendered, not mounted again, and the walk it
+/// started goes on over the first object; its match is an address in that code, and the
+/// two fixtures here share every address, so landed in the second it picks out a row.
+/// A walk still going when the pane moves is started again over the new object instead.
+///
+/// No door moves a code tab to another object in place, so the move is made by hand.
+/// Fails on a landing that does not ask which object the walk was over.
+#[test]
+fn a_walks_match_lands_only_in_the_object_it_walked() {
+    let (_path, objects) = fixture_objects(2);
+    let (first, second) = (objects[0].clone(), objects[1].clone());
+    let reading = reading_of(&first, &[]);
+    let (mut test, roots) = TestingRunner::new(
+        code_find_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let (states, sectioned) = (roots.states, roots.sectioned);
+    let mut marked = roots.doors.marked;
+    settle(&mut test);
+    let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let finds = states.places.finds;
+
+    open_find_bar(&mut test);
+    test.write_text("sum_to");
+    test.press_key(Key::Named(NamedKey::Enter));
+    pump(&mut test, |_| {
+        finds
+            .peek()
+            .get(&at)
+            .hunt
+            .as_ref()
+            .is_some_and(|hunt| !hunt.walking())
+    });
+    let found = finds.peek().get(&at).hunt.clone().expect("a walk");
+    assert!(matches!(found.walked, Walked::Found(..)));
+
+    // The pane moves in place to the second object's code.
+    marked.write().assembly = None;
+    // A generation past the first's, which is what the view counts its rows afresh on.
+    let mut moved = reading_of(&second, &[]);
+    let mut reading = sectioned.reading;
+    moved.generation = reading.peek().generation + 1;
+    reading.set(moved);
+    pump(&mut test, |_| sectioned.peek_rows_of(&second).is_some());
+
+    // The first walk's match, said again under an id the pane has not landed.
+    let stale = Hunt {
+        id: u64::MAX,
+        ..found.clone()
+    };
+    edit_find(finds, at, move |bar| bar.hunt = Some(stale));
+    settle(&mut test);
+    assert!(
+        marked.peek().assembly.is_none(),
+        "the first object's match was landed in the second's code"
+    );
+
+    // A walk over the first object that is still going is walked again over this one.
+    let walking = Hunt {
+        id: u64::MAX - 1,
+        walked: Walked::Walking(0.0),
+        ..found
+    };
+    edit_find(finds, at, move |bar| bar.hunt = Some(walking));
+    pump(&mut test, |_| marked.peek().assembly.is_some());
+    let hunt = finds.peek().get(&at).hunt.clone().expect("a walk");
+    assert!(
+        hunt.object.is(&second),
+        "the walk was not started again over the second object"
+    );
+}
+
 /// A walk that goes all the way round without finding anything says so, and stops: the
 /// bar has no count to fall back on over an object's code.
 #[test]

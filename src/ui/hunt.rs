@@ -18,6 +18,7 @@
 use super::*;
 use crate::find::Direction;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Weak;
 
 /// A search through an object's code: what it is looking for, and where it has got to.
 ///
@@ -29,6 +30,9 @@ pub(crate) struct Hunt {
     /// Which walk this is: two asks with the same question are two walks, and only the
     /// newest one's events are taken.
     pub(crate) id: u64,
+    /// The object whose code it walks. Its answer is an address in that code and nowhere
+    /// else.
+    pub(crate) object: Over,
     pub(crate) filter: Filter,
     pub(crate) direction: Direction,
     /// The address it started from, which is where the pane was.
@@ -41,6 +45,31 @@ impl Hunt {
     /// Still going. A walk that has stopped found something or found nothing.
     pub(crate) fn walking(&self) -> bool {
         matches!(self.walked, Walked::Walking(_))
+    }
+}
+
+/// The object a walk is over: by pointer, and without holding it. A bar outlives the
+/// object its pane showed, and a closed binary's bytes must not stay behind in one.
+///
+/// A `Weak` keeps the allocation, so no other object can come to sit at the same address
+/// while a bar holds this.
+#[derive(Clone)]
+pub(crate) struct Over(Weak<Object>);
+
+impl Over {
+    pub(crate) fn of(object: &Arc<Object>) -> Self {
+        Over(Arc::downgrade(object))
+    }
+
+    /// Whether this is `object`.
+    pub(crate) fn is(&self, object: &Arc<Object>) -> bool {
+        std::ptr::eq(self.0.as_ptr(), Arc::as_ptr(object))
+    }
+}
+
+impl PartialEq for Over {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -157,7 +186,8 @@ pub(crate) fn hunt(
 ///
 /// **`at` and `object` reach every effect through its deps**, never as a capture: an
 /// effect's callback is built once, and a switch of tab re-renders this list with another
-/// tab's rather than mounting it again (`ui/split.rs`).
+/// tab's rather than mounting it again (`ui/split.rs`). A walk remembers the object it
+/// walks, so a pane that moves to another object mid-walk starts it again over the new one.
 pub(crate) fn use_code_hunt(
     at: Where,
     object: Arc<Object>,
@@ -166,30 +196,37 @@ pub(crate) fn use_code_hunt(
     mut land: impl FnMut(u64, Range<usize>) -> bool + 'static,
 ) {
     let finds = use_try_consume::<Looking>().map(|looking| looking.0);
+    let from = Rc::new(from);
 
     // A step over an object's code starts a walk rather than moving through an answer.
-    use_side_effect_with_deps(&at, move |&at: &Where| {
-        let Some(finds) = finds else {
-            return;
-        };
-        let bar = finds.read().get(&at).clone();
-        // A bar with a listing is searched whole, and its step is `use_find_steps`'s.
-        let Some(direction) = bar.step.filter(|_| bar.listing.is_none()) else {
-            return;
-        };
-        let id = WALKS.fetch_add(1, Ordering::Relaxed);
-        let from = from();
-        edit_find(finds, at, move |bar| {
-            bar.step = None;
-            bar.hunt = Some(Hunt {
-                id,
-                filter: bar.filter.clone(),
-                direction,
-                from,
-                walked: Walked::Walking(0.0),
+    let start = from.clone();
+    use_side_effect_with_deps(
+        &(at, ByPtr(object.clone())),
+        move |(at, ByPtr(object)): &(Where, ByPtr<Object>)| {
+            let (at, Some(finds)) = (*at, finds) else {
+                return;
+            };
+            let bar = finds.read().get(&at).clone();
+            // A bar with a listing is searched whole, and its step is `use_find_steps`'s.
+            let Some(direction) = bar.step.filter(|_| bar.listing.is_none()) else {
+                return;
+            };
+            let id = WALKS.fetch_add(1, Ordering::Relaxed);
+            let from = start();
+            let object = Over::of(object);
+            edit_find(finds, at, move |bar| {
+                bar.step = None;
+                bar.hunt = Some(Hunt {
+                    id,
+                    object,
+                    filter: bar.filter.clone(),
+                    direction,
+                    from,
+                    walked: Walked::Walking(0.0),
+                });
             });
-        });
-    });
+        },
+    );
 
     // The walk itself. A memo over which walk it is, not a read: every word it says about
     // its progress is a write to the state below, and an effect reading that would start
@@ -200,8 +237,14 @@ pub(crate) fn use_code_hunt(
         let finds = finds?;
         let bar = finds.read();
         let hunt = bar.get(&at).hunt.as_ref()?;
-        hunt.walking()
-            .then_some((at, hunt.id, hunt.filter.clone(), hunt.from, hunt.direction))
+        hunt.walking().then_some((
+            at,
+            hunt.id,
+            hunt.object.clone(),
+            hunt.filter.clone(),
+            hunt.from,
+            hunt.direction,
+        ))
     });
     let started = asked.read().clone();
     // The walks this scope has started. A switch away from a tab mid-walk and back again
@@ -209,12 +252,32 @@ pub(crate) fn use_code_hunt(
     // lives as long as this scope.
     let taking = use_hook(|| Rc::new(RefCell::new(HashSet::<u64>::new())));
     use_side_effect_with_deps(
-        &(started, ByPtr(object)),
-        move |(walk, ByPtr(object)): &(Option<Walk>, ByPtr<Object>)| {
-            let (Some((at, id, filter, from, direction)), Some(finds)) = (walk.clone(), finds)
+        &(started, at, ByPtr(object.clone())),
+        move |(walk, here, ByPtr(object)): &(Option<Walk>, Where, ByPtr<Object>)| {
+            let (Some((at, id, walked, filter, place, direction)), Some(finds)) =
+                (walk.clone(), finds)
             else {
                 return;
             };
+            // The memo is a render behind a switch of tab, when the walk is another bar's.
+            if at == *here && !walked.is(object) {
+                // The pane has moved to another object mid-walk: start again over this
+                // one, under a new id, which is what calls the old walk off.
+                let id = WALKS.fetch_add(1, Ordering::Relaxed);
+                let (object, from) = (Over::of(object), from());
+                edit_find(finds, at, move |bar| {
+                    if let Some(hunt) = &mut bar.hunt {
+                        *hunt = Hunt {
+                            id,
+                            object,
+                            from,
+                            walked: Walked::Walking(0.0),
+                            ..hunt.clone()
+                        };
+                    }
+                });
+                return;
+            }
             if !taking.borrow_mut().insert(id) {
                 return;
             }
@@ -231,7 +294,7 @@ pub(crate) fn use_code_hunt(
                 // Or one built here: it is free (`CodeListing`), and a walk asked for
                 // before the view has one must not wait.
                 let code = code.unwrap_or_else(|| Arc::new(CodeListing::new(&object)));
-                hunt(&object, &code, &filter, from, direction, emit);
+                hunt(&object, &code, &filter, place, direction, emit);
             });
             spawn(take_hunt(finds, at, id, events));
         },
@@ -240,31 +303,35 @@ pub(crate) fn use_code_hunt(
     // The match, landed once. The walk that found it is remembered, so an effect woken
     // again -- by the pane's own rows arriving, say -- does not land it a second time.
     let mut landed = use_state(|| None::<u64>);
-    use_side_effect_with_deps(&at, move |at: &Where| {
-        let Some(finds) = finds else {
-            return;
-        };
-        let hunt = finds.read().get(at).hunt.clone();
-        let Some(hunt) = hunt else {
-            return;
-        };
-        let Walked::Found(address, columns) = hunt.walked else {
-            return;
-        };
-        if *landed.peek() == Some(hunt.id) {
-            return;
-        }
-        // Marked as landed only where it was: a walk that answers before the pane has
-        // rows to land in is landed by the wake the rows bring.
-        if land(address, columns) {
-            landed.set(Some(hunt.id));
-        }
-    });
+    use_side_effect_with_deps(
+        &(at, ByPtr(object)),
+        move |(at, ByPtr(object)): &(Where, ByPtr<Object>)| {
+            let Some(finds) = finds else {
+                return;
+            };
+            let hunt = finds.read().get(at).hunt.clone();
+            // A match in another object's code names no row of this one.
+            let Some(hunt) = hunt.filter(|hunt| hunt.object.is(object)) else {
+                return;
+            };
+            let Walked::Found(address, columns) = hunt.walked else {
+                return;
+            };
+            if *landed.peek() == Some(hunt.id) {
+                return;
+            }
+            // Marked as landed only where it was: a walk that answers before the pane has
+            // rows to land in is landed by the wake the rows bring.
+            if land(address, columns) {
+                landed.set(Some(hunt.id));
+            }
+        },
+    );
 }
 
-/// A walk as a step starts it: the bar it is for, which walk, the pattern, where it
-/// starts and which way it goes.
-type Walk = (Where, u64, Filter, u64, Direction);
+/// A walk as a step starts it: the bar it is for, which walk, the object it walks, the
+/// pattern, where it starts and which way it goes.
+type Walk = (Where, u64, Over, Filter, u64, Direction);
 
 /// Where the next walk's id comes from: one count for every listing, so no two walks
 /// anywhere share an id, and a list mounted again cannot reuse one a bar still holds.

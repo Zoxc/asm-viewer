@@ -1476,7 +1476,10 @@ listing's length -- is held in a cell each render writes, as `use_kept_position`
 A walk's id is drawn from one count for the whole app, and the list keeps the ids it has started a
 walk for: a switch away from a walking bar and back hands the walk effect the same walk again, and
 its first taker is still running. A switch leaves the bar it left with its claim: that tab still
-draws that listing.
+draws that listing. A walk also names the object it walks, since its answer is an address in that
+object's code: a pane moved in place to another object lands no match found in the old one, and a
+walk still going is started again over the new one. It names it by a `Weak`, so a bar keeps no
+closed binary's bytes.
 
 **The match is landed by the pane and not through a `Planting`.** A planting is spent by
 `use_kept_place`, whose effect wakes on the document changing or the reading's generation moving --
