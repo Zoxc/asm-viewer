@@ -278,7 +278,7 @@ impl Finds {
 /// callback is built once, and a switch of tab hands this list another `at` without
 /// mounting it again (`ui/split.rs`).
 pub(crate) fn use_marking(at: Where) -> Option<Marking> {
-    let finds = try_consume_context::<Looking>().map(|looking| looking.0);
+    let finds = use_try_consume::<Looking>().map(|looking| looking.0);
     let at = use_reactive(&at);
     let filter = use_memo(move || {
         let at = *at.read();
@@ -361,7 +361,7 @@ pub(crate) fn edit_find(mut finds: State<Finds>, at: Where, edit: impl FnOnce(&m
 /// it with another listing (`ui/split.rs`). A switch leaves the claim on the bar it left:
 /// that tab still draws that listing.
 pub(crate) fn use_searching(at: Where, searchable: Option<Searchable>) {
-    let finds = try_consume_context::<Looking>().map(|looking| looking.0);
+    let finds = use_try_consume::<Looking>().map(|looking| looking.0);
     let claim = move |at: Where, listing: Option<Searchable>| {
         let Some(mut finds) = finds else {
             return;
@@ -414,7 +414,7 @@ keyed!(FindSlot);
 
 impl Component for FindSlot {
     fn render(&self) -> impl IntoElement {
-        let finds = try_consume_context::<Looking>().map(|looking| looking.0);
+        let finds = use_try_consume::<Looking>().map(|looking| looking.0);
         let open = finds.is_some_and(|finds| finds.read().open(&self.at));
         match open {
             true => FindBar {
@@ -851,7 +851,7 @@ pub(crate) fn use_find_steps<R: FnMut(usize) + 'static>(
     file: Option<Arc<str>>,
     reveal: R,
 ) {
-    let finds = try_consume_context::<Looking>().map(|looking| looking.0);
+    let finds = use_try_consume::<Looking>().map(|looking| looking.0);
     // The reveal this render made, which knows how long the listing is now. The effect's
     // callback is built once, so a reveal it captured would clamp against the first
     // listing's rows; `at` and `file` come in as its deps for the same reason.

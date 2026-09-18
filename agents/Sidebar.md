@@ -708,16 +708,14 @@ rows nothing is pressed on: the bookmark whose place does not resolve, and the P
 
 **What a row's press and its menu reach for is the list's to consume.** Reaching for a context is
 a hook, and a press handler and a menu are built by a render and run long after it, so the states
-they write had to be reached for somewhere -- and each row did it for itself: eight context walks
-a render for a symbol row, seven for a history row and for a file row, six for an object row, a
-bookmark and a search hit, four for an archive row. Every one of them is drawn in a `ListPane`,
+they write had to be reached for somewhere -- and each row did it for itself, up to eight contexts a
+row, each a walk up the scope tree as the row mounted. Every one of them is drawn in a `ListPane`,
 which is the one hook a panel calls once and unconditionally, so that is where they are consumed
 now: `use_list_states` gathers `ListStates` (`ui/state.rs`) there, `ListPane::virtual_rows` hands
 it to the builder beside the list's own data, and a panel building its rows itself passes
 `pane.states`. The bundle compares equal always, so carrying it costs a row no render
-(`what_a_symbol_rows_press_reaches_for_costs_the_row_no_render`). The lists are virtualized, so
-this is a screenful of rows a frame and not 115k of them: what it buys is that the rule the code
-rows keep is now kept by every list. Two facts a row used to state
+(`what_a_symbol_rows_press_reaches_for_costs_the_row_no_render`). What it buys is one set for
+every row of a panel, and the rule the code rows keep kept by every list. Two facts a row used to state
 itself went with it -- which panel's pick a symbol row answers to, and which a search hit does --
 because the pane a row is drawn in is that panel by construction. The file finder keeps its own
 (`FoundRow`, `agents/Finding.md`): it is not a panel, has no pane and no pick of this kind, so

@@ -436,7 +436,7 @@ impl Component for SourceRow {
     fn render(&self) -> impl IntoElement {
         // Nothing is reached for here. Every state a handler below needs was consumed
         // where the list rendered and travels in `Common`, a handler being no place to
-        // call a hook -- and asking per row was nine context walks a render.
+        // call a hook.
         let common = &self.common;
         let index = self.index;
 

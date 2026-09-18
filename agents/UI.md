@@ -120,7 +120,11 @@ calls that same function through the runner (`test_roots`, `src/ui/tests.rs`), s
 added reaches the tests without a second list being kept in step by hand. It can serve both
 because `provide_root_context` is a free function -- a write into the root scope's storage
 that takes no hook slot -- so all it wants of a caller is a current scope, which a render has
-and so does the runner's own `provide_root_context`. The list:
+and so does the runner's own `provide_root_context`. **Reaching for one costs a walk once**:
+`use_consume` and `use_try_consume` are `use_hook(|| consume_context())`, so the walk up the
+scope tree runs at mount and every later render reads a hook slot (freya-core 0.4.3,
+`lifecycle/context.rs`). `try_consume_context` called straight from a render is no hook and walks
+every time; a render reaches for a context with the `use_` form. The list:
 
 `Objects`; `Active` (the active tab and the `Document` it shows); `Open` (the open
 tabs and the trail behind each); `Bookmarked` (the project's bookmarks, in their saved shape);
@@ -191,10 +195,10 @@ channels. `RowStates` (`state.rs`) is what a code row's menu writes and what the
 caret questions are answered through: `doors`, where an answer lands (`located`, `dock`)
 and what a bookmark is added to (`bookmarked`, `objects`). It is the one that is **not provided**
 as a context of its own -- `use_row_states` gathers it from five of them, in the list's render, and
-it travels to the rows as data, a handler being no place to call a hook. It compares **equal
-always**, so a row holding one is not re-rendered for handles the root never replaces; that is what
-makes carrying it cheaper than reaching for it, which was six lookups a row a render on the
-assembly side and nine on the source one. `ListStates` (`state.rs`) is the same thing for the lists
+it travels to the rows as data, a handler being no place to call a hook. A row could as well
+consume them itself, at one walk per mount; the list does it so there is one set. It compares
+**equal always**, so a row holding one is not re-rendered for handles the root never replaces.
+`ListStates` (`state.rs`) is the same thing for the lists
 outside the code panes: the pick (`picking`), the door a press goes through (`doors`, `ctrl`), the
 project's own states (`project`, which is where a bookmark and the objects it is judged against
 come from) and the two that go with those wherever a project is switched (`rescued`, `unopened`).
@@ -208,10 +212,10 @@ narrowed to nothing the callee did not already have. `press_location` and `symbo
 pane's `ListStates` itself, so there is one set and no second way to build one.
 `LinkStates` (`assembly.rs`) is the third of these and the smallest: Ctrl, which a linked
 operand's door is asked about, the `Doors` a press on it goes through, and the `Listing`
-`reveal_row` reads at the press. `use_link_states` gathers it in each of the two listings'
-renders, beside `use_row_states`, and takes `doors` off that bundle rather than reaching for it
-again, so a row's menu and the links in it cannot disagree about where a door leads. It rides
-down with the rows and compares equal always, so a row is not drawn again for it.
+`reveal_row` reads at the press. It is **not** list data: the row that draws a link gathers it
+(`use_link_states`), the `Listing` being the context the list's box provides, which `code_row`
+consumes in the same row anyway. An instruction row hands it its `RowStates`'s `doors`, so its
+menu and its links cannot disagree about where a door leads.
 A handle may sit in more than one bundle: `Doors` and `ProjectStates` both carry `Open` and
 `Places`, `RowStates` and `ListStates` carry `Doors`, `ListStates` carries `Picking` and
 `ProjectStates`, and `Doors` carries the runs `Marked` hands the panes. Two routes to one
@@ -1017,7 +1021,7 @@ field -- a prop that stops re-rendering for it. Most rows are that shape (`Archi
 out: the row's `key`, and the states it holds -- one of its own, or a bundle of them. Neither
 changes what is drawn. A key is a function of the row's other fields, a `State` compares by the box
 it is -- its own `eq` and not `Writable`'s -- so two rows built by one list hold the same one, and
-`RowStates`, `ListStates` and `LinkStates` compare equal always.
+`RowStates` and `ListStates` compare equal always.
 `a_second_file_leaves_the_rows_already_drawn_alone` pins it: a second file landing on the
 Objects list leaves the rows already drawn un-rendered. **A list of rows is a `Shared`**
 (`src/shared.rs`), the rule written once rather than once per list: an `Arc<[T]>` equal only to the

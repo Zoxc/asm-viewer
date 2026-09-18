@@ -86,13 +86,6 @@ impl ListBox {
         self.listing.viewport()
     }
 
-    /// The list as its rows and their links know it, for a list to carry down to what a
-    /// press reads it at ([`LinkStates`]): the very context the box provided, so a
-    /// handler holding it and the box's own handlers write one listing.
-    pub(crate) fn listing(&self) -> Listing {
-        self.listing.clone()
-    }
-
     /// The box, around `length` rows built from `data` by `build`. A hook, the sweep's
     /// cells being one, so it is called once per render.
     ///

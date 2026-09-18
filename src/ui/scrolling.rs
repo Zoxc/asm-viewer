@@ -333,12 +333,12 @@ pub(crate) fn use_kept_position(
     let owing = use_hook(|| Rc::new(RefCell::new(None::<Move>)));
     let answered = use_hook(|| Rc::new(RefCell::new(None::<Landing>)));
     // A landing on its way, whichever document it names. Asked through
-    // `try_consume_context`, a pane mounted without the landing machinery having none on
-    // its way.
-    let landing = try_consume_context::<Doors>().map(|doors| doors.land);
+    // `use_try_consume`, a pane mounted without the landing machinery having none on its
+    // way.
+    let landing = use_try_consume::<Doors>().map(|doors| doors.land);
     // Where a reveal made is said to be made, asked for the same way: a list that keeps a
     // position without the panes' marks is owed no reveal to answer.
-    let marked = try_consume_context::<Marked>().map(|marked| marked.0);
+    let marked = use_try_consume::<Marked>().map(|marked| marked.0);
     // The landing this pane has already gone to, held exactly as long as that landing is
     // on its way. **The pane does not spend the landing** -- `use_land` does, a pass or
     // more later -- so without this the reveal below is made again on every wake, and the

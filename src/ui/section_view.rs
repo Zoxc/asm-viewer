@@ -88,9 +88,6 @@ struct SectionRows {
     marking: Option<Marking>,
     /// What a row's menu writes, consumed once by the list: see [`RowStates`].
     asking: RowStates,
-    /// What a link in a row's text reaches for, consumed once by the list too: see
-    /// [`LinkStates`].
-    links: LinkStates,
 }
 
 impl PartialEq for SectionRows {
@@ -372,8 +369,6 @@ struct TextRow {
     chars: RowChars,
     /// What the find bar is looking for. See [`SectionRows::marking`].
     marking: Option<Marking>,
-    /// What the label's link reaches for. See [`SectionRows::links`].
-    links: LinkStates,
     key: DiffKey,
 }
 
@@ -425,6 +420,8 @@ keyed!(TextRow);
 
 impl Component for TextRow {
     fn render(&self) -> impl IntoElement {
+        // What the label's link reaches for, gathered here for the press to hold.
+        let link_states = use_link_states(use_doors());
         // What the row is, drawn: the colour and the weight the three kinds differ in.
         // Asked for here, in the row's own render, because asking is what subscribes a
         // scope to the theme, and it is this scope a switch has to draw again.
@@ -465,7 +462,7 @@ impl Component for TextRow {
                 object: self.object.clone(),
                 data,
             };
-            self.links.link(whole, Door::Label { symbol })
+            link_states.link(whole, Door::Label { symbol })
         });
         let text = Text {
             marking: self.marking.clone(),
@@ -644,9 +641,6 @@ impl Component for SectionList {
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
-        // What a link in a row's text reaches for, consumed here and carried to the rows:
-        // a handler may not run a hook.
-        let links = use_link_states(doors, &list);
         let (controller, viewport) = (list.controller, list.viewport());
         // What the find bar over this pane is looking for, for every row to wash. It
         // searches no listing: an object's code is decoded a stretch at a time, so a step
@@ -821,7 +815,6 @@ impl Component for SectionList {
                 chars,
                 marking,
                 asking,
-                links,
             },
             build_row,
         )
@@ -879,7 +872,6 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                 wash,
                 chars,
                 marking: data.marking.clone(),
-                links: data.links.clone(),
                 key: DiffKey::None,
             }
             .key(key)
@@ -906,7 +898,6 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             InstructionRow::at(
                 asm,
                 data.asking,
-                data.links.clone(),
                 index,
                 i,
                 paired,

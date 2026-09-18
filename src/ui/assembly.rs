@@ -306,9 +306,6 @@ struct AsmRows {
     data: AsmData,
     /// What a row's menu writes, consumed once by the list: see [`RowStates`].
     asking: RowStates,
-    /// What a link in a row's text reaches for, consumed once by the list too: see
-    /// [`LinkStates`].
-    links: LinkStates,
     /// The source pane's picked-out run, or `None` when there is none.
     pair: Option<Picked>,
     /// The edges starting or ending at a picked-out row, which every row the gutter
@@ -573,18 +570,8 @@ impl Door {
 }
 
 /// What a press on a linked operand reaches for: Ctrl, which the door is asked about,
-/// where the door leads, and the list's own scroll and box.
-///
-/// **Consumed where the list renders and carried down to the rows as data.** Reaching for
-/// a context is a hook, which a handler may not run, and a row consuming these itself paid
-/// three context walks a render for a press that almost never comes.
-///
-/// The handles are the root's and the [`Listing`] the box's, none of them ever replaced,
-/// so this **compares equal always**: a row holding one is not re-rendered for it.
-///
-/// `doors` is [`RowStates`]'s, taken off the bundle the rows already carry rather than
-/// reached for again, so the row's menu and its links cannot come to disagree about
-/// where a door leads.
+/// where the door leads, and the list's own scroll and box. Gathered by the row that
+/// draws the link ([`use_link_states`]), a handler being no place to call a hook.
 #[derive(Clone)]
 pub(crate) struct LinkStates {
     /// Whether Ctrl is held, which is what makes a label a door and a target open in a
@@ -597,18 +584,14 @@ pub(crate) struct LinkStates {
     listing: Listing,
 }
 
-impl PartialEq for LinkStates {
-    fn eq(&self, _: &LinkStates) -> bool {
-        true
-    }
-}
-
-/// What a listing's links reach for, as the list drawing them sees it.
-pub(crate) fn use_link_states(doors: Doors, list: &ListBox) -> LinkStates {
+/// What the links in a row reach for, from inside the row: the [`Listing`] is the one the
+/// list's box provided. `doors` is handed in so an instruction row takes its
+/// [`RowStates`]'s, and its menu and its links cannot disagree about where a door leads.
+pub(crate) fn use_link_states(doors: Doors) -> LinkStates {
     LinkStates {
         ctrl: use_consume::<Ctrl>().0,
         doors,
-        listing: list.listing(),
+        listing: use_consume::<Listing>(),
     }
 }
 
@@ -912,13 +895,9 @@ impl Component for SeparatorRow {
 #[derive(Clone, PartialEq)]
 pub(crate) struct InstructionRow {
     pub(crate) data: AsmData,
-    /// What this row's menu writes, told to it by the list: a handler may not run a hook,
-    /// and a row reaching for these itself paid six context walks a render for a
-    /// right-click. Compares equal always, so it costs the row no render ([`RowStates`]).
+    /// What this row's menu writes, told to it by the list: a handler may not run a hook.
+    /// Compares equal always, so it costs the row no render ([`RowStates`]).
     pub(crate) asking: RowStates,
-    /// What a link in this row's text reaches for, told to it by the list for the same
-    /// reason and with the same rule ([`LinkStates`]).
-    pub(crate) links: LinkStates,
     /// Which instruction this row draws.
     pub(crate) index: usize,
     /// Which row of the listing it is drawn in, which is `index` plus every separator
@@ -961,7 +940,6 @@ impl InstructionRow {
     pub(crate) fn at(
         data: AsmData,
         asking: RowStates,
-        links: LinkStates,
         index: usize,
         row: usize,
         paired: Option<Edges>,
@@ -976,7 +954,6 @@ impl InstructionRow {
             },
             data,
             asking,
-            links,
             index,
             row,
             paired,
@@ -1170,6 +1147,7 @@ impl Component for InstructionRow {
     fn render(&self) -> impl IntoElement {
         #[cfg(test)]
         INSTRUCTION_ROWS_DRAWN.set(INSTRUCTION_ROWS_DRAWN.get() + 1);
+        let links = use_link_states(self.asking.doors);
 
         // Where this row points on the source side. Worked out once here rather than in
         // each of the handlers, which all need the same answer.
@@ -1201,7 +1179,7 @@ impl Component for InstructionRow {
                 self.index,
                 self.chars,
                 self.marking.clone(),
-                &self.links,
+                &links,
             )),
             Some(instruction_menu(self.asking, &self.data, self.index, at)),
         )
@@ -1280,9 +1258,6 @@ impl Component for InstructionList {
         // The box the rows are drawn in, and the scroll and the measurement that come
         // with it.
         let list = use_list_box(Pane::Assembly, listing);
-        // What a link in a row's text reaches for, consumed here and carried to the rows:
-        // a handler may not run a hook.
-        let links = use_link_states(doors, &list);
         // What the find bar over this pane is looking for, for every row to wash, and
         // what it searches, claimed for as long as these rows are drawn.
         let at = (Placing::Tab(self.tab), Pane::Assembly);
@@ -1416,7 +1391,6 @@ impl Component for InstructionList {
             AsmRows {
                 data,
                 asking,
-                links,
                 pair,
                 touching,
                 chars,
@@ -1453,7 +1427,6 @@ fn asm_row(i: usize, rows: &AsmRows) -> Element {
     InstructionRow::at(
         rows.data.clone(),
         rows.asking,
-        rows.links.clone(),
         index,
         i,
         paired,

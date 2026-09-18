@@ -165,7 +165,7 @@ pub(crate) fn use_code_hunt(
     from: impl Fn() -> u64 + 'static,
     mut land: impl FnMut(u64, Range<usize>) -> bool + 'static,
 ) {
-    let finds = try_consume_context::<Looking>().map(|looking| looking.0);
+    let finds = use_try_consume::<Looking>().map(|looking| looking.0);
 
     // A step over an object's code starts a walk rather than moving through an answer.
     use_side_effect_with_deps(&at, move |&at: &Where| {

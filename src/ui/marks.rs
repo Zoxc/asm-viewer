@@ -220,7 +220,7 @@ pub(crate) fn sweeping_in(marks: &Marks) -> bool {
 /// again as one starts and ends; [`false`] where the context is missing, which is a pane
 /// mounted without the root's marks.
 pub(crate) fn use_sweeping() -> bool {
-    try_consume_context::<Sweeping>().is_some_and(|sweeping| *sweeping.0.read())
+    use_try_consume::<Sweeping>().is_some_and(|sweeping| *sweeping.0.read())
 }
 
 /// The run `pane` holds -- the caret, the characters picked out, and so the rows lit --

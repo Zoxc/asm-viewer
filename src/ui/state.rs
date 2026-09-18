@@ -530,13 +530,13 @@ pub(crate) struct Arrangement {
 /// what a bookmark is added to.
 ///
 /// **Consumed where the list renders and carried to the rows as data.** Reaching for a
-/// context is a hook, and the handlers here are built by a render and run long after it,
-/// so a row that consumed them itself paid a context walk per state per render for a
-/// right-click that almost never comes.
+/// context is a hook, and the handlers here are built by a render and run long after it.
+/// A row could consume them itself -- `use_consume` walks the scope tree once, at mount,
+/// and reads a hook slot after -- but one set taken by the list is one set for every
+/// row, and there is no second way to build one.
 ///
 /// The handles are the root's and are never replaced, so this **compares equal always**:
-/// a row holding one is not re-rendered for it, where a bundle compared field by field
-/// would trade the lookups for a render.
+/// a row holding one is not re-rendered for it.
 ///
 /// One bundle for both panes. The Source rows read the first three and the instruction
 /// rows all five, and the two menus therefore cannot come to reach for one state two ways.
@@ -575,9 +575,7 @@ pub(crate) fn use_row_states() -> RowStates {
 ///
 /// The same rule and the same reason. It is consumed where the *list* renders -- on the
 /// pane every one of them is drawn in ([`ListPane`]) -- and carried to the rows as data,
-/// a handler being no place to call a hook. Each row reached for these itself before,
-/// which was between four and eight context walks a render, every render, for a press
-/// that comes once.
+/// a handler being no place to call a hook.
 ///
 /// It **compares equal always**, the handles being the root's and never replaced, so
 /// carrying it costs a row no render.
