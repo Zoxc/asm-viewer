@@ -96,9 +96,11 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
     });
 
     use_side_effect(move || {
-        // `loading` is not itself saved, but reading it re-runs this when a load ends,
-        // which is the record that writes. A search is a view and not read at all; nor is
-        // what each place had picked out (`places.marks_at`).
+        // `proj` is read here and not only by the settling effect: the flush a close or a
+        // switch makes writes only what was recorded, so the details are recorded at once
+        // and owed. `loading` is not itself saved, but reading it re-runs this when a load
+        // ends, which is the record that writes. A search is a view and not read at all;
+        // nor is what each place had picked out (`places.marks_at`).
         let _subscribed = (
             proj.read(),
             objects.read(),
