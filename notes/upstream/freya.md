@@ -382,6 +382,23 @@ is polled after the batch of events the press made, so its request is the last w
 reported. An `Input` that unfocused only for a press it can see was not answered, or a focus
 request that outranked it, would remove the workaround.
 
+## A tooltip goes off the window when there is room on the other side
+
+`Attached`, which `TooltipContainer` is built on, places the tooltip on the side it was given
+and centred along it, and nothing else (`attached.rs:105-118`): no flip to the other side
+when this one is out of room, and no slide back inside the window. The default side is the
+bottom (`tooltip.rs:156`). So a tooltip wider than its control hangs off the window's left
+edge, and a control near the bottom puts its tooltip under the window's bottom edge, though
+the right or the top has room for all of it. It is the same in 0.5.0-rc.5. **Cost:** it hits
+where the app puts most of its tooltips. `cut_tooltip`, the rest of a name cut short, is
+wider than the row by definition, and its rows are the sidebar's, against the window's left
+edge (`src/ui/parts.rs`, `src/ui/sidebar.rs`); the last rows of a sidebar list are against
+its bottom edge; and the back and forward buttons are the window's top-left corner
+(`src/ui.rs`). Not worked around, and not reported. The hover box places itself for this
+reason and slides back inside the window (`hover_place`, `src/ui/hover_view.rs`), but it
+knows its own width and a tooltip's is its text's. `Attached` measures both areas already,
+so it could flip and clamp against the window with what it holds.
+
 ## Wanted
 
 **A `MenuItem` that says its key.** Nothing on it takes one: the struct is a theme, its
@@ -419,6 +436,19 @@ never read. What the app does instead: the tab bar turns its scrollbar off -- on
 spare 16 px of its height (`src/ui/strip.rs`) -- and every other pane lets the bar cover its
 trailing edge. A gutter of the app's own is a goal (`notes/Goals.md`).
 
+**A scrollbar that can be styled.** Only the colours reach it: the theme sheet's `scrollbar`
+entry sets the track and the thumb's three states (`scrollbar.rs:20-30`), and the app sets
+none of them, so its bars are freya's own light or dark ones beside the palette. The rest is
+hard-coded. The thickness is 12 idle and 16 hovered, and the theme's `size` is never read
+(`scrollbar.rs:28`, `:54-58`). The track's alpha is replaced, 0 idle and 160 hovered
+(`:120`). The thumb is inset 4 px with an 8 px radius (`scrollthumb.rs:49`, `:74`). And the
+bar is gone 800 ms after the last movement (`scrollview.rs:187`). `ScrollView` and
+`VirtualScrollView` pass `theme: None` with the override fields `pub(crate)`, so no field
+can be set per view either. **Cost:** the thicker bars the app had under floem are
+deferred (`notes/Goals.md`), since the one way to them is a copy of the ~1350-line scroll
+view module. The bars also stay in freya's colours. A thickness and a track the theme
+sets, and a way to keep the bar shown, would do it.
+
 **Markdown code blocks that follow the app's own syntax colours.**
 `freya-markdown`'s `code-editor` feature draws a fenced block with the `CodeEditor`
 component, which is the highlighter this app already colours its source pane with -- but
@@ -442,6 +472,17 @@ is where a reader typing a path is looking -- cannot use it. The file finder han
 overlay layer, the press outside and the Escape key that `Popup` would have given it
 (`ui/finder.rs`); `RescuedPopup`, which is content to be centred, still uses `Popup`. An
 alignment on the background would do it.
+
+**An overlay that can leave the window.** Every overlay freya has -- `Popup`, the context
+menu, a `MenuContainer`, a tooltip, `Attached` -- is a node in the window's own tree, and a
+node is clipped to the window. The one way out is `launch_window`, which opens a top-level
+window that the desktop places, not a popup placed against the one it came from. **Cost:**
+what the app opens over itself is bounded by its window. The hover box is at most what is
+left between the name's row and the window's edge (`hover_place`, `src/ui/hover_view.rs`),
+so in a short window, or on a name near its top or bottom, a long answer scrolls inside a
+box a few rows tall. A context menu has to fit inside the window too, and the tooltips
+above could not go past it even with room on the screen. A popup surface, placed against a
+rect of the window that opens it, would do it.
 
 **A `ScrollController` a view is handed from outside only reaches it by luck, and reading one
 from an effect is a loop.** `ScrollController::new` keeps the position in states of its own and
@@ -568,6 +609,41 @@ half of why the scratchpad's listing follows the editor and nothing goes the oth
 instruction that named a line could neither light it nor bring it into view. An overlay of ours
 is no way round it: it cannot read the scroll it would have to follow. A `ScrollController` the
 editor accepts, or a scroll to its own cursor, would do it.
+
+**A `CodeEditor` whose keywords can be bold.** What the highlighter gives a span is a colour
+and nothing else: a line is `SmallVec<[(Color, TextNode); 4]>` (`syntax.rs:85`), each
+capture name resolved to a `Color` (`capture_color`, `:24`), and the row draws it with
+`Span::new(..).color(span.0)` (`editor_line.rs:172`). `EditorSyntaxTheme` has a colour for
+`keyword` and no weight for anything. **Cost:** neither code view can make a keyword bold:
+the scratchpad's editor is that component (`src/ui/pad_view.rs`), and the Source pane cuts
+its rows out of that same highlighter's `SyntaxBlocks` (`src/ui/highlight.rs`), so a
+capture's name never reaches it. The two panes have to agree, so it is both or neither. A
+style per capture beside the colour (weight, and italic while at it) would do it.
+
+**A `CodeEditor` with a thin caret.** The row sets `CursorStyle::Block` itself
+(`editor_line.rs:147`), though `Line` is the paragraph's own default, and the builder has
+nothing to choose it with (`editor_ui.rs:65-114`). **Cost:** the scratchpad's editor draws
+a block over the character in `text_fg` (`src/ui/pad_view.rs`), where every other text box
+in the app draws a line between two characters. A `cursor_style` on the builder would do it.
+
+**A `CodeEditor` selection that follows the pointer out of the editor.** A drag is the
+`on_pointer_move` on each line's paragraph (`editor_line.rs:84-98`, `:144`); only the
+release is global (`editor_ui.rs:257-277`). A pointer that leaves the text stops moving the
+selection: above the first shown line, below the last, past either side, or onto the
+gutter. The selection stays where the pointer last crossed text, and the editor does not
+scroll toward the pointer. **Cost:** a pad's selection stops at the pane's edge where the
+two code panes' sweeps go on past the listing, the pane and the window
+(`use_sweep_beyond`, `src/ui/code_row.rs`; `agents/Panes.md`). So selecting more of a pad
+than is on screen takes the keyboard, or the wheel mid-drag. A move handler on the window
+for the length of the drag, as the release already is, would do it.
+
+**A `CodeEditor` whose gutter can be pressed.** The line number is a label in a plain `rect`
+beside the paragraph (`editor_line.rs:127-140`), and the press and the move are on the
+paragraph alone (`:143-144`). A press on a number does nothing, and a drag down the numbers
+selects nothing. **Cost:** in the two code panes a press in the gutter starts a run at the
+row's start (`src/ui/marks.rs`), and in most editors it picks out the whole line. In the
+scratchpad's editor it misses. A gutter that answered a press and a drag, one line at a
+time, would do it.
 
 **A text that says it did not fit.** There is no truncation flag and no event for one:
 `SizedEventData` is `area`, `visible_area` and `inner_sizes` and nothing more, and the
