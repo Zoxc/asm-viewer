@@ -202,7 +202,10 @@ to go has none. Dropping it would be the history's rule, and a reader's own list
 behind their back. And a live row's press is `open_document` like a Symbols row's, a `Preview` into
 the temporal tab and a `NewTab` with Ctrl (`Reach::outside`, the one rule every row outside the
 panes reads, on the enum in `ui/documents.rs` and not with any one list), never `navigate`, since a
-bookmark is a place and not a position on a trail. The row draws `Bookmark::label` even when live,
+bookmark is a place and not a position on a trail. A **source** bookmark goes through
+`open_source_tab` instead: it kept the spelling of the tab it was made on, saved to disk and read
+back in a session that may spell the project directory another way, so without the rule the file
+already open would open again in a second tab. The row draws `Bookmark::label` even when live,
 `short_name` of it for a symbol with the whole in the tooltip and under the filter, as a History row
 does, so a row does not change its spelling when its binary
 goes. That is the **stored name**, except for a symbol the app named rather than the file, which
@@ -454,9 +457,10 @@ directory joined with each entry's own name, unless a tab is open on that file u
 spelling, in which case the row opens in that tab. Nothing is canonicalised -- `spelling` picks
 a spelling the app uses already. That gate is not a
 copy of the cache's rule but the call the cache itself makes before it reads, so it cannot fall
-behind: a refusal added to the reader is one every press already obeys. Both of those rules
-live in `open_source_file` (`ui/documents.rs`) and are written nowhere else: the finder's
-Enter and its rows are the same door (`agents/Finding.md`).
+behind: a refusal added to the reader is one every press already obeys. The gate lives in
+`open_source_file` (`ui/documents.rs`) and the naming in `open_source_tab` under it, which the
+Source pane's bar and a source bookmark go through too; the finder's Enter and its rows are this
+row's door exactly (`agents/Finding.md`).
 `compiled_from` matches a file on the exact string `addr2line` renders, `DW_AT_comp_dir` joined
 with the file entry, so a tree-opened file *is spelled* the debug info's way exactly when the
 project directory is the directory the build ran in. It shares a tab with a companion-opened
@@ -756,8 +760,9 @@ that only folded a group opened nothing and keeps the keyboard, as does a press 
 opens nothing at all -- and those are what leave a list holding the keyboard for its arrows and its
 Enter to be used in. The two halves of that are written together in `picks::opened`, which every
 row and every `ListKeys::open` that opens a document calls: the door every row outside the panes
-takes (`Reach::outside`), and the `Pressed::Opened` that hands the tab the keyboard. A rule stated
-on the enum and then applied at each row is one a new row can be written without.
+takes (`Reach::outside`), the `Pressed::Opened` that hands the tab the keyboard, and, for a source
+document, the naming that keeps one file to one tab. A rule stated on the enum and then applied at
+each row is one a new row can be written without.
 
 **Tooltips** are how a cut row is read, so `cut_tooltip` mounts nothing where the name fitted: a
 tooltip repeating what is already on screen is noise the pointer drags down the list. What decides

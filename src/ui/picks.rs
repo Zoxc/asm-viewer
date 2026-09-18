@@ -159,11 +159,25 @@ pub(crate) enum Pressed {
 /// rule stated on the enum and then applied at nine call sites is a rule the tenth row
 /// can be written without.
 ///
+/// A **source** document goes through [`open_source_tab`], which names it by the spelling
+/// an open tab already has for the file. A bookmark is saved to disk, so the spelling it
+/// kept is a tab's from a session that may have spelled the project directory another way;
+/// a [`Document::Source`] is compared as text, so without the rule it would open a second
+/// tab of a file already open.
+///
 /// Not a hook, and it consumes nothing: the row's render has already taken [`Doors`] and
 /// the [`Ctrl`] state, so a press handler and a [`ListKeys::open`] closure can both call
 /// this.
 pub(crate) fn opened(doors: Doors, ctrl: State<bool>, document: Document) -> Pressed {
-    open_document(doors.open, doors.visits, document, Reach::outside(ctrl));
+    let (open, visits, reach) = (doors.open, doors.visits, Reach::outside(ctrl));
+    match &document {
+        Document::Source(file) => {
+            open_source_tab(open, visits, Path::new(&**file), reach);
+        }
+        _ => {
+            open_document(open, visits, document, reach);
+        }
+    }
     Pressed::Opened
 }
 

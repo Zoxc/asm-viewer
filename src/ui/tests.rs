@@ -22360,6 +22360,57 @@ fn a_bookmark_row_opens_its_place() {
         .any(|entry| *entry == document));
 }
 
+/// **A bookmarked file opens in the tab it is already in.** A bookmark keeps the spelling
+/// the tab it was made on had, and it is saved: a project directory respelled between
+/// sessions -- or a file since reopened another way -- leaves the saved spelling beside
+/// the reader's current one. A `Document::Source` is compared as text, so pressing the row
+/// would be a second tab of one file, splitting its trail and its positions.
+///
+/// The press goes through `open_source_tab` for this, as the Files row and the Source
+/// pane's bar do: `spelling` is where one file reached two ways is made one tab.
+#[test]
+fn a_bookmarked_file_opens_in_the_tab_it_is_already_in() {
+    let directory = run_directory_under(line!(), "project");
+    std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
+    let path = directory.join("calls.rs");
+    std::fs::write(&path, "fn main() {}\n").expect("writing the source file");
+    let open_as = Document::Source(Arc::from(&*path.to_string_lossy()));
+    // What the bookmark was saved under, spelled through a child and back out: one path
+    // with the one above, which only `canonicalize` reduces.
+    let saved = Document::Source(Arc::from(
+        &*directory
+            .join("sub")
+            .join("..")
+            .join("calls.rs")
+            .to_string_lossy(),
+    ));
+    assert!(
+        saved != open_as,
+        "the two spellings are one path without asking anybody"
+    );
+
+    let (mut test, states) = TestingRunner::new(
+        bookmarks_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let mut bookmarks = states.bookmarks;
+    bookmarks.set(Bookmarks::from_entries(vec![bookmark_of(&saved)]));
+    // The reader has the file open already, under the spelling with no `..` in it.
+    open_document(states.open, states.visits, open_as.clone(), Reach::NewTab);
+    settle(&mut test);
+
+    let row = centre_of(&test, "calls.rs");
+    press_at(&mut test, row);
+    settle(&mut test);
+
+    assert!(
+        open_documents(states.open) == [open_as],
+        "the bookmark opened a second tab of a file the reader already had open"
+    );
+}
+
 /// A bookmark outlives its binary: with the object gone the row is still drawn, under the
 /// name it was made with, and a press on it goes nowhere. Opening the binary again brings
 /// it back to life without the list having changed.

@@ -332,9 +332,10 @@ leaves this list when it is. That is a move made on request, like everything els
   `kreadconfig`/`gsettings` subprocesses, on the first frame and again on a settings change
   (the answer is cached per process, so it is the first call that costs); startup reads
   `settings.toml`, `recents.toml` and the open project's two files synchronously inside
-  `app()`; and a followed name canonicalises the path once per open source tab to find the
-  tab it belongs to (`follow::spelling`), which is a press's own call on the thread that
-  draws — on Unix only, the reduction being `path::absolute` on Windows. None of
+  `app()`; and every door into a source file — a followed name, a Files row, a finder row,
+  the Source pane's bar, a bookmark — canonicalises the path once per open source tab to
+  find the tab it belongs to (`documents::spelling`), which is a press's own call on the
+  thread that draws — on Unix only, the reduction being `path::absolute` on Windows. None of
   those is measured, which is where this starts: the rule is worth keeping, and an atomic write
   of a few hundred bytes may still be cheaper than the channel it would take to move it.
 - [x] Rank the finder's list on the worker beside the walk, not on the UI thread. The walked
