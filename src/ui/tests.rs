@@ -32567,8 +32567,8 @@ fn drawn_at(test: &TestingRunner, y: f32) -> Chosen {
 /// **A keystroke in one pane's find bar draws neither the other pane nor its bar.**
 /// Whether a bar is open, and what is in one, are each one key of `Finds`, and there is no
 /// reading one key of a table: both reads are of the whole of it, so every write woke every
-/// reader. Asked in the pane, that was the Assembly pane -- which clones the whole analysis
-/// on its first line -- and asked in the bar, it was the other bar of the same tab.
+/// reader. Asked in the pane, that was the whole Assembly pane, and asked in the bar, it
+/// was the other bar of the same tab.
 ///
 /// The slot is a component of its own now and the bar reads its own entry through a memo.
 /// Fails on either read put back: the pane and the bar are both drawn again for a
@@ -32620,6 +32620,49 @@ fn a_keystroke_in_one_find_bar_draws_neither_the_other_pane_nor_its_bar() {
         find_bar::bars_drawn(),
         bars,
         "a character typed in another bar drew this one again"
+    );
+}
+
+/// **An answer landing draws the Assembly pane and copies no analysis.** The pane is drawn
+/// again on every write to the analysis -- a question sent, its answer, the wait turning
+/// slow -- and `Analyzed` is a whole answer, so it reads one through a guard as the Source
+/// pane does. Fails on `use_consume::<Analysis>().0.read().clone()`.
+#[test]
+fn an_answer_landing_draws_the_assembly_pane_and_copies_no_analysis() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let shown = move || Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::new(sum_to.clone()),
+    };
+    let first = shown();
+    let (mut test, mut analysis) = TestingRunner::new(
+        listing_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| {
+            runner
+                .provide_root_context(move || listing_states(first))
+                .analysis
+        },
+        1.,
+    );
+    settle(&mut test);
+
+    let (panes, copied) = (assembly::panes_drawn(), crate::ui::studied::copies());
+    let answer = shown();
+    analysis.write().answered = Some(answer.ask.clone());
+    analysis.write().shown = Some(answer);
+    settle(&mut test);
+    assert!(
+        assembly::panes_drawn() > panes,
+        "the answer did not reach the pane"
+    );
+    assert_eq!(
+        crate::ui::studied::copies(),
+        copied,
+        "drawing the assembly side copied the whole answer"
     );
 }
 

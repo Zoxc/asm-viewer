@@ -1567,8 +1567,8 @@ impl AssemblyPane {
 }
 
 counter!(
-    /// Test-only: how many times this thread has drawn the Assembly pane. Its first line
-    /// clones the whole analysis, so what wakes it is worth pinning.
+    /// Test-only: how many times this thread has drawn the Assembly pane, the one pane
+    /// every tab has.
     pub(crate) fn panes_drawn() = PANES_DRAWN
 );
 
@@ -1577,9 +1577,12 @@ impl Component for AssemblyPane {
         #[cfg(test)]
         PANES_DRAWN.set(PANES_DRAWN.get() + 1);
 
-        let analysis = use_consume::<Analysis>().0.read().clone();
         let tab = self.tab;
         let bar = find_bar_over((Placing::Tab(tab), Pane::Assembly));
+        // Read through a guard held for the render and never copied: `Analyzed` is a
+        // whole answer. Nothing here writes it, and the children render after this returns.
+        let analysis = use_consume::<Analysis>().0;
+        let analysis = analysis.read();
 
         rect()
             .expanded()

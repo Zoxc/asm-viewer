@@ -69,7 +69,9 @@ move of a sweep in either pane -- it reads the runs -- and on every word from th
 So the two guards are bound around the one call that wants both (`source_side`), spent and
 dropped, and every later read of the analysis is a short scope of its own. `Analyzed`'s `Clone`
 counts itself (`studied::copies`), as `Grouped`'s does (`agents/Sidebar.md`), so a headless test
-can say a sweep copied nothing.
+can say a sweep copied nothing. The Assembly pane holds its guard for the whole render, which
+writes nothing, and an answer landing copies nothing either
+(`an_answer_landing_draws_the_assembly_pane_and_copies_no_analysis`).
 
 **A tab opens its source side on the symbol's own lines**, which is what selecting a symbol asked to
 see: a function a hundred lines into its file was otherwise read from the top of the file for as
@@ -1332,8 +1334,8 @@ which is every write to `Finds`, a keystroke among them. Each carries the pane a
 and both are the same on every render.
 
 **Whether a bar is open is asked in a scope of its own** (`FindSlot`). That, too, is one key of
-`Finds`, so the pane that asked was woken by every keystroke in every bar in the app -- and the
-Assembly pane clones the whole analysis on its first line. The slot is a component keyed by the
+`Finds`, so the pane that asked was woken by every keystroke in every bar in the app, heading and
+listing included. The slot is a component keyed by the
 pane, the bar under it is what comes and goes, and the pane's column is built once; a keystroke
 elsewhere redraws the slot and stops. The bar itself reads **its own entry through a memo** for the
 same reason: both bars of a tab can be open, and typing in one drew the other

@@ -397,8 +397,8 @@ pub(crate) fn use_searching(at: Where, searchable: Option<Searchable>) {
 /// **A component of its own, so that the question is asked in a scope of its own.**
 /// Whether a bar is open is one key of [`Finds`], and there is no reading one key of a
 /// table: the read is of the whole of it, and a keystroke in any bar wakes it. Asked in
-/// the pane, that put the pane itself on the list -- and the Assembly pane's first line
-/// clones the whole analysis. Asked here, a keystroke in one pane's bar redraws this slot
+/// the pane, that put the pane itself on the list, its heading and its listing with it.
+/// Asked here, a keystroke in one pane's bar redraws this slot
 /// and stops, the bar under it comparing equal.
 ///
 /// Keyed by the pane, so a tab switch remounts it -- and the [`FindBar`] under it, whose
