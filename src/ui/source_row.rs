@@ -482,7 +482,7 @@ impl Component for SourceRow {
         // non-breaking because skia trims trailing whitespace when it measures.
         let number = label()
             .text(format!("{}\u{a0}", index + 1))
-            .width(Size::px(60.0))
+            .width(Size::px(source_line_number_width()))
             .text_align(TextAlign::Right)
             .color(palette().address_fg)
             .max_lines(1)
@@ -507,14 +507,12 @@ impl Component for SourceRow {
         )
         // A press in a source-driven tab's own file also says which listing the
         // other side shows; the row is picked out by `pointer_down` either way.
-        .maybe(common.drives.is_some(), |el| {
-            let (drives, docs) = (common.drives, common.asking.doors.open.docs);
-            let driven = common.asking.doors.places.driven;
-            el.on_press(move |_| {
-                if let Some(tab) = drives {
-                    drive(docs, driven, tab, &at);
-                }
-            })
+        .map(common.drives, |el, tab| {
+            let (docs, driven) = (
+                common.asking.doors.open.docs,
+                common.asking.doors.places.driven,
+            );
+            el.on_press(move |_| drive(docs, driven, tab, &at))
         })
     }
 

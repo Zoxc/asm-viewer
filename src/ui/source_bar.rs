@@ -65,9 +65,9 @@ pub(crate) fn source_bar(
                         .width(Size::fill())
                         .height(Size::px(list_row_height()))
                         .spacing(GLYPH_GAP)
-                        .maybe(opens, |bar| {
+                        .maybe(opens, |el| {
                             let file = file.clone();
-                            bar.on_press(move |_| {
+                            el.on_press(move |_| {
                                 let path = Path::new(&*file);
                                 open_source_tab(open, visits, path, Reach::inside(ctrl));
                             })
@@ -84,8 +84,8 @@ pub(crate) fn source_bar(
         )
         // Only where this side leads, and outside the name rather than inside it, so a
         // press on it is a press on the toggle and never a door into the file.
-        .maybe(!opens, |bar| {
-            bar.child(PaneToggle {
+        .maybe(!opens, |el| {
+            el.child(PaneToggle {
                 of: Placing::Tab(tab),
             })
         })

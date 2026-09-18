@@ -254,6 +254,16 @@ pub(crate) fn gesture_width() -> f32 {
     fonts().mono.size() * 15.0
 }
 
+/// How wide the column a Source row's line number is written in.
+///
+/// [`gesture_width`]'s reasoning: the numbers are drawn in the fixed-width font, so the
+/// column follows it. Five digits and the space after them are six characters of about
+/// six tenths of the size each, with some air to their left. It was a fixed 60 px, which
+/// is what this comes to at the 14 px the font starts at.
+pub(crate) fn source_line_number_width() -> f32 {
+    (fonts().mono.size() * 4.3).round()
+}
+
 /// How wide the Scratchpad view's list of pads is.
 ///
 /// A fixed width and not a `ResizableContainer`, which is what the two splits in this app
