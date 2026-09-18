@@ -138,11 +138,9 @@ pub enum TreeRow {
     File {
         /// The file's name, without its directory.
         name: String,
-        /// The whole path, which is what the row's tooltip says.
+        /// The whole path, which is what the row's tooltip says, and the key the expansion
+        /// set holds: the tree makes one row per path.
         path: PathBuf,
-        /// The group's identity and the key the expansion set holds: the pointer of the
-        /// first object the file contributed.
-        group: usize,
         /// How many objects are under this row *now*, which under a filter is how many
         /// of them matched.
         members: usize,
@@ -176,7 +174,7 @@ impl ObjectTree {
         objects: &[Arc<Object>],
         loads: &Loads,
         matcher: &Matcher,
-        expanded: &HashSet<usize>,
+        expanded: &HashSet<PathBuf>,
     ) -> Self {
         let mut rows = opened(objects, loads, matcher, expanded);
         rows.extend(pending(objects, loads, matcher));
@@ -189,7 +187,7 @@ fn opened(
     objects: &[Arc<Object>],
     loads: &Loads,
     matcher: &Matcher,
-    expanded: &HashSet<usize>,
+    expanded: &HashSet<PathBuf>,
 ) -> Vec<TreeRow> {
     // Nothing may be forced open while the filter is asking nothing.
     let filtering = !matches!(matcher, Matcher::Everything);
@@ -220,7 +218,7 @@ fn file(
     group: &[Arc<Object>],
     loads: &Loads,
     matcher: &Matcher,
-    expanded: &HashSet<usize>,
+    expanded: &HashSet<PathBuf>,
     filtering: bool,
 ) -> Vec<TreeRow> {
     let first = &group[0];
@@ -246,10 +244,9 @@ fn file(
         return Vec::new();
     }
 
-    let key = Arc::as_ptr(first).addr();
     let expansion = if filtering && !whole {
         Expansion::Forced
-    } else if expanded.contains(&key) {
+    } else if expanded.contains(&first.path) {
         Expansion::Expanded
     } else {
         Expansion::Collapsed
@@ -258,7 +255,6 @@ fn file(
     let mut rows = vec![TreeRow::File {
         name,
         path: first.path.clone(),
-        group: key,
         members: members.len(),
         expansion,
         loading,

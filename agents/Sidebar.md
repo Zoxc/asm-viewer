@@ -108,8 +108,12 @@ Filter and folds interact by one rule: a file row is never hidden while a row un
 So a file shows when its own name matches *or* a member's does, and those are different answers. A
 file match keeps the reader's fold; a member match forces the row open (`Expansion::Forced`, a third
 state, drawing no disclosure triangle), since a search that folds its results away has answered
-nothing. Each row has a text tag (`ELF`/`PE`/`COFF`/`MACH`/`AR`) rather than an icon, because
-nothing in Lucide's 1640 icons names an object format.
+nothing. **The fold set is keyed by the file's path**, the one identity a file row has that
+outlives its objects. It was the first object's address, which a closed file frees for the next
+object to take, and an entry nothing prunes could then open another file's row. By path, a file
+reloaded after a build comes back folded as it was left. Each row has a text tag
+(`ELF`/`PE`/`COFF`/`MACH`/`AR`) rather than an icon, because nothing in Lucide's 1640 icons names
+an object format.
 
 **A tree row is four columns and one of them is elastic.** The triangle and the format tag are fixed
 widths every row keeps whether or not it has one, so the tags and the names line up down the list.
@@ -153,8 +157,8 @@ the `Loading` context) is the files being read, one entry per (load, path). The 
 Three rules come with it. A file still being read is **always** a file row even at one object, since
 "one object is its own row" needs to know the one is all there will be, and a row that promoted
 itself to a parent as the second member landed would move the list under a reader already reading
-it. A row with nothing behind it is **a variant of its own**, not a `File` with its group, its count
-and its expansion set to sentinels: it has no members, so there is nothing to fold and it draws no
+it. A row with nothing behind it is **a variant of its own**, not a `File` with its count and its
+expansion set to sentinels: it has no members, so there is nothing to fold and it draws no
 triangle, and the path is the whole of its identity, which is what keys it. That is about the model
 and not the drawing: **one component draws both**, `ArchiveRow` with its folding part an
 `Option<Folds>`, which is `None` for a file with nothing under it yet. It was a second component of

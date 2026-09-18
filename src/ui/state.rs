@@ -372,9 +372,8 @@ pub(crate) struct SidebarSplit(pub(crate) Split);
 /// would be held for as long as the app ran. Ids are never handed out twice
 /// ([`Docs::open`]), so an entry a closed tab left behind can never be mistaken for
 /// another tab's -- it is dead weight of four bytes, and a reopened tab correctly opens
-/// with its section shut. The Objects tree's fold set makes the same argument. It follows
-/// that the section stays open or shut across the whole of a tab's trail, which is a
-/// fact about the tab and not about any one place on it.
+/// with its section shut. It follows that the section stays open or shut across the whole
+/// of a tab's trail, which is a fact about the tab and not about any one place on it.
 ///
 /// Never saved: it is a view of a tab, like a filter.
 #[derive(Clone, Copy)]

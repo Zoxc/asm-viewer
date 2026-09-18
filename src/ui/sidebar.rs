@@ -15,33 +15,32 @@
 
 use super::*;
 
-/// Fold the file row's group away, or open it: what pressing an archive row does, and
+/// Fold the file row at `path` away, or open it: what pressing an archive row does, and
 /// what Enter on one does. A row the filter is holding open (`Forced`) is left alone,
 /// since folding it would hide the rows the filter put on screen.
 fn fold_archive(
-    mut expanded: State<HashSet<usize>>,
-    group: usize,
+    mut expanded: State<HashSet<PathBuf>>,
+    path: &Path,
     expansion: Expansion,
 ) -> Pressed {
     if expansion == Expansion::Forced {
         return Pressed::Folded;
     }
     let mut expanded = expanded.write();
-    if !expanded.remove(&group) {
-        expanded.insert(group);
+    if !expanded.remove(path) {
+        expanded.insert(path.to_path_buf());
     }
     Pressed::Folded
 }
 
-/// The part of a file's row that a file still being read has not got: the group it folds,
-/// how many objects came out of it, and which way it is folded now.
+/// The part of a file's row that a file still being read has not got: how many objects
+/// came out of it, which way it is folded now, and the paths of the files the reader has
+/// folded open.
 #[derive(Clone, Copy, PartialEq)]
 struct Folds {
-    /// The group this row is, in the tab's set of the groups the reader has opened.
-    group: usize,
     members: usize,
     expansion: Expansion,
-    expanded: State<HashSet<usize>>,
+    expanded: State<HashSet<PathBuf>>,
 }
 
 /// One opened file, and the row its objects fold under. It has no `Object` behind it, so
@@ -83,6 +82,7 @@ impl Component for ArchiveRow {
         let picking = self.states.picking;
         let states = self.states.project;
         let path = self.path.clone();
+        let fold_path = self.path.clone();
         let pick = Pick::Path(self.path.clone());
 
         // `Forced` draws no triangle, only the space one would have taken: the filter is
@@ -113,7 +113,7 @@ impl Component for ArchiveRow {
             list_row(hovering, picking.drawn(&pick, false))
                 .on_press(move |_| {
                     picking.press(pick.clone(), at, || match folds {
-                        Some(folds) => fold_archive(folds.expanded, folds.group, folds.expansion),
+                        Some(folds) => fold_archive(folds.expanded, &fold_path, folds.expansion),
                         // Nothing under it to fold and nothing behind it to open.
                         None => Pressed::Folded,
                     });
@@ -570,10 +570,10 @@ impl Component for ObjectsPanel {
         // What Enter on a row reaches through: the pane's, which is where the rows' own
         // states are consumed too.
         let (doors, ctrl) = (pane.states.doors, pane.states.ctrl);
-        // Which files the reader has folded open: a view of a list and not part of the
-        // session, so a `use_state` here. The set holds group keys, which are `Arc`
-        // pointers, so an entry left behind by a closed file is harmless.
-        let expanded = use_state(HashSet::<usize>::new);
+        // Which files the reader has folded open, by path: a view of a list and not part
+        // of the session, so a `use_state` here. A file closed and opened again, or
+        // reloaded after a build, comes back folded the way it was left.
+        let expanded = use_state(HashSet::<PathBuf>::new);
         // The one compiled filter: what narrows the tree below, what the rows mark with,
         // and what the bar prints for a pattern that will not compile.
         let marking = use_list_marking(filter);
@@ -616,8 +616,8 @@ impl Component for ObjectsPanel {
             },
             move |row| match row {
                 TreeRow::File {
-                    group, expansion, ..
-                } => fold_archive(expanded, *group, *expansion),
+                    path, expansion, ..
+                } => fold_archive(expanded, path, *expansion),
                 // Nothing under it to fold and nothing behind it to open.
                 TreeRow::Pending { .. } => Pressed::Folded,
                 TreeRow::Object { object, .. } => {
@@ -631,7 +631,7 @@ impl Component for ObjectsPanel {
             // at.
             move |row, unfold| {
                 let TreeRow::File {
-                    group, expansion, ..
+                    path, expansion, ..
                 } = row
                 else {
                     return;
@@ -639,7 +639,7 @@ impl Component for ObjectsPanel {
                 if unfold == (*expansion == Expansion::Expanded) {
                     return;
                 }
-                fold_archive(expanded, *group, *expansion);
+                fold_archive(expanded, path, *expansion);
             },
         );
 
@@ -654,7 +654,7 @@ impl Component for ObjectsPanel {
                  (tree, selected, expanded, marking): &(
                     ObjectTree,
                     Option<usize>,
-                    State<HashSet<usize>>,
+                    State<HashSet<PathBuf>>,
                     Marking,
                 ),
                  states| {
@@ -662,7 +662,6 @@ impl Component for ObjectsPanel {
                         TreeRow::File {
                             name,
                             path,
-                            group,
                             members,
                             expansion,
                             loading,
@@ -670,7 +669,6 @@ impl Component for ObjectsPanel {
                             name: name.clone(),
                             path: path.clone(),
                             folds: Some(Folds {
-                                group: *group,
                                 members: *members,
                                 expansion: *expansion,
                                 expanded: *expanded,
@@ -681,10 +679,9 @@ impl Component for ObjectsPanel {
                             states,
                             key: DiffKey::None,
                         }
-                        .key(*group)
+                        .key(path)
                         .into(),
-                        // The same row with nothing to fold, and keyed by the path, the
-                        // only identity a file with nothing behind it yet has.
+                        // The same row with nothing to fold, keyed by the same path.
                         TreeRow::Pending { name, path } => ArchiveRow {
                             name: name.clone(),
                             path: path.clone(),

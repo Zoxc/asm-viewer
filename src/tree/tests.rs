@@ -49,7 +49,7 @@ fn described(tree: &ObjectTree) -> Vec<String> {
         .collect()
 }
 
-fn tree(objects: &[Arc<Object>], filter: &Filter, expanded: &[usize]) -> ObjectTree {
+fn tree(objects: &[Arc<Object>], filter: &Filter, expanded: &[&str]) -> ObjectTree {
     loading_tree(objects, &Loads::default(), filter, expanded)
 }
 
@@ -57,13 +57,13 @@ fn loading_tree(
     objects: &[Arc<Object>],
     loads: &Loads,
     filter: &Filter,
-    expanded: &[usize],
+    expanded: &[&str],
 ) -> ObjectTree {
     ObjectTree::new(
         objects,
         loads,
         &filter.matcher(),
-        &expanded.iter().copied().collect(),
+        &expanded.iter().map(PathBuf::from).collect(),
     )
 }
 
@@ -98,9 +98,8 @@ fn an_archive_folds_its_members_away() {
         ["file libfoo.rlib (3) Collapsed"]
     );
 
-    let group = Arc::as_ptr(&objects[0]).addr();
     assert_eq!(
-        described(&tree(&objects, &Filter::default(), &[group])),
+        described(&tree(&objects, &Filter::default(), &["/tmp/libfoo.rlib"])),
         [
             "file libfoo.rlib (3) Expanded",
             "  object foo.o",
@@ -114,14 +113,30 @@ fn an_archive_folds_its_members_away() {
 #[test]
 fn one_path_opened_twice_is_one_group() {
     let objects = [archive(), archive()].concat();
-    let group = Arc::as_ptr(&objects[0]).addr();
     assert_eq!(
         described(&tree(&objects, &Filter::default(), &[])),
         ["file libfoo.rlib (6) Collapsed"]
     );
     assert_eq!(
-        described(&tree(&objects, &Filter::default(), &[group])).len(),
+        described(&tree(&objects, &Filter::default(), &["/tmp/libfoo.rlib"])).len(),
         7
+    );
+}
+
+/// A fold is the file's, by its path, and not its objects': the same file read again comes
+/// back folded as it was left, and no other file's fold opens it. Keyed by the first
+/// object's address, a closed file's entry could open whichever file's object the
+/// allocator next put there.
+#[test]
+fn a_fold_is_keyed_by_the_files_path() {
+    let reloaded = archive();
+    assert_eq!(
+        described(&tree(&reloaded, &Filter::default(), &["/tmp/libfoo.rlib"]))[0],
+        "file libfoo.rlib (3) Expanded"
+    );
+    assert_eq!(
+        described(&tree(&reloaded, &Filter::default(), &["/tmp/libbar.rlib"]))[0],
+        "file libfoo.rlib (3) Collapsed"
     );
 }
 
@@ -150,9 +165,8 @@ fn a_matching_file_keeps_its_own_expansion() {
         ["file libfoo.rlib (3) Collapsed"]
     );
 
-    let group = Arc::as_ptr(&objects[0]).addr();
     assert_eq!(
-        described(&tree(&objects, &plain("rlib"), &[group])),
+        described(&tree(&objects, &plain("rlib"), &["/tmp/libfoo.rlib"])),
         [
             "file libfoo.rlib (3) Expanded",
             "  object foo.o",
@@ -213,21 +227,20 @@ fn a_file_being_read_is_a_row_before_it_has_an_object() {
 fn one_object_of_a_file_still_being_read_stays_under_its_file() {
     let objects = vec![object("/tmp/libfoo.rlib", "foo.o")];
     let loads = reading(&["/tmp/libfoo.rlib"]);
-    let group = Arc::as_ptr(&objects[0]).addr();
 
     assert_eq!(
         described(&loading_tree(
             &objects,
             &loads,
             &Filter::default(),
-            &[group]
+            &["/tmp/libfoo.rlib"]
         )),
         ["file libfoo.rlib (1) Expanded reading", "  object foo.o"]
     );
 
     // And once the read is over it collapses into the one row the rule has always given it.
     assert_eq!(
-        described(&tree(&objects, &Filter::default(), &[group])),
+        described(&tree(&objects, &Filter::default(), &["/tmp/libfoo.rlib"])),
         ["object foo.o"]
     );
 }
