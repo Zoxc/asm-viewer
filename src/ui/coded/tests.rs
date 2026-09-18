@@ -24,7 +24,9 @@ fn the_marks_of_the_file_the_pane_is_showing_are_taken_with_the_objects_they_wer
     let file: Arc<str> = Arc::from("now.c");
     let mut state = Coded::default();
     assert!(state.take(Some(&file), file.clone(), lines(&[3]), vec![7]));
-    assert!(state.lines_in(&file).is_some());
+    // The lines themselves: a take that stored an empty set, or another file's, answers
+    // with something either way.
+    assert_eq!(state.lines_in(&file), Some(&lines(&[3])));
     assert_eq!(state.over, vec![7]);
     assert!(
         state.pending(&file, &[]),

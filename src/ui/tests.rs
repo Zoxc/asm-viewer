@@ -3327,13 +3327,42 @@ fn the_shortcuts_page_draws_each_gesture_under_the_place_it_applies() {
     );
     settle(&mut test);
 
-    let drawn = labels(&test);
-    let first = &shortcuts::SECTIONS[0];
-    for text in [first.place, first.gestures[0].keys, first.gestures[0].does] {
-        assert!(
-            drawn.iter().any(|label| label == text),
-            "{text:?} is not on the page: {drawn:?}"
-        );
+    // Where each piece of text was laid out, so that "under" is a fact about the page and
+    // not about which words are somewhere on it. A flat bag of labels is satisfied by a
+    // page drawing every gesture beneath one heading.
+    let drawn = labels_with_areas(&test);
+    let at = |text: &str| -> Vec<f32> {
+        drawn
+            .iter()
+            .filter(|(label, _)| label == text)
+            .map(|(_, area)| area.origin.y)
+            .collect()
+    };
+    let headings: Vec<f32> = shortcuts::SECTIONS
+        .iter()
+        .map(|section| {
+            let drawn = at(section.place);
+            assert_eq!(drawn.len(), 1, "{:?} is not drawn once", section.place);
+            drawn[0]
+        })
+        .collect();
+    assert!(
+        headings.windows(2).all(|pair| pair[0] < pair[1]),
+        "the headings are not in the order the list states them: {headings:?}"
+    );
+
+    for (index, section) in shortcuts::SECTIONS.iter().enumerate() {
+        let under = headings[index];
+        let next = headings.get(index + 1).copied().unwrap_or(f32::INFINITY);
+        for gesture in section.gestures {
+            for text in [gesture.keys, gesture.does] {
+                assert!(
+                    at(text).iter().any(|&y| y > under && y < next),
+                    "{text:?} is not drawn under {:?}",
+                    section.place
+                );
+            }
+        }
     }
 }
 
@@ -6434,9 +6463,11 @@ fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
     );
 }
 
-/// Nothing found says so, whatever way the question came back with nothing: a server
-/// that answered no places, one that refused the question, and one that stopped
-/// answering all leave the panel saying there are none.
+/// A server that answered no places leaves the panel saying there are none. The other two
+/// ways of coming back with nothing -- a refusal, and a conversation that ended -- run
+/// through the worker and are tested where it is mounted
+/// ([`a_refused_references_question_leaves_the_panel_saying_there_are_none`] and its
+/// sibling).
 #[test]
 fn a_references_question_that_answers_nothing_says_there_are_none() {
     let (mut test, roots) = TestingRunner::new(
@@ -8778,15 +8809,24 @@ fn the_box_draws_the_answer_as_markdown() {
     let (test, _at, _asks, _directory) = hovering_over(said, "helper");
     assert!(hover_box(&test).is_some(), "the box is drawn");
 
-    let drawn = labels(&test).join("\n");
+    // Each paragraph whole, and not the words it is made of: the emphasised run is a span
+    // of its own, and a renderer that kept it and dropped the prose either side would
+    // still be drawing the word.
+    let drawn: Vec<String> = labels_with_areas(&test)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
     assert!(
-        drawn.contains("pub fn helper(n: u32) -> u32"),
+        drawn
+            .iter()
+            .any(|text| text == "pub fn helper(n: u32) -> u32"),
         "the signature is not drawn: {drawn:?}"
     );
     assert!(
-        drawn.contains("one"),
-        "the doc comment is not drawn: {drawn:?}"
+        drawn.iter().any(|text| text == "Adds one to a number."),
+        "the doc comment is not drawn whole: {drawn:?}"
     );
+    let drawn = drawn.join("\n");
     // The marks are the markdown's own and are drawn as what they mean, not as text.
     assert!(
         !drawn.contains("```") && !drawn.contains("**"),
@@ -10500,6 +10540,65 @@ fn a_refused_references_question_leaves_the_panel_saying_there_are_none() {
     assert!(
         matches!(language.peek().state, Lsp::Running { .. }),
         "the control was told the server broke"
+    );
+}
+
+/// **A server that stopped answering answers the panel too.** The conversation ended
+/// rather than the question being turned down, so the panel says there are no uses and
+/// the control says the server is gone: a question left pending would go on looking for
+/// an answer from a process that is not there.
+#[test]
+fn a_references_question_a_broken_server_never_answers_says_there_are_none() {
+    let (file, _directory) = calling_file("broken");
+    let (mut test, roots, _asks) = mount_linking(
+        |job: LspJob| match job {
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
+                reply: replied(
+                    want,
+                    Err(lsp::Failure::Broken("the pipe closed".to_owned())),
+                    &mut unread(),
+                ),
+            }),
+            _ => None,
+        },
+        file.clone(),
+    );
+    let states = roots.states;
+    let mut language = roots.language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &mut language);
+
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let entry = centre_of(&test, "Find references to helper");
+    press_at(&mut test, entry);
+    pump(&mut test, |_| roots.located.peek().found.is_some());
+
+    let state = roots.located.peek().clone();
+    assert!(
+        state.pending().is_none(),
+        "the panel is still looking for an answer that will not come"
+    );
+    assert_eq!(
+        state
+            .found
+            .as_ref()
+            .and_then(Found::places)
+            .map(references::References::count),
+        Some(0),
+        "a server that stopped answering is not an empty answer"
+    );
+    // And the control is told, which is what tells this from a refusal.
+    assert!(
+        matches!(language.peek().state, Lsp::Failed(_)),
+        "the control was not told the server stopped answering"
     );
 }
 
@@ -12853,13 +12952,13 @@ fn a_landing_is_gone_to_once_and_does_not_drag_the_pane_back() {
     let mut landing = landing;
     landing.set(Some(Landing {
         tab: document,
-        at: Some(Landed::line(at)),
+        at: Some(Landed::line(at.clone())),
         address: None,
     }));
     settle(&mut test);
     let drawn = gutter_lines(&test);
     assert!(
-        drawn.first().is_some_and(|first| *first > 1),
+        drawn.contains(&at.line),
         "the pane never went to the landing's line: {drawn:?}"
     );
 
@@ -18387,11 +18486,14 @@ fn a_picked_out_line_lights_the_instructions_it_was_compiled_from() {
     let studied = Studied::new(sum_to.clone());
     let at = a_line_of(&sum_to);
     let assembly = studied.assembly.clone().expect("sum_to decodes");
-    // How many instructions the line produced, which is how many rows should light.
-    let compiled = (0..assembly.instructions.len())
+    // The instructions the line produced, by the address each draws under. **Which** rows
+    // and not how many: a mapping from an instruction to its row that is one row out
+    // lights exactly as many as this counts.
+    let compiled: Vec<String> = (0..assembly.instructions.len())
         .filter(|&index| studied.position(index).as_ref() == Some(&at))
-        .count();
-    assert!(compiled > 0, "the line produced no instruction");
+        .map(|index| format!("{:016X}", assembly.instructions[index].address))
+        .collect();
+    assert!(!compiled.is_empty(), "the line produced no instruction");
     // A row that is not one of them, for the pointer to pass over.
     let other = (0..assembly.instructions.len())
         .find(|&index| studied.position(index).as_ref() != Some(&at))
@@ -18418,6 +18520,25 @@ fn a_picked_out_line_lights_the_instructions_it_was_compiled_from() {
         })
         .len()
     };
+    // The address each lit row stands at, top to bottom: the wash is the row's own rect
+    // and the address is the column standing in it.
+    let lit_rows = |test: &TestingRunner| -> Vec<String> {
+        let washes = rects_with(test, palette().pair_bg);
+        let mut rows: Vec<(f32, String)> = labels_with_areas(test)
+            .into_iter()
+            .filter(|(text, area)| {
+                text.len() == 17
+                    && u64::from_str_radix(text.trim(), 16).is_ok()
+                    && washes.iter().any(|wash| {
+                        let middle = area.origin.y + area.height() / 2.0;
+                        middle > wash.origin.y && middle < wash.origin.y + wash.height()
+                    })
+            })
+            .map(|(text, area)| (area.origin.y, text.trim().to_owned()))
+            .collect();
+        rows.sort_by(|left, right| left.0.total_cmp(&right.0));
+        rows.into_iter().map(|(_, address)| address).collect()
+    };
     assert_eq!(
         wearing(&test, palette().pair_bg),
         0,
@@ -18430,7 +18551,7 @@ fn a_picked_out_line_lights_the_instructions_it_was_compiled_from() {
     });
     settle(&mut test);
     assert_eq!(
-        wearing(&test, palette().pair_bg),
+        lit_rows(&test),
         compiled,
         "the rows lit are not the instructions the line was compiled from"
     );
@@ -18465,11 +18586,7 @@ fn a_picked_out_line_lights_the_instructions_it_was_compiled_from() {
         (row.origin.y + row.height() / 2.0) as f64,
     ));
     settle(&mut test);
-    assert_eq!(
-        wearing(&test, palette().pair_bg),
-        compiled,
-        "the pointer moved the pair"
-    );
+    assert_eq!(lit_rows(&test), compiled, "the pointer moved the pair");
     assert_eq!(
         wearing(&test, palette().text_select_bg),
         0,
@@ -21412,13 +21529,44 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
             )
         })
         .collect();
-    assert!(!gaps.is_empty(), "the stretch draws none of its bytes");
-    for &row in &gaps {
+    // Every byte, counted: the rows run from the stretch's first address to its last,
+    // sixteen bytes each with the last one short, and what they draw adds up to the
+    // stretch's own extent. A count alone would be satisfied by one row of a hundred.
+    let stretch = rows.stretch(0).expect("the listing has stretch 0");
+    let placed = rows.placed_of(0).expect("stretch 0 is in a section");
+    let covers = stretch.range.end - stretch.range.start;
+    assert!(
+        covers > section::GAP_BYTES_PER_ROW,
+        "the stretch is one row of bytes"
+    );
+    assert_eq!(
+        u64::try_from(gaps.len()).expect("a row count fits"),
+        covers.div_ceil(section::GAP_BYTES_PER_ROW),
+        "the stretch's {covers} bytes are drawn in {} rows",
+        gaps.len()
+    );
+    let first = placed.place(stretch.range.start);
+    let mut drawn = 0;
+    for (index, &row) in gaps.iter().enumerate() {
         let address = rows.address_of(row).expect("a gap row has an address");
+        assert_eq!(
+            address,
+            first + index as u64 * section::GAP_BYTES_PER_ROW,
+            "row {row} stands where the rows above it do not end"
+        );
         let line = row_line(&rows, row);
         assert!(line.starts_with(&format!("{address:016X} ")), "{line:?}");
-        assert!(line.ends_with('|'), "row {row} draws no bytes: {line:?}");
+        // The characters between the bars are one per byte the row drew.
+        let bytes = line
+            .split_once(" |")
+            .and_then(|(_, rest)| rest.strip_suffix('|'))
+            .unwrap_or_else(|| panic!("row {row} draws no bytes: {line:?}"));
+        drawn += bytes.chars().count() as u64;
     }
+    assert_eq!(
+        drawn, covers,
+        "the rows do not draw every byte the stretch covers"
+    );
 }
 
 /// The Assembly pane over an object's code with a menu viewer above it, so a row's menu
@@ -27224,13 +27372,30 @@ fn a_step_picks_out_the_match_and_the_rows_wear_the_wash() {
         "a step owed the other pane a scroll"
     );
     let first = finds.peek().get(&at).at.expect("the bar is on a match");
-    assert!(labels(&test).iter().any(|label| label.contains(" of ")));
+    // The counter says which match, and not merely that there is a count: one stuck on
+    // the first of them reads the same as one that followed the step.
+    let counter = |test: &TestingRunner| -> Vec<String> {
+        labels(test)
+            .into_iter()
+            .filter(|label| label.contains(" of "))
+            .collect()
+    };
+    assert_eq!(
+        counter(&test),
+        [format!("{} of {}", first + 1, hits.len())],
+        "the counter is not on the match the step went to"
+    );
 
     // And on again, to another one.
     test.press_key(Key::Named(NamedKey::Enter));
     settle(&mut test);
     let second = finds.peek().get(&at).at.expect("the bar is on a match");
     assert_ne!(second, first, "the second step went nowhere");
+    assert_eq!(
+        counter(&test),
+        [format!("{} of {}", second + 1, hits.len())],
+        "the counter did not follow the second step"
+    );
 }
 
 /// A word the listing draws on more than one row, so that stepping has somewhere to go.
@@ -34700,13 +34865,23 @@ fn the_server_chord_asks_about_a_directory_the_reader_has_not_agreed_to() {
         !language.peek().started(),
         "the chord started a server unasked"
     );
-    assert!(
-        language.peek().asking.is_some(),
-        "the chord asked nothing and started nothing"
+    // The directory asked about, and not merely that something was: `/p` is a fragment of
+    // every longer path, so a prompt about the wrong one reads the same.
+    assert_eq!(
+        language
+            .peek()
+            .asking
+            .as_ref()
+            .map(|asking| asking.directory.clone()),
+        Some(PathBuf::from("/p")),
+        "the chord asked about another directory, or asked nothing"
     );
     // The question is on screen, where the control's own press puts it.
     let drawn = labels(&test);
-    assert!(drawn.iter().any(|text| text.contains("/p")), "{drawn:?}");
+    assert!(
+        drawn.iter().any(|text| text == "/p"),
+        "the prompt does not name the directory: {drawn:?}"
+    );
 }
 
 /// The Bookmarks panel under the root's keys: `Ctrl+D` writes the reader's own list, so
