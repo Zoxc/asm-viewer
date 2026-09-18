@@ -167,8 +167,9 @@ command.
   name in.
 - `src/source.rs` — source files read off disk and cached by path, failures included; the
   one name a path is called by; and whether a path can be shown at all, which is the
-  reader's own first step and the gate the UI puts in front of it. `Seeded` is the
-  test-only other way into that cache: a file with nothing on the disk behind it.
+  reader's own first step and the gate the UI puts in front of it. `Seeded`, the
+  test-only other way into that cache -- a file with nothing on the disk behind it -- is
+  in `src/source/tests.rs` and re-exported here.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
   source file, its build, and the pads there are in the order they were last opened.
 - `src/temporary.rs` — test-only: a path under the system temporary directory that a test
@@ -394,6 +395,8 @@ tests are a file of their own**: `src/<module>/tests.rs`, declared `#[cfg(test)]
 the foot of `src/<module>.rs`, so the module a reader opens is the module and not the module plus
 half again of what it is asserted to do. The path a test is named by (`project::tests::…`) is
 unchanged, which is the point: it is where the file sits and not what the module tree looks like.
+A fixture only tests use lives there too, re-exported by the module where other files need it
+(`Seeded`, `src/source/tests.rs`).
 
 **No test runs cargo or rustc.** A suite that builds a program to run costs a compile per test and
 leaves the process behind whenever an assertion fails short of the stop, so what only a real
@@ -409,7 +412,7 @@ leak is per run rather than once.
 **A test writes a real file only when the filesystem is what it is about**: an atomic write, a
 rename, a `create_new` collision, a file moved aside, directory order, an unreadable directory, a
 path that only reduces through `canonicalize`. Where the file is a fixture -- something for the
-Source pane to draw -- it is seeded into the cache instead, through `Seeded` (`src/source.rs`),
+Source pane to draw -- it is seeded into the cache instead, through `Seeded` (`src/source/tests.rs`),
 which forgets what it seeded on `Drop` as `Temporary` removes what it wrote. `analysis` has the
 same seam a step lower: `open_data_streaming` is `open_files_streaming` with the reading already
 done, so a test hands over an archive the `object` writer built rather than a path it wrote it to.
