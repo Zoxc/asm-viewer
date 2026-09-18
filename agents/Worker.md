@@ -124,9 +124,9 @@ answers land in `Reading` (`Sectioned::reading` at the root) and never in `Analy
 shape and is read by everything that draws a symbol. **A decoded stretch is a pure function of the
 object and the stretch and is never stale**, unlike a listing, which is stale the moment the ask
 moves on. So an answer is taken whenever it is about the object and the skeleton on screen,
-whichever window asked for it, and only `pending` is judged against the ask; what a scroll
-superseded is exactly what the next window asks for again. Two things bound it. A stretch farther
-than `KEEP` (512) from the last window is dropped as the answer lands. The whole reading is dropped
+whichever window asked for it, and no ask is marked as in flight (`use_asking`'s memo sends each
+window once); what a scroll superseded is exactly what the next window asks for again. Two things
+bound it. A stretch farther than `KEEP` (512) from the last window is dropped as the answer lands. The whole reading is dropped
 when what is on screen stops being that object's code or the object closes under it
 (`use_reading_of`, an effect reading `Active`, `Objects` and the claim below). It is an effect and not part
 of `close_binary` because the skeleton holds every section's bytes, and the effect makes a rebuild

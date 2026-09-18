@@ -5660,7 +5660,7 @@ fn the_queue_keeps_the_newest_question_of_each_kind() {
 }
 
 /// A window lands in the reading it was asked for: the skeleton with the first answer,
-/// each stretch decoded the way its own tab decodes it, and the ask no longer pending.
+/// each stretch decoded the way its own tab decodes it.
 #[test]
 fn a_window_lands_in_the_reading_with_the_skeleton() {
     let (_path, objects) = fixture_objects(1);
@@ -5685,11 +5685,7 @@ fn a_window_lands_in_the_reading_with_the_skeleton() {
         window: vec![1, 2],
     };
     window.set(Some(ask.clone()));
-    // Pending while the worker has it and idle once the answer lands; on a loaded machine
-    // the two can be one pump apart, so only the landing is waited for.
-    pump(&mut test, |_| {
-        reading.peek().pending.is_none() && reading.peek().code.is_some()
-    });
+    pump(&mut test, |_| reading.peek().code.is_some());
 
     let landed = reading.peek().clone();
     let code = landed
@@ -19997,14 +19993,9 @@ fn a_run_survives_the_rows_being_counted_afresh_under_it() {
     );
     let _ = label;
 
-    // An ask: the same state written, no row changed.
-    let mut asked = sections.peek().clone();
-    asked.pending = Some(CodeAsk {
-        object: object.clone(),
-        code: asked.code.clone(),
-        window: vec![1],
-    });
-    sections.set(asked);
+    // The same state written, no row changed.
+    let same = sections.peek().clone();
+    sections.set(same);
     settle(&mut test);
     assert_eq!(
         marked.peek().assembly.clone().unwrap().chars.lead().row,

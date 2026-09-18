@@ -234,8 +234,6 @@ pub(crate) struct Reading {
     pub(crate) code: Option<Arc<CodeListing>>,
     /// The decoded stretches, by flat index.
     pub(crate) held: BTreeMap<usize, Arc<Stretched>>,
-    /// The ask the worker is working on, or [`None`] when it is idle.
-    pub(crate) pending: Option<CodeAsk>,
     /// Bumped whenever `code` or `held` changes: what the view's rows are keyed on.
     pub(crate) generation: u64,
 }
@@ -267,7 +265,7 @@ impl Reading {
     /// stale**, unlike a listing answer, which is stale the moment the ask moves on: so
     /// an answer is taken whenever it is about this object and this skeleton, whichever
     /// window asked for it -- what a scroll superseded is exactly what the next window
-    /// will ask for again. Only `pending` is judged against the ask.
+    /// will ask for again.
     pub(crate) fn take(
         &mut self,
         ask: &CodeAsk,
@@ -285,23 +283,8 @@ impl Reading {
         for (flat, stretched) in decoded {
             self.held.insert(flat, Arc::new(stretched));
         }
-        if self.pending.as_ref() == Some(ask) {
-            self.pending = None;
-        }
         self.let_go(&ask.window);
         self.generation += 1;
-        true
-    }
-
-    /// The window `ask` is on its way. Whether it is, so the caller writes and sends only
-    /// then ([`write_if`]): an ask about an object this reading is not of -- a tab
-    /// switched under it -- is not asked for, and neither is the ask already being worked
-    /// on.
-    pub(crate) fn asking(&mut self, ask: &CodeAsk) -> bool {
-        if !self.is_about(&ask.object) || self.pending.as_ref() == Some(ask) {
-            return false;
-        }
-        self.pending = Some(ask.clone());
         true
     }
 
@@ -358,17 +341,15 @@ pub(crate) fn use_reading_of(
 }
 
 /// The window question: what the section view wants next, asked once ([`use_asking`]).
-/// The mark it leaves is the reading's ([`Reading::asking`]).
+/// It leaves no mark: an answer is taken whichever window asked for it ([`Reading::take`]).
 ///
 /// Called at the root beside [`use_analysis_with`], which starts the worker and hands
 /// back `requests`, the way to ask it.
 pub(crate) fn use_code_asks(sectioned: Sectioned, requests: Requests<Question>) {
-    let (reading, window) = (sectioned.reading, sectioned.window);
+    let window = sectioned.window;
     use_asking(
         move || window.read().clone(),
-        move |ask| {
-            write_if(reading, |next| next.asking(ask));
-        },
+        unmarked,
         move |ask| requests.send(Question::Code(ask)),
     );
 }
