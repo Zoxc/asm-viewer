@@ -602,7 +602,8 @@ that corner has room for beside two chevrons and is the part of the app being na
 than the program; the program's own name is in the tooltip and in the Project view. Which
 program that is is the project's to say (`OpenProject::server`), so a project on `clangd`
 is offered a `clangd` to start, and the name is passed to `Language::words` rather than
-written there.
+written there. A started server is named by what it was started as (`Serving`), since the
+box may have been typed into since.
 
 Off and untouched it is text alone with **no border**: a part of the app nobody has asked
 anything of should not look like it is holding something. The border is what says a press

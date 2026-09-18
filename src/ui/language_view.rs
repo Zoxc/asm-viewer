@@ -44,23 +44,27 @@ impl Component for ServerButton {
         let hovering = use_state(|| false);
         let language = use_consume::<Talking>().0;
         let proj = use_consume::<Proj>().0;
+        let workspace = use_consume::<Workspace>().0;
         let jobs = use_consume::<LspJobs>();
 
-        let held = language.read();
-        let open = proj.read();
-        let directory = open.workspace();
-
-        // With no directory there is nothing to run a server over.
-        let live = directory.is_some();
-        let tooltip = held.words(&open.server(), directory.as_deref());
+        // What it draws out of the two states, and nothing else of them: a memo, so a
+        // keystroke in the Project view's boxes, a trust answer or a remark that changes
+        // none of it does not draw the control again.
+        let drawn = use_memo(move || Drawn::of(&language.read(), &proj.read(), &workspace.read()));
+        let Drawn {
+            tooltip,
+            live,
+            phase,
+            busy,
+        } = drawn.read().clone();
 
         let square = icon_size();
         // Dim only where a press would do nothing. Off is a control the reader is meant
         // to find, not one that is unavailable, so it is written as plainly as the two
         // buttons beside it; what says it is off is the lack of a border and a colour.
-        let colour = match (&held.state, live) {
+        let colour = match (phase, live) {
             (_, false) => dimmed(palette().icon_fg, palette().pane_bg),
-            (Lsp::Failed(_), _) => palette().invalid_fg,
+            (Phase::Failed, _) => palette().invalid_fg,
             _ => palette().icon_fg,
         };
         // A border under the pointer, and while there is a server to press about; none at
@@ -68,16 +72,16 @@ impl Component for ServerButton {
         // icon's own colour faded into whatever the box encloses -- a line around
         // something working should be quieter than the thing inside it, and a failure is
         // the one state that gets the full colour, being the one worth looking at.
-        let edge = match (&held.state, live && hovering()) {
-            (Lsp::Failed(_), _) => palette().invalid_fg,
-            (Lsp::Off, false) => Color::TRANSPARENT,
-            (Lsp::Off, true) => palette().hairline,
-            (Lsp::Running { .. }, _) => dimmed(colour, palette().server_bg),
-            _ => dimmed(colour, palette().pane_bg),
+        let edge = match (phase, live && hovering()) {
+            (Phase::Failed, _) => palette().invalid_fg,
+            (Phase::Off, false) => Color::TRANSPARENT,
+            (Phase::Off, true) => palette().hairline,
+            (Phase::Running, _) => dimmed(colour, palette().server_bg),
+            (Phase::Starting, _) => dimmed(colour, palette().pane_bg),
         };
         // A running server wears a ground of its own, over the hover: the one state the
         // control says by its own colour rather than by the pointer being on it.
-        let running = matches!(held.state, Lsp::Running { .. });
+        let running = phase == Phase::Running;
 
         TooltipContainer::new(Tooltip::new(tooltip)).child(
             bar_pill(hovering, live, Glow::No)
@@ -99,13 +103,48 @@ impl Component for ServerButton {
                         .width(Size::px(square))
                         .height(Size::px(square))
                         .center()
-                        .child(match held.busy() {
+                        .child(match busy {
                             true => CircularLoader::new().size(square).into_element(),
                             false => glyph_in(("link", lucide::link()), colour),
                         }),
                 )
                 .child(label().text(SERVER_NAME.to_owned()).color(colour)),
         )
+    }
+}
+
+/// What [`ServerButton`] draws, worked out in its memo.
+#[derive(Clone, PartialEq)]
+struct Drawn {
+    tooltip: String,
+    /// Whether there is a directory to run a server over, and so a press to make.
+    live: bool,
+    phase: Phase,
+    busy: bool,
+}
+
+/// Which of [`Lsp`]'s four states the server is in, without what each holds.
+#[derive(Clone, Copy, PartialEq)]
+enum Phase {
+    Off,
+    Starting,
+    Running,
+    Failed,
+}
+
+impl Drawn {
+    fn of(held: &Language, open: &OpenProject, directory: &Option<PathBuf>) -> Drawn {
+        Drawn {
+            tooltip: held.words(&open.server(), directory.as_deref()),
+            live: directory.is_some(),
+            phase: match held.state {
+                Lsp::Off => Phase::Off,
+                Lsp::Starting { .. } => Phase::Starting,
+                Lsp::Running { .. } => Phase::Running,
+                Lsp::Failed(_) => Phase::Failed,
+            },
+            busy: held.busy(),
+        }
     }
 }
 

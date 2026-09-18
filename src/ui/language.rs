@@ -487,13 +487,18 @@ impl Language {
     ///
     /// `program` is the server the project named ([`OpenProject::server`]): the control
     /// says only `LSP`, so the tooltip is where the program is spelled out, and a project
-    /// on a toolchain of its own must not be told to start Rust's. `directory` is the one
-    /// it would be run over, as in [`Language::verdict`]; with none there is nothing to
-    /// press.
+    /// on a toolchain of its own must not be told to start Rust's. A server that is started
+    /// is named by what it was started as instead, since the box may have been typed into
+    /// since. `directory` is the one it would be run over, as in [`Language::verdict`];
+    /// with none there is nothing to press.
     pub(crate) fn words(&self, program: &str, directory: Option<&Path>) -> String {
         if directory.is_none() {
             return "The project has no directory".to_owned();
         }
+        let program = self
+            .state
+            .serving()
+            .map_or(program, |serving| &serving.program);
         match &self.state {
             Lsp::Off => format!("Start {program}"),
             Lsp::Starting { .. } => format!("Starting {program}"),

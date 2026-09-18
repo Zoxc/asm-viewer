@@ -181,3 +181,17 @@ fn a_failure_reported_for_a_server_already_replaced_is_not_shown() {
     assert!(state.failed(5, "it died".to_owned()));
     assert!(matches!(state.state, Lsp::Failed(_)));
 }
+
+/// **A started server is named by what it was started as**, not by the Program box, which
+/// may have been typed into since.
+#[test]
+fn the_words_name_the_server_that_was_started_and_not_the_box() {
+    let directory = Some(Path::new("/project"));
+    let mut state = Language {
+        state: Lsp::running_to_nothing(),
+        ..Language::default()
+    };
+    assert_eq!(state.words("rust-analyze", directory), "Stop rust-analyzer");
+    state.state = Lsp::Off;
+    assert_eq!(state.words("clangd", directory), "Start clangd");
+}

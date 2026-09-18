@@ -31022,6 +31022,58 @@ fn the_control_names_the_program_the_project_named() {
     assert!(said(&test), "{:?}", labels(&test));
 }
 
+/// **A keystroke in the Files box, or taking the agreement back, does not draw the control
+/// again.** Both write `Proj`, and the control draws the program and whether there is a
+/// directory, neither of which they change. The element is how this asks whether it was
+/// drawn again, a handler never comparing equal.
+///
+/// Fails on the control reading `Proj` whole.
+#[test]
+fn a_keystroke_in_the_files_box_does_not_draw_the_control_again() {
+    let (mut test, roots, _asking, _asks) = mount_server(|_: LspJob| None);
+    let mut proj = roots.states.proj;
+    with_a_directory(&mut test, &roots.states, "/p");
+
+    // The deepest handled box around the control's name.
+    let drawn = |test: &TestingRunner| {
+        use freya::elements::label::LabelElement;
+        use std::any::Any;
+        let name = test
+            .find(|node, _| {
+                let element = node.element();
+                (element.as_ref() as &dyn Any)
+                    .downcast_ref::<LabelElement>()
+                    .is_some_and(|label| label.text == "LSP")
+                    .then(|| node.layout().area)
+            })
+            .expect("the control is drawn");
+        test.find_many(|node, element| {
+            let around = node.layout().area;
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            (handled && around.contains_rect(&name)).then(|| node.element())
+        })
+        .last()
+        .cloned()
+        .expect("something around the control's name is handled")
+    };
+    let control = drawn(&test);
+
+    proj.write().language_files = "rs, c".to_owned();
+    settle(&mut test);
+    assert!(
+        Rc::ptr_eq(&control, &drawn(&test)),
+        "a keystroke in the Files box drew the control again"
+    );
+    proj.write().trusted = false;
+    settle(&mut test);
+    assert!(
+        Rc::ptr_eq(&control, &drawn(&test)),
+        "taking the agreement back drew the control again"
+    );
+}
+
 /// An answer about a server nobody is waiting for any more is dropped -- and the handle it
 /// carries is stopped rather than dropped, this being the only moment the app is handed
 /// one.
