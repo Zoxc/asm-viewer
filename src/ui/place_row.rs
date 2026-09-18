@@ -87,14 +87,6 @@ impl Folding {
             }
         }
     }
-
-    /// Which panel these rows are drawn in, which is whose pick they answer to.
-    fn panel(self) -> Panel {
-        match self {
-            Folding::Hits(_) => Panel::Search,
-            Folding::Places(_) => Panel::Locations,
-        }
-    }
 }
 
 /// One row of a grouped answer: a file, or one of the places under it.
@@ -105,6 +97,8 @@ pub(crate) struct PlaceRow<T> {
     /// Where this row is in the list as it is drawn, which is what the arrows step and
     /// what a press writes down with the pick (`ui/picks.rs`).
     pub(crate) at: usize,
+    /// What this row's press reaches for, told to it by the list: see [`ListStates`].
+    pub(crate) states: ListStates,
     pub(crate) key: DiffKey,
 }
 
@@ -165,12 +159,12 @@ pub(crate) fn press_place<T: Place>(
     }
 }
 
-/// The row and where it is are the whole of what is drawn: the states in [`Folding`]
-/// compare equal whatever they hold, and a row never moves from one panel to the other. A
-/// [`Hit`] and a [`references::Reference`] are both [`Eq`], so two item rows holding the
-/// same `Arc` compare equal without reading it. The file's path and name are `Arc`s for
-/// the copying and compare by what they say, which is what a row must be redrawn for
-/// (`src/grouped.rs`).
+/// The row and where it is are the whole of what is drawn: the states in [`Folding`] and
+/// in [`ListStates`] compare equal whatever they hold, and a row never moves from one
+/// panel to the other. A [`Hit`] and a [`references::Reference`] are both [`Eq`], so two
+/// item rows holding the same `Arc` compare equal without reading it. The file's path and
+/// name are `Arc`s for the copying and compare by what they say, which is what a row must
+/// be redrawn for (`src/grouped.rs`).
 impl<T: PartialEq> PartialEq for PlaceRow<T> {
     fn eq(&self, other: &Self) -> bool {
         self.row == other.row && self.at == other.at
@@ -182,13 +176,16 @@ keyed!([T: Place] PlaceRow<T>);
 impl<T: Place> Component for PlaceRow<T> {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
-        // Consumed in the render and peeked in the handler, where no hook may run.
-        let doors = use_doors();
-        let places = use_places();
-        let ctrl = use_consume::<Ctrl>().0;
+        let ListStates {
+            picking,
+            doors,
+            ctrl,
+            project,
+            ..
+        } = self.states;
+        let places = project.places;
 
         let folding = self.folding;
-        let picking = use_picking(folding.panel());
         let at = self.at;
 
         let row = self.row.clone();

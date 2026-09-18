@@ -878,7 +878,9 @@ impl Component for FoundRow {
         let fitted = use_fitted();
         // Consumed in the render, because the handler that uses them runs no hook. The
         // finder's state is the root's own, so the row reaches for it rather than being
-        // handed it as row data.
+        // handed it as row data. A sidebar row is handed its states instead
+        // ([`ListStates`]), which this is not: that bundle is the pane a panel mints, and
+        // the finder is no panel and has no pick of that kind.
         let states = use_project_states();
         let finder = use_consume::<Finding>().0;
 

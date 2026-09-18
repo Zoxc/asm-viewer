@@ -676,6 +676,23 @@ panel is on `pane_bg`** and the cream is out of the palette, and no caller names
 of one sidebar disagree. `dead_list_row` is the same frame with no hover, for the rows nothing is
 pressed on: the bookmark whose place does not resolve, and the Project view's two.
 
+**What a row's press and its menu reach for is the list's to consume.** Reaching for a context is
+a hook, and a press handler and a menu are built by a render and run long after it, so the states
+they write had to be reached for somewhere -- and each row did it for itself: eight context walks
+a render for a symbol row, seven for a history row and for a file row, six for an object row, a
+bookmark and a search hit, four for an archive row. Every one of them is drawn in a `ListPane`,
+which is the one hook a panel calls once and unconditionally, so that is where they are consumed
+now: `use_list_states` gathers `ListStates` (`ui/state.rs`) there, `ListPane::virtual_rows` hands
+it to the builder beside the list's own data, and a panel building its rows itself passes
+`pane.states`. The bundle compares equal always, so carrying it costs a row no render
+(`what_a_symbol_rows_press_reaches_for_costs_the_row_no_render`). The lists are virtualized, so
+this is a screenful of rows a frame and not 115k of them: what it buys is that the rule the code
+rows keep is now kept by every list. Two facts a row used to state
+itself went with it -- which panel's pick a symbol row answers to, and which a search hit does --
+because the pane a row is drawn in is that panel by construction. The file finder keeps its own
+(`FoundRow`, `agents/Finding.md`): it is not a panel, has no pane and no pick of this kind, so
+none of this bundle fits it.
+
 **What a list lights is its own pick.** A lit row used to be one fact -- the row *is* what the tab
 on screen shows -- so four lists lit one row each, four lit none, and there was no way to point at a
 row without opening it. **Alt+press picks a row out and opens nothing**, the same Alt that says a

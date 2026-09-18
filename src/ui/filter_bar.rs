@@ -238,10 +238,10 @@ impl Component for FilterBar {
 }
 
 /// The box a panel's list is drawn in: the rows' own focusable node, the box over them,
-/// the scroll the arrows move, and how tall the rows came out.
+/// the scroll the arrows move, how tall the rows came out, and what its rows reach for.
 ///
-/// The list's counterpart to [`ListBox`] (`ui/list_box.rs`), which is the same four things
-/// for a code listing, and minted the same way: before the list is built, the scroll view
+/// The list's counterpart to [`ListBox`] (`ui/list_box.rs`), which is the first four of
+/// those for a code listing, and minted the same way: before the list is built, the scroll view
 /// being handed the controller. `use_hook`, so [`use_list_pane`] is a `use_` function and
 /// is called once and unconditionally by each panel.
 #[derive(Clone, Copy)]
@@ -258,7 +258,10 @@ pub(crate) struct ListPane {
     /// on screen at all. A `VirtualScrollView` measures itself but keeps the answer, so
     /// the box around it is what is measured -- [`ListBox`]'s own reason.
     viewport: State<f32>,
-    picking: Picking,
+    /// What this pane's rows reach for, gathered here because this is the one hook every
+    /// panel calls and the rows may call none ([`ListStates`]). Public: a list built row
+    /// by row rather than through [`ListPane::virtual_rows`] hands it down itself.
+    pub(crate) states: ListStates,
 }
 
 /// The box for the list `panel` draws.
@@ -278,7 +281,7 @@ pub(crate) fn use_list_pane(panel: Panel) -> ListPane {
         box_id,
         controller: use_scroll_controller(ScrollConfig::default),
         viewport: use_state(|| 0.0f32),
-        picking: use_picking(panel),
+        states: use_list_states(panel),
     }
 }
 
@@ -377,18 +380,22 @@ impl ListPane {
     /// arrows' sake -- a pick they moved off screen is a row Enter opens unnamed.
     ///
     /// `data` and never a capture: the builder closure is not compared across renders, so
-    /// what the rows depend on has to reach them through `new_with_data`.
+    /// what the rows depend on has to reach them through `new_with_data`. The pane's
+    /// [`ListStates`] rides along with it, which is why the builder is handed one: every
+    /// row wants it and no list should have to thread it through a tuple of its own.
     pub(crate) fn virtual_rows<D: PartialEq + 'static>(
         &self,
         length: usize,
         data: D,
-        row: impl Fn(usize, &D) -> Element + 'static,
+        row: impl Fn(usize, &D, ListStates) -> Element + 'static,
     ) -> Element {
-        VirtualScrollView::new_with_data(data, row)
-            .length(length)
-            .item_size(list_row_height())
-            .scroll_controller(self.controller)
-            .into_element()
+        VirtualScrollView::new_with_data((data, self.states), move |index, (data, states)| {
+            row(index, data, *states)
+        })
+        .length(length)
+        .item_size(list_row_height())
+        .scroll_controller(self.controller)
+        .into_element()
     }
 
     /// All three: the pane on the one ground every panel is drawn on, the bar where there
@@ -449,7 +456,7 @@ impl ListPane {
     /// focused node has no handler of its own (`notes/upstream/freya.md`).
     fn rows(&self, keys: Rc<ListKeys>, list: impl IntoElement) -> Rect {
         let pane = *self;
-        let (rows, picking) = (self.rows, self.picking);
+        let (rows, picking) = (self.rows, self.states.picking);
         let mut measured = self.viewport;
         rect()
             .width(Size::fill())
@@ -483,7 +490,7 @@ impl ListPane {
     /// that stays** comes from the Ctrl every row already reads as it opens
     /// (`Reach::outside`), so the key opens the pick exactly as a Ctrl+click on it would.
     fn answer(&self, keys: &ListKeys, e: &Event<KeyboardEventData>) {
-        let picking = self.picking;
+        let picking = self.states.picking;
         if Chord::Find.is(&e.key, e.modifiers) {
             self.box_id.request_focus();
             return;
@@ -532,7 +539,7 @@ impl ListPane {
         opens: bool,
         e: &Event<KeyboardEventData>,
     ) {
-        let picking = self.picking;
+        let picking = self.states.picking;
         if let Some(toggle) = Toggle::pressed(&e.key, e.modifiers) {
             return toggle.flip(&mut filter.write());
         }

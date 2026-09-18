@@ -22429,6 +22429,70 @@ fn a_symbol_row_bookmarks_its_symbol_from_its_menu() {
     assert!(bookmarks.peek().entries().is_empty());
 }
 
+/// **What a symbol row's press and its menu reach for is the list's to consume**
+/// ([`ListStates`]), and a row carrying it is not re-rendered for it. Each row reached for
+/// eight contexts a render before -- the list's pick, the doors, the places, Ctrl, the
+/// bookmarks and the objects -- for a press that comes once, and the Symbols list is 115k
+/// rows on the app's own binary.
+///
+/// A document opened elsewhere re-renders the panel, which reads the tab on screen to mark
+/// the row showing it, and changes nothing any row of this list draws. Made to fail first
+/// with a [`ListStates`] that compares unequal, which is a render a row for handles the
+/// root never replaces.
+///
+/// Headless because nothing shows either way: the row draws the same thing, and only the
+/// element freya rebuilt says whether the scope rendered again.
+#[test]
+fn what_a_symbol_rows_press_reaches_for_costs_the_row_no_render() {
+    let wanted = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![wanted.object.clone()]);
+    settle(&mut test);
+
+    // The row itself: the node one row tall that carries the press and the menu. The
+    // element and not the area, because **the element is how this asks whether the row
+    // rendered again**: an element carrying event handlers never compares equal to the one
+    // before it, so a scope that renders is handed a new one.
+    let row = |test: &TestingRunner| {
+        let name = label_area(test, "sum_to").expect("the symbol row is drawn");
+        test.find(|node, element| {
+            let area = node.layout().area;
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            let around = area.min_y() <= name.min_y() && name.max_y() <= area.max_y();
+            (handled && around && area.height() == list_row_height()).then(|| node.element())
+        })
+        .expect("the symbol row carries its own handlers")
+    };
+
+    let before = row(&test);
+    open_document(
+        states.open,
+        states.visits,
+        Document::Object(wanted.object.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    assert!(
+        states.open.active().is_some(),
+        "the document the panel was to be woken by never opened"
+    );
+    assert!(
+        Rc::ptr_eq(&before, &row(&test)),
+        "a document opened elsewhere re-rendered a symbol row it says nothing about"
+    );
+}
+
 /// **One row in two lists.** The Symbols panel and the Locations panel draw the same
 /// symbol row, and `SymbolPress` is the whole of what each says about its own: a location
 /// row names the object the symbol is in after the name -- the same name in two objects

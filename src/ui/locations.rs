@@ -663,8 +663,9 @@ impl Component for LocationsPanel {
             )
         };
         // What a press reaches through, whichever kind of row it is on and whether it
-        // came from the pointer or from Enter: one set for the panel.
-        let to = use_landings();
+        // came from the pointer or from Enter: the pane's, which is the same set its rows
+        // are handed.
+        let to = pane.states.landings();
 
         let marking = marking.read().clone();
 
@@ -699,11 +700,12 @@ impl Component for LocationsPanel {
                         pane.virtual_rows(
                             length,
                             (used, located),
-                            |row, (used, located): &(ReferenceRows, State<Located>)| {
+                            |row, (used, located): &(ReferenceRows, State<Located>), states| {
                                 PlaceRow {
                                     row: used[row].clone(),
                                     folding: Folding::Places(*located),
                                     at: row,
+                                    states,
                                     key: DiffKey::None,
                                 }
                                 .into()
@@ -742,20 +744,14 @@ impl Component for LocationsPanel {
 /// chosen symbol is written to, and whether Ctrl is held. One set for the whole panel --
 /// both kinds of row, and Enter on either -- rather than a trio each caller lists again.
 /// The Symbols panel takes the same set, its rows being these rows (`ui/sidebar.rs`).
+///
+/// Built out of the pane's [`ListStates`] ([`ListStates::landings`]) and never consumed
+/// beside it, so a panel's rows and its keys cannot be handed two.
 #[derive(Clone, Copy)]
 pub(crate) struct Landings {
     pub(crate) doors: Doors,
     pub(crate) places: Places,
     pub(crate) ctrl: State<bool>,
-}
-
-/// The three, consumed in the render as every context-consuming function must be.
-pub(crate) fn use_landings() -> Landings {
-    Landings {
-        doors: use_doors(),
-        places: use_places(),
-        ctrl: use_consume::<Ctrl>().0,
-    }
 }
 
 /// Which door a location row's press goes through, decided before anything is opened.

@@ -67,6 +67,9 @@ struct ArchiveRow {
     at: usize,
     /// Where the filter matched in the name, for the row to mark.
     marks: Vec<Range<usize>>,
+    /// What this row's press and its menu reach for, told to it by the list: see
+    /// [`ListStates`]. Compares equal always, so it costs the row no render.
+    states: ListStates,
     key: DiffKey,
 }
 
@@ -77,10 +80,8 @@ impl Component for ArchiveRow {
         let hovering = use_state(|| false);
         let at = self.at;
         let folds = self.folds;
-        // Consumed here, in the render, because the handler that uses them may not run a
-        // hook.
-        let states = use_project_states();
-        let picking = use_picking(Panel::Objects);
+        let picking = self.states.picking;
+        let states = self.states.project;
         let path = self.path.clone();
         let pick = Pick::Path(self.path.clone());
 
@@ -151,6 +152,9 @@ struct ObjectRow {
     at: usize,
     /// Where the filter matched in the name, for the row to mark.
     marks: Vec<Range<usize>>,
+    /// What this row's press and its menu reach for, told to it by the list: see
+    /// [`ListStates`].
+    states: ListStates,
     key: DiffKey,
 }
 
@@ -161,6 +165,8 @@ impl PartialEq for ObjectRow {
             && self.member == other.member
             && self.at == other.at
             && self.marks == other.marks
+        // `states` compares equal always -- handles the root never replaces -- so it is
+        // left out.
     }
 }
 
@@ -170,10 +176,13 @@ impl Component for ObjectRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
-        let states = use_project_states();
-        let doors = use_doors();
-        let ctrl = use_consume::<Ctrl>().0;
-        let picking = use_picking(Panel::Objects);
+        let ListStates {
+            picking,
+            doors,
+            ctrl,
+            project: states,
+            ..
+        } = self.states;
         let pick = Pick::Object(self.object.clone());
         let at = self.at;
         let object = self.object.clone();
@@ -247,11 +256,15 @@ struct SymbolRow {
     marks: Vec<Range<usize>>,
     /// Which of the two lists this is a row of.
     press: SymbolPress,
+    /// What this row's press and its menu reach for, told to it by the list: see
+    /// [`ListStates`]. Each of the Symbols list's 115k rows reached for eight contexts a
+    /// render before it was handed one.
+    states: ListStates,
     key: DiffKey,
 }
 
-/// Which filtered symbol list a row is in: what pressing it does, which panel's pick it
-/// is drawn against, and what it draws after the name.
+/// Which filtered symbol list a row is in: what pressing it does, and what it draws after
+/// the name. Which panel's pick it answers to is the pane's and not said here.
 ///
 /// A prop and not a reading of anything, so a row and the panel's Enter are handed the
 /// same one and cannot open different places.
@@ -274,14 +287,6 @@ pub(crate) enum SymbolPress {
 }
 
 impl SymbolPress {
-    /// Which panel's pick the row answers to.
-    fn panel(&self) -> Panel {
-        match self {
-            SymbolPress::Open => Panel::Symbols,
-            SymbolPress::Located { .. } => Panel::Locations,
-        }
-    }
-
     /// Whether the row names the object the symbol is in after the name.
     fn about(&self) -> bool {
         matches!(self, SymbolPress::Located { .. })
@@ -317,13 +322,13 @@ impl Component for SymbolRow {
         // says it was cut.
         let (named, about) = (use_fitted(), use_fitted());
         // Every door a press of either list goes through, and the two states the menu
-        // needs. Consumed, never read: 115k rows subscribed to the bookmarks would
-        // re-render the whole list on every bookmark made.
-        let to = use_landings();
-        let bookmarked = use_consume::<Bookmarked>().0;
-        let objects = use_consume::<Objects>().0;
+        // needs. Never read: 115k rows subscribed to the bookmarks would re-render the
+        // whole list on every bookmark made.
+        let to = self.states.landings();
+        let bookmarked = self.states.project.bookmarks;
+        let objects = self.states.project.objects;
         let press = self.press.clone();
-        let picking = use_picking(press.panel());
+        let picking = self.states.picking;
         let at = self.at;
         let symbol = self.symbols[self.index].clone();
         let pick = Pick::Symbol(symbol.clone());
@@ -425,7 +430,8 @@ pub(crate) fn symbol_rows(
             Option<Symbol>,
             Marking,
             SymbolPress,
-        )| {
+        ),
+         states| {
             // The row's place in the filtered list is not the symbol's place in the list
             // it was filtered out of, and everything below is about the symbol.
             let index = filtered.index(row);
@@ -437,6 +443,7 @@ pub(crate) fn symbol_rows(
                 at: row,
                 marks: marking.marks(symbol.data.display()),
                 press: press.clone(),
+                states,
                 key: DiffKey::None,
             }
             .key((
@@ -460,6 +467,9 @@ struct HistoryRow {
     at: usize,
     /// Where the filter matched in the name, for the row to mark.
     marks: Vec<Range<usize>>,
+    /// What this row's press and its menu reach for, told to it by the list: see
+    /// [`ListStates`].
+    states: ListStates,
     key: DiffKey,
 }
 
@@ -469,13 +479,16 @@ impl Component for HistoryRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
-        // Consuming does not subscribe -- only reading would, and this row only records
-        // into it.
-        let doors = use_doors();
-        let ctrl = use_consume::<Ctrl>().0;
-        let bookmarked = use_consume::<Bookmarked>().0;
-        let objects = use_consume::<Objects>().0;
-        let picking = use_picking(Panel::History);
+        // None of these is read -- only reading would subscribe the row, and it records
+        // into them and no more.
+        let ListStates {
+            picking,
+            doors,
+            ctrl,
+            project,
+            ..
+        } = self.states;
+        let (bookmarked, objects) = (project.bookmarks, project.objects);
         let at = self.at;
         // One build of the name for every spelling: the row draws the short one and its
         // tooltip says the whole one.
@@ -554,10 +567,9 @@ impl Component for ObjectsPanel {
         let loading = use_consume::<Loading>().0;
         let filter = use_state(Filter::default);
         let pane = use_list_pane(Panel::Objects);
-        // What Enter on a row reaches through, consumed here because the handler that
-        // uses them runs no hook.
-        let doors = use_doors();
-        let ctrl = use_consume::<Ctrl>().0;
+        // What Enter on a row reaches through: the pane's, which is where the rows' own
+        // states are consumed too.
+        let (doors, ctrl) = (pane.states.doors, pane.states.ctrl);
         // Which files the reader has folded open: a view of a list and not part of the
         // session, so a `use_state` here. The set holds group keys, which are `Arc`
         // pointers, so an entry left behind by a closed file is harmless.
@@ -644,7 +656,8 @@ impl Component for ObjectsPanel {
                     Option<usize>,
                     State<HashSet<usize>>,
                     Marking,
-                )| {
+                ),
+                 states| {
                     match &tree[row] {
                         TreeRow::File {
                             name,
@@ -665,6 +678,7 @@ impl Component for ObjectsPanel {
                             loading: *loading,
                             at: row,
                             marks: marking.marks(name),
+                            states,
                             key: DiffKey::None,
                         }
                         .key(*group)
@@ -678,6 +692,7 @@ impl Component for ObjectsPanel {
                             loading: true,
                             at: row,
                             marks: marking.marks(name),
+                            states,
                             key: DiffKey::None,
                         }
                         .key(path)
@@ -688,6 +703,7 @@ impl Component for ObjectsPanel {
                             member: *member,
                             at: row,
                             marks: marking.marks(&object.name),
+                            states,
                             key: DiffKey::None,
                         }
                         .key(Arc::as_ptr(object).addr())
@@ -711,9 +727,9 @@ impl Component for SymbolsPanel {
         let symbols = use_consume::<Symbols>().0;
         let filter = use_state(Filter::default);
         let pane = use_list_pane(Panel::Symbols);
-        // What a press and Enter on a row both reach through, consumed here because the
-        // handler that uses them runs no hook.
-        let to = use_landings();
+        // What a press and Enter on a row both reach through: the pane's, so the rows and
+        // the keys cannot be handed two sets.
+        let to = pane.states.landings();
         // The one compiled filter: what narrows the list below, what the rows mark with,
         // and what the bar prints for a pattern that will not compile.
         let marking = use_list_marking(filter);
@@ -759,10 +775,12 @@ pub(crate) struct HistoryPanel;
 
 impl Component for HistoryPanel {
     fn render(&self) -> impl IntoElement {
-        // What Enter on a row reaches through, consumed here because the handler that
-        // uses them runs no hook. The record the rows are built from is the one it
-        // carries.
-        let doors = use_doors();
+        let filter = use_state(Filter::default);
+        let pane = use_list_pane(Panel::History);
+        // What Enter on a row reaches through: the pane's, which is where the rows' own
+        // states are consumed too. The record the rows are built from is the one the
+        // doors carry.
+        let (doors, ctrl) = (pane.states.doors, pane.states.ctrl);
         let visits = doors.visits;
         // The place the tab on screen shows is the row marked, the way the Symbols list
         // marks its symbol: the record itself has no cursor, the tabs having theirs.
@@ -771,9 +789,6 @@ impl Component for HistoryPanel {
             .read()
             .clone()
             .map(|(_, stop)| stop.document);
-        let filter = use_state(Filter::default);
-        let pane = use_list_pane(Panel::History);
-        let ctrl = use_consume::<Ctrl>().0;
         // A session's record is a couple of hundred places at most, so it is filtered
         // where the rows are built rather than through a memo. The one compiled filter all
         // the same, so the bar's error is what these rows were kept by.
@@ -811,6 +826,7 @@ impl Component for HistoryPanel {
                         current: current.as_ref() == Some(entry),
                         at,
                         marks: matcher.marks(text),
+                        states: pane.states,
                         key: DiffKey::None,
                     }
                     .key(entry_key(entry))

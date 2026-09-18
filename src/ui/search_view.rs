@@ -265,11 +265,12 @@ impl Component for SearchPanel {
                     pane.virtual_rows(
                         length,
                         (rows, searched),
-                        |index, (rows, searched): &(SearchRows, State<Searched>)| {
+                        |index, (rows, searched): &(SearchRows, State<Searched>), states| {
                             PlaceRow {
                                 row: rows[index].clone(),
                                 folding: Folding::Hits(*searched),
                                 at: index,
+                                states,
                                 key: DiffKey::None,
                             }
                             .key(&index)

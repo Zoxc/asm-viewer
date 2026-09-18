@@ -17,6 +17,9 @@ struct BookmarkRow {
     at: usize,
     /// Where the filter matched in the label, for the row to mark.
     marks: Vec<Range<usize>>,
+    /// What this row's press and its menu reach for, told to it by the list: see
+    /// [`ListStates`]. Compares equal always, so it costs the row no render.
+    states: ListStates,
     key: DiffKey,
 }
 
@@ -26,12 +29,16 @@ impl Component for BookmarkRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let fitted = use_fitted();
-        // Consumed and not read: a row hands the list an index back and draws nothing of
-        // it that the tab has not already handed it.
-        let doors = use_doors();
-        let ctrl = use_consume::<Ctrl>().0;
-        let bookmarked = use_consume::<Bookmarked>().0;
-        let picking = use_picking(Panel::Bookmarks);
+        // Never read: a row hands the list an index back and draws nothing of these that
+        // the panel has not already handed it.
+        let ListStates {
+            picking,
+            doors,
+            ctrl,
+            project,
+            ..
+        } = self.states;
+        let bookmarked = project.bookmarks;
         let index = self.index;
         let at = self.at;
         let pick = Pick::Bookmark(self.bookmark.clone());
@@ -107,10 +114,9 @@ impl Component for BookmarksPanel {
         let objects = use_consume::<Objects>().0;
         let filter = use_state(Filter::default);
         let pane = use_list_pane(Panel::Bookmarks);
-        // What Enter on a row reaches through, consumed here because the handler that
-        // uses them runs no hook.
-        let doors = use_doors();
-        let ctrl = use_consume::<Ctrl>().0;
+        // What Enter on a row reaches through: the pane's, which is where the rows' own
+        // states are consumed too.
+        let (doors, ctrl) = (pane.states.doors, pane.states.ctrl);
         // A handful of rows, so the filter is applied where they are built -- but the one
         // compiled filter all the same, so the bar's error is what these rows were kept by.
         let marking = use_list_marking(filter);
@@ -149,6 +155,7 @@ impl Component for BookmarksPanel {
                         live: live.clone(),
                         at,
                         marks: matcher.marks(&bookmark.label()),
+                        states: pane.states,
                         key: DiffKey::None,
                     }
                     .key((*index, bookmark))

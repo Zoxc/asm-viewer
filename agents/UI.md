@@ -178,9 +178,17 @@ as a context of its own -- `use_row_states` gathers it from six of them, in the 
 it travels to the rows as data, a handler being no place to call a hook. It compares **equal
 always**, so a row holding one is not re-rendered for handles the root never replaces; that is what
 makes carrying it cheaper than reaching for it, which was six lookups a row a render on the
-assembly side and nine on the source one. A handle may sit in more than one bundle: `Doors` and
-`ProjectStates` both carry `Open`, `RowStates` carries `Doors` and `Places`, and `Doors` carries the
-runs `Marked` hands the panes.
+assembly side and nine on the source one. `ListStates` (`state.rs`) is the same thing for the lists
+outside the code panes: the pick (`picking`), the door a press goes through (`doors`, `ctrl`), the
+project's own states (`project`, which is where a bookmark and the objects it is judged against
+come from) and the two that go with those wherever a project is switched (`rescued`, `unopened`).
+It is gathered by `use_list_states` on the pane every panel already mints (`use_list_pane`), rides
+to the rows in `ListPane::virtual_rows`, and compares equal always for `RowStates`'s reason. It is
+a **union**: no list's rows read all of it, and what they share is most of it, where a bundle per
+list would be six of them and six ways for two rows of one panel to disagree about where a press
+leads. A handle may sit in more than one bundle: `Doors` and `ProjectStates` both carry `Open`,
+`RowStates` carries `Doors` and `Places`, `ListStates` carries `Doors`, `Picking` and
+`ProjectStates`, and `Doors` carries the runs `Marked` hands the panes.
 
 **The bar says which project is open, and the controls beside the name are not one control**
 (`ProjectChip`, `src/ui/project_view.rs`). A project the reader gave a place needs only to be
@@ -970,7 +978,7 @@ field -- a prop that stops re-rendering for it. Most rows are that shape (`Archi
 out: the row's `key`, and the states it holds -- one of its own, or a bundle of them. Neither
 changes what is drawn. A key is a function of the row's other fields, a `State` compares by the box
 it is -- its own `eq` and not `Writable`'s -- so two rows built by one list hold the same one, and
-`RowStates` compares equal always.
+`RowStates` and `ListStates` compare equal always.
 `a_second_file_leaves_the_rows_already_drawn_alone` pins it: a second file landing on the
 Objects list leaves the rows already drawn un-rendered. **A list of rows is a `Shared`**
 (`src/shared.rs`), the rule written once rather than once per list: an `Arc<[T]>` equal only to the

@@ -14,9 +14,11 @@
 //! [`Doors`] and [`ProjectStates`] both carry [`Open`], and [`Doors`] carries the runs
 //! [`Marked`] hands the panes.
 //!
-//! [`RowStates`] is the one bundle that is **not** a context. It is gathered from six of
-//! them by [`use_row_states`], where a code listing renders, and carried to the rows as
-//! data: what it groups is what a row's menu writes, and a handler may not run a hook.
+//! [`RowStates`] and [`ListStates`] are the two bundles that are **not** contexts. Each is
+//! gathered from half a dozen of them where a list renders -- a code listing's by
+//! [`use_row_states`], a panel's by [`use_list_states`] -- and carried to the rows as data:
+//! what they group is what a row's press and its menu reach for, and a handler may not run
+//! a hook.
 //!
 //! Two of the names are **derivations and not states**: `Active` is a `Memo` over the strip
 //! and the document table, and `Symbols` a `Memo` over `Objects`.
@@ -546,6 +548,68 @@ pub(crate) fn use_row_states() -> RowStates {
         dock: use_consume::<SidebarDock>().0,
         bookmarked: use_consume::<Bookmarked>().0,
         objects: use_consume::<Objects>().0,
+    }
+}
+
+/// [`RowStates`] for the lists outside the code panes: what a sidebar or panel row's
+/// press and its menu reach for, in one `Copy` bundle.
+///
+/// The same rule and the same reason. It is consumed where the *list* renders -- on the
+/// pane every one of them is drawn in ([`ListPane`]) -- and carried to the rows as data,
+/// a handler being no place to call a hook. Each row reached for these itself before,
+/// which was between four and eight context walks a render, every render, for a press
+/// that comes once.
+///
+/// It **compares equal always**, the handles being the root's and never replaced, so
+/// carrying it costs a row no render.
+///
+/// A union: no list's rows read all of it, and what they share is most of it. The
+/// alternative is a bundle per list, which is six of these and six ways for two rows of
+/// one panel to disagree about where a press leads.
+#[derive(Clone, Copy)]
+pub(crate) struct ListStates {
+    /// The list's own pick: what a row draws itself against, and what a press writes.
+    pub(crate) picking: Picking,
+    /// The door a press on a row goes through.
+    pub(crate) doors: Doors,
+    /// Whether Ctrl is held, which is whether a press opens a tab of its own.
+    pub(crate) ctrl: State<bool>,
+    /// The project's own states: what a bookmark is added to and judged live against, and
+    /// what a binary is closed out of.
+    pub(crate) project: ProjectStates,
+    /// The two that go with [`ProjectStates`] wherever a project is switched, which is
+    /// what a file row's "Open as project" does.
+    pub(crate) rescued: State<Vec<PathBuf>>,
+    pub(crate) unopened: State<Option<project::Failure>>,
+}
+
+impl PartialEq for ListStates {
+    fn eq(&self, _: &ListStates) -> bool {
+        true
+    }
+}
+
+impl ListStates {
+    /// What a press in either list of symbols reaches through. Built from these rather
+    /// than consumed beside them, so a row and its panel's Enter cannot be handed two.
+    pub(crate) fn landings(&self) -> Landings {
+        Landings {
+            doors: self.doors,
+            places: self.project.places,
+            ctrl: self.ctrl,
+        }
+    }
+}
+
+/// What a list's rows reach for, as the pane drawing them sees it.
+pub(crate) fn use_list_states(panel: Panel) -> ListStates {
+    ListStates {
+        picking: use_picking(panel),
+        doors: use_doors(),
+        ctrl: use_consume::<Ctrl>().0,
+        project: use_project_states(),
+        rescued: use_consume::<Rescued>().0,
+        unopened: use_consume::<Unopened>().0,
     }
 }
 

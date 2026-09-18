@@ -14,6 +14,9 @@ struct EntryRow {
     /// Where this row is in the tree as it is drawn, which is what the arrows step and
     /// what a press writes down with the pick (`ui/picks.rs`).
     at: usize,
+    /// What this row's press and its menu reach for, told to it by the list: see
+    /// [`ListStates`]. Compares equal always, so it costs the row no render.
+    states: ListStates,
     key: DiffKey,
 }
 
@@ -58,14 +61,14 @@ impl Component for EntryRow {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
         let tree = self.tree;
-        // Consumed here, in the render, because the handlers that use them may not run a
-        // hook.
-        let states = use_project_states();
-        // Consumed here and not in the handler: a handler may run no hook.
-        let rescued = use_consume::<Rescued>().0;
-        let unopened = use_consume::<Unopened>().0;
-        let ctrl = use_consume::<Ctrl>().0;
-        let picking = use_picking(Panel::Files);
+        let ListStates {
+            picking,
+            ctrl,
+            project: states,
+            rescued,
+            unopened,
+            ..
+        } = self.states;
         let at = self.at;
         let fold = self.row.fold;
         let path = self.row.path.clone();
@@ -157,10 +160,9 @@ impl Component for FilesPanel {
     fn render(&self) -> impl IntoElement {
         let proj = use_consume::<Proj>().0;
         let pane = use_list_pane(Panel::Files);
-        // What Enter on a row reaches through, consumed here because the handler that
-        // uses them runs no hook.
-        let states = use_project_states();
-        let ctrl = use_consume::<Ctrl>().0;
+        // What Enter on a row reaches through: the pane's, which is where the rows' own
+        // states are consumed too.
+        let (states, ctrl) = (pane.states.project, pane.states.ctrl);
         // Read, not peeked: a keystroke in the Project view's directory box is a change
         // of what this is a tree of, and costs one `read_dir` of a half-typed path.
         let directory = proj.read().workspace();
@@ -214,12 +216,13 @@ impl Component for FilesPanel {
                 pane.virtual_rows(
                     length,
                     (rows, tree),
-                    |index, (rows, tree): &(FileRows, State<Option<FileTree>>)| {
+                    |index, (rows, tree): &(FileRows, State<Option<FileTree>>), states| {
                         let row = &rows[index];
                         EntryRow {
                             row: row.clone(),
                             tree: *tree,
                             at: index,
+                            states,
                             key: DiffKey::None,
                         }
                         .key(&row.path)

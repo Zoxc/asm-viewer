@@ -127,6 +127,11 @@ the list the memo holds, peeked, and a row is handed the rows it was drawn from 
 what the panel is showing rather than working a list out for itself. Those rows and an index are the
 whole of what a row is handed: the query they were picked out for is the panel's business, and a row
 that carried it would copy and compare a string per row per render for something it never draws.
+The five states its press and its menu reach for stay the row's own, where the sidebar's rows are
+handed theirs in one bundle (`ListStates`, `agents/Sidebar.md`). That bundle belongs to the pane a
+panel draws its list in, and the finder has no pane: it is not a panel, keeps no `Panel` pick and
+reads the finder's own state instead. A bundle of its own would be a second one for twelve rows
+that exist only while the overlay is up.
 That row is also the finder's **pick**, in the sense every list in the app now has one
 (`agents/Sidebar.md`): an Alt+press moves the keyboard to the row under the pointer and opens
 nothing, where a plain press opens the file.
