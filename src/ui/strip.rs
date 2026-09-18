@@ -129,7 +129,7 @@ fn chip(
         // Air to the left of the icon and next to none to the right: what sits at that
         // end is the ×, which is a target of its own and carries its own.
         .padding(Gaps::new(0.0, 2.0, 0.0, 8.0))
-        .spacing(6.0)
+        .spacing(GLYPH_GAP)
         .background(background)
         .border(right_hairline())
         .border(marker)
@@ -305,7 +305,7 @@ fn tabs_menu(open: Open, tabs: &[Tab], active: Option<Tab>, mut close: State<boo
                             .min_width(Size::px(TAB_LIST_ROW_WIDTH))
                             // The name is given what the × and the icon leave.
                             .content(Content::Flex)
-                            .spacing(6.0)
+                            .spacing(GLYPH_GAP)
                             .child(icon)
                             // `max_lines(1)`, or a name longer than the menu is wide wraps
                             // and the row grows to hold it.

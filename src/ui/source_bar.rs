@@ -64,7 +64,7 @@ pub(crate) fn source_bar(
                         .cross_align(Alignment::Center)
                         .width(Size::fill())
                         .height(Size::px(list_row_height()))
-                        .spacing(6.0)
+                        .spacing(GLYPH_GAP)
                         .maybe(opens, |bar| {
                             let file = file.clone();
                             bar.on_press(move |_| {

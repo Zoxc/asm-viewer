@@ -259,7 +259,7 @@ fn main_menu(
                             rect()
                                 .horizontal()
                                 .cross_align(Alignment::Center)
-                                .spacing(6.0)
+                                .spacing(GLYPH_GAP)
                                 .child((row.icon)())
                                 .child(menu_label(page.title(), row.key)),
                         )

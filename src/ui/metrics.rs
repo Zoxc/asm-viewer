@@ -176,6 +176,11 @@ pub(crate) fn chevron_width() -> f32 {
 /// How far an archive member is indented past the file it belongs to.
 pub(crate) const TREE_INDENT: f32 = 16.0;
 
+/// The gap between a glyph and the name after it: a tab's chip, a row of the tab list, a
+/// page row of the pages menu, a panel's tab header and the Source pane's file bar. One
+/// number, so none of them can drift from the rest.
+pub(crate) const GLYPH_GAP: f32 = 6.0;
+
 /// The gap between what a menu row says and the mark after it: the arrow on a row that
 /// opens a submenu, and the key beside an item that has one (`marked_label`,
 /// `src/ui/strip.rs`).

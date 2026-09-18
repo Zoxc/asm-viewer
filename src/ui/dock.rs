@@ -466,7 +466,7 @@ fn panel_label(panel: Panel, background: Color) -> Rect {
         .horizontal()
         .cross_align(Alignment::Center)
         .padding(Gaps::new_symmetric(0.0, 8.0))
-        .spacing(6.0)
+        .spacing(GLYPH_GAP)
         .background(background)
         .border(right_hairline())
         .overflow(Overflow::Clip)
