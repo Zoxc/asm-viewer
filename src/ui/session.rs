@@ -58,32 +58,33 @@ impl Settle {
     }
 }
 
+/// How often, at most, a burst of scrolling or dragging is recorded. The session it
+/// changes waits for the 30 s flush anyway; this bounds what a close in the middle of it
+/// loses to one scroll position or one handle.
+const SCROLLED: Duration = Duration::from_millis(250);
+
 /// Tell the save policy what the session looks like, whenever it changes.
 ///
-/// `use_side_effect` re-runs whenever a `State` `read()` inside it changes, so the
-/// `read()` calls below *are* the subscriptions: this one observer is the choke point
-/// every mutation flows through. Whether a change reaches the disk now or at the next
-/// `use_periodic_save` tick is `project::record`'s decision, not this one's.
+/// `use_side_effect` re-runs whenever a `State` `read()` inside it changes, so the reads
+/// below *are* the subscriptions, and [`record_now`] peeks. Two observers, split by how
+/// fast their states change. Everything the reader *does* is recorded at once. Where a
+/// pane is scrolled to and where a handle is dragged change on every scroll row and every
+/// pointer move, so they are recorded at most once per [`SCROLLED`]: building and
+/// comparing the whole session for each would put that work on every frame of a scroll.
+/// Whether a change reaches the disk now or at the next `use_periodic_save` tick is
+/// `project::record`'s decision, not these.
 pub(crate) fn use_save_on_change(states: ProjectStates) {
     let ProjectStates {
         proj,
-        // Where the files go is `project::record`'s own, out of what the policy was
-        // pointed at when the project was opened.
-        store: _,
         objects,
-        // What is still being read is not itself saved -- `binaries` is derived from
-        // the objects -- but a list still filling in is not the app's list, so the
-        // record below is told. Reading it also re-runs this when the load ends, which
-        // is the record that writes.
         loading,
         open,
         places,
         visits,
         bookmarks,
-        // A search is a view of the project's files, not part of the session.
-        searched: _,
         build,
         arranged,
+        ..
     } = states;
 
     // A change to the details is owed rather than written (`project::record`), since a
@@ -95,72 +96,125 @@ pub(crate) fn use_save_on_change(states: ProjectStates) {
     });
 
     use_side_effect(move || {
-        // Reading these subscribes the effect to them: any change re-runs it.
-        let objects = objects.read();
-        let loading = !loading.read().is_empty();
-        // One read, for the two halves it feeds: what the user said goes in the project
-        // file and the agreement goes in the session.
-        let about = proj.read().clone();
-        project::record(
-            &about.details(),
-            &project::binaries(&objects),
-            loading,
-            bookmarks.read().entries(),
-            {
-                // The dock and the table rather than `Active`, which is a memo and so a
-                // beat behind.
-                let (strip, docs) = (open.strip.read(), open.docs.read());
-                // The bar in its own order, pages and documents alike. A document whose
-                // trail has gone is not a tab the session can name, and is left out.
-                let tabs: Vec<SavingTab<'_>> = strip
-                    .tabs()
-                    .iter()
-                    .filter_map(|tab| match tab {
-                        Tab::Page(page) => Some(SavingTab::Page(*page)),
-                        Tab::Document(id) => docs.trail(*id).map(|trail| SavingTab::Document {
-                            id: *id,
-                            trail,
-                            temporal: docs.temporal() == Some(*id),
-                        }),
-                    })
-                    .collect();
-                // What was on screen: a page, a document, or neither. Bound before the
-                // borrow below it, the document being read out of the two states.
-                let shown_document = active_tab(&strip, &docs).map(|(_, at)| at.document);
-                let shown = match (strip.active(), &shown_document) {
-                    (Some(Tab::Page(page)), _) => OnScreen::Page(page),
-                    (_, Some(document)) => OnScreen::Document(document),
-                    _ => OnScreen::Nothing,
-                };
-                Session::from_state(
-                    &objects,
-                    &tabs,
-                    // By name, the three maps being of near-identical type. What each
-                    // place had picked out (`places.marks_at`) is a view of its tab, and
-                    // not saved.
-                    &LeftAt {
-                        asm_rows: &places.asm_at.read(),
-                        src_rows: &places.src_at.read(),
-                        places: &places.code_at.read(),
-                        driven: &places.driven.read(),
-                    },
-                    shown,
-                    &visits.read(),
-                    Noticed {
-                        trusted: about.trusted,
-                        artifacts: &build.read().previous,
-                        // Reading these three is what subscribes the observer to a panel
-                        // being dragged and to either handle being moved.
-                        ui: SavedUi {
-                            sidebar: Some(*arranged.sidebar.read()),
-                            split: Some(*arranged.split.read()),
-                            dock: Some(arranged.dock.read().saved()),
-                        },
-                    },
-                )
-            },
+        // `loading` is not itself saved, but reading it re-runs this when a load ends,
+        // which is the record that writes. A search is a view and not read at all; nor is
+        // what each place had picked out (`places.marks_at`).
+        let _subscribed = (
+            proj.read(),
+            objects.read(),
+            loading.read(),
+            bookmarks.read(),
+            open.strip.read(),
+            open.docs.read(),
+            places.driven.read(),
+            visits.read(),
+            build.read(),
+            arranged.dock.read(),
         );
+        record_now(states);
     });
+
+    let waiting = use_hook(|| Rc::new(std::cell::Cell::new(false)));
+    use_side_effect(move || {
+        let _subscribed = (
+            places.asm_at.read(),
+            places.src_at.read(),
+            places.code_at.read(),
+            arranged.sidebar.read(),
+            arranged.split.read(),
+        );
+        // One record for the burst, of the state it has come to by then.
+        if waiting.replace(true) {
+            return;
+        }
+        let waiting = waiting.clone();
+        spawn(async move {
+            Timer::after(SCROLLED).await;
+            waiting.set(false);
+            record_now(states);
+        });
+    });
+}
+
+/// Hand the save policy the state the app is in this instant, peeked: which states wake a
+/// record is the observers' business above.
+fn record_now(states: ProjectStates) {
+    let ProjectStates {
+        proj,
+        // Where the files go is `project::record`'s own, out of what the policy was
+        // pointed at when the project was opened.
+        store: _,
+        objects,
+        loading,
+        open,
+        places,
+        visits,
+        bookmarks,
+        searched: _,
+        build,
+        arranged,
+    } = states;
+
+    let objects = objects.peek();
+    let loading = !loading.peek().is_empty();
+    // One peek, for the two halves it feeds: what the user said goes in the project file
+    // and the agreement goes in the session.
+    let about = proj.peek().clone();
+    project::record(
+        &about.details(),
+        &project::binaries(&objects),
+        loading,
+        bookmarks.peek().entries(),
+        {
+            // The dock and the table rather than `Active`, which is a memo and so a beat
+            // behind.
+            let (strip, docs) = (open.strip.peek(), open.docs.peek());
+            // The bar in its own order, pages and documents alike. A document whose trail
+            // has gone is not a tab the session can name, and is left out.
+            let tabs: Vec<SavingTab<'_>> = strip
+                .tabs()
+                .iter()
+                .filter_map(|tab| match tab {
+                    Tab::Page(page) => Some(SavingTab::Page(*page)),
+                    Tab::Document(id) => docs.trail(*id).map(|trail| SavingTab::Document {
+                        id: *id,
+                        trail,
+                        temporal: docs.temporal() == Some(*id),
+                    }),
+                })
+                .collect();
+            // What was on screen: a page, a document, or neither. Bound before the borrow
+            // below it, the document being read out of the two states.
+            let shown_document = active_tab(&strip, &docs).map(|(_, at)| at.document);
+            let shown = match (strip.active(), &shown_document) {
+                (Some(Tab::Page(page)), _) => OnScreen::Page(page),
+                (_, Some(document)) => OnScreen::Document(document),
+                _ => OnScreen::Nothing,
+            };
+            Session::from_state(
+                &objects,
+                &tabs,
+                // By name, the three maps being of near-identical type.
+                &LeftAt {
+                    asm_rows: &places.asm_at.peek(),
+                    src_rows: &places.src_at.peek(),
+                    places: &places.code_at.peek(),
+                    driven: &places.driven.peek(),
+                },
+                shown,
+                &visits.peek(),
+                Noticed {
+                    trusted: about.trusted,
+                    artifacts: &build.peek().previous,
+                    ui: SavedUi {
+                        sidebar: Some(*arranged.sidebar.peek()),
+                        split: Some(*arranged.split.peek()),
+                        dock: Some(arranged.dock.peek().saved()),
+                    },
+                },
+            )
+        },
+    );
 }
 
 /// Write out a pending change every `AUTOSAVE_INTERVAL`. A tick that finds nothing

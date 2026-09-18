@@ -14893,6 +14893,41 @@ fn a_burst_of_changes_settles_into_one_write() {
     assert_eq!(settled(), mounted + 1);
 }
 
+fn saving_harness() -> impl IntoElement {
+    use_save_on_change(use_project_states());
+    rect()
+}
+
+/// A handle dragged, or a pane scrolled, writes its state on every pointer move or row;
+/// the session is built once for the burst and not once per write. What the reader does
+/// -- a tab raised, here -- is still recorded at once.
+#[test]
+fn a_drag_builds_the_session_once_and_not_per_move() {
+    let (mut test, states) = TestingRunner::new(
+        saving_harness,
+        (100., 100.).into(),
+        |runner| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    test.sync_and_update();
+    test.poll_n(Duration::from_millis(50), 8);
+    let before = project::sessions_built();
+
+    let mut split = states.arranged.split;
+    for step in 0..10 {
+        split.set(30. + step as f32);
+        test.sync_and_update();
+    }
+    assert_eq!(project::sessions_built(), before, "built per move");
+    test.poll_n(Duration::from_millis(50), 8);
+    assert_eq!(project::sessions_built(), before + 1);
+
+    let mut strip = states.open.strip;
+    drop(strip.write());
+    test.sync_and_update();
+    assert_eq!(project::sessions_built(), before + 2, "a tab waited");
+}
+
 /// Everything the settings write, recorded rather than performed.
 #[derive(Clone, Copy)]
 struct Saved(State<Vec<Settings>>);

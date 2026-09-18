@@ -409,7 +409,13 @@ because two of the three things driving it sit outside the component tree. `Save
 holds the baselines; the `record` and `flush` the app calls are `project.rs`'s, and they put on
 disk what was decided.
 `record(&details, &binaries, loading, &bookmarks, session)` is called on every state change and
-compares each against its baseline. By reference, all but the session: on the ordinary run nothing
+compares each against its baseline -- with one exception, which is how often. Where a pane is
+scrolled to and where a handle is dragged are written on every scroll row and every pointer move,
+and each record builds a whole `Session` and deep-compares it, so `use_save_on_change`
+(`src/ui/session.rs`) is two observers: everything else records at once, and those five states
+(the three `Positions` maps, the two splits) record at most once per 250 ms, from peeks, of the
+state the burst has come to. What they change is session-only and waits for the flush anyway; a
+close inside that window loses one scroll position, which a restore treats as a hint. By reference, all but the session: on the ordinary run nothing
 about `project.toml` has changed and everything handed in is dropped, so only the write path clones.
 **`Details` is the four user-given fields and `Project` holds it whole**, under `#[serde(flatten)]`,
 so they are keys of `project.toml` as before and a fifth is added in one place. The baseline is

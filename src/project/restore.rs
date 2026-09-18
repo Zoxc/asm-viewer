@@ -13,6 +13,7 @@ use std::{
 
 use analysis::{Object, Symbol, SymbolData};
 
+use crate::counter;
 use crate::docs::{DocId, Entry};
 use crate::document::Document;
 use crate::history::{History, Stop};
@@ -532,6 +533,12 @@ impl SavedEntry {
     }
 }
 
+counter!(
+    /// Test-only: how many sessions this thread has built out of the app's state, which is
+    /// what says a scroll did not build one per row.
+    pub fn sessions_built() = SESSIONS_BUILT
+);
+
 impl Session {
     /// The session described by the state the app is currently in — the one place the
     /// app's state is turned into what would be saved, [`binaries`] being the other half
@@ -546,6 +553,8 @@ impl Session {
         visits: &Visits,
         noticed: Noticed<'_>,
     ) -> Session {
+        #[cfg(test)]
+        SESSIONS_BUILT.set(SESSIONS_BUILT.get() + 1);
         let Noticed {
             trusted,
             artifacts,
