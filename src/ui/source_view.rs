@@ -470,7 +470,8 @@ counter!(
 ///
 /// **Written by the pane and read beside each of the three states an answer lands in.**
 /// One file, because one is drawn; a pane that moves to another asks again, and `None`
-/// where it draws none, so a pane that has stopped drawing a file stops asking about one.
+/// where it draws none or has gone, so a pane that has stopped drawing a file stops asking
+/// about one.
 /// Its own state rather than a field of each: three copies of one fact agree only while
 /// one writer keeps them in step, and each write woke everything reading the state it
 /// went into -- the pane itself among them, which reads [`Sourced`] for what to draw.
@@ -530,11 +531,29 @@ impl Component for SourcePane {
         let showing = use_consume::<ShowingFile>().0;
         let sourced = use_consume::<Sourcing>().0;
         let file = side.as_ref().map(|side| side.file().clone());
-        use_side_effect_with_deps(&file, move |file: &Option<Arc<str>>| {
-            // Written only where it moved: a pane redrawn for any of the dozen other
-            // reasons must not wake a worker.
+        // What this pane last wrote, for the drop below to take back.
+        let claimed = use_hook(|| Rc::new(RefCell::new(None::<Arc<str>>)));
+        use_side_effect_with_deps(&file, {
+            let claimed = claimed.clone();
+            move |file: &Option<Arc<str>>| {
+                // Written only where it moved: a pane redrawn for any of the dozen other
+                // reasons must not wake a worker.
+                let mut showing = showing;
+                showing.set_if_modified(file.clone());
+                claimed.replace(file.clone());
+            }
+        });
+        // A pane that goes names nothing, `use_code_beside`'s rule, but only while it
+        // still names this pane's file: a pane put in its place may have named another.
+        use_drop(move || {
             let mut showing = showing;
-            showing.set_if_modified(file.clone());
+            let mine = showing
+                .peek()
+                .as_ref()
+                .is_some_and(|held| claimed.borrow().as_ref() == Some(held));
+            if mine {
+                showing.set(None);
+            }
         });
 
         let Some(side) = side else {

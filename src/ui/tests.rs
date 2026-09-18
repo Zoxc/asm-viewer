@@ -12202,6 +12202,61 @@ fn a_move_between_files_does_not_wake_what_reads_the_reader() {
     forget_source_under(&directory);
 }
 
+/// Which Source pane [`claiming_pane_harness`] mounts: none at `None`, and a new one each
+/// time the number changes, over the same file.
+#[derive(Clone, Copy)]
+struct PaneMount(State<Option<u32>>);
+
+fn claiming_pane_harness() -> impl IntoElement {
+    let mount = *use_consume::<PaneMount>().0.read();
+    let document = Document::Source(Arc::from("claimed.rs"));
+    let tab = pane_tab(&document);
+    let pane = mount.map(|key| {
+        rect()
+            .expanded()
+            .key(key)
+            .child(SourcePane { tab, document })
+    });
+    rect().expanded().maybe_child(pane)
+}
+
+/// **A pane that goes stops naming the file it showed**, so the marks, the links and the
+/// reader stop asking about a file nothing draws -- a page raised over the tab, the
+/// following pane put away, the last tab closed. A pane mounted in its place over the same
+/// file keeps the claim: the one going must not undo it.
+#[test]
+fn a_source_pane_that_goes_stops_naming_its_file() {
+    let (mut test, (mut mount, showing)) = TestingRunner::new(
+        claiming_pane_harness,
+        (400., 300.).into(),
+        |runner: &mut _| {
+            runner.provide_root_context(|| {
+                let mount = provide(PaneMount(State::create(Some(0)))).0;
+                (mount, test_roots().showing)
+            })
+        },
+        1.,
+    );
+    settle(&mut test);
+    assert_eq!(showing.read().as_deref(), Some("claimed.rs"));
+
+    mount.set(Some(1));
+    settle(&mut test);
+    assert_eq!(
+        showing.read().as_deref(),
+        Some("claimed.rs"),
+        "the pane that went undid the claim of the one in its place"
+    );
+
+    mount.set(None);
+    settle(&mut test);
+    assert_eq!(
+        showing.read().as_deref(),
+        None,
+        "the file outlived the pane"
+    );
+}
+
 /// The widest row is the widest row **of this listing**: a pane moved from a file with a
 /// long line to one whose lines all fit has nothing to scroll sideways over.
 ///

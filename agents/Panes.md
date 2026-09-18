@@ -334,7 +334,10 @@ text, the gutter's marks and the links -- asked at once rather than each behind 
 
 **The pane's three questions are one fact.** Which file it is showing is written to `ShowingFile`
 (`src/ui/source_view.rs`) and nowhere else; the reader's effect, the marks' and the links' each read
-it beside the state their own answer lands in. It used to be a `wanted` field on each of those three
+it beside the state their own answer lands in. The pane takes it back as it unmounts (a page
+raised, the following pane put away, the last tab closed), or the marks would go on being asked
+about a file nobody draws. It takes it back only while it still names that pane's file, as
+`use_code_beside` does: a pane mounted in its place may already have named another. It used to be a `wanted` field on each of those three
 states, written in one pass by an accessor closure. Three copies of one fact agreed only while that
 one writer kept them in step; a move between files was three notifications for one move; and one of
 them went into `Sourced`, which the pane itself reads for what to draw, so asking woke the scope
