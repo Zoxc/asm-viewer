@@ -196,16 +196,19 @@ impl Component for TabClose {
                 e.stop_propagation();
                 close(open, places, tab);
             })
+            // An icon and not the `×` character: a character is centred by its line box,
+            // and where the mark falls inside that is the font's, so it sat low by a
+            // different amount in every font.
             .child(
-                label()
-                    .text("\u{00d7}")
-                    .font_size(close_glyph())
+                SvgViewer::new(("x", lucide::x()))
+                    .width(Size::px(close_icon()))
+                    .height(Size::px(close_icon()))
                     .color(if hovering() {
                         palette().text_fg
                     } else {
                         palette().address_fg
                     })
-                    .max_lines(1),
+                    .show_loader(false),
             )
     }
 }

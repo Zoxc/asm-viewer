@@ -675,9 +675,11 @@ share of the row, so the air is what stays fixed when the font or the row moves.
 *list* row for a while, ten pixels shorter than the chip the target sits in, so it ate that air at
 every font bigger than the app's own default, which the reader's desktop font usually is;
 `the_close_target_is_the_glyph_and_its_air` pins the square against the glyph rather than against
-any absolute width. The × is drawn a third larger than
-the interface font it sits beside: it is a mark and not a letter, and at the text's own size the
-multiplication sign looks like a scratch on the tab. And it says under the pointer that it is the ×
+any absolute width. The × is Lucide's `x` icon, sized so its mark is about
+the size the character's was at a third over the interface font (`close_icon`): at the text's own
+size the mark looks like a scratch on the tab. It was the `×` character until that was seen sitting low on Windows. A label centres its
+line box, and where the mark falls inside that is the font's: 1.5 to 4 px low in Noto Sans.
+An icon centres its own box. And it says under the pointer that it is the ×
 and not the tab: `close_hover_bg` behind it and the glyph up from `address_fg` to the interface
 text, while the tab under it stays lit. The two are told apart by the wash being the deeper step,
 not by the tab going out. It closes the tab itself rather than taking a handler, a `Component` being

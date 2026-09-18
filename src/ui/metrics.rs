@@ -134,14 +134,22 @@ pub(crate) fn close_target() -> f32 {
     (close_glyph() + 6.0).min(tab_row_height() - 2.0)
 }
 
-/// The size the × on a tab is drawn at: the interface font, a third bigger.
+/// The size the × on a tab was drawn at as a character: the interface font, a third bigger.
+/// Bigger than the text beside it because at the interface size the multiplication sign is
+/// a thin scratch that reads as dirt on the tab.
 ///
-/// Bigger than the text beside it because it is a *mark* and not a letter -- at the
-/// interface size the multiplication sign is a thin scratch that reads as dirt on the tab.
 /// [`close_target`] is written in terms of this rather than the other way round, so the air
 /// around the glyph is what stays fixed when either the font or the row height moves.
 pub(crate) fn close_glyph() -> f32 {
     (fonts().ui.size() * 1.33).round()
+}
+
+/// The side of the × icon on a tab: [`close_glyph`] cut down, since Lucide's `x` draws its
+/// mark across half its side plus the stroke, where the character's is about four tenths
+/// of its size. At the glyph's size the icon's mark was 1.4 times the character's; at 0.8
+/// it is the character's size or a pixel over.
+pub(crate) fn close_icon() -> f32 {
+    (close_glyph() * 0.8).round()
 }
 
 /// The side of a tab bar icon: the interface font, a quarter bigger, and capped so it is
