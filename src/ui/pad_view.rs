@@ -253,7 +253,6 @@ impl Component for SourceEditor {
                     .text(palette().name_fg)
                     .cursor(palette().text_fg)
                     // What would land on the clipboard, which is what `text_select_bg`
-                    // already says in both code panes.
                     // already says in both code panes -- a character selection here where
                     // it is a run of rows there, and the same question either way.
                     .highlight(palette().text_select_bg)
@@ -846,12 +845,6 @@ impl Component for PadAssembly {
     fn render(&self) -> impl IntoElement {
         use_code_beside(use_sectioned().beside, &self.object);
 
-        // Open on the pad's own code rather than at the top, which for a linked Rust
-        // program is the runtime's. A `Planting` and not a place in `Places::code_at`: the listing
-        // keeps no place of its own, and an entry there would hold this program's bytes
-        // with nothing that would ever forget them -- where a planting is taken once by
-        // the pane below and put back to `None`. Written from the render, which is the
-        // parent's and so runs before the listing's first.
         // The drive: the editor's cursor line is the run the listing lights the pair of.
         // Unconditional, as a hook must be -- the effect inside declines a program whose
         // debug info names the pad's file nowhere.
@@ -859,6 +852,12 @@ impl Component for PadAssembly {
         let marked = use_consume::<Marked>().0;
         use_driving_cursor(text, marked, self.pad.clone(), self.file.clone());
 
+        // Open on the pad's own code rather than at the top, which for a linked Rust
+        // program is the runtime's. A `Planting` and not a place in `Places::code_at`: the
+        // listing keeps no place of its own, and an entry there would hold this program's
+        // bytes with nothing that would ever forget them -- where a planting is taken once
+        // by the pane below and put back to `None`. Written from the render, which is the
+        // parent's and so runs before the listing's first.
         let mut plant = use_doors().plant;
         let opening = self.opening.map(|address| Planting {
             tab: Document::Code(self.object.clone()),
