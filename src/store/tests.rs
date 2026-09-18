@@ -7,9 +7,7 @@ impl Store {
     /// A store at a given directory: what a test points at one of its own, in place of
     /// the twin every operation under here used to have for exactly that.
     pub fn at(base: impl AsRef<Path>) -> Store {
-        Store {
-            base: base.as_ref().to_path_buf(),
-        }
+        Store::new(base.as_ref().to_path_buf())
     }
 }
 

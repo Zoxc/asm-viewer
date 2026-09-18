@@ -536,20 +536,19 @@ pub(crate) fn clear_project(states: ProjectStates) {
     build.set(Builds::default());
 }
 
-/// Add what the load that just ran moved aside to what the window is already naming.
+/// Name every file `store` moves aside in the window, as it is moved.
 ///
-/// The one place any load says what it moved: the startup's in `app()`, a project
-/// switch's below, and whatever comes later. Added to rather than set, so a window still
-/// naming an earlier load's files does not lose them; and nothing at all when the load
-/// moved nothing, so a quiet load leaves a closed window closed.
-pub(crate) fn note_moved(mut rescued: State<Vec<PathBuf>>) {
-    let moved = store::moved();
-    if moved.is_empty() {
-        return;
+/// A task for the run, fed by the store and not asked at chosen moments, so a load on any
+/// thread at any time is named: the startup's, a switch's, the pad worker's. Added to
+/// rather than set, so a window still naming an earlier load's files does not lose them;
+/// and what arrives together is added in one write.
+pub(crate) async fn name_moved(store: Store, mut rescued: State<Vec<PathBuf>>) {
+    let moved = store.moved();
+    while let Ok(path) = moved.recv().await {
+        let mut naming = rescued.write();
+        naming.push(path);
+        naming.extend(std::iter::from_fn(|| moved.try_recv().ok()));
     }
-    let mut naming = rescued.peek().clone();
-    naming.extend(moved);
-    rescued.set(naming);
 }
 
 /// Leave the project on screen and open the one the file at `path` holds in its place.
@@ -560,7 +559,6 @@ pub(crate) fn note_moved(mut rescued: State<Vec<PathBuf>>) {
 /// settled state that matches the baseline and writes nothing.
 pub(crate) fn switch_project(
     states: ProjectStates,
-    rescued: State<Vec<PathBuf>>,
     mut unopened: State<Option<project::Failure>>,
     path: PathBuf,
 ) {
@@ -574,8 +572,6 @@ pub(crate) fn switch_project(
             return;
         }
     };
-
-    note_moved(rescued);
 
     clear_project(states);
     enter_project(states, path, project, session);
@@ -644,17 +640,13 @@ pub(crate) fn binaries_dialog(title: &str) -> AsyncFileDialog {
 }
 
 /// Ask for a project file and open it in place of the one on screen.
-pub(crate) fn ask_for_a_project(
-    states: ProjectStates,
-    rescued: State<Vec<PathBuf>>,
-    unopened: State<Option<project::Failure>>,
-) {
+pub(crate) fn ask_for_a_project(states: ProjectStates, unopened: State<Option<project::Failure>>) {
     ask_file(
         AsyncFileDialog::new()
             .set_title("Open a project...")
             .add_filter("Project", &[project::PROJECT_EXTENSION]),
         AskFor::File,
-        move |path| switch_project(states, rescued, unopened, path),
+        move |path| switch_project(states, unopened, path),
     );
 }
 

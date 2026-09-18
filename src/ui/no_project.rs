@@ -71,7 +71,6 @@ pub(crate) struct NoProject;
 impl Component for NoProject {
     fn render(&self) -> impl IntoElement {
         let states = use_project_states();
-        let rescued = use_consume::<Rescued>().0;
         let unopened = use_consume::<Unopened>().0;
         let recents = use_consume::<Recents>().0.read().clone();
 
@@ -97,7 +96,7 @@ impl Component for NoProject {
                             .spacing(SECTION_GAP)
                             .child(
                                 Button::new()
-                                    .on_press(move |_| ask_for_a_project(states, rescued, unopened))
+                                    .on_press(move |_| ask_for_a_project(states, unopened))
                                     .child("Project file..."),
                             )
                             .child(

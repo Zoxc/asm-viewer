@@ -59,17 +59,17 @@ file, and a switch -- both ask `store_for` (`src/ui/session.rs`) for the store, 
 built in one place.
 
 **And the reader is told**, which is the half that makes it a rescue at all: a file moved somewhere
-nobody hears about is a file lost politely. `store::moved()` hands over the destinations recorded
-since it was last asked -- a `static Mutex<Vec<PathBuf>>`, because what fills it is a load and not
-a component -- and `RescuedPopup` (`src/ui/rescued_view.rs`) names them over freya's `Popup`, which
-is shown exactly when it has children, so the list being empty *is* the window not being there. It
-is asked at every point a run loads any of these files, and always through the one function
-`note_moved` (`src/ui/session.rs`), which **adds** to the list rather than setting it: a window
-still naming what one load moved does not lose it when the next runs, and a load that moved nothing
-leaves a closed window closed. `app()` asks **after** `use_restore_on_startup`, the three loads a
-startup makes (`Settings::load`, the same again behind `fonts()`, and the project reopened) all
-being synchronous and all landing before that line; `switch_project` asks for the project it opens.
-Setting the list would do for the startup, which finds it empty, and for nothing after it. It is drawn through `notice` (`src/ui/parts.rs`), the shell all four of
+nobody hears about is a file lost politely. Each destination is sent on a channel the store owns
+and its clones share (`Store::moved`), and a task `roots` spawns over the run's store
+(`name_moved`, `src/ui/session.rs`) adds it to `Rescued` as it arrives. `RescuedPopup`
+(`src/ui/rescued_view.rs`) names them over freya's `Popup`, which is shown exactly when it has
+children, so the list being empty *is* the window not being there. The store says it and the UI
+does not ask: the loads run on the UI thread and on the pad worker, at startup, on a switch, on a
+new project and whenever a pad is opened, and the earlier version, which asked at startup and on a
+switch, left the pad worker's moves unnamed until the next switch. A channel per store and not one
+static, so each headless test hears its own store's moves and no other test's. The task **adds** to
+the list rather than setting it: a window still naming what one load moved does not lose it when
+the next runs, and a load that moved nothing leaves a closed window closed. It is drawn through `notice` (`src/ui/parts.rs`), the shell all four of
 the app's asking windows share, which is `Popup` itself and neither `PopupTitle` nor
 `PopupContent`: both of those set a font size of their own, which would draw the window in a size
 the reader never chose.

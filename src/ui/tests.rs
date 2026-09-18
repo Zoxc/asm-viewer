@@ -1185,7 +1185,6 @@ fn a_page_picked_with_no_project_opens_as_a_tab() {
 /// ran it happened to have projects.
 fn empty_recents_harness() -> impl IntoElement {
     let states = use_project_states();
-    let rescued = use_consume::<Rescued>().0;
     let unopened = use_consume::<Unopened>().0;
     let close = use_state(|| true);
 
@@ -1197,7 +1196,7 @@ fn empty_recents_harness() -> impl IntoElement {
                 close,
                 || {},
             ))
-            .child(recents_submenu(states, rescued, unopened, &[], close)),
+            .child(recents_submenu(states, unopened, &[], close)),
     )
 }
 
@@ -29273,7 +29272,6 @@ fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
             with_dock(states, dock),
             held.keyboard,
             finder,
-            held.rescued,
             held.unopened,
             held.language,
             &held.jobs,
@@ -30448,7 +30446,7 @@ fn the_recent_projects_are_read_once_for_the_project_on_screen() {
     // list, and the list naming it.
     let other = base.join("other.avproj");
     std::fs::write(&other, "").expect("writing the project file");
-    let listing = base.join(store::RECENTS_FILE);
+    let listing = base.join(crate::store::RECENTS_FILE);
     let entry = other.to_string_lossy().into_owned();
     std::fs::write(&listing, format!("order = [{entry:?}]\n")).expect("writing the recent list");
 
@@ -30560,43 +30558,59 @@ fn the_rescued_window_names_every_path_and_its_button_empties_the_list() {
     assert!(label_area(&quiet, "Close").is_none());
 }
 
-/// A load says what it moved through one function, and that function adds: what an earlier
-/// load put in the window is still named after a later one has run.
-///
-/// The harness is the startup's own line -- a hook over a window that is already naming
-/// something -- which is the case `set` got wrong and only the empty start hid. What
-/// `store::moved()` hands back is not asserted on: the tests share one process and one
-/// list.
+/// A file moved aside after startup, by a load on another thread, is named at once, and
+/// beside what an earlier load moved rather than in its place. Before, the window was
+/// filled only at startup and at a switch, so a scratchpad order the pad worker moved
+/// waited for the next switch.
 #[test]
-fn a_load_notes_what_it_moved_without_losing_an_earlier_ones() {
-    fn noting_harness() -> impl IntoElement {
-        let rescued = use_consume::<Rescued>().0;
-        use_hook(move || note_moved(rescued));
+fn a_file_moved_aside_on_another_thread_is_named_at_once() {
+    fn rescued_harness() -> impl IntoElement {
         rect().expanded().child(RescuedPopup)
     }
 
-    let earlier = "/state/incompatible/settings.toml";
+    let directory = Temporary::directory(
+        std::env::temp_dir().join(format!("assembly-viewer-rescued-{}", std::process::id())),
+    );
+    let store = Store::at(directory.to_path_buf());
     let (mut test, rescued) = TestingRunner::new(
-        noting_harness,
+        rescued_harness,
         (600., 400.).into(),
-        |runner: &mut _| {
-            runner
-                .provide_root_context(|| Rescued(State::create(vec![PathBuf::from(earlier)])))
-                .0
+        {
+            let store = store.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || {
+                    roots(Some(store), &Settings::default());
+                    consume_context::<Rescued>().0
+                })
+            }
         },
         1.,
     );
     settle(&mut test);
 
-    assert!(
-        rescued.peek().contains(&PathBuf::from(earlier)),
-        "the later load threw away what the earlier one moved: {:?}",
-        rescued.peek(),
+    // What the pad worker does to an order file that will not parse.
+    let load = |name: &str| {
+        std::fs::write(store.path(name), "not = [toml").expect("writing the bad file");
+        let (store, name) = (store.clone(), name.to_owned());
+        std::thread::spawn(move || store.read::<Settings>(name))
+            .join()
+            .expect("the load ran");
+    };
+    load("first.toml");
+    settle(&mut test);
+    load("second.toml");
+    settle(&mut test);
+
+    let named = rescued.peek().clone();
+    assert_eq!(
+        named,
+        vec![
+            store.path("incompatible/first.toml"),
+            store.path("incompatible/second.toml"),
+        ],
+        "the window does not name both moves",
     );
-    assert!(
-        label_area(&test, earlier).is_some(),
-        "the window stopped naming it"
-    );
+    assert!(label_area(&test, "Close").is_some(), "no window is up");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -34469,7 +34483,6 @@ fn press_finder_chord(
         with_dock(*states, dock),
         root_key_states().keyboard,
         finder,
-        root_key_states().rescued,
         root_key_states().unopened,
         root_key_states().language,
         &root_key_states().jobs,
@@ -35630,13 +35643,12 @@ thread_local! {
 }
 
 /// What `root_key_down` takes beside the project's own bundle and the modifiers: where
-/// the keyboard can be put, the two windows a project that would not open puts up, the
+/// the keyboard can be put, the window a project that would not open puts up, the
 /// language server with the worker it is spoken to through, and the two flags saying
 /// whether a following pane is up.
 #[derive(Clone)]
 struct RootStates {
     keyboard: State<Keys>,
-    rescued: State<Vec<PathBuf>>,
     unopened: State<Option<project::Failure>>,
     language: State<Language>,
     jobs: LspJobs,
@@ -35652,7 +35664,6 @@ struct RootStates {
 fn use_root_key_states() {
     let proj = use_consume::<Proj>().0;
     let keyboard = use_consume::<Keyboard>().0;
-    let rescued = use_consume::<Rescued>().0;
     let unopened = use_consume::<Unopened>().0;
     let language = use_consume::<Talking>().0;
     let follow = use_consume::<Following>().0;
@@ -35665,7 +35676,6 @@ fn use_root_key_states() {
         ROOT_STATES.with_borrow_mut(|held| {
             *held = Some(RootStates {
                 keyboard,
-                rescued,
                 unopened,
                 language,
                 jobs,
@@ -35711,7 +35721,6 @@ impl Component for ChordKeys {
         rect().on_global_key_down(move |e: Event<KeyboardEventData>| {
             let RootStates {
                 keyboard,
-                rescued,
                 unopened,
                 language,
                 jobs,
@@ -35722,7 +35731,6 @@ impl Component for ChordKeys {
                 states,
                 keyboard,
                 finder,
-                rescued,
                 unopened,
                 language,
                 &jobs,
@@ -36354,7 +36362,6 @@ fn reaching_harness() -> impl IntoElement {
                 with_dock(states, dock),
                 root.keyboard,
                 finder,
-                root.rescued,
                 root.unopened,
                 root.language,
                 &root.jobs,

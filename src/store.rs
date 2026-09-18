@@ -13,9 +13,9 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
 };
 
+use async_channel::{Receiver, Sender};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::order::Order;
@@ -61,10 +61,6 @@ const MAX_CLAIMS: u32 = 1000;
 /// it.
 pub(crate) const MAX_ORDER: usize = 50;
 
-/// Where each file moved aside was put, until the UI asks. A `static` because what fills
-/// it is a load and not a component — the same reason the save policy is one.
-static MOVED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
-
 /// The directory everything the app stores goes in, and the rules every file under it
 /// follows.
 ///
@@ -72,12 +68,32 @@ static MOVED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 /// **relative to the store**, and an absolute one passes through untouched — which is
 /// [`Path::join`]'s own rule, and is what lets a project file the reader gave a place go
 /// through the same writer as the app's own.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Store {
     base: PathBuf,
+    /// Where each file [`Store::read`] moves aside is said ([`Store::moved`]). One channel
+    /// per store, which its clones share, so a load on any thread is heard by whoever
+    /// listens to the store it was handed.
+    moved: (Sender<PathBuf>, Receiver<PathBuf>),
 }
 
+/// Two stores are one when they are one directory.
+impl PartialEq for Store {
+    fn eq(&self, other: &Store) -> bool {
+        self.base == other.base
+    }
+}
+
+impl Eq for Store {}
+
 impl Store {
+    fn new(base: PathBuf) -> Store {
+        Store {
+            base,
+            moved: async_channel::unbounded(),
+        }
+    }
+
     /// The store this run keeps its files in, or `None` on a system with no state or
     /// local data directory to put one in.
     ///
@@ -86,7 +102,13 @@ impl Store {
     /// one store per run.
     pub fn open() -> Option<Store> {
         let base = given_base(std::env::var_os(STATE_VARIABLE)).or_else(desktop_base)?;
-        Some(Store { base })
+        Some(Store::new(base))
+    }
+
+    /// Every path a [`Store::read`] through this store or a clone of it moves aside, as it
+    /// is moved, whichever thread the read ran on. Each path is handed to one receiver.
+    pub fn moved(&self) -> Receiver<PathBuf> {
+        self.moved.1.clone()
     }
 
     /// Where `relative` is under this store. An absolute path is left alone.
@@ -193,7 +215,8 @@ impl Store {
                 path.display(),
                 moved.display()
             );
-            list().push(moved);
+            // Unbounded, and the store holds the receiver, so this cannot fail.
+            let _ = self.moved.0.try_send(moved);
         }
         None
     }
@@ -314,18 +337,6 @@ pub fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     drop(file);
 
     fs::rename(&temporary, path)
-}
-
-/// The paths moved aside since this was last asked, handed over rather than copied: what
-/// the reader has already been told about is not told again.
-pub fn moved() -> Vec<PathBuf> {
-    std::mem::take(&mut *list())
-}
-
-fn list() -> MutexGuard<'static, Vec<PathBuf>> {
-    // Take the list back rather than propagate: a poisoned lock must not turn a rescue
-    // into a crashed app.
-    MOVED.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 #[cfg(test)]

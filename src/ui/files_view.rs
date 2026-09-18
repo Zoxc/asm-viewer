@@ -65,7 +65,6 @@ impl Component for EntryRow {
             picking,
             ctrl,
             project: states,
-            rescued,
             unopened,
             ..
         } = self.states;
@@ -123,12 +122,7 @@ impl Component for EntryRow {
                             menu.child(
                                 MenuButton::new()
                                     .on_press(move |_| {
-                                        switch_project(
-                                            states,
-                                            rescued,
-                                            unopened,
-                                            path.to_path_buf(),
-                                        )
+                                        switch_project(states, unopened, path.to_path_buf())
                                     })
                                     .child("Open as project"),
                             )

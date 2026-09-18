@@ -441,9 +441,9 @@ pub(crate) struct Shortcuts(pub(crate) State<Filter>);
 /// Where each file that would not parse was moved to, until the reader has been told: what
 /// [`RescuedPopup`] draws, and empty for every run in which nothing was moved.
 ///
-/// A state at the root and not one inside the popup, because what fills it is a *load*
-/// (`store::moved`, through `note_moved`): the startup's, and a project switch's -- neither
-/// of them anywhere near a component that could own this.
+/// A state at the root and not one inside the popup, because what fills it is a *load*,
+/// on any thread and at any time: a task over the store ([`Store::moved`], through
+/// `name_moved`) adds each path as it is moved.
 #[derive(Clone, Copy)]
 pub(crate) struct Rescued(pub(crate) State<Vec<PathBuf>>);
 
@@ -598,9 +598,8 @@ pub(crate) struct ListStates {
     /// The project's own states: what a bookmark is added to and judged live against, and
     /// what a binary is closed out of.
     pub(crate) project: ProjectStates,
-    /// The two that go with [`ProjectStates`] wherever a project is switched, which is
-    /// what a file row's "Open as project" does.
-    pub(crate) rescued: State<Vec<PathBuf>>,
+    /// What goes with [`ProjectStates`] wherever a project is switched, which is what a
+    /// file row's "Open as project" does.
     pub(crate) unopened: State<Option<project::Failure>>,
 }
 
@@ -617,7 +616,6 @@ pub(crate) fn use_list_states(panel: Panel) -> ListStates {
         doors: use_doors(),
         ctrl: use_consume::<Ctrl>().0,
         project: use_project_states(),
-        rescued: use_consume::<Rescued>().0,
         unopened: use_consume::<Unopened>().0,
     }
 }

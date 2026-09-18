@@ -67,7 +67,7 @@ pub(crate) use crate::settings::{FontSetting, Settings, Theme as ThemeChoice};
 pub(crate) use crate::shared::{same_arc, ByPtr, Shared};
 pub(crate) use crate::shortcuts;
 pub(crate) use crate::source::{self, showable, SourceFile};
-pub(crate) use crate::store::{self, Store};
+pub(crate) use crate::store::Store;
 pub(crate) use crate::tabs::{Along, Page, Strip, Tab};
 pub(crate) use crate::tree::{
     format_tag, Expansion, LoadId, Loads, ObjectTree, TreeRow, ARCHIVE_TAG,
@@ -328,7 +328,7 @@ fn toolbar() -> impl IntoElement {
 /// door onto something the app already has, so the states it wants are the states those
 /// doors want, and a parameter per key would grow this list by one on every binding
 /// added. What is passed by hand is what belongs to no bundle: where the keyboard can be
-/// put, the finder, the two windows a project that would not open puts up, the language
+/// put, the finder, the window a project that would not open puts up, the language
 /// server with the worker it is spoken to through, and the flags saying whether each
 /// place's following pane is up.
 #[allow(clippy::too_many_arguments)]
@@ -337,7 +337,6 @@ pub(crate) fn root_key_down(
     states: ProjectStates,
     keyboard: State<Keys>,
     finder: State<Finder>,
-    rescued: State<Vec<PathBuf>>,
     unopened: State<Option<project::Failure>>,
     language: State<Language>,
     jobs: &LspJobs,
@@ -394,7 +393,7 @@ pub(crate) fn root_key_down(
 
         // The window's own doors. `show_page` for the two pages, which opens one beside
         // the tab on screen and raises one already open -- what the pages menu's row does.
-        Chord::OpenProject => ask_for_a_project(states, rescued, unopened),
+        Chord::OpenProject => ask_for_a_project(states, unopened),
         Chord::Settings => show_page(open, Page::Settings),
         Chord::Shortcuts => show_page(open, Page::Shortcuts),
         Chord::Server => toggle_server(language, proj, jobs),
@@ -449,7 +448,6 @@ pub(crate) struct Roots {
     pub(crate) asking: State<Option<String>>,
     pub(crate) unopened: State<Option<project::Failure>>,
     pub(crate) finder: State<Finder>,
-    pub(crate) rescued: State<Vec<PathBuf>>,
     pub(crate) analysis: State<Analyzed>,
     pub(crate) located: State<Located>,
     pub(crate) coded: State<Coded>,
@@ -502,7 +500,7 @@ fn context<T: 'static, C: Clone + 'static>(wrap: fn(State<T>) -> C, value: T) ->
 ///
 /// The two values a run decides for itself are handed in: where its files go, and what the
 /// settings file said. Everything else starts at its default, [`Rescued`] included -- what
-/// a load moved aside is a write after the load, not a value here.
+/// a load moved aside is written as the store says it, not a value here.
 pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     // The one store this run keeps its files in, handed down from here: no other module
     // looks the place up for itself.
@@ -608,9 +606,13 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     let asking = context(Deleting, None);
     // And which project would not open, for the window that says so.
     let unopened = context(Unopened, None);
-    // Where each file that would not parse was moved to. Empty here and written by
-    // whoever made the load: what a startup moved aside is known only once it has run.
+    // Where each file that would not parse was moved to. Empty here, and filled by a task
+    // over the store as each file is moved, the startup's loads included.
     let rescued = context(Rescued, Vec::new());
+    let stored = store.peek().clone();
+    if let Some(stored) = stored {
+        spawn(name_moved(stored, rescued));
+    }
     let searched = context(Searching, Searched::default());
     // At the root, not in the overlay: the list of a project's files is kept between
     // opens, and the walk that fills it outlives the overlay being closed.
@@ -691,7 +693,6 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         asking,
         unopened,
         finder,
-        rescued,
         analysis,
         located,
         coded,
@@ -739,7 +740,6 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
         asking,
         unopened,
         finder,
-        rescued,
         analysis,
         located,
         coded,
@@ -801,11 +801,6 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.
     use_restore_on_startup(states, opening);
-    // After the restore, which is the last of the loads a startup makes: `Settings::load`
-    // above, and the project the line above reopened. Both are synchronous, so one ask
-    // here catches everything they moved aside. A write and not a value handed to `roots`,
-    // for that reason: what to say is only known once the loads have run.
-    use_hook(move || note_moved(rescued));
 
     use_reading_of(active, objects, sectioned);
     // The question and not the active document: a source-driven tab's assembly side
@@ -903,7 +898,6 @@ pub fn app(opening: Option<PathBuf>) -> impl IntoElement {
                 states,
                 keyboard,
                 finder,
-                rescued,
                 unopened,
                 language,
                 &jobs,

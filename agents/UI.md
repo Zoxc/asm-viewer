@@ -163,8 +163,8 @@ by `roots`: a seam the tests want belongs where the tests are.
 
 **Three of them a run has to decide for itself**, and they are what `roots` takes or leaves.
 Where the files go and what the settings file said are handed in, so a test can name a store of
-its own; and `Rescued` starts empty and is *written* after the restore rather than provided
-with a value, because what a load moved aside is only known once the load has run.
+its own; and `Rescued` starts empty and is *written* by a task over the store rather than
+provided with a value, because what a load moved aside is only known once the load has run.
 
 **A context lives with the mechanism that owns it, and so does the bundle that groups it.**
 `src/ui/state.rs` holds only what belongs to no one mechanism -- the objects, the store, the
@@ -211,7 +211,7 @@ consume them itself, at one walk per mount; the list does it so there is one set
 `ListStates` (`state.rs`) is the same thing for the lists
 outside the code panes: the pick (`picking`), the door a press goes through (`doors`, `ctrl`), the
 project's own states (`project`, which is where a bookmark and the objects it is judged against
-come from) and the two that go with those wherever a project is switched (`rescued`, `unopened`).
+come from) and what goes with those wherever a project is switched (`unopened`).
 It is gathered by `use_list_states` on the pane every panel already mints (`use_list_pane`), rides
 to the rows in `ListPane::virtual_rows`, and compares equal always for `RowStates`'s reason. It is
 a **union**: no list's rows read all of it, and what they share is most of it, where a bundle per
