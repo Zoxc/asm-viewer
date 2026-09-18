@@ -149,6 +149,51 @@ pub enum Encoding {
     Utf16,
 }
 
+/// Columns as they came off the wire, and the one way to the bytes the app counts in.
+///
+/// Its own module, so the range inside is nobody else's: every parser here reads one of
+/// these out of an answer, and the only way to a `Range<u32>` is [`Wire::bytes`], which
+/// asks for the [`Encoding`] the handshake agreed on. So the conversion cannot be skipped
+/// -- a parser that wrote what it read into a byte-unit field does not compile -- and
+/// what the handshake settled at runtime is what the type asks for at compile time.
+mod wire {
+    use std::ops::Range;
+
+    use super::Encoding;
+
+    /// A range of columns in the server's own units, which are the app's only where the
+    /// handshake took `utf-8`.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(super) struct Wire(Range<u32>);
+
+    impl Wire {
+        /// Columns as an answer gave them.
+        pub(super) fn of(columns: Range<u32>) -> Wire {
+            Wire(columns)
+        }
+
+        /// The same columns in bytes: `encoding` says whether they already are, and
+        /// `counted` counts them off the line where they are not.
+        ///
+        /// The one way out of a `Wire`, and [`Talk::back`](super::Talk::back) is its only
+        /// caller.
+        pub(super) fn bytes(
+            self,
+            encoding: Encoding,
+            counted: impl FnOnce(Range<u32>) -> Range<u32>,
+        ) -> Range<u32> {
+            match encoding {
+                // Nothing is read where the server took `utf-8`: the numbers are already
+                // the app's.
+                Encoding::Utf8 => self.0,
+                Encoding::Utf16 => counted(self.0),
+            }
+        }
+    }
+}
+
+use wire::Wire;
+
 /// Where something is: a file, a **1-based** line in it, and the columns of the name on
 /// that line.
 ///
@@ -157,12 +202,15 @@ pub enum Encoding {
 /// happens here and once. The columns are **byte offsets into that line**, whichever way
 /// the server counted them ([`Encoding`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Place {
+pub struct Place<C = Range<u32>> {
     pub file: PathBuf,
     pub line: u32,
     /// The columns of the name on `line`, in bytes. Empty where the answer's range spans
     /// lines: a name does not, and an empty run selects nothing.
-    pub columns: Range<u32>,
+    ///
+    /// `C` is what says which units: bytes for every `Place` anything outside this module
+    /// holds, and a `Wire` for one a parser has just read.
+    pub columns: C,
 }
 
 /// A place a question is about: a file, a line in it, and a column on that line.
@@ -247,14 +295,14 @@ impl Question {
 /// rule, and the doc comment under it. A server told nothing sends the same thing as plain
 /// text with its structure flattened, which is why the handshake names the format.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Hovered {
+pub struct Hovered<C = Range<u32>> {
     pub text: String,
     /// 1-based, as a [`Place`]'s line is and for its reason.
     pub line: u32,
-    /// The columns of the name the answer is about, in bytes as a [`Place`]'s are. The
-    /// server need not say, and where it does not these are the columns the question was
-    /// asked at, empty.
-    pub columns: Range<u32>,
+    /// The columns of the name the answer is about, in bytes as a [`Place`]'s are, and
+    /// counted in the same `C`. The server need not say, and where it does not these are
+    /// the columns the question was asked at, empty.
+    pub columns: C,
 }
 
 /// The names a server gives the semantic token types and modifiers it will send, in the
@@ -311,11 +359,12 @@ impl Legend {
 /// The indices are kept rather than the names: a file is thousands of these, the names are
 /// a few dozen, and what asks about one has the legend to hand.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Token {
+pub struct Token<C = Range<u32>> {
     /// 1-based, as a [`Place`]'s line is and for its reason.
     pub line: u32,
-    /// The columns of the name on `line`, in bytes as a [`Place`]'s are.
-    pub columns: Range<u32>,
+    /// The columns of the name on `line`, in bytes as a [`Place`]'s are, and counted in
+    /// the same `C`.
+    pub columns: C,
     /// Which of the legend's types, by index.
     pub kind: u32,
     /// Which of its modifiers, one bit each, by index.
@@ -701,13 +750,17 @@ impl<W: Write + Send + 'static> Talk<W> {
         lines: &mut Lines,
     ) -> Result<Vec<Place>, Failure> {
         let params = question.params(at, self.out(lines, &at.file, at.line, at.column));
-        let mut found = self
+        let found = self
             .asked(question.method(), params)
             .map(|value| places(&value))?;
-        for place in &mut found {
-            place.columns = self.back(lines, &place.file, place.line, place.columns.clone());
-        }
-        Ok(found)
+        Ok(found
+            .into_iter()
+            .map(|place| Place {
+                columns: self.back(lines, &place.file, place.line, place.columns),
+                file: place.file,
+                line: place.line,
+            })
+            .collect())
     }
 
     /// What the name at `line` and `column` of `file` is, in the server's own words, and
@@ -721,13 +774,14 @@ impl<W: Write + Send + 'static> Talk<W> {
     pub fn hover(&mut self, at: &Lookup) -> Result<Option<Hovered>, Failure> {
         let mut lines = self.lines();
         let column = self.out(&mut lines, &at.file, at.line, at.column);
-        let mut said = self
+        let said = self
             .asked("textDocument/hover", asked_at(at, column))
             .map(|value| hovered(&value, at.line, column))?;
-        if let Some(said) = said.as_mut() {
-            said.columns = self.back(&mut lines, &at.file, said.line, said.columns.clone());
-        }
-        Ok(said)
+        Ok(said.map(|said| Hovered {
+            columns: self.back(&mut lines, &at.file, said.line, said.columns),
+            text: said.text,
+            line: said.line,
+        }))
     }
 
     /// Every name in `file`, as the server classifies them.
@@ -749,14 +803,19 @@ impl<W: Write + Send + 'static> Talk<W> {
             return Ok(Vec::new());
         }
         let params = json!({ "textDocument": { "uri": uri_of(file) } });
-        let mut found = self
+        let found = self
             .request("textDocument/semanticTokens/full", params)
             .map(|value| tokens(&value))?;
         let mut lines = self.lines();
-        for token in &mut found {
-            token.columns = self.back(&mut lines, file, token.line, token.columns.clone());
-        }
-        Ok(found)
+        Ok(found
+            .into_iter()
+            .map(|token| Token {
+                columns: self.back(&mut lines, file, token.line, token.columns),
+                line: token.line,
+                kind: token.kind,
+                modifiers: token.modifiers,
+            })
+            .collect())
     }
 
     /// Tell the server the app is showing `file`, whose text is `text` and whose language
@@ -835,16 +894,18 @@ impl<W: Write + Send + 'static> Talk<W> {
     }
 
     /// The server's columns as bytes: what comes back with an answer. [`Talk::out`]'s
-    /// rule about `utf-8` holds here too.
-    fn back(&self, lines: &mut Lines, file: &Path, line: u32, columns: Range<u32>) -> Range<u32> {
-        if self.encoding == Encoding::Utf8 {
-            return columns;
-        }
-        let Some(text) = lines.at(file, line) else {
-            return columns;
-        };
-        let bytes = chars::bytes_of(text, columns.start as usize..columns.end as usize);
-        narrowed(bytes.start)..narrowed(bytes.end)
+    /// rule about `utf-8` holds here too, and is [`Wire::bytes`]'s to apply.
+    ///
+    /// **The one place a [`Wire`] is unwrapped**, which is what makes every parser's
+    /// columns come through here on their way into an answer.
+    fn back(&self, lines: &mut Lines, file: &Path, line: u32, columns: Wire) -> Range<u32> {
+        columns.bytes(self.encoding, |columns| {
+            let Some(text) = lines.at(file, line) else {
+                return columns;
+            };
+            let bytes = chars::bytes_of(text, columns.start as usize..columns.end as usize);
+            narrowed(bytes.start)..narrowed(bytes.end)
+        })
     }
 
     /// One request whose refusal may be a "not now", which is the layer between
@@ -1273,7 +1334,7 @@ fn legend_of(said: &Value) -> Legend {
 /// what it could read is kept and the rest dropped; that and a number too big for a `u32`
 /// are the only ways an answer here is not an answer, and neither is worth a word to the
 /// reader (`AGENTS.md`: never panic on any file input, and a server's answer is one).
-fn tokens(answer: &Value) -> Vec<Token> {
+fn tokens(answer: &Value) -> Vec<Token<Wire>> {
     let Some(data) = answer
         .get("data")
         .and_then(Value::as_array)
@@ -1301,7 +1362,7 @@ fn tokens(answer: &Value) -> Vec<Token> {
             // The protocol counts lines from zero and everything else here counts from
             // one, as `places` converts them.
             line: line.saturating_add(1),
-            columns: column..column.saturating_add(length),
+            columns: Wire::of(column..column.saturating_add(length)),
             kind,
             modifiers,
         });
@@ -1310,11 +1371,11 @@ fn tokens(answer: &Value) -> Vec<Token> {
 }
 
 /// The line and the columns one `range` names: the line **1-based**, as a [`Place`]'s is
-/// and for its reason, and the columns in the UTF-16 units they came in.
+/// and for its reason, and the columns in the units they came in ([`Wire`]).
 ///
 /// The columns are a name's only where the range is one line's: one that ends on another
 /// names more than a name, and the empty run is what says so.
-fn spanned(range: &Value) -> Option<(u32, Range<u32>)> {
+fn spanned(range: &Value) -> Option<(u32, Wire)> {
     let start = range.get("start")?;
     let line = start.get("line")?.as_u64()?;
     let at = |place: &Value| -> u32 {
@@ -1330,7 +1391,7 @@ fn spanned(range: &Value) -> Option<(u32, Range<u32>)> {
     // The protocol counts from zero and everything else here counts from one.
     Some((
         u32::try_from(line).ok()?.saturating_add(1),
-        from..to.max(from),
+        Wire::of(from..to.max(from)),
     ))
 }
 
@@ -1340,7 +1401,7 @@ fn spanned(range: &Value) -> Option<(u32, Range<u32>)> {
 /// The columns are the answer's own where it named a range, and the question's otherwise:
 /// a server need not say what it answered about, and what the box is drawn against has to
 /// be something either way.
-fn hovered(answer: &Value, line: u32, column: u32) -> Option<Hovered> {
+fn hovered(answer: &Value, line: u32, column: u32) -> Option<Hovered<Wire>> {
     let text = contents(answer.get("contents")?);
     // rust-analyzer's own begins with a newline, and a box drawn around blank space is a
     // box about nothing.
@@ -1351,7 +1412,7 @@ fn hovered(answer: &Value, line: u32, column: u32) -> Option<Hovered> {
     let (line, columns) = answer
         .get("range")
         .and_then(spanned)
-        .unwrap_or((line, column..column));
+        .unwrap_or_else(|| (line, Wire::of(column..column)));
     Some(Hovered {
         text: text.to_owned(),
         line,
@@ -1394,7 +1455,7 @@ fn contents(value: &Value) -> String {
 /// No `linkSupport` was declared, so a list of plain locations is what should arrive; the
 /// bare location and the link are read too, since a server that sends one costs a `match`
 /// arm here and would otherwise cost the answer.
-fn places(answer: &Value) -> Vec<Place> {
+fn places(answer: &Value) -> Vec<Place<Wire>> {
     let one = |value: &Value| {
         let uri = value
             .get("uri")

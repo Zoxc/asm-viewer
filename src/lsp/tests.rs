@@ -233,9 +233,10 @@ fn a_definition_answer_is_read_in_each_shape_it_may_come_in() {
         json!({ "start": { "line": 11, "character": 4 }, "end": { "line": 11, "character": 9 } });
     let place = Place {
         file: PathBuf::from("/p/src/main.rs"),
-        // The protocol's line 11 is the twelfth line, and its column is kept as it came.
+        // The protocol's line 11 is the twelfth line, and its columns are the server's
+        // until the conversion takes them ([`Talk::back`]).
         line: 12,
-        columns: 4..9,
+        columns: Wire::of(4..9),
     };
 
     let location = json!({ "uri": "file:///p/src/main.rs", "range": range });
@@ -257,7 +258,7 @@ fn an_answer_with_no_column_is_read_at_column_zero() {
         vec![Place {
             file: PathBuf::from("/p/x.rs"),
             line: 1,
-            columns: 0..0,
+            columns: Wire::of(0..0),
         }]
     );
 }
@@ -272,7 +273,7 @@ fn a_range_that_ends_on_another_line_names_no_columns() {
     let found = places(&answer);
     assert_eq!(found[0].line, 4);
     // Empty, and where the name begins: a run that selects nothing.
-    assert_eq!(found[0].columns, 7..7);
+    assert_eq!(found[0].columns, Wire::of(7..7));
 }
 
 #[test]
@@ -827,6 +828,51 @@ fn a_hover_that_says_nothing_is_no_answer_at_all() {
     assert_eq!(hover_of(json!({ "contents": [] })), None);
 }
 
+/// A hover from a server counting in UTF-16, over the wide line: the answer's columns and
+/// the fallback to the question's both come back in bytes.
+///
+/// The answer's range is the crab's line, so the two units differ -- `helper` is 6..12 to
+/// the server and 8..14 here -- and the question went out at column 6 for byte 8, so a
+/// fallback that came back untouched would be 6..6 and not the name the pointer is on.
+#[test]
+fn a_hover_from_a_utf_16_server_is_answered_in_bytes() {
+    let asked = |range: Value| {
+        let (_said, found, _notes) = against_reading(
+            reads_wide,
+            move |fake, message| {
+                let result = match message["method"] == json!("initialize") {
+                    true => json!({ "capabilities": { "positionEncoding": "utf-16" } }),
+                    false => {
+                        let mut answer = json!({ "contents": "what it is" });
+                        if !range.is_null() {
+                            answer["range"] = range.clone();
+                        }
+                        answer
+                    }
+                };
+                fake.say(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"].clone(),
+                    "result": result,
+                }));
+            },
+            |talk| {
+                talk.initialize(Path::new("/p"), &wanted())
+                    .expect("a handshake");
+                talk.hover(&at(1, 8)).expect("an answer")
+            },
+        );
+        found.expect("an answer").columns
+    };
+
+    let range = json!({
+        "start": { "line": 0, "character": 6 },
+        "end": { "line": 0, "character": 12 },
+    });
+    assert_eq!(asked(range), 8..14);
+    assert_eq!(asked(Value::Null), 8..8);
+}
+
 /// A server that answers without saying what it answered about: the box is drawn against
 /// the name the question was asked at.
 #[test]
@@ -881,19 +927,19 @@ fn the_tokens_of_an_answer_are_read_out_of_its_deltas() {
             // Lines count from one here, where the protocol counts from zero.
             Token {
                 line: 1,
-                columns: 5..9,
+                columns: Wire::of(5..9),
                 kind: 1,
                 modifiers: 0
             },
             Token {
                 line: 1,
-                columns: 8..10,
+                columns: Wire::of(8..10),
                 kind: 7,
                 modifiers: 0b101
             },
             Token {
                 line: 3,
-                columns: 4..10,
+                columns: Wire::of(4..10),
                 kind: 2,
                 modifiers: 0
             },

@@ -263,6 +263,16 @@ and so has one that answers something this app never offered. Both are read as U
 converted, which is the reading that costs a conversion rather than the one that trusts a
 word nobody said. Never a failure: a server is not broken for being older.
 
+**The type is what makes the conversion happen.** A parser here reads an answer's columns
+off the wire and hands back a `Wire`: a newtype whose range belongs to a module of its
+own, and whose only way out is `Wire::bytes`, which asks for the `Encoding` the handshake
+agreed on. `Talk::back` is its one caller. So a parser builds a `Place<Wire>`, a
+`Hovered<Wire>` or a `Token<Wire>`, and the byte-unit `Place`, `Hovered` or `Token` a
+caller is given exists only on the far side of that call. Before, it was a convention the
+compiler could not see: each parser built the server's numbers into a field whose doc said
+bytes and a loop behind it repaired them, so a parser that forgot the loop compiled -- and
+its columns were wrong wherever a line held a character wider than a byte.
+
 **Converting takes the line's text**, and `Lines` is what reads it: the question's own
 file, and, for an answer, whatever file it named -- a definition in another crate, a
 reference in a file no tab shows. Each file once per answer, through `source::read_text`,
