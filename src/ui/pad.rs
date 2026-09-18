@@ -819,19 +819,12 @@ pub(crate) fn read_program(executable: &Path, built_from: String) -> Option<Prog
 
 /// The blocking work itself. Split out so [`use_scratchpad_with`] can be handed something
 /// that answers without a disk or a compiler.
-pub(crate) fn pad_work(job: PadJob) -> PadAnswer {
-    // The store is opened here, once per job, rather than handed in: this runs on the
-    // worker's own thread, off the end of a channel that carries the job and nothing
-    // else. Every arm wants the same directory, and without one there is nowhere to
-    // read, write, build or run in.
-    let store = Store::open();
+///
+/// `store` is the run's own, handed to the worker when it is spawned. Every arm wants it,
+/// and without one there is nowhere to read, write, build or run in.
+pub(crate) fn pad_work(store: Option<&Store>, job: PadJob) -> PadAnswer {
     match job {
-        PadJob::List => PadAnswer::Listed(
-            store
-                .as_ref()
-                .map(crate::scratchpad::pads)
-                .unwrap_or_default(),
-        ),
+        PadJob::List => PadAnswer::Listed(store.map(crate::scratchpad::pads).unwrap_or_default()),
         PadJob::New => PadAnswer::Created(match &store {
             Some(store) => crate::scratchpad::new_pad(store),
             None => Err(Failure::NoDirectory),
