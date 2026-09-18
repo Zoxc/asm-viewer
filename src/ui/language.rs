@@ -918,10 +918,9 @@ pub(crate) fn toggle_server(language: State<Language>, proj: State<OpenProject>,
 /// is here because this is where a start happens, so neither press nor the agreement can
 /// grow a path around it -- the same reason the trust gate is in `start_server`.
 fn run_server(mut language: State<Language>, jobs: &LspJobs, asking: Asking) {
-    // Bound before the write, as ever; the start it answers with is sent after it.
-    let mut next = language.peek().clone();
-    let starting = next.starting(asking.serving.clone());
-    language.set(next);
+    // Written whatever it answers, `starting` always counting the run up. The guard ends
+    // with the statement, before the send.
+    let starting = language.write().starting(asking.serving.clone());
     let Some((run, settings)) = starting else {
         return;
     };

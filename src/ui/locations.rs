@@ -439,13 +439,15 @@ impl Locating {
     /// moved on meanwhile is not pulled back.
     pub(crate) fn find(self, query: Query, subject: Option<Subject>) {
         let Locating { mut located, dock } = self;
-        let mut next = located.peek().clone();
-        if next.found.as_ref().is_some_and(|found| found.of == query) {
-            next.found = None;
+        // In place and not on a copy: what is held can be a whole references answer.
+        {
+            let mut held = located.write();
+            if held.found.as_ref().is_some_and(|found| found.of == query) {
+                held.found = None;
+            }
+            held.asked = Some(query);
+            held.subject = subject;
         }
-        next.asked = Some(query);
-        next.subject = subject;
-        located.set(next);
 
         raise_panel(dock, Panel::Locations);
     }
