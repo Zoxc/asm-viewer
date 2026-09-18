@@ -240,6 +240,21 @@ impl Language {
         matches!(&self.state, Lsp::Running { said, .. } if said.ready())
     }
 
+    /// The run to put a question under, where a server is started: [`started`]'s answer
+    /// and the `u64` with it, and all most readers want of the state.
+    ///
+    /// [`started`]: Language::started
+    pub(crate) fn current(&self) -> Option<u64> {
+        self.started().then_some(self.run)
+    }
+
+    /// The run to ask about a whole file, where it is [`ready`].
+    ///
+    /// [`ready`]: Language::ready
+    pub(crate) fn answering(&self) -> Option<u64> {
+        self.ready().then_some(self.run)
+    }
+
     /// Whether something is going on: starting one, or a server reading the project.
     /// What the control draws a turning loader for instead of its own icon.
     pub(crate) fn busy(&self) -> bool {
@@ -977,17 +992,6 @@ pub(crate) fn stop_server(language: State<Language>, jobs: &LspJobs) {
     }
 }
 
-/// The run to put a question under, and `None` where there is nobody to ask.
-///
-/// Both asks read the state through this rather than cloning it. The clone copied the
-/// process handle and the project's settings to answer with a `bool` and a `u64`, and a
-/// hover is put again at every pointer stop. The read is over before the caller has the
-/// run, so the send below it is outside the guard.
-fn current(language: State<Language>) -> Option<u64> {
-    let held = language.peek();
-    held.started().then_some(held.run)
-}
-
 /// Ask `want` about the place `at`. The answer is the worker's, and arrives under the
 /// [`Ticket`] minted here, which is what this hands back: its run tells one server from
 /// another, and its id tells this question from the next one the same caller puts.
@@ -1002,7 +1006,7 @@ pub(crate) fn ask_where(
     at: Lookup,
     want: lsp::Question,
 ) -> Option<Ticket> {
-    let ticket = jobs.ticket(current(language)?);
+    let ticket = jobs.ticket(language.peek().current()?);
     jobs.send(LspJob::Ask { ticket, at, want });
     Some(ticket)
 }
@@ -1011,7 +1015,7 @@ pub(crate) fn ask_where(
 /// arrives under the ticket minted here, there is nobody to ask with no server, and a
 /// question put while one is starting waits for it.
 pub(crate) fn ask_hover(language: State<Language>, jobs: &LspJobs, at: Lookup) -> Option<Ticket> {
-    let ticket = jobs.ticket(current(language)?);
+    let ticket = jobs.ticket(language.peek().current()?);
     jobs.send(LspJob::Hover { ticket, at });
     Some(ticket)
 }

@@ -171,15 +171,20 @@ pub(crate) fn use_opened(
     open: Open,
     jobs: LspJobs,
 ) {
+    // The run and what it was started with, out of the state and not read off it: a
+    // remark from the server writes the state, and would wake the effect below for
+    // nothing to send.
+    let started = use_memo(move || {
+        let held = language.read();
+        let serving = held.state.serving()?;
+        Some((held.run, serving.clone()))
+    });
     use_side_effect(move || {
         // Both read and not peeked: a tab opened or closed and a server started are each
         // half of what this is about. Which files the server is for is what it was started
         // with, and not what the Project view's boxes say now.
-        let (run, serving) = {
-            let held = language.read();
-            (held.run, held.state.serving().cloned())
-        };
-        let Some(serving) = serving else {
+        let started = started.read().clone();
+        let Some((run, serving)) = started else {
             write_if(opened, |waiting| waiting.forget());
             return;
         };

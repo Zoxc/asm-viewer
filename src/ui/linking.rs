@@ -181,13 +181,18 @@ pub(crate) fn use_linking(
     opened: State<Opened>,
     jobs: LspJobs,
 ) {
+    // What the two readers below want of the state, each a memo over it: a remark from
+    // the server writes the state, and wakes neither unless it changed that.
+    let started = use_memo(move || language.read().started());
+    let answering = use_memo(move || language.read().answering());
+
     // A server that has stopped or failed has nothing left to answer for, so what it said
     // goes with it: the rows are handed the links as data and would go on drawing every
     // name as one a press follows. A server that is *working* keeps them -- they are
     // still the right names while it reads more of the project -- and so does one that is
     // starting, which is the beat before its first answer.
     use_side_effect(move || {
-        if matches!(language.read().state, Lsp::Off | Lsp::Failed(_)) {
+        if !*started.read() {
             write_if(linked, |waiting| waiting.forget());
         }
     });
@@ -199,22 +204,16 @@ pub(crate) fn use_linking(
         // another. A file opened while it was still reading has no links until then, and
         // gets them without the reader doing anything.
         move || {
-            let held = language.read().clone();
-            if !held.ready() {
-                return None;
-            }
+            let run = (*answering.read())?;
             let file = showing.read().clone()?;
-            if !linked.read().pending(&file, held.run) {
+            if !linked.read().pending(&file, run) {
                 return None;
             }
             // Only about a file the server has been told the app is showing, which is
             // what `Opened` decides -- and which leaves out a file of a language the
             // server is not for, since one asked about it answers as if it were its own
             // (`serves`).
-            opened
-                .read()
-                .holds(held.run, &file)
-                .then_some((held.run, file))
+            opened.read().holds(run, &file).then_some((run, file))
         },
         move |(run, file)| {
             write_if(linked, |waiting| waiting.asking(*run, file.clone()));

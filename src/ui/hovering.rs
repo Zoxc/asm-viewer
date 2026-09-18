@@ -266,10 +266,14 @@ pub(crate) struct Hovering(pub(crate) State<Hover>);
 /// finished. What it does not answer is nothing shown, and the pointer resting on the name
 /// again is what asks anew.
 pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs: LspJobs) {
+    // The run to ask under, out of the state and not read off it: a remark from the
+    // server writes the state, and wakes neither reader below unless the run changed.
+    let current = use_memo(move || language.read().current());
+
     // Nothing to answer for, so nothing is held about a name: the box would otherwise go
     // on saying what a server that is gone once said.
     use_side_effect(move || {
-        if !language.read().started() {
+        if current.read().is_none() {
             hover_gone(hover);
         }
     });
@@ -278,11 +282,8 @@ pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs:
         // Read and not peeked, both of them: the row writing the name under the pointer
         // is one half of what wakes this, and a server starting is the other.
         move || {
-            let held = language.read().clone();
-            if !held.started() {
-                return None;
-            }
-            hover.read().resting(held.run).cloned()
+            let run = (*current.read())?;
+            hover.read().resting(run).cloned()
         },
         // The wait, armed before the task below, so a pointer moving inside the one name
         // arms one wait and not one per move.
@@ -308,8 +309,8 @@ pub(crate) fn use_hovering(language: State<Language>, hover: State<Hover>, jobs:
                     }
                     Timer::after(left).await;
                 }
-                let held = language.peek().clone();
-                if !held.started() || !hover.peek().rested(&at) {
+                let started = language.peek().started();
+                if !started || !hover.peek().rested(&at) {
                     return;
                 }
                 let Some(ticket) = ask_hover(language, &jobs, at.clone()) else {

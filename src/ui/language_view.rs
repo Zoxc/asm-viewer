@@ -132,7 +132,10 @@ impl Component for TrustPrompt {
         let proj = use_consume::<Proj>().0;
         let jobs = use_consume::<LspJobs>();
 
-        let asked = language.read().asking.clone();
+        // A memo over the one field it draws, so a remark from the server does not draw
+        // the band again.
+        let asked = use_memo(move || language.read().asking.clone());
+        let asked = asked.read().clone();
         let Some(asking) = asked else {
             return rect().into_element();
         };
