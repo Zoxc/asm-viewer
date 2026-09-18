@@ -1499,7 +1499,8 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
         let mut strip = states.open.strip;
         strip.write().show(Tab::Page(Page::Project));
     }
-    test.sync_and_update();
+    // Settled and not synced once: whether there is a tab is a memo, a beat behind.
+    settle(&mut test);
 
     let button = test
         .find(|node, _| {
@@ -1580,7 +1581,7 @@ fn the_tab_menu_hangs_from_the_buttons_right_edge() {
             Reach::NewTab,
         );
     }
-    test.sync_and_update();
+    settle(&mut test);
 
     // The button is the only thing in the bar, so it is the one box of its own width.
     let button = test
@@ -1651,7 +1652,7 @@ fn the_document_menu_opens_and_closes() {
             Reach::NewTab,
         );
     }
-    test.sync_and_update();
+    settle(&mut test);
 
     let nodes = |test: &TestingRunner| test.find_many(|_, _| Some(())).len();
     let shut = nodes(&test);
@@ -32697,6 +32698,54 @@ fn a_push_onto_one_trail_draws_no_other_chip() {
         strip::chips_drawn() - before,
         1,
         "a push onto the temporal tab's trail drew the chips it says nothing about"
+    );
+}
+
+/// **A tab moved along the bar does not draw the tab list's button again.** While its menu
+/// is down the button draws one fact of the strip, whether it holds any tab, and the strip
+/// is written by every tab opened, closed, moved or raised. Read per render, the button was
+/// drawn again for each.
+///
+/// Fails on the read of the strip put back.
+#[test]
+fn a_tab_moved_along_the_bar_does_not_draw_the_tab_list_button() {
+    let (mut test, states) = TestingRunner::new(
+        bar_harness,
+        (600., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let file = |name: &str| Document::Source(Arc::from(format!("/src/{name}.rs").as_str()));
+    open_document(states.open, states.visits, file("first"), Reach::NewTab);
+    open_document(states.open, states.visits, file("second"), Reach::NewTab);
+    settle(&mut test);
+
+    // The button, as an element: whether it is the same one is whether it rendered. Its
+    // press handler never compares equal, so one drawn again is a new element.
+    let button = |test: &TestingRunner| {
+        test.find(|node, element| {
+            let area = node.layout().area;
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            (area.width() == TAB_LIST_WIDTH && area.height() == tab_row_height() && handled)
+                .then(|| node.element())
+        })
+        .expect("the tab list's button is drawn")
+    };
+    let before = button(&test);
+    let second = Tab::Document(states.open.ids()[1]);
+    let mut strip = states.open.strip;
+    strip.write().move_to(second, 0);
+    settle(&mut test);
+    assert_eq!(
+        strip.peek().tabs().first(),
+        Some(&second),
+        "the tab did not move"
+    );
+    assert!(
+        Rc::ptr_eq(&before, &button(&test)),
+        "a tab moved along the bar drew the tab list's button again"
     );
 }
 

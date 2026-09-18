@@ -268,7 +268,10 @@ while its menu is down**, for the same reason: the marks come from the strip and
 the disk, and neither is drawn until the menu is up, so both reads sit under that branch. Read
 there and not peeked, so the marks follow a page opening or closing under an open menu; read per
 render instead, the button would subscribe to the most-written state in the app and repaint for
-every tab opened, closed, moved or raised. The recents are a real
+every tab opened, closed, moved or raised. The tab list's button is built the same way, drawing only
+a memo of whether there is any tab while its menu is down
+(`a_tab_moved_along_the_bar_does_not_draw_the_tab_list_button`), and `ContentArea` asks a memo
+which tab is on screen. The recents are a real
 `SubMenu`, **keyed by how many there are**, because `MenuContainer` measures itself once and a
 list that grew after it was laid out would hang off the side of the window
 (`notes/upstream/freya.md`).

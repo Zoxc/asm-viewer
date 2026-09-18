@@ -225,14 +225,13 @@ impl Component for TabListButton {
         let hovering = use_state(|| false);
         let mut showing = use_state(|| false);
         let open = use_open();
+        let strip = open.strip;
 
-        // Every tab and the one on screen, read together so the menu is built from one
-        // look at the strip.
-        let (tabs, active) = {
-            let strip = open.strip.read();
-            (strip.tabs().to_vec(), strip.active())
-        };
-        if tabs.is_empty() {
+        // A memo over the one thing the button draws from the strip, whether there are any
+        // tabs, and not a read of it: the strip is written by every tab opened, closed,
+        // moved or raised.
+        let any = use_memo(move || !strip.read().tabs().is_empty());
+        if !any() {
             return rect().into_element();
         }
 
@@ -246,7 +245,13 @@ impl Component for TabListButton {
                 let was = showing();
                 showing.set(!was);
             },
+            // Called only while the menu is up, which is when the strip is read: read and
+            // not peeked, so the rows follow a tab opening or closing under an open menu.
             move || {
+                let (tabs, active) = {
+                    let strip = strip.read();
+                    (strip.tabs().to_vec(), strip.active())
+                };
                 tabs_menu(open, &tabs, active, showing)
                     .on_close(move |_| showing.set(false))
                     // Keyed by row count so a list that grows while the menu is open
@@ -675,11 +680,12 @@ pub(crate) struct ContentArea;
 impl Component for ContentArea {
     fn render(&self) -> impl IntoElement {
         let strip = use_open().strip;
-        // Only what is on screen, which is what this draws: the bar reads the rest of the
-        // strip for itself, so a tab opening or moving does not rebuild the body.
-        let active = strip.read().active();
+        // A memo over the tab on screen, which is all this draws, and not a read of the
+        // strip: the bar reads the rest for itself, so a tab opening or moving beside the
+        // one on screen does not draw this again.
+        let active = use_memo(move || strip.read().active());
 
-        let body = match active {
+        let body = match active() {
             Some(Tab::Document(id)) => DocumentBody { id }.into_element(),
             Some(Tab::Page(page)) => page_body(page),
             None => placeholder("Nothing selected"),
