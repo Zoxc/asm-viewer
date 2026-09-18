@@ -30373,13 +30373,13 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
     );
 }
 
-/// **The recent list is read once for the project on screen.** The effect that re-reads it
-/// runs on mount as well as on a change, so without its guard the file, and a small read of
-/// every project named in it, would be done twice before anything was drawn.
+/// **The recent list is read once per project, and not per render of what draws it.** The
+/// pages menu read it in its render while it was up, so a pointer or a page opening under
+/// the menu read `recents.toml` and every project it names again.
 ///
-/// The list is taken off disk in the gap between the mount, which `TestingRunner::new`
-/// renders, and the first pass after it, which is the earliest an effect can run
-/// (`agents/Headless.md`). So a row still drawn is a row nothing read a second time.
+/// The list is taken off disk once the first read is done, so a row still offered is a
+/// row nothing read a second time. "Open recent" is dim exactly when the list is empty
+/// (`open_recent_is_dim_when_there_is_nothing_in_it`).
 #[test]
 fn the_recent_projects_are_read_once_for_the_project_on_screen() {
     let base = Temporary::directory(std::env::temp_dir().join(format!(
@@ -30394,56 +30394,63 @@ fn the_recent_projects_are_read_once_for_the_project_on_screen() {
     let entry = other.to_string_lossy().into_owned();
     std::fs::write(&listing, format!("order = [{entry:?}]\n")).expect("writing the recent list");
 
-    let opened = base.to_path_buf();
+    let store = Store::at(base.to_path_buf());
     let (mut test, states) = TestingRunner::new(
-        project_view_harness,
-        (600., 700.).into(),
+        pages_harness,
+        (300., 300.).into(),
         move |runner: &mut _| {
-            let states = runner.provide_root_context(test_roots).states;
-            // The store the sections read through, in place of the one that is never made.
-            let mut store = states.store;
-            store.set(Some(Store::at(&opened)));
-            runner.provide_root_context(|| {
-                BuildWorking(Arc::new(|_: BuildJob| {
-                    BuildAnswer::Read(Manifest {
-                        path: None,
-                        profiles: None,
-                        debug_lines: false,
-                        edit_refused: None,
-                    })
-                }))
-            });
-            runner.provide_root_context(|| BuildAsking(State::create(None)));
-            states
+            let store = store.clone();
+            runner.provide_root_context(move || roots(Some(store), &Settings::default()).states)
         },
         1.,
     );
-
-    // The mount's own read found it.
-    let drawn = labels(&test);
-    assert!(
-        drawn.iter().any(|text| text == "other.avproj"),
-        "the mount read no recent list: {drawn:?}"
-    );
-
-    // Now there is nothing to read, and the row is drawn out of what was read before.
-    std::fs::remove_file(&listing).expect("removing the recent list");
     settle(&mut test);
-    let drawn = labels(&test);
-    assert!(
-        drawn.iter().any(|text| text == "other.avproj"),
-        "the recent list was read a second time for the same project: {drawn:?}"
+
+    // The menu up, over the list the first read found.
+    let button = test
+        .find(|node, element| {
+            let area = node.layout().area;
+            let square = area.width() == toggle_size() && area.height() == toggle_size();
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            (square && handled).then_some(area)
+        })
+        .expect("the menu's button");
+    press_at(
+        &mut test,
+        (
+            (button.origin.x + button.width() / 2.0) as f64,
+            (button.origin.y + button.height() / 2.0) as f64,
+        ),
+    );
+    settle(&mut test);
+    assert_eq!(
+        label_colour(&test, "Open recent"),
+        None,
+        "the first read found no project"
     );
 
-    // And the guard has not frozen the list: another project open is another read, which
-    // is the one that finds the file gone.
+    // Nothing left to read, and the button drawn again under its open menu: a page
+    // opening is a change it follows.
+    std::fs::remove_file(&listing).expect("removing the recent list");
+    let mut strip = states.open.strip;
+    strip.write().show(Tab::Page(Page::Settings));
+    settle(&mut test);
+    assert_eq!(
+        label_colour(&test, "Open recent"),
+        None,
+        "the recent list was read again for the same project"
+    );
+
+    // And it is not frozen: another project open is another read, which finds the file
+    // gone.
     let mut proj = states.proj;
     proj.write().file = Some(base.join("open.avproj"));
     settle(&mut test);
-    let drawn = labels(&test);
     assert!(
-        !drawn.iter().any(|text| text == "other.avproj"),
-        "a change of project read nothing: {drawn:?}"
+        label_colour(&test, "Open recent").is_some(),
+        "a change of project read nothing"
     );
 }
 

@@ -73,9 +73,7 @@ impl Component for NoProject {
         let states = use_project_states();
         let rescued = use_consume::<Rescued>().0;
         let unopened = use_consume::<Unopened>().0;
-        // Read on mount and never again: nothing on this screen changes the list, and the
-        // one thing that would -- opening a project -- takes the screen away with it.
-        let recents = use_hook(|| recents_of(states.store));
+        let recents = use_consume::<Recents>().0.read().clone();
 
         let rows: Vec<Element> = recents
             .iter()

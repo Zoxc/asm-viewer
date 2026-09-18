@@ -136,12 +136,13 @@ impl Component for PagesButton {
         let states = use_project_states();
         let rescued = use_consume::<Rescued>().0;
         let unopened = use_consume::<Unopened>().0;
+        let recents = use_consume::<Recents>().0;
         // The pages this run offers, each with whether it is open already: one list of
         // pairs, so the mark cannot come to be about a different page than the row it is
         // drawn on. `hidden_unless_alt` is the Debug page's rule and is the row's
         // ([`PageRow`]).
         //
-        // Built only while the menu is up, as the recents below are: the marks are all
+        // Built only while the menu is up, as the recents are read below: the marks are all
         // the strip is wanted for here, and nothing draws them until then. Read and not
         // peeked, so they follow a page opening or closing under an open menu; read every
         // render, it would subscribe the button to every tab opened, closed, moved or
@@ -157,11 +158,11 @@ impl Component for PagesButton {
             }
             false => Vec::new(),
         };
-        // Read when the menu is opened and not per render: each row is a small read of
-        // another project's own file.
+        // Read only while the menu is up, for the strip's reason. The list itself was read
+        // off disk as the project changed ([`Recents`]).
         let recents = match showing() {
-            true => recents_of(states.store),
-            false => Vec::new(),
+            true => recents.read().clone(),
+            false => Shared::default(),
         };
 
         let side = toggle_size();

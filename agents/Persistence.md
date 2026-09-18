@@ -501,7 +501,7 @@ while another is being read waits for that same record instead of reaching the d
 the one being entered at the front of `recents.toml`, and re-point every baseline through
 `Saves::opened`, to empty, because the app is about to be emptied. Emptying it is the caller's half
 and stays in `ui/session.rs`, the states being the UI's. `recent_projects(&store)` is the
-list a view draws: `recents.toml`'s order, each row described by reading *that project's own* file,
+list the views draw, read once per project into the root's `Recents`: `recents.toml`'s order, each row described by reading *that project's own* file,
 with an id whose directory has gone dropped here. The list never prunes itself on load, and this is
 the point of use where the repair is free.
 

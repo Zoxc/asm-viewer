@@ -725,25 +725,8 @@ struct RecentsSection;
 impl Component for RecentsSection {
     fn render(&self) -> impl IntoElement {
         let states = use_project_states();
-
-        // Read here at the first render rather than by the effect below, which runs a beat
-        // later and would draw "No other projects" for one frame.
-        let store = states.store;
-        let file = use_consume::<ProjFile>().0;
-        let mut recents = use_state(move || recents_of(store));
-        // Read again whenever another project is opened, and not on the mount: the list
-        // above was read for this one already, and reading it again is the recents file
-        // and a small read of every project named in it.
-        use_on_change(
-            move || file.read().clone(),
-            move |before, _| {
-                if before.is_some() {
-                    recents.set(recents_of(store));
-                }
-            },
-        );
-
-        let file = file.read().clone();
+        let file = use_consume::<ProjFile>().0.read().clone();
+        let recents = use_consume::<Recents>().0;
         let others: Vec<Element> = recents
             .read()
             .iter()

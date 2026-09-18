@@ -44,16 +44,6 @@ pub(crate) struct Objects(pub(crate) State<Vec<Arc<Object>>>);
 #[derive(Clone, Copy)]
 pub(crate) struct Storage(pub(crate) State<Option<Store>>);
 
-/// The projects the reader has had open, out of the store this run keeps — or none, on a
-/// run that keeps nothing. The three views that draw the list ask through here.
-pub(crate) fn recents_of(store: State<Option<Store>>) -> Vec<Recent> {
-    store
-        .peek()
-        .as_ref()
-        .map(project::recent_projects)
-        .unwrap_or_default()
-}
-
 /// `f(before, now)` whenever the deps `now()` answers change, `before` being what the last
 /// run saw and [`None`] on the **first run** -- which `f` may return early on, there being
 /// nothing to compare with yet.
@@ -73,8 +63,8 @@ pub(crate) fn recents_of(store: State<Option<Store>>) -> Vec<Recent> {
 /// `now` hands back an owned value, so a read guard it took is over before `f` runs -- and
 /// `f` may write the very state the deps came out of.
 ///
-/// The one hook for "not on the mount", which two mechanisms each kept bookkeeping of their
-/// own for ([`use_language`], `RecentsSection`).
+/// The one hook for "not on the mount", which [`use_language`] and the Project view's recent
+/// list once each kept bookkeeping of their own for.
 pub(crate) fn use_on_change<D: PartialEq + 'static>(
     mut now: impl FnMut() -> D + 'static,
     mut f: impl FnMut(Option<&D>, &D) + 'static,
@@ -413,6 +403,19 @@ pub(crate) struct Proj(pub(crate) State<OpenProject>);
 /// moved or closed. Made in [`roots`] beside the state it reads.
 #[derive(Clone, Copy)]
 pub(crate) struct ProjFile(pub(crate) Memo<Option<PathBuf>>);
+
+/// The projects the reader has had open, each described by its own file
+/// ([`project::recent_projects`]): the list the pages menu, the Project view and the
+/// screen with no project all draw. Empty on a run that keeps nothing.
+///
+/// **A [`Memo`] over [`ProjFile`]**, read again only when the open project changes. That
+/// is when `recents.toml` is written -- a project opened, started, saved elsewhere or
+/// deleted -- and when a row can go stale, the project being left having just been
+/// flushed. The read is `recents.toml` and a small read of every project it names, so it
+/// is done once per change and not in a render. Made in
+/// [`roots`] beside the memo it follows.
+#[derive(Clone, Copy)]
+pub(crate) struct Recents(pub(crate) Memo<Shared<Recent>>);
 
 /// The project's directory ([`OpenProject::workspace`]), a memo for [`ProjFile`]'s reason:
 /// a keystroke in the Directory box changes it, and one in the other two does not.

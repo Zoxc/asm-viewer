@@ -590,7 +590,18 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     let keys = provide_modifiers();
     let proj = context(Proj, OpenProject::default());
     // Its file and its directory, out of it and not read off it: see [`ProjFile`].
-    provide(ProjFile(Memo::create(move || proj.read().file.clone())));
+    let file = provide(ProjFile(Memo::create(move || proj.read().file.clone()))).0;
+    // The recent list, read again as the project changes: see [`Recents`].
+    provide(Recents(Memo::create(move || {
+        // Read to follow it, and for nothing in it.
+        file.read();
+        store
+            .peek()
+            .as_ref()
+            .map(project::recent_projects)
+            .unwrap_or_default()
+            .into()
+    })));
     provide(Workspace(Memo::create(move || proj.read().workspace())));
     // Whether a delete is being asked about. At the root, since the control that asks is
     // in the bar and the window that answers is over everything.

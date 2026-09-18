@@ -87,7 +87,8 @@ source needs so the effect follows it and the scope that mounted the hook does n
 callback what the last run saw beside what it sees now, `None` on its **first run**. A wake that
 left the deps where they were calls nothing, so a read the callback makes for its own reasons
 cannot be mistaken for a change. It was written for two mechanisms that each kept that bookkeeping
-themselves, in two different containers (`agents/Lsp.md`, `agents/Sidebar.md`); the three effects
+themselves, in two different containers: the language server's (`agents/Lsp.md`) and the Project
+view's recent list, which has since become a memo (`agents/Sidebar.md`). The three effects
 that land a place and drop its runs go through it too (`agents/Panes.md`), and so does the Files
 tree (`agents/Sidebar.md`).
 
@@ -265,16 +266,16 @@ bar back for it, and closing the last tab takes the bar away and puts the screen
 `WindowBody` asks the strip through a memo over the one thing it wants, whether there is any tab
 at all, so a tab moved along the bar does not re-render the window. **`PagesButton` reads nothing
 while its menu is down**, for the same reason: the marks come from the strip and the recents from
-the disk, and neither is drawn until the menu is up, so both reads sit under that branch. Read
-there and not peeked, so the marks follow a page opening or closing under an open menu; read per
-render instead, the button would subscribe to the most-written state in the app and repaint for
-every tab opened, closed, moved or raised. The tab list's button is built the same way, drawing only
-a memo of whether there is any tab while its menu is down
+the root's `Recents`, and neither is drawn until the menu is up, so both reads sit under that
+branch. Read there and not peeked, so the marks follow a page opening or closing under an open
+menu; read per render instead, the button would subscribe to the most-written state in the app and
+repaint for every tab opened, closed, moved or raised. The menu never reads the disk: `Recents` is
+read once per project (`agents/Sidebar.md`). The tab list's button is built the same way, drawing
+only a memo of whether there is any tab while its menu is down
 (`a_tab_moved_along_the_bar_does_not_draw_the_tab_list_button`), and `ContentArea` asks a memo
-which tab is on screen. The recents are a real
-`SubMenu`, **keyed by how many there are**, because `MenuContainer` measures itself once and a
-list that grew after it was laid out would hang off the side of the window
-(`notes/upstream/freya.md`).
+which tab is on screen. The recents are a real `SubMenu`, **keyed by how many there are**, because
+`MenuContainer` measures itself once and a list that grew after it was laid out would hang off
+the side of the window (`notes/upstream/freya.md`).
 
 **The Shortcuts page's list is written by hand** (`src/shortcuts.rs`,
 `src/ui/shortcuts_view.rs`). The goal that asked for it offered the other answer too: make

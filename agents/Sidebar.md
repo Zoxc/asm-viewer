@@ -498,12 +498,13 @@ recent-projects view separately. They are one question, which project am I in an
 there: the recent list is how a reader *leaves* the project the rest of the pane describes, and a
 tab of its own would be empty in every session where a project was reopened, which is all of them
 after the first. The list leaves the open project *out*, since the pane above it is a better and
-fresher description of that one than a row read off a file could be. It is read as the section
-mounts and again only when the open project changes -- `recents.toml` and a small read of every
-project named in it, on the UI thread. **Not on the mount**, the render that mounted the section
-having read the list already: it goes through `use_on_change` (`agents/UI.md`), which hands an
-effect what it last saw and `None` the first time, so the whole read is not done twice before
-anything is drawn.
+fresher description of that one than a row read off a file could be. The list is `Recents`, a
+memo at the root over the project's file, read by the section, the pages menu and the screen
+with no project alike. It is read again only when the open project changes -- `recents.toml` and a
+small read of every project named in it -- which is the only time `recents.toml` is written. Each
+view used to read it for itself: the section as it mounted and on each change of project, the
+screen as it mounted, and the menu on every render while it was up, a pointer moving over it
+included.
 
 `OpenProject` is the value `Proj` holds, and its two editable fields are `String`s where `Details`
 has `Option`s: they are what is in two text boxes, and a text box has no third state. An empty box
