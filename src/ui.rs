@@ -586,6 +586,9 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     // contexts every door reads.
     let keys = provide_modifiers();
     let proj = context(Proj, OpenProject::default());
+    // Its file and its directory, out of it and not read off it: see [`ProjFile`].
+    provide(ProjFile(Memo::create(move || proj.read().file.clone())));
+    provide(Workspace(Memo::create(move || proj.read().workspace())));
     // Whether a delete is being asked about. At the root, since the control that asks is
     // in the bar and the window that answers is over everything.
     let asking = context(Deleting, None);

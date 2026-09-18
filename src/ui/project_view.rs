@@ -332,7 +332,7 @@ struct IdentitySection;
 impl Component for IdentitySection {
     fn render(&self) -> impl IntoElement {
         let mut proj = use_consume::<Proj>().0;
-        let file = proj.read().file.clone();
+        let file = use_consume::<ProjFile>().0.read().clone();
 
         let on_choose = move |_| {
             // On a task that outlives this view, which is drawn only while its tab is on
@@ -444,9 +444,10 @@ impl Component for CargoSection {
         let held = build.read().clone();
         let jobs = use_consume::<BuildJobs>();
         let PlaceStates { doors, ctrl } = self.places;
-        let open = proj.read().clone();
-        let directory = open.workspace();
-        let profile = open.profile;
+        // The two fields this draws, each a memo: `Proj` is written by every keystroke in
+        // the boxes above and below ([`ProjFile`]).
+        let directory = use_consume::<Workspace>().0.read().clone();
+        let profile = use_memo(move || proj.read().profile)();
 
         // The manifest is read on mount and whenever the directory or the profile
         // changes -- the two things that decide what the answer is. A keystroke in the
@@ -728,14 +729,13 @@ impl Component for RecentsSection {
         // Read here at the first render rather than by the effect below, which runs a beat
         // later and would draw "No other projects" for one frame.
         let store = states.store;
-        let proj = states.proj;
-        let file = proj.read().file.clone();
+        let file = use_consume::<ProjFile>().0;
         let mut recents = use_state(move || recents_of(store));
         // Read again whenever another project is opened, and not on the mount: the list
         // above was read for this one already, and reading it again is the recents file
         // and a small read of every project named in it.
         use_on_change(
-            move || proj.read().file.clone(),
+            move || file.read().clone(),
             move |before, _| {
                 if before.is_some() {
                     recents.set(recents_of(store));
@@ -743,6 +743,7 @@ impl Component for RecentsSection {
             },
         );
 
+        let file = file.read().clone();
         let others: Vec<Element> = recents
             .read()
             .iter()
@@ -868,10 +869,9 @@ pub(crate) struct ProjectChip;
 impl Component for ProjectChip {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
-        let proj = use_consume::<Proj>().0;
         let open = use_open();
         // Read and not peeked: the bar follows the project being saved, closed or opened.
-        let file = proj.read().file.clone();
+        let file = use_consume::<ProjFile>().0.read().clone();
         let Some(file) = file else {
             return rect().into_element();
         };

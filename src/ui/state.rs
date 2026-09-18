@@ -406,6 +406,19 @@ pub(crate) struct Bookmarked(pub(crate) State<Bookmarks>);
 #[derive(Clone, Copy)]
 pub(crate) struct Proj(pub(crate) State<OpenProject>);
 
+/// The file the open project is kept in, out of [`Proj`] and not read off it.
+///
+/// **A [`Memo`] because every box in the Project view writes `Proj` on every keystroke**,
+/// and what reads this wants one field: it changes only as a project is opened, saved,
+/// moved or closed. Made in [`roots`] beside the state it reads.
+#[derive(Clone, Copy)]
+pub(crate) struct ProjFile(pub(crate) Memo<Option<PathBuf>>);
+
+/// The project's directory ([`OpenProject::workspace`]), a memo for [`ProjFile`]'s reason:
+/// a keystroke in the Directory box changes it, and one in the other two does not.
+#[derive(Clone, Copy)]
+pub(crate) struct Workspace(pub(crate) Memo<Option<PathBuf>>);
+
 /// The settings, shared through context. A root context and not state inside the settings
 /// page, which is a tab that may not be open at all. The page edits this;
 /// `use_settings_with` is what notices.

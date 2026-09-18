@@ -185,7 +185,7 @@ impl Component for SearchPanel {
     fn render(&self) -> impl IntoElement {
         let searched = use_consume::<Searching>().0;
         let dock = use_consume::<SidebarDock>().0;
-        let proj = use_consume::<Proj>().0;
+        let workspace = use_consume::<Workspace>().0;
         let pane = use_list_pane(Panel::Search);
         // What Enter on a row reaches through, which the pane has already consumed for
         // its rows: taken off that bundle rather than reached for again, so the panel's
@@ -207,7 +207,7 @@ impl Component for SearchPanel {
         // compiled filter is only what the bar prints a bad pattern from.
         let marking = use_list_marking(filter);
         let marking = marking.read().clone();
-        let directory = proj.read().workspace();
+        let directory = workspace.read().clone();
 
         let rows = use_memo(move || searched.read().hits.rows(&Matcher::Everything));
         let rows = rows.read().clone();
@@ -229,7 +229,7 @@ impl Component for SearchPanel {
             if *count == 0 {
                 return;
             }
-            let directory = proj.peek().workspace();
+            let directory = workspace.peek().clone();
             let Some(directory) = directory else {
                 return;
             };

@@ -20,11 +20,11 @@ pub(crate) struct WindowBody;
 
 impl Component for WindowBody {
     fn render(&self) -> impl IntoElement {
-        let proj = use_consume::<Proj>().0;
+        let file = use_consume::<ProjFile>().0;
         let sidebar_dock = use_consume::<SidebarDock>().0;
         let split = use_consume::<SidebarSplit>().0;
         let strip = use_open().strip;
-        let opened = use_memo(move || proj.read().file.is_some());
+        let opened = use_memo(move || file.read().is_some());
         // A memo over the one thing this branch asks of the strip, not a read of it: the
         // bar is written by every tab opened, moved or closed, and this has to re-render
         // for one of those only when it takes the last tab away or brings the first back.

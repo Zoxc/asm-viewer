@@ -158,14 +158,14 @@ pub(crate) struct FilesPanel;
 
 impl Component for FilesPanel {
     fn render(&self) -> impl IntoElement {
-        let proj = use_consume::<Proj>().0;
+        let workspace = use_consume::<Workspace>().0;
         let pane = use_list_pane(Panel::Files);
         // What Enter on a row reaches through: the pane's, which is where the rows' own
         // states are consumed too.
         let (states, ctrl) = (pane.states.project, pane.states.ctrl);
         // Read, not peeked: a keystroke in the Project view's directory box is a change
         // of what this is a tree of, and costs one `read_dir` of a half-typed path.
-        let directory = proj.read().workspace();
+        let directory = workspace.read().clone();
         let first = directory.clone();
         let started = directory.clone();
         // Built here at the first render rather than by the effect below, which runs a
@@ -178,7 +178,7 @@ impl Component for FilesPanel {
         // a session being restored has already named a directory. A plain captured value
         // and not a state: nothing draws it, and a state was a render per switch.
         use_on_change(
-            move || proj.read().workspace(),
+            move || workspace.read().clone(),
             move |before, directory: &Option<PathBuf>| {
                 if before.unwrap_or(&started) == directory {
                     return;

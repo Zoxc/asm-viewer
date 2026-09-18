@@ -519,9 +519,15 @@ list is *derived from*, so what the pane draws is what the next write will say.
 cargo build, the language server and the recent projects are each a component reading the contexts
 it draws, so a change redraws the sections that read it and no others: an answer from the language
 server leaves the artifact rows and the diagnostics standing, and a binary opening touches nothing
-but the list of them. A keystroke still redraws the four sections that read `Proj`, the boxes
-writing straight into it, but not the binaries -- and this is the pane the reader types into. So a
-redraw is kept cheap: the cargo section clones the whole of `Builds` to draw it, and its two large
+but the list of them. **What wants one field of `Proj` reads a memo over it** and not the state:
+`ProjFile` for the file the project is kept in, `Workspace` for its directory, and a memo of the
+cargo section's own for the profile. So a keystroke in the Program or Files box redraws only what
+draws those fields -- the language server's section and its control in the top bar -- and one in
+the Directory box also what follows the directory. Outside this pane that spares the chip in the
+top bar and the Files and Search panels
+(`a_keystroke_in_the_program_box_draws_neither_the_chip_nor_the_files_panel`). This is the pane
+the reader types into, so a redraw is kept cheap too: the cargo section clones the whole of
+`Builds` to draw it, and its two large
 fields are behind `Arc`s (`Builds::built`, `Builds::sources`). A build says two hundred things as
 readily as two, each carrying the text the compiler rendered for it, and none of that is copied per
 keystroke. The two states a diagnostic's press reaches for are the page's, consumed once in

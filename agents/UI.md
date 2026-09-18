@@ -132,7 +132,9 @@ too); `Locations` (every symbol the line, or the function around it, last asked 
 into);
 `Pad`/`PadText` (every scratchpad and which is shown, and a buffer per pad); `Talking` (whether a
 language server is running, and what would stop it -- `agents/Lsp.md`); `DocumentSplit`
-(how wide a document's leading side is); plus the memos `Symbols` and `Active`.
+(how wide a document's leading side is); plus the memos `Symbols`, `Active`, and
+`ProjFile` and `Workspace` (the project's file and its directory, out of `Proj`, which every
+keystroke in the Project view's boxes writes).
 
 **A context holding one state is one line**: `context(Wrapper, value)` makes the state, provides
 it under the wrapper and hands the state back, so the thirty of them differ in two tokens and
@@ -354,7 +356,7 @@ comes back for a page that is nobody's project's, and goes again with the last o
 component and not a
 `match` in `app()`, for two reasons that are both about the root: `Proj` is written by every
 keystroke in the Project view's boxes and the root must not re-render for those, so the read is
-a **memo** over the one thing the branch is about; and `app()` is mounted by no test, so a
+a **memo** over the one thing the branch is about, made over `ProjFile`; and `app()` is mounted by no test, so a
 branch inside it is a branch nothing can ask about. Settings and the Scratchpad still open
 with no project -- they are nobody's project's -- out of `NoProject` and **not** the strip:
 the strip's tabs are written into the session, and there is no session to put a tab in.

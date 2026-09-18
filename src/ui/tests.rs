@@ -943,6 +943,79 @@ fn the_bar_offers_a_close_or_a_save_and_a_delete() {
     );
 }
 
+/// The chip and the Files panel side by side: one reads the project's file, the other its
+/// directory, and neither draws the language server's fields.
+fn chip_and_files_harness() -> impl IntoElement {
+    rect()
+        .expanded()
+        .child(rect().height(Size::px(40.)).child(ProjectChip))
+        .child(FilesPanel)
+}
+
+/// **A keystroke in the Project view's Program box draws neither the chip nor the Files
+/// panel again.** Every box writes straight into `Proj`, and the two read one field of it
+/// each: read whole, they were drawn again for every character typed. `ProjFile` and
+/// `Workspace` are memos over the one field.
+///
+/// Fails on either read of `Proj` put back.
+#[test]
+fn a_keystroke_in_the_program_box_draws_neither_the_chip_nor_the_files_panel() {
+    let (mut test, states) = TestingRunner::new(
+        chip_and_files_harness,
+        (400., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/src/kernel/kernel.avproj")),
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+
+    // The deepest box around the text that answers the pointer or the keyboard: a handler
+    // never compares equal, so **the element is how this asks whether it was drawn again**.
+    let drawn = |test: &TestingRunner, text: &str| {
+        use freya::elements::label::LabelElement;
+        use std::any::Any;
+        let area = test
+            .find(|node, _| {
+                let element = node.element();
+                (element.as_ref() as &dyn Any)
+                    .downcast_ref::<LabelElement>()
+                    .is_some_and(|label| label.text.starts_with(text))
+                    .then(|| node.layout().area)
+            })
+            .unwrap_or_else(|| panic!("{text:?} is drawn"));
+        test.find_many(|node, element| {
+            let around = node.layout().area;
+            let handled = element
+                .events_handlers()
+                .is_some_and(|handlers| !handlers.is_empty());
+            let inside = around.min_x() <= area.min_x()
+                && area.max_x() <= around.max_x()
+                && around.min_y() <= area.min_y()
+                && area.max_y() <= around.max_y();
+            (handled && inside).then(|| node.element())
+        })
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("something around {text:?} is handled"))
+    };
+    let (chip, files) = (drawn(&test, "kernel"), drawn(&test, "No project directory"));
+
+    proj.write().language_server = "clangd".to_owned();
+    settle(&mut test);
+    assert!(
+        Rc::ptr_eq(&chip, &drawn(&test, "kernel")),
+        "a keystroke in the Program box drew the chip again"
+    );
+    assert!(
+        Rc::ptr_eq(&files, &drawn(&test, "No project directory")),
+        "a keystroke in the Program box drew the Files panel again"
+    );
+}
+
 /// The sidebar's arrangement goes into the session and comes back out of it: which panels
 /// are in which groups, their order, and which of each group is showing.
 #[test]
