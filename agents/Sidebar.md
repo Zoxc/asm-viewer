@@ -272,14 +272,17 @@ is a lazily read tree of every entry, the other a flat streamed answer that skip
 
 **Enter asks; typing does not.** A filter bar edits live because its list is already in memory; a
 search reads every file under the project directory, so a pattern is asked for once it is finished.
-The box is `FilterBar` with three more props -- a placeholder, a `State<u64>` Enter bumps, and the
-error off the panel's one compiled filter -- gathered into a `Bar` that `ListPane::filtered` and
-`ListPane::searched` each fill in a line, so the toggles are the same three. A **counter and not a callback**: freya's `Callback` is never equal to another, so a bar
-holding one would re-render on every render of the panel, which for a streaming answer is every
-batch. The pattern itself is `filter::Filter`, and the expression it compiles to is
-`Filter::expression`, factored out of `Filter::matcher` so the two searches cannot disagree about
-what a toggle means -- `grep-regex` has a `word` option of its own and it is deliberately looser
-than `\b`. **Both builders live in `filter.rs`**, `Filter::grep_matcher` beside `Filter::matcher`:
+The box is `FilterBar` with two more props -- a placeholder, and the error off the panel's one
+compiled filter -- gathered with what Enter calls into a `Bar` that `ListPane::filtered` and
+`ListPane::searched` each fill in a line, so the toggles are the same three. **Enter is answered
+by the handler over the bar, and not by a prop of the box**: the `Input` passes it on, and that
+handler is built in the panel's own render, so it calls `start_search` from the press. A
+`Callback` prop would do the same and never compare equal, redrawing the bar on every render of
+the panel, which for a streaming answer is every batch. The pattern itself is `filter::Filter`, and
+the expression it compiles to is `Filter::expression`, factored out of `Filter::matcher` so the two
+searches cannot disagree about what a toggle means -- `grep-regex` has a `word` option of its own
+and it is deliberately looser than `\b`.
+**Both builders live in `filter.rs`**, `Filter::grep_matcher` beside `Filter::matcher`:
 what the expression does not carry is applied by each, by hand and in two crates -- the case flag,
 and the rule that an empty box is every row to a list and no search at all. A fourth toggle
 reaching one and not the other would be honoured by the sidebar and ignored by the search, so

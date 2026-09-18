@@ -202,7 +202,6 @@ impl Component for SearchPanel {
                 .map(|query| query.filter.clone())
                 .unwrap_or_default()
         });
-        let submits = use_state(|| 0u64);
         // The box filters nothing here -- Enter asks the question instead -- so the one
         // compiled filter is only what the bar prints a bad pattern from.
         let marking = use_list_marking(filter);
@@ -220,28 +219,6 @@ impl Component for SearchPanel {
             let state = searched.read();
             (state.asked.clone(), state.summary())
         };
-
-        // Enter in the box. Everything it needs is peeked, and nothing captured: an effect
-        // that read the filter would run for every character typed and search for half a
-        // pattern, and one holding the directory would hold the one the panel first
-        // rendered with.
-        use_side_effect_with_deps(&submits(), move |count: &u64| {
-            if *count == 0 {
-                return;
-            }
-            let directory = workspace.peek().clone();
-            let Some(directory) = directory else {
-                return;
-            };
-            start_search(
-                searched,
-                dock,
-                SearchQuery {
-                    root: directory,
-                    filter: filter.peek().clone(),
-                },
-            );
-        });
 
         // The rows the arrows step and Enter presses: a `SearchRows` is the rows behind an
         // `Arc`, so handing them over is a pointer.
@@ -281,10 +258,19 @@ impl Component for SearchPanel {
             }
         };
 
+        // What Enter in the box calls: peeked, being run by a press and not a render.
+        let submit = move || {
+            let root = workspace.peek().clone();
+            let Some(root) = root else {
+                return;
+            };
+            let filter = filter.peek().clone();
+            start_search(searched, dock, SearchQuery { root, filter });
+        };
         // The caret Ctrl+Shift+F asks for is not asked for here: the box was registered
         // as this panel's by `use_list_pane`, and the one ask every chord and every
         // opened row leaves is spent on it at the root (`ui/keyboard.rs`).
-        pane.searched(filter, submits, &marking, keys, body)
+        pane.searched(filter, submit, &marking, keys, body)
     }
 }
 

@@ -128,28 +128,21 @@ struct FilterBar {
     a11y: AccessibilityId,
     /// What the empty box says it is for.
     placeholder: &'static str,
-    /// Bumped by Enter, for a box that asks a question rather than filtering as it is
-    /// typed. `None` in a filter bar, where there is nothing to submit. A counter and not
-    /// a callback: a `Callback` is never equal to another, so a bar holding one would
-    /// re-render on every render of whatever holds it.
-    submits: Option<State<u64>>,
     /// What is wrong with the pattern, out of the one [`Marking`] the panel narrowed its
     /// list with. A prop and not compiled here: the reason the bar prints has to be the
     /// reason the list refused.
     error: Option<String>,
 }
 
-/// Written out because neither state can be compared: a `State` compares by the box it is
-/// and never by what is in it, so a derive would put two lines there that read as
-/// comparisons and are not. What makes the bar draw again is reading the filter in
-/// `render`, which is what subscribes it. Whether there is a `submits` at all is a real
-/// difference and is still compared, and so is the error, which is what the box is
+/// Written out because the filter cannot be compared: a `State` compares by the box it is
+/// and never by what is in it, so a derive would put a line there that reads as a
+/// comparison and is not. What makes the bar draw again is reading the filter in
+/// `render`, which is what subscribes it. The error is compared: it is what the box is
 /// coloured by.
 impl PartialEq for FilterBar {
     fn eq(&self, other: &Self) -> bool {
         self.a11y == other.a11y
             && self.placeholder == other.placeholder
-            && self.submits.is_some() == other.submits.is_some()
             && self.error == other.error
     }
 }
@@ -158,7 +151,6 @@ impl Component for FilterBar {
     fn render(&self) -> impl IntoElement {
         let filter = self.filter;
         let a11y = self.a11y;
-        let submits = self.submits;
         // Reading subscribes the bar to the filter, which is what draws the toggles
         // again. The pattern is not compiled here: `error` is the panel's own
         // [`Marking`], so the bar and the list cannot disagree about a bad pattern.
@@ -193,30 +185,19 @@ impl Component for FilterBar {
                         .compact()
                         .width(Size::flex(1.0))
                         .a11y_id(a11y)
-                        // The window's chords declined before the edit, and Enter
-                        // answered where the bar has something to submit (`chords.rs`).
+                        // The window's chords declined before the edit (`chords.rs`).
                         //
                         // **The three keys the list under the box answers are declined
                         // too**, so they reach the bar's own handler ([`handed`]) rather
                         // than moving the caret or unfocusing the box: the arrows are the
                         // pick's, and Escape puts the keyboard back on the list with what
-                        // was typed still here. Enter is not among them -- it is the
-                        // box's where the bar submits -- and arrives at that handler
-                        // anyway, an `Input` neither stopping nor cancelling it.
+                        // was typed still here. Enter is not among them and arrives at
+                        // that handler anyway, an `Input` neither stopping nor
+                        // cancelling it.
                         .on_pre_key_down(box_keys(
                             Boxed::Input,
                             &[NamedKey::ArrowUp, NamedKey::ArrowDown, NamedKey::Escape],
-                            move |key, modifiers| {
-                                let plain = chords::held(modifiers).is_empty();
-                                if let (Key::Named(NamedKey::Enter), true, Some(mut submits)) =
-                                    (key, plain, submits)
-                                {
-                                    // Bound before the write, so the read guard is gone
-                                    // by it.
-                                    let next = submits.peek().wrapping_add(1);
-                                    submits.set(next);
-                                }
-                            },
+                            |_, _| {},
                         ))
                         .maybe(error.is_some(), |input| {
                             input
@@ -286,11 +267,14 @@ pub(crate) fn use_list_pane(panel: Panel) -> ListPane {
 }
 
 /// The bar over a list, where it has one: the state it edits, what the empty box says it
-/// is for, whether Enter submits, and what is wrong with the pattern.
+/// is for, what Enter submits, and what is wrong with the pattern.
 struct Bar {
     filter: State<Filter>,
     placeholder: &'static str,
-    submits: Option<State<u64>>,
+    /// What Enter does in a box that asks a question rather than filtering as it is
+    /// typed. `None` in a filter bar, where there is nothing to submit. Never a prop:
+    /// only the handler over the bar holds it ([`ListPane::barred`]).
+    submit: Option<Rc<dyn Fn()>>,
     error: Option<String>,
 }
 
@@ -300,13 +284,13 @@ impl Bar {
     fn new(
         filter: State<Filter>,
         placeholder: &'static str,
-        submits: Option<State<u64>>,
+        submit: Option<Rc<dyn Fn()>>,
         marking: &Marking,
     ) -> Self {
         Bar {
             filter,
             placeholder,
-            submits,
+            submit,
             error: marking.matcher().error().map(str::to_owned),
         }
     }
@@ -330,17 +314,18 @@ impl ListPane {
     }
 
     /// The Search panel's list under its own box: [`ListPane::filtered`] where Enter asks a
-    /// question rather than the typing filtering as it goes.
+    /// question rather than the typing filtering as it goes. `submit` is what Enter in the
+    /// box calls.
     pub(crate) fn searched(
         &self,
         filter: State<Filter>,
-        submits: State<u64>,
+        submit: impl Fn() + 'static,
         marking: &Marking,
         keys: ListKeys,
         list: impl IntoElement,
     ) -> Element {
         self.boxed(
-            Some(Bar::new(filter, "Search", Some(submits), marking)),
+            Some(Bar::new(filter, "Search", Some(Rc::new(submit)), marking)),
             keys,
             list,
         )
@@ -423,19 +408,18 @@ impl ListPane {
         let Bar {
             filter,
             placeholder,
-            submits,
+            submit,
             error,
         } = bar;
         rect()
             .width(Size::fill())
             .on_key_down(move |e: Event<KeyboardEventData>| {
-                pane.handed(&keys, filter, submits.is_none(), &e);
+                pane.handed(&keys, filter, submit.as_deref(), &e);
             })
             .child(FilterBar {
                 filter,
                 a11y: self.box_id,
                 placeholder,
-                submits,
                 error,
             })
             .into()
@@ -530,13 +514,13 @@ impl ListPane {
     /// (`notes/upstream/freya.md`). The box declines each of these so that it neither
     /// types them nor cancels them (`box_keys`, `ui/chords.rs`).
     ///
-    /// `opens` is whether Enter is the list's here: in a bar that submits -- the Search
-    /// panel's -- Enter asks the question and only Ctrl+Enter opens the pick.
+    /// In a bar that submits -- the Search panel's -- plain Enter calls `submit` and only
+    /// Ctrl+Enter opens the pick.
     fn handed(
         &self,
         keys: &ListKeys,
         mut filter: State<Filter>,
-        opens: bool,
+        submit: Option<&dyn Fn()>,
         e: &Event<KeyboardEventData>,
     ) {
         let picking = self.states.picking;
@@ -548,9 +532,11 @@ impl ListPane {
         let command = modifiers == Modifiers::ctrl_or_meta();
         let moved = match &e.key {
             Key::Named(NamedKey::Escape) => return self.rows.request_focus(),
-            Key::Named(NamedKey::Enter) if command || (plain && opens) => {
-                return picking.entered(keys)
-            }
+            Key::Named(NamedKey::Enter) if plain => match submit {
+                Some(submit) => return submit(),
+                None => return picking.entered(keys),
+            },
+            Key::Named(NamedKey::Enter) if command => return picking.entered(keys),
             Key::Named(NamedKey::ArrowDown) if plain => picking.stepped(keys, 1),
             Key::Named(NamedKey::ArrowUp) if plain => picking.stepped(keys, -1),
             _ => return,
