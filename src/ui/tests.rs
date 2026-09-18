@@ -18293,12 +18293,17 @@ fn a_keystroke_draws_the_page_once() {
         pad.peek().state().scratchpad.source.starts_with("// typed")
     });
     settle(&mut test);
-    // And the tab once more, for the buffer it reads.
     assert_eq!(
         pieces_drawn() - before,
-        once + 1,
+        once,
         "a keystroke drew the page more than once"
     );
+
+    // A cursor move writes the buffers and nothing else, and draws no piece.
+    let before = pieces_drawn();
+    edit_shown(text, pad, |editor| editor.move_cursor_to(4));
+    settle(&mut test);
+    assert_eq!(pieces_drawn(), before, "a cursor move drew the page");
 }
 
 /// **Nothing runs while a build does**, and the rule is `request_run`'s rather than the
@@ -35076,6 +35081,8 @@ fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
     let text = roots.pad_text;
 
     pump(&mut test, |_| pad.peek().state().opened());
+    // The editor mounts a pass later: whether there is one is a memo's answer.
+    settle(&mut test);
 
     let editor = centre_of(&test, "fn");
     press_at(&mut test, editor);

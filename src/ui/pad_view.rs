@@ -1226,7 +1226,13 @@ impl Component for ScratchpadTab {
             )
         };
 
-        let editing = text.read().holds(&shown).then(|| shown.clone());
+        // Behind a memo, because the editor writes the buffers for a bare cursor move: read
+        // here, they would draw the whole page per arrow key for an answer that changes
+        // when a pad's buffer is made or dropped.
+        let editing = use_memo(move || {
+            let shown = pad.read().shown().clone();
+            text.read().holds(&shown).then_some(shown)
+        });
 
         let split = use_consume::<PadSplit>().0;
         // The pad's listing is filed under `Placing::Pad`, the key its toggle writes and
@@ -1252,7 +1258,12 @@ impl Component for ScratchpadTab {
                     // Only once the pad's source has arrived and its buffer has been made:
                     // the editor indexes that buffer, and there is nothing yet to type into
                     // while the worker is still reading the disk.
-                    .maybe_child(editing.map(|pad| SourceEditor { pad }.into_element())),
+                    .maybe_child(
+                        editing
+                            .read()
+                            .clone()
+                            .map(|pad| SourceEditor { pad }.into_element()),
+                    ),
             )
             .child(DiagnosticsPane)
             // Under the diagnostics rather than over them: what the compiler said is about
