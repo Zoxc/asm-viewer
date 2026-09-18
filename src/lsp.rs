@@ -149,12 +149,14 @@ pub enum Encoding {
     Utf16,
 }
 
-/// Columns as they came off the wire, and the one way to the bytes the app counts in.
+/// Columns in the server's own units: what an answer came in and what a question goes
+/// out in, with one way into the bytes the app counts in and one way onto the wire.
 ///
-/// Its own module, so the range inside is nobody else's: every parser here reads one of
-/// these out of an answer, and the only way to a `Range<u32>` is [`Wire::bytes`], which
-/// asks for the [`Encoding`] the handshake agreed on. So the conversion cannot be skipped
-/// -- a parser that wrote what it read into a byte-unit field does not compile -- and
+/// Its own module, so the range inside is nobody else's. A parser reads one of these out
+/// of an answer and [`Wire::bytes`] is the only way back to a `Range<u32>`, asking for
+/// the [`Encoding`] the handshake agreed on; [`Talk::out`](Talk::out) counts one for a
+/// question and [`Wire::column`] is the only way out of that. So neither conversion can
+/// be skipped -- a byte column written where a wire column goes does not compile -- and
 /// what the handshake settled at runtime is what the type asks for at compile time.
 mod wire {
     use std::ops::Range;
@@ -170,6 +172,21 @@ mod wire {
         /// Columns as an answer gave them.
         pub(super) fn of(columns: Range<u32>) -> Wire {
             Wire(columns)
+        }
+
+        /// The empty run at one column: what a question is asked at, and what an answer
+        /// that named no range falls back to.
+        pub(super) fn at(column: u32) -> Wire {
+            Wire(column..column)
+        }
+
+        /// The column the run begins at, still the server's own.
+        ///
+        /// The one way out towards the wire, and [`asked_at`](super::asked_at) is its
+        /// only caller: a question carries one column, counted by
+        /// [`Talk::out`](super::Talk::out).
+        pub(super) fn column(self) -> u32 {
+            self.0.start
         }
 
         /// The same columns in bytes: `encoding` says whether they already are, and
@@ -278,7 +295,7 @@ impl Question {
     /// What is sent with it: the place, and for references the one thing that is not
     /// asked for -- where the name is **defined**. A reader looking at the name has that
     /// under the pointer already, and following the link is the door to it.
-    fn params(self, at: &Lookup, column: u32) -> Value {
+    fn params(self, at: &Lookup, column: Wire) -> Value {
         let mut params = asked_at(at, column);
         if matches!(self, Question::Listed(Listed::References)) {
             params["context"] = json!({ "includeDeclaration": false });
@@ -775,7 +792,7 @@ impl<W: Write + Send + 'static> Talk<W> {
         let mut lines = self.lines();
         let column = self.out(&mut lines, &at.file, at.line, at.column);
         let said = self
-            .asked("textDocument/hover", asked_at(at, column))
+            .asked("textDocument/hover", asked_at(at, column.clone()))
             .map(|value| hovered(&value, at.line, column))?;
         Ok(said.map(|said| Hovered {
             columns: self.back(&mut lines, &at.file, said.line, said.columns),
@@ -882,22 +899,25 @@ impl<W: Write + Send + 'static> Talk<W> {
     ///
     /// **Nothing is read where the server took `utf-8`**: the numbers are already the
     /// app's.
-    fn out(&self, lines: &mut Lines, file: &Path, line: u32, column: u32) -> u32 {
+    ///
+    /// **The one place a [`Wire`] is made for a question**, which is what keeps a byte
+    /// column out of [`asked_at`]: what it hands back is the only thing that fits there.
+    fn out(&self, lines: &mut Lines, file: &Path, line: u32, column: u32) -> Wire {
         if self.encoding == Encoding::Utf8 {
-            return column;
+            return Wire::at(column);
         }
         let Some(text) = lines.at(file, line) else {
-            return column;
+            return Wire::at(column);
         };
         let at = column as usize;
-        narrowed(chars::columns_of(text, at..at).start)
+        Wire::at(narrowed(chars::columns_of(text, at..at).start))
     }
 
     /// The server's columns as bytes: what comes back with an answer. [`Talk::out`]'s
     /// rule about `utf-8` holds here too, and is [`Wire::bytes`]'s to apply.
     ///
-    /// **The one place a [`Wire`] is unwrapped**, which is what makes every parser's
-    /// columns come through here on their way into an answer.
+    /// **The one place a [`Wire`] is unwrapped towards the app**, which is what makes
+    /// every parser's columns come through here on their way into an answer.
     fn back(&self, lines: &mut Lines, file: &Path, line: u32, columns: Wire) -> Range<u32> {
         columns.bytes(self.encoding, |columns| {
             let Some(text) = lines.at(file, line) else {
@@ -1258,16 +1278,20 @@ fn reply(id: Value, answer: Result<Value, Value>) -> Value {
     }
 }
 
-/// The position a question is about, as every question about one sends it. `column` is
-/// the server's own already ([`Lines::out`]); the line is counted down here.
+/// The position a question is about, as every question about one sends it. The line is
+/// counted down here; the column arrives as a [`Wire`], counted by [`Talk::out`].
 ///
-/// **The one place a line goes out the wire's way**, and the mirror of [`spanned`]
+/// **The one place a [`Wire`] is unwrapped towards the wire**, and the mirror of
+/// [`Talk::back`] unwrapping one the other way: nothing else can spell a question's
+/// column, so the app's own bytes cannot reach a server that counts otherwise.
+///
+/// **The one place a line goes out the wire's way** too, and the mirror of [`spanned`]
 /// counting an answer's line up: the app counts a line from one ([`Place`]) and the
 /// protocol from zero, so both halves of that sit in the one file that speaks it.
-fn asked_at(at: &Lookup, column: u32) -> Value {
+fn asked_at(at: &Lookup, column: Wire) -> Value {
     json!({
         "textDocument": { "uri": uri_of(&at.file) },
-        "position": { "line": at.line.saturating_sub(1), "character": column },
+        "position": { "line": at.line.saturating_sub(1), "character": column.column() },
     })
 }
 
@@ -1401,7 +1425,7 @@ fn spanned(range: &Value) -> Option<(u32, Wire)> {
 /// The columns are the answer's own where it named a range, and the question's otherwise:
 /// a server need not say what it answered about, and what the box is drawn against has to
 /// be something either way.
-fn hovered(answer: &Value, line: u32, column: u32) -> Option<Hovered<Wire>> {
+fn hovered(answer: &Value, line: u32, column: Wire) -> Option<Hovered<Wire>> {
     let text = contents(answer.get("contents")?);
     // rust-analyzer's own begins with a newline, and a box drawn around blank space is a
     // box about nothing.
@@ -1412,7 +1436,7 @@ fn hovered(answer: &Value, line: u32, column: u32) -> Option<Hovered<Wire>> {
     let (line, columns) = answer
         .get("range")
         .and_then(spanned)
-        .unwrap_or_else(|| (line, Wire::of(column..column)));
+        .unwrap_or((line, column));
     Some(Hovered {
         text: text.to_owned(),
         line,

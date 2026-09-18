@@ -873,6 +873,45 @@ fn a_hover_from_a_utf_16_server_is_answered_in_bytes() {
     assert_eq!(asked(Value::Null), 8..8);
 }
 
+/// The outbound half of the same line: a question goes out at the column the server
+/// counts in, never at the byte the app does.
+///
+/// The pointer rests on byte 8 of the wide line, where `helper` begins. That is column 6
+/// to a server counting UTF-16 units, and a question sent at 8 would land it two units
+/// late -- inside the word, where a server answers about something else or about nothing.
+/// A server that took `utf-8` is asked at the byte, there being nothing to count.
+#[test]
+fn a_hover_goes_out_at_the_column_the_server_counts() {
+    let position = |encoding: &'static str| {
+        let (said, _found, _notes) = against_reading(
+            reads_wide,
+            move |fake, message| {
+                let result = match message["method"] == json!("initialize") {
+                    true => json!({ "capabilities": { "positionEncoding": encoding } }),
+                    false => json!({ "contents": "what it is" }),
+                };
+                fake.say(json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"].clone(),
+                    "result": result,
+                }));
+            },
+            |talk| {
+                talk.initialize(Path::new("/p"), &wanted())
+                    .expect("a handshake");
+                talk.hover(&at(1, 8)).expect("an answer")
+            },
+        );
+        said.iter()
+            .find(|message| message["method"] == json!("textDocument/hover"))
+            .expect("the question")["params"]["position"]
+            .clone()
+    };
+
+    assert_eq!(position("utf-16"), json!({ "line": 0, "character": 6 }));
+    assert_eq!(position("utf-8"), json!({ "line": 0, "character": 8 }));
+}
+
 /// A server that answers without saying what it answered about: the box is drawn against
 /// the name the question was asked at.
 #[test]
