@@ -65,11 +65,12 @@ pub(crate) struct LineText {
 /// `lines`.
 ///
 /// All of it crosses from the worker thread, which the cache below has always proved it
-/// can: a `static Mutex<HashMap<_, Arc<Highlighted>>>` is `Sync` only if this is `Send`
+/// can: a `static Mutex` holding `Arc<Highlighted>`s is `Sync` only if this is `Send`
 /// and `Sync`, so the compiler has been checking that since the cache was written.
 pub(crate) struct Highlighted {
     /// The file as it was read: what the stale-source check compares its digests against,
-    /// held here so that nothing in a render asks [`source::load`] for it.
+    /// and what a parse in the other appearance is made from, so a theme switch reads no
+    /// file.
     pub(crate) file: Arc<SourceFile>,
     /// The appearance the pieces below were resolved in. The cut holds a `Color` per
     /// piece and not a name for one, so an entry parsed in the other theme is not stale
@@ -280,37 +281,102 @@ pub(crate) fn language(path: &Path) -> Option<EditorLanguage> {
     Some(EditorLanguage::new(grammar, query))
 }
 
-/// Every file read so far and what came back, `None` included.
+/// Every file read so far and what came back, `None` included, and what has been
+/// forgotten of them.
 ///
-/// **The misses are cached for the reason `source::CACHE`'s are**: a path out of debug
-/// info that is not on this machine is answered as often as it is drawn, and a miss that
-/// was not written down would be a question asked again on every render of the pane.
+/// **The misses are cached too**: a path out of debug info that is not on this machine is
+/// answered as often as it is drawn, and a miss that was not written down would be a
+/// question asked again on every render of the pane.
 ///
 /// A theme switch leaves this alone. Each entry says which appearance it was parsed in,
 /// which is what [`Sourced::pending`] reads to have it read again -- where a clear would
 /// leave the panes with nothing to draw until the reader had caught up.
-static HIGHLIGHTED: LazyLock<Mutex<HashMap<PathBuf, Option<Arc<Highlighted>>>>> =
-    LazyLock::new(Mutex::default);
+static HIGHLIGHTED: LazyLock<Mutex<Cache>> = LazyLock::new(Mutex::default);
 
-pub(crate) fn highlighted() -> MutexGuard<'static, HashMap<PathBuf, Option<Arc<Highlighted>>>> {
+pub(crate) fn highlighted() -> MutexGuard<'static, Cache> {
     HIGHLIGHTED
         .lock()
         .unwrap_or_else(|error| error.into_inner())
 }
 
-/// Forget every file under `root`, in both caches: what was parsed here, and the text it
-/// was parsed from. Neither can go without the other, a parsed copy holding the old text
-/// in a `Rope` of its own.
+/// What [`HIGHLIGHTED`] holds: the files, and the forgets that must be asked about before
+/// one is filed. One lock over both, so a forget is either counted when [`read`] asks or
+/// has yet to empty anything.
+#[derive(Default)]
+pub(crate) struct Cache {
+    /// Every file read so far, by path.
+    pub(crate) files: HashMap<PathBuf, Option<Arc<Highlighted>>>,
+    forgets: Forgets,
+}
+
+/// What has been forgotten so far: how many times, and the last few directories it was.
 ///
-/// **The caches alone**, which wakes nothing: a build goes through [`Sourced::forget_under`],
+/// Read before a file is and asked again before what was read is filed, so that a read
+/// which began before a forget and finished after it is not put back as what is on disk
+/// now. The reading is the worker's and the forgetting is a finished build's, on the UI
+/// thread, so the two do interleave: the file is read, the build writes it and says so,
+/// and the copy from before the build is then filed under the path nothing will ask about
+/// again.
+///
+/// **The directories and not the count alone**, since a forget is about one of them: a
+/// file read while some other directory was being forgotten is a file nothing has said
+/// anything about, and dropping it would cost a read for every build in a window the
+/// reader is not even looking at. Only the last [`KEPT`] are held -- a bound on what this
+/// costs, the answer for a read that has been outlived by that many forgets being that it
+/// may well have been forgotten.
+#[derive(Default)]
+struct Forgets {
+    /// How many times anything has been forgotten.
+    count: u64,
+    /// The roots of the last [`KEPT`] of them, oldest first.
+    roots: VecDeque<PathBuf>,
+}
+
+/// How many directories back [`Forgets`] remembers.
+const KEPT: usize = 16;
+
+impl Forgets {
+    /// Write down that everything under `root` has been forgotten.
+    fn add(&mut self, root: &Path) {
+        self.count += 1;
+        self.roots.push_back(root.to_path_buf());
+        if self.roots.len() > KEPT {
+            self.roots.pop_front();
+        }
+    }
+
+    /// Whether anything forgotten since `at` covers `path`, which is what says a copy read
+    /// then must not be filed now.
+    fn since(&self, at: u64, path: &Path) -> bool {
+        let since = self.count.saturating_sub(at);
+        if since == 0 {
+            return false;
+        }
+        // More forgets than are remembered: the ones this cannot answer for are answered
+        // as if they were about this file.
+        if since > self.roots.len() as u64 {
+            return true;
+        }
+        self.roots
+            .iter()
+            .rev()
+            .take(since as usize)
+            .any(|root| path.starts_with(root))
+    }
+}
+
+/// Forget every file under `root`, misses included, so the next ask reads them again.
+///
+/// **The cache alone**, which wakes nothing: a build goes through [`Sourced::forget_under`],
 /// which also has the panes read again. This is what a test cleans up with.
 ///
 /// The reading is a thread's, so a read that began before this and lands after it would
-/// put back what was just forgotten. `source::forgotten_since` is what says it happened,
-/// and [`read`] asks it before filing anything.
+/// put back what was just forgotten. [`Forgets`] is what says it happened, and [`read`]
+/// asks it before filing anything.
 pub(crate) fn forget_source_under(root: &Path) {
-    highlighted().retain(|path, _| !path.starts_with(root));
-    source::forget_under(root);
+    let mut cache = highlighted();
+    cache.forgets.add(root);
+    cache.files.retain(|path, _| !path.starts_with(root));
 }
 
 /// What the Source pane is drawing: the file, read and parsed, or the two ways it has
@@ -370,7 +436,7 @@ impl Sourced {
     /// half a theme old, for the beat it takes to be read again -- where drawing nothing
     /// would blank every source pane on a theme switch.
     pub(crate) fn drawing(&self, file: &Path) -> Drawing {
-        match highlighted().get(file) {
+        match highlighted().files.get(file) {
             Some(Some(text)) => Drawing::Text(SourceText(text.clone())),
             Some(None) => Drawing::Missing,
             None => Drawing::Waiting,
@@ -387,7 +453,7 @@ impl Sourced {
     /// the cache again.
     fn pending(&self, showing: &Arc<str>, appearance: Appearance) -> Option<SourceAsk> {
         let file = PathBuf::from(&**showing);
-        let owed = match highlighted().get(&file) {
+        let owed = match highlighted().files.get(&file) {
             Some(Some(text)) => text.appearance != appearance,
             Some(None) => false,
             None => true,
@@ -405,7 +471,7 @@ impl Sourced {
     /// Forget every file under `root` ([`forget_source_under`]), and say so.
     ///
     /// **A build calls this**, with the directory it built (`ui/building.rs`, `ui/pad.rs`).
-    /// Both caches are keyed by path alone and neither is ever checked against the disk,
+    /// The cache is keyed by path alone and never checked against the disk,
     /// so without it the first text read for a file is the text every later render draws
     /// -- however often the file is rewritten, which a scratchpad's is on every build.
     ///
@@ -421,23 +487,31 @@ impl Sourced {
 /// Read and parse the file `ask` names into [`HIGHLIGHTED`], and hand back what was filed
 /// there. **The worker's whole job**, and the one place a file becomes rows.
 ///
+/// A file already parsed in the other appearance is parsed again from the text that parse
+/// holds, and read off the disk only when there is none.
+///
 /// A file forgotten while it was being read is read again rather than filed: what is in
 /// hand is the file as it was before whatever said it had changed, and filing it would
 /// leave the pane drawing the text from before a build for as long as the tab is open.
-/// `source::forgotten_since` is what says so, of this file and not of anything at all.
+/// [`Forgets::since`] is what says so, of this file and not of anything at all.
 /// Bounded rather than a loop, since a build that kept finishing would hold whoever is
 /// waiting on the read; giving up files nothing, and the pane asks again.
 pub(crate) fn read(ask: &SourceAsk) -> Option<SourceText> {
     for _ in 0..TRIES {
-        let at = source::forgotten();
-        let parsed =
-            source::load(&ask.file).map(|file| Arc::new(Highlighted::new(file, ask.appearance)));
+        let (at, held) = {
+            let cache = highlighted();
+            let held = match cache.files.get(&ask.file) {
+                Some(Some(text)) => Some(text.file.clone()),
+                _ => None,
+            };
+            (cache.forgets.count, held)
+        };
+        let file = held.or_else(|| source::load(&ask.file));
+        let parsed = file.map(|file| Arc::new(Highlighted::new(file, ask.appearance)));
 
         let mut cache = highlighted();
-        // Asked under the lock the forgetting takes, so a forget is either counted here
-        // or has yet to empty anything.
-        if !source::forgotten_since(at, &ask.file) {
-            cache.insert(ask.file.clone(), parsed.clone());
+        if !cache.forgets.since(at, &ask.file) {
+            cache.files.insert(ask.file.clone(), parsed.clone());
             return parsed.map(SourceText);
         }
     }

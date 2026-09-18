@@ -1,18 +1,15 @@
-//! Source files, read off disk once and remembered — including the ones that are not
-//! there.
+//! Source files read off disk, and the one rule for what counts as one.
 //!
 //! A path out of debug info is a weak thing to trust, so every failure is the same answer,
-//! [`None`], and the pane draws a placeholder. The misses are cached too: a pane asks on
-//! every render, and caching only the successes would make a path that is not on this
-//! machine the expensive case.
+//! [`None`], and the pane draws a placeholder. Nothing here is cached: the parse over a
+//! file is, misses included (`src/ui/highlight.rs`).
 
 use analysis::{SourceDigests, SourceHash};
 use std::{
     borrow::Cow,
-    collections::{HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
+    sync::Arc,
 };
 
 use crate::counter;
@@ -78,8 +75,8 @@ impl SourceFile {
 }
 
 /// The text of `path` by [`load`]'s rule -- a regular file within [`MAX_SIZE`], decoded
-/// lossily -- read fresh and not remembered: for a reader that wants many files once
-/// (`src/references.rs`), which the cache would otherwise hold for the life of the app.
+/// lossily -- without the digests: for a reader that wants many files once
+/// (`src/references.rs`).
 ///
 /// It is here and not a `fs::read_to_string` at the caller so that there is one answer to
 /// what a source file is. A second rule means the same file read two ways: a line a pane
@@ -140,127 +137,24 @@ counter!(
     pub fn touches() = TOUCHES
 );
 
-/// Every path asked about so far and what came back, `None` included. A `static` so that
-/// two panes asking for one file get the same `Arc` rather than two copies of a megabyte.
-static CACHE: LazyLock<Mutex<HashMap<PathBuf, Option<Arc<SourceFile>>>>> =
-    LazyLock::new(Mutex::default);
-
-fn cache() -> MutexGuard<'static, HashMap<PathBuf, Option<Arc<SourceFile>>>> {
-    // A poisoned lock must not turn an unreadable file into a crashed app.
-    CACHE.lock().unwrap_or_else(|error| error.into_inner())
-}
-
-/// What has been forgotten so far: how many times, and the last few directories it was.
+/// The file at `path`, read now: its text by [`contents`]' rule and the digests of the
+/// bytes read. [`None`] means it cannot be shown -- missing, unreadable, not a file, or
+/// past [`MAX_SIZE`].
 ///
-/// Read before a file is and asked again before what was read is filed, so that a read
-/// which began before a [`forget_under`] and finished after it is not put back as what is
-/// on disk now. The reading is a worker thread's (`src/ui/highlight.rs`) and the
-/// forgetting is a finished build's, on the UI thread, so the two do interleave: the file
-/// is read, the build writes it and says so, and the copy from before the build is then
-/// filed under the path nothing will ask about again.
-///
-/// **The directories and not the count alone**, since a forget is about one of them: a
-/// file read while some other directory was being forgotten is a file nothing has said
-/// anything about, and dropping it would cost a read for every build in a window the
-/// reader is not even looking at. Only the last [`KEPT`] are held -- a bound on what this
-/// costs, the answer for a read that has been outlived by that many forgets being that it
-/// may well have been forgotten.
-///
-/// One record for both caches, since neither can be forgotten without the other.
-static FORGOTTEN: LazyLock<Mutex<Forgets>> = LazyLock::new(Mutex::default);
-
-/// How many directories back [`FORGOTTEN`] remembers.
-const KEPT: usize = 16;
-
-#[derive(Default)]
-struct Forgets {
-    /// How many times anything has been forgotten.
-    count: u64,
-    /// The roots of the last [`KEPT`] of them, oldest first.
-    roots: VecDeque<PathBuf>,
-}
-
-fn forgets() -> MutexGuard<'static, Forgets> {
-    FORGOTTEN.lock().unwrap_or_else(|error| error.into_inner())
-}
-
-/// How many times anything has been forgotten so far.
-pub fn forgotten() -> u64 {
-    forgets().count
-}
-
-/// Whether anything forgotten since `at` covers `path`, which is what says a copy read
-/// then must not be filed now.
-pub fn forgotten_since(at: u64, path: &Path) -> bool {
-    let forgets = forgets();
-    let since = forgets.count.saturating_sub(at);
-    if since == 0 {
-        return false;
-    }
-    // More forgets than are remembered: the ones this cannot answer for are answered as
-    // if they were about this file.
-    if since > forgets.roots.len() as u64 {
-        return true;
-    }
-    forgets
-        .roots
-        .iter()
-        .rev()
-        .take(since as usize)
-        .any(|root| path.starts_with(root))
-}
-
-/// The contents of `path`, read on the first call and answered from memory afterwards.
-/// [`None`] means the file cannot be shown — missing, unreadable, not a file, or past
-/// [`MAX_SIZE`] — and is remembered as such.
-///
-/// Nothing here notices a file that changed on disk. [`forget_under`] is how it is told.
+/// Nothing here remembers it. What is remembered is the parse made of it, which holds
+/// this `Arc` (`src/ui/highlight.rs`), and a build is what forgets that.
 pub fn load(path: &Path) -> Option<Arc<SourceFile>> {
-    if let Some(cached) = cache().get(path) {
-        return cached.clone();
+    #[cfg(test)]
+    if let Some(seeded) = tests::seeded(path) {
+        return Some(seeded);
     }
-
-    // Read outside the lock: holding it across the read would make every other pane wait
-    // on this file. The cost is that two callers racing for one path may both read it, and
-    // the second's copy is dropped when it loses the insert.
-    let at = forgotten();
-    let file = SourceFile::read(path).map(Arc::new);
-
-    let mut cache = cache();
-    // Forgotten while it was being read: what came back is the file as it was before
-    // whatever said so, and is handed to the caller that asked for it rather than filed
-    // for everyone after. Asked under this cache's lock, which [`forget_under`] takes
-    // too, so a forget is either counted here or has yet to empty anything.
-    if forgotten_since(at, path) {
-        return file;
-    }
-    cache.entry(path.to_path_buf()).or_insert(file).clone()
-}
-
-/// Forget every file read from under `root`, misses included, so the next call reads them
-/// again.
-///
-/// Checking on the way in would be a `stat` per lookup, and a pane asks on every render.
-/// So a build is what calls this, a build being the app's one word that a directory's
-/// files have changed. The parsed copies above these go with them
-/// (`src/ui/highlight.rs`).
-pub fn forget_under(root: &Path) {
-    let mut forgets = forgets();
-    forgets.count += 1;
-    forgets.roots.push_back(root.to_path_buf());
-    if forgets.roots.len() > KEPT {
-        forgets.roots.pop_front();
-    }
-    // Written down and let go of before the cache is taken. A reader takes the two the
-    // other way round -- the cache, then this, to ask what happened while it was reading
-    // -- so holding both here is the one thing that would deadlock.
-    drop(forgets);
-    cache().retain(|path, _| !path.starts_with(root));
+    SourceFile::read(path).map(Arc::new)
 }
 
 #[cfg(test)]
 mod tests;
 
-/// The test-only way into the cache, kept with the tests it belongs to.
+/// The test-only way to give [`load`] a file with nothing on the disk, kept with the tests
+/// it belongs to.
 #[cfg(test)]
 pub use tests::Seeded;

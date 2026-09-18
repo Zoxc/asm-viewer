@@ -1,23 +1,24 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use super::*;
 use crate::temporary::Temporary;
 
-/// A source file the cache answers for with nothing on the disk: what a test uses when the
+/// A source file [`load`] answers for with nothing on the disk: what a test uses when the
 /// file is a fixture and not the thing under test.
 ///
 /// [`Temporary`](crate::temporary::Temporary) is the other half of this, and what a test
 /// is about is what decides between them. A real file when the reading is the point — a
-/// file read once, a miss remembered, a directory forgotten and read again, a path that
-/// only reduces through `canonicalize` — and one of these when the pane merely has to have
-/// something to draw.
+/// file read, a miss, a directory forgotten and read again, a path that only reduces
+/// through `canonicalize` — and one of these when the pane merely has to have something
+/// to draw.
 ///
 /// Nothing is made, so the directory is a name and not a place. The entries come out on
-/// `Drop`, which unwinding runs: [`CACHE`] is a `static` that outlives every test in the
-/// process, and a test that left its files in it would be paying for them in every test
-/// after. What the drop takes is this cache and not the parsed copies above it, so a test
-/// that reads a seeded file through `source_text` forgets it with `forget_source_under`
-/// as it would a real one.
+/// `Drop`, which unwinding runs: [`SEEDED`] is a `static` that outlives every test in the
+/// process. What the drop takes is the seed and not the parse made of it, so a test that
+/// reads a seeded file through `source_text` forgets it with `forget_source_under` as it
+/// would a real one.
 pub struct Seeded {
     directory: PathBuf,
 }
@@ -47,7 +48,7 @@ impl Seeded {
             digests: SourceDigests::of(bytes),
             text: text.to_owned(),
         };
-        cache().insert(path.clone(), Some(Arc::new(file)));
+        seeds().insert(path.clone(), Arc::new(file));
         path
     }
 
@@ -71,8 +72,20 @@ impl std::ops::Deref for Seeded {
 
 impl Drop for Seeded {
     fn drop(&mut self) {
-        forget_under(&self.directory);
+        seeds().retain(|path, _| !path.starts_with(&self.directory));
     }
+}
+
+/// Every file seeded and not yet dropped, by path.
+static SEEDED: LazyLock<Mutex<HashMap<PathBuf, Arc<SourceFile>>>> = LazyLock::new(Mutex::default);
+
+fn seeds() -> MutexGuard<'static, HashMap<PathBuf, Arc<SourceFile>>> {
+    SEEDED.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// The file seeded at `path`, which [`load`] answers with before it reads anything.
+pub(super) fn seeded(path: &Path) -> Option<Arc<SourceFile>> {
+    seeds().get(path).cloned()
 }
 
 /// A path of this test run's own, named per process and per call so tests can run in
@@ -189,7 +202,7 @@ fn a_symlink_is_not_shown_whatever_it_points_at() {
     assert!(!showable(&first));
 }
 
-/// `read_text` is the pane's rule without the cache, so what the pane refuses it refuses:
+/// `read_text` is the pane's rule without the digests, so what the pane refuses it refuses:
 /// a language server answering with a directory must not open it.
 #[test]
 fn read_text_refuses_a_directory() {
@@ -218,59 +231,7 @@ fn read_text_is_lossy_and_not_remembered() {
     );
 }
 
-#[test]
-fn a_file_is_read_once() {
-    let path = write("cached.rs", b"fn main() {}\n");
-    let first = load(&path).expect("a readable file");
-
-    // Deleting it must not change the answer: the second call never reaches the filesystem.
-    let _ = fs::remove_file(&path);
-    let second = load(&path).expect("the remembered file");
-    assert!(Arc::ptr_eq(&first, &second));
-}
-
-#[test]
-fn a_missing_file_is_remembered_as_missing() {
-    let path = temp_path("never-written.rs");
-    assert!(load(&path).is_none());
-    assert!(cache().contains_key(&*path));
-
-    // Creating it afterwards changes nothing: the pane asks on every render and must not
-    // `stat` a missing file every time.
-    let _ = fs::write(&path, b"fn main() {}\n");
-    assert!(load(&path).is_none());
-}
-
-/// The other half of reading a file once: a build says the files under a directory have
-/// changed, and what was read of them goes -- the misses with the rest, a file the build
-/// generated having been missing when the pane first asked for it.
-#[test]
-fn forgetting_a_directory_re_reads_what_is_under_it() {
-    let directory = temp_path("built");
-    fs::create_dir_all(&directory).expect("the temp directory is writable");
-    let path = directory.join("main.rs");
-    fs::write(&path, b"fn main() {}\n").expect("a writable directory");
-    let generated = directory.join("generated.rs");
-    let outside = write("outside.rs", b"fn outside() {}\n");
-
-    assert!(load(&path).expect("a readable file").text() == "fn main() {}\n");
-    assert!(load(&generated).is_none());
-    let kept = load(&outside).expect("a readable file");
-
-    fs::write(&path, b"fn main() { one(); }\n").expect("a writable directory");
-    fs::write(&generated, b"fn generated() {}\n").expect("a writable directory");
-    forget_under(&directory);
-
-    assert!(load(&path).expect("a readable file").text() == "fn main() { one(); }\n");
-    assert!(load(&generated).is_some());
-    // And a file outside the root is untouched: the same `Arc`, never read again.
-    assert!(Arc::ptr_eq(
-        &kept,
-        &load(&outside).expect("the remembered file")
-    ));
-}
-
-/// A seeded file goes when its guard does: `CACHE` is a `static` and every test after
+/// A seeded file goes when its guard does: `SEEDED` is a `static` and every test after
 /// this one would otherwise be holding what this one made up. Nothing is written, so what
 /// is left behind is a path with no file at it.
 #[test]
@@ -280,9 +241,7 @@ fn a_seeded_file_is_forgotten_when_its_guard_goes() {
     assert!(load(&path).expect("the seeded file").text() == "fn one() {}\n");
 
     drop(seeded);
-    assert!(!cache().contains_key(&path));
-    // Read rather than `load`, which would leave the miss in the cache it just left.
-    assert!(SourceFile::read(&path).is_none());
+    assert!(load(&path).is_none());
 }
 
 /// The digests are of the bytes as read, so a file answers the checksum the compiler took

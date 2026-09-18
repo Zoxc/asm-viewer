@@ -91,7 +91,7 @@ leaves this list when it is. That is a move made on request, like everything els
   spare; and whether an inlined body becomes something the Symbols list can offer, which would
   be a symbol the object does not have.
 - [ ] Notice a source file changed on disk and offer to reload it. A build now empties the
-  source and highlight caches under the directory it built (`source::forget_under`), which
+  source cache under the directory it built (`Sourced::forget_under`), which
   covers the app's own rebuilds and nothing else: a file written by an editor beside the app,
   or by a build the app did not run, is still drawn from the copy read the first time it was
   asked for. Check at the moments a reader's eye comes back to a file — a source tab switched
@@ -101,8 +101,8 @@ leaves this list when it is. That is a move made on request, like everything els
   already holds `SourceDigests` of the bytes as read, so a re-read hashing the same is a file
   touched and not changed. It would have to keep that length and time, which it does not
   today. Say it rather than do it: a panel over the rows offering the reload, so a reader
-  part-way down a file is not moved without being asked, and the reload is `source::forget`
-  with the highlight cache's, the pair a build already takes. Two things to keep apart from
+  part-way down a file is not moved without being asked, and the reload is the forget a
+  build already takes. Two things to keep apart from
   it: this is not the `STALE_SOURCE` banner, which says the file is not the one the binary was
   built from and goes on being true after a reload; and reading a file to hash it is the source
   reader's work and not a render's, which is where a file is read at all now

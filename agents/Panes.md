@@ -118,7 +118,7 @@ in it there is no question, so it says so.
 **The Source pane checks the file it opened against the checksum the debug info recorded**, where it
 recorded one. A PDB carries a hash per source file (MD5 unless the producer was told otherwise;
 `LineInfo::hash_for`, `SourceHash`), and `source::load` takes all three digests of a file's bytes as
-it reads them (`SourceDigests`, once per file, cached with it). So the pane compares two arrays per
+it reads them (`SourceDigests`, once per file, held with the parse). So the pane compares two arrays per
 render and says, in one row over the source rows, that *this file differs from the one the binary
 was built from* when they disagree. The file is still shown, being the best thing there is to show;
 what the row says is that its line numbers are the compiler's and not necessarily this file's. The
@@ -399,9 +399,8 @@ it has, in colours half a theme old, until the reader answers with the other -- 
 blank every source pane on a switch. That is also what makes a theme switch a file to read again
 (`Sourced::pending`).
 
-**Neither that cache nor the text under it is ever checked against the disk**, both being keyed by
-path alone: a `stat` on the way in would be a `stat` per render, since the pane asks on every one.
-So a **build** forgets them. A finished build of the project's workspace or of a scratchpad drops
+**That cache is never checked against the disk**, being keyed by path alone: a `stat` on the way
+in would be a `stat` per render, since the pane asks on every one. So a **build** forgets it. A finished build of the project's workspace or of a scratchpad drops
 every entry under the directory it built (`Sourced::forget_under`, `ui/building.rs`, `ui/pad.rs`),
 whatever the build came to -- a build that failed is as much a sign the files have changed as one
 that did not, and a build is the only word the app gets that they have. Nothing else re-reads a
@@ -409,11 +408,17 @@ file for the life of the process. The forget bumps the same count the reader's a
 cache is a `static`, and emptying it wakes nothing, so a pane showing one of those files would
 render next to an empty entry and draw nothing, with no question asked, until the reader moved
 to another file. Since the reading is a thread's, a build can now finish *during*
-one: `source::forgotten` counts the forgets and names the last sixteen directories, and a read
-whose file was forgotten under it is made again rather than filed, so the pane cannot be left
+one: the cache counts the forgets and names the last sixteen directories under its own lock, and a
+read whose file was forgotten under it is made again rather than filed, so the pane cannot be left
 drawing the text from before the build. Until this, a rebuilt scratchpad drew the text from before the
 build under the new build's line numbers, with the checksum row above saying the file differed from
 the one it was built from when it was exactly that file.
+
+**The text has no cache of its own.** `source::load` reads the disk every time it is asked, and only
+the reader asks. A second cache under this one saved nothing but the read on a theme switch, and the
+parse in the other appearance already holds that text (`Highlighted::file`), which is what the
+reader parses again from. What the second cache did cost was a second forget to keep in step, and a
+read racing a forget to be caught under two locks.
 
 **The two panes point at each other through their selected runs**, and through nothing the pointer
 does. In the Scratchpad they point one way only: the editor's cursor line is written as the source

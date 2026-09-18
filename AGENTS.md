@@ -179,11 +179,11 @@ command.
   it, how its functions are found, and which language server reads it. Plural because
   `src/ui/language.rs` holds the language server's own state and the prelude brings that
   name in.
-- `src/source.rs` — source files read off disk and cached by path, failures included; the
-  one name a path is called by; and whether a path can be shown at all, which is the
-  reader's own first step and the gate the UI puts in front of it. `Seeded`, the
-  test-only other way into that cache -- a file with nothing on the disk behind it -- is
-  in `src/source/tests.rs` and re-exported here.
+- `src/source.rs` — source files read off disk, uncached (the parse over one is what is
+  cached, `src/ui/highlight.rs`); the one name a path is called by; and whether a path can
+  be shown at all, which is the reader's own first step and the gate the UI puts in front
+  of it. `Seeded`, the test-only way to hand the read a file with nothing on the disk
+  behind it, is in `src/source/tests.rs` and re-exported here.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
   source file, its build, and the pads there are in the order they were last opened.
 - `src/temporary.rs` — test-only: a path under the system temporary directory that a test
@@ -459,7 +459,7 @@ leak is per run rather than once.
 **A test writes a real file only when the filesystem is what it is about**: an atomic write, a
 rename, a `create_new` collision, a file moved aside, directory order, an unreadable directory, a
 path that only reduces through `canonicalize`. Where the file is a fixture -- something for the
-Source pane to draw -- it is seeded into the cache instead, through `Seeded` (`src/source/tests.rs`),
+Source pane to draw -- it is seeded into the read instead, through `Seeded` (`src/source/tests.rs`),
 which forgets what it seeded on `Drop` as `Temporary` removes what it wrote. `analysis` has the
 same seam a step lower: `open_data_streaming` is `open_files_streaming` with the reading already
 done, so a test hands over an archive the `object` writer built rather than a path it wrote it to.

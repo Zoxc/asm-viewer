@@ -14048,7 +14048,7 @@ fn a_theme_switch_has_the_file_read_again() {
     // text colour -- and the reason this is a `.rs` file and not any file at all.
     let keyword = |path: &Path| {
         let cache = highlighted();
-        let text = cache.get(path).expect("the file was read").clone();
+        let text = cache.files.get(path).expect("the file was read").clone();
         let text = text.expect("the file is there");
         let piece = text.pieces(text.text(0)).next();
         piece.expect("a first piece").colour
@@ -14059,7 +14059,7 @@ fn a_theme_switch_has_the_file_read_again() {
 
     set_appearance(Appearance::Dark);
     assert!(
-        highlighted().contains_key(&path),
+        highlighted().files.contains_key(&path),
         "the switch emptied the cache instead of leaving the pane something to draw"
     );
     settle(&mut test);
@@ -17628,14 +17628,16 @@ fn a_finished_pad_build_forgets_the_directory_it_built_in() {
     let pad = roots.pad;
 
     pump(&mut test, |_| pad.peek().state().opened());
-    highlighted().insert(source.clone(), Some(stand_in.0.clone()));
+    highlighted()
+        .files
+        .insert(source.clone(), Some(stand_in.0.clone()));
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);
     pump(&mut test, |_| !pad.peek().state().building);
 
     assert!(
-        !highlighted().contains_key(&source),
+        !highlighted().files.contains_key(&source),
         "the build left the pad's source as it was read before it"
     );
 }
