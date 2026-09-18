@@ -578,10 +578,12 @@ running, so a batch draws the output and nothing else.
 `Runs` travels in `PadJobs`, the handle the events channel is already in, so what starts, stops and
 draws a run reaches it without a context of its own. The task takes everything already queued in
 one go, so a batch is one render however many lines it holds, and it writes through the state's
-own guard, so `Arc::make_mut` copies the lines once, for the pane's own hold on them. The guard is
-taken only when the batch holds something for a pad still on the run it names, a write notifying
-whether or not it changed anything. A delete takes the pad's entry out, so what is still on its way
-for it lands nowhere.
+own guard. `Arc::make_mut` still copies the output once per batch, for the pane's own hold on it,
+and `RunOutput` keeps that copy small: full blocks of lines behind `Arc`s and a short tail, so the
+copy is a pointer per block and the tail (`agents/Process.md`). The guard is taken only when the
+batch holds something for a pad still on the run it names, a write notifying whether or not it
+changed anything. A delete takes the pad's entry out, so what is still on its way for it lands
+nowhere.
 
 **The list follows the newest line, and the reader takes it back by scrolling away.** Arriving lines
 keep the pane pinned to the bottom while the reader is at the bottom; a wheel away from there

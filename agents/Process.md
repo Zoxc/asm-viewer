@@ -136,7 +136,10 @@ an incomplete sequence at the end is carried -- bytes that are genuinely invalid
 as what a program writes is not this app's to reject. `MAX_OUTPUT_LINES` (5000) is what is kept,
 oldest first out, with `RunOutput::dropped` so the view can say the story is missing its beginning;
 it is a line cap and not a byte cap, because the view is a list of rows and a byte budget would make
-the row count depend on how long the lines happened to be.
+the row count depend on how long the lines happened to be. **It is cheap to copy**, because the
+pane holds it and so every batch of lines copies it before adding to it: the lines are kept in full
+blocks of 256, each behind an `Arc` and never written again, and a tail shorter than one. A copy is
+a pointer per block and the tail rather than all 5000 lines.
 
 ## What is not tested
 

@@ -94,13 +94,15 @@ fn lines_arrive_without_their_terminators() {
 }
 
 /// The other bound: the *oldest* goes, and the view can say how much of the story it is
-/// missing.
+/// missing. Past a whole block, so the block that was let go is gone and every line after
+/// it is still where the index says.
 #[test]
 fn output_keeps_the_newest_and_counts_what_it_dropped() {
     let mut output = RunOutput::default();
     assert_eq!(output.len(), 0);
 
-    for line in 0..MAX_OUTPUT_LINES + 12 {
+    let over = CHUNK + 12;
+    for line in 0..MAX_OUTPUT_LINES + over {
         output.push(OutputLine {
             stream: Stream::Out,
             text: Arc::from(line.to_string().as_str()),
@@ -108,14 +110,40 @@ fn output_keeps_the_newest_and_counts_what_it_dropped() {
     }
 
     assert_eq!(output.len(), MAX_OUTPUT_LINES);
-    assert_eq!(output.dropped(), 12);
-    // The oldest kept is the twelfth written, and the newest is the last.
-    assert_eq!(&*output.line(0).expect("a line").text, "12");
-    assert_eq!(
-        &*output.line(MAX_OUTPUT_LINES - 1).expect("a line").text,
-        (MAX_OUTPUT_LINES + 11).to_string()
-    );
+    assert_eq!(output.dropped(), over);
+    // The oldest kept is the first not dropped, and the newest is the last.
+    for index in 0..MAX_OUTPUT_LINES {
+        assert_eq!(
+            &*output.line(index).expect("a line").text,
+            (index + over).to_string()
+        );
+    }
     assert_eq!(output.line(MAX_OUTPUT_LINES), None);
+}
+
+/// **A line added to a copy copies no full block.** The pane holds the output the app
+/// pushes into, so every batch copies it first, and a copy of every line per batch was the
+/// cost.
+#[test]
+fn a_copy_of_the_output_shares_its_full_blocks() {
+    let line = OutputLine {
+        stream: Stream::Out,
+        text: Arc::from("line"),
+    };
+    let mut output = RunOutput::default();
+    for _ in 0..3 * CHUNK + 5 {
+        output.push(line.clone());
+    }
+
+    let copy = output.clone();
+    output.push(line);
+    assert_eq!(output.sealed.len(), 3);
+    assert!(output
+        .sealed
+        .iter()
+        .zip(&copy.sealed)
+        .all(|(mine, theirs)| Arc::ptr_eq(mine, theirs)));
+    assert_eq!(output.len(), copy.len() + 1);
 }
 
 /// Every event a run said, in order, once both its pipes are at their end, with `handle`

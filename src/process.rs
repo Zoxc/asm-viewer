@@ -385,38 +385,62 @@ pub enum Stream {
     Err,
 }
 
-/// One line a running program wrote. The text is an `Arc<str>` because the app keeps
-/// thousands of these in a value it clones whenever a line is added.
+/// One line a running program wrote. The text is an `Arc<str>`, so a line is two words
+/// however long it is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutputLine {
     pub stream: Stream,
     pub text: Arc<str>,
 }
 
+/// How many lines one sealed block of [`RunOutput`] holds.
+const CHUNK: usize = 256;
+
 /// What a running program has written, bounded by [`MAX_OUTPUT_LINES`].
+///
+/// **Cheap to clone, because it is cloned for every batch of lines.** The pane holds the
+/// output behind an `Arc` it shares with the app, so adding a line copies it first. The
+/// lines are kept in full blocks of [`CHUNK`], each behind an `Arc` and never written
+/// again, and a tail of fewer than [`CHUNK`]: a copy is a pointer per block and the tail,
+/// where one deque was every line.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunOutput {
-    lines: VecDeque<OutputLine>,
+    sealed: VecDeque<Arc<[OutputLine]>>,
+    tail: Vec<OutputLine>,
+    /// How many lines at the front of the oldest block have been let go.
+    skipped: usize,
     dropped: usize,
 }
 
 impl RunOutput {
     /// Keep one more line, letting the oldest go if that is what it costs.
     pub fn push(&mut self, line: OutputLine) {
-        if self.lines.len() >= MAX_OUTPUT_LINES {
-            self.lines.pop_front();
-            self.dropped += 1;
+        self.tail.push(line);
+        if self.tail.len() == CHUNK {
+            let full = std::mem::take(&mut self.tail);
+            self.sealed.push_back(Arc::from(full));
         }
-        self.lines.push_back(line);
+        if self.len() > MAX_OUTPUT_LINES {
+            self.skipped += 1;
+            self.dropped += 1;
+            if self.skipped == CHUNK {
+                self.sealed.pop_front();
+                self.skipped = 0;
+            }
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.lines.len()
+        self.sealed.len() * CHUNK - self.skipped + self.tail.len()
     }
 
     /// The line at `index`, counting from the oldest one still kept.
     pub fn line(&self, index: usize) -> Option<&OutputLine> {
-        self.lines.get(index)
+        let at = index.checked_add(self.skipped)?;
+        match self.sealed.get(at / CHUNK) {
+            Some(block) => block.get(at % CHUNK),
+            None => self.tail.get(at - self.sealed.len() * CHUNK),
+        }
     }
 
     /// How many lines were let go to make room, so the view can say the story is missing
