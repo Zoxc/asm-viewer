@@ -55,8 +55,13 @@ pub(crate) fn recents_of(store: State<Option<Store>>) -> Vec<Recent> {
 }
 
 /// `f(before, now)` whenever the deps `now()` answers change, `before` being what the last
-/// run saw and [`None`] on the mount -- which `f` may return early on, a mount not being a
-/// change.
+/// run saw and [`None`] on the **first run** -- which `f` may return early on, there being
+/// nothing to compare with yet.
+///
+/// **That first run is not the mount.** An effect runs a beat after the render that
+/// registered it, so the deps it first sees may already have moved. An `f` that is about
+/// something the *render* made, rather than about the deps alone, seeds the comparison
+/// with what the render used and never takes [`None`] for "unchanged" (`FilesPanel`).
 ///
 /// **What wakes the effect is what `now()` reads**, and every other `.read()` `f` makes at
 /// any depth: `use_side_effect` runs its closure inside a `ReactiveContext`, so a read is a

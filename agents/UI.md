@@ -84,11 +84,19 @@ subscribes it** -- the deps are one more subscription and not the whole of what 
 effect has to tell a change from its own mount, `use_on_change` (`src/ui/state.rs`) is the one hook
 for it: it takes a closure answering the deps -- read inside the effect, which is what a `Memo`
 source needs so the effect follows it and the scope that mounted the hook does not -- and hands the
-callback what the last run saw beside what it sees now, `None` on the mount. A wake that left the
-deps where they were calls nothing, so a read the callback makes for its own reasons cannot be
-mistaken for a change. It was written for two mechanisms that each kept that bookkeeping
+callback what the last run saw beside what it sees now, `None` on its **first run**. A wake that
+left the deps where they were calls nothing, so a read the callback makes for its own reasons
+cannot be mistaken for a change. It was written for two mechanisms that each kept that bookkeeping
 themselves, in two different containers (`agents/Lsp.md`, `agents/Sidebar.md`); the three effects
-that land a place and drop its runs go through it too (`agents/Panes.md`).
+that land a place and drop its runs go through it too (`agents/Panes.md`), and so does the Files
+tree (`agents/Sidebar.md`).
+
+**That first run is not the mount.** An effect runs a beat after the render that registered it, so
+the deps it first sees may already have moved -- a session restored names a project's directory
+within that beat. An effect whose callback is about a value the *render* made, rather than about
+the deps alone, therefore has to seed the comparison with what the render used, and `None` is then
+a first run and not a mount. The Files tree is the one that does (`FilesPanel`); every other
+caller is about the deps alone and reads `None` as "nothing to compare with yet".
 
 **`prevent_default` cancels the events an event derives; `stop_propagation` stops it bubbling.** One
 platform event becomes a queue of tree events, and a handler calling `prevent_default` makes the

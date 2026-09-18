@@ -235,9 +235,12 @@ children have been read, so there is no expansion set beside it to keep in step.
 `use_state` in the tab, a view of a list and never part of the session, built by the state's own
 initialiser -- so the first frame is the tree and not the "not a directory" placeholder -- and
 rebuilt by an effect when `Proj`'s directory string changes. **The effect keeps the directory it
-built over**, because `use_side_effect_with_deps` runs on the mount as well as on a change: without
-something to compare against it would read the root a second time at the first render and hand the
-rows memo a tree equal to the one already there. A keystroke in the Project view's box is a change,
+built over**, because its own first run is no change: without something to compare against it would
+read the root a second time and hand the rows memo a tree equal to the one already there. What it
+keeps is `use_on_change`'s (`agents/UI.md`) and not a state beside it -- a state was a render per
+switch, for a value nothing draws -- and it is **seeded** with the directory the render built the
+tree for, because that first run comes a beat after the render and a session being restored has
+named a directory by then. A keystroke in the Project view's box is a change,
 and costs one `read_dir` of a half-typed path, which fails cheaply. The root is a row like any
 other, named after the directory's last component, so refolding it is how the top level is
 refreshed. **A row is the node's own name and path**, held under an `Arc` from the read that made

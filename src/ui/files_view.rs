@@ -171,18 +171,21 @@ impl Component for FilesPanel {
         // Built here at the first render rather than by the effect below, which runs a
         // beat later and would draw the "not a directory" placeholder for one frame.
         let mut tree = use_state(move || first.as_deref().and_then(FileTree::new));
-        // Which directory the tree above is over. The effect runs on the mount as well as
-        // on a change, and without something to compare against it would read the root a
-        // second time and hand the memo a tree equal to the one it already has.
-        let mut over = use_state(move || started);
-        use_side_effect_with_deps(&directory, move |directory: &Option<PathBuf>| {
-            let changed = *over.peek() != *directory;
-            if !changed {
-                return;
-            }
-            over.set(directory.clone());
-            tree.set(directory.as_deref().and_then(FileTree::new));
-        });
+        // Read again whenever the project is over another directory. Which one the tree
+        // is over is what the last run saw ([`use_on_change`]), seeded with the one the
+        // render above built it for: the first run is no switch, and without the seed it
+        // could not be told from one -- it comes a beat after that render, by which time
+        // a session being restored has already named a directory. A plain captured value
+        // and not a state: nothing draws it, and a state was a render per switch.
+        use_on_change(
+            move || proj.read().workspace(),
+            move |before, directory: &Option<PathBuf>| {
+                if before.unwrap_or(&started) == directory {
+                    return;
+                }
+                tree.set(directory.as_deref().and_then(FileTree::new));
+            },
+        );
         // A memo, not a walk per row: the `VirtualScrollView` has to be told how many rows
         // there are before it builds any of them.
         let rows = use_memo(move || tree.read().as_ref().map(FileTree::rows));
