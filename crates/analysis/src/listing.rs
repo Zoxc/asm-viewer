@@ -108,7 +108,7 @@ impl Listing {
         let symbols = section
             .placed_range()
             .map_or(&[][..], |range| object.placed_in(range));
-        let local = |&(placed, ..): &(u64, _, _)| placed.wrapping_sub(section.bias());
+        let local = |&(placed, ..): &(u64, _, _)| section.local(placed);
 
         let mut stretches = Vec::new();
         let first = symbols.first().map_or(bytes.end, local);
@@ -234,14 +234,14 @@ impl Placed {
         self.range.clone()
     }
 
-    /// The placed address of an address in this section.
+    /// The placed address of an address in this section ([`Section::place`]).
     pub fn place(&self, address: u64) -> u64 {
-        address.wrapping_add(self.bias())
+        self.listing.section().place(address)
     }
 
-    /// The address in this section of a placed address.
+    /// The address in this section of a placed address ([`Section::local`]).
     pub fn local(&self, placed: u64) -> u64 {
-        placed.wrapping_sub(self.bias())
+        self.listing.section().local(placed)
     }
 }
 

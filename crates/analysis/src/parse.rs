@@ -357,9 +357,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     // address alone does not say which code it is ([`section_biases`]).
     let place = |symbol: &Pending| {
         let section = symbol.section.and_then(|index| sections.get(&index));
-        symbol
-            .address
-            .wrapping_add(section.map_or(0, Section::bias))
+        section.map_or(symbol.address, |section| section.place(symbol.address))
     };
     let mut known: HashSet<u64> = symbols.iter().map(place).collect();
 

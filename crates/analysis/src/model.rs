@@ -358,6 +358,35 @@ impl Section {
         self.code.as_ref().map_or(0, |code| code.bias)
     }
 
+    /// `address`, one of this section's own, in the one address space every section of the
+    /// object shares: this section's [`bias`](Self::bias) added. A section holding no code
+    /// has no place in the layout, so it answers the address unchanged. That is the space a
+    /// listing of all the object's code draws in and the space
+    /// [`Object::symbol_at_placed`] answers in, so anything naming a row places an address
+    /// through here.
+    ///
+    /// `wrapping_add` and not `checked_add`, as `line::relocate` adds the same bias:
+    /// agreeing with it matters more than an overflow the biases cannot produce, the layout
+    /// starting above the highest address the file states
+    /// ([`section_biases`](crate::parse::section_biases)). Wrapping is also what keeps this
+    /// from panicking on an address a file made up.
+    pub fn place(&self, address: u64) -> u64 {
+        address.wrapping_add(self.bias())
+    }
+
+    /// [`place`](Self::place) with the overflow said, for a caller that must answer nothing
+    /// rather than answer about a different address. A bias is never a wrapped value, so
+    /// the two agree wherever this one answers.
+    pub(crate) fn place_checked(&self, address: u64) -> Option<u64> {
+        address.checked_add(self.bias())
+    }
+
+    /// A placed address back in this section's own terms: [`place`](Self::place) undone,
+    /// and wrapping for the same reason.
+    pub fn local(&self, placed: u64) -> u64 {
+        placed.wrapping_sub(self.bias())
+    }
+
     /// How many bytes of code this section holds: 0 for one holding none.
     pub(crate) fn len(&self) -> u64 {
         let length = self.code.as_ref().map_or(0, |code| code.data.len());
@@ -428,14 +457,13 @@ impl Section {
         self.code.as_ref()?.data.get(offset..end)
     }
 
-    /// The same range placed: [`bytes_range`](Self::bytes_range) with this section's
-    /// [`bias`](Self::bias) added. [`None`] wherever that answers [`None`] — a section
-    /// holding no code has no place either — and where the layout would put the bytes past
-    /// the end of the address space, which `section_biases` never does.
+    /// The same range placed: [`bytes_range`](Self::bytes_range) put through
+    /// [`place`](Self::place). [`None`] wherever that answers [`None`] — a section holding
+    /// no code has no place either — and where the layout would put the bytes past the end
+    /// of the address space, which `section_biases` never does.
     pub(crate) fn placed_range(&self) -> Option<Range<u64>> {
         let bytes = self.bytes_range()?;
-        let bias = self.bias();
-        Some(bytes.start.checked_add(bias)?..bytes.end.checked_add(bias)?)
+        Some(self.place_checked(bytes.start)?..self.place_checked(bytes.end)?)
     }
 }
 
@@ -477,19 +505,13 @@ impl SymbolData {
         self.demangled.as_deref().unwrap_or(&self.name)
     }
 
-    /// `address`, one of this symbol's own, in the one address space every section of the
-    /// object shares: [`Section::bias`] added, and nothing added for a symbol in no section,
-    /// which is in no listing either. That is the space a listing of all the object's code
-    /// draws in and the space `symbol_at_placed` answers in, so anything naming a row has
-    /// to place an address the same way.
-    ///
-    /// `wrapping_add` and not `checked_add`, as `line::relocate` adds the same bias:
-    /// agreeing with it matters more than an overflow the biases cannot produce, the layout
-    /// starting above the highest address the file states. Wrapping is also what keeps this
-    /// from panicking on an address a file made up.
+    /// `address`, one of this symbol's own, placed by the section it is in
+    /// ([`Section::place`]). Nothing is added for a symbol in no section, which is in no
+    /// listing either.
     pub fn placed(&self, address: u64) -> u64 {
-        let bias = self.section.as_ref().map_or(0, |section| section.bias());
-        address.wrapping_add(bias)
+        self.section
+            .as_ref()
+            .map_or(address, |section| section.place(address))
     }
 
     /// Where this symbol is in [`Object::placed`]: its placed address, where its section is

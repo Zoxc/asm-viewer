@@ -117,9 +117,7 @@ impl<'a> Code<'a> {
     /// stays the number it is.
     pub fn symbol_at_local(&self, address: u64) -> Option<Arc<SymbolData>> {
         let section = self.section?;
-        let symbol = self
-            .object
-            .symbol_at_placed(address.wrapping_add(section.bias()))?;
+        let symbol = self.object.symbol_at_placed(section.place(address))?;
         let home = symbol.section.as_ref()?;
         std::ptr::eq(Arc::as_ptr(home), section).then(|| symbol.clone())
     }

@@ -145,6 +145,13 @@ listing, rather than one of each cut short at `u64::MAX`. The range a symbol is 
 one a listing partitions, the one an unwind entry is clamped to and the one a declared address is
 looked up in are that one range. Each used to work it out from `address + data.len()` for itself --
 five of them, with three overflow rules between them -- and they agreed only by inspection.
+**The bias is added and taken off by name**: `Section::place()` puts one of the section's own
+addresses in the object's one space and `local()` takes it back, both wrapping, with
+`place_checked()` where a caller must answer nothing rather than answer about another address.
+Why wrapping is the deliberate choice -- `line::relocate` adds the same bias, and the layout never
+produces one that wraps -- is written on `place` and nowhere else. It was on `SymbolData::placed`,
+while four other sites spelled the add or the subtract out and re-derived it. Which space a number
+is in still has no type, but the conversion now has a name to grep for.
 Nothing else reads a section's bytes --
 the DWARF backend and `unwind.rs` take theirs from the file they re-parse -- so a copy for the
 debug sections would be a second one held for as long as the object lives, and the DWARF alone is
@@ -756,8 +763,9 @@ own, all at address 0, and a per-section listing of those is a listing of one fu
 `CodeListing` is every `Section::code` section with bytes, each with its own `Listing`, **placed**
 at `Section::bias` past its address and ordered by where it landed. That layout is the parse's
 (`section_biases`), the same one the line info is read at, so a placed address means one thing to
-both. `SymbolData::placed` is where one is worked out -- the symbol's section bias added, nothing
-added for a symbol in no section -- so everything naming a row places an address the same way. A
+both. `Section::place` is where one is worked out, and `SymbolData::placed` is that for a symbol --
+its section's `place`, nothing added for a symbol in no section -- so everything naming a row
+places an address the same way. A
 linked image's sections have real, distinct addresses and no bias, so there a placed address
 *is* the address; a relocatable object's code sections each get a place of their own. The air the
 layout leaves between two sections is nobody's bytes (`at` answers `None` there), and a section
