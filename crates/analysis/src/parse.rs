@@ -170,9 +170,10 @@ struct SymbolTable {
     /// Each one whose name reads, in table order.
     named: Vec<Pending>,
     /// Each one whose name will not read, in table order, called by its address. One claims
-    /// that address only where nothing else named it (the table, [`declared_code`], or one of
-    /// these before it), so an export, a PDB procedure or public, or an unwind entry can
-    /// still give it a real name.
+    /// its placed address only where nothing else named it (the table, [`declared_code`], or
+    /// one of these before it), so an export, a PDB procedure or public, or an unwind entry
+    /// can still give it a real name, and a name at the same offset of another section of a
+    /// relocatable object does not drop it.
     unnamed: Vec<Pending>,
     /// The first index past the table, which declared code is numbered from.
     next: usize,
@@ -352,7 +353,15 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         unnamed,
         next,
     } = symbol_table(&file);
-    let mut known: HashSet<u64> = symbols.iter().map(|symbol| symbol.address).collect();
+    // Keyed by placed address: in a relocatable object every section starts at 0, so an
+    // address alone does not say which code it is ([`section_biases`]).
+    let place = |symbol: &Pending| {
+        let section = symbol.section.and_then(|index| sections.get(&index));
+        symbol
+            .address
+            .wrapping_add(section.map_or(0, |section| section.bias))
+    };
+    let mut known: HashSet<u64> = symbols.iter().map(place).collect();
 
     let (debug_info, procedures, publics) = open_pdb(&file, &path);
     let unwind = unwind::entries(&file);
@@ -364,7 +373,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     symbols.extend(
         unnamed
             .into_iter()
-            .filter(|symbol| known.insert(symbol.address)),
+            .filter(|symbol| known.insert(place(symbol))),
     );
     symbols.extend(declared);
 

@@ -94,9 +94,10 @@ but it does **not** go into `known`, so an export, a PDB procedure or public, or
 still claim that address and give it a real name. Only where none does is the symbol listed at all,
 under `<function 0x…>`, which is why the symbol-table walk sets such a symbol aside until after
 `declared_code`. Where one does, the claimant stands at that address and bounds the symbol below
-it. Not quite always: `known` holds raw addresses, so a claimant outside every code section's bytes,
-or in another section of a relocatable object, drops the symbol without taking its place, and the
-symbol below then runs on to the next one listed. It takes an unreadable name to get there. The section comes from looking the address up in the kept **text** sections, which
+it. `known` holds placed addresses, so a name at the same offset of another section of a
+relocatable object is another place and claims nothing. Not quite always: a claimant outside every
+code section's bytes drops the symbol without taking its place, and the symbol below then runs on to
+the next one listed. It takes an unreadable name to get there. The section comes from looking the address up in the kept **text** sections, which
 doubles as the filter keeping exported *data* out. A relocatable object is skipped entirely:
 `entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. The two nameless
 declarations, the entry point and an unwind entry, are called `<entry point>` and `<function 0x…>`

@@ -1331,3 +1331,36 @@ fn a_declaration_still_names_a_symbol_whose_name_will_not_read() {
     assert_eq!(names(&object), ["exported", "first"]);
     assert_eq!(named(&object, "exported").address, TEXT_ADDRESS + 4);
 }
+
+/// Defect: `known` held raw addresses, and in a relocatable object every `.text.<name>`
+/// section starts at 0. `f` at the start of `.text.a` put 0 in it, so `g`, unreadable at the
+/// start of `.text.b`, was dropped as a second name for the same code. It is a place of its
+/// own, and is listed as one.
+#[test]
+fn an_unnamed_symbol_is_not_dropped_for_a_name_in_another_section() {
+    use object::{
+        write, Architecture, BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope,
+    };
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let a = obj.add_section(Vec::new(), b".text.a".to_vec(), SectionKind::Text);
+    let b = obj.add_section(Vec::new(), b".text.b".to_vec(), SectionKind::Text);
+    obj.append_section_data(a, &[0x90, 0x90, 0x90, 0xC3], 1);
+    obj.append_section_data(b, &[0x90, 0xC3], 1);
+    for (name, section) in [("f", a), ("g", b)] {
+        obj.add_symbol(write::Symbol {
+            name: name.as_bytes().to_vec(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(section),
+            flags: SymbolFlags::None,
+        });
+    }
+    let data = elf_with_unreadable_name(&obj.write().expect("writing the fixture object"), "g");
+    let object = parse(&data);
+
+    assert_eq!(names(&object), ["<function 0x0>", "f"]);
+}
