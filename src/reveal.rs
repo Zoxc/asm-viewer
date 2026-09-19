@@ -80,17 +80,18 @@ fn tell(path: &Path) {
 }
 
 /// What a program's finishing says about whether it worked.
+///
+/// Each platform makes only one of the two, so each variant allows the others not to. An
+/// `allow` and not a `cfg`, so the whole of what a finish can mean is compiled everywhere
+/// and an edit on one platform cannot break the arm another reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Judged {
     /// A zero exit is success and anything else is not, which is what all but one of these
     /// programs mean by it.
+    #[cfg_attr(not(unix), allow(dead_code))]
     ByStatus,
     /// Starting is all there is to go on: Windows' `explorer` exits 1 whether or not it
     /// showed the file.
-    ///
-    /// Only Windows has such a program, so on the other platforms nothing makes one. An
-    /// `allow` and not a `cfg` on the variant, so the whole of what a finish can mean is
-    /// compiled everywhere and an edit on one platform cannot break the arm another reads.
     #[cfg_attr(not(windows), allow(dead_code))]
     ByStarting,
 }
