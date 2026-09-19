@@ -315,7 +315,7 @@ fn declared_code(
         take(
             MadeUp::unwind(entry).unmangled(),
             entry.range.start,
-            entry.range.end - entry.range.start,
+            entry.len(),
         );
     }
 

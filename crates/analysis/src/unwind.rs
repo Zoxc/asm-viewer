@@ -122,6 +122,18 @@ pub(crate) struct UnwindEntry {
     pub(crate) chained: bool,
 }
 
+impl UnwindEntry {
+    /// How many bytes of code the entry declares.
+    ///
+    /// The subtraction cannot underflow today: both readers in this module drop an entry
+    /// whose end is not past its begin — [`pe`] by `begin >= end`, [`elf`] by skipping
+    /// a zero-length FDE. That rule is theirs, so it saturates here beside them rather than
+    /// have a caller elsewhere rest on it unsaid.
+    pub(crate) fn len(&self) -> u64 {
+        self.range.end.saturating_sub(self.range.start)
+    }
+}
+
 /// The entries an x86-64 PE's exception directory states: one `RUNTIME_FUNCTION` per function
 /// with unwind info, its begin and end RVAs read and placed on the image base, and one byte
 /// of the `UNWIND_INFO` its third word names, for the chained flag. Each is a **declaration
