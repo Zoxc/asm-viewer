@@ -441,6 +441,14 @@ what the crate owes them. *Where inside* a symbol the line's code sits is the fo
 question and is already answered, so a caller walks index → symbol → `line_info` → rows and there is
 one definition of "this line's rows" rather than two that can drift.
 
+**A pair names a symbol by its position in `Object::placed`**, a `u32`, and not by its
+`SymbolIndex`. That list is sorted by `(placed address, symbol index)`, which is the order an answer
+is wanted in, so sorting the positions a lookup found *is* putting the answer in order: the hash
+probe per symbol, the recomputed `code_place` and the second sort that used to recover that order
+are all gone, and the rule is read off the list rather than re-derived beside it. It also halves a
+pair. A position is good for the object's life because `placed` is built once, in `Object::new`, and
+nothing rewrites it; a position past `u32::MAX` is dropped rather than truncated or panicked over.
+
 The build is one pass, and every symbol's extent is taken *before* it. `SymbolData::extent` reaches
 `DebugInfo::extent`, which takes the backend's lock; `DebugInfo::each_row`, the one thing the index
 asks a backend for, holds that same lock for its whole walk; and a `Mutex` is not reentrant, so an
@@ -467,7 +475,7 @@ differed between runs is not one anybody can pick from.
 
 Measured, release, first ask: the 331 MB binary **0.43 s** (2.2 s before `.eh_frame` stated 115 096
 of its 115 577 extents, 2.0 s of that the extent pass). The 0.23 s line-program walk is now most of
-it, for 2 096 files and 624 544 `(line, symbol)` pairs, 10 MB of them, taking the process from 756
+it, for 2 096 files and 624 544 `(line, position)` pairs, 5 MB of them, taking the process from 756
 MB to 1.23 GB with the parsed line programs held. The 196-member rlib takes 94 ms for all 196
 objects, 862 files, 25 870 pairs. Every ask afterwards is two binary searches (5 µs). The DIE walk
 is still what a symbol without an unwind entry pays, deliberately: the cheap alternative,
@@ -624,8 +632,9 @@ their own. A section that is not code has no place, so its symbols would land on
 addresses; it keeps no bytes either, so they never had an extent to read. Where a header makes two
 places overlap, each of the two listings also labels the other's symbols; nothing breaks, and
 `CodeListing` draws only the first. `Object::new` builds the index from `symbols`, so it cannot
-disagree with them. It is built there, on the loading thread, and not lazily on first use, because a
-render reaches it: the Back/Forward tooltip names a restored `Place::Code` stop with
+disagree with them, and nothing rewrites it afterwards — which is what lets the source index name a
+symbol by its position in it. It is built there, on the loading thread, and not lazily on first
+use, because a render reaches it: the Back/Forward tooltip names a restored `Place::Code` stop with
 `symbol_at_placed`, and a lazy index would have that render sort every symbol on the UI thread. The
 cost is one sort per archive member at parse, members never read included; every question is a
 binary search.

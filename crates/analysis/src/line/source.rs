@@ -29,7 +29,7 @@
 //! `viewer-sample` — one object, 115 577 symbols, 267 MB of DWARF — **0.43 s**, down from
 //! 2.2 s of which 2.0 s was taking every symbol's extent: its `.eh_frame` now states 115 096 of
 //! them and the DIE walk is left the 481 it does not cover, so the 0.23 s line-program walk is
-//! most of what remains; the index is 2 096 files and 624 544 `(line, symbol)` pairs, 10 MB of
+//! most of what remains; the index is 2 096 files and 624 544 `(line, position)` pairs, 5 MB of
 //! them, and holding the line programs the walk parsed takes the process from 756 MB to
 //! 1.23 GB. On `libanalysis-sample.rlib` — 196 objects, 4 164 symbols — 94 ms for all of them
 //! together, 862 files and 25 870 pairs. Every ask after the first is two binary searches:
@@ -48,21 +48,23 @@
 
 use super::DebugInfo;
 use crate::{Object, SymbolData};
-use object::SymbolIndex;
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-/// Every source file one object's debug info names, and per file the `(line, symbol)` pairs
-/// its rows landed in — sorted by line and deduplicated, so a line range is two binary
-/// searches.
+/// Every source file one object's debug info names, and per file the `(line, position)` pairs
+/// its rows landed in — a position being a symbol's place in [`Object::placed`] — sorted and
+/// deduplicated, so a line range is two binary searches.
 ///
-/// Symbols are held as [`SymbolIndex`] rather than as `Arc<SymbolData>`: the index is a field
-/// of the object whose symbols they are, and keeping strong references from it to them would
-/// be an object holding itself up.
+/// A position and not an `Arc<SymbolData>` because the index is a field of the object whose
+/// symbols they are, and strong references from it to them would be an object holding itself
+/// up. A position rather than the symbol index it stands for because `placed` is sorted by
+/// `(placed address, symbol index)`, so sorting positions *is* the order an answer is wanted
+/// in and nothing has to be recovered to answer one. Both are good for the object's life:
+/// [`Object::new`] builds `placed` once and nothing rewrites it.
 #[derive(Default)]
 pub(super) struct SourceIndex {
-    files: HashMap<Arc<str>, Vec<(u32, SymbolIndex)>>,
+    files: HashMap<Arc<str>, Vec<(u32, u32)>>,
 }
 
 /// One symbol's extent in the address space the debug info is read in — biased, so it is
@@ -75,7 +77,8 @@ struct SymbolRange {
     /// needs a bound that is monotone; this is it. `addr2line`'s own unit index is built the
     /// same way and for the same reason.
     max_end: u64,
-    symbol: SymbolIndex,
+    /// Where this symbol sits in [`Object::placed`], which is what the index keeps.
+    position: u32,
 }
 
 impl SourceIndex {
@@ -88,7 +91,7 @@ impl SourceIndex {
     fn build(ranges: &[SymbolRange], debug: &DebugInfo) -> SourceIndex {
         // Keyed by the name each row spells, allocated once per distinct file: the visitor is
         // handed a borrow that ends with the call, so the key cannot be the borrow itself.
-        let mut files: HashMap<Arc<str>, Vec<(u32, SymbolIndex)>> = HashMap::new();
+        let mut files: HashMap<Arc<str>, Vec<(u32, u32)>> = HashMap::new();
 
         // What the walk has cost against what it is allowed ([`budget`]). Sticky, and no
         // backend's walk can be cut short, so past the budget a row is attributed to nothing
@@ -113,7 +116,7 @@ impl SourceIndex {
             };
             for symbol in intersecting(ranges, range.start, range.end) {
                 pairs += 1;
-                entry.push((line, symbol.symbol));
+                entry.push((line, symbol.position));
             }
         });
 
@@ -125,7 +128,7 @@ impl SourceIndex {
             .into_iter()
             .filter(|(_, entries)| !entries.is_empty())
             .map(|(file, mut entries)| {
-                entries.sort_unstable_by_key(|(line, symbol)| (*line, symbol.0));
+                entries.sort_unstable();
                 entries.dedup();
                 (file, entries)
             })
@@ -134,10 +137,10 @@ impl SourceIndex {
         SourceIndex { files }
     }
 
-    /// The `(line, symbol)` pairs for one file over `first..=last`, in line order. Inclusive
+    /// The `(line, position)` pairs for one file over `first..=last`, in line order. Inclusive
     /// at the top so that a single line is a range this cannot fail to express, `u32::MAX`
     /// included.
-    fn lookup(&self, file: &str, first: u32, last: u32) -> &[(u32, SymbolIndex)] {
+    fn lookup(&self, file: &str, first: u32, last: u32) -> &[(u32, u32)] {
         let Some(entries) = self.files.get(file) else {
             return &[];
         };
@@ -147,7 +150,7 @@ impl SourceIndex {
     }
 }
 
-/// The most `(line, symbol)` pairs a build may push: 64 per row walked, never fewer than
+/// The most `(line, position)` pairs a build may push: 64 per row walked, never fewer than
 /// 64 Ki and never more than 64 Mi.
 ///
 /// Neither factor of the index's size is the app's to choose. A symbol table may name one
@@ -181,20 +184,26 @@ fn budget(rows: usize) -> usize {
 /// and the forward direction cannot disagree about what a symbol covers.
 ///
 /// In the order of [`Object::placed`], which is the `(start, symbol index)` wanted: a start
-/// is the placed address that index holds. The rows come back in the same space: the DWARF
-/// backend is read at [`Section::bias`](crate::Section::bias), and a `.pdb` describes a
-/// linked image, where every bias is 0.
+/// is the placed address that index holds. Each range carries its position in that list, not
+/// the symbol index, which is what makes an answer's order a sort of positions. The rows come
+/// back in the same space: the DWARF backend is read at
+/// [`Section::bias`](crate::Section::bias), and a `.pdb` describes a linked image, where every
+/// bias is 0.
 fn symbol_ranges(object: &Object) -> Vec<SymbolRange> {
     let mut ranges: Vec<SymbolRange> = object
         .placed_symbols()
         .iter()
-        .filter_map(|&(start, symbol, ref data)| {
+        .enumerate()
+        .filter_map(|(position, &(start, _, ref data))| {
+            // A file naming more than `u32::MAX` placed symbols loses the ones past that,
+            // which is a smaller thing than either a wider index or a panic.
+            let position = u32::try_from(position).ok()?;
             let end = start.checked_add(data.extent(object)?.bytes)?;
             (start < end).then_some(SymbolRange {
                 start,
                 end,
                 max_end: end,
-                symbol,
+                position,
             })
         })
         .collect();
@@ -261,27 +270,25 @@ impl Object {
         };
 
         // One symbol answering for several of the lines asked about is one hit, not several.
-        let mut found: Vec<SymbolIndex> = index
+        // Sorting the positions is all it takes to put the answer in `Object::placed`'s
+        // order, which is the order the listing draws them in: that list is sorted by
+        // `(placed address, symbol index)` already. Not by `address`: that is the section's
+        // own, and in a relocatable object every `.text.<name>` starts at 0.
+        let mut found: Vec<u32> = index
             .lookup(file, first, last)
             .iter()
-            .map(|(_, symbol)| *symbol)
+            .map(|&(_, position)| position)
             .collect();
-        found.sort_unstable_by_key(|symbol| symbol.0);
+        found.sort_unstable();
         found.dedup();
 
-        // In the order of `Object::placed`, which is the order the listing draws them in.
-        // Not by `address`: that is the section's own, and in a relocatable object every
-        // `.text.<name>` starts at 0. Every symbol here came out of that index, so each has a
-        // code place.
-        let mut symbols: Vec<(u64, SymbolIndex, Arc<SymbolData>)> = found
+        // Every position came out of that list, so each names an entry.
+        let placed = self.placed_symbols();
+        found
             .into_iter()
-            .filter_map(|symbol| {
-                let data = self.symbols.get(&symbol)?;
-                Some((data.code_place()?, symbol, data.clone()))
-            })
-            .collect();
-        symbols.sort_unstable_by_key(|&(placed, symbol, _)| (placed, symbol.0));
-        symbols.into_iter().map(|(_, _, data)| data).collect()
+            .filter_map(|position| placed.get(position as usize))
+            .map(|(_, _, data)| data.clone())
+            .collect()
     }
 
     /// [`symbols_from_lines`](Self::symbols_from_lines) for one line.
