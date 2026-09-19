@@ -697,12 +697,20 @@ behind the measurement, so a row is drawn once before it knows. 0.5.0-rc.4 chang
 it -- the same three fields, and `Label` still has no holder. A flag on `SizedEventData`, or
 a `Label::holder`, would do it.
 
-**A paragraph that answers in bytes.** Its hit test and its highlight both speak UTF-16 code
-units (`caret_col`, `highlights`), skia's own unit. **Cost:** the app counts a column in bytes everywhere,
-so every probe of a paragraph converts on the way in and on the way out through the row's
-text (`src/ui/code_row.rs`), and so does a highlight (`ui::parts::marked_units`). The
-conversion is one function each way (`src/chars.rs`) and the cost is a walk of a short line,
-but it is a walk that a byte-offset hit test would remove.
+**A paragraph that counts text in UTF-8 bytes or in characters.** `ParagraphHolder` is
+freya's (`elements/paragraph.rs:119`), but all it holds is skia's own `SkParagraph` and the
+scale factor. freya has no hit test of its own, so a caller asks skia, and skia counts in
+UTF-16 code units: `get_glyph_position_at_coordinate`, `get_rects_for_range` and
+`get_word_boundary`. freya's own `highlights` and `cursor_index` count in UTF-16 too, since
+they go straight to `get_rects_for_range` (`paragraph.rs:470`, `:519`). Yet both are
+documented as a "character index" (`paragraph.rs:963`, `:969`), which is wrong for any
+character outside the Basic Multilingual Plane. 0.5.0-rc.5 changes none of it. **Cost:** the
+app counts a column in bytes everywhere. So every probe of a paragraph converts on the way in
+and on the way out through the row's text (`src/ui/code_row.rs`), and so does a highlight
+(`ui::parts::marked_units`). The conversion is one function each way (`src/chars.rs`) and
+costs a walk of a short line. Wanted: the holder's probes, `highlights` and `cursor_index`
+all counting in UTF-8 bytes, as a Rust `&str` is indexed, or in characters, as their docs
+already say. UTF-16 should never be what a caller sees. Not reported yet.
 
 **A `Component` whose key needs saying once.** `KeyExt::key` writes a `DiffKey` and
 `Component::render_key` reads one, but nothing joins them: the built-in elements hold their
