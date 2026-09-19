@@ -112,9 +112,9 @@ the same. And it carries the one thing every made-up name shares: it is not the 
 demangler is ever offered one.
 `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target lookup),
 `symbols_sorted` (by name, then by index, for the UI list) and `placed` (the
-code sections' symbols by placed address, built on first use; below). **The constructors make what
-the fields say**, for the parse and the tests alike. `Object::new` sorts `symbols_sorted` and starts
-`placed` and the debug info empty; `SymbolData::new` starts the extent empty; and a section is one of
+code sections' symbols by placed address; below). **The constructors make what
+the fields say**, for the parse and the tests alike. `Object::new` sorts `symbols_sorted` and
+`placed` and starts the debug info empty; `SymbolData::new` starts the extent empty; and a section is one of
 two kinds, `Section::text` or `Section::other`, so one holding no code has no bytes, relocations or
 bias. The parse gives each section its unwind ranges through `Section::with_unwind`, which drops,
 clamps, sorts and dedups them. The fields stay `pub` to be read. No test fixture sorts by hand any
@@ -614,10 +614,12 @@ linked image's addresses are real, and a relocatable object's code sections each
 their own. A section that is not code has no place, so its symbols would land on some code section's
 addresses; it keeps no bytes either, so they never had an extent to read. Where a header makes two
 places overlap, each of the two listings also labels the other's symbols; nothing breaks, and
-`CodeListing` draws only the first. The index is built from `symbols` behind a `OnceLock` like the
-debug info, so it cannot disagree with them. It is lazy rather than built at parse because an
-archive's members are parsed all at once and read one at a time. The build sorts every symbol, once
-per object; every question after it is a binary search.
+`CodeListing` draws only the first. `Object::new` builds the index from `symbols`, so it cannot
+disagree with them. It is built there, on the loading thread, and not lazily on first use, because a
+render reaches it: the Back/Forward tooltip names a restored `Place::Code` stop with
+`symbol_at_placed`, and a lazy index would have that render sort every symbol on the UI thread. The
+cost is one sort per archive member at parse, members never read included; every question is a
+binary search.
 
 **What an operand names is one enum**, `Operand`, and a row carries one `Option` of it. It used to
 be six fields and sixty lines of doc saying which was `Some` exactly when which other was, with the

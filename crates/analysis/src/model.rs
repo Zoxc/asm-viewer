@@ -12,7 +12,7 @@ use std::{
     hash::{Hash, Hasher},
     ops::Range,
     path::PathBuf,
-    sync::{Arc, OnceLock},
+    sync::Arc,
 };
 
 pub struct Object {
@@ -39,7 +39,7 @@ pub struct Object {
     pub debug_info: DebugInfoCache,
 
     /// The code sections' symbols by the address they are **placed** at, built from
-    /// `symbols` on first use, so it cannot disagree with them. A symbol left out of
+    /// `symbols` by [`Object::new`], so it cannot disagree with them. A symbol left out of
     /// `symbols` has no estimate and no label, and no call is named after it. See
     /// `PlacedSymbols`.
     pub placed: PlacedSymbols,
@@ -54,16 +54,15 @@ pub struct Object {
 /// A section that is not code has no place and would collide, so its symbols are left out.
 ///
 /// What a symbol's extent estimate, a listing's labels, a call's name and the source index
-/// all read. Built once per object behind a `OnceLock`, like the debug info, because it
-/// sorts every symbol; lazy rather than built at parse because an archive's members are
-/// parsed all at once and read one at a time.
-#[derive(Default)]
-pub struct PlacedSymbols(OnceLock<Vec<(u64, SymbolIndex, Arc<SymbolData>)>>);
+/// all read. Built at parse, off the UI thread, because a render asks it too: the history
+/// buttons name a saved place with [`Object::symbol_at_placed`], so every ask has to be a
+/// binary search and never the sort over every symbol.
+pub struct PlacedSymbols(Vec<(u64, SymbolIndex, Arc<SymbolData>)>);
 
 impl Object {
     /// An object holding `symbols`, which may come in any order. This is where
-    /// [`symbols_sorted`](Self::symbols_sorted) is sorted, and it starts
-    /// [`placed`](Self::placed) and `debug_info` empty, each to be built on its first use.
+    /// [`symbols_sorted`](Self::symbols_sorted) and [`placed`](Self::placed) are sorted,
+    /// and it starts `debug_info` empty, to be built on its first use.
     pub fn new(
         path: PathBuf,
         name: String,
@@ -82,6 +81,12 @@ impl Object {
             .into_iter()
             .map(|(_, symbol)| symbol.clone())
             .collect();
+        let mut placed: Vec<_> = symbols
+            .iter()
+            .filter_map(|(&index, symbol)| Some((symbol.code_place()?, index, symbol.clone())))
+            .collect();
+        // The map's order is the hash seed's; the file's is the symbol index.
+        placed.sort_unstable_by_key(|&(address, index, _)| (address, index.0));
         Object {
             path,
             name,
@@ -92,22 +97,13 @@ impl Object {
             sections,
             data,
             debug_info: DebugInfoCache::default(),
-            placed: PlacedSymbols::default(),
+            placed: PlacedSymbols(placed),
         }
     }
 
-    /// [`placed`](Self::placed), built on the first ask.
+    /// [`placed`](Self::placed).
     pub(crate) fn placed_symbols(&self) -> &[(u64, SymbolIndex, Arc<SymbolData>)] {
-        self.placed.0.get_or_init(|| {
-            let mut placed: Vec<_> = self
-                .symbols
-                .iter()
-                .filter_map(|(&index, symbol)| Some((symbol.code_place()?, index, symbol.clone())))
-                .collect();
-            // The map's order is the hash seed's; the file's is the symbol index.
-            placed.sort_unstable_by_key(|&(address, index, _)| (address, index.0));
-            placed
-        })
+        &self.placed.0
     }
 
     /// The entries of [`placed`](Self::placed) whose address is inside `range`.
