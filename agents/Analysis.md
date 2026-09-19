@@ -438,11 +438,13 @@ what the crate owes them. *Where inside* a symbol the line's code sits is the fo
 question and is already answered, so a caller walks index → symbol → `line_info` → rows and there is
 one definition of "this line's rows" rather than two that can drift.
 
-The build is one pass and its **order is load-bearing**: every symbol's extent is taken *first*,
-before the backend's lock is held. `SymbolData::extent` reaches `DebugInfo::extent`, which takes
-that lock; `DebugInfo::each_row`, the one thing the index asks a backend for, holds that same lock
-for its whole walk; and a `Mutex` is not reentrant, so computing an extent inside the visitor
-deadlocks the first object anyone asks. The DWARF backend's `each_row` is one
+The build is one pass, and every symbol's extent is taken *before* it. `SymbolData::extent` reaches
+`DebugInfo::extent`, which takes the backend's lock; `DebugInfo::each_row`, the one thing the index
+asks a backend for, holds that same lock for its whole walk; and a `Mutex` is not reentrant, so an
+extent taken inside the visitor would deadlock the first object anyone asks. The signature keeps
+that from happening: `source_index` computes the ranges and `SourceIndex::build` is handed them and
+not the object, so the visitor has nothing to ask. The rows are not collected first to drop the
+lock instead, which would hold millions of them at once on a large binary. The DWARF backend's `each_row` is one
 `find_location_range(0, u64::MAX)` over the whole address space (safe where `extent` had to decline
 `u64::MAX`: that unchecked `probe + 1` is in `find_units`, and this goes through
 `find_units_range`), with each row attributed to the symbols its addresses fall in. Addresses stay

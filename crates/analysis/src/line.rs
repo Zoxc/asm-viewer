@@ -137,8 +137,9 @@ impl DebugInfo {
 
     /// Every row that names a file and a line, whatever the object, handed to `visit` as
     /// `(range, file, line)` in the **biased** address space ([`Section::bias`] already
-    /// applied). A backend may hold its own lock for the whole walk, so `visit` must not ask
-    /// this object anything — see [`source`] for the one caller and the order it keeps.
+    /// applied). A backend may hold its own lock for the whole walk, and `extent` and
+    /// `line_info` take the same one, so `visit` must not ask the object anything: the one
+    /// caller, `SourceIndex::build`, is handed the extents it needs instead of the object.
     fn each_row(&self, visit: &mut dyn FnMut(Range<u64>, &str, u32)) {
         without_panicking(|| match &self.backend {
             Backend::Dwarf(dwarf) => dwarf.each_row(visit),

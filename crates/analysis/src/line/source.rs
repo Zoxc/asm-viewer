@@ -79,16 +79,13 @@ struct SymbolRange {
 }
 
 impl SourceIndex {
-    /// Walk every line program once and invert it. No net of its own: the calls that reach a
-    /// dependency, the extents and the walk, are each guarded at the seam.
-    pub(super) fn build(object: &Object, debug: &DebugInfo) -> SourceIndex {
-        // **Before the row walk, and this is load-bearing.** `SymbolData::extent` reaches
-        // `DebugInfo::extent`, which takes the backend's own lock, and `each_row` holds that
-        // same lock for the whole walk — a `Mutex` is not reentrant, so computing an extent
-        // inside the visitor below would deadlock the first object anyone asked a source
-        // question of.
-        let ranges = symbol_ranges(object);
-
+    /// Walk every line program once and attribute each row to the `ranges` it falls in. No
+    /// net of its own: the calls that reach a dependency, the extents and the walk, are each
+    /// guarded at the seam.
+    ///
+    /// Given the ranges rather than the object, so the visitor has no object to ask
+    /// ([`DebugInfo::each_row`]).
+    fn build(ranges: &[SymbolRange], debug: &DebugInfo) -> SourceIndex {
         // Keyed by the name each row spells, allocated once per distinct file: the visitor is
         // handed a borrow that ends with the call, so the key cannot be the borrow itself.
         let mut files: HashMap<Arc<str>, Vec<(u32, SymbolIndex)>> = HashMap::new();
@@ -114,7 +111,7 @@ impl SourceIndex {
                 Some(entry) => entry,
                 None => files.entry(Arc::from(file)).or_default(),
             };
-            for symbol in intersecting(&ranges, range.start, range.end) {
+            for symbol in intersecting(ranges, range.start, range.end) {
                 pairs += 1;
                 entry.push((line, symbol.symbol));
             }
@@ -346,6 +343,10 @@ impl Object {
     /// object, or [`None`] when it has no debug info this reads.
     fn source_index(&self) -> Option<&SourceIndex> {
         let debug = self.debug_info()?;
-        Some(debug.index.get_or_init(|| SourceIndex::build(self, debug)))
+        Some(
+            debug
+                .index
+                .get_or_init(|| SourceIndex::build(&symbol_ranges(self), debug)),
+        )
     }
 }
