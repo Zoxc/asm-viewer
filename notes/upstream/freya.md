@@ -562,6 +562,16 @@ freya's own scrollbar thumb does (above). The app ends a sweep on the capture-ph
 instead (`ui.rs`), which happens to run first; a plain "the button came up" event would say
 what is meant.
 
+**The modifiers held, on every event.** A key event carries a mask, and it is the mask as
+it was before the key (above). No pointer, mouse or wheel event carries one at all
+(`events/data.rs`), and nothing else says what is held. **Cost:** the app tracks Shift, Ctrl
+and Alt itself from the root's global key handlers and provides each as a context, which every
+door and menu that acts differently under one reads (`ModifierKeys`, `src/ui/keys.rs`). As the
+mask is late, a Caps Lock the desktop made into Ctrl has to be learnt from its first release.
+And a tracker cannot see what changed while the window was not focused: a key let go over
+another window leaves its modifier stuck until the next key event. The current mask on every
+event, pointer ones included, would remove all of it.
+
 **A highlight and a caret the size of the line box, on whole pixels.** A paragraph's
 `highlights` are painted as the glyphs' tight boxes, stretched by `CursorMode::Expanded` to
 the paragraph's area but never wider than the glyphs, and its `cursor_index` is drawn two
