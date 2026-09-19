@@ -877,13 +877,14 @@ fn elf_with_names(names: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// Defect: a section header may say its bytes live at the end of the address space, and
-/// the debug info may then claim a function running off the end of it. Four independent
+/// the debug info may then claim a function running off the end of it. Five independent
 /// bounds have to hold at once, and this is the one input in the suite that walks all of
 /// them: `estimate_size`'s and the DWARF backend's checked adds, `extent` declining a
 /// length that runs off the end of the address space whichever of its sources stated it —
 /// the debug info does here, and `addr2line` hands that number over rather than checking
-/// it — and `assembly` declining to decode a symbol with no extent rather than one decoded
-/// from an address that wrapped.
+/// it — `assembly` declining to decode a symbol with no extent rather than one decoded
+/// from an address that wrapped, and `Section::bytes_range` answering nothing, so the
+/// section is not listed at all.
 #[test]
 fn a_function_at_the_end_of_the_address_space_does_not_panic() {
     // Six single-byte instructions from three below the top of the address space: the
@@ -908,6 +909,13 @@ fn a_function_at_the_end_of_the_address_space_does_not_panic() {
     assert_eq!(symbol.data_in(&object), None);
     assert!(symbol.assembly(&object).is_none());
     assert!(symbol.line_info(&object).is_none());
+
+    // The bytes have no addresses to sit at, so the section is not listed rather than
+    // listed up to `u64::MAX`: the listing says what the extent says.
+    let section = symbol.section.clone().expect("the symbol is in a section");
+    assert_eq!(section.bytes_range(), None);
+    assert!(Listing::new(&object, section).stretches().is_empty());
+    assert!(CodeListing::new(&object).sections().is_empty());
 }
 
 /// An ELF **image** (`ET_EXEC`, so nothing is biased and DWARF addresses are read

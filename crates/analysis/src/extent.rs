@@ -77,16 +77,8 @@ impl SymbolData {
     /// linked image and wrong on every relocatable object. Only the answer leaves, and a
     /// count of bytes is the same number in either space.
     fn derived(&self, object: &Object) -> Option<u64> {
-        let section = self.section.as_ref()?;
-        let code = section.code()?;
-        let placed = self.code_place()?;
-        let range = section.placed_range()?;
-
-        // Where the section's bytes stop, placed as the rest is. [`None`] only for a section
-        // placed so near the end of the address space that it does not fit in it.
-        let end = u64::try_from(code.data.len())
-            .ok()
-            .and_then(|length| range.start.checked_add(length));
+        let range = self.section.as_ref()?.placed_range()?;
+        let placed = self.place_in(&range)?;
 
         // The next symbol is the first entry at a greater address, so a second name at this
         // one bounds nothing, and it counts only inside this section's bytes: past them, the
@@ -98,12 +90,8 @@ impl SymbolData {
             .get(after)
             .map(|&(next, ..)| next)
             .filter(|next| range.contains(next));
-        let next = match next {
-            Some(next) => next,
-            None => end?,
-        };
 
-        next.checked_sub(placed)
+        next.unwrap_or(range.end).checked_sub(placed)
     }
 
     /// A length the file states, bounded by the next symbol. A listing is one stretch per

@@ -137,7 +137,15 @@ for a file with no table read) and the section's `bias`. It is `Some` for a sect
 the rest. Those four were four fields beside a `code: bool`, each doc comment repeating that it was
 empty for a section that is not code, and every reader deriving the rule again; as one option the
 invariant is a `match`, and a reader that asks `Section::code()` once has all four or none.
-`Section::bias()` answers 0 for a section with no place. Nothing else reads a section's bytes --
+`Section::bias()` answers 0 for a section with no place, and where the bytes are is one answer too:
+`Section::end()` is where they stop, `bytes_range()` the addresses they take up in the section's
+own terms, and `placed_range()` that range with the bias added. All three are **checked**, so a
+section whose bytes run off the top of the address space has no range, no place, no extent and no
+listing, rather than one of each cut short at `u64::MAX`. The range a symbol is decoded over, the
+one a listing partitions, the one an unwind entry is clamped to and the one a declared address is
+looked up in are that one range. Each used to work it out from `address + data.len()` for itself --
+five of them, with three overflow rules between them -- and they agreed only by inspection.
+Nothing else reads a section's bytes --
 the DWARF backend and `unwind.rs` take theirs from the file they re-parse -- so a copy for the
 debug sections would be a second one held for as long as the object lives, and the DWARF alone is
 267 MB of the 331 MB binary.
@@ -735,8 +743,9 @@ the listing was cut at the decode cap, so it does not read as the function endin
 (`agents/Panes.md`). Where the file has an unwind table only a symbol no
 entry covers can get one, the rest having their ends stated. An architecture no backend decodes
 gives the symbol stretch the `undecodable` `Assembly` the symbol view gets, and its gaps are `Bytes`
-like any other. The section's end is saturating, where `estimate_size`'s is `None`: a listing has to
-end somewhere. `tests/listing.rs` holds one invariant test over every fixture shape, both committed
+like any other. Where the section's bytes end is `Section::bytes_range`'s answer and not the
+listing's own, so a section that does not fit in the address space has no stretches at all, the way
+it has no extent. `tests/listing.rs` holds one invariant test over every fixture shape, both committed
 gcc objects and gcc's stripped `.so` (the stretches partition the section exactly, every symbol
 inside it is at one label, each stretch's code is the symbol's own row for row, and the gap starts
 exactly where the extent stops), and a test per decision.

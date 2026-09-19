@@ -196,7 +196,7 @@ fn corpus() -> Vec<(String, Arc<Object>)> {
 }
 
 fn section_end(section: &Section) -> u64 {
-    section.address + section.code().map_or(0, |code| code.data.len()) as u64
+    section.end().expect("a fixture fits in the address space")
 }
 
 fn listing_of(object: &Arc<Object>, name: &str) -> Listing {

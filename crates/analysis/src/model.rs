@@ -358,18 +358,44 @@ impl Section {
         self.code.as_ref().map_or(0, |code| code.bias)
     }
 
+    /// How many bytes of code this section holds: 0 for one holding none.
+    pub(crate) fn len(&self) -> u64 {
+        let length = self.code.as_ref().map_or(0, |code| code.data.len());
+        // A `usize` is no wider than a `u64` anywhere this builds, so the fallback never
+        // answers; it is here so the conversion is not an unwrap.
+        length.try_into().unwrap_or(u64::MAX)
+    }
+
+    /// Where this section's bytes stop, in the section's own addresses. [`None`] where they
+    /// would run past the end of the address space.
+    ///
+    /// **Checked, and nothing in the crate answers it another way.** A section that does
+    /// not fit in the address space names bytes at addresses that do not exist, so it has
+    /// no extent, no listing and no place, rather than one of each cut short at
+    /// [`u64::MAX`]. The range a symbol is decoded over, the one a listing partitions, the
+    /// one an unwind entry is clamped to and the one a declared address is looked up in are
+    /// this range, so they cannot say different things.
+    pub fn end(&self) -> Option<u64> {
+        self.address.checked_add(self.len())
+    }
+
+    /// The addresses this section's bytes take up, in the section's own terms. [`None`] for
+    /// a section with no bytes — one holding no code among them — and for one that does not
+    /// fit in the address space ([`end`](Self::end)).
+    pub fn bytes_range(&self) -> Option<Range<u64>> {
+        let end = self.end()?;
+        (self.address < end).then_some(self.address..end)
+    }
+
     /// This section with `unwind` as its code's [`unwind`](CodeSection::unwind) ranges, made
     /// to hold what that field says: a range not starting in the bytes is dropped, the rest
     /// have their ends clamped to the bytes, and they are sorted by start with each start
     /// kept once. A section holding no code takes none.
     pub(crate) fn with_unwind(mut self, mut unwind: Vec<Range<u64>>) -> Section {
-        let address = self.address;
+        let bytes = self.bytes_range();
         let Some(code) = self.code.as_mut() else {
             return self;
         };
-        let bytes = u64::try_from(code.data.len())
-            .ok()
-            .and_then(|length| Some(address..address.checked_add(length)?));
         match bytes {
             Some(bytes) => {
                 unwind.retain(|range| bytes.contains(&range.start));
@@ -402,14 +428,14 @@ impl Section {
         self.code.as_ref()?.data.get(offset..end)
     }
 
-    /// The placed addresses this section's bytes take up, cut short where the address space
-    /// ends. [`None`] for a section holding no code, which has no place, and for one whose
-    /// place would be past the end of the address space.
+    /// The same range placed: [`bytes_range`](Self::bytes_range) with this section's
+    /// [`bias`](Self::bias) added. [`None`] wherever that answers [`None`] — a section
+    /// holding no code has no place either — and where the layout would put the bytes past
+    /// the end of the address space, which `section_biases` never does.
     pub(crate) fn placed_range(&self) -> Option<Range<u64>> {
-        let code = self.code.as_ref()?;
-        let start = self.address.checked_add(code.bias)?;
-        let length: u64 = code.data.len().try_into().unwrap_or(u64::MAX);
-        Some(start..start.saturating_add(length))
+        let bytes = self.bytes_range()?;
+        let bias = self.bias();
+        Some(bytes.start.checked_add(bias)?..bytes.end.checked_add(bias)?)
     }
 }
 
@@ -470,7 +496,13 @@ impl SymbolData {
     /// code and the address is inside the section's bytes. [`None`] for every other symbol,
     /// which no listing labels and no estimate is made for.
     pub(crate) fn code_place(&self) -> Option<u64> {
-        let range = self.section.as_ref()?.placed_range()?;
+        self.place_in(&self.section.as_ref()?.placed_range()?)
+    }
+
+    /// This symbol's placed address, where `range` — the placed bytes of the section it is
+    /// in — covers it. [`code_place`](Self::code_place) is this with the ask for the range,
+    /// so a caller holding one already comes here and asks for it once.
+    pub(crate) fn place_in(&self, range: &Range<u64>) -> Option<u64> {
         let placed = self.placed(self.address);
         range.contains(&placed).then_some(placed)
     }

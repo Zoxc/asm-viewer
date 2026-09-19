@@ -325,20 +325,17 @@ fn declared_code(
 
 /// The address ranges code can be in, each with its section: what [`declared_code`] looks a
 /// declared address up in, and what places an unwind entry's range in its
-/// [`CodeSection::unwind`](crate::CodeSection::unwind). Only the sections that hold code —
-/// one whose bytes would not decompress was dropped, having nothing to disassemble either —
-/// and only the ones with bytes.
+/// [`CodeSection::unwind`](crate::CodeSection::unwind). Each is the section's own
+/// [`bytes_range`](Section::bytes_range), so only the sections that hold code are here — one
+/// whose bytes would not decompress was dropped, having nothing to disassemble either — and
+/// only the ones whose bytes have addresses to sit at.
 ///
 /// In the file's own section order, which is what decides the section an address in two
 /// overlapping ranges is taken to be in.
 fn code_sections(sections: &HashMap<SectionIndex, Section>) -> Vec<(Range<u64>, SectionIndex)> {
     let mut ranges: Vec<(Range<u64>, SectionIndex)> = sections
         .values()
-        .filter_map(|section| {
-            let length: u64 = section.code()?.data.len().try_into().ok()?;
-            let end = section.address.checked_add(length)?;
-            (length > 0).then_some((section.address..end, section.index))
-        })
+        .filter_map(|section| Some((section.bytes_range()?, section.index)))
         .collect();
     ranges.sort_unstable_by_key(|&(_, index)| index.0);
     ranges

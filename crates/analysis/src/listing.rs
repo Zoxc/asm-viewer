@@ -95,7 +95,12 @@ impl Listing {
     /// section with no bytes has no stretches, and so does one placed at the very end of
     /// the address space, whose bytes have no addresses to be at.
     pub fn new(object: &Object, section: Arc<Section>) -> Self {
-        let end = section_end(&section);
+        let Some(bytes) = section.bytes_range() else {
+            return Self {
+                section,
+                stretches: Vec::new(),
+            };
+        };
         // The object's symbols over the section's placed range, already sorted by address
         // and then by index: two sections of a relocatable object share address 0, and
         // their places do not. Each placed address less the bias is the address in the
@@ -106,10 +111,10 @@ impl Listing {
         let local = |&(placed, ..): &(u64, _, _)| placed.wrapping_sub(section.bias());
 
         let mut stretches = Vec::new();
-        let first = symbols.first().map_or(end, local);
-        if section.address < first {
+        let first = symbols.first().map_or(bytes.end, local);
+        if bytes.start < first {
             stretches.push(Stretch {
-                range: section.address..first,
+                range: bytes.start..first,
                 symbols: Vec::new(),
             });
         }
@@ -121,7 +126,7 @@ impl Listing {
                 .take_while(|entry| local(entry) == address)
                 .count();
             let (here, after) = rest.split_at(count);
-            let next = after.first().map_or(end, local);
+            let next = after.first().map_or(bytes.end, local);
             stretches.push(Stretch {
                 range: address..next,
                 symbols: here.iter().map(|(_, _, symbol)| symbol.clone()).collect(),
@@ -194,15 +199,6 @@ impl Listing {
     }
 }
 
-/// Where the section's bytes stop. Saturating rather than [`None`] like `estimate_size`'s:
-/// a listing has to end somewhere, and a section placed so near the end of the address space
-/// that it does not fit ends at the end of it.
-fn section_end(section: &Section) -> u64 {
-    let length = section.code().map_or(0, |code| code.data.len());
-    let length: u64 = length.try_into().unwrap_or(u64::MAX);
-    section.address.saturating_add(length)
-}
-
 /// Every code section of one object as one listing, in the one address space the parse laid
 /// them out in: what a reader scrolling "all the code" scrolls.
 ///
@@ -213,8 +209,9 @@ fn section_end(section: &Section) -> u64 {
 /// info is read at. The air the layout leaves between two sections is nothing's bytes and is
 /// not a gap: [`at`](Self::at) answers [`None`] there.
 ///
-/// Sections are in placed order. A code section with no bytes — gcc leaves an empty `.text`
-/// beside its `.text.<name>`s — is left out, and so is one whose placed range overlaps the
+/// Sections are in placed order. A section whose bytes have no place is left out: one holding
+/// no code, one with no bytes (gcc leaves an empty `.text` beside its `.text.<name>`s), and
+/// one that does not fit in the address space. So is one whose placed range overlaps the
 /// section before it, which a file's headers can claim but nothing can draw.
 pub struct CodeListing {
     sections: Vec<Placed>,
@@ -264,7 +261,7 @@ impl CodeListing {
             .iter()
             .filter_map(|section| {
                 let range = section.placed_range()?;
-                (range.start < range.end).then(|| Placed {
+                Some(Placed {
                     listing: Listing::new(object, section.clone()),
                     range,
                 })

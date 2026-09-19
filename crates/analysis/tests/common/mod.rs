@@ -160,23 +160,18 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
     for section in &object.sections {
         let listing = Listing::new(&object, section.clone());
         let stretches = listing.stretches();
-        let end = section.address.saturating_add(
-            section
-                .code()
-                .map_or(0, |code| code.data.len())
-                .try_into()
-                .unwrap_or(u64::MAX),
-        );
         // No bytes, or none with room in the address space: nothing to list.
-        if section.address >= end {
-            assert!(stretches.is_empty());
-        } else {
-            assert_eq!(
-                stretches.first().map(|s| s.range.start),
-                Some(section.address)
-            );
-            assert_eq!(stretches.last().map(|s| s.range.end), Some(end));
-        }
+        let end = match section.bytes_range() {
+            None => {
+                assert!(stretches.is_empty());
+                section.address
+            }
+            Some(bytes) => {
+                assert_eq!(stretches.first().map(|s| s.range.start), Some(bytes.start));
+                assert_eq!(stretches.last().map(|s| s.range.end), Some(bytes.end));
+                bytes.end
+            }
+        };
         for (index, stretch) in stretches.iter().enumerate() {
             assert!(stretch.range.start < stretch.range.end);
             if let Some(next) = stretches.get(index + 1) {
