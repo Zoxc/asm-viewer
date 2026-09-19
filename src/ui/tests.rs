@@ -21550,7 +21550,7 @@ fn a_place_in_a_listing_is_named_by_the_symbol_there() {
     // layout put its section.
     let placed = twice
         .address
-        .wrapping_add(twice.section.as_ref().map_or(0, |section| section.bias));
+        .wrapping_add(twice.section.as_ref().map_or(0, |section| section.bias()));
 
     assert_eq!(stop_text(&Stop::whole(code.clone())), object.name);
     assert_eq!(stop_text(&Stop::at(object.clone(), placed)), "twice");
@@ -22199,7 +22199,7 @@ fn a_gap_row_is_marked_as_data() {
         .sections
         .iter()
         .find(|section| section.name == ".text")
-        .and_then(|section| section.data.as_deref())
+        .and_then(|section| Some(&section.code()?.data[..]))
         .expect(".text is there, with its bytes");
     let ascii: String = text[0..16]
         .iter()
@@ -22481,7 +22481,7 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
         .data
         .section
         .as_ref()
-        .map_or(0, |section| section.bias);
+        .map_or(0, |section| section.bias());
     // An instruction the debug info places on a line: the file that line is in is what
     // the pane beside it has to show.
     let (index, at) = (0..assembly.instructions.len())
@@ -22571,7 +22571,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         .data
         .section
         .as_ref()
-        .map_or(0, |section| section.bias);
+        .map_or(0, |section| section.bias());
     // An instruction whose guessed row is not its row, so the move can be seen: the
     // two stretches above decoded either way, so only `sum_to`'s own guess differs, and
     // not its first instruction, whose address is the label's and lands the view on
@@ -22718,7 +22718,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
         .data
         .section
         .as_ref()
-        .map_or(0, |section| section.bias);
+        .map_or(0, |section| section.bias());
     // The third instruction: the first shares its address text with the label over it.
     let index = 2;
     let address = assembly.instructions[index].address;

@@ -434,9 +434,9 @@ fn split_sections_are_each_given_a_place_of_their_own() {
     let mut code: Vec<&Arc<analysis::Section>> = object
         .sections
         .iter()
-        .filter(|section| section.code)
+        .filter(|section| section.code().is_some())
         .collect();
-    code.sort_by_key(|section| section.bias);
+    code.sort_by_key(|section| section.bias());
 
     // gcc leaves the ordinary `.text` in too, empty; a zero-length section still takes an
     // address of its own, so that two of them are two places.
@@ -444,32 +444,36 @@ fn split_sections_are_each_given_a_place_of_their_own() {
         code.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
         [".text", ".text.add", ".text.twice", ".text.sum_to"]
     );
-    assert!(code[0].data.as_ref().is_some_and(Vec::is_empty));
+    assert!(code[0].code().is_some_and(|code| code.data.is_empty()));
     let mut placed_end = 0;
     for section in &code {
         assert_eq!(section.address, 0);
         assert!(
-            section.bias >= placed_end,
+            section.bias() >= placed_end,
             "{} overlaps the section before it",
             section.name
         );
-        assert_eq!(section.bias % 16, 0);
-        placed_end = section.bias + section.data.as_ref().map_or(0, Vec::len) as u64;
+        assert_eq!(section.bias() % 16, 0);
+        placed_end = section.bias() + section.code().map_or(0, |code| code.data.len()) as u64;
     }
-    assert_eq!(code[0].bias, 0);
-    assert_eq!(code[1].bias, 0x10, "an empty section still takes one grain");
-    assert_eq!(code[2].bias, 0x30, "add is 0x14 bytes, rounded up to 16");
+    assert_eq!(code[0].bias(), 0);
+    assert_eq!(
+        code[1].bias(),
+        0x10,
+        "an empty section still takes one grain"
+    );
+    assert_eq!(code[2].bias(), 0x30, "add is 0x14 bytes, rounded up to 16");
 
     // And a section that is not code is not moved, whatever its address.
     for section in &object.sections {
-        if !section.code {
-            assert_eq!(section.bias, 0, "{}", section.name);
+        if section.code().is_none() {
+            assert_eq!(section.bias(), 0, "{}", section.name);
         }
     }
 
     // The one `.text` build has nothing to move.
     let flat = parse(FLAT);
-    assert!(flat.sections.iter().all(|section| section.bias == 0));
+    assert!(flat.sections.iter().all(|section| section.bias() == 0));
 }
 
 /// A relocatable object's `.eh_frame` is not read: gcc writes the FDEs before the addresses
@@ -486,6 +490,7 @@ fn a_relocatable_objects_eh_frame_is_not_read() {
 
     let object = parse(FLAT);
     let sum_to = symbol(&object, "sum_to");
-    assert!(sum_to.section.as_ref().unwrap().unwind.is_empty());
+    let section = sum_to.section.as_ref().unwrap();
+    assert!(section.code().expect(".text holds code").unwind.is_empty());
     assert_eq!(sum_to.extent(&object).map(|extent| extent.bytes), Some(62));
 }

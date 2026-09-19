@@ -41,7 +41,7 @@ pub(crate) fn entries(file: &object::File<'_>) -> Vec<UnwindEntry> {
 /// as they lie they decode to ranges that happen to fall inside `.text` — in the committed
 /// `line_fixture.o`, `0x20..0x34` for a function at 0 — which would hand `sum_to` at 0x30
 /// an extent of 4 instead of 62. `declared_code` refuses a relocatable object anyway; the
-/// ranges reaching `Section::unwind` is what this gate is for.
+/// ranges reaching `CodeSection::unwind` is what this gate is for.
 ///
 /// Read once, front to back: `.eh_frame_hdr` is the unwinder's lookup table over the same
 /// records and says nothing more, and `.debug_frame` is the same format in an object built

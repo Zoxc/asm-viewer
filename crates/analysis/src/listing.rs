@@ -103,7 +103,7 @@ impl Listing {
         let symbols = section
             .placed_range()
             .map_or(&[][..], |range| object.placed_in(range));
-        let local = |&(placed, ..): &(u64, _, _)| placed.wrapping_sub(section.bias);
+        let local = |&(placed, ..): &(u64, _, _)| placed.wrapping_sub(section.bias());
 
         let mut stretches = Vec::new();
         let first = symbols.first().map_or(end, local);
@@ -198,7 +198,7 @@ impl Listing {
 /// a listing has to end somewhere, and a section placed so near the end of the address space
 /// that it does not fit ends at the end of it.
 fn section_end(section: &Section) -> u64 {
-    let length = section.data.as_ref().map_or(0, Vec::len);
+    let length = section.code().map_or(0, |code| code.data.len());
     let length: u64 = length.try_into().unwrap_or(u64::MAX);
     section.address.saturating_add(length)
 }
@@ -206,8 +206,8 @@ fn section_end(section: &Section) -> u64 {
 /// Every code section of one object as one listing, in the one address space the parse laid
 /// them out in: what a reader scrolling "all the code" scrolls.
 ///
-/// Each section keeps its own [`Listing`] and is **placed** at [`Section::bias`] past its
-/// own address. A linked image's sections already sit at distinct addresses and have no
+/// Each section keeps its own [`Listing`] and is **placed** at
+/// [`CodeSection::bias`](crate::CodeSection::bias) past its own address. A linked image's sections already sit at distinct addresses and have no
 /// bias, so a placed address is the address; a relocatable object's code sections all start
 /// at 0 and the parse gave each a place of its own (`section_biases`), the same one its line
 /// info is read at. The air the layout leaves between two sections is nothing's bytes and is
@@ -229,7 +229,7 @@ pub struct Placed {
 impl Placed {
     /// What is added to an address in this section to place it.
     pub fn bias(&self) -> u64 {
-        self.listing.section().bias
+        self.listing.section().bias()
     }
 
     /// The placed addresses this section's bytes occupy.

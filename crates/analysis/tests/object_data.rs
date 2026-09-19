@@ -132,22 +132,13 @@ fn every_object_out_of_one_archive_shares_one_digest() {
 fn only_a_code_section_keeps_its_bytes() {
     let object = parse(&dwarf_fixture(&[]));
 
+    // A section holding no code holds no bytes at all: `Section::code` is the only place
+    // they live, and the parse fills it for a code section alone.
     let mut code = 0;
     for section in &object.sections {
-        if section.code {
-            assert!(
-                section.data.as_ref().is_some_and(|data| !data.is_empty()),
-                "{} lost its bytes",
-                section.name
-            );
-            code += 1;
-        } else {
-            assert!(
-                section.data.is_none(),
-                "{} holds bytes nothing reads",
-                section.name
-            );
-        }
+        let Some(kept) = section.code() else { continue };
+        assert!(!kept.data.is_empty(), "{} lost its bytes", section.name);
+        code += 1;
     }
     assert_eq!(code, 1, "the fixture has one code section");
 

@@ -64,7 +64,7 @@ fn bytes_in_answers_only_for_a_range_inside_the_bytes() {
     assert_eq!(section.bytes_in(0x1002..0x1005), Some(&[2, 3, 4][..]));
     assert_eq!(
         section.bytes_in(0x1000..0x1008),
-        Some(&section.data.as_ref().unwrap()[..])
+        Some(&section.code().unwrap().data[..])
     );
     // An empty range inside the bytes is an empty slice, not a miss.
     assert_eq!(section.bytes_in(0x1004..0x1004), Some(&[][..]));

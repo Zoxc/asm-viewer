@@ -1206,7 +1206,7 @@ fn only_the_text_section_is_code_and_it_is_not_moved() {
         let mut names: Vec<&str> = object
             .sections
             .iter()
-            .filter(|section| section.code == code)
+            .filter(|section| section.code().is_some() == code)
             .map(|section| section.name.as_str())
             .collect();
         names.sort_unstable();
@@ -1215,6 +1215,6 @@ fn only_the_text_section_is_code_and_it_is_not_moved() {
     assert_eq!(names(true), [".text"]);
     assert!(names(false).contains(&".symtab"), "{:?}", names(false));
     for section in &object.sections {
-        assert_eq!(section.bias, 0, "{}", section.name);
+        assert_eq!(section.bias(), 0, "{}", section.name);
     }
 }

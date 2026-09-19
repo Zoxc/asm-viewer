@@ -196,7 +196,7 @@ fn corpus() -> Vec<(String, Arc<Object>)> {
 }
 
 fn section_end(section: &Section) -> u64 {
-    section.address + section.data.as_ref().map_or(0, Vec::len) as u64
+    section.address + section.code().map_or(0, |code| code.data.len()) as u64
 }
 
 fn listing_of(object: &Arc<Object>, name: &str) -> Listing {
@@ -243,7 +243,7 @@ fn every_listing_partitions_its_section_and_agrees_with_the_symbols() {
             let stretches = listing.stretches();
             let context = format!("{name}, section {}", section.name);
 
-            if section.data.as_ref().is_none_or(Vec::is_empty) {
+            if section.code().is_none_or(|code| code.data.is_empty()) {
                 assert!(stretches.is_empty(), "{context}: no bytes, no stretches");
                 continue;
             }
@@ -374,7 +374,7 @@ fn padding_past_a_stated_extent_is_a_gap_of_bytes() {
     assert_eq!(gap.range, 6..10);
     assert_eq!(gap.kind, GapKind::Bytes);
     assert_eq!(
-        listing.section().data.as_deref().map(|data| &data[6..10]),
+        listing.section().code().map(|code| &code.data[6..10]),
         Some(&FIRST[6..])
     );
 
@@ -660,7 +660,10 @@ fn a_section_at_the_end_of_the_address_space_lists_nothing() {
     let object = parse(&data);
     let listing = listing_of(&object, ".text");
     assert_eq!(listing.section().address, u64::MAX);
-    assert_eq!(listing.section().data.as_ref().map(Vec::len), Some(7));
+    assert_eq!(
+        listing.section().code().map(|code| code.data.len()),
+        Some(7)
+    );
     assert!(listing.stretches().is_empty());
     assert_eq!(listing.stretch_at(u64::MAX), None);
     assert!(listing.decode(&object, 0).is_none());
@@ -735,9 +738,7 @@ fn every_code_listing_places_its_sections_and_finds_every_stretch_again() {
         let with_bytes = object
             .sections
             .iter()
-            .filter(|section| {
-                section.code && section.data.as_ref().is_some_and(|data| !data.is_empty())
-            })
+            .filter(|section| section.code().is_some_and(|code| !code.data.is_empty()))
             .count();
         assert_eq!(code.sections().len(), with_bytes, "{name}");
 
@@ -750,10 +751,10 @@ fn every_code_listing_places_its_sections_and_finds_every_stretch_again() {
                 "{name}: {} overlaps",
                 section.name
             );
-            assert_eq!(range.start, section.address + section.bias, "{name}");
+            assert_eq!(range.start, section.address + section.bias(), "{name}");
             assert_eq!(
                 range.end - range.start,
-                section.data.as_ref().map_or(0, Vec::len) as u64
+                section.code().map_or(0, |code| code.data.len()) as u64
             );
             placed_end = range.end;
             assert_eq!(code.section_of(section), Some(index), "{name}");
@@ -778,7 +779,7 @@ fn every_code_listing_places_its_sections_and_finds_every_stretch_again() {
             }
         }
         for section in &object.sections {
-            if !section.code {
+            if section.code().is_none() {
                 assert_eq!(code.section_of(section), None, "{name}: {}", section.name);
             }
         }
@@ -846,7 +847,7 @@ fn a_symbols_address_is_placed_by_its_sections_bias() {
     let object = parse(&two_sections());
     let second = named(&object, "second");
     let section = second.section.as_ref().expect("second is in a section");
-    assert_eq!((second.address, section.bias), (0, 16));
+    assert_eq!((second.address, section.bias()), (0, 16));
     assert_eq!(second.placed(second.address), 16);
     assert_eq!(second.placed(1), 17);
 

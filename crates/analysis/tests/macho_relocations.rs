@@ -86,8 +86,9 @@ fn a_relocation_is_keyed_by_the_address_its_bytes_are_at() {
     let section = caller.section.as_ref().expect("caller has a section");
     assert_eq!(section.name, "__text");
     assert_eq!(section.address, TEXT_ADDRESS);
+    let code = section.code().expect("__text holds code");
     assert_eq!(
-        section.relocations.keys().copied().collect::<Vec<_>>(),
+        code.relocations.keys().copied().collect::<Vec<_>>(),
         vec![TEXT_ADDRESS + 1]
     );
 }

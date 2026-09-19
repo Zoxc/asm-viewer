@@ -162,9 +162,8 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
         let stretches = listing.stretches();
         let end = section.address.saturating_add(
             section
-                .data
-                .as_ref()
-                .map_or(0, Vec::len)
+                .code()
+                .map_or(0, |code| code.data.len())
                 .try_into()
                 .unwrap_or(u64::MAX),
         );

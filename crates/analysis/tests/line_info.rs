@@ -447,7 +447,7 @@ fn a_section_that_would_not_read_keeps_its_rows_off_another() {
     let sections: Vec<&str> = object
         .sections
         .iter()
-        .filter(|section| section.code)
+        .filter(|section| section.code().is_some())
         .map(|section| section.name.as_str())
         .collect();
     assert_eq!(sections, [".text.first"]);

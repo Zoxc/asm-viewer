@@ -85,7 +85,7 @@ impl<'a> Code<'a> {
     /// relocation points at something this object has no text symbol for (a section, a data
     /// symbol, an undefined import).
     pub fn relocation(&self, address: u64, len: usize) -> Option<Relocated> {
-        let section = self.section?;
+        let code = self.section?.code()?;
         // Checked because the address is the file's number, and a section placed at the very
         // end of the address space would wrap it: there the bytes that have an address run to
         // the top of it.
@@ -93,8 +93,8 @@ impl<'a> Code<'a> {
             .ok()
             .and_then(|len| address.checked_add(len));
         let (_, found) = match end {
-            Some(end) => section.relocations.range(address..end).next_back(),
-            None => section.relocations.range(address..).next_back(),
+            Some(end) => code.relocations.range(address..end).next_back(),
+            None => code.relocations.range(address..).next_back(),
         }?;
 
         let target = match found.target() {
@@ -119,7 +119,7 @@ impl<'a> Code<'a> {
         let section = self.section?;
         let symbol = self
             .object
-            .symbol_at_placed(address.wrapping_add(section.bias))?;
+            .symbol_at_placed(address.wrapping_add(section.bias()))?;
         let home = symbol.section.as_ref()?;
         std::ptr::eq(Arc::as_ptr(home), section).then(|| symbol.clone())
     }

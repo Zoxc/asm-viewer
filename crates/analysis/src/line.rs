@@ -118,7 +118,7 @@ impl DebugInfo {
     /// The rows covering `range` **within one section**, resolved in one pass.
     fn line_info(&self, section: &Section, range: Range<u64>) -> Option<Arc<LineInfo>> {
         without_panicking(|| match &self.backend {
-            Backend::Dwarf(dwarf) => dwarf.line_info(section.bias, range),
+            Backend::Dwarf(dwarf) => dwarf.line_info(section.bias(), range),
             Backend::Pdb(pdb) => pdb.line_info(range),
         })
         .flatten()
@@ -129,7 +129,7 @@ impl DebugInfo {
     /// [`None`] when the debug info does not say.
     fn extent(&self, section: &Section, address: u64) -> Option<u64> {
         without_panicking(|| match &self.backend {
-            Backend::Dwarf(dwarf) => dwarf.extent(section.bias, address),
+            Backend::Dwarf(dwarf) => dwarf.extent(section.bias(), address),
             Backend::Pdb(pdb) => pdb.extent(address),
         })
         .flatten()

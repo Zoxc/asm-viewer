@@ -126,11 +126,11 @@ fn a_lying_compressed_size_in_a_section_header_costs_nothing() {
         .iter()
         .find(|section| section.name == ".rela.text")
         .expect("a section that holds no code is kept, bytes or no bytes");
-    assert!(rela.data.is_none());
+    assert!(rela.code().is_none());
 
     // Nothing grew: no section holds more bytes than the whole file has.
     for section in &object.sections {
-        let held = section.data.as_ref().map_or(0, Vec::len);
+        let held = section.code().map_or(0, |code| code.data.len());
         assert!(
             held <= data.len(),
             "section {} holds {held} bytes of a {}-byte file",
@@ -173,7 +173,10 @@ fn a_valid_zlib_stream_is_only_decompressed_when_its_declared_size_is_believable
         .iter()
         .find(|section| section.name == ".text")
         .expect("an honestly sized compressed section is kept");
-    assert_eq!(section.data.as_deref(), Some(&payload[..]));
+    assert_eq!(
+        section.code().map(|code| &code.data[..]),
+        Some(&payload[..])
+    );
 
     for declared in [
         1u64 << 33, // past the absolute cap.
@@ -223,7 +226,10 @@ fn a_zstd_frame_producing_more_than_its_header_declares_is_dropped() {
         .iter()
         .find(|section| section.name == ".text")
         .expect("an honestly sized zstd section is kept");
-    assert_eq!(section.data, Some(vec![b'A'; size]));
+    assert_eq!(
+        section.code().map(|code| &code.data[..]),
+        Some(&vec![b'A'; size][..])
+    );
 }
 
 /// Defect: a relocatable object's code sections were laid end to end by the size each takes
@@ -575,7 +581,7 @@ fn a_lying_compressed_debug_section_costs_nothing() {
             .find(|section| section.name == ".debug_info")
             .expect("the section is kept");
         assert!(
-            section.data.is_none(),
+            section.code().is_none(),
             "a .debug_info declaring {declared} bytes was decompressed at parse"
         );
         for section in &object.sections {

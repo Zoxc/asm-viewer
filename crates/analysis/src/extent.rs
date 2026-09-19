@@ -2,8 +2,8 @@
 //! back on. Three answers, in order:
 //!
 //! 1. **The end the file's own unwind table states**, where an entry covers the address
-//!    ([`Section::unwind`](crate::Section::unwind)). Neither the estimate nor its cap bounds
-//!    it, and the debug info is not asked.
+//!    ([`CodeSection::unwind`](crate::CodeSection::unwind)). Neither the estimate nor its
+//!    cap bounds it, and the debug info is not asked.
 //! 2. **Then the size the file declares**, where the format makes that a function's length:
 //!    an ELF `st_size`, and no other format's.
 //! 3. **Else the smaller** of the extent the debug info declares for the function and
@@ -78,18 +78,15 @@ impl SymbolData {
     /// count of bytes is the same number in either space.
     fn derived(&self, object: &Object) -> Option<u64> {
         let section = self.section.as_ref()?;
+        let code = section.code()?;
         let placed = self.code_place()?;
         let range = section.placed_range()?;
 
         // Where the section's bytes stop, placed as the rest is. [`None`] only for a section
         // placed so near the end of the address space that it does not fit in it.
-        let end = section
-            .data
-            .as_ref()
-            .map_or(0, Vec::len)
-            .try_into()
+        let end = u64::try_from(code.data.len())
             .ok()
-            .and_then(|length: u64| range.start.checked_add(length));
+            .and_then(|length| range.start.checked_add(length));
 
         // The next symbol is the first entry at a greater address, so a second name at this
         // one bounds nothing, and it counts only inside this section's bytes: past them, the
@@ -121,19 +118,19 @@ impl SymbolData {
     }
 
     /// The end the file's own unwind table states for the function this symbol is in
-    /// ([`Section::unwind`](crate::Section::unwind)), as bytes from the symbol's address, or
-    /// [`None`] where no entry covers it. Clamped to the next symbol
+    /// ([`CodeSection::unwind`](crate::CodeSection::unwind)), as bytes from the symbol's
+    /// address, or [`None`] where no entry covers it. Clamped to the next symbol
     /// ([`clamped`](Self::clamped)) — and every entry's own begin is a symbol, which is what
     /// stops a parent at the chained entry of its cold part.
     fn unwind_extent(&self, object: &Object) -> Option<u64> {
-        let section = self.section.as_ref()?;
+        let code = self.section.as_ref()?.code()?;
         // The last range starting at or before the address: with the starts sorted and
         // each once, the innermost of any that nest.
-        let i = section
+        let i = code
             .unwind
             .partition_point(|range| range.start <= self.address)
             .checked_sub(1)?;
-        let range = &section.unwind[i];
+        let range = &code.unwind[i];
         if !range.contains(&self.address) {
             return None;
         }

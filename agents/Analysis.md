@@ -114,10 +114,10 @@ demangler is ever offered one.
 `symbols_sorted` (by name, then by index, for the UI list) and `placed` (the
 code sections' symbols by placed address; below). **The constructors make what
 the fields say**, for the parse and the tests alike. `Object::new` sorts `symbols_sorted` and
-`placed` and starts the debug info empty; `SymbolData::new` starts the extent empty; and a section is one of
-two kinds, `Section::text` or `Section::other`, so one holding no code has no bytes, relocations or
-bias. The parse gives each section its unwind ranges through `Section::with_unwind`, which drops,
-clamps, sorts and dedups them. The fields stay `pub` to be read. No test fixture sorts by hand any
+`placed` and starts the debug info empty; `SymbolData::new` starts the extent empty; and a section
+is one of two kinds, `Section::text` or `Section::other`, which is all its `code` says (below). The
+parse gives each section its unwind ranges through `Section::with_unwind`, which drops, clamps,
+sorts and dedups them. The fields stay `pub` to be read. No test fixture sorts by hand any
 more, so none can break the binary search a saved place is found by. That search is
 `Object::symbols_named`, the run of one name in index order, and it sits beside the sort it depends
 on: the app asks it (`project::restore`'s `find_symbol`) rather than re-stating the order.
@@ -128,14 +128,19 @@ so an archive costs its bytes once. It also carries the file's `FileDigest`: xxH
 file*, taken once in `ObjectData::whole_file` because the bytes are in hand there, and an archive
 member is cut from that same value, so 196 members cost one pass (32 ms against the 1.6 s the open
 takes on the 331 MB binary). Nothing in the crate reads it: it exists so a restore can tell the file
-it saved from one rebuilt underneath it. `Section` owns decompressed bytes, relocations keyed by the
-address the bytes they patch sit at, and the ranges the file's unwind table states for its functions (`unwind`, sorted by start, each start once, ends
-clamped to the section's bytes; empty for a file with no table read). The bytes and the relocations
-are a **code** section's only, and `SectionKind::Text` decides both, so the flag a listing reads
-(`Section::code`) is the flag that decided what was kept; a section holding no code keeps its index,
-name and address, and its `data` is `None`. Nothing else reads a section's bytes -- the DWARF backend and
-`unwind.rs` take theirs from the file they re-parse -- so a copy for the debug sections would be a
-second one held for as long as the object lives, and the DWARF alone is 267 MB of the 331 MB binary.
+it saved from one rebuilt underneath it. `Section` keeps its index, name and address, and puts
+everything else under one `code: Option<CodeSection>`: the decompressed bytes, the relocations
+keyed by the address the bytes they patch sit at, the ranges the file's unwind table states for its
+functions (`unwind`, sorted by start, each start once, ends clamped to the section's bytes; empty
+for a file with no table read) and the section's `bias`. It is `Some` for a section the file marks
+`SectionKind::Text` whose bytes decompressed, so it is also what a listing reads to tell code from
+the rest. Those four were four fields beside a `code: bool`, each doc comment repeating that it was
+empty for a section that is not code, and every reader deriving the rule again; as one option the
+invariant is a `match`, and a reader that asks `Section::code()` once has all four or none.
+`Section::bias()` answers 0 for a section with no place. Nothing else reads a section's bytes --
+the DWARF backend and `unwind.rs` take theirs from the file they re-parse -- so a copy for the
+debug sections would be a second one held for as long as the object lives, and the DWARF alone is
+267 MB of the 331 MB binary.
 (Every resident figure below predates that rule: each was measured while the parse copied every
 section, and none has been taken again since.) That key is the parse's own doing: `object` hands
 back what the format states, an address in ELF and COFF but an offset from the
@@ -310,10 +315,10 @@ or debug info that says nothing about the range asked about. Four design points 
   linked and rustc emits one `.text.<name>` per function, so every function lands on 0 and the line
   programs pile up (52 229 of 54 109 rows overlapped, measured on the 196-member rlib). The parse
   does what a linker does: `section_biases` (`parse.rs`) gives each **text** section of a
-  **relocatable** object a place of its own, recorded on the section as `Section::bias` beside
-  `Section::code`; `relocate` adds the bias, and a query adds its section's `Section::bias` and
-  subtracts it from every row returned. Loading the DWARF asks `section_biases` again rather than
-  reading the biases back off the sections the parse kept: the rule is the layout, and a text
+  **relocatable** object a place of its own, recorded on the section as `CodeSection::bias`;
+  `relocate` adds the bias, and a query adds its section's bias and subtracts it from every row
+  returned. Loading the DWARF asks `section_biases` again rather than reading the biases back off
+  the sections the parse kept: the rule is the layout, and a text
   section whose bytes would not read is dropped from the parse but still has to be placed, or the
   rows relocated against it land on 0 where the first section already sits. The layout starts above the highest address the file
   states — a Mach-O `.o` states one per section — so nothing is moved *down* and a bias is never a
@@ -625,7 +630,7 @@ four questions: a call's name (`symbol_at_placed`), where an estimate stops, a l
 the source index's ranges. Each used to keep or rebuild its own copy, sorted with its own rule for two
 symbols at one address. It is `(placed address, SymbolIndex, Arc<SymbolData>)` sorted by address and
 then index, both names at one address kept, side by side in the file's order. It holds a symbol only
-where its section is `Section::code` and its address is inside the section's bytes
+where its section holds code and its address is inside that code's bytes
 (`SymbolData::code_place`). The placed layout is what lets one index serve the whole object: a
 linked image's addresses are real, and a relocatable object's code sections each have a place of
 their own. A section that is not code has no place, so its symbols would land on some code section's

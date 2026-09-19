@@ -272,18 +272,29 @@ pub struct Section {
     /// relocatable object where every section starts at 0.
     pub index: SectionIndex,
     pub name: String,
-
-    /// The section's bytes, decompressed. [`None`] for every section that is not
-    /// [`code`](Self::code): a debug section is read out of the file when a line question
-    /// wants it, so a copy here would be a second one held for the object's life.
-    pub data: Option<Vec<u8>>,
     pub address: u64,
+
+    /// What the parse read of this section, and the one thing that says whether it holds
+    /// code: [`Some`] for a section the file marks as code (`SectionKind::Text`) and whose
+    /// bytes decompressed, [`None`] for every other. Read through [`code`](Self::code).
+    ///
+    /// Only a code section's bytes are kept: a debug section is read out of the file when a
+    /// line question wants it, so a copy here would be a second one held for the object's
+    /// life.
+    code: Option<CodeSection>,
+}
+
+/// What a section holding code has and no other section does. Reached through
+/// [`Section::code`], which is [`Some`] exactly for those.
+#[derive(Debug)]
+pub struct CodeSection {
+    /// The section's bytes, decompressed.
+    pub data: Vec<u8>,
 
     /// The section's relocations by the address the bytes each patches sit at, which is
     /// what a disassembly has to ask by. Not always what the file states: see
     /// [`parse_object`](crate::parse_object). Ordered, because the disassembler, the only
-    /// reader, asks for the last one in an instruction's bytes. Empty for a section that is
-    /// not [`code`](Self::code).
+    /// reader, asks for the last one in an instruction's bytes.
     pub relocations: BTreeMap<u64, Relocation>,
 
     /// The address ranges the file's own unwind table states for the functions in this
@@ -293,24 +304,18 @@ pub struct Section {
     /// table read. What [`SymbolData::extent`] answers from first.
     pub unwind: Vec<Range<u64>>,
 
-    /// Whether the file marks this section as holding code (`SectionKind::Text`). This is
-    /// what a listing of all of it lists, and what decides whether the parse read the
-    /// section's [`data`](Self::data) and [`relocations`](Self::relocations) at all.
-    /// [`text`](Self::text) makes a section that does, and [`other`](Self::other) one that
-    /// does not.
-    pub code: bool,
-
     /// Where the object's layout puts this section: what is added to an address in it to
     /// place it in the one address space every section of the object shares. 0 for every
-    /// section of a linked image, whose addresses are real, and for a section that is not
-    /// code; in a relocatable object, where every code section starts at 0, an address of
-    /// its own for each. See [`section_biases`](crate::parse::section_biases).
+    /// section of a linked image, whose addresses are real; in a relocatable object, where
+    /// every code section starts at 0, an address of its own for each. See
+    /// [`section_biases`](crate::parse::section_biases).
     pub bias: u64,
 }
 
 impl Section {
     /// A section holding code: its bytes, decompressed, the address they start at, the
-    /// relocations in them by address, and its [`bias`](Self::bias). No unwind ranges.
+    /// relocations in them by address, and its [`bias`](CodeSection::bias). No unwind
+    /// ranges.
     pub fn text(
         index: SectionIndex,
         name: String,
@@ -322,12 +327,13 @@ impl Section {
         Section {
             index,
             name,
-            data: Some(data),
             address,
-            relocations,
-            unwind: Vec::new(),
-            code: true,
-            bias,
+            code: Some(CodeSection {
+                data,
+                relocations,
+                unwind: Vec::new(),
+                bias,
+            }),
         }
     }
 
@@ -336,23 +342,34 @@ impl Section {
         Section {
             index,
             name,
-            data: None,
             address,
-            relocations: BTreeMap::new(),
-            unwind: Vec::new(),
-            code: false,
-            bias: 0,
+            code: None,
         }
     }
 
-    /// This section with `unwind` as its [`unwind`](Self::unwind) ranges, made to hold what
-    /// that field says: a range not starting in the bytes is dropped, the rest have their
-    /// ends clamped to the bytes, and they are sorted by start with each start kept once.
+    /// What this section holds as code, or [`None`] where it holds none.
+    pub fn code(&self) -> Option<&CodeSection> {
+        self.code.as_ref()
+    }
+
+    /// This section's [`bias`](CodeSection::bias), and 0 for a section holding no code,
+    /// which has no place in the layout.
+    pub fn bias(&self) -> u64 {
+        self.code.as_ref().map_or(0, |code| code.bias)
+    }
+
+    /// This section with `unwind` as its code's [`unwind`](CodeSection::unwind) ranges, made
+    /// to hold what that field says: a range not starting in the bytes is dropped, the rest
+    /// have their ends clamped to the bytes, and they are sorted by start with each start
+    /// kept once. A section holding no code takes none.
     pub(crate) fn with_unwind(mut self, mut unwind: Vec<Range<u64>>) -> Section {
-        let bytes = self.data.as_ref().and_then(|data| {
-            let length: u64 = data.len().try_into().ok()?;
-            Some(self.address..self.address.checked_add(length)?)
-        });
+        let address = self.address;
+        let Some(code) = self.code.as_mut() else {
+            return self;
+        };
+        let bytes = u64::try_from(code.data.len())
+            .ok()
+            .and_then(|length| Some(address..address.checked_add(length)?));
         match bytes {
             Some(bytes) => {
                 unwind.retain(|range| bytes.contains(&range.start));
@@ -366,14 +383,14 @@ impl Section {
         // function, and the search over them assumes it.
         unwind.sort_unstable_by_key(|range| range.start);
         unwind.dedup_by_key(|range| range.start);
-        self.unwind = unwind;
+        code.unwind = unwind;
         self
     }
 
     /// The bytes at `range`, which is in this section's own addresses and not placed ones.
     /// [`None`] where the range is not wholly inside the bytes that were kept — a section
-    /// with no [`data`](Self::data), a range starting before its address, or one running
-    /// off its end — and for a range whose end is before its start.
+    /// holding no code, a range starting before its address, or one running off its end —
+    /// and for a range whose end is before its start.
     ///
     /// Every step is checked, these numbers having come out of a file, and this is the one
     /// place a caller slicing a symbol's code or a gap goes through.
@@ -382,19 +399,16 @@ impl Section {
         let length: usize = length.try_into().ok()?;
         let offset: usize = range.start.checked_sub(self.address)?.try_into().ok()?;
         let end = offset.checked_add(length)?;
-        self.data.as_ref()?.get(offset..end)
+        self.code.as_ref()?.data.get(offset..end)
     }
 
     /// The placed addresses this section's bytes take up, cut short where the address space
-    /// ends. [`None`] for a section that is not [`code`](Self::code), which has no place, and
-    /// for one whose place would be past the end of the address space.
+    /// ends. [`None`] for a section holding no code, which has no place, and for one whose
+    /// place would be past the end of the address space.
     pub(crate) fn placed_range(&self) -> Option<Range<u64>> {
-        if !self.code {
-            return None;
-        }
-        let start = self.address.checked_add(self.bias)?;
-        let length = self.data.as_ref().map_or(0, Vec::len);
-        let length: u64 = length.try_into().unwrap_or(u64::MAX);
+        let code = self.code.as_ref()?;
+        let start = self.address.checked_add(code.bias)?;
+        let length: u64 = code.data.len().try_into().unwrap_or(u64::MAX);
         Some(start..start.saturating_add(length))
     }
 }
@@ -448,7 +462,7 @@ impl SymbolData {
     /// starting above the highest address the file states. Wrapping is also what keeps this
     /// from panicking on an address a file made up.
     pub fn placed(&self, address: u64) -> u64 {
-        let bias = self.section.as_ref().map_or(0, |section| section.bias);
+        let bias = self.section.as_ref().map_or(0, |section| section.bias());
         address.wrapping_add(bias)
     }
 

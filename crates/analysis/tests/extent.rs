@@ -408,7 +408,7 @@ fn a_symbol_outside_the_code_bounds_nothing() {
     // The premise: `.text.b` is placed at 16, so `wild` at 19 is inside it, and `in_data`
     // at 2 is inside `.text.a`, which stays at 0.
     let g = named(&object, "g");
-    assert_eq!(g.section.as_ref().map(|section| section.bias), Some(16));
+    assert_eq!(g.section.as_ref().map(|section| section.bias()), Some(16));
     assert_eq!(named(&object, "wild").address, 19);
     assert_eq!(named(&object, "in_data").address, 2);
 

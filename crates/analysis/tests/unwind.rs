@@ -148,7 +148,7 @@ fn an_entry_at_a_named_address_adds_no_symbol_and_a_malformed_one_nothing() {
     assert_eq!(object.symbols.len(), 3);
     let section = named(&object, "first").section.clone().unwrap();
     assert_eq!(
-        section.unwind,
+        section.code().expect("a code section").unwind,
         [
             TEXT_ADDRESS..TEXT_ADDRESS + 4,
             TEXT_ADDRESS + 4..TEXT_ADDRESS + 6,
@@ -307,7 +307,8 @@ fn an_entry_reaching_past_the_section_is_clamped_to_its_bytes() {
     }));
     let last = named(&object, "last");
     let section = last.section.clone().unwrap();
-    assert_eq!(section.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
+    let code = section.code().expect("a code section");
+    assert_eq!(code.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
     assert_eq!(last.extent(&object).map(|extent| extent.bytes), Some(3));
     assert!(last.assembly(&object).is_some());
 }
@@ -557,7 +558,8 @@ fn an_fde_reaching_past_the_section_is_clamped_to_its_bytes() {
     ));
     let last = named(&object, "last");
     let section = last.section.clone().unwrap();
-    assert_eq!(section.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
+    let code = section.code().expect("a code section");
+    assert_eq!(code.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
     assert_eq!(last.extent(&object).map(|extent| extent.bytes), Some(3));
     assert!(last.assembly(&object).is_some());
 }
@@ -576,7 +578,7 @@ fn an_fde_at_a_named_address_adds_no_symbol_and_an_empty_one_nothing() {
     assert_eq!(object.symbols.len(), 3);
     let section = named(&object, "first").section.clone().unwrap();
     assert_eq!(
-        section.unwind,
+        section.code().expect("a code section").unwind,
         [
             TEXT_ADDRESS..TEXT_ADDRESS + 4,
             TEXT_ADDRESS + 4..TEXT_ADDRESS + 6,
@@ -702,7 +704,7 @@ fn the_hidden_shared_objects_functions_are_its_fdes() {
     }
     let section = named(&object, "<function 0x238>").section.clone().unwrap();
     assert_eq!(
-        section.unwind,
+        section.code().expect("a code section").unwind,
         [0x238..0x24c, 0x24c..0x268, 0x268..0x2a6],
         "the FDEs' ranges"
     );

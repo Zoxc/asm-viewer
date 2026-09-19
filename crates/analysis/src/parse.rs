@@ -17,7 +17,8 @@ use std::{
 };
 
 /// Where each code section is placed in the one address space the object's line info is read
-/// in and its code is listed in; what [`Section::bias`] is set from.
+/// in and its code is listed in; what [`CodeSection::bias`](crate::CodeSection::bias) is
+/// set from.
 ///
 /// **An address alone is not a key in a relocatable object.** Sections there have no address
 /// until linked and rustc emits one `.text.<name>` per function, so every function lands on 0
@@ -324,21 +325,23 @@ fn declared_code(
 
 /// The address ranges code can be in, each with its section: what [`declared_code`] looks a
 /// declared address up in, and what places an unwind entry's range in its
-/// [`Section::unwind`]. Only sections that were kept — one whose bytes would not decompress
-/// has nothing to disassemble either — and only the ones with bytes.
-fn code_sections(
-    file: &object::File<'_>,
-    sections: &HashMap<SectionIndex, Section>,
-) -> Vec<(Range<u64>, SectionIndex)> {
-    file.sections()
-        .filter(|section| section.kind() == SectionKind::Text)
+/// [`CodeSection::unwind`](crate::CodeSection::unwind). Only the sections that hold code —
+/// one whose bytes would not decompress was dropped, having nothing to disassemble either —
+/// and only the ones with bytes.
+///
+/// In the file's own section order, which is what decides the section an address in two
+/// overlapping ranges is taken to be in.
+fn code_sections(sections: &HashMap<SectionIndex, Section>) -> Vec<(Range<u64>, SectionIndex)> {
+    let mut ranges: Vec<(Range<u64>, SectionIndex)> = sections
+        .values()
         .filter_map(|section| {
-            let kept = sections.get(&section.index())?;
-            let length: u64 = kept.data.as_ref()?.len().try_into().ok()?;
-            let end = kept.address.checked_add(length)?;
-            (length > 0).then_some((kept.address..end, section.index()))
+            let length: u64 = section.code()?.data.len().try_into().ok()?;
+            let end = section.address.checked_add(length)?;
+            (length > 0).then_some((section.address..end, section.index))
         })
-        .collect()
+        .collect();
+    ranges.sort_unstable_by_key(|&(_, index)| index.0);
+    ranges
 }
 
 /// Parse `data` as a single object file. `name` is the display name (an archive member name
@@ -359,13 +362,13 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         let section = symbol.section.and_then(|index| sections.get(&index));
         symbol
             .address
-            .wrapping_add(section.map_or(0, |section| section.bias))
+            .wrapping_add(section.map_or(0, Section::bias))
     };
     let mut known: HashSet<u64> = symbols.iter().map(place).collect();
 
     let (debug_info, procedures, publics) = open_pdb(&file, &path);
     let unwind = unwind::entries(&file);
-    let code = code_sections(&file, &sections);
+    let code = code_sections(&sections);
     let declared = declared_code(&file, &code, &mut known, next, procedures, publics, &unwind);
     let ranges = place_unwind(&code, &unwind);
 
