@@ -22072,6 +22072,85 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
     );
 }
 
+/// A gap that is the rest of a symbol whose extent was capped says so, on a row of its
+/// own over the bytes: the pane draws it and a copied line says the same, so the listing
+/// does not read as the function ending where the decode stopped.
+#[test]
+fn a_cut_gap_says_the_listing_was_cut() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    // A symbol's stretch decoded, then cut short by hand after two instructions with the
+    // rest a cut gap: the fixture's functions are nowhere near the cap.
+    let decoded = reading_of(&object, &[0]);
+    let studied = decoded.held[&0]
+        .code
+        .clone()
+        .expect("stretch 0 is a symbol's");
+    let assembly = studied.assembly.clone().expect("it decodes");
+    assert!(assembly.instructions.len() > 2, "the symbol is short");
+    let cut_at = assembly.instructions[2].address;
+    let short = Arc::new(analysis::Assembly {
+        instructions: assembly.instructions[..2].to_vec(),
+        edges: Vec::new(),
+        undecodable: None,
+        range: assembly.range.start..cut_at,
+        extent: Extent {
+            bytes: cut_at - assembly.range.start,
+            capped: true,
+        },
+    });
+    let cut = |kind| {
+        let mut reading = reading_of(&object, &[]);
+        let code = reading.code.clone().expect("the skeleton");
+        let ask = CodeAsk {
+            object: object.clone(),
+            code: Some(code.clone()),
+            window: vec![0],
+        };
+        let stretched = Stretched {
+            code: Some(Studied::with_assembly(
+                studied.symbol.clone(),
+                Some(short.clone()),
+            )),
+            gap: Some(analysis::Gap {
+                range: cut_at..assembly.range.end,
+                kind,
+            }),
+        };
+        assert!(reading.take(&ask, code, vec![(0, stretched)]));
+        reading
+    };
+
+    let bytes = rows_of(&cut(analysis::GapKind::Bytes));
+    assert!(
+        (0..bytes.len()).all(|row| kind_at(&bytes, row) != Some(Kind::Cut)),
+        "a gap of plain bytes is marked cut"
+    );
+    let reading = cut(analysis::GapKind::Cut);
+    let rows = rows_of(&reading);
+    let marked = (0..rows.len())
+        .find(|&row| kind_at(&rows, row) == Some(Kind::Cut))
+        .expect("the cut gap has a cut row");
+    assert_eq!(kind_at(&rows, marked + 1), Some(Kind::Gap(0)));
+    assert_eq!(code_line(&rows, marked).to_string(), CUT_TEXT);
+    let address = rows.address_of(marked).expect("a cut row has an address");
+    assert_eq!(address, rows.address_of(marked + 1).unwrap());
+    assert_eq!(
+        row_line(&rows, marked),
+        format!("{address:016X} {CUT_TEXT}")
+    );
+
+    let (mut test, _) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&CUT_TEXT.to_string()), "{drawn:?}");
+}
+
 /// The rows of an object's code that are bytes and not instructions read as data and not
 /// as assembly: a data directive in front of the values -- `dq` for a row that divides
 /// into quadwords, down to `db` -- and the bytes as characters after them, which no

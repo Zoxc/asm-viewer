@@ -176,9 +176,10 @@ label, a split cold part) would otherwise swallow the next function. Whichever o
 answered, an extent whose end runs off the top of the address space is dropped: `addr2line` hands a
 subprogram's declared length back as it was written, and every caller here reads
 `address..address + extent`. The answer is an `Extent`: the number, and whether the number is the
-cap rather than an end. Whoever wants the second question — `Listing::decode`, which draws the rest
-of a capped stretch differently — reads it rather than comparing the number to the constant, since a
-file is free to state exactly a megabyte and used to be told it had been cut off there. The
+cap rather than an end. Whoever wants the second question — `Listing::decode`, which says the rest
+of a capped stretch is a `GapKind::Cut` — reads it rather than comparing the number to the
+constant, since a file is free to state exactly a megabyte and used to be told it had been cut off
+there. The
 derivation is capped at `MAX_DERIVED_SIZE` (1 MiB) in `estimate_size` and nowhere else, so the
 constant is private to `extent.rs`. That is not a claim about how long a function can be, but the point
 past which it is certainly describing something else: a stripped PE's export table is sparse, so
@@ -708,7 +709,9 @@ whoever draws it slices `Section::data`. The bytes are not copied, since the tai
 export can be megabytes. There are two kinds only. `Bytes` is the ordinary one. `Cut` is the rest of
 a stretch whose extent says it was capped, said apart because it is very likely the function going
 on past the cap rather than anything between two functions, and it starts wherever the cap fell
-rather than at an instruction. Where the file has an unwind table only a symbol no
+rather than at an instruction. The section view draws a cut row over a `Cut` gap's bytes saying
+the listing was cut at the decode cap, so it does not read as the function ending there
+(`agents/Panes.md`). Where the file has an unwind table only a symbol no
 entry covers can get one, the rest having their ends stated. An architecture no backend decodes
 gives the symbol stretch the `undecodable` `Assembly` the symbol view gets, and its gaps are `Bytes`
 like any other. The section's end is saturating, where `estimate_size`'s is `None`: a listing has to

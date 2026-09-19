@@ -1,5 +1,5 @@
 use super::*;
-use analysis::{CodeListing, Extent, Object};
+use analysis::{CodeListing, Extent, Gap, GapKind, Object};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -35,7 +35,7 @@ fn decode(object: &Object, code: &CodeListing, rows: &Rows, flat: usize) -> Body
     Body {
         assembly: decoded.code,
         lanes,
-        gap: decoded.gap.map(|gap| gap.range),
+        gap: decoded.gap,
     }
 }
 
@@ -277,33 +277,17 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
     let empty = nothing_decoded(code.clone());
     let body = decode(&object, &code, &empty, 2);
     let half = Rows::new(code.clone(), |flat| (flat == 2).then(|| body.clone()));
-    // A gap too: `add` decoded as if its extent stopped at its third instruction, the
-    // rest of its stretch left over as rows of bytes. The fixture's functions fill their
-    // stretches, so the gap is made by hand out of the same decode.
-    let mut cut = decode(&object, &code, &empty, 0);
-    let assembly = cut.assembly.clone().expect("add decodes");
-    assert!(assembly.instructions.len() > 3, "add is short");
-    let cut_at = assembly.instructions[2].address;
-    let stretch = &code.sections()[0].listing.stretches()[0];
-    cut.gap = Some(cut_at..stretch.range.end);
-    cut.assembly = Some(Arc::new(Assembly {
-        instructions: assembly.instructions[..2].to_vec(),
-        edges: Vec::new(),
-        undecodable: None,
-        range: assembly.range.start..cut_at,
-        extent: Extent {
-            bytes: cut_at - assembly.range.start,
-            capped: false,
-        },
-    }));
-    cut.lanes = Arc::new(Lanes::new(&[], 2));
+    let (cut, cut_at) = add_cut_short(&object, &code, GapKind::Bytes);
     let with_gap = Rows::new(code.clone(), |flat| (flat == 0).then(|| cut.clone()));
+    let (capped, _) = add_cut_short(&object, &code, GapKind::Cut);
+    let with_cut = Rows::new(code.clone(), |flat| (flat == 0).then(|| capped.clone()));
 
     let mut inside = 0;
     for (name, rows) in [
         ("estimated", &empty),
         ("half decoded", &half),
         ("with a gap", &with_gap),
+        ("with a cut", &with_cut),
     ] {
         for flat in 0..rows.layout.flat.count() {
             let range = rows_of(rows, flat);
@@ -338,11 +322,66 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
     // Spelt out: the instruction holding the byte, and the row of bytes covering it.
     let bias = code.sections()[0].bias();
     let body = with_gap.body_start(0).unwrap();
+    let assembly = cut.assembly.clone().unwrap();
     let second = &assembly.instructions[1];
     assert!(second.bytes.len() > 1, "a one-byte instruction");
     assert_eq!(with_gap.row_for(second.address + bias + 1), Some(body + 1));
     assert_eq!(with_gap.row(body + 2), row(0, Kind::Gap(0)));
     assert_eq!(with_gap.row_for(cut_at + bias + 3), Some(body + 2));
+}
+
+/// `add`, the split fixture's stretch 0, decoded as if its extent stopped at its third
+/// instruction, the rest of its stretch left over as a gap of `kind`; and the address it
+/// stops at. The fixture's functions fill their stretches, so the gap is made by hand out
+/// of the same decode.
+fn add_cut_short(object: &Object, code: &Arc<CodeListing>, kind: GapKind) -> (Body, u64) {
+    let empty = nothing_decoded(code.clone());
+    let mut cut = decode(object, code, &empty, 0);
+    let assembly = cut.assembly.clone().expect("add decodes");
+    assert!(assembly.instructions.len() > 3, "add is short");
+    let cut_at = assembly.instructions[2].address;
+    let stretch = &code.sections()[0].listing.stretches()[0];
+    cut.gap = Some(Gap {
+        range: cut_at..stretch.range.end,
+        kind,
+    });
+    cut.assembly = Some(Arc::new(Assembly {
+        instructions: assembly.instructions[..2].to_vec(),
+        edges: Vec::new(),
+        undecodable: None,
+        range: assembly.range.start..cut_at,
+        extent: Extent {
+            bytes: cut_at - assembly.range.start,
+            capped: kind == GapKind::Cut,
+        },
+    }));
+    cut.lanes = Arc::new(Lanes::new(&[], 2));
+    (cut, cut_at)
+}
+
+/// A gap that is the rest of a capped symbol draws a cut row over its bytes, standing at
+/// the gap's first byte, so the listing does not read as the function ending there. A
+/// gap of plain bytes has none, and the bytes' rows are the same either way.
+#[test]
+fn a_cut_gap_draws_a_cut_row_over_its_bytes() {
+    let (object, code) = split();
+    let bias = code.sections()[0].bias();
+    let (bytes, cut_at) = add_cut_short(&object, &code, GapKind::Bytes);
+    let (capped, _) = add_cut_short(&object, &code, GapKind::Cut);
+    let plain = Rows::new(code.clone(), |flat| (flat == 0).then(|| bytes.clone()));
+    let cut = Rows::new(code.clone(), |flat| (flat == 0).then(|| capped.clone()));
+
+    // Two instructions, then the gap.
+    let body = cut.body_start(0).unwrap();
+    assert_eq!(plain.row(body + 2), row(0, Kind::Gap(0)));
+    assert_eq!(cut.row(body + 2), row(0, Kind::Cut));
+    assert_eq!(cut.row(body + 3), row(0, Kind::Gap(0)));
+    assert_eq!(cut.len(), plain.len() + 1);
+    assert_eq!(cut.address_of(body + 2), Some(cut_at + bias));
+    assert_eq!(cut.address_of(body + 3), Some(cut_at + bias));
+    // The address is the bytes' row's, as an instruction's is and not its separator's.
+    assert_eq!(cut.row_for(cut_at + bias), Some(body + 3));
+    assert!((0..plain.len()).all(|at| kind_of(&plain, at) != Some(Kind::Cut)));
 }
 
 /// The row a caret goes on for an address is the row **holding** the byte: `row_for`'s

@@ -128,18 +128,25 @@ impl SectionRows {
     }
 }
 
-/// Which of the three text rows a row is, which is what picks its colour and its weight.
+/// Which of the four text rows a row is, which is what picks its colour and its weight.
 #[derive(Clone, Copy, PartialEq)]
 enum Role {
     Header,
     Label,
+    Cut,
     Gap,
 }
 
-/// A row that is text and nothing else: the header, a label, a gap's bytes. **One
-/// answer for the three of them**, so that what the row draws, what a run of rows copies
-/// and what a sweep of characters copies cannot drift apart: [`build_row`] draws this,
-/// [`code_line`] is this as a line, and [`row_line`] is that after the address column.
+/// What the row over a cut gap says ([`Kind::Cut`]): that the bytes under it are where the
+/// decode stopped, not where the function ends.
+pub(crate) const CUT_TEXT: &str =
+    "; listing cut at the decode cap: the function very likely goes on";
+
+/// A row that is text and nothing else: the header, a label, a cut gap's note, a gap's
+/// bytes. **One answer for the four of them**, so that what the row draws, what a run of
+/// rows copies and what a sweep of characters copies cannot drift apart: [`build_row`]
+/// draws this, [`code_line`] is this as a line, and [`row_line`] is that after the address
+/// column.
 ///
 /// It says what the row **is** and never what it looks like. A colour resolved here would
 /// be a colour asked for wherever this is asked for, and this is asked for in three places
@@ -202,8 +209,15 @@ fn text_at(
                 opens: Some(symbol),
             })
         }
+        Kind::Cut => Some(TextOf {
+            address: Some(placed.place(body?.gap.as_ref()?.range.start)),
+            mark: None,
+            text: CUT_TEXT.to_owned(),
+            role: Role::Cut,
+            opens: None,
+        }),
         Kind::Gap(index) => {
-            let (address, bytes) = gap_row_bytes(placed, body?.gap.as_ref()?, index)?;
+            let (address, bytes) = gap_row_bytes(placed, &body?.gap.as_ref()?.range, index)?;
             let (mark, values) = dump_line(&bytes);
             Some(TextOf {
                 address: Some(address),
@@ -278,7 +292,7 @@ pub(crate) fn stretch_texts(
     let decoded = index
         .code()
         .decode(object, place)
-        .map(|decoded| Body::of(decoded.code, decoded.gap.map(|gap| gap.range)));
+        .map(|decoded| Body::of(decoded.code, decoded.gap));
     let rows = StretchRows::of(placed, stretch, place, flat, decoded);
     rows.kinds()
         .filter_map(|kind| line_at(placed, stretch, rows.body(), kind))
@@ -345,9 +359,9 @@ fn gap_row_bytes(
     Some((placed.place(start), bytes))
 }
 
-/// A row that is text and nothing else -- a section's header, a symbol's label, a gap's
-/// bytes -- drawn as [`text_of`] says it. Takes the mark handlers so a sweep down the
-/// listing is not cut at every one.
+/// A row that is text and nothing else -- a section's header, a symbol's label, a cut
+/// gap's note, a gap's bytes -- drawn as [`text_of`] says it. Takes the mark handlers so a
+/// sweep down the listing is not cut at every one.
 ///
 /// It carries that answer **whole** rather than copying its fields out, so a field added
 /// to [`TextOf`] reaches the row without a line here. A row of bytes wears its data
@@ -423,12 +437,13 @@ impl Component for TextRow {
     fn render(&self) -> impl IntoElement {
         // What the label's link reaches for, gathered here for the press to hold.
         let link_states = use_link_states(use_doors());
-        // What the row is, drawn: the colour and the weight the three kinds differ in.
+        // What the row is, drawn: the colour and the weight the four kinds differ in.
         // Asked for here, in the row's own render, because asking is what subscribes a
         // scope to the theme, and it is this scope a switch has to draw again.
         let (color, weight) = match self.text.role {
             Role::Header => (palette().text_fg, FontWeight::BOLD),
             Role::Label => (palette().name_fg, FontWeight::BOLD),
+            Role::Cut => (palette().comment_fg, FontWeight::NORMAL),
             Role::Gap => (palette().operand_fg, FontWeight::NORMAL),
         };
 
@@ -566,12 +581,13 @@ enum RowKey {
     Empty(u64, usize),
     Insn(u64),
     Sep(u64),
+    Cut(u64),
     Gap(u64),
 }
 
 impl RowKey {
     /// The key row `row` draws under, `at` being what [`Rows::row`] said it is. **The one
-    /// place a [`Kind`] becomes a key**, and a total match: a ninth kind is a key space of
+    /// place a [`Kind`] becomes a key**, and a total match: a tenth kind is a key space of
     /// its own or a compile error, never a row that quietly keys as another kind's.
     ///
     /// `stated` is the address the caller has already worked out for the row -- a text
@@ -591,6 +607,7 @@ impl RowKey {
             Kind::Empty(index) => Self::Empty(start(), index),
             Kind::Instruction(_) => Self::Insn(stated.or_else(address).unwrap_or(0)),
             Kind::Separator { .. } => Self::Sep(stated.or_else(address).unwrap_or(0)),
+            Kind::Cut => Self::Cut(address().or(stated).unwrap_or(0)),
             // By the row's own address and never the bytes': a row whose bytes could not
             // be found would otherwise share a key with every other such row.
             Kind::Gap(_) => Self::Gap(address().or(stated).unwrap_or(0)),
@@ -856,10 +873,10 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
         return blank();
     };
     match kind {
-        // The three rows that are text and nothing else, drawn from the one answer they
+        // The four rows that are text and nothing else, drawn from the one answer they
         // are copied from ([`text_of`]); a row whose section or bytes could not be read
         // draws the blank it copies as.
-        Kind::Header | Kind::Label(_) | Kind::Gap(_) => {
+        Kind::Header | Kind::Label(_) | Kind::Cut | Kind::Gap(_) => {
             let Some(text) = text_of(rows, i) else {
                 return blank();
             };

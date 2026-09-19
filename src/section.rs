@@ -8,11 +8,12 @@
 //! with a blank under that, a **label** row per symbol at a stretch's address, then the
 //! stretch's body. A body that has been decoded is the symbol's instruction rows and block
 //! separators -- exactly the rows its own listing draws, `Lanes` and all -- followed by
-//! its gap as rows of hex bytes; where the decode found no instructions, no backend
-//! reading the architecture, the whole stretch is those bytes. A body nobody has decoded
-//! yet is a run of **empty** rows, as many as its bytes suggest, so the listing has its
-//! whole length from the first frame and the reader scrolls over empty space that fills
-//! in as the worker reaches it. The length therefore starts estimated and settles;
+//! its gap as rows of hex bytes, under a **cut** row where the gap is the rest of a
+//! symbol whose extent was capped, so the listing does not read as the function ending
+//! there; where the decode found no instructions, no backend reading the architecture,
+//! the whole stretch is those bytes. A body nobody has decoded yet is a run of **empty**
+//! rows, as many as its bytes suggest, so the listing has its whole length from the first
+//! frame and the reader scrolls over empty space that fills in as the worker reaches it. The length therefore starts estimated and settles;
 //! keeping the reader's row still while it does is the view's job, and
 //! [`Rows::address_of`] / [`Rows::row_for`] are what it does it with, an address being
 //! the one name for a row that survives the rows around it changing.
@@ -23,7 +24,7 @@
 
 use crate::counter;
 use crate::lanes::Lanes;
-use analysis::{Assembly, CodeListing, Place, Placed, Stretch};
+use analysis::{Assembly, CodeListing, Gap, GapKind, Place, Placed, Stretch};
 use std::{ops::Range, sync::Arc};
 
 /// How many of a gap's bytes one row draws.
@@ -43,13 +44,13 @@ pub struct Body {
     pub assembly: Option<Arc<Assembly>>,
     pub lanes: Arc<Lanes>,
     /// Widened to the whole stretch where nothing was decoded ([`BodyRows::of`]).
-    pub gap: Option<Range<u64>>,
+    pub gap: Option<Gap>,
 }
 
 impl Body {
     /// A stretch's body from what the crate's decode gave for it: the lanes laid out over
     /// the listing, as the worker lays them out for the pane ([`Lanes::over`]).
-    pub fn of(assembly: Option<Arc<Assembly>>, gap: Option<Range<u64>>) -> Body {
+    pub fn of(assembly: Option<Arc<Assembly>>, gap: Option<Gap>) -> Body {
         let lanes = Lanes::over(assembly.as_deref());
         Body {
             assembly,
@@ -65,17 +66,29 @@ impl Body {
     }
 
     fn gap_rows(&self) -> usize {
-        self.gap.as_ref().map_or(0, |gap| gap_rows(gap))
+        self.gap.as_ref().map_or(0, gap_rows)
+    }
+
+    /// The rows over the gap's bytes: the cut row, where the gap is a cut, and none else.
+    fn cut_rows(&self) -> usize {
+        self.gap.as_ref().map_or(0, cut_rows)
     }
 }
 
-/// How many rows `gap` takes: sixteen bytes each, the last one short.
-fn gap_rows(gap: &Range<u64>) -> usize {
-    let bytes = gap.end.saturating_sub(gap.start);
-    bytes
+/// How many rows `gap` takes: its cut row, if it has one, then sixteen bytes each, the last
+/// one short.
+fn gap_rows(gap: &Gap) -> usize {
+    let bytes = gap.range.end.saturating_sub(gap.range.start);
+    let rows: usize = bytes
         .div_ceil(GAP_BYTES_PER_ROW)
         .try_into()
-        .unwrap_or(usize::MAX)
+        .unwrap_or(usize::MAX);
+    rows.saturating_add(cut_rows(gap))
+}
+
+/// One for a gap that is the rest of a capped symbol, which the cut row stands over.
+fn cut_rows(gap: &Gap) -> usize {
+    usize::from(gap.kind == GapKind::Cut)
 }
 
 /// One row of the listing: the stretch it belongs to, and what it draws.
@@ -106,6 +119,9 @@ pub enum Kind {
     Instruction(usize),
     /// The block separator above the instruction `below`.
     Separator { below: usize },
+    /// The row over a gap that is the rest of a capped symbol ([`GapKind::Cut`]): what
+    /// says the listing stopped at the cap and not where the function ends.
+    Cut,
     /// The `index`th row of sixteen bytes of the stretch's gap.
     Gap(usize),
 }
@@ -142,15 +158,21 @@ impl BodyRows {
     /// A decode that found **no instructions** -- an architecture no backend reads --
     /// leaves no byte of the stretch an instruction's, so the gap is widened to the whole
     /// stretch and the body is those bytes. Without that the body would be no rows at
-    /// all.
+    /// all. Nothing was decoded, so nothing was cut: the widened gap is plain bytes.
     fn of(stretch: &Stretch, decoded: Option<Body>) -> Self {
         let Some(mut body) = decoded else {
             let rows = Self::estimate(stretch_bytes(stretch), !stretch.symbols.is_empty());
             return BodyRows::Estimated(rows);
         };
         if body.listing_rows() == 0 {
-            let end = body.gap.as_ref().map_or(stretch.range.end, |gap| gap.end);
-            body.gap = Some(stretch.range.start..end);
+            let end = body
+                .gap
+                .as_ref()
+                .map_or(stretch.range.end, |gap| gap.range.end);
+            body.gap = Some(Gap {
+                range: stretch.range.start..end,
+                kind: GapKind::Bytes,
+            });
         }
         BodyRows::Decoded(body)
     }
@@ -272,7 +294,11 @@ impl StretchRows {
                         },
                     }
                 } else {
-                    Kind::Gap(local - listing)
+                    let into = local - listing;
+                    match into.checked_sub(body.cut_rows()) {
+                        Some(index) => Kind::Gap(index),
+                        None => Kind::Cut,
+                    }
                 }
             }
         })
@@ -596,7 +622,7 @@ impl Rows {
     /// have changed. A header is its section's start, a rule, a blank row and a label its
     /// stretch's, an empty row
     /// its share of the stretch's bytes, an instruction its own, a separator the
-    /// instruction below it, and a gap row its first byte.
+    /// instruction below it, a cut row the gap row below it, and a gap row its first byte.
     pub fn address_of(&self, row: usize) -> Option<u64> {
         let Row {
             stretch: flat,
@@ -622,10 +648,14 @@ impl Rows {
                 let address = assembly.instructions.get(index)?.address;
                 self.placed_of(flat)?.place(address)
             }
+            Kind::Cut => {
+                let gap = self.body(flat)?.gap.as_ref()?;
+                self.placed_of(flat)?.place(gap.range.start)
+            }
             Kind::Gap(index) => {
                 let gap = self.body(flat)?.gap.as_ref()?;
                 self.placed_of(flat)?
-                    .place(gap.start)
+                    .place(gap.range.start)
                     .saturating_add((index as u64).saturating_mul(GAP_BYTES_PER_ROW))
             }
         })
@@ -659,9 +689,16 @@ impl Rows {
             }
             BodyRows::Decoded(decoded) => {
                 let local = self.placed_of(flat)?.local(address);
-                if let Some(gap) = decoded.gap.as_ref().filter(|gap| gap.contains(&local)) {
-                    let index = ((local - gap.start) / GAP_BYTES_PER_ROW) as usize;
-                    return Some(body + decoded.listing_rows() + index);
+                if let Some(gap) = decoded
+                    .gap
+                    .as_ref()
+                    .filter(|gap| gap.range.contains(&local))
+                {
+                    let into = local - gap.range.start;
+                    let index = (into / GAP_BYTES_PER_ROW) as usize;
+                    // Under the cut row, where it has one: the row of bytes holding the
+                    // address, as a separator's instruction is found and not the separator.
+                    return Some(body + decoded.listing_rows() + cut_rows(gap) + index);
                 }
                 let assembly = decoded.assembly.as_ref()?;
                 // The last instruction starting at or before the address.

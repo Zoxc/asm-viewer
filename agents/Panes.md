@@ -1008,9 +1008,10 @@ stretch but the listing's first with a blank under it, a header row where a plac
 with a blank under that, a label row per symbol at each stretch's address, and under them either
 the rows the
 stretch's decoded body takes (the symbol's own instruction rows and separators, straight out of its
-`Lanes`, then its gap as rows of sixteen bytes) or, for a stretch nobody has decoded, a **guess**:
-its bytes over four, x86's mean instruction length, and never fewer than one. The listing therefore
-has its whole length from the first frame, the scrollbar means something, and what the reader
+`Lanes`, then its gap as rows of sixteen bytes, under a **cut** row where the gap is a `Cut`) or,
+for a stretch nobody has decoded, a **guess**: its bytes over four, x86's mean instruction
+length, and never fewer than one. The listing therefore has its whole length from the first frame,
+the scrollbar means something, and what the reader
 scrolls over is empty space that fills in as the worker reaches it; the length starts estimated and
 settles. A body that decoded to **no instructions** -- an architecture no backend reads, where the
 symbol's own pane says so -- is widened to a gap over the whole stretch, and the view draws its
@@ -1029,10 +1030,10 @@ the listing, which is the `base` an `InstructionRow` is handed.
 **The section view reads an object's code in windows and keeps its place by address**
 (`src/ui/section_view.rs`). The rows above are drawn into one `VirtualScrollView`: the instruction
 rows are `InstructionRow` told `In::Code` with its `base` and `bias`, the separators
-`SeparatorRow`, and the header, label, empty and gap rows four small rows of the view's own. All of
+`SeparatorRow`, and the header, label, cut, empty and gap rows small rows of the view's own. All of
 them are keyed in a key space per kind over the placed address they stand for, the separators'
 lesson applied to every row. `RowKey::of` is the one place a `Kind` becomes a key and its match is
-total, so a ninth kind is a key space of its own or a compile error. Spelled out at the eight sites
+total, so a new kind is a key space of its own or a compile error. Spelled out at the eight sites
 that draw the rows instead, the gap rows were keyed by a catch-all: a new kind would have keyed as
 a gap, and nothing would have said so. Two effects do the rest. `use_kept_place` keeps the reader's
 place
@@ -1098,8 +1099,10 @@ its address, the instruction's own line for an instruction, and for a gap row a 
 (`dq` for a row that divides into quadwords, down to `db` for one that does not, the values
 little-endian as x86 reads them) followed by the same bytes as characters between bars. That is a
 hex dump's shape, which is how a row of data is told from a row of assembly, in its shape and not
-in a colour. Nothing for an empty row or a separator -- no address either, a row that draws nothing
-copying nothing.
+in a colour. A cut row says `; listing cut at the decode cap: the function very likely goes on`
+after the address of the gap's first byte, which it shares with the row of bytes under it; as with
+a separator, `row_for` answers the bytes' row. Nothing for an empty row or a separator -- no
+address either, a row that draws nothing copying nothing.
 
 **A branch's displacement is the other way to follow it**, drawn by the same label that draws a
 call's resolved target, onto `Door::Row` and not `Door::Symbol`: `Operand::Branch` says which span

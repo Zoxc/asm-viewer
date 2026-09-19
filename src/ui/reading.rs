@@ -223,7 +223,7 @@ impl Stretched {
                 .as_ref()
                 .map(|code| code.lanes.clone())
                 .unwrap_or_else(Lanes::none),
-            gap: self.gap.as_ref().map(|gap| gap.range.clone()),
+            gap: self.gap.clone(),
         }
     }
 }
