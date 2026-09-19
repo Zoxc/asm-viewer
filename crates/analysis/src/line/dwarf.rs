@@ -10,7 +10,7 @@
 //! Nothing here catches a panic: the guard is [`super::DebugInfo`]'s, one net around every
 //! question whichever backend answers it.
 
-use super::{LineInfo, RowCollector};
+use super::{recovered, LineInfo, RowCollector};
 use crate::parse::{section_biases, section_data};
 use gimli::{EndianArcSlice, RunTimeEndian};
 use object::{
@@ -105,9 +105,7 @@ impl Dwarf {
     ///
     /// [`Section::bias`]: crate::Section::bias
     pub(super) fn line_info(&self, bias: u64, range: Range<u64>) -> Option<LineInfo> {
-        // A poisoned lock means a previous query panicked. Nothing here is left half-written
-        // by one (the context is only ever read), so recover rather than propagate.
-        let context = self.context.lock().unwrap_or_else(|e| e.into_inner());
+        let context = recovered(&self.context);
 
         // Saturating rather than wrapping, so an absurd range asks about less than it meant
         // to instead of about something else.
@@ -151,7 +149,7 @@ impl Dwarf {
             return None;
         }
 
-        let context = self.context.lock().unwrap_or_else(|e| e.into_inner());
+        let context = recovered(&self.context);
 
         // `skip_all_loads` declines to fetch split DWARF, which this crate does not read
         // anywhere else either.
@@ -161,7 +159,7 @@ impl Dwarf {
 
         // Nested under the context's lock, and only ever in that order — this is the one
         // place either is taken.
-        let mut extents = self.extents.lock().unwrap_or_else(|e| e.into_inner());
+        let mut extents = recovered(&self.extents);
         let extents = extents
             .entry(key)
             .or_insert_with(|| subprogram_extents(sections, unit));
@@ -173,7 +171,7 @@ impl Dwarf {
     /// address space, handed to `visit` under the context's lock — so `visit` must not ask
     /// this object anything.
     pub(super) fn each_row(&self, visit: &mut dyn FnMut(Range<u64>, &str, u32)) {
-        let context = self.context.lock().unwrap_or_else(|e| e.into_inner());
+        let context = recovered(&self.context);
 
         // The whole address space in one pass. Safe where `extent` had to decline `u64::MAX`:
         // that unchecked `probe + 1` is in `find_units`, and this goes through

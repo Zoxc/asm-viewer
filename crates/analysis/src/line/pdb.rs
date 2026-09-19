@@ -47,7 +47,7 @@
 //!
 //! Nothing here recurses, and nothing here catches a panic: the guard is [`super::DebugInfo`]'s.
 
-use super::{LineInfo, RowCollector, SourceHash};
+use super::{recovered, LineInfo, RowCollector, SourceHash};
 use object::Object as _;
 use pdb2::{
     AddressMap, DebugInformation, FallibleIterator, PdbInternalRva, PdbInternalSectionOffset,
@@ -199,7 +199,7 @@ impl Pdb {
         let Ok(mut modules) = self.module_list() else {
             return procedures;
         };
-        let mut pdb = self.pdb.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pdb = recovered(&self.pdb);
         // A malformed tail stops the walk where it goes wrong and keeps what was read.
         while let Ok(Some(module)) = modules.next() {
             let Ok(Some(info)) = pdb.module_info(&module) else {
@@ -256,7 +256,7 @@ impl Pdb {
     /// already named.
     pub(super) fn publics(&self) -> Vec<Public> {
         let mut publics = Vec::new();
-        let mut pdb = self.pdb.lock().unwrap_or_else(|e| e.into_inner());
+        let mut pdb = recovered(&self.pdb);
         let Ok(table) = pdb.global_symbols() else {
             return publics;
         };
@@ -380,9 +380,7 @@ impl Pdb {
     /// The module with this index if it has been decoded: the outer [`None`] is "not yet",
     /// the inner one "nothing to say".
     fn remembered(&self, index: usize) -> Option<Option<Arc<ModuleLines>>> {
-        // A poisoned lock means a previous query panicked. A module is inserted only once it
-        // is whole, so nothing here is left half-written by one: recover, do not propagate.
-        let modules = self.modules.lock().unwrap_or_else(|e| e.into_inner());
+        let modules = recovered(&self.modules);
         modules.get(&index).cloned()
     }
 
@@ -411,7 +409,7 @@ impl Pdb {
             let asked = wanted.is_none_or(|wanted| wanted.binary_search(&index).is_ok());
             if asked && self.remembered(index).is_none() {
                 let decoded = self.decode(&module).map(Arc::new);
-                let mut modules = self.modules.lock().unwrap_or_else(|e| e.into_inner());
+                let mut modules = recovered(&self.modules);
                 modules.entry(index).or_insert(decoded);
             }
             if last.is_some_and(|last| index >= last) {
@@ -422,7 +420,7 @@ impl Pdb {
         // malformed one stopped it — has nothing to say. Remembering that is what keeps it
         // from starting a walk of its own on every later ask.
         if let Some(wanted) = wanted {
-            let mut modules = self.modules.lock().unwrap_or_else(|e| e.into_inner());
+            let mut modules = recovered(&self.modules);
             for &index in wanted {
                 modules.entry(index).or_insert(None);
             }
@@ -439,7 +437,7 @@ impl Pdb {
 
     fn decode(&self, module: &pdb2::Module<'_>) -> Option<ModuleLines> {
         let info = {
-            let mut pdb = self.pdb.lock().unwrap_or_else(|e| e.into_inner());
+            let mut pdb = recovered(&self.pdb);
             pdb.module_info(module).ok()??
         };
 

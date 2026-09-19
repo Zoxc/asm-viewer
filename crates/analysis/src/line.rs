@@ -24,7 +24,7 @@ use crate::{Object, Section, SymbolData};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 mod dwarf;
 mod pdb;
@@ -163,9 +163,18 @@ impl DebugInfo {
 /// unit's ranges.
 ///
 /// Sound because a panic leaves nothing half-written: a backend is only ever read, and the
-/// lock a panic poisons is recovered explicitly.
+/// lock a panic poisons is recovered explicitly ([`recovered`]).
 fn without_panicking<T>(f: impl FnOnce() -> T) -> Option<T> {
     crate::guard::guard(f)
+}
+
+/// A backend's lock, taken whether or not it is poisoned. The other half of
+/// [`without_panicking`]'s soundness: a poisoned lock here is a guarded panic's, and a
+/// backend is only ever read, so nothing is left half-written and the poison says nothing
+/// worth propagating. Every lock a backend takes goes through this — one taken with a plain
+/// `unwrap` would turn the next guarded panic into a permanent "no line info" for the object.
+pub(super) fn recovered<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
+    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// A checksum the debug info records for a source file, so a reader can tell the file they

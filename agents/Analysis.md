@@ -493,11 +493,15 @@ dependencies behind it. All are unchecked arithmetic on numbers a debug section 
 something this crate can validate without parsing the debug info twice. In `addr2line` 0.27: a row's
 length is `next.address - row.address`, so a line program that moves its address backwards is a
 subtract-with-overflow panic on a file the user merely opened. The guard is around the backend build
-as well as the questions, since a backend reads the file to build itself. What is *not* left to the
-guard is `find_units`, which asks about `probe + 1` unchecked, so the DWARF backend's `extent`
-declines `u64::MAX` outright rather than catching the panic afterwards; nor is a subprogram's own
-declared length, which the crate hands back as written, so `Symbol::extent` drops one that would run
-off the end of the address space.
+as well as the questions, since a backend reads the file to build itself. It is sound because a
+backend is only ever read, so a caught panic leaves nothing half-written — and every lock a backend
+takes goes through `recovered`, the seam's other half, which takes a poisoned lock rather than
+propagate a poison that says nothing. One lock taken with a plain `unwrap` would make the next
+caught panic a permanent "no line info" for that object, with nothing to say it had. What is *not*
+left to the guard is `find_units`, which asks about `probe + 1` unchecked, so the DWARF backend's
+`extent` declines `u64::MAX` outright rather than catching the panic afterwards; nor is a
+subprogram's own declared length, which the crate hands back as written, so `Symbol::extent` drops
+one that would run off the end of the address space.
 `pdb2` 0.10 has four of the same kind (a module's line data sliced at `start + size` unchecked, a
 line block's size less its header, `section:offset + length` as a plain `+`, a string-table name at
 a declared offset), all under the same net (`notes/upstream/pdb2.md`); and one that no guard
