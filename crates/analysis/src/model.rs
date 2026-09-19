@@ -27,7 +27,7 @@ pub struct Object {
     pub symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
     /// The same symbols **sorted by name**, byte order, and one name's by index, the file's
     /// order. The Symbols list draws them in this order and a saved place is found in it by
-    /// binary search. [`Object::new`] sorts them.
+    /// [`Object::symbols_named`]. [`Object::new`] sorts them.
     pub symbols_sorted: Vec<Arc<SymbolData>>,
     pub sections: Vec<Arc<Section>>,
     /// The bytes this object was parsed from. See [`ObjectData`].
@@ -99,6 +99,18 @@ impl Object {
             debug_info: DebugInfoCache::default(),
             placed: PlacedSymbols(placed),
         }
+    }
+
+    /// The symbols named exactly `name`, in the file's index order; empty where none is.
+    ///
+    /// Two binary searches over [`symbols_sorted`](Self::symbols_sorted). It depends on
+    /// that field's order, so it lives beside the sort that makes it rather than in the
+    /// app that asks: a saved place finds its symbol this way.
+    pub fn symbols_named(&self, name: &str) -> &[Arc<SymbolData>] {
+        let all = &self.symbols_sorted;
+        let start = all.partition_point(|data| data.name.as_str() < name);
+        let end = all.partition_point(|data| data.name.as_str() <= name);
+        &all[start..end.max(start)]
     }
 
     /// [`placed`](Self::placed).
@@ -498,3 +510,6 @@ impl Hash for Symbol {
         Arc::as_ptr(&self.data).hash(state);
     }
 }
+
+#[cfg(test)]
+mod tests;

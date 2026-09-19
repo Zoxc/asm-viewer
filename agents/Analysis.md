@@ -118,7 +118,9 @@ the fields say**, for the parse and the tests alike. `Object::new` sorts `symbol
 two kinds, `Section::text` or `Section::other`, so one holding no code has no bytes, relocations or
 bias. The parse gives each section its unwind ranges through `Section::with_unwind`, which drops,
 clamps, sorts and dedups them. The fields stay `pub` to be read. No test fixture sorts by hand any
-more, so none can break the binary search a saved place is found by.
+more, so none can break the binary search a saved place is found by. That search is
+`Object::symbols_named`, the run of one name in index order, and it sits beside the sort it depends
+on: the app asks it (`project::restore`'s `find_symbol`) rather than re-stating the order.
 `Object::data` is an `ObjectData`, an `Arc<[u8]>` of the whole file plus a `Range`, kept for the
 object's lifetime, because parsing keeps decompressed bytes only for the code sections and the lazy
 passes read the file again for the rest. Every object from one file shares that one allocation,

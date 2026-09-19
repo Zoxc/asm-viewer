@@ -428,9 +428,9 @@ impl SavedDocument {
     /// The symbol a saved place names, under a file that either is or is not the one it
     /// was saved against.
     ///
-    /// The candidates are the run of `symbols_sorted` that carries the name, found by two
-    /// binary searches over a list that is sorted by name — 115k entries on the repo's own
-    /// binary.
+    /// The candidates are the run of the object's symbols that carries the name, which
+    /// `Object::symbols_named` finds by binary search — over 115k entries on the repo's
+    /// own binary.
     ///
     /// **Unchanged** (or never hashed): the name *and* the address, which is what tells two
     /// same-named symbols apart.
@@ -446,11 +446,7 @@ impl SavedDocument {
         address: u64,
         rebuilt: bool,
     ) -> Option<&'a Arc<SymbolData>> {
-        let sorted = &object.symbols_sorted;
-        let from = sorted.partition_point(|data| data.name.as_str() < name);
-        let named = &sorted[from..];
-        let named = &named[..named.partition_point(|data| data.name == name)];
-
+        let named = object.symbols_named(name);
         let exact = named.iter().find(|data| data.address == address);
         match (exact, rebuilt, named) {
             (Some(data), _, _) => Some(data),
