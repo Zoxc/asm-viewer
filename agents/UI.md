@@ -538,7 +538,7 @@ button would be, and only the chevron's colour is this pair's. Where a step land
 answered -- and `Nav::destination` asks it rather than deriving it again from the cursor, so a live
 button and a step that does something cannot disagree.
 Headless, the runner can be asked whether a button washes under the pointer and whether it kept its
-box, and not what colour the chevron came out: an `SvgViewer` rasterises its colour into an image
+box, and not what colour the chevron came out: a glyph rasterizes its colour into an image
 that is not in the element tree.
 
 The sidebar is a `DockingArea` over a `DockArea` model whose `DockingModel::TabId` is a `Panel`, one

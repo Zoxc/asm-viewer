@@ -399,6 +399,35 @@ reason and slides back inside the window (`hover_place`, `src/ui/hover_view.rs`)
 knows its own width and a tooltip's is its text's. `Attached` measures both areas already,
 so it could flip and clamp against the window with what it holds.
 
+## An icon on a half pixel is drawn blurred, or broken
+
+`SvgViewer` rasterizes at the box's size in device pixels, and the `image` it hands that
+to draws the raster at the box's place as layout left it, fractions and all, through a
+trilinear filter (`freya-core-0.4.3/src/elements/image.rs:334-367`). Centring leaves a box
+on a half pixel whenever the room around it is odd: a 15px glyph in a 24px row sits at
+`y = 4.5`, and a glyph after a label starts where the text ended. There the filter blends
+every pixel with its neighbour. Rendered headless against Firefox at whole pixels, the two
+differed by at most 0.43 of 255. Half a pixel off, the 17px folder kept 1 of its 46 solid
+pixels, where Firefox moves the icon onto the grid and keeps all of them.
+
+`SamplingMode::Nearest` is not the fix, though it passes headless. At exactly half a pixel
+each pixel's centre lies on the edge between two texels. The CPU rasterizer settles that
+tie the same way for every row; the window's GPU settles it row by row, so a glyph came out
+with rows doubled and dropped: the lower dock's tabs, at a window height that put them on
+`.5`, and the tab's ×, at `y = 10.5` always. Nor does it help at a scale such as 1.25,
+where a 15px box is 18.75 device pixels and its raster 19, so a row goes whatever the place.
+
+**Cost:** every glyph in the app was soft, then some were misshapen, and which depended on
+the font size and the window's height. What the app does instead: `Glyph`
+(`src/ui/glyph.rs`) rasterizes the SVG itself and hands the tree its own element, freya's
+`ImageElement` but for how it draws: the raster unscaled, centred in the box and rounded
+onto whole device pixels, so nothing is sampled. Implementing `ElementExt` takes
+`freya-core` as a dependency of its own. `a_glyph_is_drawn_as_its_raster` pins it at 1.25,
+where no fitting survives. Fixed in 0.5.0-rc.5: an image takes `snap_to_grid`, which rounds
+its rect, and `SvgViewer` sets it by default (`svg_viewer.rs:112`). With the upgrade
+`Glyph` can go back to an `SvgViewer`, though a rounded rect of 18.75 still stretches a
+raster of 19.
+
 ## Wanted
 
 **A `MenuItem` that says its key.** Nothing on it takes one: the struct is a theme, its

@@ -862,16 +862,8 @@ fn chip_harness() -> impl IntoElement {
 /// How many controls the chip is offering: each is one glyph, and the name beside them is
 /// the only other thing it draws.
 fn chip_buttons(test: &TestingRunner) -> usize {
-    use freya::elements::image::ImageElement;
-    use std::any::Any;
-
-    test.find_many(|node, _| {
-        let element = node.element();
-        (element.as_ref() as &dyn Any)
-            .downcast_ref::<ImageElement>()
-            .map(|_| ())
-    })
-    .len()
+    test.find_many(|node, _| is_glyph(node.element().as_ref()).then_some(()))
+        .len()
 }
 
 #[test]
@@ -916,17 +908,10 @@ fn the_bar_offers_a_close_or_a_save_and_a_delete() {
     // and what the window will name is what the bar is naming.
     assert_eq!(*deleting.peek(), None);
     let last = {
-        use freya::elements::image::ImageElement;
-        use std::any::Any;
-        test.find_many(|node, _| {
-            let element = node.element();
-            (element.as_ref() as &dyn Any)
-                .downcast_ref::<ImageElement>()
-                .map(|_| node.layout().area)
-        })
-        .into_iter()
-        .max_by(|a, b| a.origin.x.total_cmp(&b.origin.x))
-        .expect("the rightmost of the two")
+        test.find_many(|node, _| is_glyph(node.element().as_ref()).then(|| node.layout().area))
+            .into_iter()
+            .max_by(|a, b| a.origin.x.total_cmp(&b.origin.x))
+            .expect("the rightmost of the two")
     };
     press_at(&mut test, middle(last));
     settle(&mut test);
@@ -14849,6 +14834,58 @@ fn the_settings_pages_names_all_sit_in_one_column() {
     }
 }
 
+/// A folder glyph moved half a pixel down and right: where layout leaves a centred icon as
+/// often as not.
+fn half_pixel_harness() -> impl IntoElement {
+    rect()
+        .margin(Gaps::new(8.5, 0., 0., 8.5))
+        .child(glyph_sized(("folder", lucide::folder()), 15., Color::BLACK))
+}
+
+/// **A glyph is its raster, pixel for pixel, wherever it lands.** freya's `image` draws a
+/// raster into the box at the box's fractional place, so each pixel is sampled: blended
+/// with its neighbour through a filter, or, sampled nearest, doubled and dropped where the
+/// window's GPU settles a half pixel's tie row by row. The CPU here settles ties evenly,
+/// so the half pixel alone would pass nearest sampling. The scale of 1.25 would not: the
+/// box is 18.75 device pixels and the raster 19, so anything that fits the raster to the
+/// box drops a row.
+#[test]
+fn a_glyph_is_drawn_as_its_raster() {
+    use freya::engine::prelude::SkImage;
+
+    for scale in [1.0, 1.25] {
+        let (mut test, _) =
+            TestingRunner::new(half_pixel_harness, (40., 40.).into(), |_| {}, scale);
+        settle(&mut test);
+        let area = test
+            .find(|node, _| is_glyph(node.element().as_ref()).then(|| node.layout().area))
+            .unwrap();
+        let side = (15. * scale as f32).round() as usize;
+        let raster = glyph::raster("folder", &lucide::folder(), side as u32, Color::BLACK);
+        let raster = raster.peek_pixels().unwrap();
+        let drawn = SkImage::from_encoded(test.render())
+            .and_then(|image| image.make_raster_image(None, None))
+            .unwrap();
+        let drawn = drawn.peek_pixels().unwrap();
+        let left = (area.center().x - side as f32 / 2.).round() as usize;
+        let top = (area.center().y - side as f32 / 2.).round() as usize;
+
+        // Black on the runner's white, so a drawn channel is the white the raster's
+        // coverage left: 255 less its alpha, give or take the blend's rounding.
+        let (from, to) = (raster.bytes().unwrap(), drawn.bytes().unwrap());
+        for y in 0..side {
+            for x in 0..side {
+                let alpha = from[y * raster.row_bytes() + x * 4 + 3];
+                let white = to[(top + y) * drawn.row_bytes() + (left + x) * 4];
+                assert!(
+                    (255 - alpha).abs_diff(white) <= 1,
+                    "at {scale}x, ({x}, {y}): alpha {alpha}, drawn {white}"
+                );
+            }
+        }
+    }
+}
+
 /// **A disclosure triangle follows the interface font, column and all.** The mark was a
 /// character in that font and grew with it; as an icon it grows only because
 /// `chevron_size` is written against the row, and the column it sits in only because
@@ -15575,7 +15612,7 @@ fn labels(test: &TestingRunner) -> Vec<String> {
 /// Every disclosure triangle on screen, in document order, each saying whether the row it
 /// belongs to is open.
 ///
-/// The triangle is an icon, and an `SvgViewer` rasterises to an image, so which chevron it
+/// The triangle is an icon, and a glyph is drawn from a raster, so which chevron it
 /// drew is not in the element tree at all. What is there is the `expanded` flag
 /// `disclosure` (`src/ui/parts.rs`) puts on the column, which is accessibility's own way
 /// of saying it and the only way to read one back.

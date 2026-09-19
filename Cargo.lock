@@ -4840,6 +4840,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "freya",
+ "freya-core",
  "freya-markdown",
  "freya-testing",
  "getrandom 0.3.4",

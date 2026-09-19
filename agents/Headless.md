@@ -155,8 +155,8 @@ let labels: Vec<String> = test.find_many(|node, _| {
 Verified: that reads a `label().text(..)`, and the `ParagraphElement` equivalent reads
 `p.spans[..].text`, which is what an `InstructionRow` is made of.
 
-**Nothing in it reads an icon either, and downcasting does not help.** An `SvgViewer` rasterises
-its SVG into an image and hands the element tree an `image` holding a Skia handle, so two icons are
+**Nothing in it reads an icon either, and downcasting does not help.** A glyph rasterizes its
+SVG and hands the element tree an image element holding a Skia handle, so two icons are
 one shape there and which one was drawn cannot be recovered. What is reachable is
 `element.accessibility().builder`, the `accesskit::Node` the app built, and an icon that has to be
 told apart is one that should be saying so there anyway: the disclosure triangles carry `expanded`,

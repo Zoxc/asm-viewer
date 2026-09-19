@@ -313,6 +313,9 @@ command.
   side, the scroll it owes, the keyboard's moves over it, and what Ctrl+C copies. Also
   the one hook all three code listings wire their keyboard with, and the two ways each
   reads one of its rows.
+- `src/ui/glyph.rs` — an icon: its SVG rasterized once per name, size and colour, and
+  drawn unscaled on whole device pixels by an element of the app's own, since freya 0.4's
+  `image` samples a raster at a fractional place.
 - `src/ui/highlight.rs` — a source file read and parsed off the UI thread: the reader's worker
   thread, the cache its answers land in, what the pane draws until one does, and every line of
   a parse cut into what a row draws.

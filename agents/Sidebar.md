@@ -144,7 +144,7 @@ format tag follows the font the same way**: `tag_font_size` is the interface siz
 and `tag_width` is fitted to the tag rather than to the row, four capitals of `MACH` at that size,
 which is the 34 the column was fixed at. The size was the last font size in the app written as a
 literal, and at 21pt it drew a tag a third the height of the name beside it. What an icon cannot say
-is which one it is -- an `SvgViewer` rasterises to an image -- so open or shut is carried as
+is which one it is -- a glyph is drawn from a raster -- so open or shut is carried as
 accessibility's own `expanded` on the column, which is both what a screen reader reads and what the
 headless tests find a triangle by (`disclosures`, `src/ui/tests.rs`).
 

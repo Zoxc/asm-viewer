@@ -432,8 +432,8 @@ pub(crate) fn name_tooltip(cut: bool, text: &str, whole: String, row: impl IntoE
 /// not against the text, it is centred in the row instead of sitting on its baseline, and
 /// it is Lucide, as every other small mark here already is.
 ///
-/// **Whether it is open is said in accessibility's own `expanded` and nowhere else.** An
-/// `SvgViewer` rasterises to an image, so which chevron it drew is not in the element tree
+/// **Whether it is open is said in accessibility's own `expanded` and nowhere else.** A
+/// glyph is drawn from a raster, so which chevron it drew is not in the element tree
 /// at all; the flag is what a screen reader is told and what `disclosures`
 /// (`src/ui/tests.rs`) finds the triangles by.
 pub(crate) fn disclosure(open: Option<bool>) -> Element {
@@ -445,16 +445,14 @@ pub(crate) fn disclosure(open: Option<bool>) -> Element {
         .map(open, |column, open| {
             column
                 .a11y_builder(move |node| node.set_expanded(open))
-                .child(
-                    SvgViewer::new(match open {
+                .child(glyph_sized(
+                    match open {
                         true => ("chevron-down", lucide::chevron_down()),
                         false => ("chevron-right", lucide::chevron_right()),
-                    })
-                    .width(Size::px(side))
-                    .height(Size::px(side))
-                    .color(palette().icon_fg)
-                    .show_loader(false),
-                )
+                    },
+                    side,
+                    palette().icon_fg,
+                ))
         })
         .into_element()
 }
@@ -463,28 +461,22 @@ pub(crate) fn disclosure(open: Option<bool>) -> Element {
 /// `icon_fg`: a tab bar's button, a page's icon, a panel's header, a document's row, a
 /// file in the tree.
 ///
-/// The colour is **given rather than inherited**: `SvgViewer` rasterizes only once it
-/// knows one, and with none set it waits for an `on_styled` -- a frame late, and a frame
-/// of nothing in a 26px bar. `show_loader(false)` is for that same frame: a spinner in a
-/// box this size says nothing.
-///
 /// `icon` is written `("name", lucide::name())` everywhere, the name beside the bytes,
-/// because `ImageSource` keys the raster cache on a hash of whatever it is given and
-/// hashing a short name beats hashing an SVG.
-pub(crate) fn glyph(icon: impl Into<ImageSource>) -> Element {
+/// because the name is what the raster cache is keyed by (`src/ui/glyph.rs`).
+pub(crate) fn glyph(icon: (&'static str, Bytes)) -> Element {
     glyph_in(icon, palette().icon_fg)
 }
 
 /// The same glyph in a colour of the caller's own: the language server's button, which
 /// says by the icon's colour which of its states it is in.
-pub(crate) fn glyph_in(icon: impl Into<ImageSource>, colour: Color) -> Element {
-    let side = icon_size();
-    SvgViewer::new(icon)
-        .width(Size::px(side))
-        .height(Size::px(side))
-        .color(colour)
-        .show_loader(false)
-        .into_element()
+pub(crate) fn glyph_in(icon: (&'static str, Bytes), colour: Color) -> Element {
+    glyph_sized(icon, icon_size(), colour)
+}
+
+/// An icon at a side of the caller's own: every icon in the app is one of these, drawn on
+/// whole device pixels (`src/ui/glyph.rs`).
+pub(crate) fn glyph_sized(icon: (&'static str, Bytes), side: f32, colour: Color) -> Element {
+    Glyph { icon, side, colour }.into_element()
 }
 
 /// The short tag saying what kind of file a row is, in the column every row of the objects

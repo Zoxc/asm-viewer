@@ -112,6 +112,8 @@ mod focus;
 pub(crate) use focus::*;
 mod follow;
 pub(crate) use follow::*;
+mod glyph;
+pub(crate) use glyph::*;
 mod highlight;
 pub(crate) use highlight::*;
 mod hover_view;

@@ -19,6 +19,11 @@ analysis = { path = "crates/analysis" }
 # bindings freya is built on: the rows ask a laid-out paragraph where a column is
 # (`ui/marks.rs`, `caret_x`), and the two rect styles that call takes live nowhere else.
 freya = { version = "0.4", features = ["code-editor", "icons-lucide", "engine"] }
+# freya's own core, for the one thing the facade does not re-export: the `element` module,
+# whose `ElementExt` an element outside the crate implements. That is the icon drawn on
+# whole pixels (`src/ui/glyph.rs`), which 0.4's `image` does not do. Not a new crate in the
+# build: this is the copy `freya` is built on, so the version moves with it.
+freya-core = "0.4"
 # The grammars, which `freya-code-editor` deliberately ships none of. Named in one place,
 # `source::Language::grammar` (`src/source.rs`), which is what the highlighter colours a
 # file with and what the function pass parses it with. Their `tree-sitter-language` must be
