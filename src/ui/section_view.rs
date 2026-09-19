@@ -351,11 +351,7 @@ fn gap_row_bytes(
     }
     let end = start.saturating_add(GAP_BYTES_PER_ROW).min(gap.end);
     // The section the stretch is in holds the bytes; `gap` is in its own addresses.
-    let section = placed.listing.section();
-    let offset = start.checked_sub(section.address)?;
-    let offset: usize = offset.try_into().ok()?;
-    let len: usize = (end - start).try_into().ok()?;
-    let bytes = section.data.as_ref()?.get(offset..offset + len)?.to_vec();
+    let bytes = placed.listing.section().bytes_in(start..end)?.to_vec();
     Some((placed.place(start), bytes))
 }
 

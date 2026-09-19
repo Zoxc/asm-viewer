@@ -14,7 +14,7 @@
 //! **A gap is never decoded.** Bytes no symbol claims are not known to be code, and decoding
 //! them would print a confident page of nonsense over a jump table or a run of padding — the
 //! same lesson [`Assembly::undecodable`] records for a foreign architecture. A gap is *said*,
-//! as its range and its kind, and whoever draws it slices the section's bytes.
+//! as its range and its kind, and whoever draws it asks [`Section::bytes_in`] for the bytes.
 //!
 //! Nothing here is cached: the listing is a pure function of the object, and whoever asks
 //! holds the answer.
@@ -62,8 +62,8 @@ pub struct DecodedStretch {
     pub gap: Option<Gap>,
 }
 
-/// A run of bytes no symbol's extent claims. Its bytes are the section's — `range` sliced
-/// out of [`Section::data`] — and are not copied here, since a gap can be megabytes.
+/// A run of bytes no symbol's extent claims. Its bytes are the section's — `range` asked of
+/// [`Section::bytes_in`] — and are not copied here, since a gap can be megabytes.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Gap {
     pub range: Range<u64>,

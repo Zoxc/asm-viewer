@@ -1,6 +1,9 @@
-use super::{Object, ObjectData, SymbolData};
-use object::{Architecture, BinaryFormat, SymbolIndex};
-use std::{collections::HashMap, sync::Arc};
+use super::{Object, ObjectData, Section, SymbolData};
+use object::{Architecture, BinaryFormat, SectionIndex, SymbolIndex};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 /// An object whose symbols are `(index, name, address)`, handed over in the order given —
 /// which is not the order `Object::new` sorts them into.
@@ -43,4 +46,37 @@ fn a_name_answers_its_whole_run_in_index_order() {
     assert!(object.symbols_named("shar").is_empty());
     assert!(object.symbols_named("shared2").is_empty());
     assert!(object.symbols_named("").is_empty());
+}
+
+/// Every way a range can miss the bytes answers [`None`] rather than panicking: the numbers
+/// in one came out of a file.
+#[test]
+fn bytes_in_answers_only_for_a_range_inside_the_bytes() {
+    let section = Section::text(
+        SectionIndex(1),
+        ".text".to_string(),
+        vec![0, 1, 2, 3, 4, 5, 6, 7],
+        0x1000,
+        BTreeMap::new(),
+        0,
+    );
+
+    assert_eq!(section.bytes_in(0x1002..0x1005), Some(&[2, 3, 4][..]));
+    assert_eq!(
+        section.bytes_in(0x1000..0x1008),
+        Some(&section.data.as_ref().unwrap()[..])
+    );
+    // An empty range inside the bytes is an empty slice, not a miss.
+    assert_eq!(section.bytes_in(0x1004..0x1004), Some(&[][..]));
+
+    // Before the section, past its end, and end before start.
+    assert_eq!(section.bytes_in(0x0FFF..0x1002), None);
+    assert_eq!(section.bytes_in(0x1004..0x1009), None);
+    assert_eq!(section.bytes_in(0x1005..0x1002), None);
+    // A length far past the bytes, whether or not it fits a `usize`.
+    assert_eq!(section.bytes_in(0x1000..u64::MAX), None);
+
+    // A section with no bytes answers for nothing.
+    let empty = Section::other(SectionIndex(2), ".debug_info".to_string(), 0x1000);
+    assert_eq!(empty.bytes_in(0x1000..0x1000), None);
 }

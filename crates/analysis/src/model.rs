@@ -370,6 +370,21 @@ impl Section {
         self
     }
 
+    /// The bytes at `range`, which is in this section's own addresses and not placed ones.
+    /// [`None`] where the range is not wholly inside the bytes that were kept — a section
+    /// with no [`data`](Self::data), a range starting before its address, or one running
+    /// off its end — and for a range whose end is before its start.
+    ///
+    /// Every step is checked, these numbers having come out of a file, and this is the one
+    /// place a caller slicing a symbol's code or a gap goes through.
+    pub fn bytes_in(&self, range: Range<u64>) -> Option<&[u8]> {
+        let length = range.end.checked_sub(range.start)?;
+        let length: usize = length.try_into().ok()?;
+        let offset: usize = range.start.checked_sub(self.address)?.try_into().ok()?;
+        let end = offset.checked_add(length)?;
+        self.data.as_ref()?.get(offset..end)
+    }
+
     /// The placed addresses this section's bytes take up, cut short where the address space
     /// ends. [`None`] for a section that is not [`code`](Self::code), which has no place, and
     /// for one whose place would be past the end of the address space.
@@ -456,10 +471,7 @@ impl SymbolData {
     /// the end of what was decompressed.
     fn bytes(&self, size: u64) -> Option<&[u8]> {
         let section = self.section.as_ref()?;
-        let size: usize = size.try_into().ok()?;
-        let offset: usize = self.address.checked_sub(section.address)?.try_into().ok()?;
-        let end = offset.checked_add(size)?;
-        section.data.as_ref()?.get(offset..end)
+        section.bytes_in(self.address..self.address.checked_add(size)?)
     }
 
     /// This symbol's disassembly, or [`None`] when there are no bytes to decode. An

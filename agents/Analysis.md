@@ -720,7 +720,8 @@ known up front: the extent is a DWARF walk that cost 2.0 s over the 331 MB binar
 gap is never decoded.** Bytes no symbol claims are not known to be code (alignment padding, a jump
 table MSVC put after the function, a stripped local), and decoding them would print the confident
 page of nonsense `undecodable` exists to prevent. So a gap is *said*: its range and a `GapKind`, and
-whoever draws it slices `Section::data`. The bytes are not copied, since the tail of a stripped PE's
+whoever draws it asks `Section::bytes_in` for the bytes, which checks that offset arithmetic once
+for every caller. The bytes are not copied, since the tail of a stripped PE's
 export can be megabytes. There are two kinds only. `Bytes` is the ordinary one. `Cut` is the rest of
 a stretch whose extent says it was capped, said apart because it is very likely the function going
 on past the cap rather than anything between two functions, and it starts wherever the cap fell
