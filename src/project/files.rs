@@ -621,8 +621,7 @@ impl SavedMadeUp {
 
     /// The name this is, borne by a symbol at `address`: the other half of
     /// [`SavedMadeUp::of`], and where the address the spelling needs comes back.
-    fn at(self, address: u64) -> MadeUp {
-        let address = SectionAddress::new(address);
+    fn at(self, address: SectionAddress) -> MadeUp {
         match self {
             SavedMadeUp::EntryPoint => MadeUp::EntryPoint,
             SavedMadeUp::Function => MadeUp::Function(address),
@@ -633,8 +632,8 @@ impl SavedMadeUp {
 
 impl SavedName {
     /// The saved form of `name`, borne by a symbol at `address`.
-    pub fn of(name: &str, address: u64) -> SavedName {
-        match MadeUp::of(name, SectionAddress::new(address)) {
+    pub fn of(name: &str, address: SectionAddress) -> SavedName {
+        match MadeUp::of(name, address) {
             None => SavedName::File(name.to_owned()),
             Some(made_up) => SavedName::MadeUp(SavedMadeUp::of(made_up)),
         }
@@ -643,7 +642,7 @@ impl SavedName {
     /// The name a symbol at `address` carries now: the file's own as it was saved, or a
     /// made-up one spelled the way the app spells it today. What the symbol is looked up
     /// by.
-    pub fn text(&self, address: u64) -> Cow<'_, str> {
+    pub fn text(&self, address: SectionAddress) -> Cow<'_, str> {
         match self {
             SavedName::File(name) => Cow::Borrowed(name),
             SavedName::MadeUp(made_up) => Cow::Owned(made_up.at(address).to_string()),
@@ -653,7 +652,7 @@ impl SavedName {
     /// Which name the app made up, for a symbol at `address`; [`None`] where the name is
     /// the file's own. What says a saved place can spell itself without the file it
     /// points into being open.
-    pub fn made_up(&self, address: u64) -> Option<MadeUp> {
+    pub fn made_up(&self, address: SectionAddress) -> Option<MadeUp> {
         match self {
             SavedName::File(_) => None,
             SavedName::MadeUp(made_up) => Some(made_up.at(address)),
@@ -684,7 +683,9 @@ impl SavedDocument {
                 address,
                 symbol_name,
                 ..
-            } => symbol_name.made_up(*address).map(|name| name.to_string()),
+            } => symbol_name
+                .made_up(SectionAddress::new(*address))
+                .map(|name| name.to_string()),
             _ => None,
         }
     }

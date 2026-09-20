@@ -459,26 +459,27 @@ fn split_sections_are_each_given_a_place_of_their_own() {
     assert!(code[0].code().is_some_and(|code| code.data.is_empty()));
     // Every one of them states 0, so where a section is placed is its bias, and where it
     // is placed is the observable: a `Bias` is opaque and has no number to check.
-    let placed_at = |section: &Section| section.place(section.address).get();
+    let placed_start = |section: &Section| section.place(section.address).get();
     let mut placed_end = 0;
     for section in &code {
         assert_eq!(section.address, at(0));
         assert!(
-            placed_at(section) >= placed_end,
+            placed_start(section) >= placed_end,
             "{} overlaps the section before it",
             section.name
         );
-        assert_eq!(placed_at(section) % 16, 0);
-        placed_end = placed_at(section) + section.code().map_or(0, |code| code.data.len()) as u64;
+        assert_eq!(placed_start(section) % 16, 0);
+        placed_end =
+            placed_start(section) + section.code().map_or(0, |code| code.data.len()) as u64;
     }
     assert_eq!(code[0].bias(), Bias::NONE);
     assert_eq!(
-        placed_at(code[1]),
+        placed_start(code[1]),
         0x10,
         "an empty section still takes one grain"
     );
     assert_eq!(
-        placed_at(code[2]),
+        placed_start(code[2]),
         0x30,
         "add is 0x14 bytes, rounded up to 16"
     );

@@ -1263,7 +1263,7 @@ fn file_of(document: &Document) -> Arc<str> {
 
 /// The entry of a place *inside* an object's code: the tab showing it, and the stop at
 /// `address`, which is what two places in one listing are told apart by.
-fn code_entry_of(states: &ProjectStates, document: &Document, address: u64) -> Entry {
+fn code_entry_of(states: &ProjectStates, document: &Document, address: PlacedAddress) -> Entry {
     (
         tab_showing(states, document).expect("the document is open"),
         Stop::at(object_of(document), address),
@@ -19920,8 +19920,12 @@ fn a_copied_line_spells_the_address_the_listing_draws() {
         .expect("sum_to decodes");
     let first = &assembly.instructions[0];
 
-    assert!(asm_line(first, Bias::NONE).starts_with("0000000000000030 "));
-    assert!(asm_line(first, Bias::new(0x1000)).starts_with("0000000000001030 "));
+    assert!(asm_line(first, Address::Local(first.address)).starts_with("0000000000000030 "));
+    assert!(asm_line(
+        first,
+        Address::Placed(first.address.placed(Bias::new(0x1000)))
+    )
+    .starts_with("0000000000001030 "));
 }
 
 /// Pressing an object in the Objects list opens all of its code as one listing -- a
@@ -20184,7 +20188,7 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
     // Scroll so that `sum_to`'s label is the row at the top.
     let label = (0..rows.len())
         .find(|&row| {
-            rows.address_of(row) == Some(0x30)
+            rows.address_of(row) == Some(PlacedAddress::new(0x30))
                 && matches!(kind_at(&rows, row), Some(Kind::Label(_)))
         })
         .expect("sum_to has a label row");
@@ -20201,7 +20205,7 @@ fn a_decoded_stretch_fills_its_rows_in_and_the_row_under_the_reader_stays_put() 
             .peek()
             .at(&entry_of(&states, &document)),
         Some(Spot {
-            address: 0x30,
+            address: PlacedAddress::new(0x30),
             past: TopRow::at(2)
         }),
         "the place is written down as the reader scrolls: two rows past the rule over \
@@ -20245,11 +20249,10 @@ fn a_code_tab_comes_back_to_the_address_it_was_left_at() {
     let mut states = roots.states;
     let document = Document::Code(object.clone());
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
-    states
-        .places
-        .code_at
-        .write()
-        .remember(entry_of(&states, &document), Spot::at(0x14));
+    states.places.code_at.write().remember(
+        entry_of(&states, &document),
+        Spot::at(PlacedAddress::new(0x14)),
+    );
     settle(&mut test);
     settle(&mut test);
 
@@ -20310,7 +20313,7 @@ fn closing_a_code_tab_forgets_its_address() {
     states.places.code_at.write().remember(
         entry.clone(),
         Spot {
-            address: 0x30,
+            address: PlacedAddress::new(0x30),
             past: TopRow::at(2),
         },
     );
@@ -20602,13 +20605,16 @@ fn a_carried_run_keeps_the_caret_at_the_end_it_was_swept_to() {
             assembly: Some(swept),
             source: None,
         },
-        spots: vec![(20, Spot::at(0x20)), (40, Spot::at(0x40))],
+        spots: vec![
+            (20, Spot::at(PlacedAddress::new(0x20))),
+            (40, Spot::at(PlacedAddress::new(0x40))),
+        ],
         generation: Some(0),
     };
 
     // The recount put each of those addresses one row further down.
     let carried = kept
-        .carry(|spot| Some(spot.address as usize + 1))
+        .carry(|spot| Some(spot.address.get() as usize + 1))
         .expect("both ends have a place and a row");
     assert_eq!(carried.chars.lead(), Caret { row: 0x21, col: 3 });
     assert_eq!(
@@ -20619,7 +20625,7 @@ fn a_carried_run_keeps_the_caret_at_the_end_it_was_swept_to() {
 
     // An end with no row any more takes the run with it.
     assert!(kept
-        .carry(|spot| (spot.address != 0x20).then_some(1))
+        .carry(|spot| (spot.address != PlacedAddress::new(0x20)).then_some(1))
         .is_none());
 }
 
@@ -20750,7 +20756,13 @@ fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
         .find(|symbol| symbol.data.name == "add")
         .expect("the fixture holds add");
     let own = add.data.assembly(&add.object).expect("add decodes");
-    assert_eq!(lines[3], asm_line(&own.instructions[0], Bias::NONE));
+    assert_eq!(
+        lines[3],
+        asm_line(
+            &own.instructions[0],
+            Address::Local(own.instructions[0].address)
+        )
+    );
     // `twice` is not decoded: its label, then blank lines.
     let twice = lines
         .iter()
@@ -20955,9 +20967,7 @@ fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
         .expect("the fixture holds sum_to");
     let at = a_line_of(&sum_to);
     let studied = Studied::new(sum_to.clone());
-    let first = studied.assembly.as_ref().unwrap().instructions[0]
-        .address
-        .get();
+    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
     let entry = "Open as symbol".to_string();
 
     let shown = Shown {
@@ -20997,7 +21007,7 @@ fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
         .clone()
         .expect("the instruction is left to land");
     assert!(landed.tab == symbol);
-    assert_eq!(landed.address, Some(first));
+    assert_eq!(landed.address, Some(Address::Local(first)));
 
     // The same listing as the tab itself: nothing to open.
     let shown = Shown {
@@ -21035,9 +21045,10 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
         .expect("the fixture holds sum_to");
     let object = sum_to.object.clone();
     let studied = Studied::new(sum_to.clone());
-    let first = studied.assembly.as_ref().unwrap().instructions[0]
-        .address
-        .get();
+    // The tab is the object's code, so the place it lands at is a placed address.
+    let first = sum_to
+        .data
+        .placed(studied.assembly.as_ref().unwrap().instructions[0].address);
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
@@ -21077,7 +21088,7 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
     assert!(landed.at.map(|at| at.pos) == Some(a_line_of(&sum_to)));
     assert_eq!(
         landed.address,
-        Some(first),
+        Some(Address::Placed(first)),
         "the instruction is left to land"
     );
 }
@@ -21153,7 +21164,13 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
     assert_eq!(address_labels(&test)[0], "0000000000000000 ");
     let visits = states.visits.peek().entries().len();
 
-    show_in_code(doors, object.clone(), 0x30, None, Reach::NewTab);
+    show_in_code(
+        doors,
+        object.clone(),
+        PlacedAddress::new(0x30),
+        None,
+        Reach::NewTab,
+    );
     settle(&mut test);
     settle(&mut test);
     assert_eq!(address_labels(&test)[0], "0000000000000030 ");
@@ -21167,7 +21184,7 @@ fn show_in_object_while_the_code_is_on_top_scrolls_without_a_switch() {
 /// is the number it is and the row keeps the address. Built by hand, since every call in
 /// the committed fixtures is relocated and so named. Handed back with the address the call
 /// goes to, `g`'s third `mov` being the row at or below it.
-fn calling_into_the_middle() -> (Arc<Object>, u64) {
+fn calling_into_the_middle() -> (Arc<Object>, PlacedAddress) {
     use analysis::{Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolIndex};
 
     let target = 6 + 11;
@@ -21207,7 +21224,9 @@ fn calling_into_the_middle() -> (Arc<Object>, u64) {
         vec![section],
         ObjectData::from(text),
     ));
-    (object, target)
+    // The image is linked and its one section unbiased, so the target is its own placed
+    // address.
+    (object, PlacedAddress::new(target))
 }
 
 /// The operand of `f`'s call as the disassembler printed it, which is the text of the
@@ -21305,7 +21324,7 @@ fn a_call_with_no_symbol_opens_the_code_at_its_target() {
     // The instruction is left to land, and no line: the target's row is not this one.
     let landed = landing.peek().clone().expect("the target is left to land");
     assert!(landed.at.is_none(), "a line was left to land");
-    assert_eq!(landed.address, Some(target));
+    assert_eq!(landed.address, Some(Address::Placed(target)));
 }
 
 /// A symbol named in an operand of the unified view is a place further down that same
@@ -21365,7 +21384,9 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     );
 
     // The caret is on the target's first row, and the place kept is its address.
-    let landed = rows.body_row_for(add.address.get()).expect("add has a row");
+    let landed = rows
+        .body_row_for(add.placed(add.address))
+        .expect("add has a row");
     let picked = marked
         .peek()
         .assembly
@@ -21377,8 +21398,8 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
             .places
             .code_at
             .peek()
-            .at(&code_entry_of(&states, &code, add.address.get())),
-        Some(Spot::at(add.address.get()))
+            .at(&code_entry_of(&states, &code, add.placed(add.address))),
+        Some(Spot::at(add.placed(add.address)))
     );
 
     // With Ctrl held it is the other door: the symbol alone, beside the listing. Pressed
@@ -21562,25 +21583,25 @@ fn a_place_in_a_listing_is_named_by_the_symbol_there() {
 
     // A stop's address is the one the listing draws: the symbol's own plus where the
     // layout put its section.
-    let placed = twice
-        .address
-        .placed(
-            twice
-                .section
-                .as_ref()
-                .map_or(Bias::NONE, |section| section.bias()),
-        )
-        .get();
+    let placed = twice.address.placed(
+        twice
+            .section
+            .as_ref()
+            .map_or(Bias::NONE, |section| section.bias()),
+    );
 
     assert_eq!(stop_text(&Stop::whole(code.clone())), object.name);
     assert_eq!(stop_text(&Stop::at(object.clone(), placed)), "twice");
     // A place no symbol starts at is the object again: a call to a function lands on its
     // first byte and is named, and an address into the middle of one has no name to give.
     assert_eq!(
-        stop_text(&Stop::at(object.clone(), placed + 1)),
+        stop_text(&Stop::at(object.clone(), placed.saturating_add(1))),
         object.name
     );
-    assert_eq!(stop_text(&Stop::at(object.clone(), u64::MAX)), object.name);
+    assert_eq!(
+        stop_text(&Stop::at(object.clone(), PlacedAddress::new(u64::MAX))),
+        object.name
+    );
 }
 
 /// Following a link inside an object's code is a place on the tab's trail, so Back comes
@@ -21650,7 +21671,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     assert!(
         trail
             == [
-                Stop::at(object_of(&code), add.address.get()),
+                Stop::at(object_of(&code), add.placed(add.address)),
                 Stop::whole(code.clone())
             ],
         "the place followed is not on the trail"
@@ -21690,8 +21711,8 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
             .places
             .code_at
             .peek()
-            .at(&code_entry_of(&states, &code, add.address.get())),
-        Some(Spot::at(add.address.get()))
+            .at(&code_entry_of(&states, &code, add.placed(add.address))),
+        Some(Spot::at(add.placed(add.address)))
     );
 }
 
@@ -21985,7 +22006,9 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
         .expect("g decodes")
         .instructions
         .iter()
-        .map(|instruction| instruction.address.get())
+        // The image's one section is unbiased, so an instruction's own address is where
+        // the listing draws it.
+        .map(|instruction| instruction.address.placed(Bias::NONE))
         .filter(|&address| address <= target)
         .last()
         .expect("an instruction holds the target");
@@ -22331,13 +22354,13 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
         "the stretch's {covers} bytes are drawn in {} rows",
         gaps.len()
     );
-    let first = placed.place(stretch.range.start).get();
+    let first = placed.place(stretch.range.start);
     let mut drawn = 0;
     for (index, &row) in gaps.iter().enumerate() {
         let address = rows.address_of(row).expect("a gap row has an address");
         assert_eq!(
             address,
-            first + index as u64 * section::GAP_BYTES_PER_ROW,
+            first.saturating_add(index as u64 * section::GAP_BYTES_PER_ROW),
             "row {row} stands where the rows above it do not end"
         );
         let line = row_line(&rows, row);
@@ -22429,7 +22452,10 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
     assert!(landed.at.as_ref().map(|at| &at.pos.file) == Some(&a_line_of(&twice).file));
     // The symbol's own address: the fixture places its one `.text` at 0, so the one
     // drawn is the one the listing alone will draw.
-    assert_eq!(landed.address, Some(twice.data.address.get() + 1));
+    assert_eq!(
+        landed.address,
+        Some(Address::Local(twice.data.address.saturating_add(1)))
+    );
 }
 
 /// The Assembly pane over the active document, whichever kind it is, with what the app
@@ -22515,7 +22541,7 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
     let (index, at) = (0..assembly.instructions.len())
         .find_map(|index| Some((index, studied.position(index)?)))
         .expect("sum_to's instructions name a place");
-    let address = assembly.instructions[index].address.placed(bias).get();
+    let address = assembly.instructions[index].address.placed(bias);
 
     let (mut test, roots) = TestingRunner::new(
         door_panes_harness,
@@ -22609,12 +22635,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
     let decoded = reading_of(&object, &[0, 1, 2]);
     let exact = rows_of(&decoded);
     let (index, address) = (1..assembly.instructions.len())
-        .map(|index| {
-            (
-                index,
-                assembly.instructions[index].address.placed(bias).get(),
-            )
-        })
+        .map(|index| (index, assembly.instructions[index].address.placed(bias)))
         .find(|&(_, address)| guessed.body_row_for(address) != exact.body_row_for(address))
         .expect("every guess was exact, proving nothing");
     let guess = guessed
@@ -22658,7 +22679,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         .peek()
         .clone()
         .expect("the instruction was not left for the rows");
-    assert!(planting.tab == code && planting.address == address);
+    assert!(planting.tab == code && planting.address == Address::Placed(address));
 
     // The worker's first answer, `sum_to` still a guess: the caret on the guessed row,
     // the planting spent.
@@ -22773,7 +22794,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     settle(&mut test);
     settle(&mut test);
 
-    let drawn = format!("{:016X} ", address.placed(bias).get());
+    let drawn = format!("{:016X} ", address.placed(bias));
     let at = centre_of(&test, &drawn);
     right_click(&mut test, at);
     let item = centre_of(&test, "Open as symbol");
@@ -22792,7 +22813,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
         .peek()
         .clone()
         .expect("the instruction was not left for the listing");
-    assert!(planting.tab == symbol && planting.address == address.get());
+    assert!(planting.tab == symbol && planting.address == Address::Local(address));
 
     // The worker's answer: the listing is drawn, and the caret is on the row.
     let mut analysis = roots.analysis;
@@ -22847,7 +22868,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     landing.set(Some(Landing {
         tab: first_tab.clone(),
         at: None,
-        address: Some(first.data.address.get()),
+        address: Some(Address::Local(first.data.address)),
     }));
     open_document(states.open, states.visits, first_tab.clone(), Reach::NewTab);
     settle(&mut test);
@@ -22909,8 +22930,7 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
         .clone()
         .expect("twice decodes")
         .instructions[0]
-        .address
-        .get();
+        .address;
     let before = first.checked_sub(1).expect("twice starts above zero");
 
     let (mut test, roots) = TestingRunner::new(
@@ -22937,7 +22957,7 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
     let mut plant = doors.plant;
     let other = Planting {
         tab: Document::Symbol(elsewhere),
-        address: first,
+        address: Address::Local(first),
     };
     plant.set(Some(other.clone()));
     settle(&mut test);
@@ -22954,7 +22974,7 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
     // Its own, at an address no row holds: spent all the same.
     plant.set(Some(Planting {
         tab,
-        address: before,
+        address: Address::Local(before),
     }));
     settle(&mut test);
     settle(&mut test);
@@ -23004,10 +23024,12 @@ fn a_planting_lands_in_the_listing_drawn_now() {
         .as_ref()
         .expect("twice decodes")
         .instructions[1]
-        .address
-        .get();
+        .address;
     let mut plant = doors.plant;
-    plant.set(Some(Planting { tab: two, address }));
+    plant.set(Some(Planting {
+        tab: two,
+        address: Address::Local(address),
+    }));
     settle(&mut test);
     let picked = doors
         .marked
@@ -27447,7 +27469,7 @@ fn a_kept_run_is_carried_when_the_rows_on_screen_are_of_another_generation() {
     let label_row = |rows: &Rows| {
         (0..rows.len())
             .find(|&row| {
-                rows.address_of(row) == Some(0x14)
+                rows.address_of(row) == Some(PlacedAddress::new(0x14))
                     && matches!(kind_at(rows, row), Some(Kind::Label(_)))
             })
             .expect("twice has a label row")
@@ -27824,7 +27846,7 @@ fn find_answered(test: &mut TestingRunner, finds: State<Finds>, at: Where, patte
 /// How many times the row below has been drawn, in a context of its own so the component
 /// can count its own renders.
 #[derive(Clone)]
-struct Drawn(Arc<std::sync::atomic::AtomicUsize>);
+struct Renders(Arc<std::sync::atomic::AtomicUsize>);
 
 /// The bar [`MarkedRow`] wears the marks of.
 fn marking_at() -> Where {
@@ -27840,7 +27862,7 @@ struct MarkedRow;
 impl Component for MarkedRow {
     fn render(&self) -> impl IntoElement {
         let _marking = use_marking(marking_at());
-        use_consume::<Drawn>()
+        use_consume::<Renders>()
             .0
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         rect().expanded()
@@ -27867,7 +27889,7 @@ fn a_find_write_that_changed_nothing_redraws_nothing() {
         {
             let drawn = drawn.clone();
             move |runner: &mut _| {
-                runner.provide_root_context(move || Drawn(drawn));
+                runner.provide_root_context(move || Renders(drawn));
                 runner.provide_root_context(test_roots)
             }
         },
@@ -35879,7 +35901,7 @@ fn the_walk_over_an_objects_code_holds_every_line_the_pane_draws() {
         let rows = rows_of(&reading);
 
         // Every row the pane draws text in, and where it draws it.
-        let mut drawn: Vec<(u64, String)> = (0..rows.len())
+        let mut drawn: Vec<(PlacedAddress, String)> = (0..rows.len())
             .filter_map(|row| {
                 let line = code_line(&rows, row).to_string();
                 (!line.is_empty())
@@ -35899,7 +35921,7 @@ fn the_walk_over_an_objects_code_holds_every_line_the_pane_draws() {
             })
             .count();
 
-        let mut walked: Vec<(u64, String)> = held
+        let mut walked: Vec<(PlacedAddress, String)> = held
             .iter()
             .flat_map(|&flat| section_view::stretch_texts(&object, &index, flat))
             .map(|(address, line)| (address, line.to_string()))
@@ -37587,7 +37609,7 @@ fn a_call_to_itself_is_a_stop_back_comes_back_from() {
         Landing {
             tab: Document::Symbol(sum_to.clone()),
             at: None,
-            address: Some(sum_to.data.address.get()),
+            address: Some(Address::Local(sum_to.data.address)),
         },
         Reach::InPlace,
     );
@@ -37604,7 +37626,7 @@ fn a_call_to_itself_is_a_stop_back_comes_back_from() {
     assert!(
         trail
             == [
-                Stop::in_symbol(sum_to.clone(), sum_to.data.address.get()),
+                Stop::in_symbol(sum_to.clone(), sum_to.data.address),
                 Stop::whole(Document::Symbol(sum_to.clone()))
             ],
         "the call is not a place on the trail"

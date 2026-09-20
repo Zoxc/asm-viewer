@@ -81,10 +81,11 @@ pub(crate) struct Landing {
     /// one. `None` for the door an unnamed call's target opens, which knows an address
     /// and no line. The characters to select along it come with it ([`Landed`]).
     pub(crate) at: Option<Landed>,
-    /// The instruction to put the assembly pane's caret on, where the door was one, as an
-    /// address in the space the tab's listing draws: **placed** (`AsmData::placed`) for
-    /// an object's code, the symbol's own for a symbol's tab.
-    pub(crate) address: Option<u64>,
+    /// The instruction to put the assembly pane's caret on, where the door was one, in
+    /// whichever space the tab is in ([`Address`]): the listing that spends it asks for
+    /// the half it can use, so a caret meant for one listing is never planted in the
+    /// other.
+    pub(crate) address: Option<Address>,
 }
 
 /// The line a landing names, and the characters on it where the door knew them.
@@ -123,7 +124,7 @@ impl Landed {
 #[derive(Clone, PartialEq)]
 pub(crate) struct Planting {
     pub(crate) tab: Document,
-    pub(crate) address: u64,
+    pub(crate) address: Address,
 }
 
 /// The address a planting left for `document`, taken: [`None`] where there is none, or
@@ -136,7 +137,7 @@ pub(crate) struct Planting {
 pub(crate) fn take_planting(
     mut plant: State<Option<Planting>>,
     document: &Document,
-) -> Option<u64> {
+) -> Option<Address> {
     let planting = plant.read().clone();
     let planting = planting.filter(|planting| planting.tab == *document)?;
     plant.set(None);

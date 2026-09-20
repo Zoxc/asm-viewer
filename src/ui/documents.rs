@@ -466,7 +466,7 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         // it a moment ago. Which is why an instruction of the symbol on top is a place
         // here and nowhere else: a call it makes to itself moves nothing, and without a
         // stop of its own Back could not come back to the call.
-        let stop = match (&landing.tab, landing.address) {
+        let stop = match (&landing.tab, landing.address.and_then(Address::local)) {
             (Document::Symbol(symbol), Some(address)) => Stop::in_symbol(symbol.clone(), address),
             _ => stop,
         };
@@ -718,7 +718,7 @@ fn reduced(path: &Path) -> Option<PathBuf> {
 pub(crate) fn show_in_code(
     doors: Doors,
     object: Arc<Object>,
-    address: u64,
+    address: PlacedAddress,
     at: Option<LinePos>,
     reach: Reach,
 ) {
@@ -733,7 +733,7 @@ pub(crate) fn show_in_code(
         Landing {
             tab: code.clone(),
             at: at.map(Landed::line),
-            address: Some(address),
+            address: Some(Address::Placed(address)),
         },
         reach,
     );
@@ -747,14 +747,19 @@ pub(crate) fn show_in_code(
 /// row's instruction -- `address` is the symbol's own, the space its listing draws -- and
 /// landing on the line the row was compiled from where it has one: `show_in_code`'s door
 /// the other way, and a tab of its own likewise.
-pub(crate) fn open_as_symbol(doors: Doors, symbol: Symbol, address: u64, at: Option<LinePos>) {
+pub(crate) fn open_as_symbol(
+    doors: Doors,
+    symbol: Symbol,
+    address: SectionAddress,
+    at: Option<LinePos>,
+) {
     let tab = Document::Symbol(symbol);
     land(
         doors,
         Landing {
             tab,
             at: at.map(Landed::line),
-            address: Some(address),
+            address: Some(Address::Local(address)),
         },
         Reach::NewTab,
     );

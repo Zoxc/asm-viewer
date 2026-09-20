@@ -7,6 +7,16 @@ use analysis::{
     SymbolData, SymbolIndex,
 };
 
+/// A placed address and one of a section's own, written as the numbers a test means by
+/// them: what these assertions are about is which place is held, not the spelling.
+fn placed_at(address: u64) -> PlacedAddress {
+    PlacedAddress::new(address)
+}
+
+fn at(address: u64) -> SectionAddress {
+    SectionAddress::new(address)
+}
+
 use super::*;
 use crate::docs::Docs;
 use crate::project::files::tests::*;
@@ -559,7 +569,7 @@ fn each_map_a_place_was_left_in_lands_in_its_own_saved_field() {
     let objects = objects();
     let document = places(&objects)[0].clone();
     let spot = Spot {
-        address: 0x40,
+        address: placed_at(0x40),
         past: TopRow {
             row: 3,
             into: Fraction(0x8000),
@@ -778,7 +788,7 @@ fn the_part_of_a_row_a_place_was_left_into_comes_back() {
     let objects = objects();
     let tabs = vec![tab(&objects[0]), tab(&objects[1])];
     let spot = Spot {
-        address: 0x40,
+        address: placed_at(0x40),
         past: TopRow {
             row: 3,
             into: Fraction(0x1234),
@@ -816,7 +826,7 @@ fn the_part_of_a_row_a_place_was_left_into_comes_back() {
         )
     );
     let entry = &as_document(&restored[1]).2[0];
-    assert_eq!(entry.address, Some(0x40));
+    assert_eq!(entry.address, Some(placed_at(0x40)));
     assert_eq!(
         entry.asm_row,
         TopRow {
@@ -1449,7 +1459,7 @@ fn a_code_tabs_address_is_written_before_its_document() {
     let objects = objects();
     let code = Document::Code(objects[1].clone());
     let spot = Spot {
-        address: 0x30,
+        address: placed_at(0x30),
         past: TopRow::at(2),
     };
 
@@ -1481,7 +1491,10 @@ fn a_code_tabs_address_is_written_before_its_document() {
     // a nicety.
     let restored = session.restore(&objects).tabs;
     assert!(as_document(&restored[0]).2[0].document == code);
-    assert_eq!(as_document(&restored[0]).2[0].address, Some(0x30));
+    assert_eq!(
+        as_document(&restored[0]).2[0].address,
+        Some(placed_at(0x30))
+    );
 }
 
 /// A tab that followed a link inside an object's code has that listing on its trail
@@ -1499,7 +1512,7 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
     let code = Document::Code(objects[1].clone());
     let (first, second) = (
         Stop::whole(code.clone()),
-        Stop::at(objects[1].clone(), 0x40),
+        Stop::at(objects[1].clone(), placed_at(0x40)),
     );
 
     let mut docs = Docs::default();
@@ -1511,11 +1524,11 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
     spots.remember(
         (id, first.clone()),
         Spot {
-            address: 0x10,
+            address: placed_at(0x10),
             past: TopRow::at(3),
         },
     );
-    spots.remember((id, second.clone()), Spot::at(0x50));
+    spots.remember((id, second.clone()), Spot::at(placed_at(0x50)));
 
     let session = Session::from_state(
         &objects,
@@ -1559,7 +1572,7 @@ fn a_trail_through_one_listing_comes_back_with_both_places() {
     let addresses: Vec<Option<u64>> = as_document(&restored[0])
         .2
         .iter()
-        .map(|entry| entry.address)
+        .map(|entry| entry.address.map(PlacedAddress::get))
         .collect();
     assert_eq!(addresses, [Some(0x50), Some(0x10)]);
 }
@@ -1602,7 +1615,7 @@ fn a_saved_place_whose_half_is_not_its_documents_is_the_whole_document() {
 fn a_rebuilt_binary_takes_the_saved_address_with_it() {
     let objects = objects();
     let code = Document::Code(objects[1].clone());
-    let spot = Spot::at(0x30);
+    let spot = Spot::at(placed_at(0x30));
     let session = session_of(
         &objects,
         &[code.clone()],
@@ -1693,7 +1706,7 @@ fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
     assert!(find("beta", 9, &unchanged).is_none());
     assert_eq!(
         find("beta", 9, &rebuilt).map(|data| data.address),
-        Some(SectionAddress::new(2))
+        Some(at(2))
     );
     for name in ["aardvark", "gamma", "omega"] {
         assert!(find(name, 1, &rebuilt).is_none(), "{name}");

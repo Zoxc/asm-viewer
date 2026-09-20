@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use analysis::Symbol;
+use analysis::{PlacedAddress, Symbol};
 
 use crate::docs::Entry;
 
@@ -166,13 +166,13 @@ impl TopRow {
 /// apart -- including how far into the last of them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Spot {
-    pub address: u64,
+    pub address: PlacedAddress,
     pub past: TopRow,
 }
 
 impl Spot {
     /// The address's own row, at its top.
-    pub fn at(address: u64) -> Spot {
+    pub fn at(address: PlacedAddress) -> Spot {
         Spot {
             address,
             past: TopRow::default(),

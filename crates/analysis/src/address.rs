@@ -60,14 +60,21 @@ impl Bias {
 macro_rules! address {
     ($name:ident) => {
         impl $name {
-            /// This number as an address in this space: what a file states, and what a
-            /// test writes.
+            /// The bottom of the address space, which is where a running bound starts
+            /// from and what a row with no address of its own is keyed by.
+            pub const ZERO: $name = $name(0);
+
+            /// The top of it, which `addr2line` cannot be asked about
+            /// (`Dwarf::extent`).
+            pub const MAX: $name = $name(u64::MAX);
+
+            /// This number as an address in this space: what a file stated. The two ends
+            /// of the space have names of their own, so this is only ever that.
             pub const fn new(address: u64) -> $name {
                 $name(address)
             }
 
-            /// The plain number back, for whatever does not count in addresses: printing
-            /// one, and handing one to a library that takes a `u64`.
+            /// The plain number back, for a library that counts in plain integers.
             pub const fn get(self) -> u64 {
                 self.0
             }
@@ -79,7 +86,8 @@ macro_rules! address {
             }
 
             /// `bytes` back, or [`None`] where that runs off the bottom of the address
-            /// space.
+            /// space. The mirror of [`checked_add`](Self::checked_add); what wants it is
+            /// the last address a range covers, which is where a test asks about one.
             pub fn checked_sub(self, bytes: u64) -> Option<$name> {
                 self.0.checked_sub(bytes).map($name)
             }

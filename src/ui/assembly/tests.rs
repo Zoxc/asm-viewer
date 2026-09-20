@@ -327,20 +327,34 @@ fn the_row_a_reveal_goes_to_is_the_runs_own_or_the_paired_instructions() {
 #[test]
 fn a_planted_address_lands_on_the_instruction_holding_it() {
     let instructions = [instruction(0x10, Vec::new()), instruction(0x18, Vec::new())];
-    assert_eq!(planted_index(&instructions, 0x10), Some(0));
     assert_eq!(
-        planted_index(&instructions, 0x14),
+        planted_index(&instructions, SectionAddress::new(0x10)),
+        Some(0)
+    );
+    assert_eq!(
+        planted_index(&instructions, SectionAddress::new(0x14)),
         Some(0),
         "inside the first"
     );
-    assert_eq!(planted_index(&instructions, 0x18), Some(1));
-    assert_eq!(planted_index(&instructions, 0x20), Some(1), "past the last");
     assert_eq!(
-        planted_index(&instructions, 0x0),
+        planted_index(&instructions, SectionAddress::new(0x18)),
+        Some(1)
+    );
+    assert_eq!(
+        planted_index(&instructions, SectionAddress::new(0x20)),
+        Some(1),
+        "past the last"
+    );
+    assert_eq!(
+        planted_index(&instructions, SectionAddress::new(0x0)),
         None,
         "before the listing's first instruction"
     );
-    assert_eq!(planted_index(&[], 0x10), None, "a listing with no rows");
+    assert_eq!(
+        planted_index(&[], SectionAddress::new(0x10)),
+        None,
+        "a listing with no rows"
+    );
 }
 
 /// **One answer for what a press on a link does**, over Ctrl and the listing the link is
@@ -377,7 +391,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
     };
     let address = Door::Address {
         object: object.clone(),
-        address: 0x2000,
+        address: PlacedAddress::new(0x2000),
     };
     let label = Door::Label {
         symbol: symbol.clone(),
@@ -403,7 +417,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
     // address that listing draws the target at; Ctrl opens the symbol on its own.
     assert!(matches!(
         in_code.opens(false),
-        Some(Opens::InCode { placed, .. }) if placed == target.placed(target.address).get()
+        Some(Opens::InCode { placed, .. }) if placed == target.placed(target.address)
     ));
     // With Ctrl either door is the symbol on its own, in a tab that stays: the two
     // listings differ in where a plain press goes and not in what Ctrl means.
@@ -423,7 +437,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
         address.opens(false)
             == Some(Opens::Code {
                 object: object.clone(),
-                address: 0x2000,
+                address: PlacedAddress::new(0x2000),
                 reach: Reach::InPlace,
             })
     );
@@ -431,7 +445,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
         address.opens(true)
             == Some(Opens::Code {
                 object,
-                address: 0x2000,
+                address: PlacedAddress::new(0x2000),
                 reach: Reach::NewTab,
             })
     );
@@ -603,4 +617,53 @@ fn every_field_of_a_listing_prop_is_compared() {
     ] {
         assert!(pane != changed, "AssemblyPane ignores {field}");
     }
+}
+
+/// **Which of the two spaces a row's address is in is the listing's**, and the two are
+/// different numbers wherever a section was placed anywhere but 0: a symbol read alone
+/// draws the addresses the file states, and the same symbol among its neighbours draws
+/// them with its section's bias added.
+///
+/// Over `line_fixture_split.o`, whose three `.text.<name>` sections the parse lays out at
+/// 0x10, 0x30 and 0x50, so the answers cannot agree by accident. Every other test of this
+/// runs over the flat fixture, where the one `.text` has no bias and the two spaces are
+/// the same numbers — which is exactly the case a wrong answer survives.
+#[test]
+fn a_rows_address_is_its_listings_space_and_the_two_differ_where_a_section_was_placed() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("crates/analysis/tests/fixtures/line_fixture_split.o");
+    let objects = analysis::open_files(vec![path]);
+    let object = objects.first().expect("the fixture parses").clone();
+    let symbol = object
+        .symbols_sorted
+        .iter()
+        .find(|data| data.name == "twice")
+        .map(|data| Symbol {
+            object: object.clone(),
+            data: data.clone(),
+        })
+        .expect("the fixture holds twice");
+
+    let section = symbol.data.section.clone().expect("twice is in a section");
+    let bias = section.bias();
+    assert_ne!(bias, Bias::NONE, "the fixture's sections are unplaced");
+
+    let studied = Studied::new(symbol.clone());
+    let own = studied
+        .assembly
+        .as_ref()
+        .expect("twice decodes")
+        .instructions[0]
+        .address;
+
+    let alone = AsmData::of(studied.clone(), In::Alone { subject: None }).expect("it decodes");
+    let among = AsmData::of(studied, In::Code { base: 0, bias }).expect("it decodes");
+
+    assert_eq!(alone.drawn_address(0), Address::Local(own));
+    assert_eq!(among.drawn_address(0), Address::Placed(own.placed(bias)));
+    assert_ne!(
+        alone.drawn_address(0).get(),
+        among.drawn_address(0).get(),
+        "the two spaces answered one number, so this fixture pins nothing"
+    );
 }

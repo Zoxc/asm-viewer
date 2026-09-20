@@ -363,9 +363,13 @@ company the moment the reader scrolls, and spelling one with the other brings a 
 no place in particular back as the address it was scrolled to. It is a claim about a layout as the
 scroll is, so a rebuilt binary takes both, and the place comes back as the whole listing. It
 is also the address of an instruction of a symbol, the one place inside a symbol (a call it makes
-to itself, `Stop::in_symbol`), there the symbol's own address and not a placed one.
+to itself, `Stop::in_symbol`), there the symbol's own address and not a placed one. **Which of the
+two spaces a saved number is in is the document it was saved with**, which is the one thing the
+file cannot state, so `document::Address::in_document` is where it comes back; past that
+the two are a `PlacedAddress` and a `SectionAddress` and cannot be swapped.
 The file states the halves apart and so can state a pairing that means nothing --
-a line of an object's code, an address in a file -- which a `history::Stop` cannot hold. So
+a line of an object's code, an address in a file, or either address in the other's space -- which
+a `history::Stop` cannot hold. So
 `RestoredEntry::stop` puts them back through `Stop::paired`, which is where that rule lives: the
 document says which half is its own, and a half that does not belong to it is the whole document
 rather than a guess. A door's landing states them apart too and is the other caller

@@ -208,7 +208,7 @@ fn symbol_ranges(object: &Object) -> Vec<SymbolRange> {
         })
         .collect();
 
-    let mut max_end = PlacedAddress::new(0);
+    let mut max_end = PlacedAddress::ZERO;
     for range in &mut ranges {
         max_end = max_end.max(range.end);
         range.max_end = max_end;

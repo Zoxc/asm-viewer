@@ -148,7 +148,7 @@ impl Dwarf {
         // `addr2line`'s `Context::find_units` asks its range index about `probe + 1` with a
         // plain addition, so the very last address in the space panics. Declined here rather
         // than left to the guard: this one is ours to see coming.
-        if probe.get() == u64::MAX {
+        if probe == PlacedAddress::MAX {
             return None;
         }
 

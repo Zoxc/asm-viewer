@@ -10,9 +10,9 @@
 //! Where a document was *left* is [`Positions`](crate::positions::Positions); how one is
 //! written to a file is [`SavedDocument`](crate::project::SavedDocument).
 
-use std::{path::Path, sync::Arc};
+use std::{fmt, path::Path, sync::Arc};
 
-use analysis::{Object, Symbol};
+use analysis::{Object, PlacedAddress, SectionAddress, Symbol};
 
 /// One of the two panes that show code.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,6 +34,85 @@ pub enum Kind {
     Source,
     /// The whole of an object's code, as one listing.
     Code,
+}
+
+/// An address **in whichever of the two spaces its document is in**: the object's one
+/// space for the whole of its code, one section's own for a symbol read alone.
+///
+/// The crate's two address types each name a space outright
+/// ([`PlacedAddress`], [`SectionAddress`]); this is the one that has not committed to
+/// either, and a caller must ask which it is before it can do anything with the number.
+/// It is for the three places that hold an address **apart from** the document it belongs
+/// to -- a landing, a planting, a place on a trail -- where neither type fits, because
+/// which one is right is a fact about the document and not about the number.
+///
+/// [`in_document`](Self::in_document) is where a document says which, and
+/// [`Stop::paired`](crate::history::Stop::paired) is where one is put back beside a
+/// document: a pairing that means nothing -- a placed address beside a symbol -- is
+/// dropped there rather than guessed at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Address {
+    /// In the one space an object's sections share: what [`Object::symbol_at_placed`]
+    /// answers in, and what a listing of the whole of its code is keyed by.
+    ///
+    /// [`Object::symbol_at_placed`]: analysis::Object::symbol_at_placed
+    Placed(PlacedAddress),
+    /// In one section's own terms, as [`Section::local`] answers: the addresses the file
+    /// itself states, which are what a symbol read alone is listed in.
+    ///
+    /// [`Section::local`]: analysis::Section::local
+    Local(SectionAddress),
+}
+
+impl Address {
+    /// `address` in whichever space `document` is in, and [`None`] for a document that is
+    /// in neither -- a source file, whose assembly side is whichever symbol its line was
+    /// compiled into, and an object's symbol list, which is no place in any code.
+    /// **The one place a loose number is given a space**, which is what the session file
+    /// needs: it states the number and the document apart, and only the document can say
+    /// which of the two the number was.
+    pub fn in_document(document: &Document, address: u64) -> Option<Address> {
+        match document {
+            Document::Code(_) => Some(Address::Placed(PlacedAddress::new(address))),
+            Document::Symbol(_) => Some(Address::Local(SectionAddress::new(address))),
+            Document::Object(_) | Document::Source(_) => None,
+        }
+    }
+
+    /// The placed address this is, and [`None`] where it is a symbol's own: what a reader
+    /// of an object's code asks, rather than taking the number and hoping.
+    pub fn placed(self) -> Option<PlacedAddress> {
+        match self {
+            Address::Placed(address) => Some(address),
+            Address::Local(_) => None,
+        }
+    }
+
+    /// The section's own address this is, and [`None`] where it is a placed one.
+    pub fn local(self) -> Option<SectionAddress> {
+        match self {
+            Address::Local(address) => Some(address),
+            Address::Placed(_) => None,
+        }
+    }
+
+    /// The plain number, for what is written to a file.
+    pub fn get(self) -> u64 {
+        match self {
+            Address::Placed(address) => address.get(),
+            Address::Local(address) => address.get(),
+        }
+    }
+}
+
+/// Hex as either address prints, so a row draws one without first asking which it is.
+impl fmt::UpperHex for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Address::Placed(address) => fmt::UpperHex::fmt(address, f),
+            Address::Local(address) => fmt::UpperHex::fmt(address, f),
+        }
+    }
 }
 
 /// One of the places the reader has open: a place in a binary, or a file.

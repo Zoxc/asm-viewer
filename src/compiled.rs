@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use analysis::{Object, Symbol, SymbolData};
+use analysis::{Object, PlacedAddress, Symbol, SymbolData};
 
 /// Every symbol in `objects` holding code compiled from `file` over `lines`, object by
 /// object and, within one, in the crate's own order: by placed address. A symbol holding
@@ -78,11 +78,11 @@ pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
 /// the crate answers in placed order and every symbol it names is in a section. It is still
 /// the lowest and not the first because it takes any slice, and one built some other way
 /// carries neither guarantee.
-pub fn lowest_placed(symbols: &[Arc<SymbolData>]) -> Option<u64> {
+pub fn lowest_placed(symbols: &[Arc<SymbolData>]) -> Option<PlacedAddress> {
     symbols
         .iter()
         .filter(|data| data.section.is_some())
-        .map(|data| data.placed(data.address).get())
+        .map(|data| data.placed(data.address))
         .min()
 }
 

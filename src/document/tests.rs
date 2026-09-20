@@ -63,3 +63,34 @@ fn a_source_document_closes_with_nothing() {
     assert!(!source.in_file(Path::new("/tmp/lib.a")));
     assert_eq!(source.file(), Path::new("/tmp/lib.a"));
 }
+
+/// Which space a loose number is in is the document it came with, and the two documents
+/// that are no place in any code give it none. **The one place a saved number is given a
+/// space** (`src/project/restore.rs`), so a wrong answer here is a place restored in the
+/// other listing's terms — right on a linked image, where every bias is 0, and wrong on
+/// every relocatable object.
+#[test]
+fn a_loose_number_takes_the_space_of_the_document_it_came_with() {
+    let object = object("/tmp/lib.a", "a.o");
+    let symbol = Symbol {
+        object: object.clone(),
+        data: object.symbols_sorted[0].clone(),
+    };
+
+    assert_eq!(
+        Address::in_document(&Document::Code(object.clone()), 0x40),
+        Some(Address::Placed(PlacedAddress::new(0x40)))
+    );
+    assert_eq!(
+        Address::in_document(&Document::Symbol(symbol), 0x40),
+        Some(Address::Local(SectionAddress::new(0x40)))
+    );
+
+    // A file's assembly side is whichever symbol its line was compiled into, and an
+    // object's symbol list is no place in any code: neither states a space of its own.
+    assert_eq!(
+        Address::in_document(&Document::Source("main.rs".into()), 0x40),
+        None
+    );
+    assert_eq!(Address::in_document(&Document::Object(object), 0x40), None);
+}

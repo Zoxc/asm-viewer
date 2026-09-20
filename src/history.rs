@@ -8,9 +8,9 @@
 
 use std::sync::Arc;
 
-use analysis::{Object, Symbol};
+use analysis::{Object, PlacedAddress, SectionAddress, Symbol};
 
-use crate::document::Document;
+use crate::document::{Address, Document};
 use crate::order::Order;
 
 /// The most entries a trail ever holds; the oldest are dropped past it. Per tab, so it is
@@ -46,9 +46,9 @@ pub struct Stop {
 /// The half of a place a [`Stop`] stores; the `document` beside it is the other half.
 #[derive(Clone, Copy, PartialEq)]
 enum Inside {
-    /// An address, only ever beside a [`Document::Code`], where it is placed, or a
-    /// [`Document::Symbol`], where it is the symbol's own.
-    Address(u64),
+    /// An address in whichever space its document is in ([`Address`]): placed beside a
+    /// [`Document::Code`], the symbol's own beside a [`Document::Symbol`].
+    Address(Address),
     /// A line, only ever beside a [`Document::Source`].
     Line(u32),
 }
@@ -65,9 +65,9 @@ pub enum Place<'a> {
     /// The document itself, at no place in particular.
     Whole,
     /// A placed address in an object's code, and the object whose code it is.
-    Code(&'a Arc<Object>, u64),
+    Code(&'a Arc<Object>, PlacedAddress),
     /// An instruction of a symbol, at the symbol's own address for it.
-    Instruction(u64),
+    Instruction(SectionAddress),
     /// A line of a source file. 1-based, as DWARF's are.
     Source(u32),
 }
@@ -89,19 +89,19 @@ impl Stop {
     }
 
     /// A place in `object`'s code, at a placed address.
-    pub fn at(object: Arc<Object>, address: u64) -> Stop {
+    pub fn at(object: Arc<Object>, address: PlacedAddress) -> Stop {
         Stop {
             document: Document::Code(object),
-            place: Some(Inside::Address(address)),
+            place: Some(Inside::Address(Address::Placed(address))),
         }
     }
 
     /// An instruction of `symbol`, at the symbol's own address for it: where following a
     /// call it makes to itself lands.
-    pub fn in_symbol(symbol: Symbol, address: u64) -> Stop {
+    pub fn in_symbol(symbol: Symbol, address: SectionAddress) -> Stop {
         Stop {
             document: Document::Symbol(symbol),
-            place: Some(Inside::Address(address)),
+            place: Some(Inside::Address(Address::Local(address))),
         }
     }
 
@@ -120,11 +120,17 @@ impl Stop {
     /// and a landing each state them loose -- an address, a line and a document, each
     /// its own value -- and can therefore state a pairing that means nothing, so a place
     /// whose half does not belong to its document is the document itself and not a
-    /// guess.
-    pub fn paired(document: Document, address: Option<u64>, line: Option<u32>) -> Stop {
+    /// guess. The **space** is half of belonging: a placed address beside a symbol, or a
+    /// symbol's own beside an object's code, is as much a pairing that means nothing as
+    /// a line beside either, and falls through here the same way.
+    pub fn paired(document: Document, address: Option<Address>, line: Option<u32>) -> Stop {
         match (document, address, line) {
-            (Document::Code(object), Some(address), _) => Stop::at(object, address),
-            (Document::Symbol(symbol), Some(address), _) => Stop::in_symbol(symbol, address),
+            (Document::Code(object), Some(Address::Placed(address)), _) => {
+                Stop::at(object, address)
+            }
+            (Document::Symbol(symbol), Some(Address::Local(address)), _) => {
+                Stop::in_symbol(symbol, address)
+            }
             (Document::Source(file), _, Some(line)) => Stop::on(file, line),
             (document, _, _) => Stop::whole(document),
         }
@@ -133,10 +139,12 @@ impl Stop {
     /// Where this is inside its document.
     pub fn place(&self) -> Place<'_> {
         match (&self.document, self.place) {
-            (Document::Code(object), Some(Inside::Address(address))) => {
+            (Document::Code(object), Some(Inside::Address(Address::Placed(address)))) => {
                 Place::Code(object, address)
             }
-            (Document::Symbol(_), Some(Inside::Address(address))) => Place::Instruction(address),
+            (Document::Symbol(_), Some(Inside::Address(Address::Local(address)))) => {
+                Place::Instruction(address)
+            }
             (Document::Source(_), Some(Inside::Line(line))) => Place::Source(line),
             // The constructors write the place beside the document it belongs to and
             // nothing else writes it, so what is left is the documents that carry none.
@@ -155,9 +163,10 @@ impl Stop {
 
     /// The address this is at, for a stop in an object's code -- placed -- or at an
     /// instruction of a symbol -- the symbol's own -- and [`None`] for every other place.
-    pub fn address(&self) -> Option<u64> {
+    pub fn address(&self) -> Option<Address> {
         match self.place() {
-            Place::Code(_, address) | Place::Instruction(address) => Some(address),
+            Place::Code(_, address) => Some(Address::Placed(address)),
+            Place::Instruction(address) => Some(Address::Local(address)),
             Place::Whole | Place::Source(_) => None,
         }
     }

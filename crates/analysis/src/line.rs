@@ -295,7 +295,7 @@ impl RowCollector {
         // binary-search them: it looks for the last row starting at or before an address, and
         // a row nested inside a longer one makes that answer arbitrary. The row that starts
         // first keeps the addresses it covers, and one left with nothing goes.
-        let mut covered = SectionAddress::new(0);
+        let mut covered = SectionAddress::ZERO;
         rows.retain_mut(|row| {
             row.range.start = row.range.start.max(covered);
             if row.range.start >= row.range.end {

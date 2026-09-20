@@ -11,11 +11,11 @@ use std::{
     sync::Arc,
 };
 
-use analysis::{Object, Symbol, SymbolData};
+use analysis::{Object, PlacedAddress, SectionAddress, Symbol, SymbolData};
 
 use crate::counter;
 use crate::docs::{DocId, Entry};
-use crate::document::Document;
+use crate::document::{Address, Document};
 use crate::history::{History, Stop};
 use crate::positions::{Driven, Fraction, Positions, Spot, TopRow};
 use crate::tabs::Page;
@@ -167,8 +167,8 @@ impl LeftAt<'_> {
             src_row: src.row,
             src_into: src.into.0,
             line: self.driven.line(&entry),
-            asm_address: spot.map(|spot| spot.address),
-            code_address: stop.address(),
+            asm_address: spot.map(|spot| spot.address.get()),
+            code_address: stop.address().map(Address::get),
             src_line: stop.line(),
             document: SavedDocument::from_document(&stop.document),
         }
@@ -329,10 +329,11 @@ pub struct RestoredEntry {
     pub asm_row: TopRow,
     pub src_row: TopRow,
     pub line: Option<u32>,
-    /// The address an object's code tab was scrolled to, and nothing else.
-    pub address: Option<u64>,
-    /// The address the place itself is at, where it is a place in an object's code.
-    pub code_address: Option<u64>,
+    /// The address an object's code tab was scrolled to, and nothing else. Placed, that
+    /// being the space such a listing draws; a number until it is read back here.
+    pub address: Option<PlacedAddress>,
+    /// The address the place itself is at, in whichever space its document is in.
+    pub code_address: Option<Address>,
     /// The line the place itself is, where it is a place in a source file.
     pub src_line: Option<u32>,
 }
@@ -366,7 +367,7 @@ impl SavedDocument {
                 path: symbol.object.path.clone(),
                 object_name: symbol.object.name.clone(),
                 address: symbol.data.address.get(),
-                symbol_name: SavedName::of(&symbol.data.name, symbol.data.address.get()),
+                symbol_name: SavedName::of(&symbol.data.name, symbol.data.address),
             },
             Document::Source(file) => SavedDocument::Source {
                 path: file.to_string(),
@@ -398,10 +399,12 @@ impl SavedDocument {
                 ..
             } => {
                 let object = loaded.object(self)?;
+                // A symbol's saved address is its own, the space its listing draws.
+                let address = SectionAddress::new(*address);
                 let data = SavedDocument::find_symbol(
                     &object,
-                    &symbol_name.text(*address),
-                    *address,
+                    &symbol_name.text(address),
+                    address,
                     loaded.changed(path),
                 )?
                 .clone();
@@ -443,11 +446,11 @@ impl SavedDocument {
     fn find_symbol<'a>(
         object: &'a Object,
         name: &str,
-        address: u64,
+        address: SectionAddress,
         rebuilt: bool,
     ) -> Option<&'a Arc<SymbolData>> {
         let named = object.symbols_named(name);
-        let exact = named.iter().find(|data| data.address.get() == address);
+        let exact = named.iter().find(|data| data.address == address);
         match (exact, rebuilt, named) {
             (Some(data), _, _) => Some(data),
             (None, true, [one]) => Some(one),
@@ -534,12 +537,15 @@ impl SavedEntry {
             ),
         };
         Some(RestoredEntry {
-            document,
+            document: document.clone(),
             asm_row,
             src_row,
             line: self.line,
-            address,
-            code_address,
+            address: address.map(PlacedAddress::new),
+            // The space a saved number is in is the document it was saved with, which is
+            // the one thing the file cannot state: `Address::in_document` is where it comes
+            // back ([`Stop::paired`] is what refuses a pairing that means nothing).
+            code_address: code_address.and_then(|address| Address::in_document(&document, address)),
             src_line: self.src_line,
         })
     }

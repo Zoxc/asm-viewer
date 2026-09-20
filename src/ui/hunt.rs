@@ -36,7 +36,7 @@ pub(crate) struct Hunt {
     pub(crate) filter: Filter,
     pub(crate) direction: Direction,
     /// The address it started from, which is where the pane was.
-    pub(crate) from: u64,
+    pub(crate) from: PlacedAddress,
     /// Where it has got to.
     pub(crate) walked: Walked,
 }
@@ -79,7 +79,7 @@ pub(crate) enum Walked {
     /// Still going, and how much of the code it has been through, none to all of it.
     Walking(f32),
     /// The match it stopped on: the address of the line it is on, and its columns.
-    Found(u64, Range<usize>),
+    Found(PlacedAddress, Range<usize>),
     /// All the way round, and nothing.
     Nothing,
 }
@@ -89,7 +89,7 @@ pub(crate) enum Hunted {
     /// How much of the code has been walked.
     Through(f32),
     /// The first match: the placed address of the line it is on, and its columns.
-    Found(u64, Range<usize>),
+    Found(PlacedAddress, Range<usize>),
 }
 
 /// How many stretches are walked between one word about the progress and the next. A
@@ -113,7 +113,7 @@ pub(crate) fn hunt(
     object: &Object,
     code: &Arc<CodeListing>,
     filter: &Filter,
-    from: u64,
+    from: PlacedAddress,
     direction: Direction,
     emit: &mut dyn FnMut(Hunted) -> ControlFlow<()>,
 ) {
@@ -124,7 +124,7 @@ pub(crate) fn hunt(
         return;
     };
     let first = code
-        .at(PlacedAddress::new(from))
+        .at(from)
         .and_then(|place| index.index(place))
         .unwrap_or(0);
 
@@ -192,8 +192,8 @@ pub(crate) fn use_code_hunt(
     at: Where,
     object: Arc<Object>,
     reading: State<Reading>,
-    from: impl Fn() -> u64 + 'static,
-    mut land: impl FnMut(u64, Range<usize>) -> bool + 'static,
+    from: impl Fn() -> PlacedAddress + 'static,
+    mut land: impl FnMut(PlacedAddress, Range<usize>) -> bool + 'static,
 ) {
     let finds = use_try_consume::<Looking>().map(|looking| looking.0);
     let from = Rc::new(from);
@@ -331,7 +331,7 @@ pub(crate) fn use_code_hunt(
 
 /// A walk as a step starts it: the bar it is for, which walk, the object it walks, the
 /// pattern, where it starts and which way it goes.
-type Walk = (Where, u64, Over, Filter, u64, Direction);
+type Walk = (Where, u64, Over, Filter, PlacedAddress, Direction);
 
 /// Where the next walk's id comes from: one count for every listing, so no two walks
 /// anywhere share an id, and a list mounted again cannot reuse one a bar still holds.

@@ -157,14 +157,14 @@ fn the_lowest_placed_address_is_not_the_first() {
         placed("early", 0x10, Bias::new(0x2000)),
         placed("late", 0x40, Bias::new(0x1000)),
     ];
-    assert_eq!(lowest_placed(&symbols), Some(0x1040));
+    assert_eq!(lowest_placed(&symbols), Some(PlacedAddress::new(0x1040)));
 
     // One section is the ordinary case, and there the two agree.
     let one = [
         placed("a", 0x40, Bias::new(0x1000)),
         placed("b", 0x10, Bias::new(0x1000)),
     ];
-    assert_eq!(lowest_placed(&one), Some(0x1010));
+    assert_eq!(lowest_placed(&one), Some(PlacedAddress::new(0x1010)));
 }
 
 /// A symbol in no section is in no listing either, and nothing at all is no answer.
@@ -181,7 +181,7 @@ fn a_symbol_with_no_section_is_nowhere_to_open() {
     // And it is stepped over rather than taken as the lowest.
     assert_eq!(
         lowest_placed(&[loose, placed("a", 0x40, Bias::NONE)]),
-        Some(0x40)
+        Some(PlacedAddress::new(0x40))
     );
     assert_eq!(lowest_placed(&[]), None);
 }

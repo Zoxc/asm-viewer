@@ -447,7 +447,7 @@ pub(crate) struct Program {
     /// Where the listing opens: the lowest placed address the pad's own code sits at, so
     /// what the reader scrolls down through from there is their own code before the
     /// runtime's. `None` with no `file`, and for a file that produced no code at all.
-    pub(crate) opening: Option<u64>,
+    pub(crate) opening: Option<PlacedAddress>,
 }
 
 /// One pad: everything the Scratchpad pane draws about it.

@@ -2,6 +2,16 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use analysis::{Architecture, BinaryFormat, Object, ObjectData, SectionAddress, SymbolData};
 
+/// A placed address and one of a section's own, written as the numbers a test means by
+/// them: what these assertions are about is which place is held, not the spelling.
+fn placed_at(address: u64) -> PlacedAddress {
+    PlacedAddress::new(address)
+}
+
+fn at(address: u64) -> SectionAddress {
+    SectionAddress::new(address)
+}
+
 use super::*;
 
 /// A distinct stop: two calls with the same `name` still produce different `Arc`s, and so
@@ -373,12 +383,12 @@ fn two_places_in_one_document_are_two_entries() {
     let code = Document::Code(object.clone());
     let mut history = History::default();
     history.push(Stop::whole(code.clone()));
-    history.push(Stop::at(object.clone(), 0x10));
-    history.push(Stop::at(object.clone(), 0x40));
+    history.push(Stop::at(object.clone(), placed_at(0x10)));
+    history.push(Stop::at(object.clone(), placed_at(0x40)));
 
     assert_eq!(history.entries().len(), 3);
-    assert!(history.current() == Some(&Stop::at(object.clone(), 0x40)));
-    assert!(history.back() == Some(Stop::at(object.clone(), 0x10)));
+    assert!(history.current() == Some(&Stop::at(object.clone(), placed_at(0x40))));
+    assert!(history.back() == Some(Stop::at(object.clone(), placed_at(0x10))));
     assert!(history.back() == Some(Stop::whole(code.clone())));
     assert!(history.behind().is_none());
 
@@ -386,12 +396,12 @@ fn two_places_in_one_document_are_two_entries() {
     // revisited document is: going back to 0x10 the long way leaves one entry for it.
     history.forward();
     history.forward();
-    history.push(Stop::at(object.clone(), 0x10));
+    history.push(Stop::at(object.clone(), placed_at(0x10)));
     assert!(
         history.entries()
             == [
-                Stop::at(object.clone(), 0x10),
-                Stop::at(object, 0x40),
+                Stop::at(object.clone(), placed_at(0x10)),
+                Stop::at(object, placed_at(0x40)),
                 Stop::whole(code)
             ],
         "the place was recorded twice"
@@ -471,43 +481,53 @@ fn a_half_that_does_not_belong_to_its_document_is_no_place_at_all() {
     let file: Arc<str> = Arc::from("main.rs");
     let source = Document::Source(file.clone());
 
-    assert!(Stop::paired(code.clone(), Some(64), None).address() == Some(64));
+    let there = Address::Placed(placed_at(64));
+    let its_own = Address::Local(at(64));
+
+    assert!(Stop::paired(code.clone(), Some(there), None).address() == Some(there));
     assert!(Stop::paired(source.clone(), None, Some(7)).line() == Some(7));
     assert!(
         Stop::paired(code.clone(), None, Some(7)) == Stop::whole(code.clone()),
         "a line of an object's code is no place"
     );
     assert!(
-        Stop::paired(source.clone(), Some(64), None) == Stop::whole(source.clone()),
+        Stop::paired(source.clone(), Some(there), None) == Stop::whole(source.clone()),
         "an address in a source file is no place"
     );
     assert!(
-        Stop::paired(code.clone(), Some(64), Some(7)) == Stop::at(object_of(&code), 64),
+        Stop::paired(code.clone(), Some(there), Some(7))
+            == Stop::at(object_of(&code), placed_at(64)),
         "the document says which half is its own"
     );
     assert!(
-        Stop::paired(source, Some(64), Some(7)) == Stop::on(file, 7),
+        Stop::paired(source, Some(there), Some(7)) == Stop::on(file, 7),
         "the document says which half is its own"
+    );
+    // And the space is half of belonging: the same number in the other space is not this
+    // document's half either.
+    assert!(
+        Stop::paired(code.clone(), Some(its_own), None) == Stop::whole(code.clone()),
+        "a symbol's own address in an object's code is no place"
     );
     let whole = selection("neither");
     assert!(
-        Stop::paired(whole.document.clone(), Some(64), Some(7)) == whole,
+        Stop::paired(whole.document.clone(), Some(there), Some(7)) == whole,
         "an object is the place, and carries neither half"
     );
     // A symbol's address is an instruction of it: where a call it makes to itself lands.
     let symbol = Symbol {
         object: object("symbol"),
-        data: Arc::new(SymbolData::new(
-            "f".to_owned(),
-            None,
-            SectionAddress::new(16),
-            None,
-            8,
-        )),
+        data: Arc::new(SymbolData::new("f".to_owned(), None, at(16), None, 8)),
     };
-    let instruction = Stop::paired(Document::Symbol(symbol.clone()), Some(20), Some(7));
-    assert!(instruction == Stop::in_symbol(symbol.clone(), 20));
-    assert!(instruction.address() == Some(20) && instruction.line().is_none());
+    let inside = Address::Local(at(20));
+    let instruction = Stop::paired(Document::Symbol(symbol.clone()), Some(inside), Some(7));
+    assert!(instruction == Stop::in_symbol(symbol.clone(), at(20)));
+    assert!(instruction.address() == Some(inside) && instruction.line().is_none());
+    assert!(
+        Stop::paired(Document::Symbol(symbol.clone()), Some(there), None)
+            == Stop::whole(Document::Symbol(symbol.clone())),
+        "a placed address in a symbol's own listing is no place"
+    );
     assert!(
         Stop::paired(Document::Symbol(symbol.clone()), None, Some(7))
             == Stop::whole(Document::Symbol(symbol)),

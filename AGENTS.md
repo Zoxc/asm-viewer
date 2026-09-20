@@ -238,8 +238,10 @@ command.
 - `src/document.rs` — what the reader has open: an object, a symbol, a source file, or an
   object's whole code, one flat enum. What every tab, trail, visit and bookmark is keyed
   by. Also `Pane`, the two sides a tab has, and which of them a document is driven from;
-  and `Kind`, the three kinds of place a document and a `SavedDocument` both answer for,
-  which is all a glyph needs of either.
+  `Kind`, the three kinds of place a document and a `SavedDocument` both answer for,
+  which is all a glyph needs of either; and `Address`, an address that has not committed
+  to either of the crate's two spaces, for the three places that hold one apart from the
+  document that says which it is.
 - `src/docs.rs` — `Docs`, the table mapping a document tab's `DocId` to the trail behind it: every
   place the tab has shown with a cursor on the one it shows, and which tab is the temporal one.
 - `src/compiled.rs` — the symbols a source line was compiled into, and which of them a tab follows.

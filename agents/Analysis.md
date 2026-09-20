@@ -137,7 +137,8 @@ for a file with no table read) and the section's `bias`. It is `Some` for a sect
 the rest. Those four were four fields beside a `code: bool`, each doc comment repeating that it was
 empty for a section that is not code, and every reader deriving the rule again; as one option the
 invariant is a `match`, and a reader that asks `Section::code()` once has all four or none.
-`Section::bias()` answers 0 for a section with no place, and where the bytes are is one answer too:
+`Section::bias()` answers `Bias::NONE` for a section with no place, and where the bytes are is one
+answer too:
 `Section::end()` is where they stop, `bytes_range()` the addresses they take up in the section's
 own terms, and `placed_range()` that range with the bias added. All three are **checked**, so a
 section whose bytes run off the top of the address space has no range, no place, no extent and no
@@ -167,12 +168,12 @@ must be kept in step. It was on
 it. Both types are a `u64` that can be added to, saturated and asked the bytes between two of
 them (`bytes_to`), and nothing else: every other arithmetic goes through `get()`, where a caller
 means a plain number. A forgotten bias used to be invisible on a linked image, where every bias
-is 0, and wrong on every relocatable object; it is now a type error. A *section* is still not in
-the type, so two of one section's addresses and two of another's compare alike -- which is why
-`Code::symbol_at_local` still checks its hit is in the section it asked about. What crosses into the app
+is 0, and wrong on every relocatable object; it is now a type error. A *section* is still not
+in the type, so two of one section's addresses and two of another's compare alike -- which is
+why `Code::symbol_at_local` still checks its hit is in the section it asked about. What crosses into the app
 crosses as these types too -- a stretch's range, a gap's, an assembly's, an instruction's
-address, a line row's -- though the app's own `Spot`, `Stop` and `Landing` keep the `u64` they
-are saved as and convert at the edge.
+address, a line row's -- and the app carries them on (`agents/UI.md`), converting only where a
+number goes to a file.
 **And one search looks an address up in a list of ranges**: `covering` (`model.rs`), the last
 range starting at or before it, and nothing where that one does not contain it. An unwind
 entry (`unwind_extent`), a listing's stretch (`Listing::stretch_at`), a placed section
@@ -659,12 +660,13 @@ text. *Same section*: the index is by placed address (`Section::bias` added), wh
 relocatable object's all-at-0 code sections distinct places, but a displacement past a section's end
 still lands in the placed space on some other section's function, so the hit has to be in the
 instruction's own section; `tests/linked_call.rs` pins a two-section object whose call would
-otherwise name the other's. **Each of the two takes the space it is named for**, and now says so in its
-signature: `Code::symbol_at_local` a `SectionAddress`, `Object::symbol_at_placed` a
+otherwise name the other's. **Each of the two takes the space it is named for**, and now says
+so in its signature: `Code::symbol_at_local` a `SectionAddress`, `Object::symbol_at_placed` a
 `PlacedAddress`. While both were `symbol_at` over a `u64`, a caller holding a section-local
 address and reaching for `Object`'s got an answer rather than an error -- the right one on a
 linked image, where every bias is 0, and some other section's function on every relocatable
-object. The names came first and the types now do the work. *Calls only*: an unconditional `jmp` out of the symbol is a tail call
+object. The names came first and the types now do the work.
+*Calls only*: an unconditional `jmp` out of the symbol is a tail call
 and could be named the same way, but its displacement is an `Operand::Branch`'s, so making it a link
 to a function is the item of its own that `notes/Goals.md` says it is. The relocation still wins
 where there is one: a relocated call whose target is a section symbol

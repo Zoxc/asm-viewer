@@ -173,7 +173,7 @@ impl Pdb {
             }));
         }
         contributions.sort_unstable_by_key(|c| (c.start, c.end, c.module));
-        let mut max_end = SectionAddress::new(0);
+        let mut max_end = SectionAddress::ZERO;
         for contribution in &mut contributions {
             max_end = max_end.max(contribution.end);
             contribution.max_end = max_end;

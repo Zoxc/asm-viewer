@@ -157,7 +157,7 @@ pub(crate) const CUT_TEXT: &str =
 #[derive(Clone)]
 struct TextOf {
     /// The address column, or none for a row that stands for no address of its own.
-    address: Option<u64>,
+    address: Option<PlacedAddress>,
     /// The data directive a row of bytes wears in front of its values, and none for
     /// anything else ([`dump_line`]).
     mark: Option<&'static str>,
@@ -193,7 +193,7 @@ fn text_at(
 ) -> Option<TextOf> {
     match kind {
         Kind::Header => Some(TextOf {
-            address: Some(placed.range().start.get()),
+            address: Some(placed.range().start),
             mark: None,
             text: header_text(placed),
             role: Role::Header,
@@ -202,7 +202,7 @@ fn text_at(
         Kind::Label(index) => {
             let symbol = stretch.symbols.get(index)?.clone();
             Some(TextOf {
-                address: Some(placed.place(stretch.range.start).get()),
+                address: Some(placed.place(stretch.range.start)),
                 mark: None,
                 text: label_text(&symbol),
                 role: Role::Label,
@@ -210,7 +210,7 @@ fn text_at(
             })
         }
         Kind::Cut => Some(TextOf {
-            address: Some(placed.place(body?.gap.as_ref()?.range.start).get()),
+            address: Some(placed.place(body?.gap.as_ref()?.range.start)),
             mark: None,
             text: CUT_TEXT.to_owned(),
             role: Role::Cut,
@@ -254,11 +254,11 @@ fn line_at(
     stretch: &Stretch,
     body: Option<&Body>,
     kind: Kind,
-) -> Option<(u64, Line)> {
+) -> Option<(PlacedAddress, Line)> {
     if let Kind::Instruction(index) = kind {
         let assembly = body?.assembly.as_ref()?;
         let address = placed.place(assembly.instructions.get(index)?.address);
-        return Some((address.get(), instruction_line(assembly, index)));
+        return Some((address, instruction_line(assembly, index)));
     }
     let text = text_at(placed, stretch, body, kind)?;
     Some((text.address?, text_line(text.mark, &text.text)))
@@ -282,7 +282,7 @@ pub(crate) fn stretch_texts(
     object: &Object,
     index: &section::Flat,
     flat: usize,
-) -> Vec<(u64, Line)> {
+) -> Vec<(PlacedAddress, Line)> {
     let Some((place, stretch)) = index.stretch(flat) else {
         return Vec::new();
     };
@@ -317,7 +317,7 @@ pub(crate) fn code_line(rows: &Rows, row: usize) -> Line {
 
 /// The same asked of the rows the pane is drawing: where row `row` stands and what it
 /// says, and [`None`] where it says nothing.
-fn line_of(rows: &Rows, row: usize) -> Option<(u64, Line)> {
+fn line_of(rows: &Rows, row: usize) -> Option<(PlacedAddress, Line)> {
     let Row { stretch, kind } = rows.row(row)?;
     line_at(
         rows.placed_of(stretch)?,
@@ -342,7 +342,7 @@ fn gap_row_bytes(
     placed: &analysis::Placed,
     gap: &Range<SectionAddress>,
     index: usize,
-) -> Option<(u64, Vec<u8>)> {
+) -> Option<(PlacedAddress, Vec<u8>)> {
     let start = gap
         .start
         .checked_add((index as u64).checked_mul(GAP_BYTES_PER_ROW)?)?;
@@ -352,7 +352,7 @@ fn gap_row_bytes(
     let end = start.saturating_add(GAP_BYTES_PER_ROW).min(gap.end);
     // The section the stretch is in holds the bytes; `gap` is in its own addresses.
     let bytes = placed.listing.section().bytes_in(start..end)?.to_vec();
-    Some((placed.place(start).get(), bytes))
+    Some((placed.place(start), bytes))
 }
 
 /// A row that is text and nothing else -- a section's header, a symbol's label, a cut
@@ -571,15 +571,20 @@ impl Component for EmptyRow {
 #[derive(Hash)]
 enum RowKey {
     Header(usize),
-    Rule(u64),
-    Space(u64, bool),
-    Label(u64, usize),
-    Empty(u64, usize),
-    Insn(u64),
-    Sep(u64),
-    Cut(u64),
-    Gap(u64),
+    Rule(PlacedAddress),
+    Space(PlacedAddress, bool),
+    Label(PlacedAddress, usize),
+    Empty(PlacedAddress, usize),
+    Insn(PlacedAddress),
+    Sep(PlacedAddress),
+    Cut(PlacedAddress),
+    Gap(PlacedAddress),
 }
+
+/// What a row with no address of its own is keyed by, which is only ever a row whose
+/// address could not be worked out: a key space no real address shares is not worth the
+/// trouble, since two such rows keying alike is a row redrawn and not a wrong row.
+const NO_ADDRESS: PlacedAddress = PlacedAddress::ZERO;
 
 impl RowKey {
     /// The key row `row` draws under, `at` being what [`Rows::row`] said it is. **The one
@@ -590,23 +595,23 @@ impl RowKey {
     /// row's own ([`text_of`]), an instruction's placed one -- so that neither is worked
     /// out twice and an instruction is keyed by the address the row is drawn at. [`None`]
     /// where the caller has none.
-    fn of(rows: &Rows, row: usize, at: Row, stated: Option<u64>) -> Self {
+    fn of(rows: &Rows, row: usize, at: Row, stated: Option<PlacedAddress>) -> Self {
         // The stretch's start, which the rule over it, the blank under it and its guessed
         // rows all stand for, and the row's own address.
-        let start = || rows.start_of(at.stretch).unwrap_or(0);
+        let start = || rows.start_of(at.stretch).unwrap_or(NO_ADDRESS);
         let address = || rows.address_of(row);
         match at.kind {
             Kind::Header => Self::Header(rows.place(at.stretch).map_or(0, |place| place.section)),
             Kind::Rule => Self::Rule(start()),
             Kind::Space { under } => Self::Space(start(), under),
-            Kind::Label(index) => Self::Label(address().unwrap_or(0), index),
+            Kind::Label(index) => Self::Label(address().unwrap_or(NO_ADDRESS), index),
             Kind::Empty(index) => Self::Empty(start(), index),
-            Kind::Instruction(_) => Self::Insn(stated.or_else(address).unwrap_or(0)),
-            Kind::Separator { .. } => Self::Sep(stated.or_else(address).unwrap_or(0)),
-            Kind::Cut => Self::Cut(address().or(stated).unwrap_or(0)),
+            Kind::Instruction(_) => Self::Insn(stated.or_else(address).unwrap_or(NO_ADDRESS)),
+            Kind::Separator { .. } => Self::Sep(stated.or_else(address).unwrap_or(NO_ADDRESS)),
+            Kind::Cut => Self::Cut(address().or(stated).unwrap_or(NO_ADDRESS)),
             // By the row's own address and never the bytes': a row whose bytes could not
             // be found would otherwise share a key with every other such row.
-            Kind::Gap(_) => Self::Gap(address().or(stated).unwrap_or(0)),
+            Kind::Gap(_) => Self::Gap(address().or(stated).unwrap_or(NO_ADDRESS)),
         }
     }
 }
@@ -754,8 +759,8 @@ impl Component for SectionList {
                         .map(|picked| picked.chars.lead().row);
                     let built = held.peek().clone();
                     match (row, built) {
-                        (Some(row), Some(built)) => built.address_of(row).unwrap_or(0),
-                        _ => 0,
+                        (Some(row), Some(built)) => built.address_of(row).unwrap_or(NO_ADDRESS),
+                        _ => NO_ADDRESS,
                     }
                 },
                 move |address, columns| {
@@ -917,7 +922,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
                 touching(stretch),
                 data.marking.clone(),
             )
-            .key(RowKey::of(rows, i, at, Some(address)))
+            .key(RowKey::of(rows, i, at, address.placed()))
             .into_element()
         }
         Kind::Separator { below } => {
@@ -926,7 +931,7 @@ fn build_row(i: usize, data: &SectionRows) -> Element {
             };
             let address = asm.drawn_address(below);
             SeparatorRow::over(&asm, below, i, data.chars, touching(stretch))
-                .key(RowKey::of(rows, i, at, Some(address)))
+                .key(RowKey::of(rows, i, at, address.placed()))
                 .into_element()
         }
     }
@@ -1315,7 +1320,9 @@ fn plant_caret(
     plant: State<Option<Planting>>,
     marked: State<Marks>,
 ) -> Option<(usize, Spot)> {
-    let address = take_planting(plant, &step.stop.document)?;
+    // A planting for this listing, which draws an object's whole code and so places
+    // every address it draws; a symbol's own is another listing's.
+    let address = take_planting(plant, &step.stop.document)?.placed()?;
     let row = built.body_row_for(address)?;
     land_row(marked, file_at(built, row), row, Owed::by(Pane::Assembly));
     let first = built.row_for(address).unwrap_or(row);

@@ -755,7 +755,7 @@ pub(crate) const STALE_PROGRAM: &str = "Edited since this was built";
 pub(crate) struct PadAssembly {
     pub(crate) object: Arc<Object>,
     /// Where the listing opens: the lowest placed address the pad's own code sits at.
-    pub(crate) opening: Option<u64>,
+    pub(crate) opening: Option<PlacedAddress>,
     /// The pad's own source as this program spells it, which is what the run the cursor
     /// writes is a run *of*. `None` leaves the listing undriven: there is no name to
     /// compare a row's own against.
@@ -862,7 +862,7 @@ impl Component for PadAssembly {
         let mut plant = use_doors().plant;
         let opening = self.opening.map(|address| Planting {
             tab: Document::Code(self.object.clone()),
-            address,
+            address: Address::Placed(address),
         });
         use_hook(move || {
             if opening.is_some() {

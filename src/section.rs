@@ -135,7 +135,7 @@ pub enum Kind {
 /// (`ui/section_view.rs`).
 pub struct StretchRows {
     /// The placed address the stretch starts at, and how many bytes it covers.
-    start: u64,
+    start: PlacedAddress,
     bytes: u64,
     bias: Bias,
     /// The rule over the stretch and the blank under it, which every stretch has but the
@@ -216,7 +216,7 @@ impl StretchRows {
         #[cfg(test)]
         STRETCHES_COUNTED.set(STRETCHES_COUNTED.get() + 1);
         StretchRows {
-            start: placed.place(stretch.range.start).get(),
+            start: placed.place(stretch.range.start),
             bytes: stretch_bytes(stretch),
             bias: placed.bias(),
             space: flat > 0,
@@ -578,7 +578,7 @@ impl Rows {
     }
 
     /// The placed address stretch `flat` starts at.
-    pub fn start_of(&self, flat: usize) -> Option<u64> {
+    pub fn start_of(&self, flat: usize) -> Option<PlacedAddress> {
         Some(self.stretch_rows(flat)?.start)
     }
 
@@ -623,14 +623,14 @@ impl Rows {
     /// stretch's, an empty row
     /// its share of the stretch's bytes, an instruction its own, a separator the
     /// instruction below it, a cut row the gap row below it, and a gap row its first byte.
-    pub fn address_of(&self, row: usize) -> Option<u64> {
+    pub fn address_of(&self, row: usize) -> Option<PlacedAddress> {
         let Row {
             stretch: flat,
             kind,
         } = self.row(row)?;
         let stretch = self.stretch_rows(flat)?;
         Some(match kind {
-            Kind::Header => self.placed_of(flat)?.range().start.get(),
+            Kind::Header => self.placed_of(flat)?.range().start,
             Kind::Rule | Kind::Space { .. } | Kind::Label(_) => stretch.start,
             Kind::Empty(index) => {
                 let BodyRows::Estimated(rows) = &stretch.body else {
@@ -646,17 +646,16 @@ impl Rows {
             Kind::Instruction(index) | Kind::Separator { below: index } => {
                 let assembly = self.body(flat)?.assembly.as_ref()?;
                 let address = assembly.instructions.get(index)?.address;
-                self.placed_of(flat)?.place(address).get()
+                self.placed_of(flat)?.place(address)
             }
             Kind::Cut => {
                 let gap = self.body(flat)?.gap.as_ref()?;
-                self.placed_of(flat)?.place(gap.range.start).get()
+                self.placed_of(flat)?.place(gap.range.start)
             }
             Kind::Gap(index) => {
                 let gap = self.body(flat)?.gap.as_ref()?;
                 self.placed_of(flat)?
                     .place(gap.range.start)
-                    .get()
                     .saturating_add((index as u64).saturating_mul(GAP_BYTES_PER_ROW))
             }
         })
@@ -670,18 +669,15 @@ impl Rows {
     /// stretch: between two sections, or outside every one. A view keeping its place by
     /// an address keeps how many rows past this it was, so the top row being a stretch's
     /// first instruction comes back as that row and not as the label two rows up.
-    pub fn row_for(&self, address: u64) -> Option<usize> {
-        let flat = self
-            .layout
-            .flat
-            .index(self.code().at(PlacedAddress::new(address))?)?;
+    pub fn row_for(&self, address: PlacedAddress) -> Option<usize> {
+        let flat = self.layout.flat.index(self.code().at(address)?)?;
         let stretch = self.stretch_rows(flat)?;
         let first = self.start(flat);
         if address <= stretch.start {
             return Some(first);
         }
         let body = self.body_start(flat)?;
-        let into = address - stretch.start;
+        let into = stretch.start.bytes_to(address)?;
         match &stretch.body {
             BodyRows::Estimated(rows) => {
                 let share = into
@@ -692,7 +688,7 @@ impl Rows {
                 Some(body + index)
             }
             BodyRows::Decoded(decoded) => {
-                let local = self.placed_of(flat)?.local(PlacedAddress::new(address));
+                let local = self.placed_of(flat)?.local(address);
                 if let Some(gap) = decoded
                     .gap
                     .as_ref()
@@ -721,7 +717,7 @@ impl Rows {
     /// a row of code and not the name over it, which `row_for` answers for a view that
     /// is better shown the label. [`None`] where `row_for` is, and for a stretch with no
     /// body at all.
-    pub fn body_row_for(&self, address: u64) -> Option<usize> {
+    pub fn body_row_for(&self, address: PlacedAddress) -> Option<usize> {
         let row = self.row_for(address)?;
         let flat = self.stretch_of(row)?;
         let body = self.body_start(flat)?;

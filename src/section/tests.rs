@@ -262,8 +262,8 @@ fn an_address_finds_the_row_that_draws_it_and_the_row_names_it_back() {
     // Between two sections is nowhere, and so is past the end.
     let air = code.sections()[0].range().end;
     assert!(air < code.sections()[1].range().start);
-    assert_eq!(empty.row_for(air.get()), None);
-    assert_eq!(empty.row_for(u64::MAX), None);
+    assert_eq!(empty.row_for(air), None);
+    assert_eq!(empty.row_for(PlacedAddress::new(u64::MAX)), None);
 }
 
 /// An address that is no row's own -- inside an instruction, inside a row of bytes,
@@ -292,8 +292,8 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
         for flat in 0..rows.layout.flat.count() {
             let range = rows_of(rows, flat);
             let start = rows.start_of(flat).unwrap();
-            let end = start + rows.stretch_rows(flat).unwrap().bytes;
-            for address in start..end {
+            let bytes = rows.stretch_rows(flat).unwrap().bytes;
+            for address in (0..bytes).map(|byte| start.saturating_add(byte)) {
                 let expected = if address == start {
                     range.start
                 } else {
@@ -326,12 +326,12 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
     let second = &assembly.instructions[1];
     assert!(second.bytes.len() > 1, "a one-byte instruction");
     assert_eq!(
-        with_gap.row_for(second.address.placed(bias).get() + 1),
+        with_gap.row_for(second.address.placed(bias).saturating_add(1)),
         Some(body + 1)
     );
     assert_eq!(with_gap.row(body + 2), row(0, Kind::Gap(0)));
     assert_eq!(
-        with_gap.row_for(cut_at.placed(bias).get() + 3),
+        with_gap.row_for(cut_at.placed(bias).saturating_add(3)),
         Some(body + 2)
     );
 }
@@ -387,10 +387,10 @@ fn a_cut_gap_draws_a_cut_row_over_its_bytes() {
     assert_eq!(cut.row(body + 2), row(0, Kind::Cut));
     assert_eq!(cut.row(body + 3), row(0, Kind::Gap(0)));
     assert_eq!(cut.len(), plain.len() + 1);
-    assert_eq!(cut.address_of(body + 2), Some(cut_at.placed(bias).get()));
-    assert_eq!(cut.address_of(body + 3), Some(cut_at.placed(bias).get()));
+    assert_eq!(cut.address_of(body + 2), Some(cut_at.placed(bias)));
+    assert_eq!(cut.address_of(body + 3), Some(cut_at.placed(bias)));
     // The address is the bytes' row's, as an instruction's is and not its separator's.
-    assert_eq!(cut.row_for(cut_at.placed(bias).get()), Some(body + 3));
+    assert_eq!(cut.row_for(cut_at.placed(bias)), Some(body + 3));
     assert!((0..plain.len()).all(|at| kind_of(&plain, at) != Some(Kind::Cut)));
 }
 
@@ -408,7 +408,7 @@ fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
     for (name, rows) in [("estimated", &empty), ("half decoded", &half)] {
         for flat in 0..rows.layout.flat.count() {
             let start = rows.start_of(flat).unwrap();
-            let end = start + rows.stretch_rows(flat).unwrap().bytes;
+            let bytes = rows.stretch_rows(flat).unwrap().bytes;
             let body = rows.body_start(flat).unwrap();
             assert_ne!(
                 rows.row_for(start),
@@ -427,7 +427,7 @@ fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
                     ..
                 })
             ));
-            for address in start + 1..end {
+            for address in (1..bytes).map(|byte| start.saturating_add(byte)) {
                 assert_eq!(
                     rows.body_row_for(address),
                     rows.row_for(address),
@@ -438,7 +438,7 @@ fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
     }
 
     let air = code.sections()[0].range().end;
-    assert_eq!(empty.body_row_for(air.get()), None);
+    assert_eq!(empty.body_row_for(air), None);
 }
 
 /// Decoding a stretch replaces its guess with its rows; every row above it stays where it
@@ -518,7 +518,7 @@ fn a_relocatable_objects_sections_draw_at_their_placed_addresses() {
 
     let labels: Vec<u64> = (0..rows.len())
         .filter(|&row| matches!(kind_of(&rows, row), Some(Kind::Label(_))))
-        .map(|row| rows.address_of(row).unwrap())
+        .map(|row| rows.address_of(row).unwrap().get())
         .collect();
     assert_eq!(labels, [0x10, 0x30, 0x50]);
 
@@ -533,7 +533,7 @@ fn a_relocatable_objects_sections_draw_at_their_placed_addresses() {
         assert_eq!(rows.bias(flat), Some(code.sections()[flat].bias()));
         let second = rows.address_of(body + 1).unwrap();
         let own = bodies[&flat].assembly.as_ref().unwrap().instructions[1].address;
-        assert_eq!(second, own.placed(code.sections()[flat].bias()).get());
+        assert_eq!(second, own.placed(code.sections()[flat].bias()));
     }
 
     // The one-`.text` build is the same three functions at their own addresses, unmoved.
@@ -542,7 +542,7 @@ fn a_relocatable_objects_sections_draw_at_their_placed_addresses() {
     let rows = nothing_decoded(code);
     let labels: Vec<u64> = (0..rows.len())
         .filter(|&row| matches!(kind_of(&rows, row), Some(Kind::Label(_))))
-        .map(|row| rows.address_of(row).unwrap())
+        .map(|row| rows.address_of(row).unwrap().get())
         .collect();
     assert_eq!(labels, [0, 0x14, 0x30]);
     assert_eq!(
@@ -642,7 +642,7 @@ fn a_stretch_that_decoded_to_no_instructions_draws_its_bytes() {
     assert_eq!(rows.address_of(body), Some(start));
     for byte in 0..bytes {
         let index = (byte / GAP_BYTES_PER_ROW) as usize;
-        let address = start + byte;
+        let address = start.saturating_add(byte);
         assert_eq!(rows.row(body + index), row(1, Kind::Gap(index)));
         assert_eq!(
             rows.body_row_for(address),

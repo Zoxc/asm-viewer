@@ -12,6 +12,7 @@
 
 use super::*;
 use crate::counter;
+use std::fmt;
 
 /// The address column, as every row of every listing draws it and copies it: sixteen
 /// upper-case hex digits and the space after them.
@@ -19,20 +20,26 @@ use crate::counter;
 /// One spelling, so a change to the column's width -- or to how a 32-bit object's addresses
 /// are shown -- is one edit and cannot leave the drawn column and the copied one disagreeing.
 /// How wide the column is *drawn* is [`ADDRESS_WIDTH`], a floor the digits sit inside.
-pub(crate) fn address_column(address: u64) -> String {
+pub(crate) fn address_column(address: impl Drawable) -> String {
     format!("{address:016X} ")
 }
 
+/// What an address column may be handed: the two spaces, and the one that has not
+/// committed to either. Sealed to those three so that the one place the app writes an
+/// address for the reader cannot be given a length, a row index or a bare number -- which
+/// `impl fmt::UpperHex` alone would take.
+pub(crate) trait Drawable: fmt::UpperHex {}
+impl Drawable for PlacedAddress {}
+impl Drawable for SectionAddress {}
+impl Drawable for Address {}
+
 /// One instruction as one line of text, which is what a copy of the row has to be: the
 /// address column, then [`instruction_line`]'s own text. The gutter is left out, being a
-/// picture of the branches. `bias` is what the listing adds to every address it draws
-/// (see [`AsmData::bias`]).
-pub(crate) fn asm_line(instruction: &Instruction, bias: Bias) -> String {
-    format!(
-        "{}{}",
-        address_column(instruction.address.placed(bias).get()),
-        text_of(instruction).0
-    )
+/// picture of the branches. `address` is what the listing draws the row at
+/// ([`AsmData::drawn_address`]), which is the one decision about *which space* a row's
+/// address is in.
+pub(crate) fn asm_line(instruction: &Instruction, address: Address) -> String {
+    format!("{}{}", address_column(address), text_of(instruction).0)
 }
 
 /// What one piece of an instruction's text is: one of the formatter's spans, or the link.
@@ -206,23 +213,16 @@ impl AsmData {
         }
     }
 
-    /// What is added to every address drawn or copied: nothing for a symbol read on its
-    /// own, whose listing draws the section's own addresses.
-    pub(crate) fn bias(&self) -> Bias {
+    /// The address the row of instruction `index` draws and copies, and **which space it
+    /// is in**: the symbol's own where this listing is that symbol alone, and placed by
+    /// the section's bias among its neighbours. The one place that is decided, so no row
+    /// has to say which of the two it wanted.
+    pub(crate) fn drawn_address(&self, index: usize) -> Address {
+        let address = self.assembly().instructions[index].address;
         match self.listing {
-            In::Alone { .. } => Bias::NONE,
-            In::Code { bias, .. } => bias,
+            In::Alone { .. } => Address::Local(address),
+            In::Code { bias, .. } => Address::Placed(address.placed(bias)),
         }
-    }
-
-    /// The address the row of instruction `index` draws and copies: the instruction's own,
-    /// plus the [`bias`](Self::bias) this listing adds. **The one place the two address
-    /// spaces meet**, so no row has to state which of them it wanted.
-    pub(crate) fn drawn_address(&self, index: usize) -> u64 {
-        self.assembly().instructions[index]
-            .address
-            .placed(self.bias())
-            .get()
     }
 
     /// How many lanes the gutter is drawn with: the symbol's own on its own, and
@@ -279,10 +279,10 @@ impl AsmData {
 
     /// `address`, one of this listing's own, in the object's one address space: the
     /// section's place in the layout added (`SymbolData::placed`), which is what a door
-    /// into the object's code takes. Not [`bias`](Self::bias), which is what this listing
-    /// *draws* and is nothing in a symbol's own listing, whose addresses are the file's.
-    pub(crate) fn placed(&self, address: SectionAddress) -> u64 {
-        self.symbol().placed(address).get()
+    /// into the object's code takes. Not [`drawn_address`](Self::drawn_address), which is
+    /// what this listing *draws*, and is a symbol's own where the listing is that symbol.
+    pub(crate) fn placed(&self, address: SectionAddress) -> PlacedAddress {
+        self.symbol().placed(address)
     }
 
     /// The source position the instruction at `index` was compiled from, or `None` where
@@ -364,7 +364,7 @@ pub(crate) enum Door {
     Address {
         object: Arc<Object>,
         /// Where the instruction goes, placed: in the object's one address space.
-        address: u64,
+        address: PlacedAddress,
     },
     /// The row a branch that lands inside this symbol lands on: pressing the
     /// displacement puts that row on screen and pins the line it came from.
@@ -406,7 +406,10 @@ enum Opens {
     /// is a scroll and a caret and neither a tab nor a visit, since `land` plants an
     /// address in the tab that is already showing it. `placed` is the address in the space
     /// that listing draws.
-    InCode { object: Arc<Object>, placed: u64 },
+    InCode {
+        object: Arc<Object>,
+        placed: PlacedAddress,
+    },
     /// The target as a listing of its own: followed in place, the way a browser follows a
     /// link, so the function left is one Back away -- or, with Ctrl, in a tab of its own.
     Symbol(Symbol, Reach),
@@ -414,7 +417,7 @@ enum Opens {
     /// opened in place from a symbol's own listing, and in a tab of its own with Ctrl.
     Code {
         object: Arc<Object>,
-        address: u64,
+        address: PlacedAddress,
         reach: Reach,
     },
     /// A row of the listing on screen, with the place it names for the source pane.
@@ -482,12 +485,12 @@ impl Opens {
             // reveal: the target opens at its top even where this tab has been there
             // before and kept a row for it.
             Opens::Symbol(symbol, reach) => {
-                let address = symbol.data.address.get();
+                let address = symbol.data.address;
                 let tab = Document::Symbol(symbol);
                 let landing = Landing {
                     tab,
                     at: None,
-                    address: Some(address),
+                    address: Some(Address::Local(address)),
                 };
                 land(doors, landing, reach);
             }
@@ -551,7 +554,7 @@ impl Door {
             // at the address that listing draws it at, which is the placed one.
             Door::Symbol { symbol, code_tab } if *code_tab && !ctrl => Opens::InCode {
                 object: symbol.object.clone(),
-                placed: symbol.data.placed(symbol.data.address).get(),
+                placed: symbol.data.placed(symbol.data.address),
             },
             Door::Symbol { symbol, .. } => Opens::Symbol(symbol.clone(), reach),
             Door::Address { object, address } => Opens::Code {
@@ -772,7 +775,7 @@ pub(crate) fn gutter_column(width: usize, arrows: Option<RowArrows>) -> Option<E
 /// it: wide enough for a 64-bit address and the space after it, so every row's text starts
 /// at one x. [`None`] for a row that has no address of its own and gives the column up all
 /// the same.
-pub(crate) fn address_label(address: Option<u64>) -> Element {
+pub(crate) fn address_label(address: Option<impl Drawable>) -> Element {
     label()
         .text(address.map(address_column).unwrap_or_default())
         .min_width(Size::px(ADDRESS_WIDTH))
@@ -1103,7 +1106,7 @@ fn instruction_menu(
     // the Symbols list aside, since the tab is a file. An assembly-driven tab is the
     // symbol already and gets none.
     let alone = (data.code_tab() || data.subject().is_some())
-        .then(|| (symbol.clone(), instruction.address.get()));
+        .then(|| (symbol.clone(), instruction.address));
     // The same symbol as a document, which is what the bookmark item takes.
     let symbol_document = Document::Symbol(symbol);
 
@@ -1251,10 +1254,7 @@ fn owed_listing_row(
 ///
 /// [`None`] where the address is before the listing's first instruction, which is a
 /// planting dropped rather than left.
-fn planted_index(instructions: &[Instruction], address: u64) -> Option<usize> {
-    // The planting is in the space this listing draws, which for a symbol read alone is
-    // the section's own ([`Landing::address`]).
-    let address = SectionAddress::new(address);
+fn planted_index(instructions: &[Instruction], address: SectionAddress) -> Option<usize> {
     instructions
         .partition_point(|instruction| instruction.address <= address)
         .checked_sub(1)
@@ -1349,7 +1349,10 @@ impl Component for InstructionList {
                 if !fresh {
                     return;
                 }
-                let Some(address) = take_planting(plant, &stop.document) else {
+                // The planting for a symbol's own tab, whose listing draws the
+                // section's own addresses; a placed one is another listing's.
+                let Some(address) = take_planting(plant, &stop.document).and_then(Address::local)
+                else {
                     return;
                 };
                 let Some(index) = planted_index(&data.assembly().instructions, address) else {
@@ -1386,13 +1389,14 @@ impl Component for InstructionList {
             Some(data.searchable()),
             ListingText {
                 line: Rc::new({
-                    let (assembly, lanes) = (data.assembly().clone(), data.lanes().clone());
-                    let bias = data.bias();
+                    let (data, lanes) = (data.clone(), data.lanes().clone());
                     move |row| {
                         lanes
                             .instruction_at(row)
-                            .and_then(|index| assembly.instructions.get(index))
-                            .map(|instruction| asm_line(instruction, bias))
+                            .and_then(|index| {
+                                let instruction = data.assembly().instructions.get(index)?;
+                                Some(asm_line(instruction, data.drawn_address(index)))
+                            })
                             .unwrap_or_default()
                     }
                 }),
