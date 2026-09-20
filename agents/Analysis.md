@@ -33,11 +33,12 @@ each path and every member is cut from it. That is the thing streaming must not 
 **Data model**, built once at open time and shared via `Arc`. Only `SymbolKind::Text` symbols are
 kept, plus, for a **linked image only**, the code it declares elsewhere (`declared_code`):
 `dynamic_symbols`, `exports` and `entry`; for a PE whose `.pdb` is found beside it and matches, the
-**procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a nonzero length; `Pdb::procedures`,
-below) and then its **publics** (`S_PUB32` flagged as code or a function; `Pdb::publics`); and the
-**unwind entries** the image's own table states. For an x86-64 PE that table is its exception
-directory (`.pdata`: one `RUNTIME_FUNCTION` per function with unwind info, a begin and an end and no
-name, plus one byte of the `UNWIND_INFO` it names for the chained flag). For an ELF it is its
+**procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a nonzero length) and then its
+**publics** (`S_PUB32` flagged as code or a function), which reach the parse as one list of
+`Declared`s (`Pdb::declared`, below); and the **unwind entries** the image's own table states. For
+an x86-64 PE that table is its exception directory (`.pdata`: one `RUNTIME_FUNCTION` per function
+with unwind info, a begin and an end and no name, plus one byte of the `UNWIND_INFO` it names for
+the chained flag). For an ELF it is its
 `.eh_frame` (one FDE per function with any, a start and a length; the same format on every
 architecture, and on x86-64 every function has one by default, leaves included; no fragment flag, so
 a `.cold` part is a function of its own). `unwind::entries` is the one part that reads call-frame
@@ -48,13 +49,16 @@ this keeps the "nothing is scanned for" rule. A prebuilt LLVM DLL with no COFF s
 goes from zero functions to 22 918 on the strength of the exports; `rustc_driver.dll` from its 15
 241 exports to 70 728 symbols on the strength of its PDB's procedures and 115 861 with its publics;
 a stripped `rustc.exe` from `<entry point>` alone to 412 and 415. There is one symbol per address,
-earliest source winning (symbol table > dynamic symbol > export > entry point > PDB procedure > PDB
-public > unwind entry), since an export is very often the symbol table's own function under a second
-name. The PDB comes last so a name the image itself states is never displaced by the debug file's
-spelling of it, and its 82 933 procedures collapse to the 55 487 the image did not already name,
-folded functions sharing an address being one place. Its publics come after its procedures because a
-procedure carries a display name and a length and a public only a decorated name and an address. But
-the publics are the linker's table of every externally visible symbol, so they survive a
+earliest source winning (symbol table > dynamic symbol > export > entry point > debug file > unwind
+entry), since an export is very often the symbol table's own function under a second name. The debug
+file comes last so a name the image itself states is never displaced by its spelling of it, and the
+PDB's 82 933 procedures collapse to the 55 487 the image did not already name, folded functions
+sharing an address being one place. **The order a backend hands its records over in is their
+precedence**: `declared_code` takes them in it and gives an address to the first that claims it, so
+which of a debug format's record kinds wins is that format's own business and not the parser's. The
+PDB's publics come after its procedures because a procedure carries a display name and a length and
+a public only a decorated name and an address. But the publics are the linker's table of every
+externally visible symbol, so they survive a
 **stripped** PDB (`/PDBSTRIPPED` keeps them and drops the module streams) and name what no module's
 symbols do: a module that shipped without debug info (2250 of `rustc_driver`'s 2907 have no stream),
 thunks, assembler code. 82 900 of its 141 498 publics are flagged as functions (the other 58 598 are
@@ -325,18 +329,25 @@ an eviction budget and a hand-rolled binary format with its own checksum, and it
 found two ways for it to be wrong, including a plausible wrong function name on screen. Parallel
 demangling attacks the same cost without persisting anything, and is the thing to try first.
 
-**Line info** (`line.rs`) is lazy and not touched at parse time, with one exception: a PE whose
-matching `.pdb` is opened at parse for the procedures it names (`DebugInfo::pdb`, below), and even
-there only the PDB's tables are read then; its line programs wait for the first question. It answers
-two questions under one set of rules, the rows covering a range and a function's declared extent
+**Line info** (`line.rs`) is lazy and not touched at parse time, with one exception: a debug file
+that names functions the image itself does not is opened at parse for them (`DebugInfo::declared`,
+below), which today means a PE's matching `.pdb` and nothing else; and even there only the PDB's
+tables are read then, its line programs waiting for the first question. It answers two questions
+under one set of rules, the rows covering a range and a function's declared extent
 (`Object::function_extent`), so everything below holds for both. `line.rs` is a **seam** that names
 no debug format: `DebugInfo` holds one `Backend`, a closed enum dispatched by `match` the way
 `Assembly::decode` is, and `line/dwarf.rs` is the first backend and the only module that knows
 DWARF's debug sections and `addr2line` (a DIE walk per unit visited for the extent, cached by unit
 offset; `gimli`'s call-frame reader is `unwind.rs`'s, which is not a backend). Every backend's rows
 go through one `RowCollector`, whose `finish` is where `LineInfo`'s invariants are *made* (below),
-so they hold whoever produced the rows. `Object::debug_info` is a `DebugInfoCache` caching *both*
-answers, the built backend and the fact that there is none, so an object without debug info costs
+so they hold whoever produced the rows. The third answer is the same shape: the functions a backend
+names that the image does not are `Declared` records, a `Name` that is either the file's own spelling
+or one already fit to show, an address and a length, so the parse takes them without knowing which
+format stated them. And the rule choosing a backend — debug sections in the object itself where
+there are any, the `.pdb` beside it only for an object with none — is `Backend::pick` and is written
+once, the parse calling it with no way to build a DWARF context so that it never pays for one.
+`Object::debug_info` is a `DebugInfoCache` caching *both* answers, the built backend and the fact
+that there is none, so an object without debug info costs
 one section-table scan ever. `None` from `line_info` means "no line info" for every reason at once:
 no debug info, debug info in a format no backend reads (CodeView), debug info that will not parse,
 or debug info that says nothing about the range asked about. Four design points are load-bearing:
@@ -445,28 +456,32 @@ answers any kind); and file names in the producer's spelling (`C:\...` from MSVC
 **The PDB is also a source of symbols**, the one debug format that is. A `/DEBUG` image has no COFF
 symbol table, so what the image names is its exports and entry point (its `.pdata` states where its
 functions are, not what they are called), and what the PDB knows is every function.
-`Pdb::procedures` walks every module's symbol stream once for its `S_GPROC32`/`S_LPROC32` records
-(name, `section:offset` through the address map onto the base, length), and `Pdb::publics` walks the
-symbol records stream once for its `S_PUB32` records flagged as code or a function (decorated name,
-`section:offset` the same way, no length). `parse_object` takes them as the last two *named* sources
-in `declared_code`, in that order, before the nameless unwind entries (Data model, above). That
-makes it the **one eager path through the seam**: `DebugInfo::pdb(file, path)` finds and matches the
-`.pdb` as `load` would, declines a PE carrying DWARF of its own (the same "DWARF first" rule, asked
-of `Dwarf::present` without building a context), walks the procedures and then the publics, and
-hands back the backend it built. `parse_object` seeds that into the object's `DebugInfoCache`
-(`preloaded`) so the first line question finds it there rather than opening the file again; an
-object parsed without it keeps the lazy path unchanged. The walks hold nothing of the streams they
-read but what they hand back. A module asked about later is read again for its lines, which is
+`Pdb::declared` walks every module's symbol stream once for its `S_GPROC32`/`S_LPROC32` records
+(name, `section:offset` through the address map onto the base, length), and then the symbol records
+stream once for its `S_PUB32` records flagged as code or a function (decorated name, `section:offset`
+the same way, no length). It hands both back as one list, procedures first, and that order *is* the
+precedence the parse gives them; `parse_object` takes the list as the last *named* source in
+`declared_code`, before the nameless unwind entries (Data model, above). A procedure's name is the
+compiler's display name, which no demangler claims, so it goes over as a `Name::Informative` and
+skips the demangling batch; a public's is the linker's decorated spelling and goes through it. That
+makes it the **one eager path through the seam**: `DebugInfo::declared(file, path)` picks the
+backend `load` would pick (`Backend::pick`, handed no way to build a DWARF context, so a PE carrying
+DWARF of its own declines here exactly as it would there), asks it for the functions it names, and
+hands back both. `parse_object` seeds the backend into the object's `DebugInfoCache` (`preloaded`)
+so the first line question finds it there rather than opening the file again; an object parsed
+without it keeps the lazy path unchanged. The walks hold nothing of the streams they read but what
+they hand back. A module asked about later is read again for its lines, which is
 exactly the first-question cost the lazy path had before, and holding every module's procedure table
 from the walk would only duplicate what the symbols now carry as their declared size while the
 stream still had to be read for its lines. The symbol records stream (`pdb2`'s `global_symbols`, the
 one stream the publics are in, 229 318 records in `rustc_driver`'s) is read whole through
 `BoundedFile` and dropped with the walk, since nothing later asks it anything. The whole of it
-(open, match, both walks) is under the seam's `without_panicking`, so a `pdb2` panic anywhere in it
-is "no PDB at parse" and the lazy path is left to try. **What is not read**: `/DEBUG:FASTLINK` PDBs,
-which match and then answer nothing. A stripped PDB now answers its publics and nothing else (no
-procedures, no lines, no extents), which is the shape the third committed pair stands in for
-(below). The file stays open, read a page at a time through `BoundedFile`, never whole:
+(pick, open, match, both walks) is under the seam's `without_panicking`, so a `pdb2` panic anywhere
+in it is "no PDB at parse" and the lazy path is left to try. **What is not read**:
+`/DEBUG:FASTLINK` PDBs, which match and then answer nothing. A stripped PDB now answers its publics
+and nothing else (no procedures, no lines, no extents), which is the shape the third committed pair
+stands in for (below). The file stays open, read a page at a time through `BoundedFile`, never
+whole:
 `rustc_driver`'s PDB is 268 MB. **Measured**, release, on the samples: `rustc.exe` (110 KB, a 3.7 MB
 PDB) opens in 4.5–6 ms for 415 symbols. `rustc_driver.dll` (194 MB, 15 241 exports, the 268 MB PDB)
 opens in 1.28–1.39 s for 115 861 symbols at 465 MB, against 738 ms for its exports alone: the extra

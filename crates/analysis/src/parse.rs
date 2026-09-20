@@ -2,7 +2,7 @@
 //! symbols, the code it declares outside its symbol table, and the names demangled.
 
 use crate::demangle;
-use crate::line::{DebugInfo, DebugInfoCache, Procedure, Public};
+use crate::line::{DebugInfo, DebugInfoCache, Declared, Name};
 use crate::unwind::{self, UnwindEntry};
 use crate::{Bias, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData};
 use object::{
@@ -12,7 +12,7 @@ use object::{
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -158,8 +158,9 @@ struct Pending {
     /// not is a [`MadeUp`] name, which no demangler has anything to say about.
     mangled: bool,
     address: SectionAddress,
-    /// What the file said: a symbol's size, a PDB procedure's length, an unwind entry's
-    /// stated end less its begin, and 0 for an export, the entry point and a PDB public. The
+    /// What the file said: a symbol's size, the length a debug file's record states, an
+    /// unwind entry's stated end less its begin, and 0 for an export, the entry point and a
+    /// record with no length of its own. The
     /// extent used comes from [`SymbolData::extent`], which reads this only where the format
     /// makes it a function's length ([`SymbolData::declared_extent`]).
     size: u64,
@@ -175,20 +176,20 @@ struct SymbolTable {
     named: Vec<Pending>,
     /// Each one whose name will not read, in table order, called by its address. One claims
     /// its placed address only where nothing else named it (the table, [`declared_code`], or
-    /// one of these before it), so an export, a PDB procedure or public, or an unwind entry
-    /// can still give it a real name, and a name at the same offset of another section of a
-    /// relocatable object does not drop it.
+    /// one of these before it), so an export, a name out of the debug file, or an unwind
+    /// entry can still give it a real name, and a name at the same offset of another section
+    /// of a relocatable object does not drop it.
     unnamed: Vec<Pending>,
     /// The first index past the table, which declared code is numbered from.
     next: usize,
 }
 
 /// The code a file declares outside its symbol table: its **entry point**, its **exports**,
-/// its ELF `.dynsym`, the **procedures** and **publics** of the `.pdb` a PE names, where
-/// that was found and matches (`procedures` and `publics`, out of [`DebugInfo::pdb`]), and
-/// the **unwind entries** of an x86-64 PE's exception directory or an ELF's `.eh_frame`
-/// (`unwind`, out of [`unwind::entries`]). A stripped shared library is otherwise a file with nothing in it,
-/// and a `/DEBUG` image has no symbol table at all.
+/// its ELF `.dynsym`, the functions its **debug file** names where there is one (`named`, out
+/// of [`DebugInfo::declared`]), and the **unwind entries** of an x86-64 PE's exception
+/// directory or an ELF's `.eh_frame` (`unwind`, out of [`unwind::entries`]). A stripped
+/// shared library is otherwise a file with nothing in it, and a `/DEBUG` image has no symbol
+/// table at all.
 /// Every address here is one the file — or the debug file matched to it by GUID and age —
 /// states outright, so the "nothing is scanned for" rule still holds.
 ///
@@ -199,18 +200,15 @@ struct SymbolTable {
 /// exported *data* out.
 ///
 /// **One symbol per address, earliest source winning** (symbol table > dynamic symbol >
-/// export > entry point > PDB procedure > PDB public > unwind entry). An export is very
-/// often the symbol table's own function under its exported name, and a second `SymbolData`
-/// for it would be a second row in the list for one place in the file. The PDB comes after
-/// the image so a name the image itself states is never displaced by the debug file's
-/// spelling of it, and its publics after its procedures because a procedure carries a
-/// display name and a length where a public is a decorated name and an address: the publics
-/// name only what nothing else did — a function in a module that shipped without symbols, a
-/// thunk, assembler code, or every function of a stripped PDB. The unwind entries come last
-/// of all because they carry no name: one at an address anything else named adds nothing,
-/// and one nothing named is called `<function 0x…>` by its address — or `<fragment 0x…>`
-/// where its unwind info is chained, a second range of some function's rather than a
-/// function ([`UnwindEntry`]).
+/// export > entry point > debug file > unwind entry). An export is very often the symbol
+/// table's own function under its exported name, and a second `SymbolData` for it would be a
+/// second row in the list for one place in the file. The debug file comes after the image so
+/// a name the image itself states is never displaced by the debug file's spelling of it, and
+/// its own records are taken in the order it hands them over, which is the order it wants
+/// them believed. The unwind entries come last of all because they carry no name: one at an
+/// address anything else named adds nothing, and one nothing named is called
+/// `<function 0x…>` by its address — or `<fragment 0x…>` where its unwind info is chained, a
+/// second range of some function's rather than a function ([`UnwindEntry`]).
 ///
 /// **Nothing for a relocatable object.** `entry()` answers 0 for an `.o`, and 0 there is a
 /// real function's first byte.
@@ -223,8 +221,7 @@ fn declared_code(
     code: &[(Range<SectionAddress>, SectionIndex)],
     known: &mut HashSet<PlacedAddress>,
     next: usize,
-    procedures: Vec<Procedure>,
-    publics: Vec<Public>,
+    named: Vec<Declared>,
     unwind: &[UnwindEntry],
 ) -> Vec<Pending> {
     let mut declared = Vec::new();
@@ -232,10 +229,9 @@ fn declared_code(
         return declared;
     }
 
-    // Takes the name and whether it is the file's own, which is what decides whether the
-    // name is offered to the demanglers. `MadeUp::unmangled` is that pair for the names
-    // that are ours.
-    let mut take = |(name, mangled): (String, bool), address: SectionAddress, size: u64| {
+    // Which kind of name it is decides whether it is offered to the demanglers; a name of
+    // ours is always a `Name::Informative`.
+    let mut take = |name: Name, address: SectionAddress, size: u64| {
         let Some((_, section)) = code.iter().find(|(range, _)| range.contains(&address)) else {
             return;
         };
@@ -244,6 +240,7 @@ fn declared_code(
         if !known.insert(address.unplaced()) {
             return;
         }
+        let (name, mangled) = name.into_pair();
         declared.push(Pending {
             index: SymbolIndex(next + declared.len()),
             name,
@@ -265,7 +262,7 @@ fn declared_code(
             continue;
         }
         take(
-            (String::from_utf8_lossy(name).into_owned(), true),
+            Name::Symbol(String::from_utf8_lossy(name).into_owned()),
             SectionAddress::new(symbol.address()),
             symbol.size(),
         );
@@ -287,7 +284,7 @@ fn declared_code(
             continue;
         }
         take(
-            (String::from_utf8_lossy(name).into_owned(), true),
+            Name::Symbol(String::from_utf8_lossy(name).into_owned()),
             SectionAddress::new(address),
             0,
         );
@@ -296,37 +293,21 @@ fn declared_code(
     // 0 is "this image has no entry point", which is how a DLL built without one states it.
     let entry = file.entry();
     if entry != 0 {
-        take(
-            MadeUp::EntryPoint.unmangled(),
-            SectionAddress::new(entry),
-            0,
-        );
+        take(MadeUp::EntryPoint.into(), SectionAddress::new(entry), 0);
     }
 
-    // After the image's own names, so they win. The address is already in the image's space
-    // and the code-section lookup is what drops a procedure the PDB places in a section the
-    // image does not have code in. A procedure's name is the compiler's display name, which
-    // no demangler claims and so comes through the batch as it is.
-    for procedure in procedures {
-        take((procedure.name, true), procedure.address, procedure.len);
-    }
-
-    // And the publics behind them: a name for whatever address is still unnamed, and no
-    // length, as an export has none. A public's name is the linker's, decorated as an
-    // export's is. A public in a data section — the flags are the linker's to set, and the
-    // section lookup is the rule — is dropped the same way.
-    for public in publics {
-        take((public.name, true), public.address, 0);
+    // After the image's own names, so they win, and among themselves in the order the debug
+    // file handed them over. The addresses are already in the image's space, and the
+    // code-section lookup is what drops a record the debug file places in a section the
+    // image does not have code in — a public the linker flagged as code that is not, say.
+    for function in named {
+        take(function.name, function.address, function.len);
     }
 
     // Last of all, the unwind entries: an address and a length for whatever is still
     // unnamed, and no name at all.
     for entry in unwind {
-        take(
-            MadeUp::unwind(entry).unmangled(),
-            entry.range.start,
-            entry.len(),
-        );
+        take(MadeUp::unwind(entry).into(), entry.range.start, entry.len());
     }
 
     declared
@@ -374,10 +355,16 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     };
     let mut known: HashSet<PlacedAddress> = symbols.iter().map(place).collect();
 
-    let (debug_info, procedures, publics) = open_pdb(&file, &path);
+    // The debug file is opened here and not on the first line question, because the
+    // functions it names are ones the image itself does not declare. The backend it builds
+    // is kept for the line questions later.
+    let (debug_info, named) = match DebugInfo::declared(&file, &path) {
+        Some((info, named)) => (DebugInfoCache::preloaded(info), named),
+        None => (DebugInfoCache::default(), Vec::new()),
+    };
     let unwind = unwind::entries(&file);
     let code = code_sections(&sections);
-    let declared = declared_code(&file, &code, &mut known, next, procedures, publics, &unwind);
+    let declared = declared_code(&file, &code, &mut known, next, named, &unwind);
     let ranges = place_unwind(&code, &unwind);
 
     // After `declared_code`, so `known` holds every address anything named.
@@ -482,35 +469,27 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
         let address = SectionAddress::new(symbol.address());
         let section = symbol.section().index();
 
-        let pending = |(name, mangled)| Pending {
-            index: symbol.index(),
-            name,
-            mangled,
-            address,
-            size: symbol.size(),
-            section,
+        let pending = |name: Name| {
+            let (name, mangled) = name.into_pair();
+            Pending {
+                index: symbol.index(),
+                name,
+                mangled,
+                address,
+                size: symbol.size(),
+                section,
+            }
         };
         match symbol.name_bytes() {
-            Ok(name) => table
-                .named
-                .push(pending((String::from_utf8_lossy(name).into_owned(), true))),
+            Ok(name) => table.named.push(pending(Name::Symbol(
+                String::from_utf8_lossy(name).into_owned(),
+            ))),
             Err(_) => table
                 .unnamed
-                .push(pending(MadeUp::Function(address).unmangled())),
+                .push(pending(MadeUp::Function(address).into())),
         }
     }
     table
-}
-
-/// A PE's matching `.pdb`, with the procedures and publics it names; an empty cache and none
-/// for any other file. Opened here and not on the first line question, because those are
-/// functions the image itself does not declare. The backend it builds is kept for the line
-/// questions later.
-fn open_pdb(file: &object::File<'_>, path: &Path) -> (DebugInfoCache, Vec<Procedure>, Vec<Public>) {
-    match DebugInfo::pdb(file, path) {
-        Some((info, procedures, publics)) => (DebugInfoCache::preloaded(info), procedures, publics),
-        None => (DebugInfoCache::default(), Vec::new(), Vec::new()),
-    }
 }
 
 /// Every unwind entry's range, by the section it starts in, whether or not its begin became a

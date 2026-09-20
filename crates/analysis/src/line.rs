@@ -1,10 +1,9 @@
 //! Line-number information, read lazily out of what an [`Object`] was parsed from. The first
 //! query builds the backend, and an object with no debug info caches that answer too. The
-//! one exception is a PE whose `.pdb` is found and matches: [`DebugInfo::pdb`] opens it at
-//! parse time, because the procedures and publics it names are symbols the image itself does
-//! not declare, and the backend built there is seeded into the object's cache
-//! ([`DebugInfoCache::preloaded`]) so nothing is opened twice — the line tables themselves
-//! are still decoded on the first question about them.
+//! one exception is a debug file that names functions the image itself does not:
+//! [`DebugInfo::declared`] builds the backend at parse time for those names, and it is
+//! seeded into the object's cache ([`DebugInfoCache::preloaded`]) so nothing is opened
+//! twice — the line tables themselves are still decoded on the first question about them.
 //!
 //! This file is the **seam**: what every backend answers and the rules every answer obeys,
 //! naming no debug format. The two questions — the rows covering an address range, and a
@@ -14,7 +13,9 @@
 //! is `unwind.rs`'s); [`pdb`] for a PE whose debug directory
 //! names a `.pdb` beside it, the only module that knows `pdb2`. A row out of any backend goes
 //! through one [`RowCollector`], so the invariants [`LineInfo`] promises hold whoever
-//! produced them.
+//! produced them. The third answer — the functions a backend names that the image does not
+//! — is a [`Declared`] record, with no format in it either: the PDB is the only backend with
+//! any today, and the parse takes them from the seam rather than from a backend.
 //!
 //! This is the forward direction — an address range in, source rows out. The reverse — a file
 //! and a line, out to the symbols compiled from them — is [`source`], a file of its own
@@ -31,8 +32,34 @@ mod dwarf;
 mod pdb;
 mod source;
 
-pub(crate) use pdb::{Procedure, Public};
 use source::SourceIndex;
+
+/// A name a debug file gives a function.
+pub(crate) enum Name {
+    /// The file's own spelling, which goes through the demangling batch.
+    Symbol(String),
+    /// A name already fit to show, which no demangler has anything to say about.
+    Informative(String),
+}
+
+impl Name {
+    /// The name and whether it is the file's own: the pair a symbol is held as until the
+    /// demangling batch.
+    pub(crate) fn into_pair(self) -> (String, bool) {
+        match self {
+            Name::Symbol(name) => (name, true),
+            Name::Informative(name) => (name, false),
+        }
+    }
+}
+
+/// A function a debug file names that the image itself does not.
+pub(crate) struct Declared {
+    pub(crate) name: Name,
+    pub(crate) address: SectionAddress,
+    /// The stated length, or 0 where the record has none.
+    pub(crate) len: u64,
+}
 
 /// An [`Object`]'s debug info, or the fact that it has none, worked out at most once. Caching
 /// the *absence* is what keeps a stripped binary from re-scanning its section table per query.
@@ -40,8 +67,9 @@ use source::SourceIndex;
 pub struct DebugInfoCache(OnceLock<Option<DebugInfo>>);
 
 impl DebugInfoCache {
-    /// A cache already holding the backend the parse built — [`DebugInfo::pdb`]'s — so the
-    /// first line question finds it there instead of opening the `.pdb` a second time.
+    /// A cache already holding the backend the parse built — [`DebugInfo::declared`]'s — so
+    /// the first line question finds it there instead of opening the debug file a second
+    /// time.
     pub(crate) fn preloaded(info: DebugInfo) -> DebugInfoCache {
         DebugInfoCache(OnceLock::from(Some(info)))
     }
@@ -66,6 +94,24 @@ enum Backend {
     Pdb(pdb::Pdb),
 }
 
+impl Backend {
+    /// The backend the seam's rule picks, for both paths that pick one: debug sections in
+    /// the object itself where there are any — a MinGW or clang PE can carry DWARF — and the
+    /// `.pdb` beside it only for an object with none. `dwarf` builds the DWARF backend, or
+    /// answers [`None`] to decline one — what the parse passes, so that a parse never builds
+    /// a context.
+    fn pick(
+        file: &object::File<'_>,
+        path: &Path,
+        dwarf: impl FnOnce() -> Option<dwarf::Dwarf>,
+    ) -> Option<Backend> {
+        if dwarf::Dwarf::present(file) {
+            return dwarf().map(Backend::Dwarf);
+        }
+        Some(Backend::Pdb(pdb::Pdb::load(file, path)?))
+    }
+}
+
 impl DebugInfo {
     /// Build the debug info for one object, or [`None`] when it has none this reads. Never an
     /// error: foreign debug info and corrupt debug info are both simply "no line info".
@@ -75,12 +121,7 @@ impl DebugInfo {
 
     fn load_inner(object: &Object) -> Option<DebugInfo> {
         let file = object::File::parse(object.data.bytes()).ok()?;
-        // Debug sections in the object itself first — a MinGW or clang PE can carry DWARF
-        // — and a `.pdb` beside it only for an object that has none.
-        let backend = match dwarf::Dwarf::load(&file) {
-            Some(dwarf) => Backend::Dwarf(dwarf),
-            None => Backend::Pdb(pdb::Pdb::load(&file, &object.path)?),
-        };
+        let backend = Backend::pick(&file, &object.path, || dwarf::Dwarf::load(&file))?;
         Some(DebugInfo::of(backend))
     }
 
@@ -91,27 +132,31 @@ impl DebugInfo {
         }
     }
 
-    /// The PDB backend built **eagerly**, for `parse_object`: the `.pdb` a PE at `path` names
-    /// — found and matched as [`load`](Self::load) would find it — together with every
-    /// procedure it records and every public it names for code, which the parse takes as
-    /// symbols in that order. [`None`] for anything that
-    /// is not a PE with a matching `.pdb`, and for a PE carrying DWARF of its own, which
-    /// `load` would answer from that and not from the PDB: the two paths pick the same
-    /// backend, and a parse never builds a DWARF context. Under the same net as `load`, the
-    /// walk included, so a `pdb2` panic in either is "no PDB" and the lazy path is left to
-    /// try again.
-    pub(crate) fn pdb(
+    /// The backend built **eagerly**, for `parse_object`, with every function it names that
+    /// the image itself does not — today a PE's matching `.pdb` and nothing else. [`None`]
+    /// where no backend has any such names, which is every other file.
+    ///
+    /// **The order of the records is their precedence**: the parse takes them in it and
+    /// gives an address to the first that claims it, so a backend appends its own in the
+    /// order it wants them believed.
+    ///
+    /// The backend is [`Backend::pick`]'s, handed no way to build a DWARF context, so the
+    /// parse picks what [`load`](Self::load) will pick without paying for one. Under the
+    /// same net as `load`, the walk included, so a panic in either is "no debug info here"
+    /// and the lazy path is left to try again.
+    pub(crate) fn declared(
         file: &object::File<'_>,
         path: &Path,
-    ) -> Option<(DebugInfo, Vec<Procedure>, Vec<Public>)> {
+    ) -> Option<(DebugInfo, Vec<Declared>)> {
         without_panicking(|| {
-            if dwarf::Dwarf::present(file) {
+            let backend = Backend::pick(file, path, || None)?;
+            // Unreachable while the PDB is the only backend that names anything, `pick`
+            // having been given no way to build the other one.
+            let Backend::Pdb(pdb) = &backend else {
                 return None;
-            }
-            let pdb = pdb::Pdb::load(file, path)?;
-            let procedures = pdb.procedures();
-            let publics = pdb.publics();
-            Some((DebugInfo::of(Backend::Pdb(pdb)), procedures, publics))
+            };
+            let declared = pdb.declared();
+            Some((DebugInfo::of(backend), declared))
         })
         .flatten()
     }

@@ -22,32 +22,32 @@
 //!
 //! The PDB is also the one debug format that names functions the image does not: a `/DEBUG`
 //! image has no COFF symbol table, so a stripped `.exe` declares its entry point and a DLL
-//! its exports and nothing else, while the PDB knows every function. [`Pdb::procedures`]
-//! walks every module's symbols once for its `S_GPROC32`/`S_LPROC32` records — name,
-//! address, length — and `parse_object` takes them as symbols beside the image's own. That
-//! walk is at **parse time**, so the `.pdb` is opened there for an image that has one and
-//! the backend built then is the one kept for the line questions later (`DebugInfo::pdb`);
-//! the line tables are still decoded lazily. The walk reads each module's stream and keeps
-//! nothing of it but the procedures it hands back, and a module asked about later is read
-//! again — the simpler of the two shapes, and the re-read is exactly the first-question cost
-//! the lazy path had before: holding every module's procedure table from the walk would
+//! its exports and nothing else, while the PDB knows every function. [`Pdb::declared`] is
+//! that answer, and it is asked at **parse time**, so the `.pdb` is opened there for an
+//! image that has one and the backend built then is the one kept for the line questions
+//! later ([`super::DebugInfo::declared`]); the line tables are still decoded lazily.
+//!
+//! It walks every module's symbols once for its `S_GPROC32`/`S_LPROC32` records — name,
+//! address, length — and hands those **procedures** back first. The walk reads each module's
+//! stream and keeps nothing of it but what it hands back, and a module asked about later is
+//! read again — the simpler of the two shapes, and the re-read is exactly the first-question
+//! cost the lazy path had before: holding every module's procedure table from the walk would
 //! duplicate what the symbols now carry as their declared size, and the stream would still
 //! have to be read again for its lines. Both reads take a module's procedures from the one
 //! walk, [`Pdb::procedures_in`].
 //!
-//! Behind the procedures come the **publics** ([`Pdb::publics`]): the linker's own table of
-//! every externally visible symbol, `S_PUB32` records in the symbol records stream, each a
-//! decorated name and an address and nothing else — no length, no lines. They are what
-//! survives a stripped PDB (`/PDBSTRIPPED` keeps the publics and drops every module stream),
-//! and what names a function in a module that shipped without debug info, a thunk, or
-//! assembler code: in `rustc_driver.dll`'s PDB 2250 of the 2907 modules have no stream at
-//! all. The walk takes the ones flagged as code or a function, and `parse_object` takes them
-//! after the procedures under its one-per-address rule, so a public is only ever the name of
-//! an address nothing else named. Read whole once at parse, held no longer than the walk.
+//! Behind them come the **publics**: the linker's own table of every externally visible
+//! symbol, `S_PUB32` records in the symbol records stream, each a decorated name and an
+//! address and nothing else — no length, no lines. They are what survives a stripped PDB
+//! (`/PDBSTRIPPED` keeps the publics and drops every module stream), and what names a
+//! function in a module that shipped without debug info, a thunk, or assembler code: in
+//! `rustc_driver.dll`'s PDB 2250 of the 2907 modules have no stream at all. The walk takes
+//! the ones flagged as code or a function. Read whole once at parse, held no longer than the
+//! walk.
 //!
 //! Nothing here recurses, and nothing here catches a panic: the guard is [`super::DebugInfo`]'s.
 
-use super::{recovered, LineInfo, RowCollector, SourceHash};
+use super::{recovered, Declared, LineInfo, Name, RowCollector, SourceHash};
 use crate::{PlacedAddress, SectionAddress};
 use object::Object as _;
 use pdb2::{
@@ -71,8 +71,8 @@ pub(super) struct Pdb {
     /// Every stream read goes through `&mut PDB`, and `PDB` is `Send` but not `Sync`: the
     /// same Mutex-for-`Sync` reasoning as the DWARF backend's context. Taken per module
     /// loaded and released before the module is decoded, so no other lock nests under it;
-    /// held across the whole of [`Pdb::procedures`] and of [`Pdb::publics`], which run at
-    /// parse before anything else can ask.
+    /// held across the whole of [`Pdb::declared`], which runs at parse before anything else
+    /// can ask.
     pdb: Mutex<PDB<'static, BoundedFile>>,
 
     /// The DBI stream, owned: modules are found in it by index.
@@ -105,28 +105,6 @@ struct Contribution {
     /// walk stops at; the same shape as `source.rs`'s `SymbolRange::max_end`.
     max_end: SectionAddress,
     module: usize,
-}
-
-/// One function a PDB names, as `parse_object` takes it: an `S_GPROC32`/`S_LPROC32` record
-/// with a length, its address already in the image's virtual address space.
-pub(crate) struct Procedure {
-    /// The name as the record spells it — the compiler's display name (`add`,
-    /// `core::ptr::drop_in_place<T>`), not a mangled one.
-    pub(crate) name: String,
-    pub(crate) address: SectionAddress,
-    /// The record's length, never 0.
-    pub(crate) len: u64,
-}
-
-/// One public symbol a PDB names for code, as `parse_object` takes it: an `S_PUB32` record
-/// flagged as code or a function, its address already in the image's virtual address space.
-/// A public has no length.
-pub(crate) struct Public {
-    /// The name as the linker saw it — decorated (`?add@@YAHHH@Z`, `_ZN4core3ptr…`), or
-    /// plain for C — so the demangler has something to say about it where it has nothing
-    /// about a procedure's display name.
-    pub(crate) name: String,
-    pub(crate) address: SectionAddress,
 }
 
 /// One module's line info, decoded whole on first touch.
@@ -190,32 +168,72 @@ impl Pdb {
         })
     }
 
-    /// Every procedure with a length in every module, in module order and then the order
-    /// the module's symbols are in. One pass over every module stream, under the PDB's lock
-    /// for the whole walk; a module whose stream will not read, or a record that will not
-    /// parse, is skipped and the walk goes on. Two records at one address are both handed
-    /// back — the caller's one-per-address rule decides between them.
-    pub(super) fn procedures(&self) -> Vec<Procedure> {
-        let mut procedures = Vec::new();
-        let Ok(mut modules) = self.module_list() else {
-            return procedures;
-        };
+    /// Every function this PDB names, in the order the parse claims addresses in: every
+    /// module's **procedures** first, then the **publics**. Both walks are under the PDB's
+    /// lock, taken once, and both run at parse before anything else can ask.
+    ///
+    /// **Procedures before publics**, because a procedure carries the compiler's display
+    /// name and a length where a public carries the linker's decorated spelling and an
+    /// address, so a public only ever names what no procedure did: a function in a module
+    /// that shipped without debug info, a thunk, assembler code, or — a stripped PDB having
+    /// no module streams — every function there is. Two records at one address are both
+    /// handed back either way; the caller's one-per-address rule is what decides.
+    pub(super) fn declared(&self) -> Vec<Declared> {
+        let mut declared = Vec::new();
         let mut pdb = recovered(&self.pdb);
-        // A malformed tail stops the walk where it goes wrong and keeps what was read.
-        while let Ok(Some(module)) = modules.next() {
-            let Ok(Some(info)) = pdb.module_info(&module) else {
+
+        // Every procedure with a length, in module order and then the order the module's
+        // symbols are in. One pass over every module stream; a module whose stream will not
+        // read, or a record that will not parse, is skipped and the walk goes on. A
+        // procedure's name is the compiler's display name (`add`,
+        // `core::ptr::drop_in_place<T>`), which no demangler claims.
+        if let Ok(mut modules) = self.module_list() {
+            // A malformed tail stops the walk where it goes wrong and keeps what was read.
+            while let Ok(Some(module)) = modules.next() {
+                let Ok(Some(info)) = pdb.module_info(&module) else {
+                    continue;
+                };
+                declared.extend(
+                    self.procedures_in(&info)
+                        .map(|(address, procedure)| Declared {
+                            name: Name::Informative(procedure.name.to_string().into_owned()),
+                            address,
+                            len: u64::from(procedure.len),
+                        }),
+                );
+            }
+        }
+
+        // Then every public flagged as code or a function, in the order the symbol records
+        // stream holds them. The stream is read whole once — it is the one stream the
+        // publics are in — and dropped with the walk; a record that will not parse is
+        // skipped, and a malformed tail stops the walk where it goes wrong and keeps what
+        // was read. Which of the two flags a linker sets is its own: `rust-lld` marks a
+        // function `function` alone, so either is taken, and the caller's code-section
+        // lookup is what keeps a public out of the data sections. A public's name is the
+        // linker's, decorated (`?add@@YAHHH@Z`, `_ZN4core3ptr…`) or plain for C, so it goes
+        // through the demanglers; and it has no length.
+        let Ok(table) = pdb.global_symbols() else {
+            return declared;
+        };
+        let mut symbols = table.iter();
+        while let Ok(Some(symbol)) = symbols.next() {
+            let Ok(pdb2::SymbolData::Public(public)) = symbol.parse() else {
                 continue;
             };
-            procedures.extend(
-                self.procedures_in(&info)
-                    .map(|(address, procedure)| Procedure {
-                        name: procedure.name.to_string().into_owned(),
-                        address,
-                        len: u64::from(procedure.len),
-                    }),
-            );
+            if !(public.code || public.function) {
+                continue;
+            }
+            let Some(address) = self.address(public.offset) else {
+                continue;
+            };
+            declared.push(Declared {
+                name: Name::Symbol(public.name.to_string().into_owned()),
+                address,
+                len: 0,
+            });
         }
-        procedures
+        declared
     }
 
     /// Every procedure with a length in one module, with its address, in the order the
@@ -244,40 +262,6 @@ impl Pdb {
             None
         })
         .fuse()
-    }
-
-    /// Every public flagged as code or a function, in the order the symbol records stream
-    /// holds them. The stream is read whole once — it is the one stream the publics are in
-    /// — and dropped with the walk; a record that will not parse is skipped, and a malformed
-    /// tail stops the walk where it goes wrong and keeps what was read. Which of the two
-    /// flags a linker sets is its own: `rust-lld` marks a function `function` alone, so
-    /// either is taken, and the caller's code-section lookup is what keeps a public out of
-    /// the data sections. Two records at one address are both handed back — the caller's
-    /// one-per-address rule decides between them, and drops one at an address a procedure
-    /// already named.
-    pub(super) fn publics(&self) -> Vec<Public> {
-        let mut publics = Vec::new();
-        let mut pdb = recovered(&self.pdb);
-        let Ok(table) = pdb.global_symbols() else {
-            return publics;
-        };
-        let mut symbols = table.iter();
-        while let Ok(Some(symbol)) = symbols.next() {
-            let Ok(pdb2::SymbolData::Public(public)) = symbol.parse() else {
-                continue;
-            };
-            if !(public.code || public.function) {
-                continue;
-            }
-            let Some(address) = self.address(public.offset) else {
-                continue;
-            };
-            publics.push(Public {
-                name: public.name.to_string().into_owned(),
-                address,
-            });
-        }
-        publics
     }
 
     /// A `section:offset` the PDB states, as an address in the image's own space: through
