@@ -6,7 +6,9 @@
 
 mod common;
 
-use common::{elf_shared_object, named, parse, pe_dll, ExportedSymbol, SharedObject, TEXT_ADDRESS};
+use common::{
+    at, elf_shared_object, named, parse, pe_dll, ExportedSymbol, SharedObject, TEXT_ADDRESS,
+};
 
 /// Four functions back to back, each `nop`s then a `ret`, so every offset below is a real
 /// instruction boundary and a listing decoded from it terminates.
@@ -64,9 +66,12 @@ fn a_shared_object_with_no_symbol_table_still_lists_its_exports() {
     // `a_global` is an `STT_OBJECT` in `.data`: declared, exported, and not code.
     assert_eq!(names, ["<entry point>", "first", "second"]);
 
-    assert_eq!(named(&object, "first").address, TEXT_ADDRESS);
-    assert_eq!(named(&object, "second").address, TEXT_ADDRESS + 4);
-    assert_eq!(named(&object, "<entry point>").address, TEXT_ADDRESS + 6);
+    assert_eq!(named(&object, "first").address, at(TEXT_ADDRESS));
+    assert_eq!(named(&object, "second").address, at(TEXT_ADDRESS + 4));
+    assert_eq!(
+        named(&object, "<entry point>").address,
+        at(TEXT_ADDRESS + 6)
+    );
 
     // Each of them landed in `.text`, which is what gives them bytes at all.
     for symbol in &object.symbols_sorted {
@@ -91,9 +96,12 @@ fn a_dll_with_no_coff_symbol_table_still_lists_its_exports() {
     // because its address is in `.rdata` rather than in a code section.
     assert_eq!(names, ["<entry point>", "first", "second"]);
 
-    assert_eq!(named(&object, "first").address, TEXT_ADDRESS);
-    assert_eq!(named(&object, "second").address, TEXT_ADDRESS + 4);
-    assert_eq!(named(&object, "<entry point>").address, TEXT_ADDRESS + 6);
+    assert_eq!(named(&object, "first").address, at(TEXT_ADDRESS));
+    assert_eq!(named(&object, "second").address, at(TEXT_ADDRESS + 4));
+    assert_eq!(
+        named(&object, "<entry point>").address,
+        at(TEXT_ADDRESS + 6)
+    );
 }
 
 #[test]
@@ -191,7 +199,7 @@ fn an_exported_function_disassembles() {
             })
             .collect();
         assert_eq!(text, ["nop", "nop", "nop", "ret"]);
-        assert_eq!(assembly.instructions[0].address, TEXT_ADDRESS);
+        assert_eq!(assembly.instructions[0].address, at(TEXT_ADDRESS));
     }
 }
 
@@ -231,10 +239,10 @@ fn an_export_that_is_already_a_symbol_table_entry_is_not_listed_twice() {
     let at_first = object
         .symbols_sorted
         .iter()
-        .filter(|symbol| symbol.address == TEXT_ADDRESS)
+        .filter(|symbol| symbol.address == at(TEXT_ADDRESS))
         .count();
     assert_eq!(at_first, 1);
-    assert_eq!(named(&object, "first_internal").address, TEXT_ADDRESS);
+    assert_eq!(named(&object, "first_internal").address, at(TEXT_ADDRESS));
 
     let mut names: Vec<&str> = object
         .symbols_sorted

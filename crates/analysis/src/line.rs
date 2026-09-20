@@ -21,7 +21,7 @@
 //! because it is a whole-object index rather than a query, built on the same seam.
 
 use crate::model::covering;
-use crate::{Object, Section, SymbolData};
+use crate::{Object, PlacedAddress, Section, SectionAddress, SymbolData};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
@@ -117,7 +117,7 @@ impl DebugInfo {
     }
 
     /// The rows covering `range` **within one section**, resolved in one pass.
-    fn line_info(&self, section: &Section, range: Range<u64>) -> Option<Arc<LineInfo>> {
+    fn line_info(&self, section: &Section, range: Range<SectionAddress>) -> Option<Arc<LineInfo>> {
         without_panicking(|| match &self.backend {
             Backend::Dwarf(dwarf) => dwarf.line_info(section.bias(), range),
             Backend::Pdb(pdb) => pdb.line_info(range),
@@ -128,7 +128,7 @@ impl DebugInfo {
 
     /// The declared extent of the function beginning at `address` **within one section**, or
     /// [`None`] when the debug info does not say.
-    fn extent(&self, section: &Section, address: u64) -> Option<u64> {
+    fn extent(&self, section: &Section, address: SectionAddress) -> Option<u64> {
         without_panicking(|| match &self.backend {
             Backend::Dwarf(dwarf) => dwarf.extent(section.bias(), address),
             Backend::Pdb(pdb) => pdb.extent(address),
@@ -141,7 +141,7 @@ impl DebugInfo {
     /// applied). A backend may hold its own lock for the whole walk, and `extent` and
     /// `line_info` take the same one, so `visit` must not ask the object anything: the one
     /// caller, `SourceIndex::build`, is handed the extents it needs instead of the object.
-    fn each_row(&self, visit: &mut dyn FnMut(Range<u64>, &str, u32)) {
+    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
         without_panicking(|| match &self.backend {
             Backend::Dwarf(dwarf) => dwarf.each_row(visit),
             Backend::Pdb(pdb) => pdb.each_row(visit),
@@ -263,7 +263,7 @@ impl RowCollector {
     /// as none, so no backend has to check either.
     fn push(
         &mut self,
-        range: Range<u64>,
+        range: Range<SectionAddress>,
         file: Option<usize>,
         line: Option<u32>,
         column: Option<u32>,
@@ -295,7 +295,7 @@ impl RowCollector {
         // binary-search them: it looks for the last row starting at or before an address, and
         // a row nested inside a longer one makes that answer arbitrary. The row that starts
         // first keeps the addresses it covers, and one left with nothing goes.
-        let mut covered = 0;
+        let mut covered = SectionAddress::new(0);
         rows.retain_mut(|row| {
             row.range.start = row.range.start.max(covered);
             if row.range.start >= row.range.end {
@@ -327,7 +327,7 @@ impl RowCollector {
 pub struct LineRow {
     /// The instruction addresses this row covers, clipped to the range that was asked about
     /// and in the same address space as [`SymbolData::address`].
-    pub range: Range<u64>,
+    pub range: Range<SectionAddress>,
     /// An index into [`LineInfo::files`], read with [`LineInfo::file`], or [`None`] when the
     /// row names no file.
     pub file: Option<usize>,
@@ -381,7 +381,7 @@ impl LineInfo {
     /// The rows that overlap `range`, not clipped to it. The rows ascend and do not overlap,
     /// so two binary searches find them. For a backend that keeps line info it decoded
     /// earlier and answers a smaller range out of it.
-    fn rows_over(&self, range: Range<u64>) -> &[LineRow] {
+    fn rows_over(&self, range: Range<SectionAddress>) -> &[LineRow] {
         let first = self
             .rows
             .partition_point(|row| row.range.end <= range.start);
@@ -421,7 +421,7 @@ impl LineInfo {
     /// The row covering `address`, or [`None`] when no row does. [`covering`]'s one
     /// candidate, the last row starting at or before `address`, is the only one *because*
     /// the rows do not overlap.
-    pub fn row_at(&self, address: u64) -> Option<&LineRow> {
+    pub fn row_at(&self, address: SectionAddress) -> Option<&LineRow> {
         let index = covering(&self.rows, |row| row.range.clone(), address)?;
         self.rows.get(index)
     }
@@ -444,14 +444,18 @@ impl Object {
     /// unless the parse already opened the `.pdb` beside a PE for its procedures — and each
     /// call parses the line program of every unit or module covering the range, once per
     /// unit for the object's lifetime.
-    pub fn line_info(&self, section: &Section, range: Range<u64>) -> Option<Arc<LineInfo>> {
+    pub fn line_info(
+        &self,
+        section: &Section,
+        range: Range<SectionAddress>,
+    ) -> Option<Arc<LineInfo>> {
         self.debug_info()?.line_info(section, range)
     }
 
     /// How many bytes of code the debug info says the function starting at `address` **within
     /// one section** is, or [`None`] when it does not say. Cached per unit visited; see
     /// [`SymbolData::extent`] for how it and the next-symbol estimate bound each other.
-    pub fn function_extent(&self, section: &Section, address: u64) -> Option<u64> {
+    pub fn function_extent(&self, section: &Section, address: SectionAddress) -> Option<u64> {
         self.debug_info()?.extent(section, address)
     }
 

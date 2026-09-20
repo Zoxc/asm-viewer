@@ -4,7 +4,7 @@
 
 mod common;
 
-use analysis::{LineInfo, LineRow, SourceDigests, SourceHash};
+use analysis::{LineInfo, LineRow, SectionAddress, SourceDigests, SourceHash};
 use std::sync::Arc;
 
 fn hex(text: &str) -> Vec<u8> {
@@ -43,7 +43,7 @@ fn line_info_built_by_hand_holds_the_invariants() {
     let files: Vec<(Arc<str>, Option<SourceHash>)> =
         vec![(Arc::from("a.c"), Some(md5)), (Arc::from("b.c"), None)];
     let row = |start, end, file, line| LineRow {
-        range: start..end,
+        range: SectionAddress::new(start)..SectionAddress::new(end),
         file: Some(file),
         line: Some(line),
         column: None,
@@ -62,7 +62,14 @@ fn line_info_built_by_hand_holds_the_invariants() {
     let rows: Vec<(u64, u64, Option<usize>, Option<u32>)> = info
         .rows()
         .iter()
-        .map(|row| (row.range.start, row.range.end, row.file, row.line))
+        .map(|row| {
+            (
+                row.range.start.get(),
+                row.range.end.get(),
+                row.file,
+                row.line,
+            )
+        })
         .collect();
     assert_eq!(
         rows,

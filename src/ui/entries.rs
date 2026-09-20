@@ -16,10 +16,12 @@ use super::*;
 /// that tells two of them apart.
 pub(crate) fn stop_text(stop: &Stop) -> String {
     match stop.place() {
-        Place::Code(object, address) => match object.symbol_at_placed(address) {
-            Some(symbol) => short_name(symbol.display()),
-            None => Names::of(&stop.document).text,
-        },
+        Place::Code(object, address) => {
+            match object.symbol_at_placed(PlacedAddress::new(address)) {
+                Some(symbol) => short_name(symbol.display()),
+                None => Names::of(&stop.document).text,
+            }
+        }
         Place::Source(line) => format!("{}:{line}", Names::of(&stop.document).text),
         Place::Whole | Place::Instruction(_) => Names::of(&stop.document).text,
     }

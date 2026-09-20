@@ -9,6 +9,7 @@
 //! module only reads. It is the one part of the crate that reads call-frame information;
 //! `line/dwarf.rs` is still the only one that knows DWARF's debug sections and `addr2line`.
 
+use crate::SectionAddress;
 use gimli::{BaseAddresses, CieOrFde, EhFrame, EhFrameOffset, RunTimeEndian, UnwindSection as _};
 use object::{read::pe::PeFile64, Architecture, Object as _, ObjectKind, ObjectSection as _};
 use std::{collections::HashMap, ops::Range};
@@ -97,7 +98,7 @@ fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
         let Ok(fde) = fde else {
             continue;
         };
-        let begin = fde.initial_address();
+        let begin = SectionAddress::new(fde.initial_address());
         let Some(end) = begin.checked_add(fde.len()) else {
             continue;
         };
@@ -118,7 +119,7 @@ fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
 /// a cold part or the piece after a mid-body stack adjustment, which Microsoft calls a
 /// *function fragment* — rather than a function's own.
 pub(crate) struct UnwindEntry {
-    pub(crate) range: Range<u64>,
+    pub(crate) range: Range<SectionAddress>,
     pub(crate) chained: bool,
 }
 
@@ -130,7 +131,7 @@ impl UnwindEntry {
     /// a zero-length FDE. That rule is theirs, so it saturates here beside them rather than
     /// have a caller elsewhere rest on it unsaid.
     pub(crate) fn len(&self) -> u64 {
-        self.range.end.saturating_sub(self.range.start)
+        self.range.start.bytes_to_saturating(self.range.end)
     }
 }
 
@@ -163,7 +164,7 @@ fn pe(pe: &PeFile64<'_>) -> Vec<UnwindEntry> {
         return Vec::new();
     };
 
-    let base = pe.relative_address_base();
+    let base = SectionAddress::new(pe.relative_address_base());
     data.chunks_exact(12)
         .filter_map(|entry| {
             let word = |at: usize| entry[at..at + 4].try_into().ok().map(u32::from_le_bytes);

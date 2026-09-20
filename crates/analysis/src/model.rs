@@ -6,7 +6,7 @@
 use crate::disasm::Code;
 use crate::extent::ExtentCache;
 use crate::line::DebugInfoCache;
-use crate::Assembly;
+use crate::{Assembly, Bias, PlacedAddress, SectionAddress};
 use object::{Architecture, BinaryFormat, Relocation, SectionIndex, SymbolIndex};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -59,7 +59,7 @@ pub struct Object {
 /// all read. Built at parse, off the UI thread, because a render asks it too: the history
 /// buttons name a saved place with [`Object::symbol_at_placed`], so every ask has to be a
 /// binary search and never the sort over every symbol.
-pub struct PlacedSymbols(Vec<(u64, SymbolIndex, Arc<SymbolData>)>);
+pub struct PlacedSymbols(Vec<(PlacedAddress, SymbolIndex, Arc<SymbolData>)>);
 
 impl Object {
     /// An object holding `symbols`, which may come in any order. This is where
@@ -116,12 +116,15 @@ impl Object {
     }
 
     /// [`placed`](Self::placed).
-    pub(crate) fn placed_symbols(&self) -> &[(u64, SymbolIndex, Arc<SymbolData>)] {
+    pub(crate) fn placed_symbols(&self) -> &[(PlacedAddress, SymbolIndex, Arc<SymbolData>)] {
         &self.placed.0
     }
 
     /// The entries of [`placed`](Self::placed) whose address is inside `range`.
-    pub(crate) fn placed_in(&self, range: Range<u64>) -> &[(u64, SymbolIndex, Arc<SymbolData>)] {
+    pub(crate) fn placed_in(
+        &self,
+        range: Range<PlacedAddress>,
+    ) -> &[(PlacedAddress, SymbolIndex, Arc<SymbolData>)] {
         let all = self.placed_symbols();
         let start = all.partition_point(|&(address, ..)| address < range.start);
         let end = all.partition_point(|&(address, ..)| address < range.end);
@@ -140,7 +143,7 @@ impl Object {
     /// that knows which section the address is in checks the answer is in it too — the bias
     /// makes two sections two places, but a number past one section's end is still just a
     /// number.
-    pub fn symbol_at_placed(&self, placed: u64) -> Option<&Arc<SymbolData>> {
+    pub fn symbol_at_placed(&self, placed: PlacedAddress) -> Option<&Arc<SymbolData>> {
         let all = self.placed_symbols();
         let start = all.partition_point(|&(address, ..)| address < placed);
         let end = all.partition_point(|&(address, ..)| address <= placed);
@@ -274,7 +277,7 @@ pub struct Section {
     /// relocatable object where every section starts at 0.
     pub index: SectionIndex,
     pub name: String,
-    pub address: u64,
+    pub address: SectionAddress,
 
     /// What the parse read of this section, and the one thing that says whether it holds
     /// code: [`Some`] for a section the file marks as code (`SectionKind::Text`) and whose
@@ -297,21 +300,21 @@ pub struct CodeSection {
     /// what a disassembly has to ask by. Not always what the file states: see
     /// [`parse_object`](crate::parse_object). Ordered, because the disassembler, the only
     /// reader, asks for the last one in an instruction's bytes.
-    pub relocations: BTreeMap<u64, Relocation>,
+    pub relocations: BTreeMap<SectionAddress, Relocation>,
 
     /// The address ranges the file's own unwind table states for the functions in this
     /// section — an x86-64 PE's `.pdata`, an ELF's `.eh_frame`, out of
     /// [`unwind::entries`](crate::unwind::entries) — each starting in the section's bytes,
     /// sorted by start, each start once, ends clamped to the bytes. Empty for a file with no
     /// table read. What [`SymbolData::extent`] answers from first.
-    pub unwind: Vec<Range<u64>>,
+    pub unwind: Vec<Range<SectionAddress>>,
 
     /// Where the object's layout puts this section: what is added to an address in it to
-    /// place it in the one address space every section of the object shares. 0 for every
-    /// section of a linked image, whose addresses are real; in a relocatable object, where
-    /// every code section starts at 0, an address of its own for each. See
-    /// [`section_biases`](crate::parse::section_biases).
-    pub bias: u64,
+    /// place it in the one address space every section of the object shares.
+    /// [`Bias::NONE`] for every section of a linked image, whose addresses are real; in a
+    /// relocatable object, where every code section starts at 0, an address of its own for
+    /// each. See [`section_biases`](crate::parse::section_biases).
+    pub bias: Bias,
 }
 
 impl Section {
@@ -322,9 +325,9 @@ impl Section {
         index: SectionIndex,
         name: String,
         data: Vec<u8>,
-        address: u64,
-        relocations: BTreeMap<u64, Relocation>,
-        bias: u64,
+        address: SectionAddress,
+        relocations: BTreeMap<SectionAddress, Relocation>,
+        bias: Bias,
     ) -> Section {
         Section {
             index,
@@ -340,7 +343,7 @@ impl Section {
     }
 
     /// A section holding no code: no bytes, no relocations, no unwind ranges and no bias.
-    pub fn other(index: SectionIndex, name: String, address: u64) -> Section {
+    pub fn other(index: SectionIndex, name: String, address: SectionAddress) -> Section {
         Section {
             index,
             name,
@@ -354,39 +357,34 @@ impl Section {
         self.code.as_ref()
     }
 
-    /// This section's [`bias`](CodeSection::bias), and 0 for a section holding no code,
-    /// which has no place in the layout.
-    pub fn bias(&self) -> u64 {
-        self.code.as_ref().map_or(0, |code| code.bias)
+    /// This section's [`bias`](CodeSection::bias), and [`Bias::NONE`] for a section holding
+    /// no code, which has no place in the layout.
+    pub fn bias(&self) -> Bias {
+        self.code.as_ref().map_or(Bias::NONE, |code| code.bias)
     }
 
     /// `address`, one of this section's own, in the one address space every section of the
     /// object shares: this section's [`bias`](Self::bias) added. A section holding no code
-    /// has no place in the layout, so it answers the address unchanged. That is the space a
+    /// has no place in the layout, so it answers the same number in the other space. That is the space a
     /// listing of all the object's code draws in and the space
     /// [`Object::symbol_at_placed`] answers in, so anything naming a row places an address
     /// through here.
     ///
-    /// `wrapping_add` and not `checked_add`, as `line::relocate` adds the same bias:
-    /// agreeing with it matters more than an overflow the biases cannot produce, the layout
-    /// starting above the highest address the file states
-    /// ([`section_biases`](crate::parse::section_biases)). Wrapping is also what keeps this
-    /// from panicking on an address a file made up.
-    pub fn place(&self, address: u64) -> u64 {
-        address.wrapping_add(self.bias())
+    /// Wrapping, and why, is [`SectionAddress::placed`].
+    pub fn place(&self, address: SectionAddress) -> PlacedAddress {
+        address.placed(self.bias())
     }
 
     /// [`place`](Self::place) with the overflow said, for a caller that must answer nothing
-    /// rather than answer about a different address. A bias is never a wrapped value, so
-    /// the two agree wherever this one answers.
-    pub(crate) fn place_checked(&self, address: u64) -> Option<u64> {
-        address.checked_add(self.bias())
+    /// rather than answer about a different address ([`SectionAddress::placed_checked`]).
+    pub(crate) fn place_checked(&self, address: SectionAddress) -> Option<PlacedAddress> {
+        address.placed_checked(self.bias())
     }
 
     /// A placed address back in this section's own terms: [`place`](Self::place) undone,
     /// and wrapping for the same reason.
-    pub fn local(&self, placed: u64) -> u64 {
-        placed.wrapping_sub(self.bias())
+    pub fn local(&self, placed: PlacedAddress) -> SectionAddress {
+        placed.local(self.bias())
     }
 
     /// How many bytes of code this section holds: 0 for one holding none.
@@ -406,14 +404,14 @@ impl Section {
     /// [`u64::MAX`]. The range a symbol is decoded over, the one a listing partitions, the
     /// one an unwind entry is clamped to and the one a declared address is looked up in are
     /// this range, so they cannot say different things.
-    pub fn end(&self) -> Option<u64> {
+    pub fn end(&self) -> Option<SectionAddress> {
         self.address.checked_add(self.len())
     }
 
     /// The addresses this section's bytes take up, in the section's own terms. [`None`] for
     /// a section with no bytes — one holding no code among them — and for one that does not
     /// fit in the address space ([`end`](Self::end)).
-    pub fn bytes_range(&self) -> Option<Range<u64>> {
+    pub fn bytes_range(&self) -> Option<Range<SectionAddress>> {
         let end = self.end()?;
         (self.address < end).then_some(self.address..end)
     }
@@ -422,7 +420,7 @@ impl Section {
     /// to hold what that field says: a range not starting in the bytes is dropped, the rest
     /// have their ends clamped to the bytes, and they are sorted by start with each start
     /// kept once. A section holding no code takes none.
-    pub(crate) fn with_unwind(mut self, mut unwind: Vec<Range<u64>>) -> Section {
+    pub(crate) fn with_unwind(mut self, mut unwind: Vec<Range<SectionAddress>>) -> Section {
         let bytes = self.bytes_range();
         let Some(code) = self.code.as_mut() else {
             return self;
@@ -451,10 +449,9 @@ impl Section {
     ///
     /// Every step is checked, these numbers having come out of a file, and this is the one
     /// place a caller slicing a symbol's code or a gap goes through.
-    pub fn bytes_in(&self, range: Range<u64>) -> Option<&[u8]> {
-        let length = range.end.checked_sub(range.start)?;
-        let length: usize = length.try_into().ok()?;
-        let offset: usize = range.start.checked_sub(self.address)?.try_into().ok()?;
+    pub fn bytes_in(&self, range: Range<SectionAddress>) -> Option<&[u8]> {
+        let length: usize = range.start.bytes_to(range.end)?.try_into().ok()?;
+        let offset: usize = self.address.bytes_to(range.start)?.try_into().ok()?;
         let end = offset.checked_add(length)?;
         self.code.as_ref()?.data.get(offset..end)
     }
@@ -463,7 +460,7 @@ impl Section {
     /// [`place`](Self::place). [`None`] wherever that answers [`None`] — a section holding
     /// no code has no place either — and where the layout would put the bytes past the end
     /// of the address space, which `section_biases` never does.
-    pub(crate) fn placed_range(&self) -> Option<Range<u64>> {
+    pub(crate) fn placed_range(&self) -> Option<Range<PlacedAddress>> {
         let bytes = self.bytes_range()?;
         Some(self.place_checked(bytes.start)?..self.place_checked(bytes.end)?)
     }
@@ -473,7 +470,7 @@ impl Section {
 pub struct SymbolData {
     pub name: String,
     pub demangled: Option<String>,
-    pub address: u64,
+    pub address: SectionAddress,
     pub section: Option<Arc<Section>>,
     pub size: u64,
 
@@ -487,7 +484,7 @@ impl SymbolData {
     pub fn new(
         name: String,
         demangled: Option<String>,
-        address: u64,
+        address: SectionAddress,
         section: Option<Arc<Section>>,
         size: u64,
     ) -> SymbolData {
@@ -508,25 +505,25 @@ impl SymbolData {
     }
 
     /// `address`, one of this symbol's own, placed by the section it is in
-    /// ([`Section::place`]). Nothing is added for a symbol in no section, which is in no
-    /// listing either.
-    pub fn placed(&self, address: u64) -> u64 {
+    /// ([`Section::place`]). A symbol in no section is in no listing either, so nothing
+    /// placed it ([`SectionAddress::unplaced`]).
+    pub fn placed(&self, address: SectionAddress) -> PlacedAddress {
         self.section
             .as_ref()
-            .map_or(address, |section| section.place(address))
+            .map_or(address.unplaced(), |section| section.place(address))
     }
 
     /// Where this symbol is in [`Object::placed`]: its placed address, where its section is
     /// code and the address is inside the section's bytes. [`None`] for every other symbol,
     /// which no listing labels and no estimate is made for.
-    pub(crate) fn code_place(&self) -> Option<u64> {
+    pub(crate) fn code_place(&self) -> Option<PlacedAddress> {
         self.place_in(&self.section.as_ref()?.placed_range()?)
     }
 
     /// This symbol's placed address, where `range` — the placed bytes of the section it is
     /// in — covers it. [`code_place`](Self::code_place) is this with the ask for the range,
     /// so a caller holding one already comes here and asks for it once.
-    pub(crate) fn place_in(&self, range: &Range<u64>) -> Option<u64> {
+    pub(crate) fn place_in(&self, range: &Range<PlacedAddress>) -> Option<PlacedAddress> {
         let placed = self.placed(self.address);
         range.contains(&placed).then_some(placed)
     }
@@ -603,10 +600,10 @@ impl Hash for Symbol {
 /// **Only that one candidate is looked at.** Where ranges nest, an address past an inner
 /// range but still inside the outer one answers [`None`] rather than the outer one — this
 /// finds the last range starting at or before the address, and nothing else.
-pub(crate) fn covering<T>(
+pub(crate) fn covering<T, A: Ord>(
     items: &[T],
-    range: impl Fn(&T) -> Range<u64>,
-    address: u64,
+    range: impl Fn(&T) -> Range<A>,
+    address: A,
 ) -> Option<usize> {
     let index = items
         .partition_point(|item| range(item).start <= address)

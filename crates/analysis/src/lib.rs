@@ -1,3 +1,4 @@
+mod address;
 mod demangle;
 mod disasm;
 mod extent;
@@ -10,6 +11,7 @@ mod open;
 mod parse;
 mod unwind;
 
+pub use address::{Bias, PlacedAddress, SectionAddress};
 pub use disasm::{Assembly, BranchEdge, Instruction, Operand, SpanKind};
 pub use extent::Extent;
 pub use line::{LineInfo, LineRow, SourceDigests, SourceHash};

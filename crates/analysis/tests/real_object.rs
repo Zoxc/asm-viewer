@@ -18,7 +18,8 @@
 mod common;
 
 use analysis::{parse_object, LineInfo, Object};
-use common::{committed_fixture, symbol};
+use analysis::{Bias, Section};
+use common::{at, committed_fixture, symbol};
 use object::{Object as _, ObjectKind, ObjectSection, SectionKind};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,7 +46,14 @@ fn parse(name: &str) -> Arc<Object> {
 fn rows(info: &LineInfo) -> Vec<(u64, u64, Option<u32>, Option<u32>)> {
     info.rows()
         .iter()
-        .map(|row| (row.range.start, row.range.end, row.line, row.column))
+        .map(|row| {
+            (
+                row.range.start.get(),
+                row.range.end.get(),
+                row.line,
+                row.column,
+            )
+        })
         .collect()
 }
 
@@ -116,7 +124,7 @@ fn declared_sizes_agree_with_the_estimate() {
     let object = parse(FLAT);
     for (name, address, size) in [("add", 0x00, 20), ("twice", 0x14, 28), ("sum_to", 0x30, 62)] {
         let symbol = symbol(&object, name);
-        assert_eq!(symbol.address, address, "{name} address");
+        assert_eq!(symbol.address, at(address), "{name} address");
         assert_eq!(symbol.size, size, "{name} declared size");
         assert_eq!(
             symbol.estimate_size(&object).map(|extent| extent.bytes),
@@ -220,7 +228,7 @@ fn every_instruction_of_a_function_has_a_source_line() {
     assert!(lines.iter().all(|line| matches!(line, Some(22..=24))));
 
     // Past the end of the symbol there is nothing, even though `twice` starts there.
-    assert!(info.row_at(0x14).is_none());
+    assert!(info.row_at(at(0x14)).is_none());
 }
 
 /// `LineInfo`'s invariant — rows ascending, non-overlapping, each answering for its own
@@ -232,7 +240,10 @@ fn rows_are_ascending_and_do_not_overlap() {
         let object = parse(name);
         for function in ["add", "twice", "sum_to"] {
             let symbol = symbol(&object, function);
-            let end = symbol.address + symbol.estimate_size(&object).expect("a size").bytes;
+            let end = symbol
+                .address
+                .checked_add(symbol.estimate_size(&object).expect("a size").bytes)
+                .expect("a fixture fits in the address space");
             let info = line_info(&object, function);
 
             let mut previous = symbol.address;
@@ -243,13 +254,14 @@ fn rows_are_ascending_and_do_not_overlap() {
                 );
                 assert!(
                     row.range.start >= previous,
-                    "{name}/{function}: {:?} overlaps the row ending at {previous}",
+                    "{name}/{function}: {:?} overlaps the row ending at {previous:?}",
                     row.range
                 );
                 assert!(row.range.end <= end, "{name}/{function}: {:?}", row.range);
                 previous = row.range.end;
 
-                for address in [row.range.start, row.range.end - 1] {
+                let last = row.range.end.checked_sub(1).expect("a row covers a byte");
+                for address in [row.range.start, last] {
                     let found = info
                         .row_at(address)
                         .expect("every address inside a row is answered by it");
@@ -274,7 +286,7 @@ fn functions_sharing_address_zero_keep_their_own_rows() {
     let object = parse(SPLIT);
 
     for function in ["add", "twice", "sum_to"] {
-        assert_eq!(symbol(&object, function).address, 0, "{function}");
+        assert_eq!(symbol(&object, function).address, at(0), "{function}");
     }
 
     // Rebased to each section's own zero, but otherwise exactly the flat build's rows.
@@ -445,35 +457,45 @@ fn split_sections_are_each_given_a_place_of_their_own() {
         [".text", ".text.add", ".text.twice", ".text.sum_to"]
     );
     assert!(code[0].code().is_some_and(|code| code.data.is_empty()));
+    // Every one of them states 0, so where a section is placed is its bias, and where it
+    // is placed is the observable: a `Bias` is opaque and has no number to check.
+    let placed_at = |section: &Section| section.place(section.address).get();
     let mut placed_end = 0;
     for section in &code {
-        assert_eq!(section.address, 0);
+        assert_eq!(section.address, at(0));
         assert!(
-            section.bias() >= placed_end,
+            placed_at(section) >= placed_end,
             "{} overlaps the section before it",
             section.name
         );
-        assert_eq!(section.bias() % 16, 0);
-        placed_end = section.bias() + section.code().map_or(0, |code| code.data.len()) as u64;
+        assert_eq!(placed_at(section) % 16, 0);
+        placed_end = placed_at(section) + section.code().map_or(0, |code| code.data.len()) as u64;
     }
-    assert_eq!(code[0].bias(), 0);
+    assert_eq!(code[0].bias(), Bias::NONE);
     assert_eq!(
-        code[1].bias(),
+        placed_at(code[1]),
         0x10,
         "an empty section still takes one grain"
     );
-    assert_eq!(code[2].bias(), 0x30, "add is 0x14 bytes, rounded up to 16");
+    assert_eq!(
+        placed_at(code[2]),
+        0x30,
+        "add is 0x14 bytes, rounded up to 16"
+    );
 
     // And a section that is not code is not moved, whatever its address.
     for section in &object.sections {
         if section.code().is_none() {
-            assert_eq!(section.bias(), 0, "{}", section.name);
+            assert_eq!(section.bias(), Bias::NONE, "{}", section.name);
         }
     }
 
     // The one `.text` build has nothing to move.
     let flat = parse(FLAT);
-    assert!(flat.sections.iter().all(|section| section.bias() == 0));
+    assert!(flat
+        .sections
+        .iter()
+        .all(|section| section.bias() == Bias::NONE));
 }
 
 /// A relocatable object's `.eh_frame` is not read: gcc writes the FDEs before the addresses

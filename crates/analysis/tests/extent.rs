@@ -4,9 +4,10 @@
 //! which is what these fixtures put there on purpose.
 
 mod common;
+use analysis::Bias;
 use common::{
-    coff_x86_64, elf_shared_object, elf_x86_64_with_dwarf, elf_x86_64_with_dwarf_declaring, named,
-    parse, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, SharedObject, TextSymbol,
+    at, coff_x86_64, elf_shared_object, elf_x86_64_with_dwarf, elf_x86_64_with_dwarf_declaring,
+    named, parse, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, SharedObject, TextSymbol,
     UnitRanges, TEXT_ADDRESS,
 };
 
@@ -130,7 +131,7 @@ fn the_extent_is_the_range_line_info_is_asked_about() {
     let info = first.line_info(&object).expect("line info for `first`");
     assert_eq!(info.rows().len(), 1);
     assert_eq!(info.rows()[0].line, Some(10));
-    assert_eq!(info.rows()[0].range, 0..6);
+    assert_eq!(info.rows()[0].range, at(0)..at(6));
 }
 
 #[test]
@@ -145,8 +146,8 @@ fn a_linked_image_is_asked_in_its_own_addresses() {
         .find(|section| section.name == ".text")
         .expect("the fixture has a .text");
 
-    assert_eq!(first.address, 0);
-    assert_eq!(object.function_extent(text, 0), Some(6));
+    assert_eq!(first.address, at(0));
+    assert_eq!(object.function_extent(text, at(0)), Some(6));
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
 }
 
@@ -202,8 +203,8 @@ fn two_functions_at_address_zero_get_their_own_extents() {
     let second = named(&object, "second");
 
     // The premise: the address is not the key here.
-    assert_eq!(first.address, 0);
-    assert_eq!(second.address, 0);
+    assert_eq!(first.address, at(0));
+    assert_eq!(second.address, at(0));
 
     assert_eq!(first.debug_extent(&object), Some(6));
     assert_eq!(second.debug_extent(&object), Some(2));
@@ -326,7 +327,7 @@ fn an_unwind_entry_outranks_a_declared_size() {
     }));
     let first = named(&object, "first");
 
-    assert_eq!(first.address, TEXT_ADDRESS);
+    assert_eq!(first.address, at(TEXT_ADDRESS));
     assert_eq!(first.size, 8);
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(4));
 }
@@ -408,9 +409,12 @@ fn a_symbol_outside_the_code_bounds_nothing() {
     // The premise: `.text.b` is placed at 16, so `wild` at 19 is inside it, and `in_data`
     // at 2 is inside `.text.a`, which stays at 0.
     let g = named(&object, "g");
-    assert_eq!(g.section.as_ref().map(|section| section.bias()), Some(16));
-    assert_eq!(named(&object, "wild").address, 19);
-    assert_eq!(named(&object, "in_data").address, 2);
+    assert_eq!(
+        g.section.as_ref().map(|section| section.bias()),
+        Some(Bias::new(16))
+    );
+    assert_eq!(named(&object, "wild").address, at(19));
+    assert_eq!(named(&object, "in_data").address, at(2));
 
     let f = named(&object, "f");
     assert_eq!(f.estimate_size(&object).map(|extent| extent.bytes), Some(4));

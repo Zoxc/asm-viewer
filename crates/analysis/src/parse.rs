@@ -4,7 +4,7 @@
 use crate::demangle;
 use crate::line::{DebugInfo, DebugInfoCache, Procedure, Public};
 use crate::unwind::{self, UnwindEntry};
-use crate::{MadeUp, Object, ObjectData, Section, SymbolData};
+use crate::{Bias, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData};
 use object::{
     BinaryFormat, CompressionFormat, ExportTarget, Object as _, ObjectKind, ObjectSection,
     ObjectSymbol, SectionIndex, SectionKind, SymbolIndex, SymbolKind,
@@ -39,7 +39,7 @@ use std::{
 /// * **Code sections only.** An absolute relocation in a debug section is often an offset
 ///   into another `.debug_*` section (`DW_AT_stmt_list`, `DW_FORM_strp`), which must come out
 ///   exactly as it went in.
-pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u64> {
+pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, Bias> {
     let mut biases = HashMap::new();
     if file.kind() != ObjectKind::Relocatable {
         return biases;
@@ -59,7 +59,10 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, u
     for section in text() {
         // `next` starts at or above every text address and only grows, so this is the plain
         // difference. `wrapping_sub` and not `-` so that a proof going wrong is not a panic.
-        biases.insert(section.index(), next.wrapping_sub(section.address()));
+        biases.insert(
+            section.index(),
+            Bias::new(next.wrapping_sub(section.address())),
+        );
 
         // Somewhere for the next section to go, past the bytes `section_data` keeps: for a
         // compressed section the size its header says it decompresses to, not the `size()` it
@@ -154,7 +157,7 @@ struct Pending {
     /// Whether the name is the file's own and goes through the demangling batch. One that is
     /// not is a [`MadeUp`] name, which no demangler has anything to say about.
     mangled: bool,
-    address: u64,
+    address: SectionAddress,
     /// What the file said: a symbol's size, a PDB procedure's length, an unwind entry's
     /// stated end less its begin, and 0 for an export, the entry point and a PDB public. The
     /// extent used comes from [`SymbolData::extent`], which reads this only where the format
@@ -217,8 +220,8 @@ struct SymbolTable {
 /// exports is a linked image.
 fn declared_code(
     file: &object::File<'_>,
-    code: &[(Range<u64>, SectionIndex)],
-    known: &mut HashSet<u64>,
+    code: &[(Range<SectionAddress>, SectionIndex)],
+    known: &mut HashSet<PlacedAddress>,
     next: usize,
     procedures: Vec<Procedure>,
     publics: Vec<Public>,
@@ -232,11 +235,13 @@ fn declared_code(
     // Takes the name and whether it is the file's own, which is what decides whether the
     // name is offered to the demanglers. `MadeUp::unmangled` is that pair for the names
     // that are ours.
-    let mut take = |(name, mangled): (String, bool), address: u64, size: u64| {
+    let mut take = |(name, mangled): (String, bool), address: SectionAddress, size: u64| {
         let Some((_, section)) = code.iter().find(|(range, _)| range.contains(&address)) else {
             return;
         };
-        if !known.insert(address) {
+        // `known` is keyed by placed address, and nothing here is a relocatable object's
+        // ([`section_biases`]), so nothing placed this one.
+        if !known.insert(address.unplaced()) {
             return;
         }
         declared.push(Pending {
@@ -261,7 +266,7 @@ fn declared_code(
         }
         take(
             (String::from_utf8_lossy(name).into_owned(), true),
-            symbol.address(),
+            SectionAddress::new(symbol.address()),
             symbol.size(),
         );
     }
@@ -283,7 +288,7 @@ fn declared_code(
         }
         take(
             (String::from_utf8_lossy(name).into_owned(), true),
-            address,
+            SectionAddress::new(address),
             0,
         );
     }
@@ -291,7 +296,11 @@ fn declared_code(
     // 0 is "this image has no entry point", which is how a DLL built without one states it.
     let entry = file.entry();
     if entry != 0 {
-        take(MadeUp::EntryPoint.unmangled(), entry, 0);
+        take(
+            MadeUp::EntryPoint.unmangled(),
+            SectionAddress::new(entry),
+            0,
+        );
     }
 
     // After the image's own names, so they win. The address is already in the image's space
@@ -332,8 +341,10 @@ fn declared_code(
 ///
 /// In the file's own section order, which is what decides the section an address in two
 /// overlapping ranges is taken to be in.
-fn code_sections(sections: &HashMap<SectionIndex, Section>) -> Vec<(Range<u64>, SectionIndex)> {
-    let mut ranges: Vec<(Range<u64>, SectionIndex)> = sections
+fn code_sections(
+    sections: &HashMap<SectionIndex, Section>,
+) -> Vec<(Range<SectionAddress>, SectionIndex)> {
+    let mut ranges: Vec<(Range<SectionAddress>, SectionIndex)> = sections
         .values()
         .filter_map(|section| Some((section.bytes_range()?, section.index)))
         .collect();
@@ -357,9 +368,11 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     // address alone does not say which code it is ([`section_biases`]).
     let place = |symbol: &Pending| {
         let section = symbol.section.and_then(|index| sections.get(&index));
-        section.map_or(symbol.address, |section| section.place(symbol.address))
+        section.map_or(symbol.address.unplaced(), |section| {
+            section.place(symbol.address)
+        })
     };
-    let mut known: HashSet<u64> = symbols.iter().map(place).collect();
+    let mut known: HashSet<PlacedAddress> = symbols.iter().map(place).collect();
 
     let (debug_info, procedures, publics) = open_pdb(&file, &path);
     let unwind = unwind::entries(&file);
@@ -409,7 +422,10 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
             // decompress is dropped outright: there is nothing to disassemble in it and
             // nothing else to keep it for.
             if section.kind() != SectionKind::Text {
-                return Some((index, Section::other(index, name, section.address())));
+                return Some((
+                    index,
+                    Section::other(index, name, SectionAddress::new(section.address())),
+                ));
             }
             let data = section_data(&section)?;
 
@@ -427,12 +443,21 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
             };
             let relocations = section
                 .relocations()
-                .filter_map(|(offset, relocation)| Some((base.checked_add(offset)?, relocation)))
+                .filter_map(|(offset, relocation)| {
+                    Some((SectionAddress::new(base).checked_add(offset)?, relocation))
+                })
                 .collect();
-            let bias = biases.get(&index).copied().unwrap_or(0);
+            let bias = biases.get(&index).copied().unwrap_or(Bias::NONE);
             Some((
                 index,
-                Section::text(index, name, data, section.address(), relocations, bias),
+                Section::text(
+                    index,
+                    name,
+                    data,
+                    SectionAddress::new(section.address()),
+                    relocations,
+                    bias,
+                ),
             ))
         })
         .collect()
@@ -454,7 +479,7 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
             continue;
         }
 
-        let address = symbol.address();
+        let address = SectionAddress::new(symbol.address());
         let section = symbol.section().index();
 
         let pending = |(name, mangled)| Pending {
@@ -492,10 +517,10 @@ fn open_pdb(file: &object::File<'_>, path: &Path) -> (DebugInfoCache, Vec<Proced
 /// symbol: an export or a procedure at that address takes its extent from the end the entry
 /// states. The first section holding the start takes it.
 fn place_unwind(
-    code: &[(Range<u64>, SectionIndex)],
+    code: &[(Range<SectionAddress>, SectionIndex)],
     unwind: &[UnwindEntry],
-) -> HashMap<SectionIndex, Vec<Range<u64>>> {
-    let mut ranges: HashMap<SectionIndex, Vec<Range<u64>>> = HashMap::new();
+) -> HashMap<SectionIndex, Vec<Range<SectionAddress>>> {
+    let mut ranges: HashMap<SectionIndex, Vec<Range<SectionAddress>>> = HashMap::new();
     for UnwindEntry { range, .. } in unwind {
         let Some((_, index)) = code
             .iter()
@@ -513,7 +538,7 @@ fn place_unwind(
 /// never reach past what `bytes` can read.
 fn freeze_sections(
     sections: HashMap<SectionIndex, Section>,
-    mut ranges: HashMap<SectionIndex, Vec<Range<u64>>>,
+    mut ranges: HashMap<SectionIndex, Vec<Range<SectionAddress>>>,
 ) -> HashMap<SectionIndex, Arc<Section>> {
     sections
         .into_iter()

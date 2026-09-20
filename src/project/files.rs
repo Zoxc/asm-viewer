@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use analysis::MadeUp;
+use analysis::{MadeUp, SectionAddress};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::bookmarks::Bookmark;
@@ -622,6 +622,7 @@ impl SavedMadeUp {
     /// The name this is, borne by a symbol at `address`: the other half of
     /// [`SavedMadeUp::of`], and where the address the spelling needs comes back.
     fn at(self, address: u64) -> MadeUp {
+        let address = SectionAddress::new(address);
         match self {
             SavedMadeUp::EntryPoint => MadeUp::EntryPoint,
             SavedMadeUp::Function => MadeUp::Function(address),
@@ -633,7 +634,7 @@ impl SavedMadeUp {
 impl SavedName {
     /// The saved form of `name`, borne by a symbol at `address`.
     pub fn of(name: &str, address: u64) -> SavedName {
-        match MadeUp::of(name, address) {
+        match MadeUp::of(name, SectionAddress::new(address)) {
             None => SavedName::File(name.to_owned()),
             Some(made_up) => SavedName::MadeUp(SavedMadeUp::of(made_up)),
         }

@@ -6,7 +6,7 @@ mod common;
 
 use analysis::{Operand, SpanKind};
 use common::{
-    elf_shared_object, elf_x86_64, parse, pe_dll, symbol, text, ExportedSymbol, SharedObject,
+    at, elf_shared_object, elf_x86_64, parse, pe_dll, symbol, text, ExportedSymbol, SharedObject,
     TextSymbol, TEXT_ADDRESS,
 };
 use object::{
@@ -60,7 +60,7 @@ fn target_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> 
 fn the_call_names_g(object: &analysis::Object) {
     let f = symbol(object, "f");
     let g = symbol(object, "g");
-    assert_eq!(g.address, TEXT_ADDRESS + 6);
+    assert_eq!(g.address, at(TEXT_ADDRESS + 6));
 
     let assembly = f.assembly(object).expect("f disassembles");
     assert_eq!(assembly.instructions.len(), 2);
@@ -147,7 +147,7 @@ fn a_call_landing_inside_a_function_keeps_its_number() {
     // Unnamed, the number is where the call goes, for a reader to be taken there.
     assert!(matches!(
         call.operand,
-        Some(Operand::Call { address, .. }) if address == TEXT_ADDRESS + 5
+        Some(Operand::Call { address, .. }) if address == at(TEXT_ADDRESS + 5)
     ));
     assert_eq!(
         text(call).trim_end(),
@@ -189,7 +189,7 @@ fn a_call_into_the_middle_of_a_function_keeps_its_address() {
         let object = parse(&image);
         let f = symbol(&object, "f");
         let g = symbol(&object, "g");
-        let inside = g.address + 1;
+        let inside = at(g.address.get() + 1);
 
         let assembly = f.assembly(&object).expect("f disassembles");
         let call = &assembly.instructions[0];
@@ -229,7 +229,7 @@ fn a_branch_keeps_its_target_beside_its_branch() {
     // `target` is `branch` and the span the door uses is the branch's own.
     assert!(matches!(
         jump.operand,
-        Some(Operand::Branch { address, .. }) if address == TEXT_ADDRESS + 3
+        Some(Operand::Branch { address, .. }) if address == at(TEXT_ADDRESS + 3)
     ));
     assert_eq!(jump.target(), jump.branch());
     assert!(target_span(jump).is_some());
@@ -262,7 +262,7 @@ fn an_unrelocated_call_never_reaches_across_sections() {
     let object = parse(&obj.write().expect("writing the fixture object"));
 
     let f = symbol(&object, "f");
-    assert_eq!(symbol(&object, "g").address, 6);
+    assert_eq!(symbol(&object, "g").address, at(6));
 
     let assembly = f.assembly(&object).expect("f disassembles");
     let call = &assembly.instructions[0];
@@ -274,5 +274,5 @@ fn an_unrelocated_call_never_reaches_across_sections() {
     assert_eq!(text(call).trim_end(), "call      6");
     // And the number is still where the call goes, in the section's own addresses:
     // nothing is judged about a target past the section's end.
-    assert_eq!(call.target(), Some(6));
+    assert_eq!(call.target(), Some(at(6)));
 }

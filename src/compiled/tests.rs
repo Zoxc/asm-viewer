@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use analysis::{
-    Architecture, BinaryFormat, ObjectData, Section, SectionIndex, SymbolData, SymbolIndex,
+    Architecture, Bias, BinaryFormat, ObjectData, Section, SectionAddress, SectionIndex,
+    SymbolData, SymbolIndex,
 };
 
 use super::*;
@@ -15,9 +16,9 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
         SectionIndex(0),
         ".text".into(),
         bytes,
-        0,
+        SectionAddress::new(0),
         BTreeMap::new(),
-        0,
+        Bias::NONE,
     ));
 
     let symbols = symbols
@@ -25,8 +26,13 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
         .enumerate()
         .map(|(index, name)| {
             let address = index as u64;
-            let symbol =
-                SymbolData::new((*name).to_owned(), None, address, Some(section.clone()), 0);
+            let symbol = SymbolData::new(
+                (*name).to_owned(),
+                None,
+                SectionAddress::new(address),
+                Some(section.clone()),
+                0,
+            );
             (SymbolIndex(index), Arc::new(symbol))
         })
         .collect();
@@ -123,19 +129,19 @@ fn one_name_in_two_objects_stays_two_candidates() {
 }
 
 /// A symbol in a section that was placed somewhere: what the section view draws it at.
-fn placed(name: &str, address: u64, bias: u64) -> Arc<SymbolData> {
+fn placed(name: &str, address: u64, bias: Bias) -> Arc<SymbolData> {
     let section = Section::text(
         SectionIndex(0),
         ".text".into(),
         Vec::new(),
-        0,
+        SectionAddress::new(0),
         BTreeMap::new(),
         bias,
     );
     Arc::new(SymbolData::new(
         name.to_owned(),
         None,
-        address,
+        SectionAddress::new(address),
         Some(Arc::new(section)),
         0,
     ))
@@ -147,20 +153,35 @@ fn placed(name: &str, address: u64, bias: u64) -> Arc<SymbolData> {
 #[test]
 fn the_lowest_placed_address_is_not_the_first() {
     // Raw order: `early` at 0x10 comes first, but its section sits above the other's.
-    let symbols = [placed("early", 0x10, 0x2000), placed("late", 0x40, 0x1000)];
+    let symbols = [
+        placed("early", 0x10, Bias::new(0x2000)),
+        placed("late", 0x40, Bias::new(0x1000)),
+    ];
     assert_eq!(lowest_placed(&symbols), Some(0x1040));
 
     // One section is the ordinary case, and there the two agree.
-    let one = [placed("a", 0x40, 0x1000), placed("b", 0x10, 0x1000)];
+    let one = [
+        placed("a", 0x40, Bias::new(0x1000)),
+        placed("b", 0x10, Bias::new(0x1000)),
+    ];
     assert_eq!(lowest_placed(&one), Some(0x1010));
 }
 
 /// A symbol in no section is in no listing either, and nothing at all is no answer.
 #[test]
 fn a_symbol_with_no_section_is_nowhere_to_open() {
-    let loose = Arc::new(SymbolData::new("absolute".to_owned(), None, 0x10, None, 0));
+    let loose = Arc::new(SymbolData::new(
+        "absolute".to_owned(),
+        None,
+        SectionAddress::new(0x10),
+        None,
+        0,
+    ));
     assert_eq!(lowest_placed(&[loose.clone()]), None);
     // And it is stepped over rather than taken as the lowest.
-    assert_eq!(lowest_placed(&[loose, placed("a", 0x40, 0)]), Some(0x40));
+    assert_eq!(
+        lowest_placed(&[loose, placed("a", 0x40, Bias::NONE)]),
+        Some(0x40)
+    );
     assert_eq!(lowest_placed(&[]), None);
 }

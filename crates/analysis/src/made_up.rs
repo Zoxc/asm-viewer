@@ -2,6 +2,7 @@
 //! only an unwind entry declares, and a fragment of one. This is where each is spelled.
 
 use crate::unwind::UnwindEntry;
+use crate::SectionAddress;
 use std::fmt;
 
 /// A name the app made up, its [`Display`](fmt::Display) the one place the spelling lives.
@@ -22,10 +23,10 @@ pub enum MadeUp {
     EntryPoint,
     /// A function at an address: code only an unwind entry declares, or a text symbol whose
     /// own name will not read out of the string table.
-    Function(u64),
+    Function(SectionAddress),
     /// A second range of some function's rather than a function: an unwind entry whose
     /// unwind info is chained.
-    Fragment(u64),
+    Fragment(SectionAddress),
 }
 
 impl MadeUp {
@@ -34,7 +35,7 @@ impl MadeUp {
     /// stays the one place the spelling lives; and it is the address that decides, so a name
     /// out of a file that reads like one of these but sits somewhere else is not taken for
     /// one.
-    pub fn of(name: &str, address: u64) -> Option<MadeUp> {
+    pub fn of(name: &str, address: SectionAddress) -> Option<MadeUp> {
         [
             MadeUp::EntryPoint,
             MadeUp::Function(address),

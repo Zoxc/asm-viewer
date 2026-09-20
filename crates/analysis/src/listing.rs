@@ -20,7 +20,7 @@
 //! holds the answer.
 
 use crate::model::covering;
-use crate::{Assembly, Object, Section, SymbolData};
+use crate::{Assembly, Bias, Object, PlacedAddress, Section, SectionAddress, SymbolData};
 use std::{ops::Range, sync::Arc};
 
 /// One section's listing: its stretches, contiguous and in address order, partitioning the
@@ -35,7 +35,7 @@ pub struct Listing {
 pub struct Stretch {
     /// The addresses this stretch covers, `start` being where its label sits. Ends where the
     /// next stretch starts, or at the section's end.
-    pub range: Range<u64>,
+    pub range: Range<SectionAddress>,
 
     /// The symbols at `range.start`, in the order the file's symbol table has them. Empty
     /// for the leading stretch — the bytes before the first symbol, or a section with no
@@ -67,7 +67,7 @@ pub struct DecodedStretch {
 /// [`Section::bytes_in`] — and are not copied here, since a gap can be megabytes.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Gap {
-    pub range: Range<u64>,
+    pub range: Range<SectionAddress>,
     pub kind: GapKind,
 }
 
@@ -109,7 +109,7 @@ impl Listing {
         let symbols = section
             .placed_range()
             .map_or(&[][..], |range| object.placed_in(range));
-        let local = |&(placed, ..): &(u64, _, _)| section.local(placed);
+        let local = |&(placed, ..): &(PlacedAddress, _, _)| section.local(placed);
 
         let mut stretches = Vec::new();
         let first = symbols.first().map_or(bytes.end, local);
@@ -148,7 +148,7 @@ impl Listing {
     }
 
     /// The index of the stretch `address` falls in, if it is in the section.
-    pub fn stretch_at(&self, address: u64) -> Option<usize> {
+    pub fn stretch_at(&self, address: SectionAddress) -> Option<usize> {
         covering(&self.stretches, |stretch| stretch.range.clone(), address)
     }
 
@@ -214,27 +214,27 @@ pub struct CodeListing {
 /// One code section in a [`CodeListing`]: its listing, and where the layout put it.
 pub struct Placed {
     pub listing: Listing,
-    range: Range<u64>,
+    range: Range<PlacedAddress>,
 }
 
 impl Placed {
     /// What is added to an address in this section to place it.
-    pub fn bias(&self) -> u64 {
+    pub fn bias(&self) -> Bias {
         self.listing.section().bias()
     }
 
     /// The placed addresses this section's bytes occupy.
-    pub fn range(&self) -> Range<u64> {
+    pub fn range(&self) -> Range<PlacedAddress> {
         self.range.clone()
     }
 
     /// The placed address of an address in this section ([`Section::place`]).
-    pub fn place(&self, address: u64) -> u64 {
+    pub fn place(&self, address: SectionAddress) -> PlacedAddress {
         self.listing.section().place(address)
     }
 
     /// The address in this section of a placed address ([`Section::local`]).
-    pub fn local(&self, placed: u64) -> u64 {
+    pub fn local(&self, placed: PlacedAddress) -> SectionAddress {
         self.listing.section().local(placed)
     }
 }
@@ -290,7 +290,7 @@ impl CodeListing {
 
     /// Where a placed address is: the section it falls in and the stretch of that section.
     /// [`None`] between two sections, and outside every one ([`covering`]).
-    pub fn at(&self, placed: u64) -> Option<Place> {
+    pub fn at(&self, placed: PlacedAddress) -> Option<Place> {
         let section = covering(&self.sections, |section| section.range.clone(), placed)?;
         let found = &self.sections[section];
         let stretch = found.listing.stretch_at(found.local(placed))?;

@@ -89,7 +89,7 @@ mod common;
 
 use analysis::{parse_object, LineInfo, Object, SourceDigests, SourceHash};
 use common::{
-    committed_fixture, committed_fixture_path, names, pe_image, symbol, CodeViewRecord,
+    at, committed_fixture, committed_fixture_path, names, pe_image, symbol, CodeViewRecord,
     ExportedSymbol, PeDll,
 };
 use object::{Object as _, ObjectKind, ObjectSection};
@@ -193,9 +193,9 @@ fn an_image_built_in_memory_can_name_a_pdb() {
 fn the_exports_are_the_three_functions() {
     let object = parse();
     assert_eq!(names(&object), ["add", "sum_to", "twice"]);
-    assert_eq!(symbol(&object, "add").address, TEXT);
-    assert_eq!(symbol(&object, "twice").address, TEXT + 0x20);
-    assert_eq!(symbol(&object, "sum_to").address, TEXT + 0x40);
+    assert_eq!(symbol(&object, "add").address, at(TEXT));
+    assert_eq!(symbol(&object, "twice").address, at(TEXT + 0x20));
+    assert_eq!(symbol(&object, "sum_to").address, at(TEXT + 0x40));
     for name in ["add", "twice", "sum_to"] {
         let symbol = symbol(&object, name);
         assert!(
@@ -212,8 +212,8 @@ fn rows(info: &LineInfo) -> Vec<(u64, u64, Option<u32>, Option<u32>)> {
         .iter()
         .map(|row| {
             (
-                row.range.start - TEXT,
-                row.range.end - TEXT,
+                row.range.start.get() - TEXT,
+                row.range.end.get() - TEXT,
                 row.line,
                 row.column,
             )
@@ -340,8 +340,8 @@ fn a_procedures_length_is_the_declared_extent() {
         .iter()
         .find(|section| section.name == ".text")
         .expect(".text");
-    assert_eq!(object.function_extent(text, TEXT + 0x08), None);
-    assert_eq!(object.function_extent(text, TEXT + 0x200), None);
+    assert_eq!(object.function_extent(text, at(TEXT + 0x08)), None);
+    assert_eq!(object.function_extent(text, at(TEXT + 0x200)), None);
 }
 
 /// The rows hold `LineInfo`'s invariants — ascending, non-overlapping, inside the range asked
@@ -352,7 +352,11 @@ fn the_rows_hold_the_invariants() {
     for name in ["add", "twice", "sum_to"] {
         let symbol = symbol(&object, name);
         let info = line_info(&object, name);
-        let end = symbol.address + symbol.extent(&object).unwrap().bytes;
+        let extent = symbol.extent(&object).unwrap().bytes;
+        let end = symbol
+            .address
+            .checked_add(extent)
+            .expect("the fixture fits in the address space");
         let mut previous = symbol.address;
         for row in info.rows() {
             assert!(
@@ -362,10 +366,11 @@ fn the_rows_hold_the_invariants() {
             assert!(row.range.end <= end, "{name}: a row past the extent");
             previous = row.range.end;
         }
-        for address in symbol.address..end {
+        for offset in 0..extent {
+            let address = at(symbol.address.get() + offset);
             let row = info
                 .row_at(address)
-                .unwrap_or_else(|| panic!("{name}: no row at +{:#x}", address - symbol.address));
+                .unwrap_or_else(|| panic!("{name}: no row at +{offset:#x}"));
             assert!(row.range.contains(&address));
         }
         assert!(info.row_at(end).is_none());
@@ -638,7 +643,7 @@ fn procedures_are_symbols_where_the_image_names_none() {
     assert_eq!(names(&alone), unwind_names());
     for (offset, len) in [(0x00, 0x11), (0x20, 0x1b), (0x40, 0x49)] {
         let function = symbol(&alone, &format!("<function {:#x}>", TEXT + offset));
-        assert_eq!(function.address, TEXT + offset);
+        assert_eq!(function.address, at(TEXT + offset));
         assert_eq!(function.size, len, "the entry's stated length");
         assert_eq!(function.debug_extent(&alone), None, "no PDB");
         assert_eq!(
@@ -657,7 +662,7 @@ fn procedures_are_symbols_where_the_image_names_none() {
         ("sum_to", 0x40, 0x49),
     ] {
         let symbol = symbol(&object, name);
-        assert_eq!(symbol.address, TEXT + offset, "{name}");
+        assert_eq!(symbol.address, at(TEXT + offset), "{name}");
         assert_eq!(
             symbol.size, len,
             "{name}: the procedure's length is the declared size"
@@ -735,7 +740,7 @@ fn a_public_names_the_function_no_module_describes() {
     assert_eq!(names(&object), ["?helper@@YAHXZ", "add", "sum_to", "twice"]);
 
     let helper = symbol(&object, "?helper@@YAHXZ");
-    assert_eq!(helper.address, TEXT + 0x90);
+    assert_eq!(helper.address, at(TEXT + 0x90));
     assert_eq!(helper.size, 0, "a public declares no size");
     assert_eq!(
         helper.demangled.as_deref(),
@@ -761,7 +766,7 @@ fn a_public_names_the_function_no_module_describes() {
         ("sum_to", 0x40, 0x49),
     ] {
         let symbol = symbol(&object, name);
-        assert_eq!(symbol.address, TEXT + offset, "{name}");
+        assert_eq!(symbol.address, at(TEXT + offset), "{name}");
         assert_eq!(symbol.size, len, "{name}: still the procedure's length");
         assert_eq!(
             symbol.extent(&object).map(|extent| extent.bytes),

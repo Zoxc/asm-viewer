@@ -512,7 +512,7 @@ impl Studied {
     /// backend's mutex -- and the bar over the pane prints this number in a render.
     pub(crate) fn extent(&self) -> u64 {
         self.assembly.as_ref().map_or(0, |assembly| {
-            assembly.range.end.saturating_sub(assembly.range.start)
+            assembly.range.start.bytes_to_saturating(assembly.range.end)
         })
     }
 

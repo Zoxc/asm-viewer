@@ -1,9 +1,9 @@
 //! Line info read back out of DWARF written by `gimli::write`.
 
 mod common;
-use analysis::LineInfo;
+use analysis::{LineInfo, SectionAddress};
 use common::{
-    elf_x86_64_with_dwarf, parse, symbol, DwarfFixture, DwarfRow, DwarfSection, TextSymbol,
+    at, elf_x86_64_with_dwarf, parse, symbol, DwarfFixture, DwarfRow, DwarfSection, TextSymbol,
     UnitRanges,
 };
 use std::sync::Arc;
@@ -70,7 +70,10 @@ fn two_files(base_symbol: Option<usize>) -> Vec<u8> {
 }
 
 /// The file, line and column of the row covering one address.
-fn position(info: &LineInfo, address: u64) -> Option<(Option<&str>, Option<u32>, Option<u32>)> {
+fn position(
+    info: &LineInfo,
+    address: SectionAddress,
+) -> Option<(Option<&str>, Option<u32>, Option<u32>)> {
     let row = info.row_at(address)?;
     Some((common::file_of(info, row), row.line, row.column))
 }
@@ -84,8 +87,8 @@ fn a_symbols_instructions_map_to_source_positions() {
     let info = first.line_info(&object).expect("first has line info");
 
     assert_eq!(info.rows().len(), 2);
-    assert_eq!(info.rows()[0].range, 0..3);
-    assert_eq!(info.rows()[1].range, 3..6);
+    assert_eq!(info.rows()[0].range, at(0)..at(3));
+    assert_eq!(info.rows()[1].range, at(3)..at(6));
 
     let assembly = first.assembly(&object).expect("first disassembles");
     let lines: Vec<_> = assembly
@@ -130,11 +133,11 @@ fn line_and_column_are_absent_rather_than_zero() {
         .line_info(&object)
         .expect("second has line info");
 
-    let with = info.row_at(6).expect("a row at 6");
+    let with = info.row_at(at(6)).expect("a row at 6");
     assert_eq!((with.line, with.column), (Some(42), Some(7)));
 
     // Address 7 is DWARF line 0, which is "no line" rather than line 0 or line 1.
-    let without = info.row_at(7).expect("a row at 7");
+    let without = info.row_at(at(7)).expect("a row at 7");
     assert_eq!((without.line, without.column), (None, None));
     assert_eq!(common::file_of(&info, without), Some("/src/other.c"));
 }
@@ -146,7 +149,10 @@ fn rows_do_not_leak_past_the_symbol() {
 
     for name in ["first", "second"] {
         let symbol = symbol(&object, name);
-        let end = symbol.address + symbol.estimate_size(&object).expect("a size").bytes;
+        let end = symbol
+            .address
+            .checked_add(symbol.estimate_size(&object).expect("a size").bytes)
+            .expect("a fixture fits in the address space");
         let info = symbol.line_info(&object).expect("line info");
         for row in info.rows() {
             assert!(
@@ -170,7 +176,7 @@ fn debug_line_relocations_are_applied() {
     let object = parse(&data);
 
     let second = symbol(&object, "second");
-    assert_eq!(second.address, 6);
+    assert_eq!(second.address, at(6));
     let info = second.line_info(&object).expect("second has line info");
     assert_eq!(info.rows()[0].range.start, second.address);
     assert_eq!(info.rows()[0].line, Some(10));
@@ -242,7 +248,7 @@ fn a_symbol_does_not_pick_up_another_sections_rows() {
     let first = symbol(&object, "first");
     let second = symbol(&object, "second");
     // The premise: the two genuinely share an address.
-    assert_eq!((first.address, second.address), (0, 0));
+    assert_eq!((first.address, second.address), (at(0), at(0)));
     assert_eq!(
         first.estimate_size(&object).map(|extent| extent.bytes),
         Some(6)
@@ -255,19 +261,19 @@ fn a_symbol_does_not_pick_up_another_sections_rows() {
     let info = first.line_info(&object).expect("first has line info");
     assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 2);
-    assert_eq!(info.rows()[0].range, 0..3);
-    assert_eq!(info.rows()[1].range, 3..6);
+    assert_eq!(info.rows()[0].range, at(0)..at(3));
+    assert_eq!(info.rows()[1].range, at(3)..at(6));
     assert_eq!(
-        position(&info, 5),
+        position(&info, at(5)),
         Some((Some("/src/main.c"), Some(11), None))
     );
 
     let info = second.line_info(&object).expect("second has line info");
     assert_eq!(files(&info), ["/src/other.c"]);
     assert_eq!(info.rows().len(), 1);
-    assert_eq!(info.rows()[0].range, 0..2);
+    assert_eq!(info.rows()[0].range, at(0)..at(2));
     assert_eq!(
-        position(&info, 1),
+        position(&info, at(1)),
         Some((Some("/src/other.c"), Some(42), Some(7)))
     );
 }
@@ -281,16 +287,17 @@ fn rows_are_ascending_and_do_not_overlap() {
 
     for name in ["first", "second"] {
         let info = symbol(&object, name).line_info(&object).expect("line info");
-        let mut previous = 0;
+        let mut previous = at(0);
         for row in info.rows() {
             assert!(row.range.start < row.range.end, "{name}: empty row");
             assert!(
                 row.range.start >= previous,
-                "{name}: {:?} overlaps the row ending at {previous}",
+                "{name}: {:?} overlaps the row ending at {previous:?}",
                 row.range
             );
             previous = row.range.end;
-            for address in [row.range.start, row.range.end - 1] {
+            let last = row.range.end.checked_sub(1).expect("a row covers a byte");
+            for address in [row.range.start, last] {
                 let found = info
                     .row_at(address)
                     .expect("a row covering its own address");
@@ -310,7 +317,7 @@ fn an_object_without_dwarf_has_no_line_info() {
         assert!(symbol.line_info(&object).is_none());
     }
     for section in &object.sections {
-        assert!(object.line_info(section, 0..u64::MAX).is_none());
+        assert!(object.line_info(section, at(0)..at(u64::MAX)).is_none());
     }
 }
 
@@ -324,9 +331,9 @@ fn a_range_no_unit_covers_has_no_line_info() {
         .find(|section| section.name == ".text")
         .expect("the fixture has a .text");
 
-    assert!(object.line_info(text, 0x1000..0x2000).is_none());
+    assert!(object.line_info(text, at(0x1000)..at(0x2000)).is_none());
     // An empty range asks about nothing and gets nothing, rather than everything.
-    assert!(object.line_info(text, 0..0).is_none());
+    assert!(object.line_info(text, at(0)..at(0)).is_none());
 }
 
 /// The DWARF context is built behind a `OnceLock`, so threads racing to be the first to
@@ -371,16 +378,16 @@ fn a_unit_whose_ranges_did_not_move_with_its_code_still_answers() {
     let info = first.line_info(&object).expect("first has line info");
     assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 2);
-    assert_eq!(info.rows()[0].range, 0..3);
-    assert_eq!(info.rows()[1].range, 3..6);
+    assert_eq!(info.rows()[0].range, at(0)..at(3));
+    assert_eq!(info.rows()[1].range, at(3)..at(6));
 
     // The one the unit's stale range does not reach.
     let info = second.line_info(&object).expect("second has line info");
     assert_eq!(files(&info), ["/src/other.c"]);
     assert_eq!(info.rows().len(), 1);
-    assert_eq!(info.rows()[0].range, 0..2);
+    assert_eq!(info.rows()[0].range, at(0)..at(2));
     assert_eq!(
-        position(&info, 1),
+        position(&info, at(1)),
         Some((Some("/src/other.c"), Some(42), Some(7)))
     );
 }
@@ -401,9 +408,9 @@ fn a_linked_images_retained_relocations_are_not_applied_again() {
 
     assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 1);
-    assert_eq!(info.rows()[0].range, 0x100..0x110);
+    assert_eq!(info.rows()[0].range, at(0x100)..at(0x110));
     assert_eq!(
-        position(&info, 0x100),
+        position(&info, at(0x100)),
         Some((Some("/src/main.c"), Some(7), None))
     );
 }
@@ -421,17 +428,17 @@ fn a_section_stating_an_address_of_its_own_still_answers() {
     // The premise: one section states an address above where the other's bytes put it.
     let first = symbol(&object, "first");
     let second = symbol(&object, "second");
-    assert_eq!((first.address, second.address), (0x1000, 0));
+    assert_eq!((first.address, second.address), (at(0x1000), at(0)));
 
     let info = first.line_info(&object).expect("first has line info");
     assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 2);
-    assert_eq!(info.rows()[0].range, 0x1000..0x1003);
-    assert_eq!(info.rows()[1].range, 0x1003..0x1006);
+    assert_eq!(info.rows()[0].range, at(0x1000)..at(0x1003));
+    assert_eq!(info.rows()[1].range, at(0x1003)..at(0x1006));
 
     let info = second.line_info(&object).expect("second has line info");
     assert_eq!(files(&info), ["/src/other.c"]);
-    assert_eq!(info.rows()[0].range, 0..2);
+    assert_eq!(info.rows()[0].range, at(0)..at(2));
 }
 
 /// A text section whose bytes will not read is dropped by the parse, and the layout still
@@ -457,8 +464,8 @@ fn a_section_that_would_not_read_keeps_its_rows_off_another() {
         .expect("first has line info");
     assert_eq!(files(&info), ["/src/main.c"]);
     assert_eq!(info.rows().len(), 2);
-    assert_eq!(info.rows()[0].range, 0..3);
-    assert_eq!(info.rows()[1].range, 3..6);
+    assert_eq!(info.rows()[0].range, at(0)..at(3));
+    assert_eq!(info.rows()[1].range, at(3)..at(6));
 }
 
 /// A unit whose declared range spans several sequences, with a symbol beginning in a gap
@@ -479,7 +486,7 @@ fn a_symbol_beginning_in_a_gap_between_two_sequences_is_answered_from_the_later_
             middle.address,
             middle.extent(&object).map(|extent| extent.bytes)
         ),
-        (6, Some(0x10))
+        (at(6), Some(0x10))
     );
     let named: Vec<String> = object
         .symbols_at_line("/src/other.c", 42)
@@ -498,7 +505,7 @@ fn a_symbol_beginning_in_a_gap_between_two_sequences_is_answered_from_the_later_
     // unit's range covers the gap and the second sequence is there to be found.
     let section = middle.section.clone().expect("middle is in a section");
     let whole = object
-        .line_info(&section, 0..0x16)
+        .line_info(&section, at(0)..at(0x16))
         .expect("the section's own range has line info");
     assert_eq!(files(&whole), ["/src/main.c", "/src/other.c"]);
 
@@ -507,6 +514,6 @@ fn a_symbol_beginning_in_a_gap_between_two_sequences_is_answered_from_the_later_
     let info = middle.line_info(&object).expect("middle has line info");
     assert_eq!(files(&info), ["/src/other.c"]);
     assert_eq!(info.rows().len(), 1);
-    assert_eq!(info.rows()[0].range, 0x10..0x16);
+    assert_eq!(info.rows()[0].range, at(0x10)..at(0x16));
     assert_eq!(info.rows()[0].line, Some(42));
 }

@@ -3,10 +3,11 @@
 
 mod common;
 
-use analysis::{Operand, SpanKind};
+use analysis::{Bias, Operand, SpanKind};
 use common::{
-    branch_to_data, caller_and_target, elf_x86_64, elf_x86_64_absolute, indirect_caller_and_target,
-    names, parse, rip_relative_store_to_data, symbol, text, TextRelocation, TextSymbol,
+    at, branch_to_data, caller_and_target, elf_x86_64, elf_x86_64_absolute,
+    indirect_caller_and_target, names, parse, rip_relative_store_to_data, symbol, text,
+    TextRelocation, TextSymbol,
 };
 use std::sync::Arc;
 
@@ -24,9 +25,9 @@ fn both_text_symbols_parse() {
     let section = caller.section.as_ref().expect("caller has a section");
     assert_eq!(section.name, ".text");
     // A relocatable object's `.text` starts at 0, so symbol addresses are its offsets.
-    assert_eq!(section.address, 0);
-    assert_eq!(caller.address, 0);
-    assert_eq!(target.address, 6);
+    assert_eq!(section.address, at(0));
+    assert_eq!(caller.address, at(0));
+    assert_eq!(target.address, at(6));
 }
 
 #[test]
@@ -66,7 +67,7 @@ fn assembly_decodes_both_instructions() {
     assert_eq!(assembly.instructions.len(), 2);
 
     let call = &assembly.instructions[0];
-    assert_eq!(call.address, 0);
+    assert_eq!(call.address, at(0));
     assert_eq!(call.bytes, [0xE8, 0x00, 0x00, 0x00, 0x00]);
     assert!(
         text(call).starts_with("call"),
@@ -79,7 +80,7 @@ fn assembly_decodes_both_instructions() {
     );
 
     let ret = &assembly.instructions[1];
-    assert_eq!(ret.address, 5);
+    assert_eq!(ret.address, at(5));
     assert_eq!(ret.bytes, [0xC3]);
     assert!(text(ret).starts_with("ret"), "got {:?}", text(ret));
 }
@@ -748,7 +749,7 @@ fn a_branch_out_of_the_symbol_is_not_an_edge() {
         assembly.edges
     );
     // The row still says where it goes: a listing of the whole section has a row there.
-    assert_eq!(assembly.instructions[0].branch(), Some(3));
+    assert_eq!(assembly.instructions[0].branch(), Some(at(3)));
 }
 
 #[test]
@@ -771,7 +772,7 @@ fn a_relocated_branch_is_not_an_edge() {
     let assembly = assemble(&plain, "jumper");
     assert_eq!(text(&assembly.instructions[0]).trim_end(), "jmp       5");
     assert_eq!(edges(&assembly), [(0, 1)]);
-    assert_eq!(assembly.instructions[0].branch(), Some(5));
+    assert_eq!(assembly.instructions[0].branch(), Some(at(5)));
 
     let relocated = parse(&elf_x86_64(
         &symbols,
@@ -804,7 +805,7 @@ fn a_relocation_that_resolves_to_nothing_still_suppresses_the_edge() {
     let assembly = assemble(&object, "jumper");
 
     assert!(assembly.instructions[0].symbol().is_none());
-    assert_eq!(assembly.instructions[1].address, 5);
+    assert_eq!(assembly.instructions[1].address, at(5));
     assert!(
         edges(&assembly).is_empty(),
         "expected no edge, got {:?}",
@@ -824,7 +825,7 @@ fn a_relocated_branch_prints_the_address_its_placeholder_computes() {
     let jump = &assembly.instructions[0];
 
     assert_eq!(text(jump).trim_end(), "jmp       5");
-    assert_eq!(assembly.instructions[1].address, 5);
+    assert_eq!(assembly.instructions[1].address, at(5));
 }
 
 #[test]
@@ -843,7 +844,7 @@ fn a_branch_into_the_middle_of_an_instruction_is_not_an_edge() {
         let assembly = assemble(&object, "jumper");
 
         assert_eq!(assembly.instructions.len(), 3);
-        assert_eq!(assembly.instructions[1].address, 2);
+        assert_eq!(assembly.instructions[1].address, at(2));
         assert_eq!(
             edges(&assembly),
             expected,
@@ -867,7 +868,7 @@ fn a_call_inside_the_symbol_is_not_an_edge() {
     let assembly = assemble(&object, "caller");
 
     assert_eq!(text(&assembly.instructions[0]).trim_end(), "call      5");
-    assert_eq!(assembly.instructions[1].address, 5);
+    assert_eq!(assembly.instructions[1].address, at(5));
     assert!(
         edges(&assembly).is_empty(),
         "expected no edge, got {:?}",
@@ -998,7 +999,7 @@ fn a_call_and_a_relocated_branch_have_no_branch_span() {
     assert_eq!(assembly.instructions[0].branch(), None);
     // It still says where it goes, in the span the number was printed into: the door
     // into a listing of the whole object, which a branch's span is too.
-    assert_eq!(assembly.instructions[0].target(), Some(5));
+    assert_eq!(assembly.instructions[0].target(), Some(at(5)));
     assert_eq!(
         target_span(&assembly.instructions[0]),
         Some(("5", SpanKind::Address))
@@ -1060,7 +1061,7 @@ fn a_branch_with_no_row_to_land_on_keeps_its_span() {
         branch_span(&assembly.instructions[0]),
         Some(("0", SpanKind::Address))
     );
-    assert_eq!(assembly.instructions[0].branch(), Some(0));
+    assert_eq!(assembly.instructions[0].branch(), Some(at(0)));
     assert_eq!(assembly.edge_from(0), None);
 }
 
@@ -1215,6 +1216,6 @@ fn only_the_text_section_is_code_and_it_is_not_moved() {
     assert_eq!(names(true), [".text"]);
     assert!(names(false).contains(&".symtab"), "{:?}", names(false));
     for section in &object.sections {
-        assert_eq!(section.bias(), 0, "{}", section.name);
+        assert_eq!(section.bias(), Bias::NONE, "{}", section.name);
     }
 }

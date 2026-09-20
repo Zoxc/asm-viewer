@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use analysis::{
-    Architecture, BinaryFormat, MadeUp, ObjectData, Section, SectionIndex, SymbolData, SymbolIndex,
+    Architecture, Bias, BinaryFormat, MadeUp, ObjectData, Section, SectionAddress, SectionIndex,
+    SymbolData, SymbolIndex,
 };
 
 use super::*;
@@ -24,9 +25,9 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         SectionIndex(0),
         ".text".into(),
         code,
-        0,
+        SectionAddress::new(0),
         BTreeMap::new(),
-        0,
+        Bias::NONE,
     ));
 
     // In any order: `Object::new` sorts them by name, which is what `find_symbol` searches by.
@@ -34,8 +35,13 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
         .iter()
         .enumerate()
         .map(|(index, (name, address))| {
-            let symbol =
-                SymbolData::new((*name).to_owned(), None, *address, Some(section.clone()), 0);
+            let symbol = SymbolData::new(
+                (*name).to_owned(),
+                None,
+                SectionAddress::new(*address),
+                Some(section.clone()),
+                0,
+            );
             (SymbolIndex(index), Arc::new(symbol))
         })
         .collect();
@@ -1675,14 +1681,20 @@ fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
         ("zeta", 5),
     ] {
         let found = find(name, address, &unchanged).expect(name);
-        assert_eq!((found.name.as_str(), found.address), (name, address));
+        assert_eq!(
+            (found.name.as_str(), found.address),
+            (name, SectionAddress::new(address))
+        );
     }
     // Two `mid`s and a stale address: neither is picked, rebuilt or not.
     assert!(find("mid", 9, &unchanged).is_none());
     assert!(find("mid", 9, &rebuilt).is_none());
     // A lone name at a stale address is, under a rebuild only.
     assert!(find("beta", 9, &unchanged).is_none());
-    assert_eq!(find("beta", 9, &rebuilt).map(|data| data.address), Some(2));
+    assert_eq!(
+        find("beta", 9, &rebuilt).map(|data| data.address),
+        Some(SectionAddress::new(2))
+    );
     for name in ["aardvark", "gamma", "omega"] {
         assert!(find(name, 1, &rebuilt).is_none(), "{name}");
     }
@@ -1697,7 +1709,7 @@ fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
 fn a_bookmark_on_a_made_up_name_outlives_its_spelling() {
     const ADDRESS: u64 = 0x10;
     // Whatever `MadeUp` spells it now, which is what the parser gave the symbol too.
-    let today = MadeUp::Function(ADDRESS).to_string();
+    let today = MadeUp::Function(SectionAddress::new(ADDRESS)).to_string();
     let objects = vec![object("/tmp/lib.a", "a.o", &[(today.as_str(), ADDRESS)])];
 
     let structure = SavedDocument::Symbol {

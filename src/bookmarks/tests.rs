@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use analysis::{
-    Architecture, BinaryFormat, ObjectData, Section, SectionIndex, Symbol, SymbolData, SymbolIndex,
+    Architecture, Bias, BinaryFormat, ObjectData, Section, SectionAddress, SectionIndex, Symbol,
+    SymbolData, SymbolIndex,
 };
 
 use super::*;
@@ -14,9 +15,9 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
         SectionIndex(0),
         ".text".into(),
         bytes,
-        0,
+        SectionAddress::new(0),
         BTreeMap::new(),
-        0,
+        Bias::NONE,
     ));
     let symbols = symbols
         .iter()
@@ -26,7 +27,7 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
             let symbol = SymbolData::new(
                 (*name).to_owned(),
                 demangled,
-                *address,
+                SectionAddress::new(*address),
                 Some(section.clone()),
                 0,
             );

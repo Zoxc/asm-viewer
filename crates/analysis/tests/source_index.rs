@@ -225,7 +225,7 @@ fn two_functions_at_address_zero_answer_for_their_own_lines_only() {
     let addresses: Vec<u64> = object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.address)
+        .map(|symbol| symbol.address.get())
         .collect();
     assert_eq!(addresses, [0, 0]);
 

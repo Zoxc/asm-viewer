@@ -365,8 +365,8 @@ impl SavedDocument {
             Document::Symbol(symbol) => SavedDocument::Symbol {
                 path: symbol.object.path.clone(),
                 object_name: symbol.object.name.clone(),
-                address: symbol.data.address,
-                symbol_name: SavedName::of(&symbol.data.name, symbol.data.address),
+                address: symbol.data.address.get(),
+                symbol_name: SavedName::of(&symbol.data.name, symbol.data.address.get()),
             },
             Document::Source(file) => SavedDocument::Source {
                 path: file.to_string(),
@@ -447,7 +447,7 @@ impl SavedDocument {
         rebuilt: bool,
     ) -> Option<&'a Arc<SymbolData>> {
         let named = object.symbols_named(name);
-        let exact = named.iter().find(|data| data.address == address);
+        let exact = named.iter().find(|data| data.address.get() == address);
         match (exact, rebuilt, named) {
             (Some(data), _, _) => Some(data),
             (None, true, [one]) => Some(one),

@@ -145,13 +145,34 @@ listing, rather than one of each cut short at `u64::MAX`. The range a symbol is 
 one a listing partitions, the one an unwind entry is clamped to and the one a declared address is
 looked up in are that one range. Each used to work it out from `address + data.len()` for itself --
 five of them, with three overflow rules between them -- and they agreed only by inspection.
-**The bias is added and taken off by name**: `Section::place()` puts one of the section's own
-addresses in the object's one space and `local()` takes it back, both wrapping, with
-`place_checked()` where a caller must answer nothing rather than answer about another address.
-Why wrapping is the deliberate choice -- `line::relocate` adds the same bias, and the layout never
-produces one that wraps -- is written on `place` and nowhere else. It was on `SymbolData::placed`,
-while four other sites spelled the add or the subtract out and re-derived it. Which space a number
-is in still has no type, but the conversion now has a name to grep for.
+**The two spaces are two types** (`address.rs`): a `SectionAddress` is one of a section's own
+and a `PlacedAddress` one in the space every section of an object shares, and the only way
+between them is `SectionAddress::placed(bias)` and `PlacedAddress::local(bias)`, each with a
+`_checked` where a caller must answer nothing rather than answer about another address, and the
+first with a `_saturating` for the ends of a query. `Section::place()` and `Section::local()`
+are those with the section's own bias handed in; the DWARF backend, which holds a bias and no
+section, calls the conversions themselves. **A bias is a type too**, `Bias`, so the conversion
+cannot be handed a length, an offset or a size: the addresses say which space a number is in,
+and this says that what crosses between them is the thing the layout moved a section by. It is
+one-way -- `Bias::new` in, and no number out -- since a bias exists to be added to an address
+and for nothing else; a test that wants to check the layout asks where a section was *placed*
+instead (`real_object.rs`). `Bias::NONE` is what a section holding no code and every section of
+a file that is not a relocatable object answers, and `unplaced()` is the conversion that takes
+it: for a file with no layout, and for a symbol in no section.
+Why wrapping is the deliberate choice -- `line::relocate` adds the same bias, and the layout
+never produces one that wraps -- is written on `placed` and nowhere else, and `relocate` now
+calls `placed` itself, so the agreement it rests on is the same function rather than two that
+must be kept in step. It was on
+`SymbolData::placed`, while four other sites spelled the add or the subtract out and re-derived
+it. Both types are a `u64` that can be added to, saturated and asked the bytes between two of
+them (`bytes_to`), and nothing else: every other arithmetic goes through `get()`, where a caller
+means a plain number. A forgotten bias used to be invisible on a linked image, where every bias
+is 0, and wrong on every relocatable object; it is now a type error. A *section* is still not in
+the type, so two of one section's addresses and two of another's compare alike -- which is why
+`Code::symbol_at_local` still checks its hit is in the section it asked about. What crosses into the app
+crosses as these types too -- a stretch's range, a gap's, an assembly's, an instruction's
+address, a line row's -- though the app's own `Spot`, `Stop` and `Landing` keep the `u64` they
+are saved as and convert at the edge.
 **And one search looks an address up in a list of ranges**: `covering` (`model.rs`), the last
 range starting at or before it, and nothing where that one does not contain it. An unwind
 entry (`unwind_extent`), a listing's stretch (`Listing::stretch_at`), a placed section
@@ -638,11 +659,12 @@ text. *Same section*: the index is by placed address (`Section::bias` added), wh
 relocatable object's all-at-0 code sections distinct places, but a displacement past a section's end
 still lands in the placed space on some other section's function, so the hit has to be in the
 instruction's own section; `tests/linked_call.rs` pins a two-section object whose call would
-otherwise name the other's. **Each of the two is named for the space it takes**: they are one
-question a bias apart with the same signature, and while both were `symbol_at` a caller holding
-a section-local address and reaching for `Object`'s got an answer rather than an error -- the
-right one on a linked image, where every bias is 0, and some other section's function on every
-relocatable object. *Calls only*: an unconditional `jmp` out of the symbol is a tail call
+otherwise name the other's. **Each of the two takes the space it is named for**, and now says so in its
+signature: `Code::symbol_at_local` a `SectionAddress`, `Object::symbol_at_placed` a
+`PlacedAddress`. While both were `symbol_at` over a `u64`, a caller holding a section-local
+address and reaching for `Object`'s got an answer rather than an error -- the right one on a
+linked image, where every bias is 0, and some other section's function on every relocatable
+object. The names came first and the types now do the work. *Calls only*: an unconditional `jmp` out of the symbol is a tail call
 and could be named the same way, but its displacement is an `Operand::Branch`'s, so making it a link
 to a function is the item of its own that `notes/Goals.md` says it is. The relocation still wins
 where there is one: a relocated call whose target is a section symbol

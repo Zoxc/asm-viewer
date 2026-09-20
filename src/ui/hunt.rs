@@ -124,7 +124,7 @@ pub(crate) fn hunt(
         return;
     };
     let first = code
-        .at(from)
+        .at(PlacedAddress::new(from))
         .and_then(|place| index.index(place))
         .unwrap_or(0);
 

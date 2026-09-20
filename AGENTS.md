@@ -108,6 +108,9 @@ command.
 
 - `crates/analysis/src/lib.rs` — the crate's root: its modules, what it exports, and the
   assertion that what crosses threads is `Send + Sync`.
+- `crates/analysis/src/address.rs` — the two address spaces as two types: `SectionAddress`,
+  one of a section's own, and `PlacedAddress`, one in the space every section of an object
+  shares; `Bias`, the only thing that crosses between them; and the one conversion itself.
 - `crates/analysis/src/model.rs` — the data model: `Object`, `Section` with the `CodeSection`
   only a section holding code has, `SymbolData`, `Symbol`, and `ObjectData`, the bytes an
   object was parsed from. Also `covering`, the one search an address is looked up in a list

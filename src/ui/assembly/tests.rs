@@ -40,7 +40,7 @@ fn span(text: &str, kind: SpanKind) -> (String, SpanKind) {
 /// One instruction with nothing named on it, for a case below to name what it is about.
 fn instruction(address: u64, format: Vec<(String, SpanKind)>) -> Instruction {
     Instruction {
-        address,
+        address: SectionAddress::new(address),
         bytes: Vec::new(),
         format,
         operand: None,
@@ -130,12 +130,12 @@ fn listing(target: Arc<SymbolData>) -> Assembly {
     });
     // A branch back to the first row, which this listing has.
     instructions[3].operand = Some(Operand::Branch {
-        address: 0x00,
+        address: SectionAddress::new(0x00),
         span: 2,
     });
     // A target with no name and no row here.
     instructions[4].operand = Some(Operand::Call {
-        address: 0x2000,
+        address: SectionAddress::new(0x2000),
         span: 2,
     });
     // The name inside a memory operand, so the row has a tail.
@@ -149,7 +149,7 @@ fn listing(target: Arc<SymbolData>) -> Assembly {
         instructions,
         edges: vec![BranchEdge { from: 3, to: 0 }],
         undecodable: None,
-        range: 0..0x30,
+        range: SectionAddress::new(0)..SectionAddress::new(0x30),
         extent: Extent {
             bytes: 0x30,
             capped: false,
@@ -222,7 +222,7 @@ fn every_kind_of_link_is_one_run_of_the_text() {
     let target = Arc::new(SymbolData::new(
         "_ZN3add3addE".to_owned(),
         Some("add".to_owned()),
-        0x100,
+        SectionAddress::new(0x100),
         None,
         0,
     ));
@@ -272,7 +272,13 @@ fn a_link_named_in_whitespace_stays_inside_the_line() {
             ],
         );
         nop.operand = Some(Operand::SymbolName {
-            symbol: Arc::new(SymbolData::new(name.to_owned(), None, 0, None, 0)),
+            symbol: Arc::new(SymbolData::new(
+                name.to_owned(),
+                None,
+                SectionAddress::new(0),
+                None,
+                0,
+            )),
             span: None,
         });
         text_of(&nop)
@@ -353,7 +359,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
     let target = Arc::new(SymbolData::new(
         "_ZN3add3addE".to_owned(),
         Some("add".to_owned()),
-        0x100,
+        SectionAddress::new(0x100),
         None,
         0,
     ));
@@ -397,7 +403,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
     // address that listing draws the target at; Ctrl opens the symbol on its own.
     assert!(matches!(
         in_code.opens(false),
-        Some(Opens::InCode { placed, .. }) if placed == target.placed(target.address)
+        Some(Opens::InCode { placed, .. }) if placed == target.placed(target.address).get()
     ));
     // With Ctrl either door is the symbol on its own, in a tab that stays: the two
     // listings differ in where a plain press goes and not in what Ctrl means.
@@ -493,21 +499,30 @@ fn every_field_of_a_listing_prop_is_compared() {
         (
             "listing",
             AsmData {
-                listing: In::Code { base: 0, bias: 0 },
+                listing: In::Code {
+                    base: 0,
+                    bias: Bias::NONE,
+                },
                 ..data.clone()
             },
         ),
         (
             "base",
             AsmData {
-                listing: In::Code { base: 1, bias: 0 },
+                listing: In::Code {
+                    base: 1,
+                    bias: Bias::NONE,
+                },
                 ..data.clone()
             },
         ),
         (
             "bias",
             AsmData {
-                listing: In::Code { base: 0, bias: 1 },
+                listing: In::Code {
+                    base: 0,
+                    bias: Bias::new(1),
+                },
                 ..data.clone()
             },
         ),
@@ -538,7 +553,10 @@ fn every_field_of_a_listing_prop_is_compared() {
             "data",
             InstructionList {
                 data: AsmData {
-                    listing: In::Code { base: 1, bias: 0 },
+                    listing: In::Code {
+                        base: 1,
+                        bias: Bias::NONE,
+                    },
                     ..data.clone()
                 },
                 ..rows.clone()

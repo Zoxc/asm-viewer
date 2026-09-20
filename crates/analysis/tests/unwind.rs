@@ -27,7 +27,7 @@ mod common;
 
 use analysis::{Architecture, Gap, GapKind, Listing};
 use common::{
-    committed_fixture, elf_shared_object, named, names, parse, pe_image, ExportedSymbol, PeDll,
+    at, committed_fixture, elf_shared_object, named, names, parse, pe_image, ExportedSymbol, PeDll,
     SharedObject, TEXT_ADDRESS,
 };
 use object::{Object as _, ObjectSection as _};
@@ -119,7 +119,7 @@ fn unwind_entries_are_symbols_where_nothing_names_them() {
     );
 
     let second = named(&object, &format!("<function {:#x}>", TEXT_ADDRESS + 4));
-    assert_eq!(second.address, TEXT_ADDRESS + 4);
+    assert_eq!(second.address, at(TEXT_ADDRESS + 4));
     assert_eq!(second.size, 2, "the entry's stated length");
     assert_eq!(second.demangled, None, "ours, not the file's");
     assert_eq!(
@@ -150,9 +150,9 @@ fn an_entry_at_a_named_address_adds_no_symbol_and_a_malformed_one_nothing() {
     assert_eq!(
         section.code().expect("a code section").unwind,
         [
-            TEXT_ADDRESS..TEXT_ADDRESS + 4,
-            TEXT_ADDRESS + 4..TEXT_ADDRESS + 6,
-            TEXT_ADDRESS + 6..TEXT_ADDRESS + 7,
+            at(TEXT_ADDRESS)..at(TEXT_ADDRESS + 4),
+            at(TEXT_ADDRESS + 4)..at(TEXT_ADDRESS + 6),
+            at(TEXT_ADDRESS + 6)..at(TEXT_ADDRESS + 7),
         ],
         "the three that state something"
     );
@@ -213,7 +213,7 @@ fn a_stated_end_beats_the_next_symbols_address() {
     assert_eq!(
         stretch.gap,
         Some(Gap {
-            range: TEXT_ADDRESS + 6..TEXT_ADDRESS + 10,
+            range: at(TEXT_ADDRESS + 6)..at(TEXT_ADDRESS + 10),
             kind: GapKind::Bytes,
         })
     );
@@ -308,7 +308,7 @@ fn an_entry_reaching_past_the_section_is_clamped_to_its_bytes() {
     let last = named(&object, "last");
     let section = last.section.clone().unwrap();
     let code = section.code().expect("a code section");
-    assert_eq!(code.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
+    assert_eq!(code.unwind, [at(TEXT_ADDRESS + 7)..at(TEXT_ADDRESS + 10)]);
     assert_eq!(last.extent(&object).map(|extent| extent.bytes), Some(3));
     assert!(last.assembly(&object).is_some());
 }
@@ -477,7 +477,7 @@ fn an_fdes_end_beats_the_next_symbols_address() {
     assert_eq!(
         stretch.gap,
         Some(Gap {
-            range: TEXT_ADDRESS + 6..TEXT_ADDRESS + 10,
+            range: at(TEXT_ADDRESS + 6)..at(TEXT_ADDRESS + 10),
             kind: GapKind::Bytes,
         })
     );
@@ -559,7 +559,7 @@ fn an_fde_reaching_past_the_section_is_clamped_to_its_bytes() {
     let last = named(&object, "last");
     let section = last.section.clone().unwrap();
     let code = section.code().expect("a code section");
-    assert_eq!(code.unwind, [TEXT_ADDRESS + 7..TEXT_ADDRESS + 10]);
+    assert_eq!(code.unwind, [at(TEXT_ADDRESS + 7)..at(TEXT_ADDRESS + 10)]);
     assert_eq!(last.extent(&object).map(|extent| extent.bytes), Some(3));
     assert!(last.assembly(&object).is_some());
 }
@@ -580,9 +580,9 @@ fn an_fde_at_a_named_address_adds_no_symbol_and_an_empty_one_nothing() {
     assert_eq!(
         section.code().expect("a code section").unwind,
         [
-            TEXT_ADDRESS..TEXT_ADDRESS + 4,
-            TEXT_ADDRESS + 4..TEXT_ADDRESS + 6,
-            TEXT_ADDRESS + 6..TEXT_ADDRESS + 7,
+            at(TEXT_ADDRESS)..at(TEXT_ADDRESS + 4),
+            at(TEXT_ADDRESS + 4)..at(TEXT_ADDRESS + 6),
+            at(TEXT_ADDRESS + 6)..at(TEXT_ADDRESS + 7),
         ]
     );
 }
@@ -682,7 +682,7 @@ fn the_hidden_shared_objects_functions_are_its_fdes() {
     );
     for (address, len, name) in functions {
         let function = named(&object, &format!("<function {address:#x}>"));
-        assert_eq!(function.address, address);
+        assert_eq!(function.address, at(address));
         assert_eq!(function.size, len, "{name}");
         assert_eq!(
             function.size,
@@ -705,7 +705,11 @@ fn the_hidden_shared_objects_functions_are_its_fdes() {
     let section = named(&object, "<function 0x238>").section.clone().unwrap();
     assert_eq!(
         section.code().expect("a code section").unwind,
-        [0x238..0x24c, 0x24c..0x268, 0x268..0x2a6],
+        [
+            at(0x238)..at(0x24c),
+            at(0x24c)..at(0x268),
+            at(0x268)..at(0x2a6)
+        ],
         "the FDEs' ranges"
     );
 }

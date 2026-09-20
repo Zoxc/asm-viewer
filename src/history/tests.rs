@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use analysis::{Architecture, BinaryFormat, Object, ObjectData, SymbolData};
+use analysis::{Architecture, BinaryFormat, Object, ObjectData, SectionAddress, SymbolData};
 
 use super::*;
 
@@ -497,7 +497,13 @@ fn a_half_that_does_not_belong_to_its_document_is_no_place_at_all() {
     // A symbol's address is an instruction of it: where a call it makes to itself lands.
     let symbol = Symbol {
         object: object("symbol"),
-        data: Arc::new(SymbolData::new("f".to_owned(), None, 16, None, 8)),
+        data: Arc::new(SymbolData::new(
+            "f".to_owned(),
+            None,
+            SectionAddress::new(16),
+            None,
+            8,
+        )),
     };
     let instruction = Stop::paired(Document::Symbol(symbol.clone()), Some(20), Some(7));
     assert!(instruction == Stop::in_symbol(symbol.clone(), 20));

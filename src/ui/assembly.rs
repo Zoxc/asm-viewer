@@ -27,10 +27,10 @@ pub(crate) fn address_column(address: u64) -> String {
 /// address column, then [`instruction_line`]'s own text. The gutter is left out, being a
 /// picture of the branches. `bias` is what the listing adds to every address it draws
 /// (see [`AsmData::bias`]).
-pub(crate) fn asm_line(instruction: &Instruction, bias: u64) -> String {
+pub(crate) fn asm_line(instruction: &Instruction, bias: Bias) -> String {
     format!(
         "{}{}",
-        address_column(instruction.address.wrapping_add(bias)),
+        address_column(instruction.address.placed(bias).get()),
         text_of(instruction).0
     )
 }
@@ -157,7 +157,7 @@ pub(crate) enum In {
         /// What is added to every address drawn or copied: the section's place in the
         /// object's layout (`Section::bias`), where two functions of a relocatable object
         /// are both at 0 and have to be told apart.
-        bias: u64,
+        bias: Bias,
     },
 }
 
@@ -206,10 +206,11 @@ impl AsmData {
         }
     }
 
-    /// What is added to every address drawn or copied: 0 for a symbol read on its own.
-    pub(crate) fn bias(&self) -> u64 {
+    /// What is added to every address drawn or copied: nothing for a symbol read on its
+    /// own, whose listing draws the section's own addresses.
+    pub(crate) fn bias(&self) -> Bias {
         match self.listing {
-            In::Alone { .. } => 0,
+            In::Alone { .. } => Bias::NONE,
             In::Code { bias, .. } => bias,
         }
     }
@@ -220,7 +221,8 @@ impl AsmData {
     pub(crate) fn drawn_address(&self, index: usize) -> u64 {
         self.assembly().instructions[index]
             .address
-            .wrapping_add(self.bias())
+            .placed(self.bias())
+            .get()
     }
 
     /// How many lanes the gutter is drawn with: the symbol's own on its own, and
@@ -279,8 +281,8 @@ impl AsmData {
     /// section's place in the layout added (`SymbolData::placed`), which is what a door
     /// into the object's code takes. Not [`bias`](Self::bias), which is what this listing
     /// *draws* and is nothing in a symbol's own listing, whose addresses are the file's.
-    pub(crate) fn placed(&self, address: u64) -> u64 {
-        self.symbol().placed(address)
+    pub(crate) fn placed(&self, address: SectionAddress) -> u64 {
+        self.symbol().placed(address).get()
     }
 
     /// The source position the instruction at `index` was compiled from, or `None` where
@@ -480,7 +482,7 @@ impl Opens {
             // reveal: the target opens at its top even where this tab has been there
             // before and kept a row for it.
             Opens::Symbol(symbol, reach) => {
-                let address = symbol.data.address;
+                let address = symbol.data.address.get();
                 let tab = Document::Symbol(symbol);
                 let landing = Landing {
                     tab,
@@ -549,7 +551,7 @@ impl Door {
             // at the address that listing draws it at, which is the placed one.
             Door::Symbol { symbol, code_tab } if *code_tab && !ctrl => Opens::InCode {
                 object: symbol.object.clone(),
-                placed: symbol.data.placed(symbol.data.address),
+                placed: symbol.data.placed(symbol.data.address).get(),
             },
             Door::Symbol { symbol, .. } => Opens::Symbol(symbol.clone(), reach),
             Door::Address { object, address } => Opens::Code {
@@ -1101,7 +1103,7 @@ fn instruction_menu(
     // the Symbols list aside, since the tab is a file. An assembly-driven tab is the
     // symbol already and gets none.
     let alone = (data.code_tab() || data.subject().is_some())
-        .then(|| (symbol.clone(), instruction.address));
+        .then(|| (symbol.clone(), instruction.address.get()));
     // The same symbol as a document, which is what the bookmark item takes.
     let symbol_document = Document::Symbol(symbol);
 
@@ -1250,6 +1252,9 @@ fn owed_listing_row(
 /// [`None`] where the address is before the listing's first instruction, which is a
 /// planting dropped rather than left.
 fn planted_index(instructions: &[Instruction], address: u64) -> Option<usize> {
+    // The planting is in the space this listing draws, which for a symbol read alone is
+    // the section's own ([`Landing::address`]).
+    let address = SectionAddress::new(address);
     instructions
         .partition_point(|instruction| instruction.address <= address)
         .checked_sub(1)

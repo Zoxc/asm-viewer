@@ -48,6 +48,7 @@
 //! Nothing here recurses, and nothing here catches a panic: the guard is [`super::DebugInfo`]'s.
 
 use super::{recovered, LineInfo, RowCollector, SourceHash};
+use crate::{PlacedAddress, SectionAddress};
 use object::Object as _;
 use pdb2::{
     AddressMap, DebugInformation, FallibleIterator, PdbInternalRva, PdbInternalSectionOffset,
@@ -84,7 +85,7 @@ pub(super) struct Pdb {
     address_map: AddressMap<'static>,
 
     /// What an RVA is added to for the address space the image's sections are in.
-    image_base: u64,
+    image_base: SectionAddress,
 
     /// Every section contribution as a virtual address range and the module it belongs to,
     /// sorted by start with a running `max_end`, so a range is mapped to its modules by a
@@ -98,11 +99,11 @@ pub(super) struct Pdb {
 
 /// One section contribution, in virtual addresses.
 struct Contribution {
-    start: u64,
-    end: u64,
+    start: SectionAddress,
+    end: SectionAddress,
     /// The furthest `end` of this entry and every entry before it, the bound a backwards
     /// walk stops at; the same shape as `source.rs`'s `SymbolRange::max_end`.
-    max_end: u64,
+    max_end: SectionAddress,
     module: usize,
 }
 
@@ -112,7 +113,7 @@ pub(crate) struct Procedure {
     /// The name as the record spells it — the compiler's display name (`add`,
     /// `core::ptr::drop_in_place<T>`), not a mangled one.
     pub(crate) name: String,
-    pub(crate) address: u64,
+    pub(crate) address: SectionAddress,
     /// The record's length, never 0.
     pub(crate) len: u64,
 }
@@ -125,7 +126,7 @@ pub(crate) struct Public {
     /// plain for C — so the demangler has something to say about it where it has nothing
     /// about a procedure's display name.
     pub(crate) name: String,
-    pub(crate) address: u64,
+    pub(crate) address: SectionAddress,
 }
 
 /// One module's line info, decoded whole on first touch.
@@ -136,7 +137,7 @@ struct ModuleLines {
     lines: Option<LineInfo>,
     /// The start address of every `S_GPROC32`/`S_LPROC32` with a length, to that length. The
     /// first procedure read at an address keeps it.
-    procedures: HashMap<u64, u64>,
+    procedures: HashMap<SectionAddress, u64>,
 }
 
 impl Pdb {
@@ -145,7 +146,7 @@ impl Pdb {
     /// whose tables will not read.
     pub(super) fn load(file: &object::File<'_>, path: &Path) -> Option<Pdb> {
         let codeview = file.pdb_info().ok()??;
-        let image_base = file.relative_address_base();
+        let image_base = SectionAddress::new(file.relative_address_base());
 
         let recorded = String::from_utf8_lossy(codeview.path());
         let (mut pdb, dbi) = find(&recorded, codeview.guid(), codeview.age(), path)?;
@@ -163,7 +164,7 @@ impl Pdb {
             let Some(end) = start.0.checked_add(contribution.size) else {
                 continue;
             };
-            let ranges = placed(&address_map, image_base, start..PdbInternalRva(end));
+            let ranges = rebased(&address_map, image_base, start..PdbInternalRva(end));
             contributions.extend(ranges.map(|range| Contribution {
                 start: range.start,
                 end: range.end,
@@ -172,7 +173,7 @@ impl Pdb {
             }));
         }
         contributions.sort_unstable_by_key(|c| (c.start, c.end, c.module));
-        let mut max_end = 0;
+        let mut max_end = SectionAddress::new(0);
         for contribution in &mut contributions {
             max_end = max_end.max(contribution.end);
             contribution.max_end = max_end;
@@ -224,7 +225,7 @@ impl Pdb {
     fn procedures_in<'a>(
         &'a self,
         info: &'a pdb2::ModuleInfo<'_>,
-    ) -> impl Iterator<Item = (u64, pdb2::ProcedureSymbol<'a>)> + 'a {
+    ) -> impl Iterator<Item = (SectionAddress, pdb2::ProcedureSymbol<'a>)> + 'a {
         let mut symbols = info.symbols().ok();
         std::iter::from_fn(move || {
             let symbols = symbols.as_mut()?;
@@ -281,13 +282,13 @@ impl Pdb {
 
     /// A `section:offset` the PDB states, as an address in the image's own space: through
     /// the address map to an RVA and onto the image base, or [`None`] where either fails.
-    fn address(&self, offset: PdbInternalSectionOffset) -> Option<u64> {
+    fn address(&self, offset: PdbInternalSectionOffset) -> Option<SectionAddress> {
         let rva = offset.to_rva(&self.address_map)?;
         self.image_base.checked_add(u64::from(rva.0))
     }
 
     /// The rows over `range`, out of every module contributing to it.
-    pub(super) fn line_info(&self, range: Range<u64>) -> Option<LineInfo> {
+    pub(super) fn line_info(&self, range: Range<SectionAddress>) -> Option<LineInfo> {
         let mut rows = RowCollector::default();
         let over = self.modules_over(range.clone());
         // One walk for the lot: `module` alone would start a walk per module not yet decoded.
@@ -319,7 +320,7 @@ impl Pdb {
 
     /// The length of the procedure beginning at `address`, or [`None`] when no module
     /// contributes there or none of its procedures begins at that address.
-    pub(super) fn extent(&self, address: u64) -> Option<u64> {
+    pub(super) fn extent(&self, address: SectionAddress) -> Option<u64> {
         let end = address.checked_add(1)?;
         self.modules_over(address..end)
             .into_iter()
@@ -331,7 +332,7 @@ impl Pdb {
     /// one walk of the module list and visited from the table after. Each is loaded under
     /// the PDB's lock and visited once it is released; the `modules` lock is held for no
     /// longer than a lookup.
-    pub(super) fn each_row(&self, visit: &mut dyn FnMut(Range<u64>, &str, u32)) {
+    pub(super) fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
         let count = self.walk(None);
         for index in 0..count {
             let Some(module) = self.module(index) else {
@@ -345,13 +346,19 @@ impl Pdb {
                 let (Some(file), Some(line)) = (file, row.line) else {
                     continue;
                 };
-                visit(row.range.clone(), file, line);
+                // A PDB describes a linked image, which nothing placed, so a row's
+                // address is already the placed one.
+                visit(
+                    row.range.start.unplaced()..row.range.end.unplaced(),
+                    file,
+                    line,
+                );
             }
         }
     }
 
     /// The modules with a contribution overlapping `range`, each once, in index order.
-    fn modules_over(&self, range: Range<u64>) -> Vec<usize> {
+    fn modules_over(&self, range: Range<SectionAddress>) -> Vec<usize> {
         let pos = self
             .contributions
             .partition_point(|contribution| contribution.start < range.end);
@@ -479,7 +486,7 @@ impl Pdb {
                 let line_number = (line.line_start != 0).then_some(line.line_start);
                 let column = line.column_start;
                 let range = start..PdbInternalRva(end);
-                for range in placed(&self.address_map, self.image_base, range) {
+                for range in rebased(&self.address_map, self.image_base, range) {
                     rows.push(range, file, line_number, column);
                 }
             }
@@ -538,11 +545,11 @@ fn find(
 /// An internal RVA range the PDB states, as the ranges of the image's own address space it
 /// lies over: through the address map, which can split it, and onto the image base. A piece
 /// that would overflow the address space, or that is empty, is dropped.
-fn placed<'a>(
+fn rebased<'a>(
     address_map: &'a AddressMap<'_>,
-    image_base: u64,
+    image_base: SectionAddress,
     range: Range<PdbInternalRva>,
-) -> impl Iterator<Item = Range<u64>> + 'a {
+) -> impl Iterator<Item = Range<SectionAddress>> + 'a {
     address_map.rva_ranges(range).filter_map(move |range| {
         let start = image_base.checked_add(u64::from(range.start.0))?;
         let end = image_base.checked_add(u64::from(range.end.0))?;

@@ -12,6 +12,7 @@
 
 use super::{recovered, LineInfo, RowCollector};
 use crate::parse::{section_biases, section_data};
+use crate::{Bias, PlacedAddress, SectionAddress};
 use gimli::{EndianArcSlice, RunTimeEndian};
 use object::{
     Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget,
@@ -32,8 +33,8 @@ pub(super) struct Dwarf {
 
     /// Every compilation unit that has been asked about, and the extent of each
     /// `DW_TAG_subprogram` in it, keyed by the unit's `.debug_info` offset and then by the
-    /// subprogram's `DW_AT_low_pc`. Both keys are in the biased address space.
-    extents: Mutex<HashMap<u64, HashMap<u64, u64>>>,
+    /// subprogram's `DW_AT_low_pc`.
+    extents: Mutex<HashMap<u64, HashMap<PlacedAddress, u64>>>,
 }
 
 impl Dwarf {
@@ -104,20 +105,22 @@ impl Dwarf {
     /// rows it produces are translated in and out of the address space the context reads in.
     ///
     /// [`Section::bias`]: crate::Section::bias
-    pub(super) fn line_info(&self, bias: u64, range: Range<u64>) -> Option<LineInfo> {
+    pub(super) fn line_info(&self, bias: Bias, range: Range<SectionAddress>) -> Option<LineInfo> {
         let context = recovered(&self.context);
 
         // Saturating rather than wrapping, so an absurd range asks about less than it meant
         // to instead of about something else.
-        let query = range.start.saturating_add(bias)..range.end.saturating_add(bias);
+        let query = range.start.placed_saturating(bias)..range.end.placed_saturating(bias);
 
         let mut rows = RowCollector::default();
 
         // One call for the symbol's whole extent: this walks each covering unit's line table
         // once, where per-instruction lookups would binary-search it per address.
-        for (address, length, location) in
-            context.find_location_range(query.start, query.end).ok()?
+        for (address, length, location) in context
+            .find_location_range(query.start.get(), query.end.get())
+            .ok()?
         {
+            let address = PlacedAddress::new(address);
             let Some(end) = address.checked_add(length) else {
                 continue;
             };
@@ -140,12 +143,12 @@ impl Dwarf {
     /// The extent of the `DW_TAG_subprogram` beginning at `address`, or [`None`] when no unit
     /// covers the address or the subprogram that does begins elsewhere. `bias` is as for
     /// [`line_info`](Self::line_info).
-    pub(super) fn extent(&self, bias: u64, address: u64) -> Option<u64> {
-        let probe = address.checked_add(bias)?;
+    pub(super) fn extent(&self, bias: Bias, address: SectionAddress) -> Option<u64> {
+        let probe = address.placed_checked(bias)?;
         // `addr2line`'s `Context::find_units` asks its range index about `probe + 1` with a
         // plain addition, so the very last address in the space panics. Declined here rather
         // than left to the guard: this one is ours to see coming.
-        if probe == u64::MAX {
+        if probe.get() == u64::MAX {
             return None;
         }
 
@@ -153,7 +156,7 @@ impl Dwarf {
 
         // `skip_all_loads` declines to fetch split DWARF, which this crate does not read
         // anywhere else either.
-        let unit = context.find_dwarf_and_unit(probe).skip_all_loads()?;
+        let unit = context.find_dwarf_and_unit(probe.get()).skip_all_loads()?;
         let (sections, unit) = (unit.dwarf, unit.unit);
         let key = unit.header.offset().to_debug_info_offset(&unit.header)?.0 as u64;
 
@@ -170,7 +173,7 @@ impl Dwarf {
     /// Every row of every line program that names a file and a line, in the **biased**
     /// address space, handed to `visit` under the context's lock — so `visit` must not ask
     /// this object anything.
-    pub(super) fn each_row(&self, visit: &mut dyn FnMut(Range<u64>, &str, u32)) {
+    pub(super) fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
         let context = recovered(&self.context);
 
         // The whole address space in one pass. Safe where `extent` had to decline `u64::MAX`:
@@ -186,6 +189,7 @@ impl Dwarf {
             let (Some(file), Some(line)) = (location.file, location.line) else {
                 continue;
             };
+            let address = PlacedAddress::new(address);
             let Some(end) = address.checked_add(length) else {
                 continue;
             };
@@ -207,13 +211,17 @@ impl Dwarf {
 /// or not relocated — has rows lying below where the section was placed. Subtracting the bias
 /// first turned such a row into one running to the end of the address space, which
 /// [`LineInfo::row_at`] then answered with for every address the real rows left uncovered.
-fn clipped(row: Range<u64>, query: &Range<u64>, bias: u64) -> Option<Range<u64>> {
+fn clipped(
+    row: Range<PlacedAddress>,
+    query: &Range<PlacedAddress>,
+    bias: Bias,
+) -> Option<Range<SectionAddress>> {
     let start = row.start.max(query.start);
     let end = row.end.min(query.end);
     if start >= end {
         return None;
     }
-    Some(start.checked_sub(bias)?..end.checked_sub(bias)?)
+    Some(start.local_checked(bias)?..end.local_checked(bias)?)
 }
 
 /// Every `DW_TAG_subprogram` in one unit that states where it begins and ends, as
@@ -228,7 +236,7 @@ fn clipped(row: Range<u64>, query: &Range<u64>, bias: u64) -> Option<Range<u64>>
 fn subprogram_extents(
     sections: &gimli::Dwarf<Reader>,
     unit: &gimli::Unit<Reader>,
-) -> HashMap<u64, u64> {
+) -> HashMap<PlacedAddress, u64> {
     let mut extents = HashMap::new();
 
     let mut entries = unit.entries();
@@ -239,9 +247,11 @@ fn subprogram_extents(
             continue;
         }
 
+        // The addresses a unit states are the biased ones: `load` relocated them
+        // ([`relocate`]).
         let low = match entry.attr_value(gimli::DW_AT_low_pc) {
             Some(value) => match sections.attr_address(unit, value) {
-                Ok(Some(low)) => low,
+                Ok(Some(low)) => PlacedAddress::new(low),
                 _ => continue,
             },
             None => continue,
@@ -250,7 +260,7 @@ fn subprogram_extents(
         let size = match entry.attr_value(gimli::DW_AT_high_pc) {
             Some(gimli::AttributeValue::Udata(length)) => length,
             Some(value) => match sections.attr_address(unit, value) {
-                Ok(Some(high)) => match high.checked_sub(low) {
+                Ok(Some(high)) => match low.bytes_to(PlacedAddress::new(high)) {
                     Some(size) => size,
                     None => continue,
                 },
@@ -305,11 +315,11 @@ struct StaleRangeList {
 /// there means the ranges moved without any of them saying so.
 fn stale_range_lists(
     file: &object::File<'_>,
-    biases: &HashMap<SectionIndex, u64>,
+    biases: &HashMap<SectionIndex, Bias>,
     dwarf: &gimli::Dwarf<Reader>,
 ) -> Vec<StaleRangeList> {
     let mut stale = Vec::new();
-    if !biases.values().any(|&bias| bias != 0) {
+    if !biases.values().any(|&bias| bias != Bias::NONE) {
         return stale;
     }
 
@@ -382,7 +392,7 @@ fn load_section(
     id: gimli::SectionId,
     endian: RunTimeEndian,
     relocatable: bool,
-    biases: &HashMap<SectionIndex, u64>,
+    biases: &HashMap<SectionIndex, Bias>,
     stale: &[StaleRangeList],
 ) -> Reader {
     let data = file
@@ -435,7 +445,7 @@ fn relocate<'data, 'file>(
     file: &object::File<'data>,
     section: &object::Section<'data, 'file>,
     endian: RunTimeEndian,
-    biases: &HashMap<SectionIndex, u64>,
+    biases: &HashMap<SectionIndex, Bias>,
 ) {
     for (offset, relocation) in section.relocations() {
         if relocation.kind() != RelocationKind::Absolute {
@@ -449,17 +459,17 @@ fn relocate<'data, 'file>(
             index
                 .and_then(|index| biases.get(&index))
                 .copied()
-                .unwrap_or(0)
+                .unwrap_or(Bias::NONE)
         };
         let target = match relocation.target() {
             RelocationTarget::Symbol(index) => file
                 .symbol_by_index(index)
                 .ok()
-                .map(|s| s.address().wrapping_add(bias(s.section_index()))),
+                .map(|s| SectionAddress::new(s.address()).placed(bias(s.section_index()))),
             RelocationTarget::Section(index) => file
                 .section_by_index(index)
                 .ok()
-                .map(|s| s.address().wrapping_add(bias(Some(index)))),
+                .map(|s| SectionAddress::new(s.address()).placed(bias(Some(index)))),
             _ => None,
         };
         let Some(target) = target else { continue };
@@ -478,7 +488,7 @@ fn relocate<'data, 'file>(
             0
         };
         let value = implicit
-            .wrapping_add(target)
+            .wrapping_add(target.get())
             .wrapping_add(relocation.addend() as u64);
 
         write_uint(bytes, endian, value);

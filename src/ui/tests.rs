@@ -1395,7 +1395,7 @@ fn a_history_row_names_the_function_and_not_the_whole_symbol() {
         data: Arc::new(SymbolData::new(
             "_RNvXsa_".to_owned(),
             Some(demangled.to_owned()),
-            0x1000,
+            SectionAddress::new(0x1000),
             None,
             0,
         )),
@@ -12397,6 +12397,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     // other.
     let assembly = studied.assembly.clone().expect("sum_to decodes");
     let row_at = |address: u64| {
+        let address = SectionAddress::new(address);
         let index = assembly
             .instructions
             .iter()
@@ -12412,7 +12413,7 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
             assembly
                 .instructions
                 .iter()
-                .position(|instruction| instruction.address == 0x61)
+                .position(|instruction| instruction.address == SectionAddress::new(0x61))
                 .expect("checked above"),
         )
         .expect("the row the jump lands on is on a line")
@@ -12549,7 +12550,7 @@ fn a_row_a_branch_lands_on_starts_a_block() {
     let mut targets: Vec<u64> = assembly
         .edges
         .iter()
-        .map(|edge| assembly.instructions[edge.to].address)
+        .map(|edge| assembly.instructions[edge.to].address.get())
         .collect();
     targets.sort_unstable();
     targets.dedup();
@@ -12772,7 +12773,7 @@ fn mangled_symbol() -> Symbol {
         data: Arc::new(SymbolData::new(
             "_ZN6viewer2ui8assembly12AssemblyPane6render17h0123456789abcdefE".to_owned(),
             Some("viewer::ui::assembly::AssemblyPane::render".to_owned()),
-            0x1000,
+            SectionAddress::new(0x1000),
             None,
             0,
         )),
@@ -13024,7 +13025,11 @@ fn the_bar_says_how_many_bytes_the_listing_under_it_holds() {
         .expect("the fixture holds sum_to");
     let mut studied = Studied::new(sum_to.clone());
     let decoded = studied.assembly.clone().expect("sum_to decodes");
-    let whole = decoded.range.end - decoded.range.start;
+    let whole = decoded
+        .range
+        .start
+        .bytes_to(decoded.range.end)
+        .expect("the fixture's extent reads");
     // Half the function, which is a number the crate answers for no symbol here.
     let half = whole / 2;
     assert!(half != 0 && half != whole, "sum_to is too short to halve");
@@ -13032,7 +13037,7 @@ fn the_bar_says_how_many_bytes_the_listing_under_it_holds() {
         instructions: decoded.instructions.clone(),
         edges: decoded.edges.clone(),
         undecodable: None,
-        range: decoded.range.start..decoded.range.start + half,
+        range: decoded.range.start..decoded.range.start.saturating_add(half),
         extent: Extent {
             bytes: half,
             capped: false,
@@ -13863,7 +13868,7 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
     ] {
         let mut studied = Studied::new(sum_to.clone());
         let rows = vec![LineRow {
-            range: sum_to.data.address..sum_to.data.address + 1,
+            range: sum_to.data.address..sum_to.data.address.saturating_add(1),
             file: Some(0),
             line: Some(1),
             column: None,
@@ -19164,7 +19169,7 @@ fn a_picked_out_instruction_lights_its_line() {
     // The first instruction on line 5, and nothing else placed anywhere.
     studied.lines.info = LineInfo::new(
         vec![LineRow {
-            range: first..first + 1,
+            range: first..first.saturating_add(1),
             file: Some(0),
             line: Some(5),
             column: None,
@@ -19270,7 +19275,7 @@ fn a_sweep_in_the_source_pane_does_not_work_its_pair_out_again() {
     // The first instruction on line 5, and nothing else placed anywhere.
     studied.lines.info = LineInfo::new(
         vec![LineRow {
-            range: first..first + 1,
+            range: first..first.saturating_add(1),
             file: Some(0),
             line: Some(5),
             column: None,
@@ -19915,8 +19920,8 @@ fn a_copied_line_spells_the_address_the_listing_draws() {
         .expect("sum_to decodes");
     let first = &assembly.instructions[0];
 
-    assert!(asm_line(first, 0).starts_with("0000000000000030 "));
-    assert!(asm_line(first, 0x1000).starts_with("0000000000001030 "));
+    assert!(asm_line(first, Bias::NONE).starts_with("0000000000000030 "));
+    assert!(asm_line(first, Bias::new(0x1000)).starts_with("0000000000001030 "));
 }
 
 /// Pressing an object in the Objects list opens all of its code as one listing -- a
@@ -20745,7 +20750,7 @@ fn a_copied_run_of_the_section_view_spells_each_kind_of_row() {
         .find(|symbol| symbol.data.name == "add")
         .expect("the fixture holds add");
     let own = add.data.assembly(&add.object).expect("add decodes");
-    assert_eq!(lines[3], asm_line(&own.instructions[0], 0));
+    assert_eq!(lines[3], asm_line(&own.instructions[0], Bias::NONE));
     // `twice` is not decoded: its label, then blank lines.
     let twice = lines
         .iter()
@@ -20950,7 +20955,9 @@ fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
         .expect("the fixture holds sum_to");
     let at = a_line_of(&sum_to);
     let studied = Studied::new(sum_to.clone());
-    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
+    let first = studied.assembly.as_ref().unwrap().instructions[0]
+        .address
+        .get();
     let entry = "Open as symbol".to_string();
 
     let shown = Shown {
@@ -21028,7 +21035,9 @@ fn show_in_object_lands_the_code_tab_on_the_instruction() {
         .expect("the fixture holds sum_to");
     let object = sum_to.object.clone();
     let studied = Studied::new(sum_to.clone());
-    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
+    let first = studied.assembly.as_ref().unwrap().instructions[0]
+        .address
+        .get();
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
@@ -21171,16 +21180,21 @@ fn calling_into_the_middle() -> (Arc<Object>, u64) {
         SectionIndex(1),
         ".text".into(),
         text.clone(),
-        0,
+        SectionAddress::new(0),
         std::collections::BTreeMap::new(),
-        0,
+        Bias::NONE,
     ));
     let symbols = [("f", 0, 6), ("g", 6, text.len() as u64 - 6)]
         .into_iter()
         .enumerate()
         .map(|(index, (name, address, size))| {
-            let symbol =
-                SymbolData::new(name.to_owned(), None, address, Some(section.clone()), size);
+            let symbol = SymbolData::new(
+                name.to_owned(),
+                None,
+                SectionAddress::new(address),
+                Some(section.clone()),
+                size,
+            );
             (SymbolIndex(index), Arc::new(symbol))
         })
         .collect();
@@ -21351,7 +21365,7 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
     );
 
     // The caret is on the target's first row, and the place kept is its address.
-    let landed = rows.body_row_for(add.address).expect("add has a row");
+    let landed = rows.body_row_for(add.address.get()).expect("add has a row");
     let picked = marked
         .peek()
         .assembly
@@ -21363,8 +21377,8 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
             .places
             .code_at
             .peek()
-            .at(&code_entry_of(&states, &code, add.address)),
-        Some(Spot::at(add.address))
+            .at(&code_entry_of(&states, &code, add.address.get())),
+        Some(Spot::at(add.address.get()))
     );
 
     // With Ctrl held it is the other door: the symbol alone, beside the listing. Pressed
@@ -21550,7 +21564,13 @@ fn a_place_in_a_listing_is_named_by_the_symbol_there() {
     // layout put its section.
     let placed = twice
         .address
-        .wrapping_add(twice.section.as_ref().map_or(0, |section| section.bias()));
+        .placed(
+            twice
+                .section
+                .as_ref()
+                .map_or(Bias::NONE, |section| section.bias()),
+        )
+        .get();
 
     assert_eq!(stop_text(&Stop::whole(code.clone())), object.name);
     assert_eq!(stop_text(&Stop::at(object.clone(), placed)), "twice");
@@ -21630,7 +21650,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     assert!(
         trail
             == [
-                Stop::at(object_of(&code), add.address),
+                Stop::at(object_of(&code), add.address.get()),
                 Stop::whole(code.clone())
             ],
         "the place followed is not on the trail"
@@ -21670,8 +21690,8 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
             .places
             .code_at
             .peek()
-            .at(&code_entry_of(&states, &code, add.address)),
-        Some(Spot::at(add.address))
+            .at(&code_entry_of(&states, &code, add.address.get())),
+        Some(Spot::at(add.address.get()))
     );
 }
 
@@ -21965,7 +21985,7 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
         .expect("g decodes")
         .instructions
         .iter()
-        .map(|instruction| instruction.address)
+        .map(|instruction| instruction.address.get())
         .filter(|&address| address <= target)
         .last()
         .expect("an instruction holds the target");
@@ -22095,7 +22115,11 @@ fn a_cut_gap_says_the_listing_was_cut() {
         undecodable: None,
         range: assembly.range.start..cut_at,
         extent: Extent {
-            bytes: cut_at - assembly.range.start,
+            bytes: assembly
+                .range
+                .start
+                .bytes_to(cut_at)
+                .expect("the cut is inside"),
             capped: true,
         },
     });
@@ -22169,7 +22193,7 @@ fn a_gap_row_is_marked_as_data() {
         window: vec![0],
     };
     let gap = analysis::Gap {
-        range: 0..16,
+        range: SectionAddress::new(0)..SectionAddress::new(16),
         kind: analysis::GapKind::Bytes,
     };
     assert!(reading.take(
@@ -22261,7 +22285,7 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
         edges: Vec::new(),
         undecodable: Some("aarch64"),
         extent: Extent {
-            bytes: range.end - range.start,
+            bytes: range.start.bytes_to(range.end).expect("the range reads"),
             capped: false,
         },
         range,
@@ -22292,7 +22316,11 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
     // stretch's own extent. A count alone would be satisfied by one row of a hundred.
     let stretch = rows.stretch(0).expect("the listing has stretch 0");
     let placed = rows.placed_of(0).expect("stretch 0 is in a section");
-    let covers = stretch.range.end - stretch.range.start;
+    let covers = stretch
+        .range
+        .start
+        .bytes_to(stretch.range.end)
+        .expect("the stretch reads");
     assert!(
         covers > section::GAP_BYTES_PER_ROW,
         "the stretch is one row of bytes"
@@ -22303,7 +22331,7 @@ fn a_stretch_with_no_instructions_draws_every_byte_it_covers() {
         "the stretch's {covers} bytes are drawn in {} rows",
         gaps.len()
     );
-    let first = placed.place(stretch.range.start);
+    let first = placed.place(stretch.range.start).get();
     let mut drawn = 0;
     for (index, &row) in gaps.iter().enumerate() {
         let address = rows.address_of(row).expect("a gap row has an address");
@@ -22378,7 +22406,7 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
 
     // The second instruction: the first shares its address text with the label above
     // it, which is not a row with a menu.
-    let second = format!("{:016X} ", twice.data.address + 1);
+    let second = format!("{:016X} ", twice.data.address.get() + 1);
     let row = centre_of(&test, &second);
     right_click(&mut test, row);
     let drawn = labels(&test);
@@ -22401,7 +22429,7 @@ fn open_as_symbol_from_the_unified_view_opens_the_symbols_tab() {
     assert!(landed.at.as_ref().map(|at| &at.pos.file) == Some(&a_line_of(&twice).file));
     // The symbol's own address: the fixture places its one `.text` at 0, so the one
     // drawn is the one the listing alone will draw.
-    assert_eq!(landed.address, Some(twice.data.address + 1));
+    assert_eq!(landed.address, Some(twice.data.address.get() + 1));
 }
 
 /// The Assembly pane over the active document, whichever kind it is, with what the app
@@ -22481,13 +22509,13 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
         .data
         .section
         .as_ref()
-        .map_or(0, |section| section.bias());
+        .map_or(Bias::NONE, |section| section.bias());
     // An instruction the debug info places on a line: the file that line is in is what
     // the pane beside it has to show.
     let (index, at) = (0..assembly.instructions.len())
         .find_map(|index| Some((index, studied.position(index)?)))
         .expect("sum_to's instructions name a place");
-    let address = assembly.instructions[index].address.wrapping_add(bias);
+    let address = assembly.instructions[index].address.placed(bias).get();
 
     let (mut test, roots) = TestingRunner::new(
         door_panes_harness,
@@ -22571,7 +22599,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         .data
         .section
         .as_ref()
-        .map_or(0, |section| section.bias());
+        .map_or(Bias::NONE, |section| section.bias());
     // An instruction whose guessed row is not its row, so the move can be seen: the
     // two stretches above decoded either way, so only `sum_to`'s own guess differs, and
     // not its first instruction, whose address is the label's and lands the view on
@@ -22584,7 +22612,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         .map(|index| {
             (
                 index,
-                assembly.instructions[index].address.wrapping_add(bias),
+                assembly.instructions[index].address.placed(bias).get(),
             )
         })
         .find(|&(_, address)| guessed.body_row_for(address) != exact.body_row_for(address))
@@ -22718,7 +22746,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
         .data
         .section
         .as_ref()
-        .map_or(0, |section| section.bias());
+        .map_or(Bias::NONE, |section| section.bias());
     // The third instruction: the first shares its address text with the label over it.
     let index = 2;
     let address = assembly.instructions[index].address;
@@ -22745,7 +22773,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
     settle(&mut test);
     settle(&mut test);
 
-    let drawn = format!("{:016X} ", address.wrapping_add(bias));
+    let drawn = format!("{:016X} ", address.placed(bias).get());
     let at = centre_of(&test, &drawn);
     right_click(&mut test, at);
     let item = centre_of(&test, "Open as symbol");
@@ -22764,7 +22792,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
         .peek()
         .clone()
         .expect("the instruction was not left for the listing");
-    assert!(planting.tab == symbol && planting.address == address);
+    assert!(planting.tab == symbol && planting.address == address.get());
 
     // The worker's answer: the listing is drawn, and the caret is on the row.
     let mut analysis = roots.analysis;
@@ -22819,7 +22847,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     landing.set(Some(Landing {
         tab: first_tab.clone(),
         at: None,
-        address: Some(first.data.address),
+        address: Some(first.data.address.get()),
     }));
     open_document(states.open, states.visits, first_tab.clone(), Reach::NewTab);
     settle(&mut test);
@@ -22881,7 +22909,8 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
         .clone()
         .expect("twice decodes")
         .instructions[0]
-        .address;
+        .address
+        .get();
     let before = first.checked_sub(1).expect("twice starts above zero");
 
     let (mut test, roots) = TestingRunner::new(
@@ -22975,7 +23004,8 @@ fn a_planting_lands_in_the_listing_drawn_now() {
         .as_ref()
         .expect("twice decodes")
         .instructions[1]
-        .address;
+        .address
+        .get();
     let mut plant = doors.plant;
     plant.set(Some(Planting { tab: two, address }));
     settle(&mut test);
@@ -23237,7 +23267,7 @@ fn a_stretch_let_go_under_the_rows_on_screen_still_draws_as_it_was() {
             Stretched {
                 code: None,
                 gap: Some(analysis::Gap {
-                    range: 0..16,
+                    range: SectionAddress::new(0)..SectionAddress::new(16),
                     kind: analysis::GapKind::Bytes,
                 }),
             }
@@ -23965,7 +23995,9 @@ fn an_instruction_rows_menu_bookmarks_its_symbol() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
     let studied = Studied::new(sum_to.clone());
-    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
+    let first = studied.assembly.as_ref().unwrap().instructions[0]
+        .address
+        .get();
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
@@ -24010,7 +24042,9 @@ fn an_instruction_rows_menu_says_none_of_the_source_panes_keys() {
         .find(|symbol| symbol.data.name == "sum_to")
         .expect("the fixture holds sum_to");
     let studied = Studied::new(sum_to.clone());
-    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
+    let first = studied.assembly.as_ref().unwrap().instructions[0]
+        .address
+        .get();
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
@@ -35945,7 +35979,7 @@ fn each_kind_of_row_of_an_objects_code_copies_the_same_text_both_ways() {
             Stretched {
                 code: None,
                 gap: Some(analysis::Gap {
-                    range: 0..16,
+                    range: SectionAddress::new(0)..SectionAddress::new(16),
                     kind: analysis::GapKind::Bytes,
                 }),
             }
@@ -37553,7 +37587,7 @@ fn a_call_to_itself_is_a_stop_back_comes_back_from() {
         Landing {
             tab: Document::Symbol(sum_to.clone()),
             at: None,
-            address: Some(sum_to.data.address),
+            address: Some(sum_to.data.address.get()),
         },
         Reach::InPlace,
     );
@@ -37570,7 +37604,7 @@ fn a_call_to_itself_is_a_stop_back_comes_back_from() {
     assert!(
         trail
             == [
-                Stop::in_symbol(sum_to.clone(), sum_to.data.address),
+                Stop::in_symbol(sum_to.clone(), sum_to.data.address.get()),
                 Stop::whole(Document::Symbol(sum_to.clone()))
             ],
         "the call is not a place on the trail"

@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{parse, symbol, text};
+use common::{at, parse, symbol, text};
 use object::{
     write, Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags,
     RelocationKind, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
@@ -85,11 +85,11 @@ fn a_relocation_is_keyed_by_the_address_its_bytes_are_at() {
     let caller = symbol(&object, "caller");
     let section = caller.section.as_ref().expect("caller has a section");
     assert_eq!(section.name, "__text");
-    assert_eq!(section.address, TEXT_ADDRESS);
+    assert_eq!(section.address, at(TEXT_ADDRESS));
     let code = section.code().expect("__text holds code");
     assert_eq!(
         code.relocations.keys().copied().collect::<Vec<_>>(),
-        vec![TEXT_ADDRESS + 1]
+        vec![at(TEXT_ADDRESS + 1)]
     );
 }
 
@@ -98,9 +98,9 @@ fn a_call_in_a_section_that_is_not_at_zero_resolves_through_its_relocation() {
     let object = parse(&text_after_const());
     let caller = symbol(&object, "caller");
     let target = symbol(&object, "target");
-    assert_eq!(caller.address, TEXT_ADDRESS);
+    assert_eq!(caller.address, at(TEXT_ADDRESS));
     // What the placeholder displacement spells, and so what a missed relocation names.
-    assert_eq!(symbol(&object, "other").address, TEXT_ADDRESS + 5);
+    assert_eq!(symbol(&object, "other").address, at(TEXT_ADDRESS + 5));
 
     let assembly = caller.assembly(&object).expect("caller disassembles");
     let call = &assembly.instructions[0];

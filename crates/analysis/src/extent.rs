@@ -93,7 +93,7 @@ impl SymbolData {
             .map(|&(next, ..)| next)
             .filter(|next| range.contains(next));
 
-        next.unwrap_or(range.end).checked_sub(placed)
+        placed.bytes_to(next.unwrap_or(range.end))
     }
 
     /// A length the file states, bounded by the next symbol. A listing is one stretch per
@@ -116,7 +116,7 @@ impl SymbolData {
         let code = self.section.as_ref()?.code()?;
         let index = covering(&code.unwind, Range::clone, self.address)?;
         let range = &code.unwind[index];
-        Some(self.clamped(object, range.end - self.address))
+        Some(self.clamped(object, self.address.bytes_to(range.end)?))
     }
 
     /// The size the file declares for this symbol ([`size`](Self::size)) where that

@@ -193,7 +193,7 @@ fn text_at(
 ) -> Option<TextOf> {
     match kind {
         Kind::Header => Some(TextOf {
-            address: Some(placed.range().start),
+            address: Some(placed.range().start.get()),
             mark: None,
             text: header_text(placed),
             role: Role::Header,
@@ -202,7 +202,7 @@ fn text_at(
         Kind::Label(index) => {
             let symbol = stretch.symbols.get(index)?.clone();
             Some(TextOf {
-                address: Some(placed.place(stretch.range.start)),
+                address: Some(placed.place(stretch.range.start).get()),
                 mark: None,
                 text: label_text(&symbol),
                 role: Role::Label,
@@ -210,7 +210,7 @@ fn text_at(
             })
         }
         Kind::Cut => Some(TextOf {
-            address: Some(placed.place(body?.gap.as_ref()?.range.start)),
+            address: Some(placed.place(body?.gap.as_ref()?.range.start).get()),
             mark: None,
             text: CUT_TEXT.to_owned(),
             role: Role::Cut,
@@ -258,7 +258,7 @@ fn line_at(
     if let Kind::Instruction(index) = kind {
         let assembly = body?.assembly.as_ref()?;
         let address = placed.place(assembly.instructions.get(index)?.address);
-        return Some((address, instruction_line(assembly, index)));
+        return Some((address.get(), instruction_line(assembly, index)));
     }
     let text = text_at(placed, stretch, body, kind)?;
     Some((text.address?, text_line(text.mark, &text.text)))
@@ -340,7 +340,7 @@ fn label_text(symbol: &SymbolData) -> String {
 /// The bytes gap row `index` of `gap` draws, and the placed address they start at.
 fn gap_row_bytes(
     placed: &analysis::Placed,
-    gap: &Range<u64>,
+    gap: &Range<SectionAddress>,
     index: usize,
 ) -> Option<(u64, Vec<u8>)> {
     let start = gap
@@ -352,7 +352,7 @@ fn gap_row_bytes(
     let end = start.saturating_add(GAP_BYTES_PER_ROW).min(gap.end);
     // The section the stretch is in holds the bytes; `gap` is in its own addresses.
     let bytes = placed.listing.section().bytes_in(start..end)?.to_vec();
-    Some((placed.place(start), bytes))
+    Some((placed.place(start).get(), bytes))
 }
 
 /// A row that is text and nothing else -- a section's header, a symbol's label, a cut

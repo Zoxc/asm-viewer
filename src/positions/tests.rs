@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use analysis::{Architecture, BinaryFormat, Object, ObjectData, SymbolData, SymbolIndex};
+use analysis::{
+    Architecture, BinaryFormat, Object, ObjectData, SectionAddress, SymbolData, SymbolIndex,
+};
 
 use super::*;
 use crate::docs::Docs;
@@ -211,7 +213,13 @@ fn a_closing_binary_forgets_the_lines_of_the_entries_it_takes() {
 
 /// A bare symbol in a bare object at `path`: only what [`Driven::release`] looks at.
 fn symbol(path: &str, name: &str) -> Symbol {
-    let data = Arc::new(SymbolData::new(name.to_owned(), None, 0, None, 0));
+    let data = Arc::new(SymbolData::new(
+        name.to_owned(),
+        None,
+        SectionAddress::new(0),
+        None,
+        0,
+    ));
     let object = Arc::new(Object::new(
         PathBuf::from(path),
         path.to_owned(),

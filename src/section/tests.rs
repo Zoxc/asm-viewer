@@ -1,5 +1,5 @@
 use super::*;
-use analysis::{CodeListing, Extent, Gap, GapKind, Object};
+use analysis::{CodeListing, Extent, Gap, GapKind, Object, SectionAddress};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -120,7 +120,7 @@ fn a_stretch_nobody_decoded_is_a_run_of_empty_rows_sized_by_its_bytes() {
     let mut expected = 0;
     for (flat, placed) in code.sections().iter().enumerate() {
         let stretch = &placed.listing.stretches()[0];
-        let bytes = stretch.range.end - stretch.range.start;
+        let bytes = stretch.range.start.bytes_to(stretch.range.end).unwrap();
         let estimate = bytes.div_ceil(ESTIMATED_BYTES_PER_ROW).max(1) as usize;
         let first = rows_of(&rows, flat);
         assert_eq!(
@@ -262,7 +262,7 @@ fn an_address_finds_the_row_that_draws_it_and_the_row_names_it_back() {
     // Between two sections is nowhere, and so is past the end.
     let air = code.sections()[0].range().end;
     assert!(air < code.sections()[1].range().start);
-    assert_eq!(empty.row_for(air), None);
+    assert_eq!(empty.row_for(air.get()), None);
     assert_eq!(empty.row_for(u64::MAX), None);
 }
 
@@ -325,16 +325,26 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
     let assembly = cut.assembly.clone().unwrap();
     let second = &assembly.instructions[1];
     assert!(second.bytes.len() > 1, "a one-byte instruction");
-    assert_eq!(with_gap.row_for(second.address + bias + 1), Some(body + 1));
+    assert_eq!(
+        with_gap.row_for(second.address.placed(bias).get() + 1),
+        Some(body + 1)
+    );
     assert_eq!(with_gap.row(body + 2), row(0, Kind::Gap(0)));
-    assert_eq!(with_gap.row_for(cut_at + bias + 3), Some(body + 2));
+    assert_eq!(
+        with_gap.row_for(cut_at.placed(bias).get() + 3),
+        Some(body + 2)
+    );
 }
 
 /// `add`, the split fixture's stretch 0, decoded as if its extent stopped at its third
 /// instruction, the rest of its stretch left over as a gap of `kind`; and the address it
 /// stops at. The fixture's functions fill their stretches, so the gap is made by hand out
 /// of the same decode.
-fn add_cut_short(object: &Object, code: &Arc<CodeListing>, kind: GapKind) -> (Body, u64) {
+fn add_cut_short(
+    object: &Object,
+    code: &Arc<CodeListing>,
+    kind: GapKind,
+) -> (Body, SectionAddress) {
     let empty = nothing_decoded(code.clone());
     let mut cut = decode(object, code, &empty, 0);
     let assembly = cut.assembly.clone().expect("add decodes");
@@ -351,7 +361,7 @@ fn add_cut_short(object: &Object, code: &Arc<CodeListing>, kind: GapKind) -> (Bo
         undecodable: None,
         range: assembly.range.start..cut_at,
         extent: Extent {
-            bytes: cut_at - assembly.range.start,
+            bytes: assembly.range.start.bytes_to(cut_at).unwrap(),
             capped: kind == GapKind::Cut,
         },
     }));
@@ -377,10 +387,10 @@ fn a_cut_gap_draws_a_cut_row_over_its_bytes() {
     assert_eq!(cut.row(body + 2), row(0, Kind::Cut));
     assert_eq!(cut.row(body + 3), row(0, Kind::Gap(0)));
     assert_eq!(cut.len(), plain.len() + 1);
-    assert_eq!(cut.address_of(body + 2), Some(cut_at + bias));
-    assert_eq!(cut.address_of(body + 3), Some(cut_at + bias));
+    assert_eq!(cut.address_of(body + 2), Some(cut_at.placed(bias).get()));
+    assert_eq!(cut.address_of(body + 3), Some(cut_at.placed(bias).get()));
     // The address is the bytes' row's, as an instruction's is and not its separator's.
-    assert_eq!(cut.row_for(cut_at + bias), Some(body + 3));
+    assert_eq!(cut.row_for(cut_at.placed(bias).get()), Some(body + 3));
     assert!((0..plain.len()).all(|at| kind_of(&plain, at) != Some(Kind::Cut)));
 }
 
@@ -428,7 +438,7 @@ fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
     }
 
     let air = code.sections()[0].range().end;
-    assert_eq!(empty.body_row_for(air), None);
+    assert_eq!(empty.body_row_for(air.get()), None);
 }
 
 /// Decoding a stretch replaces its guess with its rows; every row above it stays where it
@@ -523,7 +533,7 @@ fn a_relocatable_objects_sections_draw_at_their_placed_addresses() {
         assert_eq!(rows.bias(flat), Some(code.sections()[flat].bias()));
         let second = rows.address_of(body + 1).unwrap();
         let own = bodies[&flat].assembly.as_ref().unwrap().instructions[1].address;
-        assert_eq!(second, own + code.sections()[flat].bias());
+        assert_eq!(second, own.placed(code.sections()[flat].bias()).get());
     }
 
     // The one-`.text` build is the same three functions at their own addresses, unmoved.
@@ -602,7 +612,7 @@ fn a_separator_row_belongs_to_the_instruction_below_it() {
 fn a_stretch_that_decoded_to_no_instructions_draws_its_bytes() {
     let (_, code) = split();
     let stretch = &code.sections()[1].listing.stretches()[0];
-    let bytes = stretch.range.end - stretch.range.start;
+    let bytes = stretch.range.start.bytes_to(stretch.range.end).unwrap();
     assert!(bytes > GAP_BYTES_PER_ROW, "one row of bytes proves little");
     // What the worker answers for a symbol on an architecture no backend decodes: an
     // assembly saying so, with no instructions, and no gap, the extent being the whole

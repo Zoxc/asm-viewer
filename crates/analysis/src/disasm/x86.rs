@@ -1,6 +1,7 @@
 //! The x86 backend: the only module in the crate that mentions `iced-x86`.
 
 use super::{Code, Disassembler, Instruction, Operand, SpanKind};
+use crate::SectionAddress;
 use iced_x86::Formatter;
 use std::{cell::RefCell, rc::Rc};
 
@@ -15,7 +16,7 @@ impl Disassembler for X86 {
         let mut decoder = iced_x86::Decoder::with_ip(
             self.bitness,
             code.bytes,
-            code.address,
+            code.address.get(),
             iced_x86::DecoderOptions::NONE,
         );
 
@@ -42,13 +43,17 @@ impl Disassembler for X86 {
         while decoder.can_decode() {
             decoder.decode_out(&mut instruction);
 
+            // The decoder counts in plain integers; the address it is at is one of the
+            // section's, since that is what it was started from.
+            let ip = SectionAddress::new(instruction.ip());
+
             // Checked: the instruction pointer is the symbol's address plus what has been
             // decoded, both of them numbers out of the file, so a section at the end of
             // the address space wraps it and the offset would index the slice. The listing
             // stops at the wrap.
-            let Some(start_index) = instruction
-                .ip()
-                .checked_sub(code.address)
+            let Some(start_index) = code
+                .address
+                .bytes_to(ip)
                 .and_then(|offset| usize::try_from(offset).ok())
             else {
                 break;
@@ -60,7 +65,7 @@ impl Disassembler for X86 {
                 break;
             };
 
-            let relocation = code.relocation(instruction.ip(), instruction.len());
+            let relocation = code.relocation(ip, instruction.len());
 
             // Whether *any* relocation covers these bytes, which is not whether one
             // resolved to something navigable: a branch relocated against a section
@@ -122,7 +127,7 @@ impl Disassembler for X86 {
             };
 
             instructions.push(Instruction {
-                address: instruction.ip(),
+                address: ip,
                 bytes: encoded.to_vec(),
                 format: formatted.format,
                 operand,
@@ -281,7 +286,7 @@ impl iced_x86::SymbolResolver for RelocationResolver {
 /// answers 0 for anything that is not a near branch, and 0 is an ordinary address in a
 /// relocatable object — `xabort imm8` shares `xbegin`'s flow-control kind and would
 /// otherwise draw an arrow to the top of the function.
-fn branch_target(instruction: &iced_x86::Instruction) -> Option<u64> {
+fn branch_target(instruction: &iced_x86::Instruction) -> Option<SectionAddress> {
     match instruction.flow_control() {
         iced_x86::FlowControl::UnconditionalBranch
         | iced_x86::FlowControl::ConditionalBranch
@@ -296,19 +301,19 @@ fn branch_target(instruction: &iced_x86::Instruction) -> Option<u64> {
 /// named — never so the gutter draws it. A `jmp` out of the symbol is a tail call and could
 /// be named the same way, but it is an [`Operand::Branch`] and making that a link to a
 /// function is a decision of its own.
-fn call_target(instruction: &iced_x86::Instruction) -> Option<u64> {
+fn call_target(instruction: &iced_x86::Instruction) -> Option<SectionAddress> {
     (instruction.flow_control() == iced_x86::FlowControl::Call)
         .then(|| near_target(instruction))
         .flatten()
 }
 
 /// `near_branch_target` for exactly the operands it means something for.
-fn near_target(instruction: &iced_x86::Instruction) -> Option<u64> {
+fn near_target(instruction: &iced_x86::Instruction) -> Option<SectionAddress> {
     matches!(
         instruction.op0_kind(),
         iced_x86::OpKind::NearBranch16
             | iced_x86::OpKind::NearBranch32
             | iced_x86::OpKind::NearBranch64
     )
-    .then(|| instruction.near_branch_target())
+    .then(|| SectionAddress::new(instruction.near_branch_target()))
 }

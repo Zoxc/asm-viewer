@@ -24,7 +24,7 @@
 
 use crate::counter;
 use crate::lanes::Lanes;
-use analysis::{Assembly, CodeListing, Gap, GapKind, Place, Placed, Stretch};
+use analysis::{Assembly, Bias, CodeListing, Gap, GapKind, Place, Placed, PlacedAddress, Stretch};
 use std::{ops::Range, sync::Arc};
 
 /// How many of a gap's bytes one row draws.
@@ -78,7 +78,7 @@ impl Body {
 /// How many rows `gap` takes: its cut row, if it has one, then sixteen bytes each, the last
 /// one short.
 fn gap_rows(gap: &Gap) -> usize {
-    let bytes = gap.range.end.saturating_sub(gap.range.start);
+    let bytes = gap.range.start.bytes_to_saturating(gap.range.end);
     let rows: usize = bytes
         .div_ceil(GAP_BYTES_PER_ROW)
         .try_into()
@@ -137,7 +137,7 @@ pub struct StretchRows {
     /// The placed address the stretch starts at, and how many bytes it covers.
     start: u64,
     bytes: u64,
-    bias: u64,
+    bias: Bias,
     /// The rule over the stretch and the blank under it, which every stretch has but the
     /// listing's first.
     space: bool,
@@ -216,7 +216,7 @@ impl StretchRows {
         #[cfg(test)]
         STRETCHES_COUNTED.set(STRETCHES_COUNTED.get() + 1);
         StretchRows {
-            start: placed.place(stretch.range.start),
+            start: placed.place(stretch.range.start).get(),
             bytes: stretch_bytes(stretch),
             bias: placed.bias(),
             space: flat > 0,
@@ -308,7 +308,7 @@ impl StretchRows {
 /// How many bytes a stretch covers. Saturating: a range stated backwards is no bytes,
 /// not a panic.
 fn stretch_bytes(stretch: &Stretch) -> u64 {
-    stretch.range.end.saturating_sub(stretch.range.start)
+    stretch.range.start.bytes_to_saturating(stretch.range.end)
 }
 
 /// Where each of `counts` starts once they are laid end to end, with one more entry
@@ -573,7 +573,7 @@ impl Rows {
     }
 
     /// What the stretch adds to its symbol's own addresses.
-    pub fn bias(&self, flat: usize) -> Option<u64> {
+    pub fn bias(&self, flat: usize) -> Option<Bias> {
         Some(self.stretch_rows(flat)?.bias)
     }
 
@@ -630,7 +630,7 @@ impl Rows {
         } = self.row(row)?;
         let stretch = self.stretch_rows(flat)?;
         Some(match kind {
-            Kind::Header => self.placed_of(flat)?.range().start,
+            Kind::Header => self.placed_of(flat)?.range().start.get(),
             Kind::Rule | Kind::Space { .. } | Kind::Label(_) => stretch.start,
             Kind::Empty(index) => {
                 let BodyRows::Estimated(rows) = &stretch.body else {
@@ -646,16 +646,17 @@ impl Rows {
             Kind::Instruction(index) | Kind::Separator { below: index } => {
                 let assembly = self.body(flat)?.assembly.as_ref()?;
                 let address = assembly.instructions.get(index)?.address;
-                self.placed_of(flat)?.place(address)
+                self.placed_of(flat)?.place(address).get()
             }
             Kind::Cut => {
                 let gap = self.body(flat)?.gap.as_ref()?;
-                self.placed_of(flat)?.place(gap.range.start)
+                self.placed_of(flat)?.place(gap.range.start).get()
             }
             Kind::Gap(index) => {
                 let gap = self.body(flat)?.gap.as_ref()?;
                 self.placed_of(flat)?
                     .place(gap.range.start)
+                    .get()
                     .saturating_add((index as u64).saturating_mul(GAP_BYTES_PER_ROW))
             }
         })
@@ -670,7 +671,10 @@ impl Rows {
     /// an address keeps how many rows past this it was, so the top row being a stretch's
     /// first instruction comes back as that row and not as the label two rows up.
     pub fn row_for(&self, address: u64) -> Option<usize> {
-        let flat = self.layout.flat.index(self.code().at(address)?)?;
+        let flat = self
+            .layout
+            .flat
+            .index(self.code().at(PlacedAddress::new(address))?)?;
         let stretch = self.stretch_rows(flat)?;
         let first = self.start(flat);
         if address <= stretch.start {
@@ -688,13 +692,13 @@ impl Rows {
                 Some(body + index)
             }
             BodyRows::Decoded(decoded) => {
-                let local = self.placed_of(flat)?.local(address);
+                let local = self.placed_of(flat)?.local(PlacedAddress::new(address));
                 if let Some(gap) = decoded
                     .gap
                     .as_ref()
                     .filter(|gap| gap.range.contains(&local))
                 {
-                    let into = local - gap.range.start;
+                    let into = gap.range.start.bytes_to(local)?;
                     let index = (into / GAP_BYTES_PER_ROW) as usize;
                     // Under the cut row, where it has one: the row of bytes holding the
                     // address, as a separator's instruction is found and not the separator.

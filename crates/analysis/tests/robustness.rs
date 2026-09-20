@@ -5,10 +5,10 @@ mod common;
 
 use analysis::{parse_object, CodeListing, Listing, Object};
 use common::{
-    caller_and_target, committed_fixture, declared_code_images, dwarf_fixture, elf_shared_object,
-    elf_with_unreadable_name, elf_x86_64, elf_x86_64_with_dwarf, garbage, named, names, parse,
-    parse_and_walk, survivors, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, SharedObject,
-    TextRelocation, TextSymbol, UnitRanges, TEXT_ADDRESS,
+    at, caller_and_target, committed_fixture, declared_code_images, dwarf_fixture,
+    elf_shared_object, elf_with_unreadable_name, elf_x86_64, elf_x86_64_with_dwarf, garbage, named,
+    names, parse, parse_and_walk, survivors, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol,
+    SharedObject, TextRelocation, TextSymbol, UnitRanges, TEXT_ADDRESS,
 };
 use object::SectionKind;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -249,7 +249,7 @@ fn a_compressed_code_section_is_placed_by_the_size_it_decompresses_to() {
     let ranges: Vec<_> = code
         .sections()
         .iter()
-        .map(|placed| placed.range())
+        .map(|placed| placed.range().start.get()..placed.range().end.get())
         .collect();
     assert_eq!(ranges, [0..200, 208..210]);
 }
@@ -585,7 +585,7 @@ fn a_lying_compressed_debug_section_costs_nothing() {
             "a .debug_info declaring {declared} bytes was decompressed at parse"
         );
         for section in &object.sections {
-            assert!(object.line_info(section, 0..u64::MAX).is_none());
+            assert!(object.line_info(section, at(0)..at(u64::MAX)).is_none());
         }
     }
 }
@@ -603,7 +603,7 @@ fn a_line_program_that_runs_backwards_does_not_panic() {
         .expect("the object still parses");
 
     for section in &object.sections {
-        assert!(object.line_info(section, 0..0x400).is_none());
+        assert!(object.line_info(section, at(0)..at(0x400)).is_none());
     }
     for symbol in &object.symbols_sorted {
         assert!(symbol.line_info(&object).is_none());
@@ -841,11 +841,14 @@ fn symbols_of_one_name_are_listed_in_the_files_order() {
     // Each is at an address of its own, so the address says which symbol it is.
     let mut by_index: Vec<_> = object.symbols.iter().collect();
     by_index.sort_by_key(|(index, _)| index.0);
-    let by_index: Vec<u64> = by_index.iter().map(|(_, symbol)| symbol.address).collect();
+    let by_index: Vec<u64> = by_index
+        .iter()
+        .map(|(_, symbol)| symbol.address.get())
+        .collect();
     let listed: Vec<u64> = object
         .symbols_sorted
         .iter()
-        .map(|symbol| symbol.address)
+        .map(|symbol| symbol.address.get())
         .collect();
 
     assert_eq!(by_index.len(), names.len());
@@ -900,7 +903,7 @@ fn a_function_at_the_end_of_the_address_space_does_not_panic() {
         .expect("the symbol is listed")
         .clone();
 
-    assert_eq!(symbol.address, BASE);
+    assert_eq!(symbol.address, at(BASE));
     assert_eq!(
         symbol.estimate_size(&object).map(|extent| extent.bytes),
         None
@@ -1263,7 +1266,7 @@ fn a_symbol_whose_name_will_not_read_is_listed_by_its_address() {
     // Its address bounds `a`, and it is the symbol standing at that bound.
     let a = named(&object, "a");
     assert_eq!(a.extent(&object).map(|extent| extent.bytes), Some(16));
-    assert_eq!(named(&object, "<function 0x10>").address, 16);
+    assert_eq!(named(&object, "<function 0x10>").address, at(16));
 
     // The listing's labels say the same: three stretches, each claiming its whole span.
     let section = object
@@ -1277,8 +1280,8 @@ fn a_symbol_whose_name_will_not_read_is_listed_by_its_address() {
         .iter()
         .map(|stretch| {
             (
-                stretch.range.start,
-                stretch.range.end,
+                stretch.range.start.get(),
+                stretch.range.end.get(),
                 stretch.symbol().map(|symbol| symbol.name.as_str()),
             )
         })
@@ -1343,7 +1346,7 @@ fn a_declaration_still_names_a_symbol_whose_name_will_not_read() {
     let object = parse(&data);
 
     assert_eq!(names(&object), ["exported", "first"]);
-    assert_eq!(named(&object, "exported").address, TEXT_ADDRESS + 4);
+    assert_eq!(named(&object, "exported").address, at(TEXT_ADDRESS + 4));
 }
 
 /// Defect: `known` held raw addresses, and in a relocatable object every `.text.<name>`

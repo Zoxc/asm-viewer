@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use analysis::{Architecture, BinaryFormat, ObjectData, SymbolData, SymbolIndex};
+use analysis::{Architecture, BinaryFormat, ObjectData, SectionAddress, SymbolData, SymbolIndex};
 
 use super::*;
 
 /// A bare `Object` with one text symbol — only the fields these tests read.
 fn object(path: &str, name: &str) -> Arc<Object> {
-    let caller = SymbolData::new("caller".to_owned(), None, 0, None, 0);
+    let caller = SymbolData::new("caller".to_owned(), None, SectionAddress::new(0), None, 0);
     Arc::new(Object::new(
         PathBuf::from(path),
         name.to_owned(),

@@ -507,7 +507,7 @@ fn bookmarks_are_written_to_the_project_file_and_read_back() {
 /// it is, and it carries no name of its own, the place being able to say what it is called.
 #[test]
 fn a_bookmark_on_a_made_up_name_writes_no_spelling() {
-    let spelling = MadeUp::Function(0x10).to_string();
+    let spelling = MadeUp::Function(SectionAddress::new(0x10)).to_string();
     let bookmark = Bookmark::new(
         SavedDocument::Symbol {
             path: PathBuf::from("/tmp/lib.a"),

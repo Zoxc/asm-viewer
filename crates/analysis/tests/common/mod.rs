@@ -4,7 +4,8 @@
 #![allow(dead_code)]
 
 use analysis::{
-    parse_object, CodeListing, Instruction, LineInfo, LineRow, Listing, Object, Place, SymbolData,
+    parse_object, CodeListing, Instruction, LineInfo, LineRow, Listing, Object, Place,
+    PlacedAddress, SectionAddress, SymbolData,
 };
 use object::write;
 use object::{
@@ -21,6 +22,18 @@ use std::sync::Arc;
 pub fn parse(data: &[u8]) -> Arc<Object> {
     parse_object(data.into(), "fixture.o".into(), PathBuf::from("/fixture.o"))
         .expect("the fixture parses")
+}
+
+/// An address in a section's own terms, written as the number a test means by it: what a
+/// fixture's sections, symbols and listings are all laid out in.
+pub fn at(address: u64) -> SectionAddress {
+    SectionAddress::new(address)
+}
+
+/// The same in the one space an object's code sections share, which is where a fixture's
+/// biases put them.
+pub fn placed_at(address: u64) -> PlacedAddress {
+    PlacedAddress::new(address)
 }
 
 /// The file a row of `info` names, as a string to compare against.
@@ -134,7 +147,7 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
         // Rows are ascending and non-overlapping for *any* input, however corrupt — they
         // are clipped to make it so — hence `previous` is the last row's end.
         if let Some(info) = symbol.line_info(&object) {
-            let mut previous = 0;
+            let mut previous = at(0);
             for row in info.rows() {
                 assert!(row.range.start >= previous && row.range.start < row.range.end);
                 previous = row.range.end;
@@ -145,12 +158,14 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
                 );
                 let _ = row.file.and_then(|file| info.file(file));
             }
-            let _ = info.row_at(u64::MAX).and_then(|row| info.file(row.file?));
+            let _ = info
+                .row_at(at(u64::MAX))
+                .and_then(|row| info.file(row.file?));
         }
     }
     // Build the DWARF context even for an object whose symbols were all dropped.
     for section in &object.sections {
-        let _ = object.line_info(section, 0..u64::MAX);
+        let _ = object.line_info(section, at(0)..at(u64::MAX));
     }
 
     // Every section's listing: the skeleton whole, the first few stretches decoded. What is

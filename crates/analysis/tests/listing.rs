@@ -5,12 +5,12 @@
 mod common;
 
 use analysis::{
-    parse_object, Architecture, CodeListing, Extent, GapKind, Listing, Object, Place, Section,
-    SymbolData,
+    parse_object, Architecture, Bias, CodeListing, Extent, GapKind, Listing, Object, Place,
+    Section, SectionAddress, SymbolData,
 };
 use common::{
-    caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
-    elf_x86_64_with_dwarf, elf_x86_64_with_dwarf_declaring, named, parse, pe_dll, text,
+    at, caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
+    elf_x86_64_with_dwarf, elf_x86_64_with_dwarf_declaring, named, parse, pe_dll, placed_at, text,
     DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, TextSymbol, UnitRanges, TEXT_ADDRESS,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -195,7 +195,13 @@ fn corpus() -> Vec<(String, Arc<Object>)> {
     corpus
 }
 
-fn section_end(section: &Section) -> u64 {
+/// The last address a range covers, which is the one an "and not past its end" check is
+/// written against. Every range here is non-empty where it is asked.
+fn last_byte(range: &std::ops::Range<SectionAddress>) -> SectionAddress {
+    range.end.checked_sub(1).expect("a range above zero")
+}
+
+fn section_end(section: &Section) -> SectionAddress {
     section.end().expect("a fixture fits in the address space")
 }
 
@@ -227,7 +233,7 @@ fn ranges(listing: &Listing) -> Vec<(u64, u64)> {
     listing
         .stretches()
         .iter()
-        .map(|stretch| (stretch.range.start, stretch.range.end))
+        .map(|stretch| (stretch.range.start.get(), stretch.range.end.get()))
         .collect()
 }
 
@@ -280,7 +286,7 @@ fn every_listing_partitions_its_section_and_agrees_with_the_symbols() {
                     assert_eq!(symbol.address, stretch.range.start, "{context}");
                 }
                 assert_eq!(listing.stretch_at(stretch.range.start), Some(index));
-                assert_eq!(listing.stretch_at(stretch.range.end - 1), Some(index));
+                assert_eq!(listing.stretch_at(last_byte(&stretch.range)), Some(index));
             }
             assert_eq!(listing.stretch_at(end), None, "{context}");
 
@@ -332,8 +338,11 @@ fn every_listing_partitions_its_section_and_agrees_with_the_symbols() {
                     assert_eq!(rows(&own), rows(&code), "{context}: {}", symbol.name);
                 }
 
-                let claimed =
-                    stretch.range.start + symbol.extent(&object).map_or(0, |extent| extent.bytes);
+                let claimed = stretch
+                    .range
+                    .start
+                    .checked_add(symbol.extent(&object).map_or(0, |extent| extent.bytes))
+                    .expect("a fixture's extent fits in the address space");
                 match decoded.gap {
                     Some(gap) => {
                         assert_eq!(gap.range.start, claimed, "{context}: {}", symbol.name);
@@ -371,7 +380,7 @@ fn padding_past_a_stated_extent_is_a_gap_of_bytes() {
     let code = first.code.expect("first has code");
     assert_eq!(code.instructions.len(), 6);
     let gap = first.gap.expect("the padding is a gap");
-    assert_eq!(gap.range, 6..10);
+    assert_eq!(gap.range, at(6)..at(10));
     assert_eq!(gap.kind, GapKind::Bytes);
     assert_eq!(
         listing.section().code().map(|code| &code.data[6..10]),
@@ -397,7 +406,7 @@ fn the_rest_of_a_stretch_cut_at_a_megabyte_is_said_to_be_cut() {
         Some(1 << 20)
     );
     let gap = decoded.gap.expect("the rest is a gap");
-    assert_eq!(gap.range, (1 << 20)..length);
+    assert_eq!(gap.range, at(1 << 20)..at(length));
     assert_eq!(gap.kind, GapKind::Cut);
 }
 
@@ -418,7 +427,7 @@ fn a_stated_extent_the_size_of_the_cap_is_not_a_cut() {
     let listing = listing_of(&object, ".text");
     let decoded = listing.decode(&object, 0).expect("huge decodes");
     let gap = decoded.gap.expect("the rest is a gap");
-    assert_eq!(gap.range, (1 << 20)..(2 << 20) + 16);
+    assert_eq!(gap.range, at(1 << 20)..at((2 << 20) + 16));
     assert_eq!(gap.kind, GapKind::Bytes);
 }
 
@@ -437,7 +446,7 @@ fn bytes_before_the_first_symbol_are_a_stretch_with_no_label() {
     assert_eq!(
         leading.gap,
         Some(analysis::Gap {
-            range: 0..3,
+            range: at(0)..at(3),
             kind: GapKind::Bytes
         })
     );
@@ -481,12 +490,12 @@ fn stretch_at_finds_the_stretch_an_address_is_in() {
     let object = parse(&padded());
     let listing = listing_of(&object, ".text");
 
-    assert_eq!(listing.stretch_at(0), Some(0));
-    assert_eq!(listing.stretch_at(7), Some(0), "inside first's padding");
-    assert_eq!(listing.stretch_at(10), Some(1));
-    assert_eq!(listing.stretch_at(11), Some(1));
-    assert_eq!(listing.stretch_at(12), None, "the section's end");
-    assert_eq!(listing.stretch_at(u64::MAX), None);
+    assert_eq!(listing.stretch_at(at(0)), Some(0));
+    assert_eq!(listing.stretch_at(at(7)), Some(0), "inside first's padding");
+    assert_eq!(listing.stretch_at(at(10)), Some(1));
+    assert_eq!(listing.stretch_at(at(11)), Some(1));
+    assert_eq!(listing.stretch_at(at(12)), None, "the section's end");
+    assert_eq!(listing.stretch_at(at(u64::MAX)), None);
 }
 
 #[test]
@@ -503,7 +512,7 @@ fn a_tail_jump_names_the_next_symbols_stretch() {
     let target = code.instructions[0]
         .branch()
         .expect("the jump names an address");
-    assert_eq!(target, 3);
+    assert_eq!(target, at(3));
     assert_eq!(listing.stretch_at(target), Some(1));
     assert_eq!(listing.stretches()[1].range.start, target);
 }
@@ -561,7 +570,7 @@ fn a_symbol_pointed_outside_its_section_is_left_out() {
     }
 
     let object = parse(&data);
-    assert_eq!(named(&object, "wild").address, 0xDEAD_BEEF);
+    assert_eq!(named(&object, "wild").address, at(0xDEAD_BEEF));
     let listing = listing_of(&object, ".text");
 
     // `good` runs to the section's end: the wild address is past it and bounds nothing.
@@ -589,12 +598,15 @@ fn a_linked_image_lists_its_declared_code_at_its_addresses() {
     ));
     let listing = listing_of(&object, ".text");
     let end = section_end(listing.section());
-    assert!(end >= TEXT_ADDRESS + 6);
+    assert!(end >= at(TEXT_ADDRESS + 6));
 
     assert_eq!(labels(&listing), [vec!["first"], vec!["<entry point>"]]);
     assert_eq!(
         ranges(&listing),
-        [(TEXT_ADDRESS, TEXT_ADDRESS + 4), (TEXT_ADDRESS + 4, end)]
+        [
+            (TEXT_ADDRESS, TEXT_ADDRESS + 4),
+            (TEXT_ADDRESS + 4, end.get())
+        ]
     );
 
     let first = listing.decode(&object, 0).expect("first decodes");
@@ -619,7 +631,7 @@ fn the_committed_objects_list_every_function_at_its_own_address() {
         listing
             .stretches()
             .iter()
-            .map(|stretch| stretch.range.start)
+            .map(|stretch| stretch.range.start.get())
             .collect::<Vec<_>>(),
         [0, 0x14, 0x30]
     );
@@ -630,7 +642,7 @@ fn the_committed_objects_list_every_function_at_its_own_address() {
     for name in ["add", "twice", "sum_to"] {
         let listing = listing_of(&split, &format!(".text.{name}"));
         assert_eq!(labels(&listing), [vec![name]]);
-        assert_eq!(listing.stretches()[0].range.start, 0);
+        assert_eq!(listing.stretches()[0].range.start, at(0));
     }
 }
 
@@ -659,13 +671,13 @@ fn a_section_at_the_end_of_the_address_space_lists_nothing() {
 
     let object = parse(&data);
     let listing = listing_of(&object, ".text");
-    assert_eq!(listing.section().address, u64::MAX);
+    assert_eq!(listing.section().address, at(u64::MAX));
     assert_eq!(
         listing.section().code().map(|code| code.data.len()),
         Some(7)
     );
     assert!(listing.stretches().is_empty());
-    assert_eq!(listing.stretch_at(u64::MAX), None);
+    assert_eq!(listing.stretch_at(at(u64::MAX)), None);
     assert!(listing.decode(&object, 0).is_none());
 }
 
@@ -723,7 +735,7 @@ fn placed_names(code: &CodeListing) -> Vec<&str> {
 fn placed_ranges(code: &CodeListing) -> Vec<(u64, u64)> {
     code.sections()
         .iter()
-        .map(|placed| (placed.range().start, placed.range().end))
+        .map(|placed| (placed.range().start.get(), placed.range().end.get()))
         .collect()
 }
 
@@ -742,7 +754,7 @@ fn every_code_listing_places_its_sections_and_finds_every_stretch_again() {
             .count();
         assert_eq!(code.sections().len(), with_bytes, "{name}");
 
-        let mut placed_end = 0;
+        let mut placed_end = placed_at(0);
         for (index, placed) in code.sections().iter().enumerate() {
             let range = placed.range();
             let section = placed.listing.section();
@@ -751,23 +763,28 @@ fn every_code_listing_places_its_sections_and_finds_every_stretch_again() {
                 "{name}: {} overlaps",
                 section.name
             );
-            assert_eq!(range.start, section.address + section.bias(), "{name}");
+            // Where the layout put the bytes against where `place` says it did: the two
+            // are worked out by different methods -- `placed_range` is checked and `place`
+            // wraps -- so this pins that they agree, over the whole corpus. What placing
+            // an address *is* is pinned in `address/tests.rs`, where the numbers are
+            // visible.
+            assert_eq!(range.start, section.place(section.address), "{name}");
             assert_eq!(
-                range.end - range.start,
-                section.code().map_or(0, |code| code.data.len()) as u64
+                range.start.bytes_to(range.end),
+                Some(section.code().map_or(0, |code| code.data.len()) as u64)
             );
             placed_end = range.end;
             assert_eq!(code.section_of(section), Some(index), "{name}");
 
             for (stretch, s) in placed.listing.stretches().iter().enumerate() {
-                let at = placed.place(s.range.start);
-                assert_eq!(placed.local(at), s.range.start);
+                let start = placed.place(s.range.start);
+                assert_eq!(placed.local(start), s.range.start);
                 let place = Place {
                     section: index,
                     stretch,
                 };
-                assert_eq!(code.at(at), Some(place), "{name}: {}", section.name);
-                assert_eq!(code.at(placed.place(s.range.end - 1)), Some(place));
+                assert_eq!(code.at(start), Some(place), "{name}: {}", section.name);
+                assert_eq!(code.at(placed.place(last_byte(&s.range))), Some(place));
 
                 let through = code.decode(&object, place).expect("decodes");
                 let own = placed.listing.decode(&object, stretch).expect("decodes");
@@ -794,33 +811,37 @@ fn a_relocatable_objects_sections_are_placed_one_after_another() {
     // Both at 0 in the file; the second placed one grain after the first.
     assert_eq!(placed_names(&code), [".text.first", ".text.second"]);
     assert_eq!(placed_ranges(&code), [(0, 6), (16, 18)]);
-    assert_eq!(code.sections()[1].bias(), 16);
+    assert_eq!(code.sections()[1].bias(), Bias::new(16));
 
     assert_eq!(
-        code.at(0),
+        code.at(placed_at(0)),
         Some(Place {
             section: 0,
             stretch: 0
         })
     );
-    assert_eq!(code.at(5).map(|place| place.section), Some(0));
-    assert_eq!(code.at(6), None, "the air after first is nowhere");
-    assert_eq!(code.at(15), None);
+    assert_eq!(code.at(placed_at(5)).map(|place| place.section), Some(0));
     assert_eq!(
-        code.at(16),
+        code.at(placed_at(6)),
+        None,
+        "the air after first is nowhere"
+    );
+    assert_eq!(code.at(placed_at(15)), None);
+    assert_eq!(
+        code.at(placed_at(16)),
         Some(Place {
             section: 1,
             stretch: 0
         })
     );
-    assert_eq!(code.at(18), None);
+    assert_eq!(code.at(placed_at(18)), None);
 
     // The listing at the place is the section's own, symbol and all.
     let second = code.sections()[1].listing.stretches()[0]
         .symbol()
         .expect("second is labelled");
     assert_eq!(second.name, "second");
-    assert_eq!(second.address, 0, "the symbol keeps the file's address");
+    assert_eq!(second.address, at(0), "the symbol keeps the file's address");
     let decoded = code
         .decode(
             &object,
@@ -847,12 +868,12 @@ fn a_symbols_address_is_placed_by_its_sections_bias() {
     let object = parse(&two_sections());
     let second = named(&object, "second");
     let section = second.section.as_ref().expect("second is in a section");
-    assert_eq!((second.address, section.bias()), (0, 16));
-    assert_eq!(second.placed(second.address), 16);
-    assert_eq!(second.placed(1), 17);
+    assert_eq!((second.address, section.bias()), (at(0), Bias::new(16)));
+    assert_eq!(second.placed(second.address), placed_at(16));
+    assert_eq!(second.placed(at(1)), placed_at(17));
 
-    let loose = SymbolData::new("absolute".to_owned(), None, 0x10, None, 0);
-    assert_eq!(loose.placed(loose.address), 0x10);
+    let loose = SymbolData::new("absolute".to_owned(), None, at(0x10), None, 0);
+    assert_eq!(loose.placed(loose.address), placed_at(0x10));
 }
 
 #[test]
@@ -865,7 +886,11 @@ fn the_committed_split_object_is_three_functions_in_a_row() {
         placed_names(&code),
         [".text.add", ".text.twice", ".text.sum_to"]
     );
-    let starts: Vec<u64> = code.sections().iter().map(|p| p.range().start).collect();
+    let starts: Vec<u64> = code
+        .sections()
+        .iter()
+        .map(|p| p.range().start.get())
+        .collect();
     assert_eq!(starts, [0x10, 0x30, 0x50]);
     for (index, placed) in code.sections().iter().enumerate() {
         assert_eq!(placed.listing.stretches().len(), 1);
@@ -882,7 +907,7 @@ fn the_committed_split_object_is_three_functions_in_a_row() {
     let flat = committed("line_fixture.o");
     let code = CodeListing::new(&flat);
     assert_eq!(placed_names(&code), [".text"]);
-    assert_eq!(code.sections()[0].range().start, 0);
+    assert_eq!(code.sections()[0].range().start, placed_at(0));
     assert_eq!(code.sections()[0].listing.stretches().len(), 3);
 }
 
@@ -903,15 +928,18 @@ fn a_linked_image_is_placed_at_its_own_addresses() {
 
     assert_eq!(placed_names(&code), [".text"]);
     let placed = &code.sections()[0];
-    assert_eq!(placed.bias(), 0);
-    assert_eq!(placed.range().start, TEXT_ADDRESS);
-    assert_eq!(placed.place(TEXT_ADDRESS + 4), TEXT_ADDRESS + 4);
+    assert_eq!(placed.bias(), Bias::NONE);
+    assert_eq!(placed.range().start, placed_at(TEXT_ADDRESS));
     assert_eq!(
-        code.at(TEXT_ADDRESS + 4),
+        placed.place(at(TEXT_ADDRESS + 4)),
+        placed_at(TEXT_ADDRESS + 4)
+    );
+    assert_eq!(
+        code.at(placed_at(TEXT_ADDRESS + 4)),
         Some(Place {
             section: 0,
             stretch: 1
         })
     );
-    assert_eq!(code.at(TEXT_ADDRESS - 1), None);
+    assert_eq!(code.at(placed_at(TEXT_ADDRESS - 1)), None);
 }

@@ -47,7 +47,7 @@
 //! `drop_in_place` — answers with **9 374** of `viewer-sample`'s symbols.
 
 use super::DebugInfo;
-use crate::{Object, SymbolData};
+use crate::{Object, PlacedAddress, SymbolData};
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -70,13 +70,13 @@ pub(super) struct SourceIndex {
 /// One symbol's extent in the address space the debug info is read in — biased, so it is
 /// directly comparable with the addresses the backend answers with.
 struct SymbolRange {
-    start: u64,
-    end: u64,
+    start: PlacedAddress,
+    end: PlacedAddress,
     /// The furthest `end` of this entry and every entry before it. The ranges are sorted by
     /// `start` and may still overlap (an alias, a split cold part), so a backwards search
     /// needs a bound that is monotone; this is it. `addr2line`'s own unit index is built the
     /// same way and for the same reason.
-    max_end: u64,
+    max_end: PlacedAddress,
     /// Where this symbol sits in [`Object::placed`], which is what the index keeps.
     position: u32,
 }
@@ -208,7 +208,7 @@ fn symbol_ranges(object: &Object) -> Vec<SymbolRange> {
         })
         .collect();
 
-    let mut max_end = 0;
+    let mut max_end = PlacedAddress::new(0);
     for range in &mut ranges {
         max_end = max_end.max(range.end);
         range.max_end = max_end;
@@ -221,8 +221,8 @@ fn symbol_ranges(object: &Object) -> Vec<SymbolRange> {
 /// aliasing another, or a `DW_AT_high_pc` reaching over an assembler label.
 fn intersecting(
     ranges: &[SymbolRange],
-    start: u64,
-    end: u64,
+    start: PlacedAddress,
+    end: PlacedAddress,
 ) -> impl Iterator<Item = &SymbolRange> {
     // Everything that could overlap begins before the row ends.
     let pos = ranges.partition_point(|range| range.start < end);

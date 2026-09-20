@@ -10,7 +10,7 @@
 //! and no signature here says `dyn`, so a backend's formatting and span-mapping can inline
 //! into the per-instruction decode loop.
 
-use crate::{Extent, Object, Section, SymbolData};
+use crate::{Extent, Object, Section, SectionAddress, SymbolData};
 use object::{Architecture, RelocationTarget};
 use std::{ops::Range, sync::Arc};
 
@@ -50,7 +50,7 @@ pub(crate) struct Code<'a> {
 
     /// The address `bytes[0]` sits at. In a relocatable object this is an offset into the
     /// section and typically 0; nothing here depends on it being either.
-    pub address: u64,
+    pub address: SectionAddress,
 
     /// The section the bytes came from, for its relocations. [`None`] for a symbol with no
     /// section.
@@ -65,7 +65,7 @@ pub(crate) struct Code<'a> {
 impl<'a> Code<'a> {
     pub(crate) fn new(
         bytes: &'a [u8],
-        address: u64,
+        address: SectionAddress,
         section: Option<&'a Section>,
         object: &'a Object,
     ) -> Self {
@@ -84,7 +84,7 @@ impl<'a> Code<'a> {
     /// is a placeholder, while [`target`](Relocated::target) is [`None`] whenever the
     /// relocation points at something this object has no text symbol for (a section, a data
     /// symbol, an undefined import).
-    pub fn relocation(&self, address: u64, len: usize) -> Option<Relocated> {
+    pub fn relocation(&self, address: SectionAddress, len: usize) -> Option<Relocated> {
         let code = self.section?.code()?;
         // Checked because the address is the file's number, and a section placed at the very
         // end of the address space would wrap it: there the bytes that have an address run to
@@ -115,7 +115,7 @@ impl<'a> Code<'a> {
     /// section's end lands on some other section's function in the placed space, and that
     /// is not where the call goes. A target nothing starts at is [`None`], and the operand
     /// stays the number it is.
-    pub fn symbol_at_local(&self, address: u64) -> Option<Arc<SymbolData>> {
+    pub fn symbol_at_local(&self, address: SectionAddress) -> Option<Arc<SymbolData>> {
         let section = self.section?;
         let symbol = self.object.symbol_at_placed(section.place(address))?;
         let home = symbol.section.as_ref()?;
@@ -217,7 +217,7 @@ pub enum Operand {
     /// [`Assembly::edges`] drops keep their span. A caller that wants to *follow* one pairs
     /// this with [`Assembly::edge_from`], which is what says the target has a row.
     Branch {
-        address: u64,
+        address: SectionAddress,
 
         /// Where in [`format`](Instruction::format) the displacement was printed — an index
         /// into `format`, as every `span` here is. It says where the number is and not that
@@ -236,7 +236,7 @@ pub enum Operand {
     /// stretch of a linked image nothing claims — for a reader to be taken there in a
     /// listing of the whole object. Nothing is judged here either.
     Call {
-        address: u64,
+        address: SectionAddress,
 
         /// Where in [`format`](Instruction::format) the address was printed.
         span: usize,
@@ -245,7 +245,7 @@ pub enum Operand {
 
 #[derive(Clone)]
 pub struct Instruction {
-    pub address: u64,
+    pub address: SectionAddress,
     pub bytes: Vec<u8>,
     pub format: Vec<(String, SpanKind)>,
 
@@ -266,7 +266,7 @@ impl Instruction {
 
     /// The address this instruction's own encoding branches to. See [`Operand::Branch`],
     /// which is the only case this is [`Some`] for.
-    pub fn branch(&self) -> Option<u64> {
+    pub fn branch(&self) -> Option<SectionAddress> {
         match self.operand {
             Some(Operand::Branch { address, .. }) => Some(address),
             _ => None,
@@ -275,7 +275,7 @@ impl Instruction {
 
     /// The address this instruction goes to and nothing here has named: a branch's own, or
     /// an unnamed call's. See [`Operand::Branch`] and [`Operand::Call`].
-    pub fn target(&self) -> Option<u64> {
+    pub fn target(&self) -> Option<SectionAddress> {
         match self.operand {
             Some(Operand::Branch { address, .. } | Operand::Call { address, .. }) => Some(address),
             _ => None,
@@ -306,7 +306,7 @@ pub struct Assembly {
     /// section's own addresses. Carried so that nobody has to ask for the extent a second
     /// time — [`SymbolData::extent`] is the most expensive answer in the crate, and this is
     /// what it came to.
-    pub range: Range<u64>,
+    pub range: Range<SectionAddress>,
 
     /// The extent [`range`](Self::range) is, so that a caller can tell an end the file
     /// states from the derivation's cap without asking again.
@@ -329,7 +329,7 @@ impl Assembly {
     pub(crate) fn decode(
         architecture: Architecture,
         code: &Code<'_>,
-        range: Range<u64>,
+        range: Range<SectionAddress>,
         extent: Extent,
     ) -> Self {
         match architecture {
@@ -350,7 +350,7 @@ impl Assembly {
     fn decoded<D: Disassembler>(
         backend: D,
         code: &Code<'_>,
-        range: Range<u64>,
+        range: Range<SectionAddress>,
         extent: Extent,
     ) -> Self {
         let instructions = backend.disassemble(code);
@@ -395,7 +395,11 @@ impl Assembly {
     /// The answer for an architecture no arm of `decode` claims: no rows, the architecture's
     /// name to say why, and the bytes that would have been decoded — an undecodable symbol
     /// still states its extent.
-    fn unsupported(architecture: Architecture, range: Range<u64>, extent: Extent) -> Self {
+    fn unsupported(
+        architecture: Architecture,
+        range: Range<SectionAddress>,
+        extent: Extent,
+    ) -> Self {
         Self {
             instructions: Vec::new(),
             edges: Vec::new(),

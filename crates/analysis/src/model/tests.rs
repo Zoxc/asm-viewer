@@ -1,4 +1,4 @@
-use super::{covering, Object, ObjectData, Section, SymbolData};
+use super::{covering, Bias, Object, ObjectData, Section, SectionAddress, SymbolData};
 use object::{Architecture, BinaryFormat, SectionIndex, SymbolIndex};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -6,13 +6,18 @@ use std::{
     sync::Arc,
 };
 
+/// An address in a section's own terms, written as the number a test means by it.
+fn at(address: u64) -> SectionAddress {
+    SectionAddress::new(address)
+}
+
 /// An object whose symbols are `(index, name, address)`, handed over in the order given —
 /// which is not the order `Object::new` sorts them into.
 fn object(symbols: &[(u32, &str, u64)]) -> Object {
     let symbols: HashMap<_, _> = symbols
         .iter()
         .map(|&(index, name, address)| {
-            let data = SymbolData::new(name.to_string(), None, address, None, 0);
+            let data = SymbolData::new(name.to_string(), None, at(address), None, 0);
             (SymbolIndex(index as usize), Arc::new(data))
         })
         .collect();
@@ -39,7 +44,7 @@ fn a_name_answers_its_whole_run_in_index_order() {
     ]);
 
     let named = object.symbols_named("shared");
-    let places: Vec<_> = named.iter().map(|data| data.address).collect();
+    let places: Vec<_> = named.iter().map(|data| data.address.get()).collect();
     // Index 2 before index 3, whatever order the map iterated them in.
     assert_eq!(places, [0x20, 0x30]);
 
@@ -57,49 +62,52 @@ fn bytes_in_answers_only_for_a_range_inside_the_bytes() {
         SectionIndex(1),
         ".text".to_string(),
         vec![0, 1, 2, 3, 4, 5, 6, 7],
-        0x1000,
+        at(0x1000),
         BTreeMap::new(),
-        0,
+        Bias::NONE,
     );
 
-    assert_eq!(section.bytes_in(0x1002..0x1005), Some(&[2, 3, 4][..]));
     assert_eq!(
-        section.bytes_in(0x1000..0x1008),
+        section.bytes_in(at(0x1002)..at(0x1005)),
+        Some(&[2, 3, 4][..])
+    );
+    assert_eq!(
+        section.bytes_in(at(0x1000)..at(0x1008)),
         Some(&section.code().unwrap().data[..])
     );
     // An empty range inside the bytes is an empty slice, not a miss.
-    assert_eq!(section.bytes_in(0x1004..0x1004), Some(&[][..]));
+    assert_eq!(section.bytes_in(at(0x1004)..at(0x1004)), Some(&[][..]));
 
     // Before the section, past its end, and end before start.
-    assert_eq!(section.bytes_in(0x0FFF..0x1002), None);
-    assert_eq!(section.bytes_in(0x1004..0x1009), None);
-    assert_eq!(section.bytes_in(0x1005..0x1002), None);
+    assert_eq!(section.bytes_in(at(0x0FFF)..at(0x1002)), None);
+    assert_eq!(section.bytes_in(at(0x1004)..at(0x1009)), None);
+    assert_eq!(section.bytes_in(at(0x1005)..at(0x1002)), None);
     // A length far past the bytes, whether or not it fits a `usize`.
-    assert_eq!(section.bytes_in(0x1000..u64::MAX), None);
+    assert_eq!(section.bytes_in(at(0x1000)..at(u64::MAX)), None);
 
     // A section with no bytes answers for nothing.
-    let empty = Section::other(SectionIndex(2), ".debug_info".to_string(), 0x1000);
-    assert_eq!(empty.bytes_in(0x1000..0x1000), None);
+    let empty = Section::other(SectionIndex(2), ".debug_info".to_string(), at(0x1000));
+    assert_eq!(empty.bytes_in(at(0x1000)..at(0x1000)), None);
 }
 
 /// The three ways an address misses, and the one nesting answer the callers depend on.
 #[test]
 fn covering_answers_only_for_the_last_start_at_or_before() {
     let ranges = [0x10..0x20, 0x30..0x38, 0x40..0x48];
-    let at = |address| covering(&ranges, Range::clone, address);
+    let covers = |address| covering(&ranges, Range::clone, address);
 
-    assert_eq!(at(0x10), Some(0));
-    assert_eq!(at(0x1F), Some(0));
-    assert_eq!(at(0x30), Some(1));
-    assert_eq!(at(0x47), Some(2));
+    assert_eq!(covers(0x10), Some(0));
+    assert_eq!(covers(0x1F), Some(0));
+    assert_eq!(covers(0x30), Some(1));
+    assert_eq!(covers(0x47), Some(2));
 
     // Nothing at all: no range starts at or before the address.
-    assert_eq!(at(0x0F), None);
+    assert_eq!(covers(0x0F), None);
     assert!(covering(&[] as &[Range<u64>], Range::clone, 0x10).is_none());
     // The gap after a range, and past the last one.
-    assert_eq!(at(0x20), None);
-    assert_eq!(at(0x3F), None);
-    assert_eq!(at(0x48), None);
+    assert_eq!(covers(0x20), None);
+    assert_eq!(covers(0x3F), None);
+    assert_eq!(covers(0x48), None);
 
     // Only the last start at or before is looked at, so an address past an inner range is
     // not answered with the outer one that still contains it.

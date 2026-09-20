@@ -174,8 +174,11 @@ arrows in; a row that only gives the column up hands none, and gets a blank of t
 column's *text* is one function too, `address_column`: sixteen upper-case hex digits and a space,
 which the label, `asm_line` and `row_line` all spell through it, so what is drawn and what is copied
 cannot come to disagree and a change to the width is one edit. What the address *is* is
-`AsmData::drawn_address` for the same reason: the instruction's own plus the listing's bias is where
-the two address spaces meet, and it was three sites each restating which one it wanted.
+`AsmData::drawn_address` for the same reason: the instruction's own placed by the listing's bias
+(`SectionAddress::placed`) is where the two address spaces meet, and it was three sites each
+restating which one it wanted. It is also where the crate's two address types stop and a `u64`
+takes over, deliberately: a symbol read alone draws the section's own addresses and the unified
+view draws placed ones, so what the row draws is neither type but whichever this listing is.
 
 **The Assembly pane has a bar naming what it is drawing**, in both spellings: the demangled name
 over the mangled original, `src/ui/symbol_bar.rs`. It names **the drawn symbol and never the
