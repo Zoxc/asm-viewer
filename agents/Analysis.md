@@ -154,9 +154,12 @@ five of them, with three overflow rules between them -- and they agreed only by 
 and a `PlacedAddress` one in the space every section of an object shares, and the only way
 between them is `SectionAddress::placed(bias)` and `PlacedAddress::local(bias)`, each with a
 `_checked` where a caller must answer nothing rather than answer about another address, and the
-first with a `_saturating` for the ends of a query. `Section::place()` and `Section::local()`
-are those with the section's own bias handed in; the DWARF backend, which holds a bias and no
-section, calls the conversions themselves. **A bias is a type too**, `Bias`, so the conversion
+first with a `_saturating` for the ends of a query. `Section::place()`, `Section::local()` and
+the checked and saturating spellings beside them are those with the section's own bias handed
+in. The line seam converts with them on the way into a backend and out again; no backend
+converts a query or a row, each reading and answering in the placed space throughout (the
+DWARF one applies the layout once, to its own copy of the debug sections, and not per query).
+**A bias is a type too**, `Bias`, so the conversion
 cannot be handed a length, an offset or a size: the addresses say which space a number is in,
 and this says that what crosses between them is the thing the layout moved a section by. It is
 one-way -- `Bias::new` in, and no number out -- since a bias exists to be added to an address
@@ -335,12 +338,19 @@ below), which today means a PE's matching `.pdb` and nothing else; and even ther
 tables are read then, its line programs waiting for the first question. It answers two questions
 under one set of rules, the rows covering a range and a function's declared extent
 (`Object::function_extent`), so everything below holds for both. `line.rs` is a **seam** that names
-no debug format: `DebugInfo` holds one `Backend`, a closed enum dispatched by `match` the way
-`Assembly::decode` is, and `line/dwarf.rs` is the first backend and the only module that knows
+no debug format: `DebugInfo` holds one `Backend`, a closed enum whose every variant answers one
+trait, `LineBackend`, and `line/dwarf.rs` is the first backend and the only module that knows
 DWARF's debug sections and `addr2line` (a DIE walk per unit visited for the extent, cached by unit
 offset; `gimli`'s call-frame reader is `unwind.rs`'s, which is not a backend). Every backend's rows
-go through one `RowCollector`, whose `finish` is where `LineInfo`'s invariants are *made* (below),
-so they hold whoever produced the rows. The third answer is the same shape: the functions a backend
+go through one `RowCollector`, which the seam hands the backend and which clips and un-biases every
+row (below) before `finish` *makes* `LineInfo`'s invariants, so they hold whoever produced the rows.
+The three questions reach the backend through one `match`, `DebugInfo::backend()`, which hands back
+a `&dyn LineBackend`, so a format added is a variant, an impl and a `Backend::pick` arm rather than
+three arms and a variant. **Dynamic where `Assembly::decode` is generic**: there the backend's call
+sits in a per-instruction loop and the inlining is what the `match` buys, here every call is one per
+question and takes the backend's lock on its first line, so a virtual call is noise. The enum stays
+because the set is closed and because the `Send + Sync` assertion is on the concrete types. The
+third answer is the same shape: the functions a backend
 names that the image does not are `Declared` records, a `Name` that is either the file's own spelling
 or one already fit to show, an address and a length, so the parse takes them without knowing which
 format stated them. And the rule choosing a backend — debug sections in the object itself where
@@ -373,9 +383,16 @@ or debug info that says nothing about the range asked about. Four design points 
   programs pile up (52 229 of 54 109 rows overlapped, measured on the 196-member rlib). The parse
   does what a linker does: `section_biases` (`parse.rs`) gives each **text** section of a
   **relocatable** object a place of its own, recorded on the section as `CodeSection::bias`;
-  `relocate` adds the bias, and a query adds its section's bias and subtracts it from every row
-  returned. Loading the DWARF asks `section_biases` again rather than reading the biases back off
-  the sections the parse kept: the rule is the layout, and a text
+  `relocate` adds the bias, and **the seam** adds the query's section's bias on the way down and
+  takes it off every row on the way back. It is the seam's and no backend's, because both backends
+  already read in the placed space and neither is where the layout is decided: DWARF states a flat
+  address — zero plus a relocation in a relocatable object, the link-time virtual address in a
+  linked image — and `relocate` patches the placed one into the context's private copy of the debug
+  sections; CodeView states a `section:offset` pair and maps it to an RVA and then onto the image
+  base, which is the placed space of an image nothing placed. So a PDB's "no bias" is
+  `Bias::NONE` and not an asymmetry in the design, and a third backend inherits the rule rather
+  than having to find it in `dwarf.rs`. Loading the DWARF asks `section_biases` again rather than
+  reading the biases back off the sections the parse kept: the rule is the layout, and a text
   section whose bytes would not read is dropped from the parse but still has to be placed, or the
   rows relocated against it land on 0 where the first section already sits. The layout starts above the highest address the file
   states — a Mach-O `.o` states one per section — so nothing is moved *down* and a bias is never a
@@ -433,13 +450,15 @@ that rewrite a PDB afterwards (source indexing) and may legitimately exceed the 
 **Addresses**: a PDB states `section:offset`. Every one goes through the PDB's own `AddressMap` to
 an RVA, which is also where an OMAP-rearranged image is undone (a path no fixture exercises beyond
 its identity form), and onto the image base with checked arithmetic. So answers are in the virtual
-address space a linked image's symbols already are, and a linked image has no section bias. **Per
+address space a linked image's symbols already are, which is also the placed space the seam asks
+every backend in: a linked image is one nothing placed, so the two spaces are a `Bias::NONE` apart
+and `own`/`placed` say which is meant rather than leave it to be read off a type. **Per
 module, on demand**: line info in a PDB is per module (one object the linker took in), found from an
 address through the DBI's section contributions, a sorted table with a running `max_end`,
 `source.rs`'s `SymbolRange` shape, built at load. A module is decoded whole the first time an
-address in it is asked about (its rows through `RowCollector::finish` into a `LineInfo` if any, its
-`S_GPROC32`/`S_LPROC32` lengths into an extent table) and kept, the way the DWARF backend keeps a
-unit's subprogram extents. A row with no length, one whose successor sits below it, which only
+address in it is asked about (its rows through a whole, unclipped `RowCollector` into a `LineInfo`
+if any, its `S_GPROC32`/`S_LPROC32` lengths into an extent table) and kept, the way the DWARF backend
+keeps a unit's subprogram extents. A row with no length, one whose successor sits below it, which only
 assemblers emit, is dropped rather than given an end. Line 0 and column 0 are `None` as in DWARF.
 `each_row` walks every module, so a first source question decodes the whole PDB, as the DWARF one
 parses every line program. The DBI module list is a chain of variable-length records with no index,
@@ -586,12 +605,14 @@ total against the file's length first.
 The guard is not the whole answer to the first of those. Overflow checks are on in a test and a
 debug build and off in a release one, so where a debug build panics inside `addr2line` and answers
 "no line info", a release build wraps: the backwards row's length becomes huge and the rows after
-it come back lying below the query. So `line_info` clips a row to the query and drops one with
-nothing left *before* taking the bias off (`clipped`). Subtracting first made a row below the
-section's placement one that ran to the end of the address space, and `row_at` then answered with
-it across the rest of the function — a confident wrong source line where there should have been
-none. It is the one piece of the backend with a unit test of its own, no fixture being able to
-produce that row in a build with the checks on.
+it come back lying below the query. So `RowCollector::push` clips a row to the query and drops one
+with nothing left *before* taking the bias off. Subtracting first made a row below the section's
+placement one that ran to the end of the address space, and `row_at` then answered with it across
+the rest of the function — a confident wrong source line where there should have been none. Both
+halves of that rule are the collector's, so they are read together and neither is a backend's to
+write again: the PDB's own inline clip went with the move, and a backend now pushes what the debug
+info said and nothing else. It is the one piece of the seam with a unit test of its own
+(`line/tests.rs`), no fixture being able to produce that row in a build with the checks on.
 
 **Disassembly** (`SymbolData::assembly`) goes through a seam: `disasm.rs` defines everything a
 caller sees and names no backend, and `disasm/x86.rs` is the only module in the crate that mentions

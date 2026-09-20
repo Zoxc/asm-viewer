@@ -10,7 +10,7 @@
 //! Nothing here catches a panic: the guard is [`super::DebugInfo`]'s, one net around every
 //! question whichever backend answers it.
 
-use super::{recovered, LineInfo, RowCollector};
+use super::{recovered, LineBackend, RowCollector};
 use crate::parse::{section_biases, section_data};
 use crate::{Bias, PlacedAddress, SectionAddress};
 use gimli::{EndianArcSlice, RunTimeEndian};
@@ -99,32 +99,24 @@ impl Dwarf {
         file.section_by_name(gimli::SectionId::DebugInfo.name())
             .is_some()
     }
+}
 
-    /// Resolve a whole address range in one pass. `bias` is the [`Section::bias`] of the
-    /// range's section, the same layout the context was loaded with, so the query and the
-    /// rows it produces are translated in and out of the address space the context reads in.
-    ///
-    /// [`Section::bias`]: crate::Section::bias
-    pub(super) fn line_info(&self, bias: Bias, range: Range<SectionAddress>) -> Option<LineInfo> {
+impl LineBackend for Dwarf {
+    /// Resolve a whole address range in one pass. The context reads in the space the query
+    /// is in: [`load`](Dwarf::load) relocated its copy of the debug sections with the
+    /// parse's own layout, so what a unit states is already placed.
+    fn line_info(&self, query: Range<PlacedAddress>, rows: &mut RowCollector) {
         let context = recovered(&self.context);
-
-        // Saturating rather than wrapping, so an absurd range asks about less than it meant
-        // to instead of about something else.
-        let query = range.start.placed_saturating(bias)..range.end.placed_saturating(bias);
-
-        let mut rows = RowCollector::default();
 
         // One call for the symbol's whole extent: this walks each covering unit's line table
         // once, where per-instruction lookups would binary-search it per address.
-        for (address, length, location) in context
-            .find_location_range(query.start.get(), query.end.get())
-            .ok()?
-        {
+        let Ok(found) = context.find_location_range(query.start.get(), query.end.get()) else {
+            return;
+        };
+
+        for (address, length, location) in found {
             let address = PlacedAddress::new(address);
             let Some(end) = address.checked_add(length) else {
-                continue;
-            };
-            let Some(range) = clipped(address..end, &query, bias) else {
                 continue;
             };
 
@@ -132,19 +124,16 @@ impl Dwarf {
             // keeps nothing of the entry behind it, so no hash travels with it for now
             // (`notes/upstream/addr2line.md`).
             let file = location.file.map(|file| rows.file(file, None));
-            rows.push(range, file, location.line, location.column);
+
+            // Pushed as `addr2line` handed it over: the clip to the query, and the bias
+            // that comes off after it, are the collector's (`RowCollector::push`).
+            rows.push(address..end, file, location.line, location.column);
         }
-
-        drop(context);
-
-        rows.finish()
     }
 
-    /// The extent of the `DW_TAG_subprogram` beginning at `address`, or [`None`] when no unit
-    /// covers the address or the subprogram that does begins elsewhere. `bias` is as for
-    /// [`line_info`](Self::line_info).
-    pub(super) fn extent(&self, bias: Bias, address: SectionAddress) -> Option<u64> {
-        let probe = address.placed_checked(bias)?;
+    /// The extent of the `DW_TAG_subprogram` beginning at `probe`, or [`None`] when no unit
+    /// covers the address or the subprogram that does begins elsewhere.
+    fn extent(&self, probe: PlacedAddress) -> Option<u64> {
         // `addr2line`'s `Context::find_units` asks its range index about `probe + 1` with a
         // plain addition, so the very last address in the space panics. Declined here rather
         // than left to the guard: this one is ours to see coming.
@@ -170,10 +159,9 @@ impl Dwarf {
         extents.get(&probe).copied()
     }
 
-    /// Every row of every line program that names a file and a line, in the **biased**
-    /// address space, handed to `visit` under the context's lock — so `visit` must not ask
-    /// this object anything.
-    pub(super) fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
+    /// Every row of every line program that names a file and a line, handed to `visit` under
+    /// the context's lock — so `visit` must not ask this object anything.
+    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
         let context = recovered(&self.context);
 
         // The whole address space in one pass. Safe where `extent` had to decline `u64::MAX`:
@@ -199,29 +187,6 @@ impl Dwarf {
             visit(address..end, file, line);
         }
     }
-}
-
-/// One row `addr2line` handed back, clipped to the query and moved back out of the biased
-/// space, or [`None`] when nothing of it is left inside the query.
-///
-/// **Both ends are clipped before the bias comes off.** `addr2line` 0.27 hands back the row
-/// containing the query's start, which may begin before it, clips nothing at the top, and
-/// checks nowhere that a row ends past the start at all: a line program that moves its
-/// address backwards — a second `DW_LNE_set_address` in one sequence, relocated differently
-/// or not relocated — has rows lying below where the section was placed. Subtracting the bias
-/// first turned such a row into one running to the end of the address space, which
-/// [`LineInfo::row_at`] then answered with for every address the real rows left uncovered.
-fn clipped(
-    row: Range<PlacedAddress>,
-    query: &Range<PlacedAddress>,
-    bias: Bias,
-) -> Option<Range<SectionAddress>> {
-    let start = row.start.max(query.start);
-    let end = row.end.min(query.end);
-    if start >= end {
-        return None;
-    }
-    Some(start.local_checked(bias)?..end.local_checked(bias)?)
 }
 
 /// Every `DW_TAG_subprogram` in one unit that states where it begins and ends, as
@@ -525,6 +490,3 @@ fn write_uint(bytes: &mut [u8], endian: RunTimeEndian, value: u64) {
         _ => {}
     }
 }
-
-#[cfg(test)]
-mod tests;

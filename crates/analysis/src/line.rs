@@ -7,13 +7,14 @@
 //!
 //! This file is the **seam**: what every backend answers and the rules every answer obeys,
 //! naming no debug format. The two questions — the rows covering an address range, and a
-//! function's declared extent — are asked of a [`DebugInfo`], which dispatches by `match` to
-//! the one backend the object has: [`dwarf`] for debug sections in the object itself, the
-//! only module that knows DWARF's debug sections and `addr2line` (`gimli`'s call-frame reader
-//! is `unwind.rs`'s); [`pdb`] for a PE whose debug directory
-//! names a `.pdb` beside it, the only module that knows `pdb2`. A row out of any backend goes
-//! through one [`RowCollector`], so the invariants [`LineInfo`] promises hold whoever
-//! produced them. The third answer — the functions a backend names that the image does not
+//! function's declared extent — are asked of a [`DebugInfo`], which puts them to the one
+//! backend the object has ([`LineBackend`]): [`dwarf`] for debug sections in the object
+//! itself, the only module that knows DWARF's debug sections and `addr2line` (`gimli`'s
+//! call-frame reader is `unwind.rs`'s); [`pdb`] for a PE whose debug directory names a
+//! `.pdb` beside it, the only module that knows `pdb2`. A row out of any backend goes
+//! through one [`RowCollector`], which clips it to what was asked about and takes the
+//! section's bias off it, so the invariants [`LineInfo`] promises hold whoever produced
+//! them. The third answer — the functions a backend names that the image does not
 //! — is a [`Declared`] record, with no format in it either: the PDB is the only backend with
 //! any today, and the parse takes them from the seam rather than from a backend.
 //!
@@ -22,7 +23,7 @@
 //! because it is a whole-object index rather than a query, built on the same seam.
 
 use crate::model::covering;
-use crate::{Object, PlacedAddress, Section, SectionAddress, SymbolData};
+use crate::{Bias, Object, PlacedAddress, Section, SectionAddress, SymbolData};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
@@ -88,10 +89,45 @@ pub(crate) struct DebugInfo {
     index: OnceLock<SourceIndex>,
 }
 
-/// The formats read. A closed set dispatched by `match`, monomorphised, nothing boxed.
+/// The formats read: a closed set, so adding one is a variant here, an impl of
+/// [`LineBackend`] and an arm of [`Backend::pick`]. An enum and not a boxed trait object
+/// because the set is closed and because what crosses threads is asserted on the concrete
+/// types (`lib.rs`).
 enum Backend {
     Dwarf(dwarf::Dwarf),
     Pdb(pdb::Pdb),
+}
+
+/// The three questions a backend answers, and the one space it answers them in.
+///
+/// **Placed addresses throughout**, and that is not a concession to one format. DWARF states
+/// a flat address — zero plus a relocation in a relocatable object, the link-time virtual
+/// address in a linked image — and the DWARF backend relocates its private copy of the debug
+/// sections with the parse's own layout, so its context reads in the space every section of
+/// the object shares. CodeView states a `section:offset` pair and maps it to an RVA and then
+/// onto the image base, which is that same space for an image nothing placed. So the bias is
+/// not a backend's business at all: it is the seam's conversion between the space
+/// [`LineInfo`] is keyed in — a section's own — and the space both backends already read in,
+/// and no backend has one.
+///
+/// Dispatched dynamically, where `Assembly::decode` matches on the architecture and compiles
+/// a backend in: there a backend's call sits in a per-instruction loop and the inlining is
+/// the point, here every call is one per question and takes a backend's lock on its first
+/// line, so a virtual call is noise.
+trait LineBackend {
+    /// The rows over `query`, pushed into `rows` as the backend reads them. The collector is
+    /// the seam's and holds the query: it clips each row and takes the section's bias off
+    /// ([`RowCollector::push`]), so a backend pushes what the debug info said and nothing
+    /// else.
+    fn line_info(&self, query: Range<PlacedAddress>, rows: &mut RowCollector);
+
+    /// The declared extent of the function beginning at `address`, or [`None`] when the
+    /// debug info does not say.
+    fn extent(&self, address: PlacedAddress) -> Option<u64>;
+
+    /// Every row that names a file and a line, handed to `visit` as `(range, file, line)`.
+    /// A backend may hold its own lock for the whole walk; see [`DebugInfo::each_row`].
+    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32));
 }
 
 impl Backend {
@@ -162,10 +198,18 @@ impl DebugInfo {
     }
 
     /// The rows covering `range` **within one section**, resolved in one pass.
+    ///
+    /// The section's bias is applied here and taken off here: the query goes up into the
+    /// placed space every backend reads in, and the collector brings each row back down
+    /// once it has clipped it ([`RowCollector::over`]).
     fn line_info(&self, section: &Section, range: Range<SectionAddress>) -> Option<Arc<LineInfo>> {
-        without_panicking(|| match &self.backend {
-            Backend::Dwarf(dwarf) => dwarf.line_info(section.bias(), range),
-            Backend::Pdb(pdb) => pdb.line_info(range),
+        // Saturating rather than wrapping, so an absurd range asks about less than it meant
+        // to instead of about something else.
+        let query = section.place_saturating(range.start)..section.place_saturating(range.end);
+        without_panicking(|| {
+            let mut rows = RowCollector::over(query.clone(), section.bias());
+            self.backend().line_info(query.clone(), &mut rows);
+            rows.finish()
         })
         .flatten()
         .map(Arc::new)
@@ -174,23 +218,26 @@ impl DebugInfo {
     /// The declared extent of the function beginning at `address` **within one section**, or
     /// [`None`] when the debug info does not say.
     fn extent(&self, section: &Section, address: SectionAddress) -> Option<u64> {
-        without_panicking(|| match &self.backend {
-            Backend::Dwarf(dwarf) => dwarf.extent(section.bias(), address),
-            Backend::Pdb(pdb) => pdb.extent(address),
-        })
-        .flatten()
+        let probe = section.place_checked(address)?;
+        without_panicking(|| self.backend().extent(probe)).flatten()
     }
 
     /// Every row that names a file and a line, whatever the object, handed to `visit` as
-    /// `(range, file, line)` in the **biased** address space ([`Section::bias`] already
-    /// applied). A backend may hold its own lock for the whole walk, and `extent` and
-    /// `line_info` take the same one, so `visit` must not ask the object anything: the one
-    /// caller, `SourceIndex::build`, is handed the extents it needs instead of the object.
+    /// `(range, file, line)` in the **placed** address space ([`Section::bias`] already
+    /// applied, and never taken off). A backend may hold its own lock for the whole walk,
+    /// and `extent` and `line_info` take the same one, so `visit` must not ask the object
+    /// anything: the one caller, `SourceIndex::build`, is handed the extents it needs
+    /// instead of the object.
     fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
-        without_panicking(|| match &self.backend {
-            Backend::Dwarf(dwarf) => dwarf.each_row(visit),
-            Backend::Pdb(pdb) => pdb.each_row(visit),
-        });
+        without_panicking(|| self.backend().each_row(visit));
+    }
+
+    /// The one backend this object has, as the three questions the seam puts.
+    fn backend(&self) -> &dyn LineBackend {
+        match &self.backend {
+            Backend::Dwarf(dwarf) => dwarf,
+            Backend::Pdb(pdb) => pdb,
+        }
     }
 }
 
@@ -266,12 +313,18 @@ impl SourceHash {
     }
 }
 
-/// Rows as a backend hands them over, and the one path from there to a [`LineInfo`]: files
-/// deduplicated in first-seen order, and [`finish`](Self::finish) making the rows ascending,
-/// non-overlapping and coalesced. Every backend feeds this, so the invariants are made in one
-/// place rather than promised by each.
-#[derive(Default)]
+/// Rows as a backend hands them over, and the one path from there to a [`LineInfo`]: each
+/// row clipped to the range asked about and moved out of the placed space the backends
+/// answer in ([`push`](Self::push)), files deduplicated in first-seen order, and
+/// [`finish`](Self::finish) making the rows ascending, non-overlapping and coalesced. Every
+/// backend feeds this, so the invariants are made in one place rather than promised by each.
 struct RowCollector {
+    /// The range asked about, in the space rows are pushed in.
+    query: Range<PlacedAddress>,
+    /// What comes off a row to put it in the space [`LineInfo`] is keyed in — the section's
+    /// own — **after** it has been clipped to the query. The order is the rule, and it is
+    /// [`push`](Self::push)'s.
+    bias: Bias,
     rows: Vec<LineRow>,
     files: Vec<FileEntry>,
     indices: HashMap<Arc<str>, usize>,
@@ -285,6 +338,25 @@ struct FileEntry {
 }
 
 impl RowCollector {
+    /// Rows over `query`, pushed in the placed space `bias` puts a section's addresses in
+    /// and answered in that section's own.
+    fn over(query: Range<PlacedAddress>, bias: Bias) -> RowCollector {
+        RowCollector {
+            query,
+            bias,
+            rows: Vec::new(),
+            files: Vec::new(),
+            indices: HashMap::new(),
+        }
+    }
+
+    /// Rows clipped to nothing and moved by nothing, for a caller whose rows are already in
+    /// the space it wants them in: a whole module decoded at once, or rows handed straight
+    /// over.
+    fn whole() -> RowCollector {
+        RowCollector::over(PlacedAddress::ZERO..PlacedAddress::MAX, Bias::NONE)
+    }
+
     /// The index a file name will have in [`LineInfo::files`], interning it on first sight
     /// along with the hash recorded for it — the first hash seen for a name is the one kept.
     fn file(&mut self, name: &str, hash: Option<SourceHash>) -> usize {
@@ -303,21 +375,38 @@ impl RowCollector {
         }
     }
 
-    /// One row, in the address space the caller's answer is in. A row covering nothing is
-    /// dropped here, and a column of 0 — which both formats write for "no column" — is taken
-    /// as none, so no backend has to check either.
+    /// One row, in the placed space every backend answers in, clipped to the query and moved
+    /// into the section's own space. A row with nothing left inside the query is dropped
+    /// here, and a column of 0 — which both formats write for "no column" — is taken as
+    /// none, so no backend has to check either.
+    ///
+    /// **Both ends are clipped before the bias comes off**, and that order is the rule this
+    /// owns. `addr2line` 0.27 hands back the row containing the query's start, which may
+    /// begin before it, clips nothing at the top, and checks nowhere that a row ends past
+    /// its start at all: a line program that moves its address backwards — a second
+    /// `DW_LNE_set_address` in one sequence, relocated differently or not relocated — has
+    /// rows lying below where the section was placed. Subtracting the bias first turned such
+    /// a row into one running to the end of the address space, which [`LineInfo::row_at`]
+    /// then answered with for every address the real rows left uncovered.
     fn push(
         &mut self,
-        range: Range<SectionAddress>,
+        range: Range<PlacedAddress>,
         file: Option<usize>,
         line: Option<u32>,
         column: Option<u32>,
     ) {
-        if range.start >= range.end {
+        let start = range.start.max(self.query.start);
+        let end = range.end.min(self.query.end);
+        if start >= end {
             return;
         }
+        let (Some(start), Some(end)) =
+            (start.local_checked(self.bias), end.local_checked(self.bias))
+        else {
+            return;
+        };
         self.rows.push(LineRow {
-            range,
+            range: start..end,
             file,
             line,
             column: column.filter(|&column| column != 0),
@@ -406,14 +495,17 @@ impl LineInfo {
     /// row's `file` indexes `files` as given. For code that has line info to stand in for
     /// what a backend would have said — a test of the app's panes, say — and nothing else.
     pub fn new(rows: Vec<LineRow>, files: Vec<(Arc<str>, Option<SourceHash>)>) -> Option<LineInfo> {
-        let mut collector = RowCollector::default();
+        let mut collector = RowCollector::whole();
         let indices: Vec<usize> = files
             .iter()
             .map(|(name, hash)| collector.file(name, *hash))
             .collect();
         for row in rows {
             let file = row.file.and_then(|file| indices.get(file).copied());
-            collector.push(row.range, file, row.line, row.column);
+            // The rows are the caller's own and nothing placed them, so they go in and come
+            // back out as the same numbers.
+            let range = row.range.start.unplaced()..row.range.end.unplaced();
+            collector.push(range, file, row.line, row.column);
         }
         collector.finish()
     }
@@ -531,3 +623,6 @@ impl SymbolData {
         object.function_extent(self.section.as_ref()?, self.address)
     }
 }
+
+#[cfg(test)]
+mod tests;

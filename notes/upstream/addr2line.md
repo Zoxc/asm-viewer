@@ -11,13 +11,14 @@ reading the line program a second time, so it is caught instead, by `without_pan
 (`crates/analysis/src/line.rs`), and pinned by `robustness.rs`'
 `a_line_program_that_runs_backwards_does_not_panic`.
 
-**What it cost**: `clipped` in `line/dwarf.rs`. Overflow checks are off in a release build, so
-there the panic is a wrap: the backwards row's length becomes huge and the rows after it come
-back below the query. Every row is therefore clipped to the query, and rejected where nothing
-is left, before the section's bias comes off it — subtracting first made a row reaching the end
-of the address space, which the pane then showed as one confident wrong source line across the
-function. Pinned by `line/dwarf/tests.rs`, a unit test and not a fixture because no fixture can
-produce that row in a build with the checks on.
+**What it cost**: the clip in `RowCollector::push` (`crates/analysis/src/line.rs`). Overflow
+checks are off in a release build, so there the panic is a wrap: the backwards row's length
+becomes huge and the rows after it come back below the query. Every row is therefore clipped to
+the query, and rejected where nothing is left, before the section's bias comes off it —
+subtracting first made a row reaching the end of the address space, which the pane then showed
+as one confident wrong source line across the function. The seam does it for every backend, so
+neither half of the rule is a backend's to get wrong. Pinned by `line/tests.rs`, a unit test and
+not a fixture because no fixture can produce that row in a build with the checks on.
 
 **`Context::find_units` asks its range index about `probe + 1`, unchecked** (`src/unit.rs`),
 so the very last address in the space panics. Declined rather than caught: `Dwarf::extent`

@@ -11,9 +11,11 @@
 //!
 //! Addresses come out of a PDB as `section:offset` pairs. Every one goes through the PDB's
 //! own [`AddressMap`] to an RVA — which is also where an OMAP-rearranged image is undone — and
-//! then onto the image base, so everything this backend answers is in the same virtual
+//! then onto the image base, so everything this backend reads is in the same virtual
 //! address space a linked image's `Section::address` and `SymbolData::address` already are.
-//! A linked image has no section bias, so [`Pdb`] has no notion of one.
+//! A linked image is one nothing placed, so that space is also the seam's **placed** one,
+//! the two being a bias of [`Bias::NONE`] apart: [`own`] and [`placed`] are that, said
+//! rather than read off a type.
 //!
 //! Line info in a PDB is **per module** (one object file the linker took in), found from an
 //! address by the DBI's section contributions. A module is decoded whole the first time an
@@ -47,8 +49,8 @@
 //!
 //! Nothing here recurses, and nothing here catches a panic: the guard is [`super::DebugInfo`]'s.
 
-use super::{recovered, Declared, LineInfo, Name, RowCollector, SourceHash};
-use crate::{PlacedAddress, SectionAddress};
+use super::{recovered, Declared, LineBackend, LineInfo, Name, RowCollector, SourceHash};
+use crate::{Bias, PlacedAddress, SectionAddress};
 use object::Object as _;
 use pdb2::{
     AddressMap, DebugInformation, FallibleIterator, PdbInternalRva, PdbInternalSectionOffset,
@@ -271,76 +273,6 @@ impl Pdb {
         self.image_base.checked_add(u64::from(rva.0))
     }
 
-    /// The rows over `range`, out of every module contributing to it.
-    pub(super) fn line_info(&self, range: Range<SectionAddress>) -> Option<LineInfo> {
-        let mut rows = RowCollector::default();
-        let over = self.modules_over(range.clone());
-        // One walk for the lot: `module` alone would start a walk per module not yet decoded.
-        if over.iter().any(|&index| self.remembered(index).is_none()) {
-            self.walk(Some(&over));
-        }
-        for module in over {
-            let Some(module) = self.module(module) else {
-                continue;
-            };
-            let Some(lines) = &module.lines else {
-                continue;
-            };
-            for row in lines.rows_over(range.clone()) {
-                let file = row
-                    .file
-                    .and_then(|file| lines.file_with_hash(file))
-                    .map(|(name, hash)| rows.file(name, hash));
-                rows.push(
-                    row.range.start.max(range.start)..row.range.end.min(range.end),
-                    file,
-                    row.line,
-                    row.column,
-                );
-            }
-        }
-        rows.finish()
-    }
-
-    /// The length of the procedure beginning at `address`, or [`None`] when no module
-    /// contributes there or none of its procedures begins at that address.
-    pub(super) fn extent(&self, address: SectionAddress) -> Option<u64> {
-        let end = address.checked_add(1)?;
-        self.modules_over(address..end)
-            .into_iter()
-            .filter_map(|module| self.module(module))
-            .find_map(|module| module.procedures.get(&address).copied())
-    }
-
-    /// Every row of every module that names a file and a line. Every module is decoded in
-    /// one walk of the module list and visited from the table after. Each is loaded under
-    /// the PDB's lock and visited once it is released; the `modules` lock is held for no
-    /// longer than a lookup.
-    pub(super) fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
-        let count = self.walk(None);
-        for index in 0..count {
-            let Some(module) = self.module(index) else {
-                continue;
-            };
-            let Some(lines) = &module.lines else {
-                continue;
-            };
-            for row in lines.rows() {
-                let file = row.file.and_then(|file| lines.file(file));
-                let (Some(file), Some(line)) = (file, row.line) else {
-                    continue;
-                };
-                // A PDB describes a linked image, which nothing placed, so a row's
-                // address is already the placed one.
-                visit(
-                    row.range.start.unplaced()..row.range.end.unplaced(),
-                    file,
-                    line,
-                );
-            }
-        }
-    }
-
     /// The modules with a contribution overlapping `range`, each once, in index order.
     fn modules_over(&self, range: Range<SectionAddress>) -> Vec<usize> {
         let pos = self
@@ -432,7 +364,9 @@ impl Pdb {
             pdb.module_info(module).ok()??
         };
 
-        let mut rows = RowCollector::default();
+        // The module whole, in the image's own addresses: nothing is clipped and nothing
+        // comes off, the query being the caller's own when one of these rows reaches it.
+        let mut rows = RowCollector::whole();
         if let Ok(program) = info.line_program() {
             // Each file is resolved through the string table once per module, not per row.
             let mut files: HashMap<u32, Option<usize>> = HashMap::new();
@@ -471,7 +405,7 @@ impl Pdb {
                 let column = line.column_start;
                 let range = start..PdbInternalRva(end);
                 for range in rebased(&self.address_map, self.image_base, range) {
-                    rows.push(range, file, line_number, column);
+                    rows.push(placed(range), file, line_number, column);
                 }
             }
         }
@@ -491,6 +425,83 @@ impl Pdb {
         }
         Some(ModuleLines { lines, procedures })
     }
+}
+
+impl LineBackend for Pdb {
+    /// The rows over `query`, out of every module contributing to it.
+    fn line_info(&self, query: Range<PlacedAddress>, rows: &mut RowCollector) {
+        let range = own(query);
+        let over = self.modules_over(range.clone());
+        // One walk for the lot: `module` alone would start a walk per module not yet decoded.
+        if over.iter().any(|&index| self.remembered(index).is_none()) {
+            self.walk(Some(&over));
+        }
+        for module in over {
+            let Some(module) = self.module(module) else {
+                continue;
+            };
+            let Some(lines) = &module.lines else {
+                continue;
+            };
+            for row in lines.rows_over(range.clone()) {
+                let file = row
+                    .file
+                    .and_then(|file| lines.file_with_hash(file))
+                    .map(|(name, hash)| rows.file(name, hash));
+                // The clip to the query is the collector's, as it is for every backend
+                // (`RowCollector::push`).
+                rows.push(placed(row.range.clone()), file, row.line, row.column);
+            }
+        }
+    }
+
+    /// The length of the procedure beginning at `address`, or [`None`] when no module
+    /// contributes there or none of its procedures begins at that address.
+    fn extent(&self, address: PlacedAddress) -> Option<u64> {
+        let address = address.local(Bias::NONE);
+        let end = address.checked_add(1)?;
+        self.modules_over(address..end)
+            .into_iter()
+            .filter_map(|module| self.module(module))
+            .find_map(|module| module.procedures.get(&address).copied())
+    }
+
+    /// Every row of every module that names a file and a line. Every module is decoded in
+    /// one walk of the module list and visited from the table after. Each is loaded under
+    /// the PDB's lock and visited once it is released; the `modules` lock is held for no
+    /// longer than a lookup.
+    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
+        let count = self.walk(None);
+        for index in 0..count {
+            let Some(module) = self.module(index) else {
+                continue;
+            };
+            let Some(lines) = &module.lines else {
+                continue;
+            };
+            for row in lines.rows() {
+                let file = row.file.and_then(|file| lines.file(file));
+                let (Some(file), Some(line)) = (file, row.line) else {
+                    continue;
+                };
+                visit(placed(row.range.clone()), file, line);
+            }
+        }
+    }
+}
+
+/// A range the seam asked about, in the image's own addresses, and [`placed`] is the way
+/// back. A PDB describes a **linked image**, which nothing placed, so the two spaces hold
+/// the same numbers; these say which of them is meant rather than leave it to be read off a
+/// type.
+fn own(range: Range<PlacedAddress>) -> Range<SectionAddress> {
+    range.start.local(Bias::NONE)..range.end.local(Bias::NONE)
+}
+
+/// A range of the image's own addresses in the space the seam reads every backend in; the
+/// inverse of [`own`].
+fn placed(range: Range<SectionAddress>) -> Range<PlacedAddress> {
+    range.start.unplaced()..range.end.unplaced()
 }
 
 /// Open the `.pdb` an image's CodeView record describes, trying the paths [`candidates`]

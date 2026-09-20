@@ -127,8 +127,9 @@ command.
   point, a function only an unwind entry declares, a fragment of one), and the one place each
   is spelled.
 - `crates/analysis/src/line.rs` — line info, lazy: an address range in, source rows out. The
-  seam: the two questions every backend answers, dispatched by `match`, and the one collector
-  that makes every answer's rows hold `LineInfo`'s invariants. Names no debug format.
+  seam: the trait every backend answers, the space it answers in, and the one collector that
+  clips every answer's rows to the query, takes the section's bias off them and makes them
+  hold `LineInfo`'s invariants. Names no debug format.
 - `crates/analysis/src/line/dwarf.rs` — the DWARF backend, and the only part that knows
   DWARF's debug sections and `addr2line`.
 - `crates/analysis/src/line/pdb.rs` — the PDB backend: a PE's `.pdb` found by its CodeView

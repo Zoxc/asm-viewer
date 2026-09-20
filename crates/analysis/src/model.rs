@@ -381,6 +381,13 @@ impl Section {
         address.placed_checked(self.bias())
     }
 
+    /// [`place`](Self::place) saturating, for the ends of a query: an absurd range then asks
+    /// about less than it meant to instead of about something else
+    /// ([`SectionAddress::placed_saturating`]).
+    pub(crate) fn place_saturating(&self, address: SectionAddress) -> PlacedAddress {
+        address.placed_saturating(self.bias())
+    }
+
     /// A placed address back in this section's own terms: [`place`](Self::place) undone,
     /// and wrapping for the same reason.
     pub fn local(&self, placed: PlacedAddress) -> SectionAddress {
