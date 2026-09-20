@@ -1,5 +1,7 @@
 //! The data model: an [`Object`], its [`Section`]s and its symbols, and the bytes it was
 //! parsed from. Built by [`parse_object`](crate::parse_object) and read by everything else.
+//! Also [`covering`], the one search the crate looks an address up in a sorted list of
+//! ranges with.
 
 use crate::disasm::Code;
 use crate::extent::ExtentCache;
@@ -589,6 +591,27 @@ impl Hash for Symbol {
         Arc::as_ptr(&self.object).hash(state);
         Arc::as_ptr(&self.data).hash(state);
     }
+}
+
+/// Which of `items`, a list sorted by range start, holds `address`: the index of the last
+/// one starting at or before it, where that one's range contains it.
+///
+/// [`None`] in three cases, which is every way an address can miss. `items` is empty, or
+/// `address` is below the first start, so there is no candidate at all; or the candidate
+/// ends at or before `address`, the gap after a range.
+///
+/// **Only that one candidate is looked at.** Where ranges nest, an address past an inner
+/// range but still inside the outer one answers [`None`] rather than the outer one — this
+/// finds the last range starting at or before the address, and nothing else.
+pub(crate) fn covering<T>(
+    items: &[T],
+    range: impl Fn(&T) -> Range<u64>,
+    address: u64,
+) -> Option<usize> {
+    let index = items
+        .partition_point(|item| range(item).start <= address)
+        .checked_sub(1)?;
+    range(&items[index]).contains(&address).then_some(index)
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@
 //! Nothing here is cached: the listing is a pure function of the object, and whoever asks
 //! holds the answer.
 
+use crate::model::covering;
 use crate::{Assembly, Object, Section, SymbolData};
 use std::{ops::Range, sync::Arc};
 
@@ -148,14 +149,7 @@ impl Listing {
 
     /// The index of the stretch `address` falls in, if it is in the section.
     pub fn stretch_at(&self, address: u64) -> Option<usize> {
-        let after = self
-            .stretches
-            .partition_point(|stretch| stretch.range.start <= address);
-        let index = after.checked_sub(1)?;
-        self.stretches[index]
-            .range
-            .contains(&address)
-            .then_some(index)
+        covering(&self.stretches, |stretch| stretch.range.clone(), address)
     }
 
     /// Decode the stretch at `index`: the symbol's own instructions, and whatever the
@@ -295,16 +289,10 @@ impl CodeListing {
     }
 
     /// Where a placed address is: the section it falls in and the stretch of that section.
-    /// [`None`] between two sections, and outside every one.
+    /// [`None`] between two sections, and outside every one ([`covering`]).
     pub fn at(&self, placed: u64) -> Option<Place> {
-        let after = self
-            .sections
-            .partition_point(|section| section.range.start <= placed);
-        let section = after.checked_sub(1)?;
+        let section = covering(&self.sections, |section| section.range.clone(), placed)?;
         let found = &self.sections[section];
-        if !found.range.contains(&placed) {
-            return None;
-        }
         let stretch = found.listing.stretch_at(found.local(placed))?;
         Some(Place { section, stretch })
     }

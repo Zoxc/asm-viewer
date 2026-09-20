@@ -15,8 +15,10 @@
 //! ([`Extent::capped`]). An extent running off the end of the address space is no extent.
 //! The answer is worked out at most once per symbol ([`ExtentCache`]).
 
+use crate::model::covering;
 use crate::{Object, SymbolData};
 use object::BinaryFormat;
+use std::ops::Range;
 use std::sync::OnceLock;
 
 /// How far [`SymbolData::estimate_size`]'s next-symbol derivation may reach (1 MiB) before
@@ -107,21 +109,13 @@ impl SymbolData {
 
     /// The end the file's own unwind table states for the function this symbol is in
     /// ([`CodeSection::unwind`](crate::CodeSection::unwind)), as bytes from the symbol's
-    /// address, or [`None`] where no entry covers it. Clamped to the next symbol
-    /// ([`clamped`](Self::clamped)) — and every entry's own begin is a symbol, which is what
-    /// stops a parent at the chained entry of its cold part.
+    /// address, or [`None`] where the entry the address falls in ([`covering`]) states none.
+    /// Clamped to the next symbol ([`clamped`](Self::clamped)) — and every entry's own begin
+    /// is a symbol, which is what stops a parent at the chained entry of its cold part.
     fn unwind_extent(&self, object: &Object) -> Option<u64> {
         let code = self.section.as_ref()?.code()?;
-        // The last range starting at or before the address: with the starts sorted and
-        // each once, the innermost of any that nest.
-        let i = code
-            .unwind
-            .partition_point(|range| range.start <= self.address)
-            .checked_sub(1)?;
-        let range = &code.unwind[i];
-        if !range.contains(&self.address) {
-            return None;
-        }
+        let index = covering(&code.unwind, Range::clone, self.address)?;
+        let range = &code.unwind[index];
         Some(self.clamped(object, range.end - self.address))
     }
 

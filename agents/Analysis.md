@@ -152,6 +152,15 @@ Why wrapping is the deliberate choice -- `line::relocate` adds the same bias, an
 produces one that wraps -- is written on `place` and nowhere else. It was on `SymbolData::placed`,
 while four other sites spelled the add or the subtract out and re-derived it. Which space a number
 is in still has no type, but the conversion now has a name to grep for.
+**And one search looks an address up in a list of ranges**: `covering` (`model.rs`), the last
+range starting at or before it, and nothing where that one does not contain it. An unwind
+entry (`unwind_extent`), a listing's stretch (`Listing::stretch_at`), a placed section
+(`CodeListing::at`) and a line row (`LineInfo::row_at`) are each found by it, where all four
+used to write out the partition point, the `checked_sub(1)` and the `contains` for themselves,
+in four spellings of the same three ways to miss -- an empty list, an address below the first
+start, the gap after a range. The unwind one's comment claimed to find "the innermost of any
+that nest", which none of them does: past an inner range and still inside an outer one, every
+one of them answers nothing. The helper's doc says that instead of implying otherwise.
 Nothing else reads a section's bytes --
 the DWARF backend and `unwind.rs` take theirs from the file they re-parse -- so a copy for the
 debug sections would be a second one held for as long as the object lives, and the DWARF alone is

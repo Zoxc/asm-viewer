@@ -110,7 +110,8 @@ command.
   assertion that what crosses threads is `Send + Sync`.
 - `crates/analysis/src/model.rs` — the data model: `Object`, `Section` with the `CodeSection`
   only a section holding code has, `SymbolData`, `Symbol`, and `ObjectData`, the bytes an
-  object was parsed from.
+  object was parsed from. Also `covering`, the one search an address is looked up in a list
+  of ranges with.
 - `crates/analysis/src/extent.rs` — how many bytes of code a symbol is: the end its unwind
   entry states, an ELF's declared size, or the smaller of the debug info's and the estimate.
 - `crates/analysis/src/parse.rs` — one object file read into an `Object`: its sections and

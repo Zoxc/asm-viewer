@@ -1,7 +1,8 @@
-use super::{Object, ObjectData, Section, SymbolData};
+use super::{covering, Object, ObjectData, Section, SymbolData};
 use object::{Architecture, BinaryFormat, SectionIndex, SymbolIndex};
 use std::{
     collections::{BTreeMap, HashMap},
+    ops::Range,
     sync::Arc,
 };
 
@@ -79,4 +80,29 @@ fn bytes_in_answers_only_for_a_range_inside_the_bytes() {
     // A section with no bytes answers for nothing.
     let empty = Section::other(SectionIndex(2), ".debug_info".to_string(), 0x1000);
     assert_eq!(empty.bytes_in(0x1000..0x1000), None);
+}
+
+/// The three ways an address misses, and the one nesting answer the callers depend on.
+#[test]
+fn covering_answers_only_for_the_last_start_at_or_before() {
+    let ranges = [0x10..0x20, 0x30..0x38, 0x40..0x48];
+    let at = |address| covering(&ranges, Range::clone, address);
+
+    assert_eq!(at(0x10), Some(0));
+    assert_eq!(at(0x1F), Some(0));
+    assert_eq!(at(0x30), Some(1));
+    assert_eq!(at(0x47), Some(2));
+
+    // Nothing at all: no range starts at or before the address.
+    assert_eq!(at(0x0F), None);
+    assert!(covering(&[] as &[Range<u64>], Range::clone, 0x10).is_none());
+    // The gap after a range, and past the last one.
+    assert_eq!(at(0x20), None);
+    assert_eq!(at(0x3F), None);
+    assert_eq!(at(0x48), None);
+
+    // Only the last start at or before is looked at, so an address past an inner range is
+    // not answered with the outer one that still contains it.
+    let nested = [0x10..0x40, 0x20..0x28];
+    assert_eq!(covering(&nested, Range::clone, 0x30), None);
 }

@@ -20,6 +20,7 @@
 //! and a line, out to the symbols compiled from them — is [`source`], a file of its own
 //! because it is a whole-object index rather than a query, built on the same seam.
 
+use crate::model::covering;
 use crate::{Object, Section, SymbolData};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -417,19 +418,12 @@ impl LineInfo {
         Some((&entry.name, entry.hash))
     }
 
-    /// The row covering `address`, or [`None`] when no row does. The last row starting at or
-    /// before `address` is the only candidate *because* the rows do not overlap.
+    /// The row covering `address`, or [`None`] when no row does. [`covering`]'s one
+    /// candidate, the last row starting at or before `address`, is the only one *because*
+    /// the rows do not overlap.
     pub fn row_at(&self, address: u64) -> Option<&LineRow> {
-        let index = match self
-            .rows
-            .binary_search_by_key(&address, |row| row.range.start)
-        {
-            Ok(index) => index,
-            Err(0) => return None,
-            Err(index) => index - 1,
-        };
-        let row = &self.rows[index];
-        (address < row.range.end).then_some(row)
+        let index = covering(&self.rows, |row| row.range.clone(), address)?;
+        self.rows.get(index)
     }
 }
 
