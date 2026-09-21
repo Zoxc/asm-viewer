@@ -261,14 +261,17 @@ impl Pdb {
         modules
     }
 
-    /// The module with this index, decoded on first ask and remembered — including as
-    /// [`None`] when it has nothing to say.
-    fn module(&self, index: usize) -> Option<Arc<ModuleLines>> {
-        if let Some(module) = self.remembered(index) {
-            return module;
+    /// The modules `wanted` names (ascending, each once), in that order, skipping any with
+    /// nothing to say. Those not yet decoded are decoded in one walk between them, so no
+    /// caller can start a walk per module. The `modules` lock is taken per module and
+    /// released before it is handed over.
+    fn decoded<'a>(&'a self, wanted: &'a [usize]) -> impl Iterator<Item = Arc<ModuleLines>> + 'a {
+        if wanted.iter().any(|&index| self.remembered(index).is_none()) {
+            self.walk(Some(wanted));
         }
-        self.walk(Some(&[index]));
-        self.remembered(index).flatten()
+        wanted
+            .iter()
+            .filter_map(|&index| self.remembered(index).flatten())
     }
 
     /// The module with this index if it has been decoded: the outer [`None`] is "not yet",
@@ -408,14 +411,7 @@ impl LineBackend for Pdb {
     fn line_info(&self, query: Range<PlacedAddress>, rows: &mut RowCollector) {
         let range = own(query);
         let over = self.modules_over(range.clone());
-        // One walk for the lot: `module` alone would start a walk per module not yet decoded.
-        if over.iter().any(|&index| self.remembered(index).is_none()) {
-            self.walk(Some(&over));
-        }
-        for module in over {
-            let Some(module) = self.module(module) else {
-                continue;
-            };
+        for module in self.decoded(&over) {
             let Some(lines) = &module.lines else {
                 continue;
             };
@@ -432,14 +428,18 @@ impl LineBackend for Pdb {
     }
 
     /// The length of the procedure beginning at `address`, or [`None`] when no module
-    /// contributes there or none of its procedures begins at that address.
+    /// contributes there or none of its procedures begins at that address. Every module
+    /// covering the address is decoded, in the one walk, before any is asked.
     fn extent(&self, address: PlacedAddress) -> Option<u64> {
         let address = address.local(Bias::NONE);
         let end = address.checked_add(1)?;
-        self.modules_over(address..end)
-            .into_iter()
-            .filter_map(|module| self.module(module))
-            .find_map(|module| module.procedures.get(&address).copied())
+        let over = self.modules_over(address..end);
+        // Bound, not returned: the iterator borrows `over`, and a tail expression's
+        // temporaries outlive the function's locals.
+        let extent = self
+            .decoded(&over)
+            .find_map(|module| module.procedures.get(&address).copied());
+        extent
     }
 
     /// Every row of every module that names a file and a line. Every module is decoded in
@@ -448,10 +448,8 @@ impl LineBackend for Pdb {
     /// longer than a lookup.
     fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
         let count = self.walk(None);
-        for index in 0..count {
-            let Some(module) = self.module(index) else {
-                continue;
-            };
+        // That walk remembered every module, so each is only looked up here.
+        for module in (0..count).filter_map(|index| self.remembered(index).flatten()) {
             let Some(lines) = &module.lines else {
                 continue;
             };

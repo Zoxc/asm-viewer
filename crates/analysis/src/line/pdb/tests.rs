@@ -29,6 +29,23 @@ fn every_module_is_decoded_in_one_walk_of_the_module_list() {
     assert!(modules.len() > 1, "{} modules", modules.len());
 }
 
+/// Two modules at one address, neither decoded, cost one walk of the module list between
+/// them when their extent is asked for, as a question over every module does.
+#[test]
+fn the_modules_at_an_address_are_decoded_in_one_walk() {
+    let (bytes, path) = fixture();
+    let file = object::File::parse(&*bytes).expect("a PE");
+    let mut pdb = Pdb::load(&file, &path).expect("the .pdb beside it");
+    // An address no procedure begins at, so neither module answers and both are read.
+    let start = SectionAddress::new(1);
+    let end = SectionAddress::new(2);
+    pdb.contributions = Intervals::new([(start..end, 0), (start..end, 1)]);
+
+    let before = pdb.walks.load(Relaxed);
+    assert_eq!(pdb.extent(PlacedAddress::new(1)), None);
+    assert_eq!(pdb.walks.load(Relaxed) - before, 1);
+}
+
 /// The path a binary records is a name, not a place to reach. On Windows a UNC path is
 /// absolute, and opening `\\host\share\x.pdb` logs the machine in to `host` over SMB before
 /// a byte comes back, so nothing outside the binary's own directory is tried for one.
