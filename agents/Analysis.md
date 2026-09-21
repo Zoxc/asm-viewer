@@ -711,21 +711,21 @@ names for one address answer the first by name, the order `symbols_sorted` has.
 
 **One index of an object's code symbols by place** (`Object::placed`, a `PlacedSymbols`) answers
 four questions: a call's name (`symbol_at_placed`), where an estimate stops, a listing's labels and
-the source index's ranges. Each used to keep or rebuild its own copy, sorted with its own rule for two
-symbols at one address. It is `(placed address, SymbolIndex, Arc<SymbolData>)` sorted by address and
-then index, both names at one address kept, side by side in the file's order. It holds a symbol only
-where its section holds code and its address is inside that code's bytes
-(`SymbolData::code_place`). The placed layout is what lets one index serve the whole object: a
-linked image's addresses are real, and a relocatable object's code sections each have a place of
-their own. A section that is not code has no place, so its symbols would land on some code section's
-addresses; it keeps no bytes either, so they never had an extent to read. Where a header makes two
-places overlap, each of the two listings also labels the other's symbols; nothing breaks, and
-`CodeListing` draws only the first. `Object::new` builds the index from `symbols`, so it cannot
-disagree with them, and nothing rewrites it afterwards — which is what lets the source index name a
-symbol by its position in it. It is built there, on the loading thread, and not lazily on first
-use, because a render reaches it: the Back/Forward tooltip names a restored `Place::Code` stop with
-`symbol_at_placed`, and a lazy index would have that render sort every symbol on the UI thread. The
-cost is one sort per archive member at parse, members never read included; every question is a
+the source index's ranges. Each used to keep or rebuild its own copy, sorted with its own rule for
+two symbols at one address. Each entry is a `PlacedSymbol` -- a placed address, a `SymbolIndex` and
+an `Arc<SymbolData>` -- sorted by address and then index, both names at one address kept, side by
+side in the file's order. It holds a symbol only where its section holds code and its address is
+inside that code's bytes (`SymbolData::code_place`). The placed layout is what lets one index serve
+the whole object: a linked image's addresses are real, and a relocatable object's code sections each
+have a place of their own. A section that is not code has no place, so its symbols would land on
+some code section's addresses; it keeps no bytes either, so they never had an extent to read. Where
+a header makes two places overlap, each of the two listings also labels the other's symbols; nothing
+breaks, and `CodeListing` draws only the first. `Object::new` builds the index from `symbols`, so it
+cannot disagree with them, and nothing rewrites it afterwards — which is what lets the source index
+name a symbol by its position in it. It is built there, on the loading thread, and not lazily on
+first use, because a render reaches it: the Back/Forward tooltip names a restored `Place::Code` stop
+with `symbol_at_placed`, and a lazy index would have that render sort every symbol on the UI thread.
+The cost is one sort per archive member at parse, members never read included; every question is a
 binary search.
 
 **What an operand names is one enum**, `Operand`, and a row carries one `Option` of it. It used to

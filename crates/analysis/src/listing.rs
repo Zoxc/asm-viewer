@@ -19,7 +19,7 @@
 //! Nothing here is cached: the listing is a pure function of the object, and whoever asks
 //! holds the answer.
 
-use crate::model::covering;
+use crate::model::{covering, PlacedSymbol};
 use crate::{Assembly, Bias, Object, PlacedAddress, Section, SectionAddress, SymbolData};
 use std::{ops::Range, sync::Arc};
 
@@ -109,7 +109,7 @@ impl Listing {
         let symbols = section
             .placed_range()
             .map_or(&[][..], |range| object.placed_in(range));
-        let local = |&(placed, ..): &(PlacedAddress, _, _)| section.local(placed);
+        let local = |entry: &PlacedSymbol| section.local(entry.placed);
 
         let mut stretches = Vec::new();
         let first = symbols.first().map_or(bytes.end, local);
@@ -130,7 +130,7 @@ impl Listing {
             let next = after.first().map_or(bytes.end, local);
             stretches.push(Stretch {
                 range: address..next,
-                symbols: here.iter().map(|(_, _, symbol)| symbol.clone()).collect(),
+                symbols: here.iter().map(|entry| entry.symbol.clone()).collect(),
             });
             rest = after;
         }

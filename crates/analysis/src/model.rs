@@ -48,8 +48,8 @@ pub struct Object {
 }
 
 /// [`Object::placed`]: every symbol inside a code section's bytes
-/// ([`SymbolData::code_place`]), as `(placed address, index, symbol)`, sorted by address and
-/// then by index. Two names at one address are both kept, side by side in the file's order.
+/// ([`SymbolData::code_place`]), one [`PlacedSymbol`] each, sorted by address and then by
+/// index. Two names at one address are both kept, side by side in the file's order.
 ///
 /// One index serves the whole object because of the placed layout: a linked image's
 /// addresses are real, and each code section of a relocatable object has a place of its own.
@@ -59,7 +59,15 @@ pub struct Object {
 /// all read. Built at parse, off the UI thread, because a render asks it too: the history
 /// buttons name a saved place with [`Object::symbol_at_placed`], so every ask has to be a
 /// binary search and never the sort over every symbol.
-pub struct PlacedSymbols(Vec<(PlacedAddress, SymbolIndex, Arc<SymbolData>)>);
+pub struct PlacedSymbols(Vec<PlacedSymbol>);
+
+/// One entry of [`PlacedSymbols`]: a symbol, the index the file names it by, and the address
+/// its code is placed at.
+pub(crate) struct PlacedSymbol {
+    pub(crate) placed: PlacedAddress,
+    pub(crate) index: SymbolIndex,
+    pub(crate) symbol: Arc<SymbolData>,
+}
 
 impl Object {
     /// An object holding `symbols`, which may come in any order. This is where
@@ -85,10 +93,16 @@ impl Object {
             .collect();
         let mut placed: Vec<_> = symbols
             .iter()
-            .filter_map(|(&index, symbol)| Some((symbol.code_place()?, index, symbol.clone())))
+            .filter_map(|(&index, symbol)| {
+                Some(PlacedSymbol {
+                    placed: symbol.code_place()?,
+                    index,
+                    symbol: symbol.clone(),
+                })
+            })
             .collect();
         // The map's order is the hash seed's; the file's is the symbol index.
-        placed.sort_unstable_by_key(|&(address, index, _)| (address, index.0));
+        placed.sort_unstable_by_key(|entry| (entry.placed, entry.index.0));
         Object {
             path,
             name,
@@ -116,18 +130,15 @@ impl Object {
     }
 
     /// [`placed`](Self::placed).
-    pub(crate) fn placed_symbols(&self) -> &[(PlacedAddress, SymbolIndex, Arc<SymbolData>)] {
+    pub(crate) fn placed_symbols(&self) -> &[PlacedSymbol] {
         &self.placed.0
     }
 
     /// The entries of [`placed`](Self::placed) whose address is inside `range`.
-    pub(crate) fn placed_in(
-        &self,
-        range: Range<PlacedAddress>,
-    ) -> &[(PlacedAddress, SymbolIndex, Arc<SymbolData>)] {
+    pub(crate) fn placed_in(&self, range: Range<PlacedAddress>) -> &[PlacedSymbol] {
         let all = self.placed_symbols();
-        let start = all.partition_point(|&(address, ..)| address < range.start);
-        let end = all.partition_point(|&(address, ..)| address < range.end);
+        let start = all.partition_point(|entry| entry.placed < range.start);
+        let end = all.partition_point(|entry| entry.placed < range.end);
         &all[start..end.max(start)]
     }
 
@@ -145,11 +156,11 @@ impl Object {
     /// number.
     pub fn symbol_at_placed(&self, placed: PlacedAddress) -> Option<&Arc<SymbolData>> {
         let all = self.placed_symbols();
-        let start = all.partition_point(|&(address, ..)| address < placed);
-        let end = all.partition_point(|&(address, ..)| address <= placed);
+        let start = all.partition_point(|entry| entry.placed < placed);
+        let end = all.partition_point(|entry| entry.placed <= placed);
         all[start..end.max(start)]
             .iter()
-            .map(|(_, _, symbol)| symbol)
+            .map(|entry| &entry.symbol)
             .min_by(|a, b| a.name.cmp(&b.name))
     }
 }

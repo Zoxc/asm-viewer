@@ -87,10 +87,10 @@ impl SymbolData {
         // section's end is the bound. A wild address in the symbol table is in no entry, so it
         // cannot cut short the symbol before it.
         let all = object.placed_symbols();
-        let after = all.partition_point(|&(address, ..)| address <= placed);
+        let after = all.partition_point(|entry| entry.placed <= placed);
         let next = all
             .get(after)
-            .map(|&(next, ..)| next)
+            .map(|entry| entry.placed)
             .filter(|next| range.contains(next));
 
         placed.bytes_to(next.unwrap_or(range.end))

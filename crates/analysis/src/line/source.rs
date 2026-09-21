@@ -194,11 +194,12 @@ fn symbol_ranges(object: &Object) -> Vec<SymbolRange> {
         .placed_symbols()
         .iter()
         .enumerate()
-        .filter_map(|(position, &(start, _, ref data))| {
+        .filter_map(|(position, entry)| {
             // A file naming more than `u32::MAX` placed symbols loses the ones past that,
             // which is a smaller thing than either a wider index or a panic.
             let position = u32::try_from(position).ok()?;
-            let end = start.checked_add(data.extent(object)?.bytes)?;
+            let start = entry.placed;
+            let end = start.checked_add(entry.symbol.extent(object)?.bytes)?;
             (start < end).then_some(SymbolRange {
                 start,
                 end,
@@ -287,7 +288,7 @@ impl Object {
         found
             .into_iter()
             .filter_map(|position| placed.get(position as usize))
-            .map(|(_, _, data)| data.clone())
+            .map(|entry| entry.symbol.clone())
             .collect()
     }
 
