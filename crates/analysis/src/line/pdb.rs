@@ -49,6 +49,7 @@
 //!
 //! Nothing here recurses, and nothing here catches a panic: the guard is [`super::DebugInfo`]'s.
 
+use super::intervals::Intervals;
 use super::{recovered, Declared, LineBackend, LineInfo, RowCollector, SourceHash};
 use crate::parse::Name;
 use crate::{Bias, PlacedAddress, SectionAddress};
@@ -85,10 +86,9 @@ pub(super) struct Pdb {
     /// What an RVA is added to for the address space the image's sections are in.
     image_base: SectionAddress,
 
-    /// Every section contribution as a virtual address range and the module it belongs to,
-    /// sorted by start with a running `max_end`, so a range is mapped to its modules by a
-    /// bounded backwards walk. Built once at load.
-    contributions: Vec<Contribution>,
+    /// Every section contribution as a virtual address range, to the module it belongs to.
+    /// Built once at load.
+    contributions: Intervals<SectionAddress, usize>,
 
     /// The modules decoded so far, by index. [`None`] remembers a module with no stream, no
     /// rows and no procedures, so it is not re-read for every symbol in it.
@@ -98,16 +98,6 @@ pub(super) struct Pdb {
     /// question over every module costs one walk and not one per module. Test builds only.
     #[cfg(test)]
     walks: std::sync::atomic::AtomicUsize,
-}
-
-/// One section contribution, in virtual addresses.
-struct Contribution {
-    start: SectionAddress,
-    end: SectionAddress,
-    /// The furthest `end` of this entry and every entry before it, the bound a backwards
-    /// walk stops at; the same shape as `source.rs`'s `SymbolRange::max_end`.
-    max_end: SectionAddress,
-    module: usize,
 }
 
 /// One module's line info, decoded whole on first touch.
@@ -146,19 +136,9 @@ impl Pdb {
                 continue;
             };
             let ranges = rebased(&address_map, image_base, start..PdbInternalRva(end));
-            contributions.extend(ranges.map(|range| Contribution {
-                start: range.start,
-                end: range.end,
-                max_end: range.end,
-                module: contribution.module,
-            }));
+            contributions.extend(ranges.map(|range| (range, contribution.module)));
         }
-        contributions.sort_unstable_by_key(|c| (c.start, c.end, c.module));
-        let mut max_end = SectionAddress::ZERO;
-        for contribution in &mut contributions {
-            max_end = max_end.max(contribution.end);
-            contribution.max_end = max_end;
-        }
+        let contributions = Intervals::new(contributions);
 
         Some(Pdb {
             pdb: Mutex::new(pdb),
@@ -275,16 +255,7 @@ impl Pdb {
 
     /// The modules with a contribution overlapping `range`, each once, in index order.
     fn modules_over(&self, range: Range<SectionAddress>) -> Vec<usize> {
-        let pos = self
-            .contributions
-            .partition_point(|contribution| contribution.start < range.end);
-        let mut modules: Vec<usize> = self.contributions[..pos]
-            .iter()
-            .rev()
-            .take_while(|contribution| contribution.max_end > range.start)
-            .filter(|contribution| contribution.end > range.start)
-            .map(|contribution| contribution.module)
-            .collect();
+        let mut modules: Vec<usize> = self.contributions.over(range).copied().collect();
         modules.sort_unstable();
         modules.dedup();
         modules

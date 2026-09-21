@@ -46,6 +46,7 @@
 //! That one line maps into many symbols is not theoretical: `core/src/ptr/mod.rs:848` —
 //! `drop_in_place` — answers with **9 374** of `viewer-sample`'s symbols.
 
+use super::intervals::Intervals;
 use super::DebugInfo;
 use crate::{Object, PlacedAddress, SymbolData};
 use std::collections::HashMap;
@@ -67,20 +68,6 @@ pub(super) struct SourceIndex {
     files: HashMap<Arc<str>, Vec<(u32, u32)>>,
 }
 
-/// One symbol's extent in the address space the debug info is read in — biased, so it is
-/// directly comparable with the addresses the backend answers with.
-struct SymbolRange {
-    start: PlacedAddress,
-    end: PlacedAddress,
-    /// The furthest `end` of this entry and every entry before it. The ranges are sorted by
-    /// `start` and may still overlap (an alias, a split cold part), so a backwards search
-    /// needs a bound that is monotone; this is it. `addr2line`'s own unit index is built the
-    /// same way and for the same reason.
-    max_end: PlacedAddress,
-    /// Where this symbol sits in [`Object::placed`], which is what the index keeps.
-    position: u32,
-}
-
 impl SourceIndex {
     /// Walk every line program once and attribute each row to the `ranges` it falls in. No
     /// net of its own: the calls that reach a dependency, the extents and the walk, are each
@@ -88,7 +75,7 @@ impl SourceIndex {
     ///
     /// Given the ranges rather than the object, so the visitor has no object to ask
     /// ([`DebugInfo::each_row`]).
-    fn build(ranges: &[SymbolRange], debug: &DebugInfo) -> SourceIndex {
+    fn build(ranges: &Intervals<PlacedAddress, u32>, debug: &DebugInfo) -> SourceIndex {
         // Keyed by the name each row spells, allocated once per distinct file: the visitor is
         // handed a borrow that ends with the call, so the key cannot be the borrow itself.
         let mut files: HashMap<Arc<str>, Vec<(u32, u32)>> = HashMap::new();
@@ -114,9 +101,11 @@ impl SourceIndex {
                 Some(entry) => entry,
                 None => files.entry(Arc::from(file)).or_default(),
             };
-            for symbol in intersecting(ranges, range.start, range.end) {
+            // Usually one symbol, occasionally two: a symbol aliasing another, or a
+            // `DW_AT_high_pc` reaching over an assembler label.
+            for &position in ranges.over(range.start..range.end) {
                 pairs += 1;
-                entry.push((line, symbol.position));
+                entry.push((line, position));
             }
         });
 
@@ -177,20 +166,18 @@ fn budget(rows: usize) -> usize {
 }
 
 /// Every symbol of `object` that has bytes, as a range in the address space the debug info is
-/// read in, sorted by start and carrying the running `max_end`.
+/// read in, to its position in [`Object::placed`]. The position and not the symbol index is
+/// what the index keeps, which is what makes an answer's order a sort of positions.
 ///
 /// The extent is [`SymbolData::extent`] and not the next-symbol estimate, because that is the
 /// extent everything else uses: it is what [`SymbolData::line_info`] asks about, so the index
 /// and the forward direction cannot disagree about what a symbol covers.
 ///
-/// In the order of [`Object::placed`], which is the `(start, symbol index)` wanted: a start
-/// is the placed address that index holds. Each range carries its position in that list, not
-/// the symbol index, which is what makes an answer's order a sort of positions. The rows come
-/// back in the same space: the DWARF backend is read at
-/// [`Section::bias`](crate::Section::bias), and a `.pdb` describes a linked image, where every
-/// bias is 0.
-fn symbol_ranges(object: &Object) -> Vec<SymbolRange> {
-    let mut ranges: Vec<SymbolRange> = object
+/// The ranges are biased, and the rows come back in the same space: the DWARF backend is read
+/// at [`Section::bias`](crate::Section::bias), and a `.pdb` describes a linked image, where
+/// every bias is 0.
+fn symbol_ranges(object: &Object) -> Intervals<PlacedAddress, u32> {
+    let ranges = object
         .placed_symbols()
         .iter()
         .enumerate()
@@ -200,40 +187,9 @@ fn symbol_ranges(object: &Object) -> Vec<SymbolRange> {
             let position = u32::try_from(position).ok()?;
             let start = entry.placed;
             let end = start.checked_add(entry.symbol.extent(object)?.bytes)?;
-            (start < end).then_some(SymbolRange {
-                start,
-                end,
-                max_end: end,
-                position,
-            })
-        })
-        .collect();
-
-    let mut max_end = PlacedAddress::ZERO;
-    for range in &mut ranges {
-        max_end = max_end.max(range.end);
-        range.max_end = max_end;
-    }
-
-    ranges
-}
-
-/// The symbols whose extent overlaps `[start, end)`. Usually one, occasionally two — a symbol
-/// aliasing another, or a `DW_AT_high_pc` reaching over an assembler label.
-fn intersecting(
-    ranges: &[SymbolRange],
-    start: PlacedAddress,
-    end: PlacedAddress,
-) -> impl Iterator<Item = &SymbolRange> {
-    // Everything that could overlap begins before the row ends.
-    let pos = ranges.partition_point(|range| range.start < end);
-    ranges[..pos]
-        .iter()
-        .rev()
-        // Nothing before an entry whose whole prefix ends at or before `start` can overlap
-        // either, which is what stops this walking back to the beginning of the object.
-        .take_while(move |range| range.max_end > start)
-        .filter(move |range| range.end > start)
+            Some((start..end, position))
+        });
+    Intervals::new(ranges)
 }
 
 impl Object {

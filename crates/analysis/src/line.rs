@@ -31,6 +31,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 mod dwarf;
+mod intervals;
 mod pdb;
 mod source;
 

@@ -459,8 +459,8 @@ address space a linked image's symbols already are, which is also the placed spa
 every backend in: a linked image is one nothing placed, so the two spaces are a `Bias::NONE` apart
 and `own`/`placed` say which is meant rather than leave it to be read off a type. **Per
 module, on demand**: line info in a PDB is per module (one object the linker took in), found from an
-address through the DBI's section contributions, a sorted table with a running `max_end`,
-`source.rs`'s `SymbolRange` shape, built at load. A module is decoded whole the first time an
+address through the DBI's section contributions, an `Intervals` (`line/intervals.rs`, the index
+the source index's symbol ranges are too) built at load. A module is decoded whole the first time an
 address in it is asked about (its rows through a whole, unclipped `RowCollector` into a `LineInfo`
 if any, its `S_GPROC32`/`S_LPROC32` lengths into an extent table) and kept, the way the DWARF backend
 keeps a unit's subprogram extents. A row with no length, one whose successor sits below it, which only

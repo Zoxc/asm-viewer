@@ -138,6 +138,9 @@ command.
   record, matched by GUID and age, read a page at a time; the only part that knows `pdb2`. Also
   the one eager path through the seam: opened at parse for the procedures and publics it names,
   which `parse_object` takes as symbols.
+- `crates/analysis/src/line/intervals.rs` — ranges that may overlap, each carrying a value,
+  searched for the ones a range overlaps: a PDB's section contributions and the source index's
+  symbols, one index for both.
 - `crates/analysis/src/line/source.rs` — the same line info the other way: a file and a line,
   out to the symbols compiled from them, built on the seam and not on a backend.
 - `crates/analysis/src/unwind.rs` — the unwind tables a linked image states its functions'
