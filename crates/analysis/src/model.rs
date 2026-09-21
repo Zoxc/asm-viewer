@@ -350,7 +350,7 @@ pub struct CodeSection {
     /// place it in the one address space every section of the object shares.
     /// [`Bias::NONE`] for every section of a linked image, whose addresses are real; in a
     /// relocatable object, where every code section starts at 0, an address of its own for
-    /// each. See [`section_biases`](crate::parse::section_biases).
+    /// each. See [`section_biases`](crate::sections::section_biases).
     pub bias: Bias,
 }
 

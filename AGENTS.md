@@ -119,6 +119,8 @@ command.
   entry states, an ELF's declared size, or the smaller of the debug info's and the estimate.
 - `crates/analysis/src/parse.rs` — one object file read into an `Object`: its sections and
   where each is placed, its symbols, and the code it declares outside its symbol table.
+- `crates/analysis/src/sections.rs` — the two rules the parse and the DWARF loader both follow:
+  where each code section is placed, and a section's bytes read with a believable size.
 - `crates/analysis/src/open.rs` — the entry point: each file tried as an archive and as an
   object, and every object handed over as it is parsed.
 - `crates/analysis/src/demangle.rs` — an object's symbol names demangled in one batch, on a

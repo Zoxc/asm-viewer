@@ -9,6 +9,7 @@ mod made_up;
 mod model;
 mod open;
 mod parse;
+mod sections;
 mod unwind;
 
 pub use address::{Bias, PlacedAddress, SectionAddress};

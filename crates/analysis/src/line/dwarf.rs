@@ -11,7 +11,7 @@
 //! question whichever backend answers it.
 
 use super::{recovered, LineBackend, RowCollector};
-use crate::parse::{section_biases, section_data};
+use crate::sections::{section_biases, section_data};
 use crate::{Bias, PlacedAddress, SectionAddress};
 use gimli::{EndianArcSlice, RunTimeEndian};
 use object::{
@@ -41,7 +41,7 @@ impl Dwarf {
     /// Build the context for one object file, or [`None`] when it has no DWARF. Never an
     /// error: corrupt debug info is simply "no line info".
     ///
-    /// The layout is [`crate::parse::section_biases`], asked again here rather than read back
+    /// The layout is [`crate::sections::section_biases`], asked again here rather than read back
     /// off the sections the parse kept: it is the rule that decides a section's place, so the
     /// rows land where the code listing draws them by construction, and a text section whose
     /// bytes would not read — one dropped from the parse — still moves the rows relocated
@@ -246,7 +246,7 @@ fn subprogram_extents(
     extents
 }
 
-/// One unit range list that [`crate::parse::section_biases`] left behind, and the bytes that
+/// One unit range list that [`crate::sections::section_biases`] left behind, and the bytes that
 /// make it read as a list of no ranges at all.
 struct StaleRangeList {
     section: gimli::SectionId,

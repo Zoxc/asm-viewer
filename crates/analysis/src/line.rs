@@ -466,7 +466,7 @@ pub struct LineRow {
 /// compiler-generated instructions belonging to no source line leave gaps, and
 /// [`row_at`](Self::row_at) returns [`None`] there rather than inventing a position.
 /// Non-overlapping is an invariant of this type, established by scoping the query to a
-/// section ([`crate::parse::section_biases`]) and by the clipping in [`RowCollector::finish`];
+/// section ([`crate::sections::section_biases`]) and by the clipping in [`RowCollector::finish`];
 /// where two rows genuinely covered one address, the one that starts first keeps it.
 pub struct LineInfo {
     rows: Vec<LineRow>,
@@ -577,7 +577,7 @@ impl Object {
     ///
     /// The section is not decoration: in a relocatable object every section starts at 0, so
     /// `range` on its own does not say which code it means. See
-    /// [`crate::parse::section_biases`].
+    /// [`crate::sections::section_biases`].
     ///
     /// [`None`] means "no line info" for every reason at once: no debug info, debug info in a
     /// format this does not read (CodeView embedded in a COFF object), a `.pdb` that is

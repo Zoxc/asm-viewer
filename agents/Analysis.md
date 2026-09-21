@@ -386,7 +386,7 @@ or debug info that says nothing about the range asked about. Four design points 
 - **An address alone is not a key in a relocatable object.** Sections there have no address until
   linked and rustc emits one `.text.<name>` per function, so every function lands on 0 and the line
   programs pile up (52 229 of 54 109 rows overlapped, measured on the 196-member rlib). The parse
-  does what a linker does: `section_biases` (`parse.rs`) gives each **text** section of a
+  does what a linker does: `section_biases` (`sections.rs`) gives each **text** section of a
   **relocatable** object a place of its own, recorded on the section as `CodeSection::bias`;
   `relocate` adds the bias, and **the seam** adds the query's section's bias on the way down and
   takes it off every row on the way back. It is the seam's and no backend's, because both backends
@@ -401,12 +401,12 @@ or debug info that says nothing about the range asked about. Four design points 
   section whose bytes would not read is dropped from the parse but still has to be placed, or the
   rows relocated against it land on 0 where the first section already sits. The layout starts above the highest address the file
   states — a Mach-O `.o` states one per section — so nothing is moved *down* and a bias is never a
-  wrapped value: `relocate`'s wrapping add and a query's checked one mean the same thing. It is
-  decided at parse and not in `line.rs` because the listing of an object's whole code is laid out
-  by the same rule, and one layout read twice cannot disagree with itself. Both limits matter: a
-  linked image holds real addresses literally and must be left alone, and an absolute relocation
-  in a debug section is often an offset into another `.debug_*` section rather than an address.
-  Hence `Object::line_info` takes a `&Section`: a bare range is not a question the crate can
+  wrapped value: `relocate`'s wrapping add and a query's checked one mean the same thing. It lives
+  in `sections.rs`, in neither the parse nor `line.rs`, because both read it and the listing of an
+  object's whole code is laid out by the same rule: one layout read twice cannot disagree with
+  itself. Both limits matter: a linked image holds real addresses literally and must be left
+  alone, and an absolute relocation in a debug section is often an offset into another
+  `.debug_*` section rather than an address. Hence `Object::line_info` takes a `&Section`: a bare range is not a question the crate can
   answer. `relocate` itself runs for a relocatable object only, for the same reason the bias does:
   a linked image's debug sections hold what the linker resolved, and one linked with
   `--emit-relocs` keeps the relocations that resolved them, which `object` attaches to their

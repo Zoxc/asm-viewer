@@ -29,12 +29,12 @@ pub struct SectionAddress(u64);
 ///
 /// What [`Object::symbol_at_placed`](crate::Object::symbol_at_placed) answers in, what a
 /// listing of a whole object's code draws in, and what the debug info is read in
-/// ([`section_biases`](crate::parse::section_biases)).
+/// ([`section_biases`](crate::sections::section_biases)).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PlacedAddress(u64);
 
 /// What a section's own addresses are moved by to place them: what
-/// [`section_biases`](crate::parse::section_biases) gives each code section of a relocatable
+/// [`section_biases`](crate::sections::section_biases) gives each code section of a relocatable
 /// object, and nothing at all for every other file and for every section holding no code.
 ///
 /// A type rather than a `u64` so that the conversion between the two spaces cannot be handed
@@ -146,7 +146,7 @@ impl SectionAddress {
     /// `wrapping_add` and not `checked_add`, as `line::relocate` adds the same bias:
     /// agreeing with it matters more than an overflow the biases cannot produce, the layout
     /// starting above the highest address the file states
-    /// ([`section_biases`](crate::parse::section_biases)). Wrapping is also what keeps this
+    /// ([`section_biases`](crate::sections::section_biases)). Wrapping is also what keeps this
     /// from panicking on an address a file made up.
     pub fn placed(self, bias: Bias) -> PlacedAddress {
         PlacedAddress(self.0.wrapping_add(bias.0))
