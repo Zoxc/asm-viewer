@@ -356,23 +356,9 @@ impl Pdb {
                 let Some(len) = line.length else {
                     continue;
                 };
-                let file = *files.entry(line.file_index.0).or_insert_with(|| {
-                    let info = program.get_file_info(line.file_index).ok()?;
-                    let name = self.strings.as_ref()?.get(info.name).ok()?.to_string();
-                    let hash = match info.checksum {
-                        pdb2::FileChecksum::Md5(bytes) => {
-                            bytes.try_into().ok().map(SourceHash::Md5)
-                        }
-                        pdb2::FileChecksum::Sha1(bytes) => {
-                            bytes.try_into().ok().map(SourceHash::Sha1)
-                        }
-                        pdb2::FileChecksum::Sha256(bytes) => {
-                            bytes.try_into().ok().map(SourceHash::Sha256)
-                        }
-                        pdb2::FileChecksum::None => None,
-                    };
-                    Some(rows.file(&name, hash))
-                });
+                let file = *files
+                    .entry(line.file_index.0)
+                    .or_insert_with(|| self.intern_file(&program, line.file_index, &mut rows));
                 // CodeView's line 0 is DWARF's: instructions belonging to no line. Column 0
                 // is the "no column" it writes when asked for none, which the collector
                 // takes as none.
@@ -398,6 +384,19 @@ impl Pdb {
             return None;
         }
         Some(ModuleLines { lines, procedures })
+    }
+
+    /// The file a module's line program names by `index`, resolved through the string table
+    /// and interned into `rows` with its checksum, or [`None`] where either lookup fails.
+    fn intern_file(
+        &self,
+        program: &pdb2::LineProgram<'_>,
+        index: pdb2::FileIndex,
+        rows: &mut RowCollector,
+    ) -> Option<usize> {
+        let info = program.get_file_info(index).ok()?;
+        let name = self.strings.as_ref()?.get(info.name).ok()?.to_string();
+        Some(rows.file(&name, source_hash(info.checksum)))
     }
 }
 
@@ -456,6 +455,17 @@ impl LineBackend for Pdb {
                 visit(placed(row.range.clone()), file, line);
             }
         }
+    }
+}
+
+/// A file's checksum as the PDB records it, or [`None`] where it records none or one of the
+/// wrong length.
+fn source_hash(checksum: pdb2::FileChecksum<'_>) -> Option<SourceHash> {
+    match checksum {
+        pdb2::FileChecksum::Md5(bytes) => bytes.try_into().ok().map(SourceHash::Md5),
+        pdb2::FileChecksum::Sha1(bytes) => bytes.try_into().ok().map(SourceHash::Sha1),
+        pdb2::FileChecksum::Sha256(bytes) => bytes.try_into().ok().map(SourceHash::Sha256),
+        pdb2::FileChecksum::None => None,
     }
 }
 
