@@ -4,8 +4,8 @@
 #![allow(dead_code)]
 
 use analysis::{
-    parse_object, CodeListing, Instruction, LineInfo, LineRow, Listing, Object, Place,
-    PlacedAddress, SectionAddress, SymbolData,
+    parse_object, CodeListing, Instruction, LineInfo, LineRow, Listing, Object, PlacedAddress,
+    SectionAddress, SymbolData,
 };
 use object::write;
 use object::{
@@ -212,25 +212,24 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
     // walk above did that.
     let code = CodeListing::new(&object);
     let mut placed_end = None;
+    let mut flat = 0;
     for (index, placed) in code.sections().iter().enumerate() {
         let range = placed.range();
         assert!(range.start < range.end);
         assert!(placed_end.is_none_or(|end| end <= range.start));
         placed_end = Some(range.end);
         assert_eq!(code.section_of(placed.listing.section()), Some(index));
-        for (stretch, s) in placed.listing.stretches().iter().enumerate() {
+        for s in placed.listing.stretches() {
             let at = placed.place(s.range.start);
             assert!(range.contains(&at));
-            assert_eq!(
-                code.at(at),
-                Some(Place {
-                    section: index,
-                    stretch
-                })
-            );
+            assert_eq!(code.at(at), Some(flat));
+            assert!(std::ptr::eq(code.stretch(flat).expect("the stretch").1, s));
+            flat += 1;
         }
-        assert_ne!(code.at(range.end).map(|place| place.section), Some(index));
+        // The air past the section's last byte is in no stretch of it.
+        assert!(code.at(range.end).is_none_or(|at| at >= flat));
     }
+    assert_eq!(code.stretch_count(), flat);
 
     // The reverse direction, which builds a whole-object index the first time it is asked.
     // Every symbol's own file and line, so the lookup path is walked and not only the build,

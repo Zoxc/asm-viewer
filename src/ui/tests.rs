@@ -35895,8 +35895,8 @@ fn the_walk_over_an_objects_code_holds_every_line_the_pane_draws() {
     for fixture in ["line_fixture.o", "line_fixture.dll"] {
         let (_path, objects) = fixture_objects_of(fixture, 1);
         let object = objects[0].clone();
-        let index = section::Flat::new(Arc::new(CodeListing::new(&object)));
-        let held: Vec<usize> = (0..index.count()).collect();
+        let code = Arc::new(CodeListing::new(&object));
+        let held: Vec<usize> = (0..code.stretch_count()).collect();
         let reading = reading_of(&object, &held);
         let rows = rows_of(&reading);
 
@@ -35923,7 +35923,7 @@ fn the_walk_over_an_objects_code_holds_every_line_the_pane_draws() {
 
         let mut walked: Vec<(PlacedAddress, String)> = held
             .iter()
-            .flat_map(|&flat| section_view::stretch_texts(&object, &index, flat))
+            .flat_map(|&flat| section_view::stretch_texts(&object, &code, flat))
             .map(|(address, line)| (address, line.to_string()))
             .collect();
 

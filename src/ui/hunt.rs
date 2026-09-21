@@ -118,15 +118,11 @@ pub(crate) fn hunt(
     emit: &mut dyn FnMut(Hunted) -> ControlFlow<()>,
 ) {
     let matcher = filter.matcher();
-    let index = section::Flat::new(Arc::clone(code));
-    let total = index.count();
+    let total = code.stretch_count();
     let Some(last) = total.checked_sub(1) else {
         return;
     };
-    let first = code
-        .at(from)
-        .and_then(|place| index.index(place))
-        .unwrap_or(0);
+    let first = code.at(from).unwrap_or(0);
 
     for step in 0..total {
         let flat = match direction {
@@ -140,7 +136,7 @@ pub(crate) fn hunt(
             }
         }
 
-        let mut lines = section_view::stretch_texts(object, &index, flat);
+        let mut lines = section_view::stretch_texts(object, code, flat);
         // In the order the listing draws them, and backwards for a walk that way, so the
         // match found is the nearest one behind the reader and not the first of a stretch.
         lines.sort_by_key(|(address, _)| *address);

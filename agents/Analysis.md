@@ -849,7 +849,11 @@ places an address the same way. A
 linked image's sections have real, distinct addresses and no bias, so there a placed address
 *is* the address; a relocatable object's code sections each get a place of their own. The air the
 layout leaves between two sections is nobody's bytes (`at` answers `None` there), and a section
-boundary is a label for the view to draw, not a gap. Two things are left out rather than listed: a
+boundary is a label for the view to draw, not a gap. **The listing numbers its own stretches**:
+every section's end to end, in placed order, worked out in `new` where the sections are fixed. That
+one number is what a stretch is named by, inside the crate and out -- `at` answers it, `stretch`
+and `decode` take it -- so a reader of the listing has no table of its own to write
+(`agents/Worker.md`). Two things are left out rather than listed: a
 code section with no bytes (gcc leaves an empty `.text` beside the split ones; it has a place in the
 layout, so the biases the tests pin skip a grain for it) and a section whose placed range overlaps
 the one before it, which a header can claim and nothing can draw. Each section's symbols are its own run of the

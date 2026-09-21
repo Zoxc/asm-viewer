@@ -140,9 +140,9 @@ pub(crate) fn holding(
 
 /// One window of an object's code to decode.
 ///
-/// `window` is the stretches wanted, by flat index over every section
-/// (`section::Flat`), **nearest the reader first**: the worker takes the first
-/// [`CHUNK`] of them. `code` is the skeleton once the view has one and `None` on the first
+/// `window` is the stretches wanted, by the flat index the listing numbers its stretches
+/// with ([`CodeListing::stretch_count`]), **nearest the reader first**: the worker takes
+/// the first [`CHUNK`] of them. `code` is the skeleton once the view has one and `None` on the first
 /// ask, when the worker builds it and answers with it. It is a [`Layout`], every stretch's
 /// rows estimated, so the worker counts them and not the UI thread.
 #[derive(Clone)]
@@ -171,14 +171,14 @@ impl CodeAsk {
             .code
             .clone()
             .unwrap_or_else(|| Arc::new(Layout::new(Arc::new(CodeListing::new(&self.object)))));
-        let (index, code) = (layout.flat(), layout.code());
+        let code = layout.code();
         let decoded = self
             .window
             .iter()
             .take(CHUNK)
             .filter_map(|&flat| {
-                let (place, stretch) = index.stretch(flat)?;
-                let decoded = code.decode(&self.object, place)?;
+                let stretch = code.stretch(flat)?.1;
+                let decoded = code.decode(&self.object, flat)?;
                 // The symbol's listing exactly as its own tab would work it out -- one
                 // decode, the crate's, with the lanes and the line info put beside it as
                 // `Studied::new` puts them.

@@ -15,7 +15,7 @@ pub use address::{Bias, PlacedAddress, SectionAddress};
 pub use disasm::{Assembly, BranchEdge, Instruction, Operand, SpanKind};
 pub use extent::Extent;
 pub use line::{LineInfo, LineRow, SourceDigests, SourceHash};
-pub use listing::{CodeListing, Gap, GapKind, Listing, Place, Placed, Stretch};
+pub use listing::{CodeListing, Gap, GapKind, Listing, Placed, Stretch};
 pub use made_up::MadeUp;
 pub use model::{CodeSection, FileDigest, Object, ObjectData, Section, Symbol, SymbolData};
 pub use open::{open_data_streaming, open_files, open_files_streaming, Progress};

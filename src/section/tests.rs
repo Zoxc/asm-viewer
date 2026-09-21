@@ -25,9 +25,8 @@ fn split() -> (Arc<Object>, Arc<CodeListing>) {
 }
 
 /// What decoding stretch `flat` of `code` draws, exactly as the worker will build it.
-fn decode(object: &Object, code: &CodeListing, rows: &Rows, flat: usize) -> Body {
-    let place = rows.place(flat).expect("the stretch exists");
-    let decoded = code.decode(object, place).expect("the stretch decodes");
+fn decode(object: &Object, code: &CodeListing, flat: usize) -> Body {
+    let decoded = code.decode(object, flat).expect("the stretch decodes");
     let lanes = match &decoded.code {
         Some(assembly) => Arc::new(Lanes::new(&assembly.edges, assembly.instructions.len())),
         None => Lanes::none(),
@@ -63,51 +62,6 @@ fn kind_of(rows: &Rows, at: usize) -> Option<Kind> {
     Some(rows.row(at)?.kind)
 }
 
-/// The flat index is one mapping, both ways: the listing's stretches numbered end to
-/// end, section by section, each naming its place and coming back from it, and the
-/// stretch it hands over is the one the crate has there. A place past the end of its
-/// section is nothing, and not the next section's first stretch.
-#[test]
-fn a_flat_index_numbers_every_stretch_in_placed_order_and_nothing_else() {
-    for name in ["line_fixture.o", "line_fixture_split.o"] {
-        let object = fixture(name);
-        let code = Arc::new(CodeListing::new(&object));
-        assert!(!code.sections().is_empty(), "the fixture's layout moved");
-        let index = Flat::new(code.clone());
-
-        let mut flat = 0;
-        for (section, placed) in code.sections().iter().enumerate() {
-            for stretch in 0..placed.listing.stretches().len() {
-                let place = Place { section, stretch };
-                assert_eq!(index.place(flat), Some(place), "{name} at {flat}");
-                assert_eq!(index.index(place), Some(flat), "{name} at {flat}");
-                let (named, held) = index.stretch(flat).expect("the stretch exists");
-                assert_eq!(named, place);
-                assert!(std::ptr::eq(held, &placed.listing.stretches()[stretch]));
-                flat += 1;
-            }
-        }
-
-        assert_eq!(index.count(), flat, "{name}: every stretch is counted");
-        assert_eq!(index.place(flat), None, "{name}: no stretch past the end");
-        assert!(index.stretch(flat).is_none(), "{name}: none to hand over");
-        let past = Place {
-            section: code.sections().len(),
-            stretch: 0,
-        };
-        assert_eq!(index.index(past), None, "{name}: no section past the last");
-        let over = Place {
-            section: 0,
-            stretch: code.sections()[0].listing.stretches().len(),
-        };
-        assert_eq!(
-            index.index(over),
-            None,
-            "{name}: a section ends where it ends"
-        );
-    }
-}
-
 /// Before a byte is decoded, a stretch is its header where a section starts, a label per
 /// symbol, and as many empty rows as its bytes suggest -- and never none, so that every
 /// label has a row under it.
@@ -116,7 +70,7 @@ fn a_stretch_nobody_decoded_is_a_run_of_empty_rows_sized_by_its_bytes() {
     let (_, code) = split();
     let rows = nothing_decoded(code.clone());
 
-    assert_eq!(rows.layout.flat.count(), 3);
+    assert_eq!(rows.code().stretch_count(), 3);
     let mut expected = 0;
     for (flat, placed) in code.sections().iter().enumerate() {
         let stretch = &placed.listing.stretches()[0];
@@ -158,10 +112,13 @@ fn a_rule_and_a_blank_stand_over_every_stretch_and_a_blank_under_every_header() 
     let object = fixture("line_fixture.o");
     let code = Arc::new(CodeListing::new(&object));
     let rows = nothing_decoded(code);
-    assert!(rows.layout.flat.count() > 2, "the fixture's layout moved");
+    assert!(
+        rows.code().stretch_count() > 2,
+        "the fixture's layout moved"
+    );
     let kinds = kinds(&rows);
 
-    for flat in 0..rows.layout.flat.count() {
+    for flat in 0..rows.code().stretch_count() {
         let first = rows_of(&rows, flat).start;
         let over = 2 * usize::from(flat > 0);
         if flat == 0 {
@@ -199,9 +156,12 @@ fn the_rows_above_a_body_are_counted_as_they_are_drawn() {
     let object = fixture("line_fixture.o");
     let code = Arc::new(CodeListing::new(&object));
     let rows = nothing_decoded(code);
-    assert!(rows.layout.flat.count() > 2, "the fixture's layout moved");
+    assert!(
+        rows.code().stretch_count() > 2,
+        "the fixture's layout moved"
+    );
 
-    for flat in 0..rows.layout.flat.count() {
+    for flat in 0..rows.code().stretch_count() {
         let range = rows_of(&rows, flat);
         let body = rows.body_start(flat).expect("the stretch has a body");
         assert!(range.contains(&body), "stretch {flat}'s body is outside it");
@@ -229,7 +189,7 @@ fn the_rows_above_a_body_are_counted_as_they_are_drawn() {
 fn an_address_finds_the_row_that_draws_it_and_the_row_names_it_back() {
     let (object, code) = split();
     let empty = nothing_decoded(code.clone());
-    let body = decode(&object, &code, &empty, 1);
+    let body = decode(&object, &code, 1);
     let half = Rows::new(code.clone(), |flat| (flat == 1).then(|| body.clone()));
 
     for (name, rows) in [("estimated", &empty), ("half decoded", &half)] {
@@ -275,7 +235,7 @@ fn an_address_finds_the_row_that_draws_it_and_the_row_names_it_back() {
 fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
     let (object, code) = split();
     let empty = nothing_decoded(code.clone());
-    let body = decode(&object, &code, &empty, 2);
+    let body = decode(&object, &code, 2);
     let half = Rows::new(code.clone(), |flat| (flat == 2).then(|| body.clone()));
     let (cut, cut_at) = add_cut_short(&object, &code, GapKind::Bytes);
     let with_gap = Rows::new(code.clone(), |flat| (flat == 0).then(|| cut.clone()));
@@ -289,7 +249,7 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
         ("with a gap", &with_gap),
         ("with a cut", &with_cut),
     ] {
-        for flat in 0..rows.layout.flat.count() {
+        for flat in 0..rows.code().stretch_count() {
             let range = rows_of(rows, flat);
             let start = rows.start_of(flat).unwrap();
             let bytes = rows.stretch_rows(flat).unwrap().bytes;
@@ -345,8 +305,7 @@ fn add_cut_short(
     code: &Arc<CodeListing>,
     kind: GapKind,
 ) -> (Body, SectionAddress) {
-    let empty = nothing_decoded(code.clone());
-    let mut cut = decode(object, code, &empty, 0);
+    let mut cut = decode(object, code, 0);
     let assembly = cut.assembly.clone().expect("add decodes");
     assert!(assembly.instructions.len() > 3, "add is short");
     let cut_at = assembly.instructions[2].address;
@@ -402,11 +361,11 @@ fn a_cut_gap_draws_a_cut_row_over_its_bytes() {
 fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
     let (object, code) = split();
     let empty = nothing_decoded(code.clone());
-    let body = decode(&object, &code, &empty, 1);
+    let body = decode(&object, &code, 1);
     let half = Rows::new(code.clone(), |flat| (flat == 1).then(|| body.clone()));
 
     for (name, rows) in [("estimated", &empty), ("half decoded", &half)] {
-        for flat in 0..rows.layout.flat.count() {
+        for flat in 0..rows.code().stretch_count() {
             let start = rows.start_of(flat).unwrap();
             let bytes = rows.stretch_rows(flat).unwrap().bytes;
             let body = rows.body_start(flat).unwrap();
@@ -448,7 +407,7 @@ fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
 fn decoding_a_stretch_settles_its_rows_and_moves_none_above_it() {
     let (object, code) = split();
     let before = nothing_decoded(code.clone());
-    let body = decode(&object, &code, &before, 1);
+    let body = decode(&object, &code, 1);
     let after = Rows::new(code.clone(), |flat| (flat == 1).then(|| body.clone()));
 
     let middle = rows_of(&before, 1);
@@ -510,9 +469,8 @@ fn decoding_a_stretch_settles_its_rows_and_moves_none_above_it() {
 #[test]
 fn a_relocatable_objects_sections_draw_at_their_placed_addresses() {
     let (object, code) = split();
-    let empty = nothing_decoded(code.clone());
     let bodies: HashMap<usize, Body> = (0..3)
-        .map(|flat| (flat, decode(&object, &code, &empty, flat)))
+        .map(|flat| (flat, decode(&object, &code, flat)))
         .collect();
     let rows = Rows::new(code.clone(), |flat| bodies.get(&flat).cloned());
 
@@ -583,9 +541,8 @@ fn a_window_is_the_stretches_around_the_view_nearest_first_less_those_held() {
 #[test]
 fn a_separator_row_belongs_to_the_instruction_below_it() {
     let (object, code) = split();
-    let empty = nothing_decoded(code.clone());
     // `sum_to` is the one with a loop, and so a block boundary.
-    let body = decode(&object, &code, &empty, 2);
+    let body = decode(&object, &code, 2);
     let rows = Rows::new(code, |flat| (flat == 2).then(|| body.clone()));
 
     let separators: Vec<usize> = (0..rows.len())

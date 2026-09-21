@@ -209,6 +209,10 @@ impl Listing {
 /// section before it, which a file's headers can claim but nothing can draw.
 pub struct CodeListing {
     sections: Vec<Placed>,
+    /// `starts[s]` is the flat index of section `s`'s first stretch; one more entry holds
+    /// the stretch count. A section with no stretches shares the start of whatever follows
+    /// it, which is what the `partition_point` over this has to step over.
+    starts: Vec<usize>,
 }
 
 /// One code section in a [`CodeListing`]: its listing, and where the layout put it.
@@ -239,11 +243,14 @@ impl Placed {
     }
 }
 
-/// A place in a [`CodeListing`]: which of its sections, and which stretch of that.
+/// A place in a [`CodeListing`]: which of its sections, and which stretch of that. The
+/// listing's own way of holding a stretch, which nothing outside it speaks: a stretch is
+/// named by its **flat index** everywhere else, and this is what that index is resolved
+/// to and from ([`CodeListing::place`] and [`CodeListing::flat`], both private).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Place {
-    pub section: usize,
-    pub stretch: usize,
+struct Place {
+    section: usize,
+    stretch: usize,
 }
 
 impl CodeListing {
@@ -272,7 +279,17 @@ impl CodeListing {
                 sections.push(next);
             }
         }
-        Self { sections }
+        // Every section's stretches numbered end to end, in placed order: the sections
+        // are fixed from here on, so the numbering is too.
+        let mut starts = Vec::with_capacity(sections.len() + 1);
+        let mut total = 0;
+        for section in &sections {
+            starts.push(total);
+            total += section.listing.stretches().len();
+        }
+        starts.push(total);
+
+        Self { sections, starts }
     }
 
     /// The code sections, in placed order.
@@ -288,17 +305,62 @@ impl CodeListing {
             .position(|placed| std::ptr::eq(&**placed.listing.section(), section))
     }
 
-    /// Where a placed address is: the section it falls in and the stretch of that section.
-    /// [`None`] between two sections, and outside every one ([`covering`]).
-    pub fn at(&self, placed: PlacedAddress) -> Option<Place> {
+    /// How many stretches the listing has, over every section. The one number a stretch
+    /// is named by: a flat index is `0..stretch_count()`, and every question here about a
+    /// stretch is asked with one.
+    pub fn stretch_count(&self) -> usize {
+        *self.starts.last().unwrap_or(&0)
+    }
+
+    /// Where the flat index `flat` is in the sections.
+    fn place(&self, flat: usize) -> Option<Place> {
+        if flat >= self.stretch_count() {
+            return None;
+        }
+        // The last section starting at or before `flat`, which steps over a section with
+        // no stretches; `starts` has one entry past the sections.
+        let after = self.starts.partition_point(|&first| first <= flat);
+        let section = after.checked_sub(1)?;
+        Some(Place {
+            section,
+            stretch: flat - self.starts[section],
+        })
+    }
+
+    /// The flat index of a place, if the listing has it.
+    fn flat(&self, place: Place) -> Option<usize> {
+        let first = *self.starts.get(place.section)?;
+        let end = *self.starts.get(place.section + 1)?;
+        let flat = first.checked_add(place.stretch)?;
+        (flat < end).then_some(flat)
+    }
+
+    /// The stretch at flat index `flat`, and the section it is in. One call, so nothing
+    /// indexes a section with an index it was handed a line earlier.
+    pub fn stretch(&self, flat: usize) -> Option<(&Placed, &Stretch)> {
+        let place = self.place(flat)?;
+        let placed = self.sections.get(place.section)?;
+        Some((placed, placed.listing.stretches().get(place.stretch)?))
+    }
+
+    /// Whether stretch `flat` is the first of its section, which is where a reader is
+    /// told the section starts. `false` for a flat index the listing has no stretch at.
+    pub fn opens_section(&self, flat: usize) -> bool {
+        self.place(flat).is_some_and(|place| place.stretch == 0)
+    }
+
+    /// Where a placed address is, as a flat index. [`None`] between two sections, and
+    /// outside every one ([`covering`]).
+    pub fn at(&self, placed: PlacedAddress) -> Option<usize> {
         let section = covering(&self.sections, |section| section.range.clone(), placed)?;
         let found = &self.sections[section];
         let stretch = found.listing.stretch_at(found.local(placed))?;
-        Some(Place { section, stretch })
+        self.flat(Place { section, stretch })
     }
 
-    /// [`Listing::decode`] for the stretch at `place`.
-    pub fn decode(&self, object: &Object, place: Place) -> Option<DecodedStretch> {
+    /// [`Listing::decode`] for the stretch at flat index `flat`.
+    pub fn decode(&self, object: &Object, flat: usize) -> Option<DecodedStretch> {
+        let place = self.place(flat)?;
         self.sections
             .get(place.section)?
             .listing

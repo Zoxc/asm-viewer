@@ -5,8 +5,8 @@
 mod common;
 
 use analysis::{
-    parse_object, Architecture, Bias, CodeListing, Extent, GapKind, Listing, Object, Place,
-    Section, SectionAddress, SymbolData,
+    parse_object, Architecture, Bias, CodeListing, Extent, GapKind, Listing, Object, Section,
+    SectionAddress, SymbolData,
 };
 use common::{
     at, caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
@@ -755,6 +755,9 @@ fn every_code_listing_places_its_sections_and_finds_every_stretch_again() {
         assert_eq!(code.sections().len(), with_bytes, "{name}");
 
         let mut placed_end = placed_at(0);
+        // The flat index of the section's first stretch, which every stretch of it is
+        // found at in turn: the numbering the listing states, counted again here.
+        let mut first_stretch = 0;
         for (index, placed) in code.sections().iter().enumerate() {
             let range = placed.range();
             let section = placed.listing.section();
@@ -779,14 +782,11 @@ fn every_code_listing_places_its_sections_and_finds_every_stretch_again() {
             for (stretch, s) in placed.listing.stretches().iter().enumerate() {
                 let start = placed.place(s.range.start);
                 assert_eq!(placed.local(start), s.range.start);
-                let place = Place {
-                    section: index,
-                    stretch,
-                };
-                assert_eq!(code.at(start), Some(place), "{name}: {}", section.name);
-                assert_eq!(code.at(placed.place(last_byte(&s.range))), Some(place));
+                let flat = first_stretch + stretch;
+                assert_eq!(code.at(start), Some(flat), "{name}: {}", section.name);
+                assert_eq!(code.at(placed.place(last_byte(&s.range))), Some(flat));
 
-                let through = code.decode(&object, place).expect("decodes");
+                let through = code.decode(&object, flat).expect("decodes");
                 let own = placed.listing.decode(&object, stretch).expect("decodes");
                 assert_eq!(through.gap, own.gap);
                 assert_eq!(
@@ -794,7 +794,17 @@ fn every_code_listing_places_its_sections_and_finds_every_stretch_again() {
                     own.code.map(|c| c.instructions.len())
                 );
             }
+            // A section's first stretch says it opens one, and the numbering carries on
+            // into the section after it.
+            assert!(
+                placed.listing.stretches().is_empty() || code.opens_section(first_stretch),
+                "{name}: {}",
+                section.name
+            );
+            first_stretch += placed.listing.stretches().len();
         }
+        assert_eq!(code.stretch_count(), first_stretch, "{name}");
+        assert!(code.stretch(first_stretch).is_none(), "{name}");
         for section in &object.sections {
             if section.code().is_none() {
                 assert_eq!(code.section_of(section), None, "{name}: {}", section.name);
@@ -813,28 +823,17 @@ fn a_relocatable_objects_sections_are_placed_one_after_another() {
     assert_eq!(placed_ranges(&code), [(0, 6), (16, 18)]);
     assert_eq!(code.sections()[1].bias(), Bias::new(16));
 
-    assert_eq!(
-        code.at(placed_at(0)),
-        Some(Place {
-            section: 0,
-            stretch: 0
-        })
-    );
-    assert_eq!(code.at(placed_at(5)).map(|place| place.section), Some(0));
+    assert_eq!(code.at(placed_at(0)), Some(0));
+    assert_eq!(code.at(placed_at(5)), Some(0));
     assert_eq!(
         code.at(placed_at(6)),
         None,
         "the air after first is nowhere"
     );
     assert_eq!(code.at(placed_at(15)), None);
-    assert_eq!(
-        code.at(placed_at(16)),
-        Some(Place {
-            section: 1,
-            stretch: 0
-        })
-    );
+    assert_eq!(code.at(placed_at(16)), Some(1), "the second section's own");
     assert_eq!(code.at(placed_at(18)), None);
+    assert_eq!(code.stretch_count(), 2);
 
     // The listing at the place is the section's own, symbol and all.
     let second = code.sections()[1].listing.stretches()[0]
@@ -842,15 +841,7 @@ fn a_relocatable_objects_sections_are_placed_one_after_another() {
         .expect("second is labelled");
     assert_eq!(second.name, "second");
     assert_eq!(second.address, at(0), "the symbol keeps the file's address");
-    let decoded = code
-        .decode(
-            &object,
-            Place {
-                section: 1,
-                stretch: 0,
-            },
-        )
-        .expect("second decodes");
+    let decoded = code.decode(&object, 1).expect("second decodes");
     assert_eq!(decoded.code.map(|code| code.instructions.len()), Some(2));
 
     // And the line info reads the same layout: each function's own line, not the other's.
@@ -894,13 +885,9 @@ fn the_committed_split_object_is_three_functions_in_a_row() {
     assert_eq!(starts, [0x10, 0x30, 0x50]);
     for (index, placed) in code.sections().iter().enumerate() {
         assert_eq!(placed.listing.stretches().len(), 1);
-        assert_eq!(
-            code.at(placed.range().start),
-            Some(Place {
-                section: index,
-                stretch: 0
-            })
-        );
+        // One stretch each, so the flat index of a section's only stretch is its own.
+        assert_eq!(code.at(placed.range().start), Some(index));
+        assert!(code.opens_section(index));
     }
 
     // The one-`.text` build is the same three functions in one section, unmoved.
@@ -909,6 +896,38 @@ fn the_committed_split_object_is_three_functions_in_a_row() {
     assert_eq!(placed_names(&code), [".text"]);
     assert_eq!(code.sections()[0].range().start, placed_at(0));
     assert_eq!(code.sections()[0].listing.stretches().len(), 3);
+}
+
+/// The flat index is one numbering: every section's stretches end to end, in placed
+/// order, each index handing over the stretch that section has there and each section's
+/// first index saying so. Nothing past the last.
+#[test]
+fn a_flat_index_numbers_every_stretch_in_placed_order_and_nothing_else() {
+    for name in ["line_fixture.o", "line_fixture_split.o"] {
+        let object = committed(name);
+        let code = CodeListing::new(&object);
+        assert!(!code.sections().is_empty(), "{name}: the layout moved");
+
+        let mut flat = 0;
+        for placed in code.sections() {
+            for (stretch, held) in placed.listing.stretches().iter().enumerate() {
+                let (section, handed) = code.stretch(flat).expect("the stretch exists");
+                assert!(std::ptr::eq(section, placed), "{name} at {flat}");
+                assert!(std::ptr::eq(handed, held), "{name} at {flat}");
+                assert_eq!(code.opens_section(flat), stretch == 0, "{name} at {flat}");
+                assert_eq!(code.at(placed.place(held.range.start)), Some(flat));
+                flat += 1;
+            }
+        }
+
+        assert_eq!(code.stretch_count(), flat, "{name}: every stretch counted");
+        assert!(code.stretch(flat).is_none(), "{name}: none past the end");
+        assert!(
+            !code.opens_section(flat),
+            "{name}: no section past the last"
+        );
+        assert!(code.decode(&object, flat).is_none(), "{name}");
+    }
 }
 
 #[test]
@@ -934,12 +953,7 @@ fn a_linked_image_is_placed_at_its_own_addresses() {
         placed.place(at(TEXT_ADDRESS + 4)),
         placed_at(TEXT_ADDRESS + 4)
     );
-    assert_eq!(
-        code.at(placed_at(TEXT_ADDRESS + 4)),
-        Some(Place {
-            section: 0,
-            stretch: 1
-        })
-    );
+    assert_eq!(code.at(placed_at(TEXT_ADDRESS + 4)), Some(1));
+    assert!(!code.opens_section(1), "the section's second stretch");
     assert_eq!(code.at(placed_at(TEXT_ADDRESS - 1)), None);
 }

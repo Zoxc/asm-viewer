@@ -107,11 +107,14 @@ there is no receiver here whose dropping could stop it and the walk number does 
 **A third kind of question is a window of an object's code** (`src/ui/reading.rs`), for the section
 view. `Question::Code(CodeAsk)` carries an object, its skeleton once the view has one, and the
 stretches wanted by flat index, **nearest the reader first**. A flat index numbers the sections'
-stretches end to end, and `section::Flat` is the one mapping between it and the crate's `Place`. It
-hands over the stretch along with the place, so nothing indexes the listing with a place it was
-given a line earlier; the worker builds one over the skeleton, and the rows the view draws are
-counted over another. The skeleton is the `CodeListing`, free to build, with every stretch's rows
-estimated over it (`section::Layout`), which is not free: it is built on the worker with the first
+stretches end to end, and the numbering is the `CodeListing`'s own: it is worked out once where
+the sections are fixed, in `CodeListing::new`, and a stretch is a flat index to the view, the
+worker, the rows and the crate alike. `CodeListing::stretch` hands over the section along with
+the stretch, so nothing indexes a section with an index it was given a line earlier. The app
+owned the table instead (`section::Flat`), which made `Place` -- the listing's section and
+stretch -- a public type whose only use was to be converted from and to. The skeleton is the
+`CodeListing`, free to build, with every stretch's rows estimated over it (`section::Layout`),
+which is not free: it is built on the worker with the first
 ask and answered with it, so the UI thread never counts the whole listing. The decode is
 `CodeAsk::decode`, in `reading.rs` beside the rest of the mechanism rather than in `answer`, which
 calls it and names the answer. A stretch goes through the crate's own `CodeListing::decode` and then

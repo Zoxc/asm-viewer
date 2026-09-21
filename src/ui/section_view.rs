@@ -280,20 +280,16 @@ fn line_at(
 /// row from a separator.
 pub(crate) fn stretch_texts(
     object: &Object,
-    index: &section::Flat,
+    code: &CodeListing,
     flat: usize,
 ) -> Vec<(PlacedAddress, Line)> {
-    let Some((place, stretch)) = index.stretch(flat) else {
+    let Some((placed, stretch)) = code.stretch(flat) else {
         return Vec::new();
     };
-    let Some(placed) = index.code().sections().get(place.section) else {
-        return Vec::new();
-    };
-    let decoded = index
-        .code()
-        .decode(object, place)
+    let decoded = code
+        .decode(object, flat)
         .map(|decoded| Body::of(decoded.code, decoded.gap));
-    let rows = StretchRows::of(placed, stretch, place, flat, decoded);
+    let rows = StretchRows::of(placed, stretch, code.opens_section(flat), flat, decoded);
     rows.kinds()
         .filter_map(|kind| line_at(placed, stretch, rows.body(), kind))
         .collect()
@@ -570,7 +566,7 @@ impl Component for EmptyRow {
 /// placed address the row stands for.
 #[derive(Hash)]
 enum RowKey {
-    Header(usize),
+    Header(PlacedAddress),
     Rule(PlacedAddress),
     Space(PlacedAddress, bool),
     Label(PlacedAddress, usize),
@@ -601,7 +597,9 @@ impl RowKey {
         let start = || rows.start_of(at.stretch).unwrap_or(NO_ADDRESS);
         let address = || rows.address_of(row);
         match at.kind {
-            Kind::Header => Self::Header(rows.place(at.stretch).map_or(0, |place| place.section)),
+            // The section's own start, which is the only address a header stands for and
+            // is one section's alone: the sections are placed in order and do not overlap.
+            Kind::Header => Self::Header(address().unwrap_or(NO_ADDRESS)),
             Kind::Rule => Self::Rule(start()),
             Kind::Space { under } => Self::Space(start(), under),
             Kind::Label(index) => Self::Label(address().unwrap_or(NO_ADDRESS), index),
