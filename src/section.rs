@@ -701,11 +701,7 @@ impl Rows {
                     return Some(body + decoded.listing_rows() + cut_rows(gap) + index);
                 }
                 let assembly = decoded.assembly.as_ref()?;
-                // The last instruction starting at or before the address.
-                let after = assembly
-                    .instructions
-                    .partition_point(|instruction| instruction.address <= local);
-                let index = after.checked_sub(1)?;
+                let index = assembly.instruction_at(local)?;
                 Some(body + decoded.lanes.row_of(index))
             }
         }

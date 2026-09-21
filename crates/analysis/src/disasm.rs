@@ -355,16 +355,15 @@ impl Assembly {
     ) -> Self {
         let instructions = backend.disassemble(code);
 
-        // A backend decodes from the front, so the rows ascend by address and a target is one
-        // binary search away. A target with no row is dropped; see `edges`.
+        // The target's own row, found by `instruction_starting`'s search, spelt as the free
+        // function because there is no `Self` to ask yet. A target with no row is dropped;
+        // see `edges`.
         let edges = instructions
             .iter()
             .enumerate()
             .filter_map(|(from, instruction)| {
                 let target = instruction.branch()?;
-                let to = instructions
-                    .binary_search_by_key(&target, |instruction| instruction.address)
-                    .ok()?;
+                let to = starting(&instructions, target)?;
                 (to != from).then_some(BranchEdge { from, to })
             })
             .collect();
@@ -392,6 +391,25 @@ impl Assembly {
         self.edges.get(at).copied()
     }
 
+    /// The instruction **holding** the byte at `address`: the last one starting at or before
+    /// it, and [`None`] before the first. A door into the middle of an instruction lands on
+    /// the instruction the byte is in.
+    ///
+    /// A binary search, not a scan: a backend decodes from the front, so
+    /// [`instructions`](Self::instructions) ascend strictly by address.
+    pub fn instruction_at(&self, address: SectionAddress) -> Option<usize> {
+        holding(&self.instructions, address)
+    }
+
+    /// The instruction starting **exactly** at `address`, which is what a branch target
+    /// wants: a target landing mid-instruction has no row of its own.
+    ///
+    /// The same search as [`instruction_at`](Self::instruction_at), under the same
+    /// invariant, with the answer kept only where that instruction starts at `address`.
+    pub fn instruction_starting(&self, address: SectionAddress) -> Option<usize> {
+        starting(&self.instructions, address)
+    }
+
     /// The answer for an architecture no arm of `decode` claims: no rows, the architecture's
     /// name to say why, and the bytes that would have been decoded — an undecodable symbol
     /// still states its extent.
@@ -408,6 +426,21 @@ impl Assembly {
             extent,
         }
     }
+}
+
+/// [`Assembly::instruction_at`] over rows that are not an [`Assembly`] yet: `decoded` searches
+/// while it is still building them.
+fn holding(instructions: &[Instruction], address: SectionAddress) -> Option<usize> {
+    instructions
+        .partition_point(|instruction| instruction.address <= address)
+        .checked_sub(1)
+}
+
+/// [`Assembly::instruction_starting`] over the same: the holding instruction, kept only where
+/// it starts at `address`.
+fn starting(instructions: &[Instruction], address: SectionAddress) -> Option<usize> {
+    let index = holding(instructions, address)?;
+    (instructions[index].address == address).then_some(index)
 }
 
 /// A branch from one instruction of a symbol to another instruction of the same symbol.
@@ -437,3 +470,6 @@ impl BranchEdge {
         self.to < self.from
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1249,17 +1249,6 @@ fn owed_listing_row(
     owing.row(|pair| paired(pair).map(|index| lanes.row_of(index)))
 }
 
-/// The instruction a door's planted `address` lands on: the last one at or below it, so a
-/// door into the middle of an instruction lands on the instruction holding the byte.
-///
-/// [`None`] where the address is before the listing's first instruction, which is a
-/// planting dropped rather than left.
-fn planted_index(instructions: &[Instruction], address: SectionAddress) -> Option<usize> {
-    instructions
-        .partition_point(|instruction| instruction.address <= address)
-        .checked_sub(1)
-}
-
 impl Component for InstructionList {
     fn render(&self) -> impl IntoElement {
         // What the rows' menus write, consumed here and carried to them: a handler may not
@@ -1355,7 +1344,9 @@ impl Component for InstructionList {
                 else {
                     return;
                 };
-                let Some(index) = planted_index(&data.assembly().instructions, address) else {
+                // The instruction holding the planted byte. An address before the listing's
+                // first is a planting dropped rather than left.
+                let Some(index) = data.assembly().instruction_at(address) else {
                     return;
                 };
                 let file = data.position(index).map(|at| at.file);

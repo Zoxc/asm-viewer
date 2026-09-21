@@ -322,41 +322,6 @@ fn the_row_a_reveal_goes_to_is_the_runs_own_or_the_paired_instructions() {
     );
 }
 
-/// **A planted address lands on the instruction holding it**, which is the last one at or
-/// below it; an address before the first is dropped.
-#[test]
-fn a_planted_address_lands_on_the_instruction_holding_it() {
-    let instructions = [instruction(0x10, Vec::new()), instruction(0x18, Vec::new())];
-    assert_eq!(
-        planted_index(&instructions, SectionAddress::new(0x10)),
-        Some(0)
-    );
-    assert_eq!(
-        planted_index(&instructions, SectionAddress::new(0x14)),
-        Some(0),
-        "inside the first"
-    );
-    assert_eq!(
-        planted_index(&instructions, SectionAddress::new(0x18)),
-        Some(1)
-    );
-    assert_eq!(
-        planted_index(&instructions, SectionAddress::new(0x20)),
-        Some(1),
-        "past the last"
-    );
-    assert_eq!(
-        planted_index(&instructions, SectionAddress::new(0x0)),
-        None,
-        "before the listing's first instruction"
-    );
-    assert_eq!(
-        planted_index(&[], SectionAddress::new(0x10)),
-        None,
-        "a listing with no rows"
-    );
-}
-
 /// **One answer for what a press on a link does**, over Ctrl and the listing the link is
 /// drawn in, and the whole of it: where the target opens as well as which target it is.
 /// A press that is no door is left to the row, which a label is without Ctrl. Alt is the

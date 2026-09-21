@@ -790,6 +790,16 @@ both.
 names at most one target and a backend decodes from the front, so `from` ascends strictly across
 `edges`.
 
+The same invariant holds over `instructions` themselves, which ascend by address, and the crate
+states it once in the two lookups it makes: `Assembly::instruction_at` is the instruction
+**holding** the byte at an address, the last one starting at or before it, and
+`instruction_starting` the one starting **exactly** there. The app asks the first wherever a
+place is an address and the answer is a row -- a door planted mid-instruction, a row of the
+section listing -- and `decoded` asks the second for each branch target, which is where a target
+landing mid-instruction becomes an edge dropped. `decoded` searches while it is still building
+its rows, with no `Assembly` to ask, so both methods are one line over a private free function
+that `decoded` calls directly.
+
 **The section listing** (`listing.rs`) is the crate's half of the unified section view: a whole
 section as one address-keyed listing, beside the symbol view and not instead of it. Nothing
 index-keyed changed for it. `Listing::new` is the **skeleton**, and it decodes nothing: one
