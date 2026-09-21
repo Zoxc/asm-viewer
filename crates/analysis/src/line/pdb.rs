@@ -129,13 +129,12 @@ impl Pdb {
         let mut listed = dbi.section_contributions().ok()?;
         // A malformed tail stops the walk where it goes wrong and keeps what was read.
         while let Ok(Some(contribution)) = listed.next() {
-            let Some(start) = contribution.offset.to_internal_rva(&address_map) else {
-                continue;
-            };
-            let Some(end) = start.0.checked_add(contribution.size) else {
-                continue;
-            };
-            let ranges = rebased(&address_map, image_base, start..PdbInternalRva(end));
+            let ranges = rebased(
+                &address_map,
+                image_base,
+                contribution.offset,
+                contribution.size,
+            );
             contributions.extend(ranges.map(|range| (range, contribution.module)));
         }
         let contributions = Intervals::new(contributions);
@@ -352,12 +351,9 @@ impl Pdb {
             let mut lines = program.lines();
             // A malformed tail stops the walk where it goes wrong and keeps what was read.
             while let Ok(Some(line)) = lines.next() {
-                let Some(start) = line.offset.to_internal_rva(&self.address_map) else {
-                    continue;
-                };
                 // A row without a length is one whose successor sits *below* it — a shape
                 // only assemblers emit — and it is dropped rather than given an end.
-                let Some(end) = line.length.and_then(|len| start.0.checked_add(len)) else {
+                let Some(len) = line.length else {
                     continue;
                 };
                 let file = *files.entry(line.file_index.0).or_insert_with(|| {
@@ -382,8 +378,7 @@ impl Pdb {
                 // takes as none.
                 let line_number = (line.line_start != 0).then_some(line.line_start);
                 let column = line.column_start;
-                let range = start..PdbInternalRva(end);
-                for range in rebased(&self.address_map, self.image_base, range) {
+                for range in rebased(&self.address_map, self.image_base, line.offset, len) {
                     rows.push(placed(range), file, line_number, column);
                 }
             }
@@ -511,15 +506,21 @@ fn find(
     })
 }
 
-/// An internal RVA range the PDB states, as the ranges of the image's own address space it
-/// lies over: through the address map, which can split it, and onto the image base. A piece
-/// that would overflow the address space, or that is empty, is dropped.
+/// The `len` bytes the PDB states at `offset`, as the ranges of the image's own address
+/// space they lie over: through the address map, which can split them, and onto the image
+/// base. Nothing when the offset will not map or its end overflows; a piece that would
+/// overflow the address space, or that is empty, is dropped.
 fn rebased<'a>(
     address_map: &'a AddressMap<'_>,
     image_base: SectionAddress,
-    range: Range<PdbInternalRva>,
+    offset: PdbInternalSectionOffset,
+    len: u32,
 ) -> impl Iterator<Item = Range<SectionAddress>> + 'a {
-    address_map.rva_ranges(range).filter_map(move |range| {
+    let pieces = offset.to_internal_rva(address_map).and_then(|start| {
+        let end = start.0.checked_add(len)?;
+        Some(address_map.rva_ranges(start..PdbInternalRva(end)))
+    });
+    pieces.into_iter().flatten().filter_map(move |range| {
         let start = image_base.checked_add(u64::from(range.start.0))?;
         let end = image_base.checked_add(u64::from(range.end.0))?;
         (start < end).then_some(start..end)
