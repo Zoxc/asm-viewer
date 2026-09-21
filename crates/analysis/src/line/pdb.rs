@@ -225,24 +225,19 @@ impl Pdb {
         &'a self,
         info: &'a pdb2::ModuleInfo<'_>,
     ) -> impl Iterator<Item = (SectionAddress, pdb2::ProcedureSymbol<'a>)> + 'a {
-        let mut symbols = info.symbols().ok();
-        std::iter::from_fn(move || {
-            let symbols = symbols.as_mut()?;
-            while let Ok(Some(symbol)) = symbols.next() {
+        let symbols = info.symbols().ok().into_iter();
+        let symbols = symbols.flat_map(|symbols| symbols.iterator().map_while(Result::ok));
+        symbols
+            .filter_map(move |symbol| {
                 let Ok(pdb2::SymbolData::Procedure(procedure)) = symbol.parse() else {
-                    continue;
+                    return None;
                 };
                 if procedure.len == 0 {
-                    continue;
+                    return None;
                 }
-                let Some(address) = self.address(procedure.offset) else {
-                    continue;
-                };
-                return Some((address, procedure));
-            }
-            None
-        })
-        .fuse()
+                Some((self.address(procedure.offset)?, procedure))
+            })
+            .fuse()
     }
 
     /// A `section:offset` the PDB states, as an address in the image's own space: through
@@ -326,14 +321,10 @@ impl Pdb {
         #[cfg(test)]
         self.walks
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut list = self.dbi.modules().ok();
-        let mut index = 0;
-        std::iter::from_fn(move || {
-            let module = list.as_mut()?.next().ok().flatten()?;
-            index += 1;
-            Some((index - 1, module))
-        })
-        .fuse()
+        let list = self.dbi.modules().ok().into_iter();
+        list.flat_map(|list| list.iterator().map_while(Result::ok))
+            .enumerate()
+            .fuse()
     }
 
     fn decode(&self, module: &pdb2::Module<'_>) -> Option<ModuleLines> {
