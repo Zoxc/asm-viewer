@@ -25,7 +25,7 @@
 
 mod common;
 
-use analysis::{Architecture, Gap, GapKind, Listing};
+use analysis::{Architecture, Gap, GapKind, Listing, MadeUp};
 use common::{
     at, committed_fixture, elf_shared_object, named, names, parse, pe_image, ExportedSymbol, PeDll,
     SharedObject, TEXT_ADDRESS,
@@ -122,6 +122,11 @@ fn unwind_entries_are_symbols_where_nothing_names_them() {
     assert_eq!(second.address, at(TEXT_ADDRESS + 4));
     assert_eq!(second.size, 2, "the entry's stated length");
     assert_eq!(second.demangled, None, "ours, not the file's");
+    assert_eq!(
+        second.made_up,
+        Some(MadeUp::Function(at(TEXT_ADDRESS + 4))),
+        "and it says which of ours"
+    );
     assert_eq!(
         second.section.as_ref().map(|s| s.name.as_str()),
         Some(".text")

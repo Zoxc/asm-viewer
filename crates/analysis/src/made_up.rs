@@ -6,7 +6,7 @@ use crate::SectionAddress;
 use std::fmt;
 
 /// A name the app made up, its [`Display`](fmt::Display) the one place the spelling lives.
-/// [`MadeUp::of`] reads one back.
+/// A symbol so named keeps which one it is ([`SymbolData::made_up`](crate::SymbolData::made_up)).
 ///
 /// The angle brackets are the point: no assembler, linker or mangling scheme produces them,
 /// so none of these can collide with a name that was in the file. The address is in the
@@ -30,21 +30,6 @@ pub enum MadeUp {
 }
 
 impl MadeUp {
-    /// Which of these `name` is for a symbol at `address`, or [`None`] where the name is the
-    /// file's own. The candidates are rendered and compared, so [`Display`](fmt::Display)
-    /// stays the one place the spelling lives; and it is the address that decides, so a name
-    /// out of a file that reads like one of these but sits somewhere else is not taken for
-    /// one.
-    pub fn of(name: &str, address: SectionAddress) -> Option<MadeUp> {
-        [
-            MadeUp::EntryPoint,
-            MadeUp::Function(address),
-            MadeUp::Fragment(address),
-        ]
-        .into_iter()
-        .find(|made_up| made_up.to_string() == name)
-    }
-
     /// What to call the code an unwind entry declares.
     pub(crate) fn unwind(entry: &UnwindEntry) -> MadeUp {
         let address = entry.range.start;

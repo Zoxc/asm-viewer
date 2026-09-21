@@ -25,7 +25,8 @@ pub(crate) enum Name {
     /// A debug file's name that is already fit to show, which no demangler has anything to
     /// say about.
     Informative(String),
-    /// One of ours, rendered to a `String` only when the symbol is built.
+    /// One of ours, rendered to a `String` only when the symbol is built, which keeps it
+    /// too ([`SymbolData::made_up`]).
     MadeUp(MadeUp),
 }
 
@@ -417,11 +418,12 @@ fn symbol_data(
     sections: &HashMap<SectionIndex, Arc<Section>>,
 ) -> HashMap<SymbolIndex, Arc<SymbolData>> {
     let mut built = HashMap::with_capacity(symbols.len());
-    let mut build = |index, name, demangled, address, size, section: Option<SectionIndex>| {
-        let section = section.and_then(|index| sections.get(&index).cloned());
-        let symbol = SymbolData::new(name, demangled, address, section, size);
-        built.insert(index, Arc::new(symbol));
-    };
+    let mut build =
+        |index, name, demangled, made_up, address, size, section: Option<SectionIndex>| {
+            let section = section.and_then(|index| sections.get(&index).cloned());
+            let symbol = SymbolData::parsed(name, demangled, made_up, address, section, size);
+            built.insert(index, Arc::new(symbol));
+        };
 
     // `waiting[i]` is the rest of the symbol `offered[i]` names.
     let mut offered = Vec::new();
@@ -439,10 +441,16 @@ fn symbol_data(
                 offered.push(name);
                 waiting.push((index, address, size, section));
             }
-            Name::Informative(name) => build(index, name, None, address, size, section),
-            Name::MadeUp(made_up) => {
-                build(index, made_up.to_string(), None, address, size, section)
-            }
+            Name::Informative(name) => build(index, name, None, None, address, size, section),
+            Name::MadeUp(made_up) => build(
+                index,
+                made_up.to_string(),
+                None,
+                Some(made_up),
+                address,
+                size,
+                section,
+            ),
         }
     }
 
@@ -450,7 +458,7 @@ fn symbol_data(
     for ((index, address, size, section), (name, demangled)) in
         waiting.into_iter().zip(names.into_iter().zip(demangled))
     {
-        build(index, name, demangled, address, size, section);
+        build(index, name, demangled, None, address, size, section);
     }
     built
 }

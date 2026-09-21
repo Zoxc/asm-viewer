@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use analysis::{MadeUp, SectionAddress};
+use analysis::{MadeUp, SectionAddress, SymbolData};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::bookmarks::Bookmark;
@@ -631,10 +631,10 @@ impl SavedMadeUp {
 }
 
 impl SavedName {
-    /// The saved form of `name`, borne by a symbol at `address`.
-    pub fn of(name: &str, address: SectionAddress) -> SavedName {
-        match MadeUp::of(name, address) {
-            None => SavedName::File(name.to_owned()),
+    /// The saved form of `symbol`'s name.
+    pub fn of(symbol: &SymbolData) -> SavedName {
+        match symbol.made_up {
+            None => SavedName::File(symbol.name.clone()),
             Some(made_up) => SavedName::MadeUp(SavedMadeUp::of(made_up)),
         }
     }

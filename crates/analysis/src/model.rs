@@ -6,7 +6,7 @@
 use crate::disasm::Code;
 use crate::extent::ExtentCache;
 use crate::line::{DebugInfo, DebugInfoCache};
-use crate::{Assembly, Bias, PlacedAddress, SectionAddress};
+use crate::{Assembly, Bias, MadeUp, PlacedAddress, SectionAddress};
 use object::{Architecture, BinaryFormat, Relocation, SectionIndex, SymbolIndex};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -514,6 +514,8 @@ impl Section {
 pub struct SymbolData {
     pub name: String,
     pub demangled: Option<String>,
+    /// Which name the app made up, where `name` is one of those and not the file's own.
+    pub made_up: Option<MadeUp>,
     pub address: SectionAddress,
     pub section: Option<Arc<Section>>,
     pub size: u64,
@@ -532,9 +534,33 @@ impl SymbolData {
         section: Option<Arc<Section>>,
         size: u64,
     ) -> SymbolData {
+        SymbolData::parsed(name, demangled, None, address, section, size)
+    }
+
+    /// A symbol the parse would have named itself, spelled as it spells `made_up`.
+    pub fn new_made_up(
+        made_up: MadeUp,
+        address: SectionAddress,
+        section: Option<Arc<Section>>,
+        size: u64,
+    ) -> SymbolData {
+        let name = made_up.to_string();
+        SymbolData::parsed(name, None, Some(made_up), address, section, size)
+    }
+
+    /// [`new`](Self::new) with `made_up` saying which name the parse made up, if it did.
+    pub(crate) fn parsed(
+        name: String,
+        demangled: Option<String>,
+        made_up: Option<MadeUp>,
+        address: SectionAddress,
+        section: Option<Arc<Section>>,
+        size: u64,
+    ) -> SymbolData {
         SymbolData {
             name,
             demangled,
+            made_up,
             address,
             section,
             size,

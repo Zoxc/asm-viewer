@@ -30,30 +30,44 @@ fn object(path: &str, name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
 /// The same, out of a named build of the file. `bytes` is only ever hashed, so "the file
 /// was rebuilt" is spelt as two calls with different bytes.
 fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<Object> {
-    let code = vec![0xC3; symbols.len()];
+    with_symbols(path, name, bytes, symbols.len(), |section| {
+        symbols
+            .iter()
+            .map(|(name, address)| {
+                SymbolData::new(
+                    (*name).to_owned(),
+                    None,
+                    SectionAddress::new(*address),
+                    Some(section.clone()),
+                    0,
+                )
+            })
+            .collect()
+    })
+}
+
+/// An object holding the symbols `make` builds in its one text section, of `code` bytes.
+fn with_symbols(
+    path: &str,
+    name: &str,
+    bytes: &[u8],
+    code: usize,
+    make: impl FnOnce(&Arc<Section>) -> Vec<SymbolData>,
+) -> Arc<Object> {
     let section = Arc::new(Section::text(
         SectionIndex(0),
         ".text".into(),
-        code,
+        vec![0xC3; code],
         SectionAddress::new(0),
         BTreeMap::new(),
         Bias::NONE,
     ));
 
-    // In any order: `Object::new` sorts them by name, which is what `find_symbol` searches by.
-    let symbols = symbols
-        .iter()
+    // In any order: the constructor sorts them by name, which is what `find_symbol` searches by.
+    let symbols = make(&section)
+        .into_iter()
         .enumerate()
-        .map(|(index, (name, address))| {
-            let symbol = SymbolData::new(
-                (*name).to_owned(),
-                None,
-                SectionAddress::new(*address),
-                Some(section.clone()),
-                0,
-            );
-            (SymbolIndex(index), Arc::new(symbol))
-        })
+        .map(|(index, symbol)| (SymbolIndex(index), Arc::new(symbol)))
         .collect();
 
     Arc::new(Object::new(
@@ -1721,9 +1735,23 @@ fn a_symbol_is_found_by_binary_search_over_the_name_sorted_list() {
 #[test]
 fn a_bookmark_on_a_made_up_name_outlives_its_spelling() {
     const ADDRESS: u64 = 0x10;
-    // Whatever `MadeUp` spells it now, which is what the parser gave the symbol too.
-    let today = MadeUp::Function(SectionAddress::new(ADDRESS)).to_string();
-    let objects = vec![object("/tmp/lib.a", "a.o", &[(today.as_str(), ADDRESS)])];
+    let address = SectionAddress::new(ADDRESS);
+    // Named as the parser names it: spelled however `MadeUp` spells it now.
+    let objects = vec![with_symbols(
+        "/tmp/lib.a",
+        "a.o",
+        b"the first build",
+        1,
+        |section| {
+            let made_up = MadeUp::Function(address);
+            vec![SymbolData::new_made_up(
+                made_up,
+                address,
+                Some(section.clone()),
+                0,
+            )]
+        },
+    )];
 
     let structure = SavedDocument::Symbol {
         path: PathBuf::from("/tmp/lib.a"),

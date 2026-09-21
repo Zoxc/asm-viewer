@@ -107,13 +107,13 @@ doubles as the filter keeping exported *data* out. A relocatable object is skipp
 declarations, the entry point and an unwind entry, are called `<entry point>` and `<function 0x…>`
 or `<fragment 0x…>`, in angle brackets because no assembler, linker or mangling scheme emits them,
 so none can collide with a real one. The three are one type, `made_up::MadeUp`, whose `Display` is
-the only place they are spelled and whose `of` reads one back — by rendering the three candidates
-for an address and comparing, so there is no second spelling to keep in step. The parse carries
-one as `Name::MadeUp` and renders it once, when the symbol is built; what a symbol holds is that
-`String`. The type itself travels as far as the app's *saved* places, which
-write which name it is and the symbol's address rather than the spelling, so a bookmark on one
-outlives a change of spelling (`agents/Persistence.md`); `made_up/tests.rs` pins today's three all
-the same. And it carries the one thing every made-up name shares: it is not the file's own, so no
+the only place they are spelled. The parse carries one as `Name::MadeUp` and renders it once, when
+the symbol is built; the symbol keeps both, the `String` as its `name` and the value as
+`SymbolData::made_up`. Nothing reads a spelling back: a name is made up because the parse made it,
+so a file symbol spelled like one is still the file's own. The value travels as far as the app's
+*saved* places, which write which name it is and the symbol's address rather than the spelling, so
+a bookmark on one outlives a change of spelling (`agents/Persistence.md`); `made_up/tests.rs` pins
+today's three all the same. And it carries the one thing every made-up name shares: it is not the file's own, so no
 demangler is ever offered one.
 `Object` holds `symbols: HashMap<SymbolIndex, Arc<SymbolData>>` (for relocation-target lookup),
 `symbols_sorted` (by name, then by index, for the UI list) and `placed` (the

@@ -367,7 +367,7 @@ impl SavedDocument {
                 path: symbol.object.path.clone(),
                 object_name: symbol.object.name.clone(),
                 address: symbol.data.address.get(),
-                symbol_name: SavedName::of(&symbol.data.name, symbol.data.address),
+                symbol_name: SavedName::of(&symbol.data),
             },
             Document::Source(file) => SavedDocument::Source {
                 path: file.to_string(),
