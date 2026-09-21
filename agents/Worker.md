@@ -7,11 +7,12 @@ second one, for the file beside the binary, and a section below says why it is n
 **Nothing is analysed on the UI thread.** `SymbolData::assembly` decodes and formats the whole
 symbol. The line info builds the object's entire DWARF context on the first query against it.
 Together they take 1.4 s for the first symbol clicked in the 331 MB binary (debug build; 0.6 s
-in release), and both used to run in `render`. `SymbolLines::new` is asked over
-`Assembly::range` -- the very bytes the symbol was decoded over -- rather than over
-`SymbolData::line_info`, which would work the extent out a second time; the last thing on the UI
-thread that still asked the crate anything was the extent the symbol bar prints, and it now reads
-the number off the `Studied` the pane is drawing (`Studied::extent`). `use_analysis` moves them off together, because one
+in release), and both used to run in `render`. `SymbolLines::new` asks `SymbolData::line_info`,
+which works the symbol's extent out itself: that answer is memoized per symbol (`ExtentCache`) and
+the decode just before has paid for it, so the rows cover the very bytes that were decoded without
+anything being asked twice. The last thing on the UI thread that still asked the crate anything was
+the extent the symbol bar prints, and it now reads the number off the `Studied` the pane is drawing
+(`Studied::extent`). `use_analysis` moves them off together, because one
 click asks for both and the pane needs both. There is **one worker thread** for the app's lifetime.
 It is fed an `async_channel` of `Question`s and answers each with a `Studied`: the `Assembly`, its
 `Lanes`, and the `SymbolLines`. It is one worker and not a thread per request or a pool because

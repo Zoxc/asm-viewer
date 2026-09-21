@@ -562,6 +562,28 @@ impl LineInfo {
         let index = covering(&self.rows, |row| row.range.clone(), address)?;
         self.rows.get(index)
     }
+
+    /// Where the code at `address` opens: the file it was compiled from and the line of it.
+    ///
+    /// The row covering `address` answers both, falling back to the first row that names a
+    /// file at all — a prologue the debug info places on no line leaves
+    /// [`row_at`](Self::row_at) with nothing to say. **One row for both answers**, so the
+    /// line is a line of the file and not of another.
+    ///
+    /// [`None`] where no file is named at all. Where no row names one but these rows came
+    /// with a file anyway — every row that named it was clipped away — that file is the
+    /// answer and no line comes with it.
+    pub fn opening(&self, address: SectionAddress) -> Option<(&Arc<str>, Option<u32>)> {
+        let opening = self
+            .row_at(address)
+            .filter(|row| row.file.is_some())
+            .or_else(|| self.rows.iter().find(|row| row.file.is_some()));
+        let file = opening
+            .and_then(|row| row.file)
+            .and_then(|file| self.file(file))
+            .or_else(|| self.files().next())?;
+        Some((file, opening.and_then(|row| row.line)))
+    }
 }
 
 impl Object {
@@ -609,9 +631,10 @@ impl SymbolData {
     /// The line info for this symbol's instructions, over the same extent
     /// [`assembly`](Self::assembly) decodes.
     ///
-    /// It works that extent out itself, so anything with the assembly in hand asks
-    /// [`Object::line_info`] over [`Assembly::range`](crate::Assembly::range) instead, and
-    /// pays for the extent once.
+    /// It works that extent out itself at no extra cost: [`extent`](Self::extent) is
+    /// memoized per symbol. So even a caller with the assembly in hand, which has already
+    /// paid for it, asks this rather than [`Object::line_info`] over
+    /// [`Assembly::range`](crate::Assembly::range).
     pub fn line_info(&self, object: &Object) -> Option<Arc<LineInfo>> {
         let section = self.section.as_ref()?;
         let end = self.address.checked_add(self.extent(object)?.bytes)?;

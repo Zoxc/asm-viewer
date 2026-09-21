@@ -81,9 +81,9 @@ writes nothing, and an answer landing copies nothing either
 **A tab opens its source side on the symbol's own lines**, which is what selecting a symbol asked to
 see: a function a hundred lines into its file was otherwise read from the top of the file for as
 long as it took to scroll. `SymbolLines` carries the **line** the symbol opens at beside the file it
-opens in, both taken from **one** line-info row (the row the first instruction was compiled from,
-else the first row naming a file at all), so the line can never be a line of some other file; both
-are worked out on the worker, beside the info they come from. `source_side` names that line, or
+opens in, both taken from **one** line-info row (`LineInfo::opening`: the row the first instruction
+was compiled from, else the first row naming a file at all), so the line can never be a line of some
+other file; both are worked out on the worker, beside the info they come from. `source_side` names that line, or
 the pressed instruction's for an object's code, and `SourceSide::opening` turns it into the row
 `use_kept_position` opens a tab it has never shown at, backed off by the `CONTEXT_ROWS` a reveal
 keeps above the row it scrolls to. A row remembered for the tab wins over it, so this is the *first*

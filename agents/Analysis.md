@@ -254,10 +254,10 @@ take 756 ms because the 15 636 no entry covers each go to the PDB.
 
 **It is decided once per symbol drawn, and the disassembly is where the answer is kept.**
 `SymbolData::assembly` asks for the extent, and the `Assembly` it hands back carries the range it
-decoded (`Assembly::range`) and the `Extent` behind it. So the line info is asked over that range,
-`Listing::decode` reads the stretch's gap off it, and the bar over the pane prints its length —
-four askings for one answer, in three files, down to one. The bar is why the fields are on the
-`Assembly` rather than beside it in the UI: `symbol_bar::facts` runs in a render, and an unwind
+decoded (`Assembly::range`) and the `Extent` behind it. So `Listing::decode` reads the stretch's gap
+off it, the bar over the pane prints its length, and `SymbolData::line_info`, asked for the same
+symbol's rows, covers those very bytes off the memoized extent (`ExtentCache`) rather than deriving
+them again. The bar is why the fields are on the `Assembly` rather than beside it in the UI: `symbol_bar::facts` runs in a render, and an unwind
 lookup or a DIE walk under the debug backend's mutex is not something the UI thread may do
 (`AGENTS.md`). A symbol whose bytes will not read has no `Assembly` and so no range, which is a
 listing of nothing and a gap over the whole stretch.
@@ -374,8 +374,9 @@ or debug info that says nothing about the range asked about. Four design points 
   the cheap fix would be to go back on the UI thread.
 - **One query per symbol, not per instruction.** `SymbolData::line_info(&object)` returns an
   `Arc<LineInfo>` for the whole extent; the UI answers each instruction locally with
-  `LineInfo::row_at`. Rows are ascending, non-overlapping, clipped to the range, and coalesced, but
-  *not* contiguous. `line`/`column` are `Option`, because DWARF line 0 means "no line" and column 0
+  `LineInfo::row_at`, and asks `LineInfo::opening` for the file and line the symbol opens at, which
+  row answers those being a rule about the rows and not about a pane. Rows are ascending,
+  non-overlapping, clipped to the range, and coalesced, but *not* contiguous. `line`/`column` are `Option`, because DWARF line 0 means "no line" and column 0
   means "left edge". Non-overlapping is an invariant *made* to hold in `RowCollector::finish` by
   clipping after the sort, not a property of any debug format.
 - **An address alone is not a key in a relocatable object.** Sections there have no address until

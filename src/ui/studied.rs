@@ -621,36 +621,19 @@ impl PartialEq for SymbolLines {
 }
 
 impl SymbolLines {
-    /// The lines of the rows `assembly` holds, asked over the very range it was decoded
-    /// over: the extent behind that range is the most expensive answer in the crate, and it
-    /// has been paid for once already. A symbol with nothing to decode has no range and so
-    /// no lines -- there are no rows to pair them with.
+    /// The lines of the rows `assembly` holds, over the same extent they were decoded
+    /// over: the crate works that extent out again, which costs nothing -- it is memoized
+    /// per symbol and the decode has paid for it. A symbol with nothing to decode has no
+    /// lines -- there are no rows to pair them with.
     fn new(symbol: &Symbol, assembly: Option<&Assembly>) -> SymbolLines {
-        let info = symbol
-            .data
-            .section
+        let info = assembly.and_then(|_| symbol.data.line_info(&symbol.object));
+        let opening = info
             .as_ref()
-            .zip(assembly)
-            .and_then(|(section, assembly)| {
-                symbol.object.line_info(section, assembly.range.clone())
-            });
-        // The row the symbol's first instruction was compiled from, falling back to the
-        // first row that names a file at all: a prologue DWARF places on no line leaves
-        // `row_at` with nothing to say. **One row for both answers**, so the line the
-        // pane opens at is a line of the file it is showing and not of another.
-        let opening = info.as_ref().and_then(|info| {
-            info.row_at(symbol.data.address)
-                .filter(|row| row.file.is_some())
-                .or_else(|| info.rows().iter().find(|row| row.file.is_some()))
-        });
-        let file = info.as_ref().and_then(|info| {
-            opening
-                .and_then(|row| row.file)
-                .and_then(|file| info.file(file))
-                .or_else(|| info.files().next())
-                .cloned()
-        });
-        let line = opening.and_then(|row| row.line);
+            .and_then(|info| info.opening(symbol.data.address));
+        let (file, line) = match opening {
+            Some((file, line)) => (Some(file.clone()), line),
+            None => (None, None),
+        };
 
         SymbolLines { info, file, line }
     }
