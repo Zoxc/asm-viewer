@@ -49,7 +49,8 @@
 //!
 //! Nothing here recurses, and nothing here catches a panic: the guard is [`super::DebugInfo`]'s.
 
-use super::{recovered, Declared, LineBackend, LineInfo, Name, RowCollector, SourceHash};
+use super::{recovered, Declared, LineBackend, LineInfo, RowCollector, SourceHash};
+use crate::parse::Name;
 use crate::{Bias, PlacedAddress, SectionAddress};
 use object::Object as _;
 use pdb2::{

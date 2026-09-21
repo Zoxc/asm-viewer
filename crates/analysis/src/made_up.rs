@@ -1,7 +1,6 @@
 //! The names the app gives code the file names nothing: an image's entry point, a function
 //! only an unwind entry declares, and a fragment of one. This is where each is spelled.
 
-use crate::line::Name;
 use crate::unwind::UnwindEntry;
 use crate::SectionAddress;
 use std::fmt;
@@ -54,14 +53,6 @@ impl MadeUp {
         } else {
             MadeUp::Function(address)
         }
-    }
-}
-
-impl From<MadeUp> for Name {
-    /// Always a [`Name::Informative`]: a made-up name is not the file's own, and no
-    /// demangler has anything to say about it.
-    fn from(made_up: MadeUp) -> Name {
-        Name::Informative(made_up.to_string())
     }
 }
 

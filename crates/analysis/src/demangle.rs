@@ -53,13 +53,12 @@ const GRAIN: usize = 256;
 /// committed for the life of the process.
 const MAX_THREADS: usize = 8;
 
-/// One object's mangled names, in symbol order: [`None`] for a name with nothing to demangle
-/// (the entry point's, which is this crate's own).
+/// The names one object offers to the demanglers, in the order it offered them.
 ///
 /// Shared rather than borrowed, because the pool's threads outlive any one batch and a job
 /// handed to them cannot borrow the caller's frame. Nothing is copied to make it: [`batch`]
 /// moves the caller's names in here and hands them back out afterwards.
-type Names = Arc<Vec<Option<String>>>;
+type Names = Arc<Vec<String>>;
 
 /// Demangle a whole object's names, and hand them back. The answer is the names as they came
 /// in and what each demangled to, one entry per name in the same order, whatever it was
@@ -68,9 +67,9 @@ type Names = Arc<Vec<Option<String>>>;
 /// [`None`] out means no demangler recognised the name, it was longer than
 /// [`MAX_MANGLED_NAME`], or the demangler panicked — all of which display as the file wrote
 /// it, which is what an unrecognised name already did.
-pub(crate) fn batch(names: Vec<Option<String>>) -> (Vec<Option<String>>, Vec<Option<String>>) {
+pub(crate) fn batch(names: Vec<String>) -> (Vec<String>, Vec<Option<String>>) {
     // The deepest any of them can recurse is the longest of them.
-    let deepest = names.iter().flatten().map(|name| name.len()).max();
+    let deepest = names.iter().map(String::len).max();
     match deepest {
         None | Some(0) => {
             let demangled = vec![None; names.len()];
@@ -109,11 +108,8 @@ fn demangle_one(name: &str) -> Option<String> {
 
 /// A run of the batch, demangled in place order. The one definition of what a chunk of work
 /// is, so the parallel path and the sequential one cannot answer differently.
-fn demangle_range(names: &[Option<String>], range: Range<usize>) -> Vec<Option<String>> {
-    names[range]
-        .iter()
-        .map(|name| demangle_one(name.as_deref()?))
-        .collect()
+fn demangle_range(names: &[String], range: Range<usize>) -> Vec<Option<String>> {
+    names[range].iter().map(|name| demangle_one(name)).collect()
 }
 
 /// How many of the pool's threads a batch of `len` names is worth asking for: enough that

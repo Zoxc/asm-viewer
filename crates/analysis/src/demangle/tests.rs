@@ -5,18 +5,16 @@ use super::*;
 
 /// A batch big enough to be split, of names that are all safe on the caller's own stack, so
 /// a test can compute the same answer sequentially to compare against.
-fn mixed_batch(len: usize) -> Vec<Option<String>> {
+fn mixed_batch(len: usize) -> Vec<String> {
     (0..len)
         .map(|index| match index % 4 {
-            // Nothing to demangle: the entry point's kind of name.
-            0 => None,
+            // Nothing to demangle: an empty name.
+            0 => String::new(),
             // A real one, and a different one each time round.
-            1 => Some(format!(
-                "_ZN4core3fmt9Formatter12pad_integral17h{index:016x}E"
-            )),
+            1 => format!("_ZN4core3fmt9Formatter12pad_integral17h{index:016x}E"),
             // A C name no demangler has anything to say about.
-            2 => Some(format!("plain_c_function_{index}")),
-            _ => Some(format!("_ZN3std2io5Write5write17h{index:016x}E")),
+            2 => format!("plain_c_function_{index}"),
+            _ => format!("_ZN3std2io5Write5write17h{index:016x}E"),
         })
         .collect()
 }
@@ -67,11 +65,11 @@ fn a_deep_name_in_a_split_batch_is_demangled_on_a_pool_thread() {
     let deep = format!("?f@@YAX{}@Z", "P".repeat(1000));
     let over_cap = format!("?g@@YAX{}@Z", "P".repeat(4000));
 
-    let mut names: Vec<Option<String>> = (0..GRAIN * 2).map(|_| None).collect();
-    names[0] = Some("_ZN4core3fmt9Formatter12pad_integral17h0123456789abcdefE".to_owned());
+    let mut names = vec![String::new(); GRAIN * 2];
+    names[0] = "_ZN4core3fmt9Formatter12pad_integral17h0123456789abcdefE".to_owned();
     // In the last grain, so it is not the first thing the first job does.
-    names[GRAIN * 2 - 1] = Some(deep);
-    names[GRAIN + 1] = Some(over_cap);
+    names[GRAIN * 2 - 1] = deep;
+    names[GRAIN + 1] = over_cap;
 
     let (_, demangled) = batch(names);
     assert_eq!(
@@ -87,13 +85,9 @@ fn a_deep_name_in_a_split_batch_is_demangled_on_a_pool_thread() {
 #[test]
 fn a_batch_with_nothing_in_it_answers_one_none_per_name() {
     assert_eq!(batch(Vec::new()), (Vec::new(), Vec::new()));
-    assert_eq!(
-        batch(vec![None, None, None]),
-        (vec![None; 3], vec![None; 3])
-    );
     // An empty name is not a name either, and it comes back as it went in.
     assert_eq!(
-        batch(vec![Some(String::new()), None]),
-        (vec![Some(String::new()), None], vec![None; 2])
+        batch(vec![String::new(); 3]),
+        (vec![String::new(); 3], vec![None; 3])
     );
 }

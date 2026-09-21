@@ -84,8 +84,8 @@ it is gone: a stripped copy goes from the 16 728 functions its `.dynsym` names t
 the table costs a tenth to a fifth more at open and pays back at the first extent: every covered
 symbol's is stated (115 096 of `viewer-sample`'s 115 577, 197 375 of the `.so`'s 197 381) where it
 was a DWARF walk, which is what the reverse index's first ask below is made of. A procedure's name
-is the compiler's display name (`add`, `core::ptr::drop_in_place<T>`), which goes through the same
-demangling batch as an export's and comes out untouched. A public's is the decorated name as the
+is the compiler's display name (`add`, `core::ptr::drop_in_place<T>`), which skips the demangling
+batch. A public's is the decorated name as the
 linker saw it (`?add@@YAHHH@Z`, `_ZN4core3ptr…`, a plain `add` for C), and goes through the same
 batch to come out demangled, the raw spelling kept as `name`. A procedure's length and an unwind
 entry's stated length are the symbol's *declared* size where an export's and a public's is 0; the
@@ -108,8 +108,9 @@ declarations, the entry point and an unwind entry, are called `<entry point>` an
 or `<fragment 0x…>`, in angle brackets because no assembler, linker or mangling scheme emits them,
 so none can collide with a real one. The three are one type, `made_up::MadeUp`, whose `Display` is
 the only place they are spelled and whose `of` reads one back — by rendering the three candidates
-for an address and comparing, so there is no second spelling to keep in step. What a symbol holds
-is still the `String` it builds. The type itself travels as far as the app's *saved* places, which
+for an address and comparing, so there is no second spelling to keep in step. The parse carries
+one as `Name::MadeUp` and renders it once, when the symbol is built; what a symbol holds is that
+`String`. The type itself travels as far as the app's *saved* places, which
 write which name it is and the symbol's address rather than the spelling, so a bookmark on one
 outlives a change of spelling (`agents/Persistence.md`); `made_up/tests.rs` pins today's three all
 the same. And it carries the one thing every made-up name shares: it is not the file's own, so no
@@ -308,7 +309,8 @@ than being dealt equal shares, since a name's cost is superlinear in its length 
 ones sit is the file's business; an even split hands one thread the object's whole C++ section.
 **The answer does not depend on the scheduling**: a grain is handed back over a channel with the
 index it started at and written there, so the vector is the batch's own order and two runs over one
-file agree. `batch` takes the names by value and hands them back beside what they demangled to. In
+file agree. `batch` is handed only the names worth offering (`Name::Symbol`s), takes them by value
+and hands them back beside what they demangled to, in the same order. In
 between they are *moved* into an `Arc` the jobs share, because a job outlives the frame that
 submitted it and cannot borrow one; 115k names is not a copy worth making for that. A job
 never submits a job, which is why a bounded pool cannot deadlock itself however many opens are in

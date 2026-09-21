@@ -23,6 +23,7 @@
 //! because it is a whole-object index rather than a query, built on the same seam.
 
 use crate::model::covering;
+use crate::parse::Name;
 use crate::{Bias, Object, PlacedAddress, Section, SectionAddress, SymbolData};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -34,25 +35,6 @@ mod pdb;
 mod source;
 
 use source::SourceIndex;
-
-/// A name a debug file gives a function.
-pub(crate) enum Name {
-    /// The file's own spelling, which goes through the demangling batch.
-    Symbol(String),
-    /// A name already fit to show, which no demangler has anything to say about.
-    Informative(String),
-}
-
-impl Name {
-    /// The name and whether it is the file's own: the pair a symbol is held as until the
-    /// demangling batch.
-    pub(crate) fn into_pair(self) -> (String, bool) {
-        match self {
-            Name::Symbol(name) => (name, true),
-            Name::Informative(name) => (name, false),
-        }
-    }
-}
 
 /// A function a debug file names that the image itself does not.
 pub(crate) struct Declared {

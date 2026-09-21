@@ -2,7 +2,7 @@
 //! symbols, the code it declares outside its symbol table, and the names demangled.
 
 use crate::demangle;
-use crate::line::{DebugInfo, Declared, Name};
+use crate::line::{DebugInfo, Declared};
 use crate::unwind::{self, UnwindEntry};
 use crate::{Bias, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData};
 use object::{
@@ -149,14 +149,23 @@ fn zstd_data(data: &[u8], size: u64) -> Option<Vec<u8>> {
     (out.len() as u64 == size).then_some(out)
 }
 
+/// A symbol's name as the parse holds it, until [`symbol_data`] builds the symbol. Only a
+/// [`Name::Symbol`] is offered to the demanglers.
+pub(crate) enum Name {
+    /// The file's own spelling, or a debug file's decorated one: offered to the demanglers.
+    Symbol(String),
+    /// A debug file's name that is already fit to show, which no demangler has anything to
+    /// say about.
+    Informative(String),
+    /// One of ours, rendered to a `String` only when the symbol is built.
+    MadeUp(MadeUp),
+}
+
 /// One symbol as the file states it, in its symbol table or elsewhere ([`declared_code`]),
 /// held until the whole object's names are demangled in one batch ([`symbol_data`]).
 struct Pending {
     index: SymbolIndex,
-    name: String,
-    /// Whether the name is the file's own and goes through the demangling batch. One that is
-    /// not is a [`MadeUp`] name, which no demangler has anything to say about.
-    mangled: bool,
+    name: Name,
     address: SectionAddress,
     /// What the file said: a symbol's size, the length a debug file's record states, an
     /// unwind entry's stated end less its begin, and 0 for an export, the entry point and a
@@ -229,8 +238,7 @@ fn declared_code(
         return declared;
     }
 
-    // Which kind of name it is decides whether it is offered to the demanglers; a name of
-    // ours is always a `Name::Informative`.
+    // Which kind of name it is decides whether it is offered to the demanglers.
     let mut take = |name: Name, address: SectionAddress, size: u64| {
         let Some((_, section)) = code.iter().find(|(range, _)| range.contains(&address)) else {
             return;
@@ -240,11 +248,9 @@ fn declared_code(
         if !known.insert(address.unplaced()) {
             return;
         }
-        let (name, mangled) = name.into_pair();
         declared.push(Pending {
             index: SymbolIndex(next + declared.len()),
             name,
-            mangled,
             address,
             size,
             section: Some(*section),
@@ -293,7 +299,11 @@ fn declared_code(
     // 0 is "this image has no entry point", which is how a DLL built without one states it.
     let entry = file.entry();
     if entry != 0 {
-        take(MadeUp::EntryPoint.into(), SectionAddress::new(entry), 0);
+        take(
+            Name::MadeUp(MadeUp::EntryPoint),
+            SectionAddress::new(entry),
+            0,
+        );
     }
 
     // After the image's own names, so they win, and among themselves in the order the debug
@@ -307,7 +317,11 @@ fn declared_code(
     // Last of all, the unwind entries: an address and a length for whatever is still
     // unnamed, and no name at all.
     for entry in unwind {
-        take(MadeUp::unwind(entry).into(), entry.range.start, entry.len());
+        take(
+            Name::MadeUp(MadeUp::unwind(entry)),
+            entry.range.start,
+            entry.len(),
+        );
     }
 
     declared
@@ -469,16 +483,12 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
         let address = SectionAddress::new(symbol.address());
         let section = symbol.section().index();
 
-        let pending = |name: Name| {
-            let (name, mangled) = name.into_pair();
-            Pending {
-                index: symbol.index(),
-                name,
-                mangled,
-                address,
-                size: symbol.size(),
-                section,
-            }
+        let pending = |name: Name| Pending {
+            index: symbol.index(),
+            name,
+            address,
+            size: symbol.size(),
+            section,
         };
         match symbol.name_bytes() {
             Ok(name) => table.named.push(pending(Name::Symbol(
@@ -486,7 +496,7 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
             ))),
             Err(_) => table
                 .unnamed
-                .push(pending(MadeUp::Function(address).into())),
+                .push(pending(Name::MadeUp(MadeUp::Function(address)))),
         }
     }
     table
@@ -531,37 +541,48 @@ fn freeze_sections(
 /// Every symbol built, by index, with its section looked up and its name demangled.
 ///
 /// One batch for the whole object, on stacks of their own and on as many cores as the pool
-/// has; see [`demangle`]. The file's own names are *moved* into the batch and come back out
-/// of it rather than being copied: 115k names is not a copy worth making.
+/// has; see [`demangle`]. Only the [`Name::Symbol`]s are offered: each is *moved* into the
+/// batch and comes back out beside the rest of its symbol, in the order it went in. 115k
+/// names is not a copy worth making.
 fn symbol_data(
-    mut symbols: Vec<Pending>,
+    symbols: Vec<Pending>,
     sections: &HashMap<SectionIndex, Arc<Section>>,
 ) -> HashMap<SymbolIndex, Arc<SymbolData>> {
-    let (names, demangled) = demangle::batch(
-        symbols
-            .iter_mut()
-            .map(|symbol| symbol.mangled.then(|| std::mem::take(&mut symbol.name)))
-            .collect(),
-    );
+    let mut built = HashMap::with_capacity(symbols.len());
+    let mut build = |index, name, demangled, address, size, section: Option<SectionIndex>| {
+        let section = section.and_then(|index| sections.get(&index).cloned());
+        let symbol = SymbolData::new(name, demangled, address, section, size);
+        built.insert(index, Arc::new(symbol));
+    };
 
-    symbols
-        .into_iter()
-        .zip(names)
-        .zip(demangled)
-        .map(|((symbol, name), demangled)| {
-            (
-                symbol.index,
-                Arc::new(SymbolData::new(
-                    // `None` for a name that was not offered, and so is still the symbol's.
-                    name.unwrap_or(symbol.name),
-                    demangled,
-                    symbol.address,
-                    symbol
-                        .section
-                        .and_then(|index| sections.get(&index).cloned()),
-                    symbol.size,
-                )),
-            )
-        })
-        .collect()
+    // `waiting[i]` is the rest of the symbol `offered[i]` names.
+    let mut offered = Vec::new();
+    let mut waiting = Vec::new();
+    for Pending {
+        index,
+        name,
+        address,
+        size,
+        section,
+    } in symbols
+    {
+        match name {
+            Name::Symbol(name) => {
+                offered.push(name);
+                waiting.push((index, address, size, section));
+            }
+            Name::Informative(name) => build(index, name, None, address, size, section),
+            Name::MadeUp(made_up) => {
+                build(index, made_up.to_string(), None, address, size, section)
+            }
+        }
+    }
+
+    let (names, demangled) = demangle::batch(offered);
+    for ((index, address, size, section), (name, demangled)) in
+        waiting.into_iter().zip(names.into_iter().zip(demangled))
+    {
+        build(index, name, demangled, address, size, section);
+    }
+    built
 }
