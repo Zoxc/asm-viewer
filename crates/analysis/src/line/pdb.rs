@@ -63,11 +63,6 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// How many walks of a DBI module list have been started, so a test can pin that a question
-/// over every module costs one walk and not one per module. Test builds only.
-#[cfg(test)]
-pub(super) static WALKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 /// One image's `.pdb`, opened and matched once and kept for the object's lifetime.
 pub(super) struct Pdb {
     /// Every stream read goes through `&mut PDB`, and `PDB` is `Send` but not `Sync`: the
@@ -97,6 +92,11 @@ pub(super) struct Pdb {
     /// The modules decoded so far, by index. [`None`] remembers a module with no stream, no
     /// rows and no procedures, so it is not re-read for every symbol in it.
     modules: Mutex<HashMap<usize, Option<Arc<ModuleLines>>>>,
+
+    /// How many walks of the DBI module list this PDB has started, so a test can pin that a
+    /// question over every module costs one walk and not one per module. Test builds only.
+    #[cfg(test)]
+    walks: std::sync::atomic::AtomicUsize,
 }
 
 /// One section contribution, in virtual addresses.
@@ -167,6 +167,8 @@ impl Pdb {
             image_base,
             contributions,
             modules: Mutex::default(),
+            #[cfg(test)]
+            walks: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -189,21 +191,18 @@ impl Pdb {
         // read, or a record that will not parse, is skipped and the walk goes on. A
         // procedure's name is the compiler's display name (`add`,
         // `core::ptr::drop_in_place<T>`), which no demangler claims.
-        if let Ok(mut modules) = self.module_list() {
-            // A malformed tail stops the walk where it goes wrong and keeps what was read.
-            while let Ok(Some(module)) = modules.next() {
-                let Ok(Some(info)) = pdb.module_info(&module) else {
-                    continue;
-                };
-                declared.extend(
-                    self.procedures_in(&info)
-                        .map(|(address, procedure)| Declared {
-                            name: Name::Informative(procedure.name.to_string().into_owned()),
-                            address,
-                            len: u64::from(procedure.len),
-                        }),
-                );
-            }
+        for (_, module) in self.modules() {
+            let Ok(Some(info)) = pdb.module_info(&module) else {
+                continue;
+            };
+            declared.extend(
+                self.procedures_in(&info)
+                    .map(|(address, procedure)| Declared {
+                        name: Name::Informative(procedure.name.to_string().into_owned()),
+                        address,
+                        len: u64::from(procedure.len),
+                    }),
+            );
         }
 
         // Then every public flagged as code or a function, in the order the symbol records
@@ -321,14 +320,9 @@ impl Pdb {
             Some([]) => return 0,
             None => None,
         };
-        let Ok(mut modules) = self.module_list() else {
-            return 0;
-        };
         let mut count = 0;
-        // A malformed tail stops the walk where it goes wrong and keeps what was read.
-        while let Ok(Some(module)) = modules.next() {
-            let index = count;
-            count += 1;
+        for (index, module) in self.modules() {
+            count = index + 1;
             let asked = wanted.is_none_or(|wanted| wanted.binary_search(&index).is_ok());
             if asked && self.remembered(index).is_none() {
                 let decoded = self.decode(&module).map(Arc::new);
@@ -351,11 +345,21 @@ impl Pdb {
         count
     }
 
-    /// The DBI module list from the front, the one place it is walked from.
-    fn module_list(&self) -> pdb2::Result<pdb2::ModuleIter<'_>> {
+    /// The DBI module list from the front, numbered: the one place it is walked from. A
+    /// list that will not read has no modules, and a malformed tail stops the walk where it
+    /// goes wrong and keeps what was read.
+    fn modules(&self) -> impl Iterator<Item = (usize, pdb2::Module<'_>)> + '_ {
         #[cfg(test)]
-        WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.dbi.modules()
+        self.walks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut list = self.dbi.modules().ok();
+        let mut index = 0;
+        std::iter::from_fn(move || {
+            let module = list.as_mut()?.next().ok().flatten()?;
+            index += 1;
+            Some((index - 1, module))
+        })
+        .fuse()
     }
 
     fn decode(&self, module: &pdb2::Module<'_>) -> Option<ModuleLines> {
