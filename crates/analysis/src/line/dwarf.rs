@@ -67,10 +67,13 @@ impl Dwarf {
         // addend sits in the bytes rather than in the relocation (ELF `REL`).
         let relocatable = file.kind() == ObjectKind::Relocatable;
 
-        let dwarf = gimli::Dwarf::load::<_, ()>(|id| {
-            Ok(load_section(file, id, endian, relocatable, &biases, &[]))
-        })
-        .ok()?;
+        let load = |stale: &[StaleRangeList]| {
+            gimli::Dwarf::load::<_, ()>(|id| {
+                Ok(load_section(file, id, endian, relocatable, &biases, stale))
+            })
+            .ok()
+        };
+        let dwarf = load(&[])?;
 
         // Read once more, without the range lists that were left behind by the bias. Rare
         // enough — nothing in the tree emits the shape — that reading twice is cheaper than
@@ -79,10 +82,7 @@ impl Dwarf {
         let dwarf = if stale.is_empty() {
             dwarf
         } else {
-            gimli::Dwarf::load::<_, ()>(|id| {
-                Ok(load_section(file, id, endian, relocatable, &biases, &stale))
-            })
-            .ok()?
+            load(&stale)?
         };
 
         Some(Dwarf {
