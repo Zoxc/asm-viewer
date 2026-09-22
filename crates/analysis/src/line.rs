@@ -2,7 +2,7 @@
 //! query builds the backend, and an object with no debug info caches that answer too. The
 //! one exception is a debug file that names functions the image itself does not:
 //! [`DebugInfo::declared`] builds the backend at parse time for those names, and it is
-//! seeded into the object's cache ([`DebugInfoCache::preloaded`]) so nothing is opened
+//! handed to [`Object::preloaded`] to seed its cache so nothing is opened
 //! twice — the line tables themselves are still decoded on the first question about them.
 //!
 //! This file is the **seam**: what every backend answers and the rules every answer obeys,
@@ -64,15 +64,18 @@ pub(crate) struct Declared {
 
 /// An [`Object`]'s debug info, or the fact that it has none, worked out at most once. Caching
 /// the *absence* is what keeps a stripped binary from re-scanning its section table per query.
-#[derive(Default)]
-pub struct DebugInfoCache(OnceLock<Option<DebugInfo>>);
+pub(crate) struct DebugInfoCache(OnceLock<Option<DebugInfo>>);
 
 impl DebugInfoCache {
-    /// A cache already holding the backend the parse built — [`DebugInfo::declared`]'s — so
-    /// the first line question finds it there instead of opening the debug file a second
-    /// time.
-    pub(crate) fn preloaded(info: DebugInfo) -> DebugInfoCache {
-        DebugInfoCache(OnceLock::from(Some(info)))
+    /// A cache holding `preloaded`, the backend the parse built ([`DebugInfo::declared`]'s),
+    /// so the first line question finds it there and does not open the debug file again.
+    /// [`None`] means nothing was loaded yet: the first question loads it, which is not the
+    /// same as the cached [`None`] of an object found to have no debug info.
+    pub(crate) fn new(preloaded: Option<DebugInfo>) -> DebugInfoCache {
+        DebugInfoCache(match preloaded {
+            Some(info) => OnceLock::from(Some(info)),
+            None => OnceLock::new(),
+        })
     }
 }
 

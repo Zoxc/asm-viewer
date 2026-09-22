@@ -118,14 +118,16 @@ demangler is ever offered one.
 `symbols_sorted` (by name, then by index, for the UI list) and `placed` (the
 code sections' symbols by placed address; below). **The constructors make what
 the fields say**, for the parse and the tests alike. `Object::new` sorts `symbols_sorted` and
-`placed` and starts the debug info empty; `SymbolData::new` starts the extent empty; and a section
-is one of two kinds, `Section::text` or `Section::other`, which is all its `code` says (below). The
-parse gives each section its unwind ranges through `Section::with_unwind`, which drops, clamps,
-sorts and dedups them. The fields stay `pub` to be read. No test fixture sorts by hand any
-more, so none can break the binary search a saved place is found by. That search is
-`Object::symbols_named`, the run of one name in index order, and it sits beside the sort it depends
-on: the app asks it (`project::restore`'s `find_symbol`) rather than re-stating the order.
-`Object::data` is an `ObjectData`, an `Arc<[u8]>` of the whole file plus a `Range`, kept for the
+`placed`, and seeds the debug info with the backend the parse built (`Object::preloaded`), or
+leaves it for the first line question when there is none; `SymbolData::new` starts the extent
+empty; and a section is one of two kinds, `Section::text` or `Section::other`, which is all its
+`code` says (below). The parse gives each section its unwind ranges through `Section::with_unwind`,
+which drops, clamps, sorts and dedups them. The fields stay `pub` to be read, except the three
+caches (`debug_info`, `placed`, a symbol's `extent`), which nothing outside the crate can use. No
+test fixture sorts by hand any more, so none can break the binary search a saved place is found by.
+That search is `Object::symbols_named`, the run of one name in index order, and it sits beside the
+sort it depends on: the app asks it (`project::restore`'s `find_symbol`) rather than re-stating the
+order. `Object::data` is an `ObjectData`, an `Arc<[u8]>` of the whole file plus a `Range`, kept for the
 object's lifetime, because parsing keeps decompressed bytes only for the code sections and the lazy
 passes read the file again for the rest. Every object from one file shares that one allocation,
 so an archive costs its bytes once. It also carries the file's `FileDigest`: xxHash64 of the *whole
@@ -487,8 +489,8 @@ skips the demangling batch; a public's is the linker's decorated spelling and go
 makes it the **one eager path through the seam**: `DebugInfo::declared(file, path)` picks the
 backend `load` would pick (`Backend::pick`, handed no way to build a DWARF context, so a PE carrying
 DWARF of its own declines here exactly as it would there), asks it for the functions it names, and
-hands back both. `parse_object` seeds the backend into the object's `DebugInfoCache` (`preloaded`)
-so the first line question finds it there rather than opening the file again; an object parsed
+hands back both. `parse_object` hands the backend to `Object::preloaded`, which seeds the object's `DebugInfoCache`
+with it, so the first line question finds it there rather than opening the file again; an object parsed
 without it keeps the lazy path unchanged. The walks hold nothing of the streams they read but what
 they hand back. A module asked about later is read again for its lines, which is
 exactly the first-question cost the lazy path had before, and holding every module's procedure table

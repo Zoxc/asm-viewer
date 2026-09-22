@@ -2,7 +2,7 @@
 //! symbols, the code it declares outside its symbol table, and the names demangled.
 
 use crate::demangle;
-use crate::line::{DebugInfo, DebugInfoCache, Declared, Name};
+use crate::line::{DebugInfo, Declared, Name};
 use crate::unwind::{self, UnwindEntry};
 use crate::{Bias, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData};
 use object::{
@@ -358,9 +358,9 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     // The debug file is opened here and not on the first line question, because the
     // functions it names are ones the image itself does not declare. The backend it builds
     // is kept for the line questions later.
-    let (debug_info, named) = match DebugInfo::declared(&file, &path) {
-        Some((info, named)) => (DebugInfoCache::preloaded(info), named),
-        None => (DebugInfoCache::default(), Vec::new()),
+    let (preloaded, named) = match DebugInfo::declared(&file, &path) {
+        Some((info, named)) => (Some(info), named),
+        None => (None, Vec::new()),
     };
     let unwind = unwind::entries(&file);
     let code = code_sections(&sections);
@@ -380,7 +380,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
     let format = file.format();
     let architecture = file.architecture();
-    let mut object = Object::new(
+    let object = Object::preloaded(
         path,
         name,
         format,
@@ -388,8 +388,8 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         symbols,
         sections.into_values().collect(),
         data,
+        preloaded,
     );
-    object.debug_info = debug_info;
     Some(Arc::new(object))
 }
 

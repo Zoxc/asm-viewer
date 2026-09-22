@@ -52,7 +52,7 @@ pub struct Extent {
 /// the file's own tables, and because a `SymbolData` belongs to one object. Asking with
 /// another object is a caller's bug, and the memo does not catch it.
 #[derive(Debug, Default)]
-pub struct ExtentCache(OnceLock<Option<Extent>>);
+pub(crate) struct ExtentCache(OnceLock<Option<Extent>>);
 
 impl SymbolData {
     /// Object files frequently report a size of 0, so derive the extent from the next symbol

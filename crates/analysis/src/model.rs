@@ -5,7 +5,7 @@
 
 use crate::disasm::Code;
 use crate::extent::ExtentCache;
-use crate::line::DebugInfoCache;
+use crate::line::{DebugInfo, DebugInfoCache};
 use crate::{Assembly, Bias, PlacedAddress, SectionAddress};
 use object::{Architecture, BinaryFormat, Relocation, SectionIndex, SymbolIndex};
 use std::{
@@ -38,13 +38,13 @@ pub struct Object {
     /// This object's debug info, built on the first query — except for a PE whose matching
     /// `.pdb` was opened at parse time for the symbols it names, whose backend is seeded
     /// here so it is not opened twice. See [`Object::line_info`].
-    pub debug_info: DebugInfoCache,
+    pub(crate) debug_info: DebugInfoCache,
 
     /// The code sections' symbols by the address they are **placed** at, built from
     /// `symbols` by [`Object::new`], so it cannot disagree with them. A symbol left out of
     /// `symbols` has no estimate and no label, and no call is named after it. See
     /// `PlacedSymbols`.
-    pub placed: PlacedSymbols,
+    pub(crate) placed: PlacedSymbols,
 }
 
 /// [`Object::placed`]: every symbol inside a code section's bytes
@@ -59,7 +59,7 @@ pub struct Object {
 /// all read. Built at parse, off the UI thread, because a render asks it too: the history
 /// buttons name a saved place with [`Object::symbol_at_placed`], so every ask has to be a
 /// binary search and never the sort over every symbol.
-pub struct PlacedSymbols(Vec<PlacedSymbol>);
+pub(crate) struct PlacedSymbols(Vec<PlacedSymbol>);
 
 /// One entry of [`PlacedSymbols`]: a symbol, the index the file names it by, and the address
 /// its code is placed at.
@@ -81,6 +81,32 @@ impl Object {
         symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
         sections: Vec<Arc<Section>>,
         data: ObjectData,
+    ) -> Object {
+        Object::preloaded(
+            path,
+            name,
+            format,
+            architecture,
+            symbols,
+            sections,
+            data,
+            None,
+        )
+    }
+
+    /// [`new`](Self::new) with `debug_info` started on `preloaded`, the backend the parse
+    /// already built; [`None`] means nothing is loaded yet, and the first line question
+    /// loads it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn preloaded(
+        path: PathBuf,
+        name: String,
+        format: BinaryFormat,
+        architecture: Architecture,
+        symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
+        sections: Vec<Arc<Section>>,
+        data: ObjectData,
+        preloaded: Option<DebugInfo>,
     ) -> Object {
         let mut sorted: Vec<_> = symbols.iter().collect();
         // The map's order is the hash seed's; the file's is the symbol index.
@@ -112,7 +138,7 @@ impl Object {
             symbols_sorted,
             sections,
             data,
-            debug_info: DebugInfoCache::default(),
+            debug_info: DebugInfoCache::new(preloaded),
             placed: PlacedSymbols(placed),
         }
     }
@@ -493,7 +519,7 @@ pub struct SymbolData {
     pub size: u64,
 
     /// What [`extent`](Self::extent) answered, once it has been asked; empty until then.
-    pub extent: ExtentCache,
+    pub(crate) extent: ExtentCache,
 }
 
 impl SymbolData {
