@@ -1461,7 +1461,8 @@ each stretch exactly as the view's own window ask does and **throws it away agai
 is an address, so walking a whole object leaves the app's memory where it found it and the landing
 pays for the one stretch it lands in through the ordinary window ask. It wraps once, starting and
 ending in the stretch the reader's address is in, so a match behind them is still found and none is
-found twice. What it says as it goes is how far it has got, every `SAID_EVERY` stretches rather than
+found twice. With no caret there is no address to start from: a forward walk starts at the top of
+the code, a backward one at the bottom, and every line counts. What it says as it goes is how far it has got, every `SAID_EVERY` stretches rather than
 every one: a word per function on a binary with 115k of them is a write per function to a state the
 bar reads. The bar draws that where a count would be, and "No matches" when a walk comes back round
 with nothing.

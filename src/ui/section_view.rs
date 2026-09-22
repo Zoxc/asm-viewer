@@ -748,18 +748,15 @@ impl Component for SectionList {
                 self.object.clone(),
                 reading,
                 move || {
-                    // Where the pane is, as an address; the top of the code where there
-                    // is no run in it yet.
+                    // Where the pane is, as an address; none where there is no run in it
+                    // yet, and the walk starts at the top.
                     let row = caret
                         .peek()
                         .assembly
                         .as_ref()
-                        .map(|picked| picked.chars.lead().row);
-                    let built = held.peek().clone();
-                    match (row, built) {
-                        (Some(row), Some(built)) => built.address_of(row).unwrap_or(NO_ADDRESS),
-                        _ => NO_ADDRESS,
-                    }
+                        .map(|picked| picked.chars.lead().row)?;
+                    let built = held.peek().clone()?;
+                    built.address_of(row)
                 },
                 move |address, columns| {
                     // The row the address is in **now**: the rows are counted afresh as

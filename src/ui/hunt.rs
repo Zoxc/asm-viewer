@@ -35,8 +35,9 @@ pub(crate) struct Hunt {
     pub(crate) object: Over,
     pub(crate) filter: Filter,
     pub(crate) direction: Direction,
-    /// The address it started from, which is where the pane was.
-    pub(crate) from: PlacedAddress,
+    /// The address it started from, which is where the pane was, or [`None`] where the
+    /// pane had no caret.
+    pub(crate) from: Option<PlacedAddress>,
     /// Where it has got to.
     pub(crate) walked: Walked,
 }
@@ -98,7 +99,8 @@ pub(crate) enum Hunted {
 const SAID_EVERY: usize = 64;
 
 /// Walk `object`'s code for the next match of `filter` from `from`, the way `direction`
-/// says, and say how far it has got as it goes.
+/// says, and say how far it has got as it goes. With no `from` the walk starts at the top
+/// going forward and at the bottom going back, and every line counts.
 ///
 /// **Stretch by stretch, and nothing kept.** Each is decoded exactly as the view's own
 /// window ask decodes one (`answer`'s `Question::Code` arm) and thrown away again: what
@@ -113,7 +115,7 @@ pub(crate) fn hunt(
     object: &Object,
     code: &Arc<CodeListing>,
     filter: &Filter,
-    from: PlacedAddress,
+    from: Option<PlacedAddress>,
     direction: Direction,
     emit: &mut dyn FnMut(Hunted) -> ControlFlow<()>,
 ) {
@@ -122,7 +124,11 @@ pub(crate) fn hunt(
     let Some(last) = total.checked_sub(1) else {
         return;
     };
-    let first = code.at(from).unwrap_or(0);
+    let first = match (from, direction) {
+        (Some(from), _) => code.at(from).unwrap_or(0),
+        (None, Direction::Forward) => 0,
+        (None, Direction::Back) => last,
+    };
 
     for step in 0..total {
         let flat = match direction {
@@ -146,7 +152,8 @@ pub(crate) fn hunt(
         for (address, line) in lines {
             // The stretch the walk started in holds the reader's own place: only what is
             // past it counts, or a step would find the match the pane is already on.
-            if step == 0 || (step == last && flat == first) {
+            let starting = step == 0 || (step == last && flat == first);
+            if let Some(from) = from.filter(|_| starting) {
                 let past = match direction {
                     Direction::Forward => address > from,
                     Direction::Back => address < from,
@@ -176,9 +183,9 @@ pub(crate) fn hunt(
 /// by reading on, and the bar shows how far the reading has got instead of a count. The
 /// two divide the step between them by whether the bar has a listing.
 ///
-/// `from` is where the pane is, as an address; a listing with no caret in it yet starts at
-/// the top. `land` is given the match, and is the section view's own: only it can put a
-/// caret on the row an address is in, the rows being counted afresh as stretches decode.
+/// `from` is where the pane is, as an address, and [`None`] where there is no caret in it
+/// yet. `land` is given the match, and is the section view's own: only it can put a caret
+/// on the row an address is in, the rows being counted afresh as stretches decode.
 ///
 /// **`at` and `object` reach every effect through its deps**, never as a capture: an
 /// effect's callback is built once, and a switch of tab re-renders this list with another
@@ -188,7 +195,7 @@ pub(crate) fn use_code_hunt(
     at: Where,
     object: Arc<Object>,
     reading: State<Reading>,
-    from: impl Fn() -> PlacedAddress + 'static,
+    from: impl Fn() -> Option<PlacedAddress> + 'static,
     mut land: impl FnMut(PlacedAddress, Range<usize>) -> bool + 'static,
 ) {
     let finds = use_try_consume::<Looking>().map(|looking| looking.0);
@@ -327,7 +334,7 @@ pub(crate) fn use_code_hunt(
 
 /// A walk as a step starts it: the bar it is for, which walk, the object it walks, the
 /// pattern, where it starts and which way it goes.
-type Walk = (Where, u64, Over, Filter, PlacedAddress, Direction);
+type Walk = (Where, u64, Over, Filter, Option<PlacedAddress>, Direction);
 
 /// Where the next walk's id comes from: one count for every listing, so no two walks
 /// anywhere share an id, and a list mounted again cannot reuse one a bar still holds.
@@ -376,3 +383,6 @@ async fn take_hunt(
         });
     }
 }
+
+#[cfg(test)]
+mod tests;
