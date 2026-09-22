@@ -601,17 +601,19 @@ impl SymbolData {
         range.contains(&placed).then_some(placed)
     }
 
-    /// This symbol's bytes over [`extent`](Self::extent) — the same range
-    /// [`assembly`](Self::assembly) decodes and [`line_info`](Self::line_info) asks about.
-    pub fn data_in(&self, object: &Object) -> Option<&[u8]> {
-        self.bytes(self.extent(object)?.bytes)
+    /// The addresses this symbol's [`extent`](Self::extent) covers: what
+    /// [`data_in`](Self::data_in) slices, [`assembly`](Self::assembly) decodes and
+    /// [`line_info`](Self::line_info) asks about. `extent` has already checked the sum;
+    /// it is checked again rather than assumed, as every number here came out of a file.
+    pub(crate) fn range(&self, object: &Object) -> Option<Range<SectionAddress>> {
+        let bytes = self.extent(object)?.bytes;
+        Some(self.address..self.address.checked_add(bytes)?)
     }
 
-    /// `size` bytes of the section starting at this symbol, or [`None`] when that runs off
-    /// the end of what was decompressed.
-    fn bytes(&self, size: u64) -> Option<&[u8]> {
-        let section = self.section.as_ref()?;
-        section.bytes_in(self.address..self.address.checked_add(size)?)
+    /// This symbol's bytes over its [`range`](Self::range), or [`None`] when that runs
+    /// off the end of what was decompressed.
+    pub fn data_in(&self, object: &Object) -> Option<&[u8]> {
+        self.section.as_ref()?.bytes_in(self.range(object)?)
     }
 
     /// This symbol's disassembly, or [`None`] when there are no bytes to decode. An
@@ -624,15 +626,13 @@ impl SymbolData {
     /// prints its length, neither of them asking [`extent`](Self::extent) again.
     pub fn assembly(&self, object: &Object) -> Option<Arc<Assembly>> {
         let extent = self.extent(object)?;
-        let bytes = self.bytes(extent.bytes)?;
-        // The sum `extent` has already checked. Checked again rather than assumed: every
-        // number here came out of a file.
-        let end = self.address.checked_add(extent.bytes)?;
+        let range = self.range(object)?;
+        let bytes = self.section.as_ref()?.bytes_in(range.clone())?;
         let code = Code::new(bytes, self.address, self.section.as_deref(), object);
         Some(Arc::new(Assembly::decode(
             object.architecture,
             &code,
-            self.address..end,
+            range,
             extent,
         )))
     }

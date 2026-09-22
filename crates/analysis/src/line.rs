@@ -622,9 +622,7 @@ impl SymbolData {
     /// paid for it, asks this rather than [`Object::line_info`] over
     /// [`Assembly::range`](crate::Assembly::range).
     pub fn line_info(&self, object: &Object) -> Option<Arc<LineInfo>> {
-        let section = self.section.as_ref()?;
-        let end = self.address.checked_add(self.extent(object)?.bytes)?;
-        object.line_info(section, self.address..end)
+        object.line_info(self.section.as_ref()?, self.range(object)?)
     }
 
     /// What the debug info says this symbol's extent is, [`None`] when it says nothing.
