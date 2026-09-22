@@ -143,9 +143,16 @@ fn facts(heading: &Heading) -> Vec<Element> {
                 )
                 .into_element(),
                 fact("Address", format!("{:016X}", data.address)).into_element(),
-                // The declared size is only ever displayed, as 0 where the file states none;
-                // the extent below is the range the listing was decoded over.
-                fact("Declared", format!("{} bytes", data.size.unwrap_or(0))).into_element(),
+                // The size the file states, if it states one. It is only displayed; the
+                // extent below is the range the listing was decoded over.
+                fact(
+                    "Declared",
+                    match data.size {
+                        Some(size) => format!("{size} bytes"),
+                        None => "Unknown size".to_owned(),
+                    },
+                )
+                .into_element(),
                 fact("Extent", format!("{extent} bytes")).into_element(),
                 fact("Object", symbol.object.name.clone()).into_element(),
             ]
