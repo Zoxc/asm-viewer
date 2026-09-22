@@ -350,6 +350,26 @@ pub(super) fn saves() -> MutexGuard<'static, Saves> {
     SAVES.lock().unwrap_or_else(|error| error.into_inner())
 }
 
+/// Test-only: put the static back to what the app boots into if it is in a project under
+/// `directory`, which a test is about to remove. Otherwise the next flush from any test
+/// writes into the removed directory and makes it again. A static in some other test's
+/// directory is left alone.
+#[cfg(test)]
+pub(super) fn forget_under(directory: &Path) {
+    let mut saves = saves();
+    let store_in = saves
+        .store
+        .as_ref()
+        .is_some_and(|store| store.path("").starts_with(directory));
+    let open_in = saves
+        .open
+        .as_ref()
+        .is_some_and(|open| open.starts_with(directory));
+    if store_in || open_in {
+        *saves = Saves::default();
+    }
+}
+
 /// The store and the project file the app is in, or `None` when it is in none — in which
 /// case nothing is written and nothing is made. The session goes beside the file. Also
 /// what a delete takes away.

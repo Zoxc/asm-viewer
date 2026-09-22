@@ -29,10 +29,12 @@ fn a_project_file_is_known_by_its_extension() {
 /// **opened** has the other half of it: the baseline every change is measured against is the
 /// stub `opened` seeded, and only `stored` says what the session file holds.
 ///
-/// The one test here that goes through the `SAVES` static; every other builds a `Saves` of
-/// its own, and nothing else in the suite touches it.
+/// One of four tests here that go through the `SAVES` static, each holding
+/// [`using_saves`] while it does. Every other test here builds a `Saves` of its own. The
+/// headless UI tests reach the static too, through `record` and `flush`.
 #[test]
 fn putting_a_project_somewhere_carries_the_id_and_the_session() {
+    let _saves = using_saves();
     let base = directory(line!());
     let store = Store::at(&base);
     let from = start_new(&store).expect("a project is started");
@@ -112,6 +114,7 @@ fn no_project_open_means_nothing_is_written_and_nothing_is_made() {
 /// Startup: the front of the recent list, both halves of it.
 #[test]
 fn the_last_project_is_the_one_reopened() {
+    let _saves = using_saves();
     let base = directory(line!());
     let store = Store::at(&base);
     let project = a_project();
@@ -147,6 +150,7 @@ fn the_last_project_is_the_one_reopened() {
 /// the two halves and not the path it was given.
 #[test]
 fn a_project_opens_under_the_path_it_was_named_by() {
+    let _saves = using_saves();
     let base = directory(line!());
     let store = Store::at(&base);
     let path = base.join(format!("kernel.{PROJECT_EXTENSION}"));
@@ -207,6 +211,7 @@ fn nothing_to_reopen_is_not_an_error() {
 /// beside it is the same answer.
 #[test]
 fn a_project_missing_a_half_still_reopens() {
+    let _saves = using_saves();
     let base = directory(line!());
     let store = Store::at(&base);
     let path = unsaved_project(&store).expect("a project");
