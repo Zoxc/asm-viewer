@@ -59,14 +59,10 @@ impl SymbolData {
     /// in the section (or the section end). An *upper* bound rather than a measurement: it
     /// includes alignment padding, and a declaration the symbol table never mentioned (an
     /// export, an entry point) has no size of its own. A derivation running past
-    /// [`MAX_DERIVED_SIZE`] stops there and says so ([`Extent::capped`]), which is the only
-    /// place the cap is applied. See [`extent`](Self::extent).
+    /// [`MAX_DERIVED_SIZE`] stops there and says so ([`Extent::capped`]). See
+    /// [`extent`](Self::extent).
     pub fn estimate_size(&self, object: &Object) -> Option<Extent> {
-        let derived = self.derived(object)?;
-        Some(Extent {
-            bytes: derived.min(MAX_DERIVED_SIZE),
-            capped: derived > MAX_DERIVED_SIZE,
-        })
+        self.derived(object).map(cap)
     }
 
     /// [`estimate_size`](Self::estimate_size) before its cap: the bytes from this symbol to
@@ -96,32 +92,22 @@ impl SymbolData {
         placed.bytes_to(next.unwrap_or(range.end))
     }
 
-    /// A length the file states, bounded by the next symbol. A listing is one stretch per
-    /// symbol and decodes each as its symbol's extent, so a length reaching past the next
-    /// label would draw those rows twice. A zero derivation is no derivation: a symbol
-    /// placed exactly at the section's end has nothing to bound it with.
-    fn clamped(&self, object: &Object, stated: u64) -> u64 {
-        match self.derived(object).filter(|&size| size != 0) {
-            Some(derived) => stated.min(derived),
-            None => stated,
-        }
-    }
-
     /// The end the file's own unwind table states for the function this symbol is in
     /// ([`CodeSection::unwind`](crate::CodeSection::unwind)), as bytes from the symbol's
     /// address, or [`None`] where the entry the address falls in ([`covering`]) states none.
-    /// Clamped to the next symbol ([`clamped`](Self::clamped)) — and every entry's own begin
-    /// is a symbol, which is what stops a parent at the chained entry of its cold part.
-    fn unwind_extent(&self, object: &Object) -> Option<u64> {
+    /// Not yet clamped to the next symbol: [`stated_extent`](Self::stated_extent) does that.
+    /// Every entry's own begin is a symbol, so the clamp is what stops a parent at the
+    /// chained entry of its cold part.
+    fn unwind_extent(&self) -> Option<u64> {
         let code = self.section.as_ref()?.code()?;
         let index = covering(&code.unwind, Range::clone, self.address)?;
         let range = &code.unwind[index];
-        Some(self.clamped(object, self.address.bytes_to(range.end)?))
+        self.address.bytes_to(range.end)
     }
 
     /// The size the file declares for this symbol ([`size`](Self::size)) where that
-    /// declaration is a function's length in bytes, [`clamped`](Self::clamped); [`None`]
-    /// where it declares none or the format's size field is something else.
+    /// declaration is a function's length in bytes, not yet clamped to the next symbol;
+    /// [`None`] where it declares none or the format's size field is something else.
     ///
     /// **ELF only, and that is an allowlist a format joins on evidence.** An ELF `st_size`
     /// is the ABI's own statement of how many bytes the symbol is, and every mainstream
@@ -134,14 +120,14 @@ impl SymbolData {
     /// taken as fact here, which is why only the field with the measurement behind it is
     /// read.
     ///
-    /// The clamp catches an over-reaching one — hand-written assembly with a `.size` past
+    /// The clamp in [`stated_extent`](Self::stated_extent) catches an over-reaching one — hand-written assembly with a `.size` past
     /// the next label. One that is too small is taken as it stands, as an unwind entry's
     /// stated end and a `DW_AT_high_pc` already are.
-    fn declared_extent(&self, object: &Object) -> Option<u64> {
-        if object.format != BinaryFormat::Elf || self.size == 0 {
+    fn declared_extent(&self, format: BinaryFormat) -> Option<u64> {
+        if format != BinaryFormat::Elf || self.size == 0 {
             return None;
         }
-        Some(self.clamped(object, self.size))
+        Some(self.size)
     }
 
     /// How many bytes of code this symbol is. Three answers, in order.
@@ -185,23 +171,41 @@ impl SymbolData {
     }
 
     /// The three answers [`extent`](Self::extent) chooses among, before it bounds them.
+    ///
+    /// A length the file states is clamped to the next symbol. A listing is one stretch per
+    /// symbol and decodes each as its symbol's extent, so a length reaching past the next
+    /// label would draw those rows twice.
     fn stated_extent(&self, object: &Object) -> Option<Extent> {
+        // A zero derivation is no derivation: a symbol placed exactly at the section's end
+        // has nothing to bound a stated length with, and no estimate of its own.
+        let derived = self.derived(object).filter(|&size| size != 0);
+        let clamp = |bytes: u64| Extent {
+            bytes: derived.map_or(bytes, |derived| bytes.min(derived)),
+            capped: false,
+        };
+        if let Some(bytes) = self.unwind_extent() {
+            return Some(clamp(bytes));
+        }
+        if let Some(bytes) = self.declared_extent(object.format) {
+            return Some(clamp(bytes));
+        }
+        let estimate = derived.map(cap);
         let stated = |bytes| Extent {
             bytes,
             capped: false,
         };
-        if let Some(bytes) = self.unwind_extent(object) {
-            return Some(stated(bytes));
-        }
-        if let Some(bytes) = self.declared_extent(object) {
-            return Some(stated(bytes));
-        }
-        let estimate = self
-            .estimate_size(object)
-            .filter(|estimate| estimate.bytes != 0);
         match (self.debug_extent(object).map(stated), estimate) {
             (Some(declared), Some(estimate)) if estimate.bytes < declared.bytes => Some(estimate),
             (declared, estimate) => declared.or(estimate),
         }
+    }
+}
+
+/// The next-symbol derivation as an estimate: cut at [`MAX_DERIVED_SIZE`], and saying so.
+/// The only place the cap is applied.
+fn cap(derived: u64) -> Extent {
+    Extent {
+        bytes: derived.min(MAX_DERIVED_SIZE),
+        capped: derived > MAX_DERIVED_SIZE,
     }
 }

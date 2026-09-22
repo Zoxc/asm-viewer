@@ -243,7 +243,7 @@ cap rather than an end. Whoever wants the second question — `Listing::decode`,
 of a capped stretch is a `GapKind::Cut` — reads it rather than comparing the number to the
 constant, since a file is free to state exactly a megabyte and used to be told it had been cut off
 there. The
-derivation is capped at `MAX_DERIVED_SIZE` (1 MiB) in `estimate_size` and nowhere else, so the
+derivation is capped at `MAX_DERIVED_SIZE` (1 MiB) in `extent.rs`'s `cap` and nowhere else, so the
 constant is private to `extent.rs`. That is not a claim about how long a function can be, but the point
 past which it is certainly describing something else: a stripped PE's export table is sparse, so
 nine of the LLVM DLL's exports derived megabytes and one derived 3.7 MB, which was 772 302 instructions
@@ -276,8 +276,8 @@ the object as an argument while the memo sits on the symbol, so asking with anot
 caller's bug the memo does not catch. It is not checked: a check that the object owns the symbol's
 section walks every section on every call, and the source index (`symbol_ranges`) asks every
 symbol's extent, so in a debug build it cost symbols × sections. Nothing else is kept —
-`estimate_size` is a binary search sitting on `extent`'s own path, and `data_in` is a slice of a
-section rather than an answer.
+the next-symbol derivation is a binary search sitting on `extent`'s own path, and `data_in` is a
+slice of a section rather than an answer.
 
 **Names are demangled in one batch per object, on stacks sized for them** (`demangle.rs`). A mangled
 name is bytes out of a string table, and it is the *file* that chooses how deep the demangler
