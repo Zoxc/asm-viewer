@@ -31,7 +31,7 @@ fn object(name: &str, symbols: &[&str]) -> Arc<Object> {
                 None,
                 SectionAddress::new(address),
                 Some(section.clone()),
-                0,
+                None,
             );
             (SymbolIndex(index), Arc::new(symbol))
         })
@@ -143,7 +143,7 @@ fn placed(name: &str, address: u64, bias: Bias) -> Arc<SymbolData> {
         None,
         SectionAddress::new(address),
         Some(Arc::new(section)),
-        0,
+        None,
     ))
 }
 
@@ -175,7 +175,7 @@ fn a_symbol_with_no_section_is_nowhere_to_open() {
         None,
         SectionAddress::new(0x10),
         None,
-        0,
+        None,
     ));
     assert_eq!(lowest_placed(&[loose.clone()]), None);
     // And it is stepped over rather than taken as the lowest.

@@ -267,7 +267,7 @@ fn a_declared_size_is_taken_before_the_debug_info() {
     let object = parse(&declaring(&[(0, 12)], Some(0), &[6, 2]));
     let first = named(&object, "first");
 
-    assert_eq!(first.size, 6);
+    assert_eq!(first.size, Some(6));
     assert_eq!(
         first.estimate_size(&object).map(|extent| extent.bytes),
         Some(10)
@@ -281,13 +281,14 @@ fn a_declared_size_is_taken_before_the_debug_info() {
 }
 
 /// 0 is the size an object file most often declares, and it has to mean "nothing declared"
-/// rather than "no bytes": `first` falls through to DWARF, `second` beside it does not.
+/// rather than "no bytes", so the parse reads it as none: `first` falls through to DWARF,
+/// `second` beside it does not.
 #[test]
 fn a_declared_zero_still_falls_through_to_the_debug_info() {
     let object = parse(&declaring(&[(0, 6), (1, 2)], Some(0), &[0, 2]));
     let first = named(&object, "first");
 
-    assert_eq!(first.size, 0);
+    assert_eq!(first.size, None);
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
     assert_eq!(
         named(&object, "second")
@@ -305,7 +306,7 @@ fn a_declared_size_past_the_next_symbol_is_clipped_to_it() {
     let object = parse(&declaring(&[], Some(0), &[100]));
     let first = named(&object, "first");
 
-    assert_eq!(first.size, 100);
+    assert_eq!(first.size, Some(100));
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(10));
 }
 
@@ -328,7 +329,7 @@ fn an_unwind_entry_outranks_a_declared_size() {
     let first = named(&object, "first");
 
     assert_eq!(first.address, at(TEXT_ADDRESS));
-    assert_eq!(first.size, 8);
+    assert_eq!(first.size, Some(8));
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(4));
 }
 
@@ -357,7 +358,7 @@ fn a_coff_total_size_is_not_a_functions_length() {
     let first = named(&object, "first");
 
     assert_eq!(object.format, analysis::BinaryFormat::Coff);
-    assert_eq!(first.size, 2);
+    assert_eq!(first.size, Some(2));
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
     assert_eq!(
         first

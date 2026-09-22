@@ -1397,7 +1397,7 @@ fn a_history_row_names_the_function_and_not_the_whole_symbol() {
             Some(demangled.to_owned()),
             SectionAddress::new(0x1000),
             None,
-            0,
+            None,
         )),
     };
 
@@ -12775,7 +12775,7 @@ fn mangled_symbol() -> Symbol {
             Some("viewer::ui::assembly::AssemblyPane::render".to_owned()),
             SectionAddress::new(0x1000),
             None,
-            0,
+            None,
         )),
     }
 }
@@ -21210,7 +21210,7 @@ fn calling_into_the_middle() -> (Arc<Object>, PlacedAddress) {
                 None,
                 SectionAddress::new(address),
                 Some(section.clone()),
-                size,
+                Some(size),
             );
             (SymbolIndex(index), Arc::new(symbol))
         })

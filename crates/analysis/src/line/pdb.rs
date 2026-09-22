@@ -180,7 +180,7 @@ impl Pdb {
                     .map(|(address, procedure)| Declared {
                         name: Name::Informative(procedure.name.to_string().into_owned()),
                         address,
-                        len: u64::from(procedure.len),
+                        len: Some(u64::from(procedure.len)),
                     }),
             );
         }
@@ -211,7 +211,7 @@ impl Pdb {
             declared.push(Declared {
                 name: Name::Symbol(public.name.to_string().into_owned()),
                 address,
-                len: 0,
+                len: None,
             });
         }
         declared

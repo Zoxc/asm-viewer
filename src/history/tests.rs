@@ -517,7 +517,7 @@ fn a_half_that_does_not_belong_to_its_document_is_no_place_at_all() {
     // A symbol's address is an instruction of it: where a call it makes to itself lands.
     let symbol = Symbol {
         object: object("symbol"),
-        data: Arc::new(SymbolData::new("f".to_owned(), None, at(16), None, 8)),
+        data: Arc::new(SymbolData::new("f".to_owned(), None, at(16), None, Some(8))),
     };
     let inside = Address::Local(at(20));
     let instruction = Stop::paired(Document::Symbol(symbol.clone()), Some(inside), Some(7));

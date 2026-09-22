@@ -518,7 +518,10 @@ pub struct SymbolData {
     pub made_up: Option<MadeUp>,
     pub address: SectionAddress,
     pub section: Option<Arc<Section>>,
-    pub size: u64,
+    /// The size the file states for the symbol, or [`None`] where it states none: an
+    /// export, the entry point, a debug file's public, and a symbol table entry whose size
+    /// field is 0. Only an ELF's is a function's length ([`Symbol::extent`]).
+    pub size: Option<u64>,
 
     /// What [`extent`](Self::extent) answered, once it has been asked; empty until then.
     pub(crate) extent: ExtentCache,
@@ -532,7 +535,7 @@ impl SymbolData {
         demangled: Option<String>,
         address: SectionAddress,
         section: Option<Arc<Section>>,
-        size: u64,
+        size: Option<u64>,
     ) -> SymbolData {
         SymbolData::parsed(name, demangled, None, address, section, size)
     }
@@ -542,7 +545,7 @@ impl SymbolData {
         made_up: MadeUp,
         address: SectionAddress,
         section: Option<Arc<Section>>,
-        size: u64,
+        size: Option<u64>,
     ) -> SymbolData {
         let name = made_up.to_string();
         SymbolData::parsed(name, None, Some(made_up), address, section, size)
@@ -555,7 +558,7 @@ impl SymbolData {
         made_up: Option<MadeUp>,
         address: SectionAddress,
         section: Option<Arc<Section>>,
-        size: u64,
+        size: Option<u64>,
     ) -> SymbolData {
         SymbolData {
             name,

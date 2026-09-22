@@ -37,8 +37,8 @@ fn estimate_size_is_derived_from_the_next_symbol() {
     let target = symbol(&object, "target");
 
     // Nothing to derive from: the fixture declares no sizes at all.
-    assert_eq!(caller.size, 0);
-    assert_eq!(target.size, 0);
+    assert_eq!(caller.size, None);
+    assert_eq!(target.size, None);
 
     // `caller` ends where `target` begins ...
     assert_eq!(

@@ -17,7 +17,7 @@ fn object(symbols: &[(u32, &str, u64)]) -> Object {
     let symbols: HashMap<_, _> = symbols
         .iter()
         .map(|&(index, name, address)| {
-            let data = SymbolData::new(name.to_string(), None, at(address), None, 0);
+            let data = SymbolData::new(name.to_string(), None, at(address), None, None);
             (SymbolIndex(index as usize), Arc::new(data))
         })
         .collect();

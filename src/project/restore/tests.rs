@@ -39,7 +39,7 @@ fn built(path: &str, name: &str, symbols: &[(&str, u64)], bytes: &[u8]) -> Arc<O
                     None,
                     SectionAddress::new(*address),
                     Some(section.clone()),
-                    0,
+                    None,
                 )
             })
             .collect()
@@ -1748,7 +1748,7 @@ fn a_bookmark_on_a_made_up_name_outlives_its_spelling() {
                 made_up,
                 address,
                 Some(section.clone()),
-                0,
+                None,
             )]
         },
     )];

@@ -29,7 +29,7 @@ fn object(name: &str, symbols: &[(&str, u64)]) -> Arc<Object> {
                 demangled,
                 SectionAddress::new(*address),
                 Some(section.clone()),
-                0,
+                None,
             );
             (SymbolIndex(index), Arc::new(symbol))
         })

@@ -36,12 +36,12 @@ struct Pending {
     index: SymbolIndex,
     name: Name,
     address: SectionAddress,
-    /// What the file said: a symbol's size, the length a debug file's record states, an
-    /// unwind entry's stated end less its begin, and 0 for an export, the entry point and a
-    /// record with no length of its own. The
-    /// extent used comes from [`SymbolData::extent`], which reads this only where the format
-    /// makes it a function's length ([`SymbolData::declared_extent`]).
-    size: u64,
+    /// What the file said: a symbol's size, the length a debug file's record states, or an
+    /// unwind entry's stated end less its begin. [`None`] for an export, the entry point, a
+    /// record with no length of its own, and a symbol whose size field is 0 ([`stated`]).
+    /// The extent used comes from [`SymbolData::extent`], which reads this only where the
+    /// format makes it a function's length ([`SymbolData::declared_extent`]).
+    size: Option<u64>,
     /// The section the symbol is in, looked up when the symbol is built. For declared code it
     /// is the code section containing `address`: an export table and an entry point name an
     /// address and nothing else.
@@ -108,7 +108,7 @@ fn declared_code(
     }
 
     // Which kind of name it is decides whether it is offered to the demanglers.
-    let mut take = |name: Name, address: SectionAddress, size: u64| {
+    let mut take = |name: Name, address: SectionAddress, size: Option<u64>| {
         let Some((_, section)) = code.iter().find(|(range, _)| range.contains(&address)) else {
             return;
         };
@@ -139,7 +139,7 @@ fn declared_code(
         take(
             Name::Symbol(String::from_utf8_lossy(name).into_owned()),
             SectionAddress::new(symbol.address()),
-            symbol.size(),
+            stated(symbol.size()),
         );
     }
 
@@ -161,7 +161,7 @@ fn declared_code(
         take(
             Name::Symbol(String::from_utf8_lossy(name).into_owned()),
             SectionAddress::new(address),
-            0,
+            None,
         );
     }
 
@@ -171,7 +171,7 @@ fn declared_code(
         take(
             Name::MadeUp(MadeUp::EntryPoint),
             SectionAddress::new(entry),
-            0,
+            None,
         );
     }
 
@@ -189,7 +189,7 @@ fn declared_code(
         take(
             Name::MadeUp(MadeUp::unwind(entry)),
             entry.range.start,
-            entry.len(),
+            Some(entry.len()),
         );
     }
 
@@ -356,7 +356,7 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
             index: symbol.index(),
             name,
             address,
-            size: symbol.size(),
+            size: stated(symbol.size()),
             section,
         };
         match symbol.name_bytes() {
@@ -369,6 +369,12 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
         }
     }
     table
+}
+
+/// A symbol table's size field as a size: a symbol whose field is 0 states none, which is
+/// what an ELF `st_size` of 0 means and how `object` answers for a format with no such field.
+fn stated(size: u64) -> Option<u64> {
+    (size != 0).then_some(size)
 }
 
 /// Every unwind entry's range, by the section it starts in, whether or not its begin became a

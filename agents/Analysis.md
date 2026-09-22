@@ -88,8 +88,10 @@ is the compiler's display name (`add`, `core::ptr::drop_in_place<T>`), which ski
 batch. A public's is the decorated name as the
 linker saw it (`?add@@YAHHH@Z`, `_ZN4core3ptr…`, a plain `add` for C), and goes through the same
 batch to come out demangled, the raw spelling kept as `name`. A procedure's length and an unwind
-entry's stated length are the symbol's *declared* size where an export's and a public's is 0; the
-extent used is still `SymbolData::extent`. The symbol table itself may hold two names for one
+entry's stated length are the symbol's *declared* size where an export and a public have none; the
+extent used is still `SymbolData::extent`. A size is an `Option` from where it is read: a symbol
+table's size field of 0 becomes `None` in `parse.rs`'s `stated`, once, so no 0 travels further
+meaning "no size". The symbol table itself may hold two names for one
 address (an alias, an assembler label) and both are kept. `estimate_size` stops at the next symbol
 at a **greater** address, so a twin bounds nothing: a search that once landed on either twin
 answered 0 for an aliased symbol, which in an object without DWARF was a function with no listing at
@@ -212,7 +214,8 @@ since an address is a number out of the file and one wild `st_value` would other
 the symbol's own included, because the index it reads is: it used to take the bias back off the next
 symbol so the subtraction could meet `st_value`, which put five addresses in two spaces inside thirty
 lines. Only the count of bytes leaves, and that is the same number either way. Declared sizes are
-frequently 0 in ELF/COFF, which is why the derivation exists at all.
+frequently absent in ELF/COFF, which is why the derivation exists at all. It is never 0: the symbol
+is inside the section's bytes, and the next symbol and the section's end are both past it.
 `SymbolData::extent` is the answer that is actually used, and has three
 answers in order. First, **the end the unwind table states**, where an entry covers the address,
 whatever named the symbol. That is the image's own statement, to its loader, of the very bytes the
@@ -223,10 +226,10 @@ being a symbol, that is also what stops a parent at the chained entry of its col
 size the file declares for the symbol**, clamped the same way. Only an ELF `st_size` counts as one:
 it is the ABI's own statement of how many bytes the symbol is, every mainstream toolchain fills it
 in, and on the `.so` above it equals the FDE's length for all 172 169 functions the `.eh_frame`
-covers. No other format's nonzero size means that. A COFF function symbol's is the `TotalSize` of an
+covers. No other format's size means that. A COFF function symbol's is the `TotalSize` of an
 auxiliary function-definition record, written for COFF's line-number data rather than to measure
 code; XCOFF's is a csect's length, and one csect can hold several functions; Mach-O states no size
-at all. A size that is *wrong* rather than 0 would be taken as fact, so the trusted set is an
+at all. A size that is *wrong* rather than absent would be taken as fact, so the trusted set is an
 allowlist of one and a format joins it on evidence. The clamp catches an over-reaching declaration —
 hand-written assembly with a `.size` past the next label — while one that is too small stands, as an
 unwind entry's stated end and a `DW_AT_high_pc` already do. What this is for is the ELF with a

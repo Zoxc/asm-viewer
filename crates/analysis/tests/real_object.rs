@@ -125,7 +125,7 @@ fn declared_sizes_agree_with_the_estimate() {
     for (name, address, size) in [("add", 0x00, 20), ("twice", 0x14, 28), ("sum_to", 0x30, 62)] {
         let symbol = symbol(&object, name);
         assert_eq!(symbol.address, at(address), "{name} address");
-        assert_eq!(symbol.size, size, "{name} declared size");
+        assert_eq!(symbol.size, Some(size), "{name} declared size");
         assert_eq!(
             symbol.estimate_size(&object).map(|extent| extent.bytes),
             Some(size),

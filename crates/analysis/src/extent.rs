@@ -55,7 +55,7 @@ pub struct Extent {
 pub(crate) struct ExtentCache(OnceLock<Option<Extent>>);
 
 impl SymbolData {
-    /// Object files frequently report a size of 0, so derive the extent from the next symbol
+    /// Object files frequently state no size, so derive the extent from the next symbol
     /// in the section (or the section end). An *upper* bound rather than a measurement: it
     /// includes alignment padding, and a declaration the symbol table never mentioned (an
     /// export, an entry point) has no size of its own. A derivation running past
@@ -67,7 +67,8 @@ impl SymbolData {
 
     /// [`estimate_size`](Self::estimate_size) before its cap: the bytes from this symbol to
     /// the next in the section, or to the section's end. [`None`] for a symbol outside every
-    /// code section's bytes ([`SymbolData::code_place`]).
+    /// code section's bytes ([`SymbolData::code_place`]). Never 0: the symbol is inside those
+    /// bytes, and the next symbol and the section's end are both past it.
     ///
     /// **Every address here is a placed one** ([`SymbolData::placed`]), the symbol's own
     /// included, because the index it reads is: two spaces in one derivation would each
@@ -112,11 +113,11 @@ impl SymbolData {
     /// **ELF only, and that is an allowlist a format joins on evidence.** An ELF `st_size`
     /// is the ABI's own statement of how many bytes the symbol is, and every mainstream
     /// toolchain fills it in: on `librustc_driver.so` it equals the FDE's length for every
-    /// one of the 172 169 functions the `.eh_frame` covers. No other format's nonzero size
-    /// means that. A COFF function symbol's is the `TotalSize` of an auxiliary
+    /// one of the 172 169 functions the `.eh_frame` covers. No other format's size means
+    /// that. A COFF function symbol's is the `TotalSize` of an auxiliary
     /// function-definition record, written for COFF's line-number data rather than to
     /// measure code; XCOFF's is a csect's length, and one csect can hold several functions;
-    /// Mach-O states no size at all. A declaration that is *wrong* rather than 0 would be
+    /// Mach-O states no size at all. A declaration that is *wrong* rather than absent would be
     /// taken as fact here, which is why only the field with the measurement behind it is
     /// read.
     ///
@@ -124,10 +125,7 @@ impl SymbolData {
     /// the next label. One that is too small is taken as it stands, as an unwind entry's
     /// stated end and a `DW_AT_high_pc` already are.
     fn declared_extent(&self, format: BinaryFormat) -> Option<u64> {
-        if format != BinaryFormat::Elf || self.size == 0 {
-            return None;
-        }
-        Some(self.size)
+        self.size.filter(|_| format == BinaryFormat::Elf)
     }
 
     /// How many bytes of code this symbol is. Three answers, in order.
@@ -149,9 +147,6 @@ impl SymbolData {
     /// other gets wrong. The estimate over-reaches into padding and over a function with no
     /// symbol; the declared extent over-reaches when two symbols share one function (an
     /// alias, an assembler label, a split cold part), since it describes the *function*.
-    ///
-    /// A zero estimate is treated as no estimate: a symbol placed exactly at the section's
-    /// end has no bytes to derive from, and the debug info may still know its extent.
     ///
     /// Whichever answers, an extent running off the end of the address space is no extent:
     /// a table stating one describes a range that does not exist, and every caller here
@@ -176,9 +171,7 @@ impl SymbolData {
     /// symbol and decodes each as its symbol's extent, so a length reaching past the next
     /// label would draw those rows twice.
     fn stated_extent(&self, object: &Object) -> Option<Extent> {
-        // A zero derivation is no derivation: a symbol placed exactly at the section's end
-        // has nothing to bound a stated length with, and no estimate of its own.
-        let derived = self.derived(object).filter(|&size| size != 0);
+        let derived = self.derived(object);
         let clamp = |bytes: u64| Extent {
             bytes: derived.map_or(bytes, |derived| bytes.min(derived)),
             capped: false,

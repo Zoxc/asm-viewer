@@ -41,8 +41,8 @@ use source::SourceIndex;
 pub(crate) struct Declared {
     pub(crate) name: Name,
     pub(crate) address: SectionAddress,
-    /// The stated length, or 0 where the record has none.
-    pub(crate) len: u64,
+    /// The stated length, or [`None`] where the record has none.
+    pub(crate) len: Option<u64>,
 }
 
 /// An [`Object`]'s debug info, or the fact that it has none, worked out at most once. Caching

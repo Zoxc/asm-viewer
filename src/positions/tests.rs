@@ -218,7 +218,7 @@ fn symbol(path: &str, name: &str) -> Symbol {
         None,
         SectionAddress::new(0),
         None,
-        0,
+        None,
     ));
     let object = Arc::new(Object::new(
         PathBuf::from(path),

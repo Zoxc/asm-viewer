@@ -7,7 +7,13 @@ use super::*;
 
 /// A bare `Object` with one text symbol — only the fields these tests read.
 fn object(path: &str, name: &str) -> Arc<Object> {
-    let caller = SymbolData::new("caller".to_owned(), None, SectionAddress::new(0), None, 0);
+    let caller = SymbolData::new(
+        "caller".to_owned(),
+        None,
+        SectionAddress::new(0),
+        None,
+        None,
+    );
     Arc::new(Object::new(
         PathBuf::from(path),
         name.to_owned(),

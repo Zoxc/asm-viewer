@@ -224,7 +224,7 @@ fn every_kind_of_link_is_one_run_of_the_text() {
         Some("add".to_owned()),
         SectionAddress::new(0x100),
         None,
-        0,
+        None,
     ));
     let assembly = listing(target);
     let lines = assembly
@@ -277,7 +277,7 @@ fn a_link_named_in_whitespace_stays_inside_the_line() {
                 None,
                 SectionAddress::new(0),
                 None,
-                0,
+                None,
             )),
             span: None,
         });
@@ -340,7 +340,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
         Some("add".to_owned()),
         SectionAddress::new(0x100),
         None,
-        0,
+        None,
     ));
     let symbol = Symbol {
         object: object.clone(),

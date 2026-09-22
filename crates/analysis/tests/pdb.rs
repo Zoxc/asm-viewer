@@ -598,7 +598,7 @@ fn a_stated_end_beats_the_procedures_length() {
         Some(0x11),
         "the procedure's length"
     );
-    assert_eq!(add.size, 0, "an export declares no size");
+    assert_eq!(add.size, None, "an export declares no size");
     assert_eq!(
         add.extent(&object).map(|extent| extent.bytes),
         Some(0x18),
@@ -644,7 +644,7 @@ fn procedures_are_symbols_where_the_image_names_none() {
     for (offset, len) in [(0x00, 0x11), (0x20, 0x1b), (0x40, 0x49)] {
         let function = symbol(&alone, &format!("<function {:#x}>", TEXT + offset));
         assert_eq!(function.address, at(TEXT + offset));
-        assert_eq!(function.size, len, "the entry's stated length");
+        assert_eq!(function.size, Some(len), "the entry's stated length");
         assert_eq!(function.debug_extent(&alone), None, "no PDB");
         assert_eq!(
             function.extent(&alone).map(|extent| extent.bytes),
@@ -664,7 +664,8 @@ fn procedures_are_symbols_where_the_image_names_none() {
         let symbol = symbol(&object, name);
         assert_eq!(symbol.address, at(TEXT + offset), "{name}");
         assert_eq!(
-            symbol.size, len,
+            symbol.size,
+            Some(len),
             "{name}: the procedure's length is the declared size"
         );
         assert_eq!(
@@ -702,7 +703,7 @@ fn a_procedure_never_displaces_an_export() {
     for name in ["add", "twice", "sum_to"] {
         assert_eq!(
             symbol(&object, name).size,
-            0,
+            None,
             "{name}: an export declares no size"
         );
     }
@@ -741,7 +742,7 @@ fn a_public_names_the_function_no_module_describes() {
 
     let helper = symbol(&object, "?helper@@YAHXZ");
     assert_eq!(helper.address, at(TEXT + 0x90));
-    assert_eq!(helper.size, 0, "a public declares no size");
+    assert_eq!(helper.size, None, "a public declares no size");
     assert_eq!(
         helper.demangled.as_deref(),
         Some("int helper(void)"),
@@ -767,7 +768,11 @@ fn a_public_names_the_function_no_module_describes() {
     ] {
         let symbol = symbol(&object, name);
         assert_eq!(symbol.address, at(TEXT + offset), "{name}");
-        assert_eq!(symbol.size, len, "{name}: still the procedure's length");
+        assert_eq!(
+            symbol.size,
+            Some(len),
+            "{name}: still the procedure's length"
+        );
         assert_eq!(
             symbol.extent(&object).map(|extent| extent.bytes),
             Some(len),
@@ -790,7 +795,7 @@ fn a_public_never_displaces_a_procedure() {
     for (name, len) in [("add", 0x11), ("twice", 0x1b), ("sum_to", 0x49)] {
         assert_eq!(
             symbol(&object, name).size,
-            len,
+            Some(len),
             "{name}: the procedure's length"
         );
     }

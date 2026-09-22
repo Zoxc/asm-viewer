@@ -120,7 +120,7 @@ fn unwind_entries_are_symbols_where_nothing_names_them() {
 
     let second = named(&object, &format!("<function {:#x}>", TEXT_ADDRESS + 4));
     assert_eq!(second.address, at(TEXT_ADDRESS + 4));
-    assert_eq!(second.size, 2, "the entry's stated length");
+    assert_eq!(second.size, Some(2), "the entry's stated length");
     assert_eq!(second.demangled, None, "ours, not the file's");
     assert_eq!(
         second.made_up,
@@ -342,7 +342,7 @@ fn a_chained_entry_is_a_fragment() {
         ]
     );
     let fragment = named(&object, &format!("<fragment {:#x}>", TEXT_ADDRESS + 4));
-    assert_eq!(fragment.size, 2);
+    assert_eq!(fragment.size, Some(2));
     assert_eq!(fragment.extent(&object).map(|extent| extent.bytes), Some(2));
     assert_eq!(fragment.demangled, None);
     assert_eq!(
@@ -434,7 +434,7 @@ fn an_elfs_fdes_are_symbols_where_nothing_names_them() {
         ]
     );
     let second = named(&object, &format!("<function {:#x}>", TEXT_ADDRESS + 4));
-    assert_eq!(second.size, 2, "the FDE's length");
+    assert_eq!(second.size, Some(2), "the FDE's length");
     assert_eq!(second.demangled, None);
     assert_eq!(
         second.section.as_ref().map(|s| s.name.as_str()),
@@ -688,7 +688,7 @@ fn the_hidden_shared_objects_functions_are_its_fdes() {
     for (address, len, name) in functions {
         let function = named(&object, &format!("<function {address:#x}>"));
         assert_eq!(function.address, at(address));
-        assert_eq!(function.size, len, "{name}");
+        assert_eq!(function.size, Some(len), "{name}");
         assert_eq!(
             function.size,
             named(&flat, name).size,
