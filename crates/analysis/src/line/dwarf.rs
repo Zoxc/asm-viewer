@@ -110,16 +110,7 @@ impl LineBackend for Dwarf {
 
         // One call for the symbol's whole extent: this walks each covering unit's line table
         // once, where per-instruction lookups would binary-search it per address.
-        let Ok(found) = context.find_location_range(query.start.get(), query.end.get()) else {
-            return;
-        };
-
-        for (address, length, location) in found {
-            let address = PlacedAddress::new(address);
-            let Some(end) = address.checked_add(length) else {
-                continue;
-            };
-
+        for (range, location) in location_ranges(&context, query) {
             // DWARF 5 can record a file's MD5 too, but `addr2line` renders the name and
             // keeps nothing of the entry behind it, so no hash travels with it for now
             // (`notes/upstream/addr2line.md`).
@@ -127,7 +118,7 @@ impl LineBackend for Dwarf {
 
             // Pushed as `addr2line` handed it over: the clip to the query, and the bias
             // that comes off after it, are the collector's (`RowCollector::push`).
-            rows.push(address..end, file, location.line, location.column);
+            rows.push(range, file, location.line, location.column);
         }
     }
 
@@ -167,26 +158,35 @@ impl LineBackend for Dwarf {
         // The whole address space in one pass. Safe where `extent` had to decline `u64::MAX`:
         // that unchecked `probe + 1` is in `find_units`, and this goes through
         // `find_units_range`, which takes the bound as given.
-        let Ok(rows) = context.find_location_range(0, u64::MAX) else {
-            return;
-        };
-
-        for (address, length, location) in rows {
+        for (range, location) in location_ranges(&context, PlacedAddress::ZERO..PlacedAddress::MAX)
+        {
             // A row naming no file or no line points at nothing a reader could ask for.
             // DWARF line 0 is already `None` by the time `addr2line` has spoken.
             let (Some(file), Some(line)) = (location.file, location.line) else {
                 continue;
             };
-            let address = PlacedAddress::new(address);
-            let Some(end) = address.checked_add(length) else {
-                continue;
-            };
-            if address >= end {
-                continue;
-            }
-            visit(address..end, file, line);
+            visit(range, file, line);
         }
     }
+}
+
+/// What `addr2line`'s `find_location_range` says of `query`, each range placed and with
+/// the location it gives. A range whose end would pass the last address, or that ends where
+/// it starts, is dropped, and an error is no ranges at all.
+fn location_ranges<'context>(
+    context: &'context addr2line::Context<Reader>,
+    query: Range<PlacedAddress>,
+) -> impl Iterator<Item = (Range<PlacedAddress>, addr2line::Location<'context>)> {
+    let found = context.find_location_range(query.start.get(), query.end.get());
+    found
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|(address, length, location)| {
+            let start = PlacedAddress::new(address);
+            let end = start.checked_add(length)?;
+            (start < end).then_some((start..end, location))
+        })
 }
 
 /// Every `DW_TAG_subprogram` in one unit that states where it begins and ends, as
