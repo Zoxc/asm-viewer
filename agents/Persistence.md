@@ -396,11 +396,12 @@ restore resolves every entry of every tab, up to 200 visits and the active docum
 one list, and a scan per place is a component-wise `Path` compare against every member of an
 archive that can hold thousands. A place resolved **on its own** scans instead
 (`Loaded::scanning`, which is what `resolve_by_name` and so every bookmark uses): one index over
-the whole list costs more than the one scan it saves. `project::by_file` is the same thought at
-the other end -- the first object out of each file, in the order the files were opened, with how
-many objects came out of it, which is what `binaries`, `binary_counts` and `digests` are each a
-reading of. Where the list holds two objects a saved place
-cannot tell apart, the first is the one that answers.
+the whole list costs more than the one scan it saves. `project::by_file` needs neither: it is
+the first object out of each file, in the order the files were opened, with how many objects
+came out of it, which is what `binaries`, `binary_counts` and `digests` are each a reading of.
+It groups by the run a file's objects make, the rule the Objects list follows too
+(`crate::tree`), because the loader keeps one file's objects in one run. Where the list holds
+two objects a saved place cannot tell apart, the first is the one that answers.
 
 Coming back, the **active document degrades** (symbol -> its object -> nothing, since there is one
 of it and the app must open somewhere) while **a trail's places and the visits are dropped** (a list

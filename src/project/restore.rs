@@ -6,7 +6,7 @@
 //! since ([`Loaded`]).
 
 use std::{
-    collections::{hash_map, BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -27,22 +27,15 @@ use super::files::{
 };
 
 /// The first object out of each file the loaded objects came from, in the order the files
-/// were opened, each with how many objects came out of that file: one walk, where a path
-/// already seen names the row to count against. [`binaries`], [`binary_counts`] and
+/// were opened, each with how many objects came out of that file. Grouped by the run a
+/// file's objects make, as the Objects list is (`crate::tree`): the loader keeps one
+/// file's objects in one run (`crate::ui::loading`). [`binaries`], [`binary_counts`] and
 /// [`digests`] each read their answer off it.
 fn by_file(objects: &[Arc<Object>]) -> Vec<(&Arc<Object>, usize)> {
-    let mut files: Vec<(&Arc<Object>, usize)> = Vec::new();
-    let mut at: HashMap<&Path, usize> = HashMap::new();
-    for object in objects {
-        match at.entry(&object.path) {
-            hash_map::Entry::Occupied(seen) => files[*seen.get()].1 += 1,
-            hash_map::Entry::Vacant(unseen) => {
-                unseen.insert(files.len());
-                files.push((object, 1));
-            }
-        }
-    }
-    files
+    objects
+        .chunk_by(|a, b| a.path == b.path)
+        .map(|run| (&run[0], run.len()))
+        .collect()
 }
 
 /// Every binary the loaded objects came out of, deduplicated, in the order they were

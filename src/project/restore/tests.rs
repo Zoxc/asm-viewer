@@ -345,9 +345,10 @@ fn symbols_given_out_of_order_are_all_found() {
 fn every_binary_is_counted_once_in_the_order_it_was_opened() {
     let objects = vec![
         object("/tmp/lib.a", "a.o", &[("caller", 0)]),
-        object("/tmp/one.o", "one.o", &[("one", 0)]),
-        // A second member of the archive above and not a third binary.
+        // A second member of the same archive and not a second binary: next to the
+        // first, as the loader keeps them.
         object("/tmp/lib.a", "b.o", &[("caller", 0)]),
+        object("/tmp/one.o", "one.o", &[("one", 0)]),
     ];
 
     assert_eq!(
