@@ -333,6 +333,16 @@ pub fn byte_of_char(text: &str, nth: usize) -> usize {
         .map_or(text.len(), |(at, _)| at)
 }
 
+/// `text` cut to `width` characters, with an ellipsis where anything was taken. Cut on a
+/// character boundary ([`byte_of_char`]), so a multi-byte text cannot panic here.
+pub fn elide(text: &str, width: usize) -> String {
+    let end = byte_of_char(text, width);
+    match end < text.len() {
+        true => format!("{}\u{2026}", &text[..end]),
+        false => text.to_owned(),
+    }
+}
+
 /// The last character boundary of `line` at or before `byte`, and the line's length for a
 /// byte past its end: a byte column out of a stale answer made into a place in the line.
 pub fn floor(line: &str, byte: usize) -> usize {

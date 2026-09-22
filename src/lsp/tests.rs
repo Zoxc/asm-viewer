@@ -1524,8 +1524,8 @@ fn what_a_program_said_is_cut_to_something_a_line_can_hold() {
         panic!("a program that ended was not read as one that would not start");
     };
 
-    assert!(reason.ends_with("..."), "{reason}");
-    assert!(reason.chars().count() <= 203, "{reason}");
+    assert!(reason.ends_with('\u{2026}'), "{reason}");
+    assert!(reason.chars().count() <= SAID_CHARS + 1, "{reason}");
 }
 
 /// A reader handing back one canned chunk per `read`, which is what a pipe does: a read

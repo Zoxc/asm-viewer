@@ -588,19 +588,12 @@ fn gone_instead(failure: Failure, ended: Option<String>, said: &str) -> Failure 
     let said: String = said.split_whitespace().collect::<Vec<_>>().join(" ");
     Failure::NoServer(match said.is_empty() {
         true => format!("it ended at once ({status})"),
-        false => elided(&said),
+        false => chars::elide(&said, SAID_CHARS),
     })
 }
 
-/// What a program said, cut to a length a line of the interface can hold.
-fn elided(said: &str) -> String {
-    const MOST: usize = 200;
-    let end = chars::byte_of_char(said, MOST);
-    match end < said.len() {
-        true => format!("{}...", &said[..end]),
-        false => said.to_owned(),
-    }
-}
+/// How much of what a program said is kept: a length a line of the interface can hold.
+const SAID_CHARS: usize = 200;
 
 impl Drop for Server {
     /// Kill it and reap it. `Child`'s own `Drop` neither waits nor kills, so a server

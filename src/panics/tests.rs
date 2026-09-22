@@ -346,11 +346,6 @@ fn a_frame_is_drawn_without_the_bytes_that_say_nothing() {
         shorten_path("             at ./src/ui.rs:419:5"),
         "             at ./src/ui.rs:419:5"
     );
-
-    assert_eq!(cut("abcdef", 4), "abcd\u{2026}");
-    assert_eq!(cut("abcd", 4), "abcd");
-    // Characters and not bytes: a name is text.
-    assert_eq!(cut("\u{e9}\u{e9}\u{e9}", 2), "\u{e9}\u{e9}\u{2026}");
 }
 
 /// A capture with nothing this recognises in it is shown as it came: the trimming is a

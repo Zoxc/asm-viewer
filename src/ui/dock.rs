@@ -471,7 +471,11 @@ fn panel_label(panel: Panel, background: Color) -> Rect {
         .border(right_hairline())
         .overflow(Overflow::Clip)
         .child(panel.icon())
-        .child(label().text(elide(panel.title())).max_lines(1))
+        .child(
+            label()
+                .text(chars::elide(panel.title(), CHIP_NAME_CHARS))
+                .max_lines(1),
+        )
 }
 
 /// One panel's tab header, as `TabHeader` is one tab's chip (`ui/strip.rs`): a component

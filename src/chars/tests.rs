@@ -573,3 +573,13 @@ fn the_nth_character_is_where_an_elision_cuts() {
     assert_eq!(byte_of_char(WIDE, 99), WIDE.len());
     assert_eq!(byte_of_char("", 0), 0);
 }
+
+/// Cut to a width in characters, with an ellipsis only where something was taken.
+#[test]
+fn a_text_is_elided_only_past_its_width() {
+    assert_eq!(elide("abc", 4), "abc");
+    assert_eq!(elide("abcd", 4), "abcd");
+    assert_eq!(elide("abcdef", 4), "abcd\u{2026}");
+    // Characters and not bytes: the crab is four bytes and one character.
+    assert_eq!(elide(WIDE, 4), "// \u{1f980}\u{2026}");
+}

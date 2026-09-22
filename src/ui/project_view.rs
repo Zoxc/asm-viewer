@@ -886,7 +886,10 @@ impl Component for ProjectChip {
                     .on_press(move |_| show_page(open, Page::Project))
                     .child(
                         label()
-                            .text(elide(&project::label(&store, &file)))
+                            .text(chars::elide(
+                                &project::label(&store, &file),
+                                CHIP_NAME_CHARS,
+                            ))
                             .max_lines(1),
                     ),
             ))

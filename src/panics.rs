@@ -432,21 +432,10 @@ fn drawn(frame: &[&str]) -> String {
         .iter()
         .map(|line| match line.trim_start().starts_with("at ") {
             true => shorten_path(line),
-            false => cut(line, MAX_WIDTH),
+            false => chars::elide(line, MAX_WIDTH),
         })
         .collect::<Vec<String>>()
         .join("\n")
-}
-
-/// `line` cut to `width` characters, with an ellipsis where anything was taken. Counted in
-/// `char`s, a name being text and not bytes, and cut on a character boundary
-/// (`chars::byte_of_char`), which is also the one walk the decision takes.
-fn cut(line: &str, width: usize) -> String {
-    let end = chars::byte_of_char(line, width);
-    match end < line.len() {
-        true => format!("{}\u{2026}", &line[..end]),
-        false => line.to_owned(),
-    }
 }
 
 /// An `at` line with its path cut down. A line this does not recognise is left as it is.

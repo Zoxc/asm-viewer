@@ -120,7 +120,7 @@ fn chip(
         Mark::Plain | Mark::Dragging => None,
     };
 
-    // A chip is cut by the count and never by the room it has: `elide` is what shortened
+    // A chip is cut by the count and never by the room it has: `chars::elide` is what shortened
     // it, and the bar scrolls rather than squeezing a chip (`metrics.rs`).
     rect()
         .horizontal()
@@ -141,7 +141,7 @@ fn chip(
         .child(icon)
         .child(
             label()
-                .text(elide(text))
+                .text(chars::elide(text, CHIP_NAME_CHARS))
                 .color(name)
                 .max_lines(1)
                 .maybe(temporal, |chip| chip.font_slant(FontSlant::Italic)),
@@ -276,7 +276,7 @@ fn tabs_menu(open: Open, tabs: &[Tab], active: Option<Tab>, mut close: State<boo
         tabs.iter()
             .map(|tab| {
                 let (icon, names) = tab_drawn(*tab, shown(*tab, &docs));
-                (*tab, elide(&names.text), icon)
+                (*tab, chars::elide(&names.text, CHIP_NAME_CHARS), icon)
             })
             .collect()
     };
