@@ -6575,6 +6575,52 @@ fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
     );
 }
 
+/// **A place row's hover goes with the row and not its slot** when a fold above it moves
+/// it up. A file row and the rows under it hold the same path `Arc`, so a key must say
+/// which kind of row it is as well as what it holds. Fails on rows keyed by their index,
+/// or not keyed at all: the hovered row's slot is gone after the fold, and its hover with
+/// it.
+#[test]
+fn a_place_rows_hover_goes_with_it_across_a_fold() {
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let mut located = roots.located;
+    let at = LinePos {
+        file: Arc::from("/p/src/main.rs"),
+        line: 2,
+    };
+    settle(&mut test);
+    located.set(found_references(
+        at,
+        "helper",
+        &[
+            ("/p/src/main.rs", 2, 12..18),
+            ("/p/src/main.rs", 7, 4..10),
+            ("/p/src/other.rs", 9, 4..10),
+        ],
+    ));
+    settle(&mut test);
+
+    test.move_cursor(centre_of(&test, "other.rs"));
+    test.sync_and_update();
+    assert!(wears_hover(&test, "other.rs"), "the pointer lit no row");
+
+    // Folded by the state and not by a press, so the pointer stays where it was.
+    let above = label_area(&test, "other.rs").expect("other.rs is drawn");
+    located.write().fold(Path::new("/p/src/main.rs"));
+    settle(&mut test);
+    let below = label_area(&test, "other.rs").expect("other.rs is still drawn");
+    assert!(below.origin.y < above.origin.y, "the fold moved nothing");
+    assert!(
+        wears_hover(&test, "other.rs"),
+        "the hover stayed in the slot instead of going with the row"
+    );
+}
+
 /// A server that answered no places leaves the panel saying there are none. The other two
 /// ways of coming back with nothing -- a refusal, and a conversation that ended -- run
 /// through the worker and are tested where it is mounted
@@ -29425,6 +29471,38 @@ fn hits_arrive_under_their_file_and_fold() {
     assert!(folded.iter().any(|label| label == "third hit"));
 }
 
+/// A hit row's hover goes with the row across a fold above it, as a place row's does
+/// ([`a_place_rows_hover_goes_with_it_across_a_fold`]): the two panels draw one list.
+#[test]
+fn a_hit_rows_hover_goes_with_it_across_a_fold() {
+    let first: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
+    let second: Arc<Path> = Arc::from(Path::new("/project/two.rs"));
+    let (one, two) = (first.clone(), second);
+    let (mut test, states, directory, dock) = search_over(move |_query, emit| {
+        let _ = emit(SearchEvent::Hit(one.clone(), hit_at(3, "first hit")));
+        let _ = emit(SearchEvent::Hit(one.clone(), hit_at(9, "second hit")));
+        let _ = emit(SearchEvent::Hit(two.clone(), hit_at(1, "third hit")));
+        let _ = emit(SearchEvent::Finished);
+    });
+    ask_for(&states, dock, &directory, "hit");
+    let mut searched = states.searched;
+    pump(&mut test, |_| !searched.peek().running);
+
+    test.move_cursor(centre_of(&test, "third hit"));
+    test.sync_and_update();
+    assert!(wears_hover(&test, "third hit"), "the pointer lit no row");
+
+    let above = label_area(&test, "third hit").expect("the hit is drawn");
+    searched.write().hits.toggle(&first);
+    settle(&mut test);
+    let below = label_area(&test, "third hit").expect("the hit is still drawn");
+    assert!(below.origin.y < above.origin.y, "the fold moved nothing");
+    assert!(
+        wears_hover(&test, "third hit"),
+        "the hover stayed in the slot instead of going with the row"
+    );
+}
+
 /// The panel is drawn from counts and never from a copy of the answer. A search renders
 /// once per batch and `Searched` holds every hit found so far, up to `MAX_HITS` of them,
 /// so a copy per render is a pointer bump per hit and an allocation per file on the UI
@@ -30130,23 +30208,11 @@ fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
     }
     settle(&mut test);
 
-    // Whether the row holding `text` is the one wearing the hover wash.
-    let hovered = |test: &TestingRunner, text: &str| {
-        let area = label_area(test, text).unwrap_or_else(|| panic!("{text:?} is drawn"));
-        let middle = area.origin.y + area.height() / 2.0;
-        test.find_many(|node, element| {
-            (element.style().background == Fill::Color(palette().row_hover_bg))
-                .then(|| node.layout().area)
-        })
-        .into_iter()
-        .any(|row| row.origin.y <= middle && middle <= row.origin.y + row.height())
-    };
-
     let second = centre_of(&test, &about(&two));
     test.move_cursor(second);
     test.sync_and_update();
-    assert!(hovered(&test, &about(&two)), "the pointer lit no row");
-    assert!(!hovered(&test, &about(&one)), "the wrong row lit");
+    assert!(wears_hover(&test, &about(&two)), "the pointer lit no row");
+    assert!(!wears_hover(&test, &about(&one)), "the wrong row lit");
 
     // The same two targets the other way around, as a build that reordered them would
     // hand them over. The pointer has not moved.
@@ -30161,9 +30227,21 @@ fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
         "the rows were not reordered, so nothing was asked"
     );
     assert!(
-        hovered(&test, &about(&two)),
+        wears_hover(&test, &about(&two)),
         "the hover stayed in the slot instead of going with the row's key"
     );
+}
+
+/// Whether the row holding the label `text` is one wearing the hover wash.
+fn wears_hover(test: &TestingRunner, text: &str) -> bool {
+    let area = label_area(test, text).unwrap_or_else(|| panic!("{text:?} is drawn"));
+    let middle = area.origin.y + area.height() / 2.0;
+    test.find_many(|node, element| {
+        (element.style().background == Fill::Color(palette().row_hover_bg))
+            .then(|| node.layout().area)
+    })
+    .into_iter()
+    .any(|row| row.origin.y <= middle && middle <= row.origin.y + row.height())
 }
 
 /// **An artifact's load outlives the view that asked for it.** The row is drawn only while

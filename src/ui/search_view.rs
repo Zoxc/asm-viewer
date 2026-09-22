@@ -15,7 +15,7 @@
 //! binary loader (`take_load`, `ui/documents.rs`) is stopped by the same line.
 
 use super::*;
-use crate::search::{self, SearchEvent, SearchHits, SearchQuery, SearchRows};
+use crate::search::{self, SearchEvent, SearchHits, SearchQuery};
 use std::ops::ControlFlow;
 
 /// What has been searched for and what it came to, shared through context.
@@ -213,7 +213,7 @@ impl Component for SearchPanel {
             (state.asked.clone(), state.summary())
         };
 
-        // The rows the arrows step and Enter presses: a `SearchRows` is the rows behind an
+        // The rows the arrows step and Enter presses: the rows are behind an
         // `Arc`, so handing them over is a pointer.
         let keys = ListKeys::over(rows.clone(), place_pick, move |row| {
             press_place(doors, ctrl, Folding::Hits(searched), row)
@@ -227,28 +227,11 @@ impl Component for SearchPanel {
             (Some(_), Some(query)) if summary.hits == 0 => {
                 placeholder(format!("No matches for {}", query.filter.pattern))
             }
-            (Some(_), Some(_)) => {
-                let length = rows.len();
-                headed(
-                    section_heading(&heading(summary), None).into_element(),
-                    pane.virtual_rows(
-                        length,
-                        (rows, searched),
-                        |index, (rows, searched): &(SearchRows, State<Searched>), states| {
-                            PlaceRow {
-                                row: rows[index].clone(),
-                                folding: Folding::Hits(*searched),
-                                at: index,
-                                states,
-                                key: DiffKey::None,
-                            }
-                            .key(&index)
-                            .into()
-                        },
-                    ),
-                )
-                .into_element()
-            }
+            (Some(_), Some(_)) => headed(
+                section_heading(&heading(summary), None).into_element(),
+                place_rows(&pane, rows, Folding::Hits(searched)),
+            )
+            .into_element(),
         };
 
         // What Enter in the box calls: peeked, being run by a press and not a render.

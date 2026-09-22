@@ -370,7 +370,10 @@ the row is drawn against. What is left of the *sameness* is a trait: the two ans
 item structs (`search::Hit` and `references::Reference`, the same four fields but for a
 reference always having columns), so `Place` is four accessors over both and the row is generic
 over it. One struct would end the trait and every bound on it, and that is a change to the two
-models rather than to this seam. The filter matches the file's path, applied where the rows are
+models rather than to this seam. Both lists are built by one call (`place_rows`), keyed by the
+`Arc` a row holds and by its kind, since a file row's path is the `Arc` every row under it holds
+too. Search had keyed its rows by index and Locations not at all, so a row's hover stayed in its
+slot when a fold above it moved the row (`a_place_rows_hover_goes_with_it_across_a_fold`). The filter matches the file's path, applied where the rows are
 built rather than through `Filtered`'s memo -- that is for the thousands a line's symbols
 can be, and a name's references are tens.
 

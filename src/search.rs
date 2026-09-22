@@ -234,9 +234,6 @@ fn trim_terminator(line: &[u8]) -> &[u8] {
 /// moves.
 pub type SearchHits = Grouped<Hit>;
 
-/// The rows the Search panel draws, in order.
-pub type SearchRows = grouped::Rows<Hit>;
-
 /// Whether the cap was reached, so the panel can say that there are more.
 pub fn capped(hits: &SearchHits) -> bool {
     hits.count() >= MAX_HITS

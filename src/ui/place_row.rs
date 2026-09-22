@@ -7,7 +7,7 @@
 //! is drawn against (`ui/picks.rs`).
 
 use super::*;
-use crate::grouped::Row;
+use crate::grouped::{Row, Rows};
 use crate::search::Hit;
 
 /// What a row of a grouped answer draws, and where a press on it goes: one place in a
@@ -150,6 +150,36 @@ pub(crate) fn press_place<T: Place>(
             Pressed::Opened
         }
     }
+}
+
+/// The rows themselves, in `pane`'s `VirtualScrollView`: what both panels draw an answer
+/// in, with `folding` saying whose answer it is.
+///
+/// Keyed by the `Arc` a row holds, and by which kind of row it is: a file row's path is the
+/// same `Arc` each row under it holds (`src/grouped.rs`), so the pointer alone would not
+/// tell them apart. A fold only flips a flag, and the rows built after it hold the same
+/// `Arc`s, so a row's state goes with it when a fold above it moves it.
+pub(crate) fn place_rows<T: Place>(pane: &ListPane, rows: Rows<T>, folding: Folding) -> Element {
+    pane.virtual_rows(
+        rows.len(),
+        (rows, folding),
+        |at, (rows, folding): &(Rows<T>, Folding), states| {
+            let row = rows[at].clone();
+            let key = match &row {
+                Row::File { path, .. } => (0u8, Arc::as_ptr(path).addr()),
+                Row::Item { item, .. } => (1u8, Arc::as_ptr(item).addr()),
+            };
+            PlaceRow {
+                row,
+                folding: *folding,
+                at,
+                states,
+                key: DiffKey::None,
+            }
+            .key(key)
+            .into()
+        },
+    )
 }
 
 keyed!([T: Place] PlaceRow<T>);

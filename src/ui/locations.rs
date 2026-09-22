@@ -682,7 +682,6 @@ impl Component for LocationsPanel {
                 )),
             ),
             (Some(query), false, Some(Answer::Places(count))) => {
-                let length = used.len();
                 // The rows the arrows step and Enter presses: a `ReferenceRows` is the
                 // rows behind an `Arc`, so handing them over is a pointer.
                 let keys = ListKeys::over(used.clone(), place_pick, move |row| {
@@ -692,20 +691,7 @@ impl Component for LocationsPanel {
                     0 => placeholder(format!("No {} {}", query.words().1, query.spell())),
                     count => headed(
                         question(query, count),
-                        pane.virtual_rows(
-                            length,
-                            (used, located),
-                            |row, (used, located): &(ReferenceRows, State<Located>), states| {
-                                PlaceRow {
-                                    row: used[row].clone(),
-                                    folding: Folding::Places(*located),
-                                    at: row,
-                                    states,
-                                    key: DiffKey::None,
-                                }
-                                .into()
-                            },
-                        ),
+                        place_rows(&pane, used, Folding::Places(located)),
                     )
                     .into(),
                 };
