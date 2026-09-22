@@ -474,25 +474,15 @@ pub(crate) fn use_find(finds: State<Finds>) {
 /// The find worker, and the effect that asks it. `work` is an argument so a test can hold
 /// it still, as every worker here does.
 ///
-/// **Drained to the newest question per pane**, since a pattern supersedes on every
-/// keystroke: what the reader has typed past is dropped without being started, and the two
-/// panes of a tab do not drop each other's.
+/// **Drained to the newest question per pane** ([`newest_by`]), since a pattern supersedes
+/// on every keystroke, and the two panes of a tab do not drop each other's.
 pub(crate) fn use_find_with(
     finds: State<Finds>,
     work: impl Fn(FindAsk) -> FindAnswer + Send + 'static,
 ) {
     let requests = use_worker(
         "the find worker",
-        |first: FindAsk, queued| {
-            let mut newest: Vec<FindAsk> = vec![first];
-            for ask in queued.by_ref() {
-                match newest.iter_mut().find(|kept| kept.at == ask.at) {
-                    Some(kept) => *kept = ask,
-                    None => newest.push(ask),
-                }
-            }
-            newest
-        },
+        |first: FindAsk, queued| newest_by(first, queued, |ask| Some(ask.at)),
         move |ask| Some(work(ask)),
         move |answer: FindAnswer, _| {
             let mut finds = finds;

@@ -28,7 +28,7 @@ parallelism `notes/Goals.md` asks for is parsing many objects at once, a differe
 this one, the source reader, the build, the scratchpad, the find bar and the language server,
 which takes the answer sender back with it -- and `stream` the shape of the three one-shot ones,
 the search, a code pane's find and the binary loader, worked once for one question and stopped by
-the receiver going. What differs stays with each worker: the drain policy (`newest` here), the work, and the state each answer lands in. The work is an argument on every one of them, which is the seam the headless tests
+the receiver going. What differs stays with each worker: the drain policy (`newest` here), the work, and the state each answer lands in. Three of the drains -- this one, the find bar's and the language server's -- are `newest_by` given a key: the last job of each key is kept, with every job that has none, in the order they arrived; this one then sorts what is left into the order it works it in. The work is an argument on every one of them, which is the seam the headless tests
 substitute a worker of their own through. Four of them -- `use_source_reading`, `use_find`,
 `use_building`, `use_language` -- have a plain wrapper beside the `_with` form naming the app's one
 value, so `app()` reads as wiring there and the `_with` form is visibly the test entry; the search,

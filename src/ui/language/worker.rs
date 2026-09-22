@@ -312,26 +312,16 @@ fn superseded_as(job: &LspJob) -> Option<JobKind> {
     }
 }
 
-/// The jobs worth doing, of the one taken off the channel and everything queued behind it.
+/// The jobs worth doing ([`newest_by`]): the last question of each kind, and every job
+/// that is never dropped, in the order they were sent.
 ///
-/// Only the last question **of each kind** is kept: a reader clicking twice wants the
-/// second answer, and the first is a conversation the second would only wait behind -- but
-/// a reader who asks for a name's references has not taken back the definition they asked
-/// for, and the two are answered by different parts of the app. What a kind is,
-/// [`superseded_as`] says.
+/// A reader clicking twice wants the second answer, and the first is a conversation the
+/// second would only wait behind -- but a reader who asks for a name's references has not
+/// taken back the definition they asked for, and the two are answered by different parts
+/// of the app. What a kind is, [`superseded_as`] says. The order matters: an open before
+/// the question about the file it opens, a stop before the start that follows it.
 pub(crate) fn worth_doing(first: LspJob, queued: impl Iterator<Item = LspJob>) -> Vec<LspJob> {
-    let jobs: Vec<LspJob> = std::iter::once(first).chain(queued).collect();
-    let mut last: HashMap<JobKind, usize> = HashMap::new();
-    for (at, job) in jobs.iter().enumerate() {
-        if let Some(kind) = superseded_as(job) {
-            last.insert(kind, at);
-        }
-    }
-    jobs.into_iter()
-        .enumerate()
-        .filter(|(at, job)| superseded_as(job).is_none_or(|kind| last.get(&kind) == Some(at)))
-        .map(|(_, job)| job)
-        .collect()
+    newest_by(first, queued, superseded_as)
 }
 
 #[cfg(test)]

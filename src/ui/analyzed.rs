@@ -56,11 +56,12 @@ pub(crate) enum Question {
     },
 }
 
-/// The four kinds of job, which supersede separately.
+/// The four kinds of job, which supersede separately, declared in the order they are
+/// worked ([`newest`]).
 ///
 /// `JobKind` and not `Kind`: the prelude's [`Kind`] is a document's, which a type of that
 /// name here would put out of reach.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum JobKind {
     Listing,
     Code,
@@ -79,35 +80,19 @@ impl Question {
     }
 }
 
-/// The newest question of each kind out of `first` and whatever is `queued` behind it,
-/// in the order they are worked: the listing first, since it is what is on screen, then
-/// the window, then the locate, and the gutter's marks last -- the one whose absence
-/// costs the reader least while they wait.
+/// The newest question of each kind ([`newest_by`]), in the order they are worked: the
+/// listing first, since it is what is on screen, then the window, then the locate, and the
+/// gutter's marks last -- the one whose absence costs the reader least while they wait.
 ///
-/// What the reader clicked past is dropped here, without being started. Per kind and not
-/// overall, because a locate is not a newer version of the listing question -- drained to
-/// one, a symbol click after asking for a line's locations would silently cancel the
-/// locations, or the other way round -- and a window the reader scrolled past is the one
-/// thing here that *should* go, the next window asking for whatever of it still matters.
+/// Per kind and not overall, because a locate is not a newer version of the listing
+/// question -- drained to one, a symbol click after asking for a line's locations would
+/// silently cancel the locations, or the other way round -- and a window the reader
+/// scrolled past is the one thing here that *should* go, the next window asking for
+/// whatever of it still matters.
 pub(crate) fn newest(first: Question, queued: impl Iterator<Item = Question>) -> Vec<Question> {
-    let mut listing = None;
-    let mut code = None;
-    let mut locate = None;
-    let mut marks = None;
-    for question in std::iter::once(first).chain(queued) {
-        match question.job_kind() {
-            JobKind::Listing => listing = Some(question),
-            JobKind::Code => code = Some(question),
-            JobKind::Locate => locate = Some(question),
-            JobKind::Marks => marks = Some(question),
-        }
-    }
-    listing
-        .into_iter()
-        .chain(code)
-        .chain(locate)
-        .chain(marks)
-        .collect()
+    let mut newest = newest_by(first, queued, |question| Some(question.job_kind()));
+    newest.sort_by_key(Question::job_kind);
+    newest
 }
 
 /// What the worker sends back: the question, and what it came to.

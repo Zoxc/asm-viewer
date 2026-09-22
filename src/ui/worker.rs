@@ -95,6 +95,37 @@ impl<J> Iterator for Queued<'_, J> {
     }
 }
 
+/// The drain most workers use: of `first` and everything `queued` behind it, only the
+/// last job of each key, and every job whose key is [`None`].
+///
+/// A key is whatever a newer job makes an older one pointless for: the kind of question,
+/// or the pane it is about. What is kept stays in the order it arrived in, so a job that
+/// is never dropped is still done after the ones sent before it, and a key's job is done
+/// where its newest arrived.
+pub(crate) fn newest_by<J, K: Eq + std::hash::Hash>(
+    first: J,
+    queued: impl Iterator<Item = J>,
+    key: impl Fn(&J) -> Option<K>,
+) -> Vec<J> {
+    let jobs: Vec<J> = std::iter::once(first).chain(queued).collect();
+    let keys: Vec<Option<K>> = jobs.iter().map(key).collect();
+    let mut last = HashMap::new();
+    for (at, key) in keys.iter().enumerate() {
+        if let Some(key) = key {
+            last.insert(key, at);
+        }
+    }
+    let kept: Vec<bool> = keys
+        .iter()
+        .enumerate()
+        .map(|(at, key)| key.as_ref().is_none_or(|key| last[key] == at))
+        .collect();
+    jobs.into_iter()
+        .zip(kept)
+        .filter_map(|(job, kept)| kept.then_some(job))
+        .collect()
+}
+
 /// The request/answer worker: a named thread fed jobs over one channel and answering over
 /// another, with the task that takes those answers on the UI thread. Started once, in a
 /// [`use_hook`].
@@ -280,3 +311,6 @@ pub(crate) fn use_asking<J: Clone + PartialEq + 'static>(
 /// The `mark` of a state with nothing to record, where the memo is the whole of what
 /// stops a question being sent twice.
 pub(crate) fn unmarked<J>(_: &J) {}
+
+#[cfg(test)]
+mod tests;
