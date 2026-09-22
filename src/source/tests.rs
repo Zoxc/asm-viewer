@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use super::*;
-use crate::temporary::Temporary;
+use crate::temporary::{fresh_path, Temporary};
 
 /// A source file [`load`] answers for with nothing on the disk: what a test uses when the
 /// file is a fixture and not the thing under test.
@@ -24,18 +23,12 @@ pub struct Seeded {
 }
 
 impl Seeded {
-    /// A directory of this call's own, named per process and per call so that tests seeding
-    /// files can run in parallel, here and in another checkout at once. It is under the
-    /// system temporary directory for one reason, that being an absolute path on every
-    /// platform; nothing is written there.
+    /// A directory of this call's own, so that tests seeding files can run in parallel,
+    /// here and in another checkout at once. It is under the system temporary directory for
+    /// one reason, that being an absolute path on every platform; nothing is written there.
     pub fn directory(name: &str) -> Seeded {
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         Seeded {
-            directory: std::env::temp_dir().join(format!(
-                "assembly-viewer-seeded-{}-{unique}-{name}",
-                std::process::id()
-            )),
+            directory: fresh_path(&format!("seeded-{name}")),
         }
     }
 
@@ -88,19 +81,8 @@ pub(super) fn seeded(path: &Path) -> Option<Arc<SourceFile>> {
     seeds().get(path).cloned()
 }
 
-/// A path of this test run's own, named per process and per call so tests can run in
-/// parallel, here and in another checkout at once. Gone when the test ends.
-fn temp_path(name: &str) -> Temporary {
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    Temporary::at(std::env::temp_dir().join(format!(
-        "viewer-source-{}-{unique}-{name}",
-        std::process::id()
-    )))
-}
-
 fn write(name: &str, bytes: &[u8]) -> Temporary {
-    let path = temp_path(name);
+    let path = Temporary::fresh(&format!("source-{name}"));
     fs::write(&path, bytes).expect("the temp directory is writable");
     path
 }
@@ -108,7 +90,7 @@ fn write(name: &str, bytes: &[u8]) -> Temporary {
 /// A file `length` bytes long, made by its length alone: a sparse file costs no blocks and
 /// `symlink_metadata` reports the length, so a test about the cap need not write 16 MiB.
 fn sized(name: &str, length: u64) -> Temporary {
-    let path = temp_path(name);
+    let path = Temporary::fresh(&format!("source-{name}"));
     fs::File::create(&path)
         .and_then(|file| file.set_len(length))
         .expect("the temp directory is writable");
@@ -160,7 +142,7 @@ fn only_a_regular_file_within_the_bound_is_shown() {
     let at_the_cap = sized("at-the-cap.txt", MAX_SIZE);
     let over_it = sized("over-the-cap.txt", MAX_SIZE + 1);
     let empty = write("empty.rs", b"");
-    let missing = std::env::temp_dir().join("viewer-source-nothing-here");
+    let missing = fresh_path("source-nothing-here");
 
     // The cap is inclusive, and one byte past it is not.
     assert!(showable(&at_the_cap));
@@ -183,7 +165,7 @@ fn a_symlink_is_not_shown_whatever_it_points_at() {
     use std::os::unix::fs::symlink;
 
     let real = write("linked.rs", b"fn main() {}\n");
-    let link = temp_path("link.rs");
+    let link = Temporary::fresh("source-link.rs");
     symlink(&*real, &*link).expect("the temp directory is writable");
 
     assert!(showable(&real));
@@ -191,12 +173,14 @@ fn a_symlink_is_not_shown_whatever_it_points_at() {
     // And the read behind the gate, so a caller that skipped it gets the same answer.
     assert!(read_text(&link).is_none());
 
-    let broken = temp_path("broken.rs");
-    symlink(temp_path("nothing.rs").to_path_buf(), &*broken)
-        .expect("the temp directory is writable");
+    let broken = Temporary::fresh("source-broken.rs");
+    symlink(fresh_path("source-nothing.rs"), &*broken).expect("the temp directory is writable");
     assert!(!showable(&broken));
 
-    let (first, second) = (temp_path("loop-a.rs"), temp_path("loop-b.rs"));
+    let (first, second) = (
+        Temporary::fresh("source-loop-a.rs"),
+        Temporary::fresh("source-loop-b.rs"),
+    );
     symlink(second.to_path_buf(), &*first).expect("the temp directory is writable");
     symlink(first.to_path_buf(), &*second).expect("the temp directory is writable");
     assert!(!showable(&first));

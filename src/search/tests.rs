@@ -1,21 +1,7 @@
-use std::{
-    fs,
-    sync::atomic::{AtomicU32, Ordering as Atomic},
-};
+use std::fs;
 
 use super::*;
 use crate::temporary::Temporary;
-
-/// A directory of this test's own, empty, under the system's temp directory, and gone
-/// when the test ends.
-fn temp_dir(name: &str) -> Temporary {
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let unique = COUNTER.fetch_add(1, Atomic::Relaxed);
-    Temporary::directory(std::env::temp_dir().join(format!(
-        "viewer-search-{}-{unique}-{name}",
-        std::process::id()
-    )))
-}
 
 fn write(path: &Path, text: &str) {
     if let Some(directory) = path.parent() {
@@ -73,7 +59,7 @@ fn places(root: &Path, hits: &[(Arc<Path>, Hit)]) -> Vec<String> {
 /// The order is the order the panel's list grows in, so it is pinned.
 #[test]
 fn a_directorys_files_come_before_the_directories_under_it() {
-    let root = temp_dir("order");
+    let root = Temporary::fresh_directory("search-order");
     write(&root.join("b.rs"), "needle\n");
     write(&root.join("a/inner.rs"), "needle\n");
     write(&root.join("a.rs"), "needle\n");
@@ -92,7 +78,7 @@ fn a_directorys_files_come_before_the_directories_under_it() {
 /// allocates a path per file and not per hit. Fails on a `PathBuf` built for each.
 #[test]
 fn every_hit_of_a_file_carries_the_one_path() {
-    let root = temp_dir("one-path");
+    let root = Temporary::fresh_directory("search-one-path");
     write(&root.join("a.rs"), "needle\nneedle\nneedle\n");
     write(&root.join("b.rs"), "needle\n");
 
@@ -109,7 +95,7 @@ fn every_hit_of_a_file_carries_the_one_path() {
 /// Every line of a file that matches is its own hit, numbered from one.
 #[test]
 fn every_matching_line_is_a_hit_numbered_from_one() {
-    let root = temp_dir("lines");
+    let root = Temporary::fresh_directory("search-lines");
     write(&root.join("x.rs"), "one\nneedle\nthree\nneedle\n");
 
     let hits = found(&root, "needle");
@@ -121,7 +107,7 @@ fn every_matching_line_is_a_hit_numbered_from_one() {
 /// tree, which is where a project directory usually is.
 #[test]
 fn what_git_is_told_to_ignore_is_not_searched() {
-    let root = temp_dir("ignored");
+    let root = Temporary::fresh_directory("search-ignored");
     write(&root.join(".gitignore"), "target\n");
     write(&root.join("target/build.rs"), "needle\n");
     write(&root.join("kept.rs"), "needle\n");
@@ -134,7 +120,7 @@ fn what_git_is_told_to_ignore_is_not_searched() {
 /// A hidden file is not searched, unlike the Files panel, which lists one.
 #[test]
 fn a_hidden_file_is_not_searched() {
-    let root = temp_dir("hidden");
+    let root = Temporary::fresh_directory("search-hidden");
     write(&root.join(".secret.rs"), "needle\n");
     write(&root.join("open.rs"), "needle\n");
 
@@ -147,7 +133,7 @@ fn a_hidden_file_is_not_searched() {
 /// before the NUL is not reported either, since the file is abandoned whole.
 #[test]
 fn a_binary_file_is_skipped() {
-    let root = temp_dir("binary");
+    let root = Temporary::fresh_directory("search-binary");
     fs::write(root.join("object.o"), b"needle\n\x00 needle\n").expect("writable");
     write(&root.join("source.rs"), "needle\n");
 
@@ -160,7 +146,7 @@ fn a_binary_file_is_skipped() {
 /// both say so under the box instead.
 #[test]
 fn nothing_typed_and_a_broken_pattern_are_not_questions() {
-    let root = temp_dir("askable");
+    let root = Temporary::fresh_directory("search-askable");
     write(&root.join("x.rs"), "needle\n");
 
     let query = |pattern: &str, regex: bool| SearchQuery {
@@ -192,7 +178,7 @@ fn nothing_typed_and_a_broken_pattern_are_not_questions() {
 /// the builder's flag.
 #[test]
 fn the_toggles_mean_what_they_mean_in_a_filter_bar() {
-    let root = temp_dir("toggles");
+    let root = Temporary::fresh_directory("search-toggles");
     write(
         &root.join("x.rs"),
         "Needle\nneedles\na.c\nabc\nfoo -2 bar\n",
@@ -237,7 +223,7 @@ fn the_toggles_mean_what_they_mean_in_a_filter_bar() {
 /// trimmed text the row draws: the trimming happens after the match is found.
 #[test]
 fn an_anchored_pattern_is_asked_of_the_whole_line() {
-    let root = temp_dir("anchored");
+    let root = Temporary::fresh_directory("search-anchored");
     write(&root.join("x.rs"), "    needle\nneedle\n");
 
     let anchored = Filter {
@@ -255,7 +241,7 @@ fn an_anchored_pattern_is_asked_of_the_whole_line() {
 /// indentation finds it -- and are moved to the drawn text afterwards.
 #[test]
 fn a_match_reaching_into_the_indentation_is_marked_for_what_is_drawn() {
-    let root = temp_dir("indent");
+    let root = Temporary::fresh_directory("search-indent");
     write(&root.join("x.rs"), "    needle;\n");
 
     let indented = Filter {
@@ -274,7 +260,7 @@ fn a_match_reaching_into_the_indentation_is_marked_for_what_is_drawn() {
 /// spans point into that text and not into the line as it was read.
 #[test]
 fn the_spans_are_where_the_matches_are_in_the_text_drawn() {
-    let root = temp_dir("spans");
+    let root = Temporary::fresh_directory("search-spans");
     write(&root.join("x.rs"), "\tlet needle = needle;\r\n");
 
     let hits = found(&root, "needle");
@@ -294,7 +280,7 @@ fn the_spans_are_where_the_matches_are_in_the_text_drawn() {
 /// is still in it.
 #[test]
 fn a_hit_knows_where_its_match_is_in_the_files_line() {
-    let root = temp_dir("columns");
+    let root = Temporary::fresh_directory("search-columns");
     write(&root.join("x.rs"), "  \u{e9}\u{1f600} needle here\n");
 
     let hits = found(&root, "needle");
@@ -308,7 +294,7 @@ fn a_hit_knows_where_its_match_is_in_the_files_line() {
 /// is dropped rather than pointing off the end of the text.
 #[test]
 fn a_long_line_is_cut_on_a_character_boundary() {
-    let root = temp_dir("cut");
+    let root = Temporary::fresh_directory("search-cut");
     let long = format!("needle{}needle\n", "\u{e9}".repeat(grouped::MAX_LINE));
     write(&root.join("x.rs"), &long);
 
@@ -324,7 +310,7 @@ fn a_long_line_is_cut_on_a_character_boundary() {
 /// same.
 #[test]
 fn a_zero_width_match_is_a_hit_with_nothing_marked() {
-    let root = temp_dir("empty");
+    let root = Temporary::fresh_directory("search-empty");
     write(&root.join("x.rs"), "word\n");
 
     let empty = Filter {
@@ -342,7 +328,7 @@ fn a_zero_width_match_is_a_hit_with_nothing_marked() {
 /// it -- not even the end of the search, which nobody is listening for.
 #[test]
 fn a_break_stops_the_walk_where_it_stands() {
-    let root = temp_dir("break");
+    let root = Temporary::fresh_directory("search-break");
     for name in ["a.rs", "b.rs", "c.rs"] {
         write(&root.join(name), "needle\nneedle\n");
     }
@@ -372,7 +358,7 @@ fn a_break_stops_the_walk_where_it_stands() {
 /// search whose reader has gone is not worth saying anything to.
 #[test]
 fn the_search_stops_at_the_cap() {
-    let root = temp_dir("cap");
+    let root = Temporary::fresh_directory("search-cap");
     let lines = "needle\n".repeat(MAX_HITS + 5);
     write(&root.join("many.rs"), &lines);
 

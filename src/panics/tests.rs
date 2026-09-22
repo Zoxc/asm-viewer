@@ -1,16 +1,6 @@
 use super::*;
 use crate::temporary::Temporary;
 
-/// A directory of this test's own under the system temporary directory, named after the
-/// line that asked for it, standing in for the one everything is stored in. Gone when the
-/// test ends.
-fn base(line: u32) -> Temporary {
-    Temporary::at(std::env::temp_dir().join(format!(
-        "assembly-viewer-panics-test-{}-{line}",
-        std::process::id()
-    )))
-}
-
 fn panic_at(at: u64, message: &str) -> Panic {
     Panic {
         thread: "the analysis worker".to_owned(),
@@ -25,7 +15,7 @@ fn panic_at(at: u64, message: &str) -> Panic {
 /// the directory is made on the way, and a second panic adds a record rather than a file.
 #[test]
 fn a_run_s_panics_are_appended_to_one_file() {
-    let base = base(line!());
+    let base = Temporary::fresh("panics-test");
     let store = Store::at(&base);
     let _ = fs::remove_dir_all(&base);
     let run = Run::new();
@@ -63,7 +53,7 @@ fn a_run_s_panics_are_appended_to_one_file() {
 /// the run's first panic, so it sorts, and it survives a file being copied about.
 #[test]
 fn the_panic_files_are_listed_newest_first_and_nothing_else_is() {
-    let base = base(line!());
+    let base = Temporary::fresh("panics-test");
     let store = Store::at(&base);
     let directory = store.panics();
     fs::create_dir_all(&directory).expect("the temp directory is writable");
@@ -99,7 +89,7 @@ fn the_panic_files_are_listed_newest_first_and_nothing_else_is() {
 /// nowhere to keep what it wrote.
 #[test]
 fn a_directory_with_no_panics_in_it_lists_nothing() {
-    let base = base(line!());
+    let base = Temporary::fresh("panics-test");
     let store = Store::at(&base);
     assert!(recorded(&store).is_empty(), "nothing was ever written");
 

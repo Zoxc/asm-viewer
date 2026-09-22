@@ -1565,17 +1565,13 @@ fn a_character_split_across_two_reads_is_still_the_character() {
     assert_eq!(String::from_utf8_lossy(&said), line);
 }
 
-/// A directory of this test's own under the system temporary directory, named after the
-/// line that asked for it, holding a `server` program that `does`. The directory goes when
-/// the test ends.
+/// A directory of this test's own under the system temporary directory, holding a `server`
+/// program that `does`. The directory goes when the test ends.
 #[cfg(unix)]
-fn program_that(does: &str, line: u32) -> Temporary {
+fn program_that(does: &str) -> Temporary {
     use std::os::unix::fs::PermissionsExt;
 
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-lsp-test-{}-{line}",
-        std::process::id()
-    )));
+    let directory = Temporary::fresh_directory("lsp-test");
     let program = directory.join("server");
     std::fs::write(&program, format!("#!/bin/sh\n{does}\n")).expect("a program");
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("a mode");
@@ -1593,10 +1589,9 @@ fn program_that(does: &str, line: u32) -> Temporary {
 #[cfg(unix)]
 fn what_a_program_said_on_its_way_out_is_waited_for() {
     let said = "error: no rust-analyzer in this toolchain";
-    let directory = program_that(
-        &format!("exec 1>&-\nsleep 0.05\necho \"{said}\" >&2\nexit 1"),
-        line!(),
-    );
+    let directory = program_that(&format!(
+        "exec 1>&-\nsleep 0.05\necho \"{said}\" >&2\nexit 1"
+    ));
     let program = directory.join("server");
     let mut server = start_in(&program.to_string_lossy(), Path::new("."), |_| ()).expect("spawned");
 
@@ -1617,7 +1612,7 @@ fn what_a_program_said_on_its_way_out_is_waited_for() {
 fn the_handle_a_start_hands_over_is_the_servers_own() {
     // A program that takes the pipe and answers nothing, so the handshake never returns
     // and the only way out is the handle.
-    let directory = program_that("sleep 30", line!());
+    let directory = program_that("sleep 30");
     let program = directory.join("server");
     let server = start_in(&program.to_string_lossy(), Path::new("."), |_| ()).expect("spawned");
 

@@ -46,13 +46,9 @@ pub(in crate::project) fn paths(binaries: &[&str]) -> Vec<PathBuf> {
     binaries.iter().map(PathBuf::from).collect()
 }
 
-/// A directory of this test's own, named after the line that asked for it, and gone when
-/// the test ends.
-pub(in crate::project) fn directory(line: u32) -> Directory {
-    Directory(Temporary::at(std::env::temp_dir().join(format!(
-        "assembly-viewer-project-test-{}-{line}",
-        std::process::id()
-    ))))
+/// A path of this test's own, made by nothing yet, and gone when the test ends.
+pub(in crate::project) fn directory() -> Directory {
+    Directory(Temporary::fresh("project-test"))
 }
 
 /// A test's directory, which also takes the `SAVES` static out of it before it goes. A
@@ -199,11 +195,7 @@ fn an_empty_session_round_trips() {
 
 #[test]
 fn writes_atomically_and_reads_back() {
-    let directory = Temporary::at(std::env::temp_dir().join(format!(
-        "assembly-viewer-test-{}-{}",
-        std::process::id(),
-        line!()
-    )));
+    let directory = Temporary::fresh("project-test");
     let path = directory.join("nested").join("one.avproj.session");
 
     let session = Session {
@@ -233,11 +225,7 @@ fn writes_atomically_and_reads_back() {
 /// entry did. It pins that a failure before the rename is an error and not a replacement.
 #[test]
 fn a_write_that_fails_leaves_the_good_file_where_it_is() {
-    let directory = Temporary::at(std::env::temp_dir().join(format!(
-        "assembly-viewer-test-{}-{}",
-        std::process::id(),
-        line!()
-    )));
+    let directory = Temporary::fresh("project-test");
     let _ = fs::remove_dir_all(&directory);
     let path = directory.join("one.avproj");
 
@@ -274,11 +262,7 @@ fn a_non_utf8_path_is_not_written_rather_than_mangled() {
         assert!(toml::to_string_pretty(&project).is_err());
         assert!(toml::to_string_pretty(&session).is_err());
 
-        let directory = Temporary::at(std::env::temp_dir().join(format!(
-            "assembly-viewer-test-{}-{}",
-            std::process::id(),
-            line!()
-        )));
+        let directory = Temporary::fresh("project-test");
         let store = Store::at(&directory);
         assert!(store
             .write_toml(directory.join("one.avproj"), &project)
@@ -354,7 +338,7 @@ fn what_was_never_said_writes_no_key() {
 /// paths either way, so what goes in comes back out.
 #[test]
 fn a_path_under_the_project_file_is_written_relative_to_it() {
-    let directory = directory(line!());
+    let directory = directory();
     fs::create_dir_all(&directory).expect("creating the test directory");
     let path = directory.join("kernel.avproj");
 
@@ -397,8 +381,8 @@ fn a_path_under_the_project_file_is_written_relative_to_it() {
 /// which is what a project checked in beside its code has to do.
 #[test]
 fn a_project_file_moved_with_its_tree_points_at_the_new_one() {
-    let here = directory(line!());
-    let there = directory(line!() + 1000);
+    let here = directory();
+    let there = directory();
     fs::create_dir_all(&here).expect("creating the test directory");
     fs::create_dir_all(&there).expect("creating the second test directory");
 
@@ -424,7 +408,7 @@ fn a_project_file_moved_with_its_tree_points_at_the_new_one() {
 /// other's.
 #[test]
 fn the_two_halves_are_written_to_their_own_files() {
-    let directory = directory(line!());
+    let directory = directory();
     let project = a_project();
     let session = Session {
         active: Some(saved_object("a.o")),
@@ -460,7 +444,7 @@ fn the_two_halves_are_written_to_their_own_files() {
 /// take the half the user gave down with it.
 #[test]
 fn a_corrupt_session_leaves_the_project_readable() {
-    let directory = directory(line!());
+    let directory = directory();
     let project = a_project();
     Store::at(&directory)
         .write_toml(directory.join("one.avproj"), &project)

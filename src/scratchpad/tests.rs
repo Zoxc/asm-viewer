@@ -2,15 +2,6 @@ use super::*;
 use crate::store::MAX_ORDER;
 use crate::temporary::Temporary;
 
-/// A directory of this test's own under the system temporary directory, named after the
-/// line that asked for it, and gone when the test ends.
-fn directory(line: u32) -> Temporary {
-    Temporary::at(std::env::temp_dir().join(format!(
-        "assembly-viewer-scratchpad-test-{}-{line}",
-        std::process::id()
-    )))
-}
-
 fn scratchpad() -> Scratchpad {
     Scratchpad::new("sketch").expect("an id")
 }
@@ -160,7 +151,7 @@ fn the_same_crate_twice_is_a_row_that_says_so() {
 
 #[test]
 fn a_scratchpad_with_a_bad_row_will_not_write() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("scratchpad-test");
     let mut scratchpad = scratchpad();
     scratchpad.add_dependency("rand", "");
 
@@ -186,7 +177,7 @@ fn a_scratchpad_with_a_bad_row_will_not_write() {
 /// The package is the storage, so this is the whole of the persistence test.
 #[test]
 fn writes_and_reads_back() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("scratchpad-test");
     let mut scratchpad = scratchpad();
     scratchpad.source = "fn main() { /* edited */ }\n".to_owned();
     let anyhow = scratchpad.add_dependency("anyhow", "1.0.86");
@@ -249,7 +240,7 @@ fn an_id_out_of_a_file_goes_through_the_same_check_a_generated_one_does() {
 /// name is the id, so this is where a hand-edited one is caught.
 #[test]
 fn a_manifest_naming_a_path_is_not_a_scratchpad() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("scratchpad-test");
     let source = directory.join("src");
     fs::create_dir_all(&source).expect("the directory");
     fs::write(
@@ -281,7 +272,7 @@ fn the_default_scratchpad_is_one_this_module_would_write() {
 /// which is the directory the next write goes back to.
 #[test]
 fn a_scratchpad_opens_as_its_directory_has_it() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("scratchpad-test");
 
     // Nothing there yet: what the caller was holding, unchanged.
     let fresh = Scratchpad::default().opened_in(&directory);
@@ -310,7 +301,7 @@ fn a_scratchpad_opens_as_its_directory_has_it() {
 /// table -- the ordinary way to ask for a feature -- is enough to bring it about.
 #[test]
 fn a_package_that_will_not_load_is_refused_and_not_read_as_an_empty_directory() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("scratchpad-test");
     let source = directory.join("src");
     fs::create_dir_all(&source).expect("the directory");
     fs::write(source.join("main.rs"), "fn main() { /* kept */ }\n").expect("the source");
@@ -365,7 +356,7 @@ fn the_order_keeps_every_pad_and_the_file_keeps_fifty() {
     assert_eq!(order.entries().len(), listing.len());
     assert!(order.entries().contains(&id(&format!("pad-{MAX_ORDER}"))));
 
-    let base = directory(line!());
+    let base = Temporary::fresh("scratchpad-test");
     let store = Store::at(&base);
     let scratchpads = store.scratchpads();
     fs::create_dir_all(&scratchpads).expect("the directory");
@@ -389,7 +380,7 @@ fn the_order_keeps_every_pad_and_the_file_keeps_fifty() {
 /// package, which is what lets the panel draw a pad nothing has opened.
 #[test]
 fn the_listing_drops_what_is_not_a_pad_and_keeps_what_the_order_forgot() {
-    let base = directory(line!());
+    let base = Temporary::fresh("scratchpad-test");
     let store = Store::at(&base);
     let scratchpads = store.scratchpads();
     fs::create_dir_all(&scratchpads).expect("the directory");
@@ -428,7 +419,7 @@ fn the_listing_drops_what_is_not_a_pad_and_keeps_what_the_order_forgot() {
 /// opened and told about rather than missing from it.
 #[test]
 fn the_listing_asks_the_manifest_and_not_the_source() {
-    let base = directory(line!());
+    let base = Temporary::fresh("scratchpad-test");
     let store = Store::at(&base);
     let scratchpads = store.scratchpads();
     fs::create_dir_all(&scratchpads).expect("the directory");
@@ -475,7 +466,7 @@ fn the_listing_asks_the_manifest_and_not_the_source() {
 /// listing above would repair it away.
 #[test]
 fn a_new_pad_steps_over_what_is_already_claimed() {
-    let base = directory(line!());
+    let base = Temporary::fresh("scratchpad-test");
     let store = Store::at(&base);
     let scratchpads = store.scratchpads();
     fs::create_dir_all(scratchpads.join("pad-1")).expect("the squatter");
@@ -501,7 +492,7 @@ fn a_new_pad_steps_over_what_is_already_claimed() {
 /// id.
 #[test]
 fn a_delete_takes_the_package_and_only_the_package() {
-    let base = directory(line!());
+    let base = Temporary::fresh("scratchpad-test");
     let store = Store::at(&base);
     let scratchpads = store.scratchpads();
     fs::create_dir_all(&scratchpads).expect("the directory");
@@ -551,7 +542,7 @@ fn a_delete_takes_the_package_and_only_the_package() {
 /// by the time the reader presses the button.
 #[test]
 fn a_program_that_is_not_there_says_so() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("scratchpad-test");
     let failure = run_in(&directory.join("not-a-program"), &directory, |_| {})
         .err()
         .expect("a refusal");
@@ -612,7 +603,7 @@ fn the_pads_own_file_is_the_one_ending_in_it() {
 /// being `write_to`'s inverse.
 #[test]
 fn what_the_last_build_made_is_written_and_read_back() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("scratchpad-test");
     let mut pad = Scratchpad::new("pad-1").expect("a valid id");
     pad.built = Some(Built {
         path: PathBuf::from("/elsewhere/target/debug/pad-1"),

@@ -12,7 +12,7 @@ use crate::store::{MAX_ORDER, PROJECTS_DIR};
 /// otherwise write over it.
 #[test]
 fn a_recent_list_that_will_not_parse_is_moved_aside() {
-    let directory = directory(line!());
+    let directory = directory();
     let path = directory.join(RECENTS_FILE);
     fs::create_dir_all(&directory).expect("creating the test directory");
     fs::write(&path, b"{ not toml").expect("writing");
@@ -28,7 +28,7 @@ fn a_recent_list_that_will_not_parse_is_moved_aside() {
 /// memory they are all absolute.
 #[test]
 fn a_project_in_app_storage_is_remembered_relative_to_it() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let unsaved = store.projects().join(format!("1.{PROJECT_EXTENSION}"));
     let elsewhere = PathBuf::from("/src/kernel/kernel.avproj");
@@ -61,7 +61,7 @@ fn a_project_in_app_storage_is_remembered_relative_to_it() {
 /// with a list the panel is holding whole.
 #[test]
 fn the_recent_list_is_bounded_where_it_is_written() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
 
     let mut recents = Recents::default();
@@ -95,7 +95,7 @@ fn the_recent_list_round_trips_through_toml() {
 /// the list keeps, so nothing about a project is copied beside the order.
 #[test]
 fn the_recent_view_describes_each_project_from_its_own_file() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     for name in ["kernel", "loader"] {
         let path = store.projects().join(format!("{name}.{PROJECT_EXTENSION}"));
@@ -135,7 +135,7 @@ fn the_recent_view_describes_each_project_from_its_own_file() {
 /// left where it is, since nothing is about to write over a project nobody has entered.
 #[test]
 fn listing_a_project_does_not_move_its_file_aside() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let path = store.projects().join(format!("broken.{PROJECT_EXTENSION}"));
     fs::create_dir_all(store.projects()).expect("creating the test directory");
@@ -155,7 +155,7 @@ fn listing_a_project_does_not_move_its_file_aside() {
 /// is there and holds nothing yet is a real project and keeps its row.
 #[test]
 fn a_recent_project_that_is_gone_is_dropped_and_an_empty_one_is_not() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let empty = unsaved_project(&store).expect("a project");
     remember(&store, &empty);

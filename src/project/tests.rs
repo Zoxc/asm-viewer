@@ -35,7 +35,7 @@ fn a_project_file_is_known_by_its_extension() {
 #[test]
 fn putting_a_project_somewhere_carries_the_id_and_the_session() {
     let _saves = using_saves();
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let from = start_new(&store).expect("a project is started");
     assert_eq!(fs::read(&from).expect("the claimed file"), b"");
@@ -85,7 +85,7 @@ fn putting_a_project_somewhere_carries_the_id_and_the_session() {
 /// opening Settings, into a project appearing on disk behind the reader's back.
 #[test]
 fn no_project_open_means_nothing_is_written_and_nothing_is_made() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let mut saves = Saves::default();
 
@@ -115,7 +115,7 @@ fn no_project_open_means_nothing_is_written_and_nothing_is_made() {
 #[test]
 fn the_last_project_is_the_one_reopened() {
     let _saves = using_saves();
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let project = a_project();
     let session = Session {
@@ -151,7 +151,7 @@ fn the_last_project_is_the_one_reopened() {
 #[test]
 fn a_project_opens_under_the_path_it_was_named_by() {
     let _saves = using_saves();
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let path = base.join(format!("kernel.{PROJECT_EXTENSION}"));
     let project = a_project();
@@ -187,7 +187,7 @@ fn a_project_opens_under_the_path_it_was_named_by() {
 /// not open is news.
 #[test]
 fn nothing_to_reopen_is_not_an_error() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     // No recent list at all: a first run, or one whose file was deleted.
     assert!(reopen(&store).is_none());
@@ -212,7 +212,7 @@ fn nothing_to_reopen_is_not_an_error() {
 #[test]
 fn a_project_missing_a_half_still_reopens() {
     let _saves = using_saves();
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let path = unsaved_project(&store).expect("a project");
     remember(&store, &path);
@@ -257,7 +257,7 @@ fn a_project_missing_a_half_still_reopens() {
 /// is answered instead is where the parser stopped and what it said there.
 #[test]
 fn a_project_file_that_will_not_parse_is_left_where_it_is() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let path = store.projects().join(format!("1.{PROJECT_EXTENSION}"));
     fs::create_dir_all(store.projects()).expect("creating the test directory");
@@ -285,7 +285,7 @@ fn a_project_file_that_will_not_parse_is_left_where_it_is() {
 /// says, and a file that is not there is the one the startup keeps to itself.
 #[test]
 fn a_project_that_does_not_open_says_which_way() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let path = store.projects().join(format!("1.{PROJECT_EXTENSION}"));
     fs::create_dir_all(store.projects()).expect("creating the test directory");
@@ -313,7 +313,7 @@ fn a_project_that_does_not_open_says_which_way() {
 /// rather than opened over a project it was never written for.
 #[test]
 fn a_session_written_for_another_project_is_ignored() {
-    let base = directory(line!());
+    let base = directory();
     let store = Store::at(&base);
     let path = store.projects().join(format!("1.{PROJECT_EXTENSION}"));
     fs::create_dir_all(store.projects()).expect("creating the test directory");

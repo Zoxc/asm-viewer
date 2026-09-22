@@ -128,9 +128,7 @@ fn a_second_build_is_not_started_over_the_first() {
 fn only_the_diagnostic_files_under_the_directory_that_read_are_named() {
     // A real directory, this being one of the few things the filesystem itself is the
     // question (`AGENTS.md`).
-    let directory = Temporary::directory(
-        std::env::temp_dir().join(format!("assembly-viewer-openable-{}", std::process::id())),
-    );
+    let directory = Temporary::fresh_directory("openable");
     std::fs::create_dir_all(directory.join("src")).expect("the directory");
     std::fs::write(directory.join("src/main.rs"), "fn main() {}\n").expect("the file");
 
@@ -261,10 +259,7 @@ fn both_build_panes_say_the_same_line_about_the_same_build() {
 fn a_members_read_names_its_own_manifest_and_the_root_the_profile_comes_from() {
     // Real files, this being one of the few things the filesystem itself is the question
     // (`AGENTS.md`): both manifests are read and parsed.
-    let root = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-member-read-{}",
-        std::process::id()
-    )));
+    let root = Temporary::fresh_directory("member-read");
     let member = root.join("app");
     std::fs::create_dir_all(&member).expect("the directory");
     std::fs::write(

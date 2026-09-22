@@ -2015,16 +2015,20 @@ pub fn archive(members: &[(&str, &[u8])]) -> Vec<u8> {
     file
 }
 
-/// A directory of one test's own under the system temporary directory, named after the
-/// test file and the line that asked for it, and removed when the test ends -- when it
-/// panics included, which is the case a removal at the foot of the body misses. The
-/// fixtures that have to be on disk go here, and `/tmp` is memory on many systems.
+/// A directory of one test's own under the system temporary directory, removed when the
+/// test ends -- when it panics included, which is the case a removal at the foot of the
+/// body misses. The fixtures that have to be on disk go here, and `/tmp` is memory on many
+/// systems.
 pub struct Scratch(pub PathBuf);
 
 impl Scratch {
-    pub fn new(what: &str, line: u32) -> Scratch {
+    /// Named `analysis-{what}-{pid}-{n}`, with `n` counted across the process, so no two
+    /// calls share one.
+    pub fn new(what: &str) -> Scratch {
+        static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let directory =
-            std::env::temp_dir().join(format!("analysis-{what}-{}-{line}", std::process::id()));
+            std::env::temp_dir().join(format!("analysis-{what}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).expect("creating the test directory");
         Scratch(directory)

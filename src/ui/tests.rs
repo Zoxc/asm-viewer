@@ -2708,9 +2708,7 @@ fn alt_held_as_the_menu_opens_is_what_offers_the_debug_page() {
 /// here, as the hook would have written it before the press returned.
 #[test]
 fn a_guarded_panics_file_is_listed_on_the_debug_page_at_once() {
-    let directory = Temporary::directory(
-        std::env::temp_dir().join(format!("assembly-viewer-debug-page-{}", std::process::id())),
-    );
+    let directory = Temporary::fresh_directory("debug-page");
     let store = Store::at(directory.to_path_buf());
     let panics = store.panics();
     let (mut test, ()) = TestingRunner::new(
@@ -4645,7 +4643,7 @@ fn a_search_file_row_counts_in_the_column_an_archive_row_does() {
     let (_path, objects) = fixture_objects(3);
     let (_, archive) = archive_row(300.0, &objects);
 
-    let (mut test, states, directory, _dock) = search_over(line!(), |_query, _emit| {});
+    let (mut test, states, directory, _dock) = search_over(|_query, _emit| {});
     let path = directory.join("x.c");
     let mut searched = states.searched;
     searched.write().asked = Some(SearchQuery {
@@ -6323,9 +6321,7 @@ fn locations_harness() -> impl IntoElement {
 /// assembly side follows that line as it follows a clicked one.
 #[test]
 fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
-    let directory = Temporary::directory(
-        std::env::temp_dir().join(format!("assembly-viewer-uses-row-{}", std::process::id())),
-    );
+    let directory = Temporary::fresh_directory("uses-row");
     let path = directory.join("used.rs");
     std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
         .expect("writing the source file");
@@ -8368,10 +8364,7 @@ fn the_caret_a_definition_plants_reads_nothing_on_the_ui_thread() {
     let _ = &seeded;
     // A file on disk and not in the cache, since a cached one is not read at all and
     // there would be nothing to move off this thread.
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-follow-caret-{}",
-        std::process::id()
-    )));
+    let directory = Temporary::fresh_directory("follow-caret");
     let defined = directory.join("helper.rs");
     // `helper` begins at byte 19 of the first line, the `ø` before it being two bytes.
     std::fs::write(&defined, "let ø = 0; pub fn helper() {}\n").expect("the file is written");
@@ -9526,9 +9519,7 @@ fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
 fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() {
     // The one following test with a file really on the disk: `canonicalize` is what
     // reduces the `..`, and it answers for a path that is there and for no other.
-    let directory = Temporary::directory(
-        std::env::temp_dir().join(format!("assembly-viewer-reducing-{}", std::process::id())),
-    );
+    let directory = Temporary::fresh_directory("reducing");
     std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
     let path = directory.join("calls.rs");
     std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
@@ -11020,10 +11011,7 @@ fn companion_menu_harness() -> impl IntoElement {
 /// Not on the rows of a source-driven tab, which is that file already.
 #[test]
 fn a_companions_line_opens_the_file_it_is_in() {
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-companion-door-test-{}",
-        std::process::id()
-    )));
+    let directory = Temporary::fresh_directory("companion-door-test");
     let path = directory.join("door.c");
     std::fs::write(&path, "int add(int a, int b)\n{\n    return a + b;\n}\n")
         .expect("writing the source file");
@@ -11119,10 +11107,7 @@ fn a_companions_line_opens_the_file_it_is_in() {
 /// it by `spelling`. Two doors into one file in one pane, so both go through the rule.
 #[test]
 fn a_companions_name_opens_in_the_tab_the_file_is_already_in() {
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-companion-spelling-test-{}",
-        std::process::id()
-    )));
+    let directory = Temporary::fresh_directory("companion-spelling-test");
     std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
     let path = directory.join("door.c");
     std::fs::write(&path, "int add(int a, int b)\n{\n    return a + b;\n}\n")
@@ -13197,10 +13182,7 @@ fn gutter_lines(test: &TestingRunner) -> Vec<u32> {
 /// a test that never finishes rather than one that fails.
 #[test]
 fn a_landing_is_gone_to_once_and_does_not_drag_the_pane_back() {
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-landing-once-test-{}",
-        std::process::id()
-    )));
+    let directory = Temporary::fresh_directory("landing-once-test");
     let path = directory.join("long.c");
     let text: String = (1..=60).map(|line| format!("int x{line};\n")).collect();
     std::fs::write(&path, text).expect("writing the source file");
@@ -14089,7 +14071,7 @@ fn a_row_is_drawn_in_the_pieces_the_parse_coloured() {
 /// parsed copy holds the text it was parsed from in a `Rope` of its own.
 #[test]
 fn forgetting_a_directory_re_reads_and_re_parses_its_files() {
-    let directory = run_directory(line!());
+    let directory = Temporary::fresh_directory("run-test");
     let path = directory.join("main.rs");
     std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
 
@@ -18055,26 +18037,6 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
         (2, 4),
         "the span was pressed and the cursor did not move to it"
     );
-}
-
-/// A directory of this test's own, empty and named after the line that asked for it, and
-/// gone when the test ends.
-fn run_directory(line: u32) -> Temporary {
-    Temporary::directory(run_path(line))
-}
-
-/// The same, with the test's own directory `name` under it: what is removed is still the
-/// whole of it.
-fn run_directory_under(line: u32, name: &str) -> Temporary {
-    Temporary::under(run_path(line), name)
-}
-
-/// Where both of those put it.
-fn run_path(line: u32) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "assembly-viewer-run-test-{}-{line}",
-        std::process::id()
-    ))
 }
 
 /// What a build left behind, put where a build would have put it -- written into the
@@ -23440,7 +23402,7 @@ fn a_bookmark_row_opens_its_place() {
 /// pane's bar do: `spelling` is where one file reached two ways is made one tab.
 #[test]
 fn a_bookmarked_file_opens_in_the_tab_it_is_already_in() {
-    let directory = run_directory_under(line!(), "project");
+    let directory = Temporary::fresh_under("run-test", "project");
     std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
     let path = directory.join("calls.rs");
     std::fs::write(&path, "fn main() {}\n").expect("writing the source file");
@@ -24119,10 +24081,10 @@ fn files_harness() -> impl IntoElement {
         .child(FilesPanel)
 }
 
-/// A project directory of this test's own, named after the line that asked for it, and
-/// the panel mounted over it as the project's directory.
-fn files_over(line: u32) -> (TestingRunner, ProjectStates, Temporary) {
-    let directory = run_directory_under(line, "project");
+/// A project directory of this test's own, and the panel mounted over it as the project's
+/// directory.
+fn files_over() -> (TestingRunner, ProjectStates, Temporary) {
+    let directory = Temporary::fresh_under("run-test", "project");
     let (mut test, states) = TestingRunner::new(
         files_harness,
         (300., 400.).into(),
@@ -24147,7 +24109,7 @@ fn press(test: &mut TestingRunner, text: &str) {
 /// after, and is gone again after a second press.
 #[test]
 fn a_directory_row_unfolds_on_press() {
-    let (mut test, _states, directory) = files_over(line!());
+    let (mut test, _states, directory) = files_over();
     std::fs::create_dir_all(directory.join("a")).expect("creating the test directory");
     std::fs::write(directory.join("a/b.c"), "int x;\n").expect("writing the source");
     // Made after the mount, so the root has to be read again to see it.
@@ -24168,7 +24130,7 @@ fn a_directory_row_unfolds_on_press() {
 /// directory joined with the entry's own name, and the history records the visit.
 #[test]
 fn a_source_row_opens_a_source_driven_tab() {
-    let (mut test, states, directory) = files_over(line!());
+    let (mut test, states, directory) = files_over();
     let path = directory.join("x.c");
     std::fs::write(&path, "int x;\n").expect("writing the source");
     press(&mut test, "project");
@@ -24197,7 +24159,7 @@ fn a_source_row_opens_a_source_driven_tab() {
 /// row's rule than any other door's.
 #[test]
 fn a_source_row_opens_in_the_tab_the_file_is_already_in() {
-    let directory = run_directory_under(line!(), "project");
+    let directory = Temporary::fresh_under("run-test", "project");
     std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
     let path = directory.join("x.c");
     std::fs::write(&path, "int x;\n").expect("writing the source");
@@ -24238,7 +24200,7 @@ fn a_source_row_opens_in_the_tab_the_file_is_already_in() {
 /// file" instead, so a path is never opened twice.
 #[test]
 fn an_object_row_opens_from_its_menu() {
-    let (mut test, states, directory) = files_over(line!());
+    let (mut test, states, directory) = files_over();
     let (fixture, _) = fixture_objects(1);
     let path = directory.join("fixture.o");
     std::fs::copy(&fixture, &path).expect("copying the fixture");
@@ -24266,7 +24228,7 @@ fn an_object_row_opens_from_its_menu() {
 /// folder is as showable as a file, and there is no object inside one to open.
 #[test]
 fn a_directory_row_offers_the_file_manager_alone() {
-    let (mut test, _states, directory) = files_over(line!());
+    let (mut test, _states, directory) = files_over();
     std::fs::create_dir_all(directory.join("a")).expect("creating the test directory");
     press(&mut test, "project");
     press(&mut test, "project");
@@ -24283,7 +24245,7 @@ fn a_directory_row_offers_the_file_manager_alone() {
 /// file this view knows something more about than "it is a file", so the menu says so.
 #[test]
 fn a_project_files_row_offers_to_open_it_as_one() {
-    let (mut test, _states, directory) = files_over(line!());
+    let (mut test, _states, directory) = files_over();
     std::fs::write(directory.join("kernel.avproj"), b"binaries = []").expect("a project file");
     std::fs::write(directory.join("main.rs"), b"fn main() {}").expect("a source file");
     press(&mut test, "project");
@@ -24307,7 +24269,7 @@ fn a_project_files_row_offers_to_open_it_as_one() {
 /// could only say so -- and still has its menu, since what it is is not judged here.
 #[test]
 fn a_file_past_the_source_bound_does_nothing_when_pressed() {
-    let (mut test, states, directory) = files_over(line!());
+    let (mut test, states, directory) = files_over();
     let path = directory.join("huge.txt");
     // Sparse, so the bound is crossed without writing it.
     std::fs::File::create(&path)
@@ -24338,7 +24300,7 @@ fn no_directory_draws_the_placeholder() {
     settle(&mut test);
     assert!(label_area(&test, "No project directory. Set one in the Project view.").is_some());
 
-    let directory = run_directory_under(line!(), "project");
+    let directory = Temporary::fresh_under("run-test", "project");
     std::fs::write(directory.join("main.rs"), "fn main() {}\n").expect("writing the source");
     let mut proj = states.proj;
     proj.write().workspace_text = directory.to_string_lossy().into_owned();
@@ -24367,7 +24329,7 @@ fn no_directory_draws_the_placeholder() {
 /// effect *should* build.
 #[test]
 fn the_root_is_read_once_at_the_first_render() {
-    let directory = run_directory_under(line!(), "project");
+    let directory = Temporary::fresh_under("run-test", "project");
     std::fs::write(directory.join("main.rs"), "fn main() {}\n").expect("writing the source");
     let over = directory.to_string_lossy().into_owned();
 
@@ -29277,10 +29239,9 @@ fn search_harness() -> impl IntoElement {
 /// The panel over `work`, with the project's directory set: a real directory of this
 /// test's own, since a panel with none says so instead of drawing rows.
 fn search_over(
-    line: u32,
     work: impl Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync + 'static,
 ) -> (TestingRunner, ProjectStates, Temporary, State<DockArea>) {
-    let (test, states, directory, _, _, _, dock) = search_and_modifiers(line, work);
+    let (test, states, directory, _, _, _, dock) = search_and_modifiers(work);
     (test, states, directory, dock)
 }
 
@@ -29288,7 +29249,6 @@ fn search_over(
 /// `State` outside the runner's own context, so it is made where the rest are.
 #[allow(clippy::type_complexity)]
 fn search_and_modifiers(
-    line: u32,
     work: impl Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync + 'static,
 ) -> (
     TestingRunner,
@@ -29299,7 +29259,7 @@ fn search_and_modifiers(
     State<Finder>,
     State<DockArea>,
 ) {
-    let directory = run_directory_under(line, "searched");
+    let directory = Temporary::fresh_under("run-test", "searched");
     let work = Arc::new(work);
     let (mut test, states) = TestingRunner::new(
         search_harness,
@@ -29333,9 +29293,7 @@ fn search_and_modifiers(
 /// The panel over a walk that answers nothing, and the modifier states the root's one key
 /// handler writes beside the chord.
 #[allow(clippy::type_complexity)]
-fn search_with_modifiers(
-    line: u32,
-) -> (
+fn search_with_modifiers() -> (
     TestingRunner,
     ProjectStates,
     Temporary,
@@ -29345,8 +29303,7 @@ fn search_with_modifiers(
     State<Finder>,
     State<DockArea>,
 ) {
-    let (test, states, directory, keys, _, finder, dock) =
-        search_and_modifiers(line, |_query, _emit| {});
+    let (test, states, directory, keys, _, finder, dock) = search_and_modifiers(|_query, _emit| {});
     (
         test, states, directory, keys, keys.shift, keys.ctrl, finder, dock,
     )
@@ -29384,7 +29341,7 @@ fn hits_arrive_under_their_file_and_fold() {
     let first: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
     let second: Arc<Path> = Arc::from(Path::new("/project/two.rs"));
     let (one, two) = (first.clone(), second.clone());
-    let (mut test, states, directory, dock) = search_over(line!(), move |_query, emit| {
+    let (mut test, states, directory, dock) = search_over(move |_query, emit| {
         let _ = emit(SearchEvent::Hit(one.clone(), hit_at(3, "first hit")));
         let _ = emit(SearchEvent::Hit(one.clone(), hit_at(9, "second hit")));
         let _ = emit(SearchEvent::Hit(two.clone(), hit_at(1, "third hit")));
@@ -29422,7 +29379,7 @@ fn hits_arrive_under_their_file_and_fold() {
 fn drawing_the_hits_copies_none_of_them() {
     let file = PathBuf::from("/project/one.rs");
     let found: Arc<Path> = file.clone().into();
-    let (mut test, states, directory, dock) = search_over(line!(), move |_query, emit| {
+    let (mut test, states, directory, dock) = search_over(move |_query, emit| {
         for line in 1..=3 {
             let _ = emit(SearchEvent::Hit(found.clone(), hit_at(line, "a hit")));
         }
@@ -29455,7 +29412,7 @@ fn a_hit_from_a_replaced_search_is_dropped() {
     let (gate, held) = std::sync::mpsc::channel::<()>();
     let held = Arc::new(std::sync::Mutex::new(held));
     let file: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
-    let (mut test, states, directory, dock) = search_over(line!(), move |query, emit| {
+    let (mut test, states, directory, dock) = search_over(move |query, emit| {
         if query.filter.pattern == "slow" {
             let _ = emit(SearchEvent::Hit(file.clone(), hit_at(1, "early answer")));
             // Held until the test has asked for something else.
@@ -29512,7 +29469,7 @@ fn a_walk_of_the_project_left_cannot_answer_into_the_next() {
     let (going, waiting) = std::sync::mpsc::channel::<()>();
     let waiting = Arc::new(std::sync::Mutex::new(waiting));
     let file: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
-    let (mut test, states, directory, dock) = search_over(line!(), move |query, emit| {
+    let (mut test, states, directory, dock) = search_over(move |query, emit| {
         if query.filter.pattern == "left" {
             let _ = emit(SearchEvent::Hit(file.clone(), hit_at(1, "the old project")));
             // Held until the project has been switched and asked something of its own.
@@ -29562,8 +29519,7 @@ fn a_walk_of_the_project_left_cannot_answer_into_the_next() {
 /// what the pane would.
 #[test]
 fn pressing_a_hit_opens_its_file_on_the_line() {
-    let (mut test, states, directory, _, marked, _, _) =
-        search_and_modifiers(line!(), |_query, _emit| {});
+    let (mut test, states, directory, _, marked, _, _) = search_and_modifiers(|_query, _emit| {});
     let path = directory.join("x.c");
     std::fs::write(&path, "int x;\nint y;\nint z;\n").expect("writing the source");
     let missing = directory.join("gone.c");
@@ -29626,8 +29582,7 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
 /// side with no line to follow and nothing to draw.
 #[test]
 fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
-    let (mut test, states, directory, _, _, _, _) =
-        search_and_modifiers(line!(), |_query, _emit| {});
+    let (mut test, states, directory, _, _, _, _) = search_and_modifiers(|_query, _emit| {});
     let path = directory.join("x.c");
     std::fs::write(&path, "int x;\nint y;\nint z;\n").expect("writing the source");
 
@@ -29675,8 +29630,7 @@ fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
 /// is exactly what the UI thread did.
 #[test]
 fn pressing_a_hit_asks_the_filesystem_nothing() {
-    let (mut test, states, directory, _, _, _, _) =
-        search_and_modifiers(line!(), |_query, _emit| {});
+    let (mut test, states, directory, _, _, _, _) = search_and_modifiers(|_query, _emit| {});
     let path = directory.join("x.c");
     std::fs::write(&path, "int x;\nint y;\nint z;\n").expect("writing the source");
 
@@ -29717,7 +29671,7 @@ fn pressing_a_hit_asks_the_filesystem_nothing() {
 #[test]
 fn enter_in_the_box_asks_for_what_is_in_it() {
     let file: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
-    let (mut test, states, directory, _dock) = search_over(line!(), move |query, emit| {
+    let (mut test, states, directory, _dock) = search_over(move |query, emit| {
         let _ = emit(SearchEvent::Hit(
             file.clone(),
             hit_at(1, &format!("found {}", query.filter.pattern)),
@@ -29754,8 +29708,7 @@ fn enter_in_the_box_asks_for_what_is_in_it() {
 fn the_chord_asks_for_the_box_without_losing_the_modifiers() {
     // A runner, because every `State` here belongs to freya's own context, and the panel
     // is what spends what the chord asks for.
-    let (mut test, states, _directory, keys, shift, ctrl, finder, dock) =
-        search_with_modifiers(line!());
+    let (mut test, states, _directory, keys, shift, ctrl, finder, dock) = search_with_modifiers();
 
     let chord = |key: Key, modifiers: Modifiers| {
         let held = root_key_states();
@@ -30232,7 +30185,7 @@ fn an_artifact_load_survives_the_view_being_left() {
 /// says the file differs from the one that was built when it is exactly that file.
 #[test]
 fn a_finished_build_forgets_the_workspace_sources() {
-    let directory = run_directory(line!());
+    let directory = Temporary::fresh_directory("run-test");
     let path = directory.join("main.rs");
     std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
 
@@ -30286,7 +30239,7 @@ fn built_source_harness() -> impl IntoElement {
 /// saying so, the pane's next render finds nothing to draw and stays blank.
 #[test]
 fn a_source_pane_reads_its_file_again_after_a_build() {
-    let directory = run_directory(line!());
+    let directory = Temporary::fresh_directory("run-test");
     let path = directory.join("main.rs");
     std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
     let file: Arc<str> = Arc::from(path.to_string_lossy());
@@ -30594,10 +30547,7 @@ fn a_refused_debug_lines_edit_says_why_until_the_manifest_is_read_again() {
 /// which no canned answer would show.
 #[test]
 fn a_manifest_job_reads_and_writes_the_root_manifest() {
-    let root = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-profile-manifest-{}",
-        std::process::id()
-    )));
+    let root = Temporary::fresh_directory("profile-manifest");
     let root_manifest = root.join("Cargo.toml");
     std::fs::write(&root_manifest, "[workspace]\nmembers = [\"app\"]\n").expect("a manifest");
     std::fs::create_dir_all(root.join("app")).expect("the member directory");
@@ -30929,10 +30879,7 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
 /// (`open_recent_is_dim_when_there_is_nothing_in_it`).
 #[test]
 fn the_recent_projects_are_read_once_for_the_project_on_screen() {
-    let base = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-recents-once-{}",
-        std::process::id()
-    )));
+    let base = Temporary::fresh_directory("recents-once");
     // A real store, since what this is about is how often a file is read: one project to
     // list, and the list naming it.
     let other = base.join("other.avproj");
@@ -31053,9 +31000,7 @@ fn a_file_moved_aside_on_another_thread_is_named_at_once() {
         rect().expanded().child(RescuedPopup)
     }
 
-    let directory = Temporary::directory(
-        std::env::temp_dir().join(format!("assembly-viewer-rescued-{}", std::process::id())),
-    );
+    let directory = Temporary::fresh_directory("rescued");
     let store = Store::at(directory.to_path_buf());
     let (mut test, rescued) = TestingRunner::new(
         rescued_harness,
@@ -31956,13 +31901,9 @@ fn the_project_view_says_how_the_language_server_went() {
     );
 }
 
-/// A directory of this test's own with `text` in its `.vscode/settings.json`, named after
-/// the line that asked for it.
-fn a_project_with_settings(line: u32, text: &str) -> Temporary {
-    let directory = Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-lsp-settings-{}-{line}",
-        std::process::id()
-    )));
+/// A directory of this test's own with `text` in its `.vscode/settings.json`.
+fn a_project_with_settings(text: &str) -> Temporary {
+    let directory = Temporary::fresh_directory("lsp-settings");
     std::fs::create_dir_all(directory.join(".vscode")).expect("creating the test directory");
     std::fs::write(directory.join(".vscode").join("settings.json"), text)
         .expect("writing the settings file");
@@ -31990,7 +31931,6 @@ fn label_colour(test: &TestingRunner, has: &str) -> Option<Fill> {
 #[test]
 fn the_project_view_lists_the_settings_the_project_gave_the_server() {
     let directory = a_project_with_settings(
-        line!(),
         r#"{
             // the tree's own
             "rust-analyzer.cargo.features": ["one"],
@@ -32033,10 +31973,8 @@ fn the_project_view_lists_the_settings_the_project_gave_the_server() {
 /// that stops a start before it is one.
 #[test]
 fn the_project_view_says_why_a_settings_file_could_not_be_used() {
-    let directory = a_project_with_settings(
-        line!(),
-        r#"{ "rust-analyzer.cargo.sysrootSrc": "${userHome}/rust" }"#,
-    );
+    let directory =
+        a_project_with_settings(r#"{ "rust-analyzer.cargo.sysrootSrc": "${userHome}/rust" }"#);
     let (mut test, roots, _asking, _asks) = mount_project(|_: BuildJob| {
         BuildAnswer::Read(Manifest {
             path: None,
@@ -34606,7 +34544,7 @@ fn ctrl_enter_opens_a_tab_the_next_row_does_not_reuse() {
 /// row pressed opens the file, and Right on one must open nothing at all.
 #[test]
 fn left_and_right_fold_a_tree_row_and_leave_a_leaf_alone() {
-    let (mut test, states, directory) = files_over(line!());
+    let (mut test, states, directory) = files_over();
     std::fs::create_dir_all(directory.join("a")).expect("creating the test directory");
     std::fs::write(directory.join("a/b.c"), "int x;\n").expect("writing the source");
     std::fs::write(directory.join("leaf.rs"), "fn main() {}\n").expect("writing the source");
@@ -34867,7 +34805,6 @@ fn finder_harness() -> impl IntoElement {
 /// The overlay over `work`, with the project's directory set to a real one of this test's
 /// own, and the states the root's key handler writes.
 fn finder_over(
-    line: u32,
     work: impl Fn(&Path, &mut dyn FnMut(WalkEvent) -> ControlFlow<()>) + Send + Sync + 'static,
 ) -> (
     TestingRunner,
@@ -34877,7 +34814,7 @@ fn finder_over(
     Temporary,
     State<DockArea>,
 ) {
-    let directory = run_directory_under(line, "found");
+    let directory = Temporary::fresh_under("run-test", "found");
     let work = Arc::new(work);
     let (mut test, states) = TestingRunner::new(
         finder_harness,
@@ -35017,12 +34954,11 @@ fn press_finder_chord(
 /// the box then picks out. Fails on a finder that draws its list before it is opened.
 #[test]
 fn the_chord_opens_the_finder_over_the_project_files() {
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "src/ui/files_view.rs"));
-            let _ = emit(walked_file(root, "notes/Goals.md"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "src/ui/files_view.rs"));
+        let _ = emit(walked_file(root, "notes/Goals.md"));
+        let _ = emit(WalkEvent::Finished);
+    });
 
     assert!(
         finder_rows(&test).is_empty(),
@@ -35049,11 +34985,10 @@ fn the_chord_opens_the_finder_over_the_project_files() {
 /// empty.
 #[test]
 fn an_empty_box_lists_the_files_opened_most_recently() {
-    let (mut test, states, finder, keys, directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "walked.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "walked.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35090,12 +35025,11 @@ fn an_empty_box_lists_the_files_opened_most_recently() {
 /// arrows' own, so pointing at a row with the pointer is moving the keyboard to it.
 #[test]
 fn alt_in_the_finder_moves_to_the_row_and_opens_nothing() {
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "first.rs"));
-            let _ = emit(walked_file(root, "second.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "first.rs"));
+        let _ = emit(walked_file(root, "second.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35133,12 +35067,11 @@ fn alt_in_the_finder_moves_to_the_row_and_opens_nothing() {
 /// opens a file the reader never pointed at.
 #[test]
 fn a_pick_and_a_press_open_the_row_and_close_the_finder() {
-    let (mut test, states, finder, keys, directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "first.rs"));
-            let _ = emit(walked_file(root, "second.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "first.rs"));
+        let _ = emit(walked_file(root, "second.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
     // The files have to be there: a file the source pane would refuse opens nothing.
     for name in ["first.rs", "second.rs"] {
         std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
@@ -35194,12 +35127,11 @@ fn a_pick_and_a_press_open_the_row_and_close_the_finder() {
 /// path is written in: a column of names all starting `src/ui/` says nothing.
 #[test]
 fn a_row_is_the_name_and_then_the_directories_above_it() {
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "src/ui/files_view.rs"));
-            let _ = emit(walked_file(root, "top.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "src/ui/files_view.rs"));
+        let _ = emit(walked_file(root, "top.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35217,13 +35149,12 @@ fn a_row_is_the_name_and_then_the_directories_above_it() {
 /// match is first. Fails on a finder that filters by anything but the fuzzy match.
 #[test]
 fn typing_narrows_the_list_to_the_characters_in_order() {
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "src/ui/files_view.rs"));
-            let _ = emit(walked_file(root, "src/ui/source_view.rs"));
-            let _ = emit(walked_file(root, "notes/Goals.md"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "src/ui/files_view.rs"));
+        let _ = emit(walked_file(root, "src/ui/source_view.rs"));
+        let _ = emit(walked_file(root, "notes/Goals.md"));
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35246,12 +35177,11 @@ fn typing_narrows_the_list_to_the_characters_in_order() {
 /// it. Ctrl+Enter is the tab that stays, and the test under this one.
 #[test]
 fn enter_opens_the_selected_file_in_the_preview_tab() {
-    let (mut test, states, finder, keys, directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "first.rs"));
-            let _ = emit(walked_file(root, "second.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "first.rs"));
+        let _ = emit(walked_file(root, "second.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
     // The files have to be there: a file the source pane would refuse opens nothing.
     for name in ["first.rs", "second.rs"] {
         std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
@@ -35310,12 +35240,11 @@ fn enter_opens_the_selected_file_in_the_preview_tab() {
 /// both in tabs of their own, and the difference between the two keys would be nothing.
 #[test]
 fn ctrl_enter_opens_a_file_in_a_tab_the_next_row_does_not_take_back() {
-    let (mut test, states, finder, keys, directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "first.rs"));
-            let _ = emit(walked_file(root, "second.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "first.rs"));
+        let _ = emit(walked_file(root, "second.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
     // The files have to be there: a file the source pane would refuse opens nothing.
     for name in ["first.rs", "second.rs"] {
         std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
@@ -35367,13 +35296,12 @@ fn ctrl_enter_opens_a_file_in_a_tab_the_next_row_does_not_take_back() {
 /// moved at all.
 #[test]
 fn down_stops_at_the_last_row_so_up_moves_at_once() {
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            for name in ["one.rs", "two.rs", "three.rs"] {
-                let _ = emit(walked_file(root, name));
-            }
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        for name in ["one.rs", "two.rs", "three.rs"] {
+            let _ = emit(walked_file(root, name));
+        }
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35411,13 +35339,12 @@ fn down_stops_at_the_last_row_so_up_moves_at_once() {
 #[test]
 fn the_list_scrolls_to_the_row_the_keyboard_is_on() {
     let walked: Vec<String> = (0..20).map(|n| format!("f{n:02}.rs")).collect();
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            for name in &walked {
-                let _ = emit(walked_file(root, name));
-            }
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        for name in &walked {
+            let _ = emit(walked_file(root, name));
+        }
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35460,13 +35387,12 @@ fn the_list_scrolls_to_the_row_the_keyboard_is_on() {
 #[test]
 fn a_page_moves_the_finder_a_screen_of_files() {
     let walked: Vec<String> = (0..20).map(|n| format!("f{n:02}.rs")).collect();
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            for name in &walked {
-                let _ = emit(walked_file(root, name));
-            }
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        for name in &walked {
+            let _ = emit(walked_file(root, name));
+        }
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35511,13 +35437,12 @@ fn a_page_moves_the_finder_a_screen_of_files() {
 #[test]
 fn home_and_end_move_to_the_first_file_and_the_last() {
     let walked: Vec<String> = (0..20).map(|n| format!("f{n:02}.rs")).collect();
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            for name in &walked {
-                let _ = emit(walked_file(root, name));
-            }
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        for name in &walked {
+            let _ = emit(walked_file(root, name));
+        }
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35544,11 +35469,10 @@ fn home_and_end_move_to_the_first_file_and_the_last() {
 /// Escape closes it, and keeps nothing of what was typed.
 #[test]
 fn escape_closes_the_finder_and_keeps_nothing_typed() {
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "first.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "first.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35571,16 +35495,15 @@ fn escape_closes_the_finder_and_keeps_nothing_typed() {
 fn the_second_open_shows_the_files_the_first_walk_found() {
     let held = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let gate = held.clone();
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            // The second walk says nothing at all, so anything drawn after it is the list the
-            // first one left.
-            if gate.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
-            }
-            let _ = emit(walked_file(root, "kept.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        // The second walk says nothing at all, so anything drawn after it is the list the
+        // first one left.
+        if gate.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let _ = emit(walked_file(root, "kept.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35671,11 +35594,10 @@ fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
 /// and Escape), and a chord is declined whether or not it is a named key like those.
 #[test]
 fn the_windows_chords_are_declined_by_the_finder_box() {
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "kept.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "kept.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
 
@@ -35687,11 +35609,10 @@ fn the_windows_chords_are_declined_by_the_finder_box() {
 /// panel's width, so it ran off the right-hand edge of the window.
 #[test]
 fn the_box_fills_the_panel_with_air_around_it() {
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "kept.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "kept.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
 
@@ -35714,11 +35635,10 @@ fn the_box_fills_the_panel_with_air_around_it() {
 /// what says a rect with no background is still there to be pressed.
 #[test]
 fn a_press_outside_the_panel_closes_the_finder() {
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "kept.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "kept.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
     assert!(finder.peek().open);
@@ -35745,11 +35665,10 @@ fn a_press_outside_the_panel_closes_the_finder() {
 /// box does not list it however recently it was read.
 #[test]
 fn a_file_outside_the_project_is_not_listed() {
-    let (mut test, states, finder, keys, directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "own.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "own.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
 
     for path in [
         directory.join("own.rs"),
@@ -35776,11 +35695,10 @@ fn a_file_outside_the_project_is_not_listed() {
 /// saying a tab of its own here as it does on every row outside the panes.
 #[test]
 fn pressing_a_row_opens_its_file() {
-    let (mut test, states, finder, keys, directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            let _ = emit(walked_file(root, "kept.rs"));
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, directory, dock) = finder_over(move |root, emit| {
+        let _ = emit(walked_file(root, "kept.rs"));
+        let _ = emit(WalkEvent::Finished);
+    });
     std::fs::write(directory.join("kept.rs"), "fn one() {}\n").expect("writing the file");
 
     press_finder_chord(&states, finder, keys, dock);
@@ -35851,13 +35769,12 @@ fn nothing_is_said_of_a_query_the_worker_has_not_answered() {
     // Enough files that ranking them takes longer than the passes below: the point is the
     // frame between the keystroke and the answer, and with a handful there is none.
     let walked: Vec<String> = (0..5000).map(|n| format!("src/f{n:04}.rs")).collect();
-    let (mut test, states, finder, keys, _directory, dock) =
-        finder_over(line!(), move |root, emit| {
-            for name in &walked {
-                let _ = emit(walked_file(root, name));
-            }
-            let _ = emit(WalkEvent::Finished);
-        });
+    let (mut test, states, finder, keys, _directory, dock) = finder_over(move |root, emit| {
+        for name in &walked {
+            let _ = emit(walked_file(root, name));
+        }
+        let _ = emit(WalkEvent::Finished);
+    });
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);

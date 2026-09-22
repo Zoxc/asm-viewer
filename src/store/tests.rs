@@ -11,16 +11,6 @@ impl Store {
     }
 }
 
-/// A directory of this test's own under the system temporary directory, named after the
-/// line that asked for it, standing in for the one everything is stored in. Gone when the
-/// test ends.
-fn base(line: u32) -> Temporary {
-    Temporary::at(std::env::temp_dir().join(format!(
-        "assembly-viewer-store-test-{}-{line}",
-        std::process::id()
-    )))
-}
-
 /// A file with `data` in it, made along with the directories above it.
 fn written(path: &Path, data: &[u8]) {
     fs::create_dir_all(path.parent().expect("a parent")).expect("creating the test directory");
@@ -37,7 +27,7 @@ struct Named {
 
 #[test]
 fn a_file_that_parses_is_left_alone() {
-    let base = base(line!());
+    let base = Temporary::fresh("store-test");
     let path = base.join("settings.toml");
     written(&path, b"name = \"a\"\n");
 
@@ -53,7 +43,7 @@ fn a_file_that_parses_is_left_alone() {
 /// into one heap of `session.toml`s.
 #[test]
 fn a_file_that_will_not_parse_is_moved_under_the_path_it_had() {
-    let base = base(line!());
+    let base = Temporary::fresh("store-test");
     let path = base.join("projects").join("project-1").join("session.toml");
     written(&path, b"{ not toml");
 
@@ -72,7 +62,7 @@ fn a_file_that_will_not_parse_is_moved_under_the_path_it_had() {
 /// one is exactly what the reader would otherwise lose without hearing about it.
 #[test]
 fn a_file_of_the_wrong_shape_is_moved_too() {
-    let base = base(line!());
+    let base = Temporary::fresh("store-test");
     let path = base.join("settings.toml");
     written(&path, b"other = 1\n");
 
@@ -84,7 +74,7 @@ fn a_file_of_the_wrong_shape_is_moved_too() {
 /// it as bytes is what makes it rescuable at all.
 #[test]
 fn a_file_that_is_not_text_is_moved() {
-    let base = base(line!());
+    let base = Temporary::fresh("store-test");
     let path = base.join("recents.toml");
     written(&path, &[0xFF, 0xFE, 0x00]);
 
@@ -98,7 +88,7 @@ fn a_file_that_is_not_text_is_moved() {
 /// Nothing there is ever overwritten, so the second rescue of one name takes another.
 #[test]
 fn a_name_already_taken_gets_a_number() {
-    let base = base(line!());
+    let base = Temporary::fresh("store-test");
     let path = base.join("settings.toml");
     let moved = base.join(INCOMPATIBLE_DIR);
 
@@ -127,7 +117,7 @@ fn a_name_already_taken_gets_a_number() {
 /// will not parse: there is nothing to rescue and nothing is about to write over it.
 #[test]
 fn a_missing_file_moves_nothing() {
-    let base = base(line!());
+    let base = Temporary::fresh("store-test");
 
     assert_eq!(
         Store::at(&base).read::<Named>(&base.join("settings.toml")),
@@ -140,7 +130,7 @@ fn a_missing_file_moves_nothing() {
 /// taking away a file that is somebody else's.
 #[test]
 fn a_path_outside_the_base_is_left_where_it_is() {
-    let base = base(line!());
+    let base = Temporary::fresh("store-test");
     let outside = base.join("elsewhere").join("settings.toml");
     written(&outside, b"{ not toml");
 
@@ -188,7 +178,7 @@ fn a_path_is_relative_to_the_store_only_where_it_is_under_it() {
 /// order file cannot be the one that forgets the number.
 #[test]
 fn an_order_is_cut_to_the_cap_as_it_is_written() {
-    let base = base(line!());
+    let base = Temporary::fresh("store-test");
     let store = Store::at(&base);
 
     let over: Order<String> = (0..MAX_ORDER + 10).map(|n| format!("e{n}")).collect();
@@ -208,7 +198,7 @@ fn an_order_is_cut_to_the_cap_as_it_is_written() {
 /// of date is one the app carries on from, where a project is not.
 #[test]
 fn a_save_that_fails_leaves_the_file_that_was_there() {
-    let base = base(line!());
+    let base = Temporary::fresh("store-test");
     let store = Store::at(&base);
     written(&base.join("settings.toml"), b"name = \"a\"\n");
 

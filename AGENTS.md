@@ -470,8 +470,9 @@ process could show is judged by hand instead (`agents/Scratchpad.md`).
 **A test that writes to the system temporary directory takes what it wrote with it**, through
 `Temporary` (`src/temporary.rs`; `Scratch` in `crates/analysis/tests/common/mod.rs` for the other
 crate). A removal at the foot of the body is not enough: the usual failure is an `assert!` part way
-down, and the lines after it never run. The guard removes on `Drop`, which unwinding runs. `/tmp`
-is memory on many systems and the suite writes into it under names carrying the process id, so a
+down, and the lines after it never run. The guard removes on `Drop`, which unwinding runs. It names
+the path too, so no test spells one: the process id and a count kept for the whole process make
+each call's its own. `/tmp` is memory on many systems and the names carry the process id, so a
 leak is per run rather than once.
 
 **A test writes a real file only when the filesystem is what it is about**: an atomic write, a

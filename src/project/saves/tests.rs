@@ -747,7 +747,7 @@ fn entering_a_project_empties_every_baseline() {
 /// same name.
 #[test]
 fn unsaved_projects_do_not_collide() {
-    let directory = directory(line!());
+    let directory = directory();
 
     let store = Store::at(directory.join(PROJECTS_DIR));
     let first = unsaved_project(&store).expect("a file");

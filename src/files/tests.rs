@@ -1,21 +1,5 @@
-use std::sync::atomic::{AtomicU32, Ordering};
-
 use super::*;
 use crate::temporary::Temporary;
-
-/// A `root/` directory of this test's own, empty, under the system's temp directory. It
-/// and everything above it go when the test ends.
-fn temp_dir(name: &str) -> Temporary {
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    Temporary::under(
-        std::env::temp_dir().join(format!(
-            "viewer-files-{}-{unique}-{name}",
-            std::process::id()
-        )),
-        "root",
-    )
-}
 
 fn touch(path: &Path) {
     fs::write(path, b"").expect("the temp directory is writable");
@@ -40,7 +24,7 @@ fn described(rows: &FileRows) -> Vec<String> {
 
 /// `root/` holding `src/main.rs`, `src/ui/mod.rs` and `Cargo.toml`.
 fn project(name: &str) -> Temporary {
-    let root = temp_dir(name);
+    let root = Temporary::fresh_under(&format!("files-{name}"), "root");
     fs::create_dir_all(root.join("src/ui")).expect("the temp directory is writable");
     touch(&root.join("src/main.rs"));
     touch(&root.join("src/ui/mod.rs"));
@@ -128,7 +112,7 @@ fn toggling_the_root_refreshes_the_top_level() {
 
 #[test]
 fn directories_come_first_and_names_sort_without_regard_to_case() {
-    let root = temp_dir("order");
+    let root = Temporary::fresh_under("files-order", "root");
     fs::create_dir_all(root.join("zdir")).expect("the temp directory is writable");
     fs::create_dir_all(root.join("Mdir")).expect("the temp directory is writable");
     touch(&root.join("b.txt"));

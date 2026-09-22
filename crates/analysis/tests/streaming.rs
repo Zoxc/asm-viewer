@@ -134,7 +134,7 @@ fn breaking_stops_the_walk_where_it_stands() {
 
 #[test]
 fn collecting_the_stream_is_what_open_files_returns() {
-    let scratch = Scratch::new("streaming", line!());
+    let scratch = Scratch::new("streaming");
     let member = caller_and_target();
     let first = scratch.write("lib.a", &archive(&[("a.o", &member), ("b.o", &member)]));
     let second = scratch.write("plain.o", &member);

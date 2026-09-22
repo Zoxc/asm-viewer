@@ -3,15 +3,6 @@ use std::fs;
 use super::*;
 use crate::temporary::Temporary;
 
-/// A directory of this test's own under the system temporary directory, named after
-/// the line that asked for it, and gone when the test ends.
-fn directory(line: u32) -> Temporary {
-    Temporary::at(std::env::temp_dir().join(format!(
-        "assembly-viewer-settings-test-{}-{line}",
-        std::process::id()
-    )))
-}
-
 fn settings() -> Settings {
     Settings {
         theme: Theme::Dark,
@@ -28,7 +19,7 @@ fn settings() -> Settings {
 
 #[test]
 fn a_missing_or_corrupt_file_is_the_default() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("settings-test");
     let path = directory.join(FILE_NAME);
 
     assert_eq!(Settings::load(&Store::at(&directory)), Settings::default());
@@ -54,7 +45,7 @@ fn a_missing_or_corrupt_file_is_the_default() {
 /// settings file is one someone may write by hand.
 #[test]
 fn a_file_that_names_one_setting_keeps_it() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("settings-test");
     let path = directory.join(FILE_NAME);
 
     fs::create_dir_all(&directory).expect("creating the test directory");
@@ -69,7 +60,7 @@ fn a_file_that_names_one_setting_keeps_it() {
 /// before `[interface]` — a runtime failure, hence a real serializer and a real file.
 #[test]
 fn writes_atomically_and_reads_back_with_its_tables_last() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("settings-test");
     let path = directory.join("nested").join(FILE_NAME);
 
     let settings = settings();
@@ -151,7 +142,7 @@ fn a_size_the_app_cannot_draw_at_is_no_size() {
 /// test that goes through the `OWED` static.
 #[test]
 fn a_flush_writes_the_settings_last_owed_once() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh("settings-test");
     let store = Store::at(&directory);
     fs::create_dir_all(&directory).expect("creating the test directory");
 

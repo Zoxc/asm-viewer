@@ -7,15 +7,6 @@ fn workspace() -> PathBuf {
     PathBuf::from("/work/app")
 }
 
-/// A directory of this test's own under the system temporary directory, named after the
-/// line that asked for it, and gone when the test ends.
-fn directory(line: u32) -> Temporary {
-    Temporary::directory(std::env::temp_dir().join(format!(
-        "assembly-viewer-cargo-test-{}-{line}",
-        std::process::id()
-    )))
-}
-
 /// What a failed build reports, over a canned cargo stream — which is why `outcome` is a
 /// function of its own. Nothing here shells out.
 #[test]
@@ -220,7 +211,7 @@ fn a_verbatim_windows_directory_keeps_its_artifacts() {
 #[cfg(unix)]
 #[test]
 fn a_directory_the_reader_spelled_their_own_way_holds_what_cargo_named() {
-    let root = directory(line!());
+    let root = Temporary::fresh_directory("cargo-test");
     let real = root.join("real");
     let link = root.join("link");
     fs::create_dir_all(&real).expect("a directory");
@@ -295,7 +286,7 @@ fn a_message_this_module_does_not_know_is_skipped() {
 /// unless the manifest says not.
 #[test]
 fn a_manifest_that_says_nothing_gets_cargos_answer() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh_directory("cargo-test");
     fs::write(
         directory.join("Cargo.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
@@ -313,7 +304,7 @@ fn a_manifest_that_says_nothing_gets_cargos_answer() {
 /// The three spellings cargo takes, each in the two directions.
 #[test]
 fn debug_information_is_read_however_it_is_spelled() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh_directory("cargo-test");
     let manifest_at = directory.join("Cargo.toml");
     let says = |text: &str| {
         fs::write(&manifest_at, format!("[profile.release]\ndebug = {text}\n"))
@@ -334,7 +325,7 @@ fn debug_information_is_read_however_it_is_spelled() {
 /// the comment, the other tables and the key order all stand.
 #[test]
 fn adding_debug_lines_keeps_the_rest_of_the_manifest() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh_directory("cargo-test");
     let manifest_at = directory.join("Cargo.toml");
     let before = "# The app.\n\
                   [package]\n\
@@ -357,7 +348,7 @@ fn adding_debug_lines_keeps_the_rest_of_the_manifest() {
 /// A profile the manifest already has keeps everything else it said.
 #[test]
 fn adding_debug_lines_to_a_profile_that_is_there_keeps_its_other_keys() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh_directory("cargo-test");
     let manifest_at = directory.join("Cargo.toml");
     fs::write(
         &manifest_at,
@@ -380,7 +371,7 @@ fn adding_debug_lines_to_a_profile_that_is_there_keeps_its_other_keys() {
 /// there while the build carries none.
 #[test]
 fn a_members_profiles_are_the_workspace_roots() {
-    let root = directory(line!());
+    let root = Temporary::fresh_directory("cargo-test");
     let root_manifest = root.join("Cargo.toml");
     fs::write(
         &root_manifest,
@@ -412,7 +403,7 @@ fn a_members_profiles_are_the_workspace_roots() {
 /// And a package that names its root outright is taken at its word, ancestor or not.
 #[test]
 fn a_package_that_is_its_own_workspace_stops_the_walk() {
-    let root = directory(line!());
+    let root = Temporary::fresh_directory("cargo-test");
     fs::write(root.join("Cargo.toml"), "[workspace]\n").expect("the root manifest");
 
     let other = root.join("other");
@@ -451,7 +442,7 @@ fn a_package_that_is_its_own_workspace_stops_the_walk() {
 /// nothing to say about its profiles, and a write that fails rather than making one.
 #[test]
 fn a_directory_with_no_manifest_is_not_a_workspace() {
-    let directory = directory(line!());
+    let directory = Temporary::fresh_directory("cargo-test");
 
     assert_eq!(manifest(&directory), None);
     assert!(!debug_lines(

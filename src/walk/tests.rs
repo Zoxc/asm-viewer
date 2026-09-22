@@ -1,22 +1,7 @@
-use std::{
-    fs,
-    sync::atomic::{AtomicU32, Ordering as Atomic},
-};
+use std::fs;
 
 use super::*;
 use crate::temporary::Temporary;
-
-/// A directory of this test's own, empty, under the system's temp directory, and gone
-/// when the test ends. The oversized case writes 17 MB into it, so leaving one behind is
-/// not a matter of tidiness.
-fn temp_dir(name: &str) -> Temporary {
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let unique = COUNTER.fetch_add(1, Atomic::Relaxed);
-    Temporary::directory(std::env::temp_dir().join(format!(
-        "viewer-walk-{}-{unique}-{name}",
-        std::process::id()
-    )))
-}
 
 fn write(path: &Path, text: &str) {
     if let Some(directory) = path.parent() {
@@ -51,7 +36,7 @@ fn found_files(root: &Path) -> Vec<Found> {
 /// directory's own files, then the directories under it, each by name.
 #[test]
 fn a_directorys_files_come_before_the_directories_under_it() {
-    let root = temp_dir("order");
+    let root = Temporary::fresh_directory("walk-order");
     write(&root.join("b.rs"), "");
     write(&root.join("a/inner.rs"), "");
     write(&root.join("a.rs"), "");
@@ -79,7 +64,7 @@ fn a_name_is_lowercased_a_character_at_a_time() {
 /// The rule the module exists for: what the search skips, the finder skips.
 #[test]
 fn what_git_is_told_to_ignore_is_not_walked() {
-    let root = temp_dir("ignored");
+    let root = Temporary::fresh_directory("walk-ignored");
     write(&root.join(".gitignore"), "skipped.rs\n");
     write(&root.join("skipped.rs"), "");
     write(&root.join("kept.rs"), "");
@@ -89,7 +74,7 @@ fn what_git_is_told_to_ignore_is_not_walked() {
 
 #[test]
 fn a_hidden_file_is_not_walked() {
-    let root = temp_dir("hidden");
+    let root = Temporary::fresh_directory("walk-hidden");
     write(&root.join(".hidden.rs"), "");
     write(&root.join("kept.rs"), "");
 
@@ -100,7 +85,7 @@ fn a_hidden_file_is_not_walked() {
 /// offer, since opening it would do nothing.
 #[test]
 fn a_file_too_big_for_the_source_pane_is_not_walked() {
-    let root = temp_dir("oversized");
+    let root = Temporary::fresh_directory("walk-oversized");
     let big = " ".repeat(crate::source::MAX_SIZE as usize + 1);
     write(&root.join("big.rs"), &big);
     write(&root.join("kept.rs"), "");
@@ -111,7 +96,7 @@ fn a_file_too_big_for_the_source_pane_is_not_walked() {
 /// A directory is not a file, whatever it is called.
 #[test]
 fn a_directory_is_not_reported() {
-    let root = temp_dir("directories");
+    let root = Temporary::fresh_directory("walk-directories");
     fs::create_dir_all(root.join("empty.rs")).expect("the temp directory is writable");
     write(&root.join("kept.rs"), "");
 
@@ -122,7 +107,7 @@ fn a_directory_is_not_reported() {
 /// whatever the platform, cut into the name and the directories above it.
 #[test]
 fn a_file_is_held_by_the_path_it_is_drawn_by() {
-    let root = temp_dir("shown");
+    let root = Temporary::fresh_directory("walk-shown");
     write(&root.join("src/ui/files_view.rs"), "");
     write(&root.join("top.rs"), "");
 
@@ -146,7 +131,7 @@ fn a_file_is_held_by_the_path_it_is_drawn_by() {
 /// only way either reader cancels one.
 #[test]
 fn a_walk_stops_when_the_callback_says_to() {
-    let root = temp_dir("stopped");
+    let root = Temporary::fresh_directory("walk-stopped");
     write(&root.join("a.rs"), "");
     write(&root.join("b.rs"), "");
     write(&root.join("c.rs"), "");
@@ -180,7 +165,7 @@ fn a_walk_stops_when_the_callback_says_to() {
 fn a_symlink_is_not_walked() {
     use std::os::unix::fs::symlink;
 
-    let root = temp_dir("links");
+    let root = Temporary::fresh_directory("walk-links");
     write(&root.join("real.rs"), "");
     write(&root.join("under/inner.rs"), "");
     symlink(root.join("real.rs"), root.join("link.rs")).expect("the temp directory is writable");
@@ -198,9 +183,9 @@ fn a_symlink_is_not_walked() {
 fn a_project_reached_through_a_symlink_is_walked() {
     use std::os::unix::fs::symlink;
 
-    let real = temp_dir("linked-root");
+    let real = Temporary::fresh_directory("walk-linked-root");
     write(&real.join("main.rs"), "");
-    let outer = temp_dir("linked-root-through");
+    let outer = Temporary::fresh_directory("walk-linked-root-through");
     let through = outer.join("project");
     symlink(real.to_path_buf(), &through).expect("the temp directory is writable");
 
