@@ -6,8 +6,8 @@ mod common;
 
 use analysis::{Operand, SpanKind};
 use common::{
-    at, elf_shared_object, elf_x86_64, parse, pe_dll, symbol, text, ExportedSymbol, SharedObject,
-    TextSymbol, TEXT_ADDRESS,
+    at, elf_shared_object, elf_x86_64, goes_to, parse, pe_dll, symbol, text, ExportedSymbol,
+    SharedObject, TextSymbol, TEXT_ADDRESS,
 };
 use object::{
     write, Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind,
@@ -72,7 +72,7 @@ fn the_call_names_g(object: &analysis::Object) {
     assert_eq!(symbol_span(call), Some(("g", SpanKind::Address)));
     // The name is the door, and the operand is one case: naming the symbol is not also
     // naming an address, and where the call goes is the symbol's own address.
-    assert_eq!(call.target(), None);
+    assert_eq!(goes_to(call), None);
     assert_eq!(target_span(call), None);
 
     assert!(assembly.instructions[1].operand.is_none());
@@ -195,7 +195,7 @@ fn a_call_into_the_middle_of_a_function_keeps_its_address() {
         let call = &assembly.instructions[0];
         assert!(call.symbol().is_none());
         assert_eq!(call.branch(), None);
-        assert_eq!(call.target(), Some(inside));
+        assert_eq!(goes_to(call), Some(inside));
         let number = format!("{inside:X}h");
         assert_eq!(
             target_span(call),
@@ -226,12 +226,12 @@ fn a_branch_keeps_its_target_beside_its_branch() {
     let assembly = f.assembly(&object).expect("f disassembles");
     let jump = &assembly.instructions[0];
     // One `Operand::Branch`, so the address and the span are the same answer given once:
-    // `target` is `branch` and the span the door uses is the branch's own.
+    // `goes_to` is `branch` and the span the door uses is the branch's own.
     assert!(matches!(
         jump.operand,
         Some(Operand::Branch { address, .. }) if address == at(TEXT_ADDRESS + 3)
     ));
-    assert_eq!(jump.target(), jump.branch());
+    assert_eq!(goes_to(jump), jump.branch());
     assert!(target_span(jump).is_some());
 }
 
@@ -274,5 +274,5 @@ fn an_unrelocated_call_never_reaches_across_sections() {
     assert_eq!(text(call).trim_end(), "call      6");
     // And the number is still where the call goes, in the section's own addresses:
     // nothing is judged about a target past the section's end.
-    assert_eq!(call.target(), Some(at(6)));
+    assert_eq!(goes_to(call), Some(at(6)));
 }

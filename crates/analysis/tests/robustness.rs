@@ -3,12 +3,13 @@
 
 mod common;
 
-use analysis::{parse_object, CodeListing, Listing, Object};
+use analysis::{parse_object, CodeListing, Object};
 use common::{
     at, caller_and_target, committed_fixture, declared_code_images, dwarf_fixture,
-    elf_shared_object, elf_with_unreadable_name, elf_x86_64, elf_x86_64_with_dwarf, garbage, named,
-    names, parse, parse_and_walk, survivors, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol,
-    SharedObject, TextRelocation, TextSymbol, UnitRanges, TEXT_ADDRESS,
+    elf_shared_object, elf_with_unreadable_name, elf_x86_64, elf_x86_64_with_dwarf, garbage,
+    listing_of, named, names, parse, parse_and_walk, survivors, DwarfFixture, DwarfRow,
+    DwarfSection, ExportedSymbol, SharedObject, TextRelocation, TextSymbol, UnitRanges,
+    TEXT_ADDRESS,
 };
 use object::SectionKind;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -915,9 +916,6 @@ fn a_function_at_the_end_of_the_address_space_does_not_panic() {
 
     // The bytes have no addresses to sit at, so the section is not listed rather than
     // listed up to `u64::MAX`: the listing says what the extent says.
-    let section = symbol.section.clone().expect("the symbol is in a section");
-    assert_eq!(section.bytes_range(), None);
-    assert!(Listing::new(&object, section).stretches().is_empty());
     assert!(CodeListing::new(&object).sections().is_empty());
 }
 
@@ -1274,7 +1272,7 @@ fn a_symbol_whose_name_will_not_read_is_listed_by_its_address() {
         .iter()
         .find(|section| section.name == ".text")
         .expect("a .text section");
-    let listing = Listing::new(&object, section.clone());
+    let listing = listing_of(&object, section);
     let stretches: Vec<_> = listing
         .stretches()
         .iter()

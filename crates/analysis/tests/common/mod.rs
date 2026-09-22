@@ -4,8 +4,8 @@
 #![allow(dead_code)]
 
 use analysis::{
-    parse_object, CodeListing, Instruction, LineInfo, LineRow, Listing, Object, PlacedAddress,
-    SectionAddress, SymbolData,
+    parse_object, CodeListing, Instruction, LineInfo, LineRow, Listing, Object, Operand, Placed,
+    PlacedAddress, Section, SectionAddress, SymbolData,
 };
 use object::write;
 use object::{
@@ -73,6 +73,52 @@ pub fn text(instruction: &Instruction) -> String {
         .iter()
         .map(|(text, _)| text.as_str())
         .collect()
+}
+
+/// The address an instruction goes to that nothing has named: a branch's own, or an unnamed
+/// call's.
+pub fn goes_to(instruction: &Instruction) -> Option<SectionAddress> {
+    match instruction.operand {
+        Some(Operand::Branch { address, .. } | Operand::Call { address, .. }) => Some(address),
+        _ => None,
+    }
+}
+
+/// One section's listing, reached as the crate hands it out: through the object's
+/// [`CodeListing`]. Derefs to the [`Listing`].
+pub struct SectionListing {
+    code: CodeListing,
+    index: usize,
+}
+
+impl SectionListing {
+    /// The section as the whole listing placed it.
+    pub fn placed(&self) -> &Placed {
+        &self.code.sections()[self.index]
+    }
+
+    /// Where the section's bytes stop, in its own addresses.
+    pub fn end(&self) -> SectionAddress {
+        let placed = self.placed();
+        placed.local(placed.range().end)
+    }
+}
+
+impl std::ops::Deref for SectionListing {
+    type Target = Listing;
+
+    fn deref(&self) -> &Listing {
+        &self.placed().listing
+    }
+}
+
+/// `section`'s listing. Panics for a section the [`CodeListing`] leaves out.
+pub fn listing_of(object: &Object, section: &Section) -> SectionListing {
+    let code = CodeListing::new(object);
+    let index = code
+        .section_of(section)
+        .unwrap_or_else(|| panic!("section {} is listed", section.name));
+    SectionListing { code, index }
 }
 
 /// Where one of the committed, compiler-produced fixtures (`tests/fixtures/`) sits on disk.
@@ -168,25 +214,29 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
         let _ = object.line_info(section, at(0)..at(u64::MAX));
     }
 
-    // Every section's listing: the skeleton whole, the first few stretches decoded. What is
-    // asserted is what holds for any input — the stretches partition the section's bytes
-    // in order and a gap lies inside its stretch; the agreement with the symbol's own
-    // listing is a claim tested where the objects are honest, in `listing.rs`.
-    for section in &object.sections {
-        let listing = Listing::new(&object, section.clone());
+    // All of the code as one listing: the sections placed in order without overlap, each
+    // section's stretches partitioning its bytes in order, every stretch found again at its
+    // placed address, and the first few of each decoded with a gap inside its stretch. What
+    // is asserted holds for any input; the agreement with the symbol's own listing is a
+    // claim tested where the objects are honest, in `listing.rs`.
+    let code = CodeListing::new(&object);
+    let mut placed_end = None;
+    let mut flat = 0;
+    for (index, placed) in code.sections().iter().enumerate() {
+        let range = placed.range();
+        assert!(range.start < range.end);
+        assert!(placed_end.is_none_or(|end| end <= range.start));
+        placed_end = Some(range.end);
+        let listing = &placed.listing;
+        assert_eq!(code.section_of(listing.section()), Some(index));
+
         let stretches = listing.stretches();
-        // No bytes, or none with room in the address space: nothing to list.
-        let end = match section.bytes_range() {
-            None => {
-                assert!(stretches.is_empty());
-                section.address
-            }
-            Some(bytes) => {
-                assert_eq!(stretches.first().map(|s| s.range.start), Some(bytes.start));
-                assert_eq!(stretches.last().map(|s| s.range.end), Some(bytes.end));
-                bytes.end
-            }
-        };
+        let end = placed.local(range.end);
+        assert_eq!(
+            stretches.first().map(|s| s.range.start),
+            Some(listing.section().address)
+        );
+        assert_eq!(stretches.last().map(|s| s.range.end), Some(end));
         for (index, stretch) in stretches.iter().enumerate() {
             assert!(stretch.range.start < stretch.range.end);
             if let Some(next) = stretches.get(index + 1) {
@@ -202,30 +252,17 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
                     assert_eq!(gap.range.end, stretch.range.end);
                 }
             }
+            let at = placed.place(stretch.range.start);
+            assert!(range.contains(&at));
+            assert_eq!(code.at(at), Some(flat));
+            assert!(std::ptr::eq(
+                code.stretch(flat).expect("the stretch").1,
+                stretch
+            ));
+            flat += 1;
         }
         assert_eq!(listing.stretch_at(end), None);
         assert_eq!(listing.decode(&object, stretches.len()).is_some(), false);
-    }
-
-    // And all of the code as one listing: the sections placed in order without overlap,
-    // every stretch found again at its placed address. Nothing decoded — the per-section
-    // walk above did that.
-    let code = CodeListing::new(&object);
-    let mut placed_end = None;
-    let mut flat = 0;
-    for (index, placed) in code.sections().iter().enumerate() {
-        let range = placed.range();
-        assert!(range.start < range.end);
-        assert!(placed_end.is_none_or(|end| end <= range.start));
-        placed_end = Some(range.end);
-        assert_eq!(code.section_of(placed.listing.section()), Some(index));
-        for s in placed.listing.stretches() {
-            let at = placed.place(s.range.start);
-            assert!(range.contains(&at));
-            assert_eq!(code.at(at), Some(flat));
-            assert!(std::ptr::eq(code.stretch(flat).expect("the stretch").1, s));
-            flat += 1;
-        }
         // The air past the section's last byte is in no stretch of it.
         assert!(code.at(range.end).is_none_or(|at| at >= flat));
     }

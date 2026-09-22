@@ -50,11 +50,11 @@ fn an_address_lands_on_the_instruction_holding_it() {
 #[test]
 fn a_target_mid_instruction_starts_nothing() {
     let assembly = listing(&[0x10, 0x18]);
-    let starting = |address| assembly.instruction_starting(SectionAddress::new(address));
+    let starts = |address| starting(&assembly.instructions, SectionAddress::new(address));
 
-    assert_eq!(starting(0x10), Some(0));
-    assert_eq!(starting(0x18), Some(1));
-    assert_eq!(starting(0x14), None, "inside the first");
-    assert_eq!(starting(0x20), None, "past the last");
-    assert_eq!(starting(0x0), None, "before the first");
+    assert_eq!(starts(0x10), Some(0));
+    assert_eq!(starts(0x18), Some(1));
+    assert_eq!(starts(0x14), None, "inside the first");
+    assert_eq!(starts(0x20), None, "past the last");
+    assert_eq!(starts(0x0), None, "before the first");
 }

@@ -149,12 +149,14 @@ invariant is a `match`, and a reader that asks `Section::code()` once has all fo
 `Section::bias()` answers `Bias::NONE` for a section with no place, and where the bytes are is one
 answer too:
 `Section::end()` is where they stop, `bytes_range()` the addresses they take up in the section's
-own terms, and `placed_range()` that range with the bias added. All three are **checked**, so a
-section whose bytes run off the top of the address space has no range, no place, no extent and no
-listing, rather than one of each cut short at `u64::MAX`. The range a symbol is decoded over, the
-one a listing partitions, the one an unwind entry is clamped to and the one a declared address is
-looked up in are that one range. Each used to work it out from `address + data.len()` for itself --
-five of them, with three overflow rules between them -- and they agreed only by inspection.
+own terms, and `placed_range()` that range with the bias added. All three are crate-private and
+**checked**, so a section whose bytes run off the top of the address space has no range, no place,
+no extent and no listing, rather than one of each cut short at `u64::MAX`. Outside the crate, a
+section's range is the one its `CodeListing` entry was placed at. The range a symbol is decoded
+over, the one a listing partitions, the one an unwind entry is clamped to and the one a declared
+address is looked up in are that one range. Each used to work it out from `address + data.len()`
+for itself -- five of them, with three overflow rules between them -- and they agreed only by
+inspection.
 **The two spaces are two types** (`address.rs`): a `SectionAddress` is one of a section's own
 and a `PlacedAddress` one in the space every section of an object shares, and the only way
 between them is `SectionAddress::placed(bias)` and `PlacedAddress::local(bias)`, each with a
@@ -761,9 +763,8 @@ having no operand at all. `Branch { address, span }` is the instruction's own di
 a `jmp`, a `jcc`, a `loop`, an `xbegin`, never a `call`, since control comes straight back.
 `Call { address, span }` is a direct near `call` whose displacement is real and whose target no
 symbol starts at: into the middle of a function, or into a function a stripped image has no symbol
-for. Both addresses are in the section's own space, as `address` is. `symbol()`, `branch()` and
-`target()` are one-line projections for a caller that wants one number, `Assembly::decoded`'s edges
-and the section listing among them.
+for. Both addresses are in the section's own space, as `address` is. `symbol()` and `branch()` are
+one-line projections for a caller that wants one value, `Assembly::decoded`'s edges among them.
 
 The exclusions the old doc comments spelled out are the enum's shape now. A relocated operand is a
 placeholder, so a row naming a symbol names no address of its own; a call the resolver named goes to
@@ -800,13 +801,13 @@ names at most one target and a backend decodes from the front, so `from` ascends
 
 The same invariant holds over `instructions` themselves, which ascend by address, and the crate
 states it once in the two lookups it makes: `Assembly::instruction_at` is the instruction
-**holding** the byte at an address, the last one starting at or before it, and
-`instruction_starting` the one starting **exactly** there. The app asks the first wherever a
-place is an address and the answer is a row -- a door planted mid-instruction, a row of the
-section listing -- and `decoded` asks the second for each branch target, which is where a target
-landing mid-instruction becomes an edge dropped. `decoded` searches while it is still building
-its rows, with no `Assembly` to ask, so both methods are one line over a private free function
-that `decoded` calls directly.
+**holding** the byte at an address, the last one starting at or before it, and the private
+`starting` the one starting **exactly** there. The app asks the first wherever a place is an
+address and the answer is a row -- a door planted mid-instruction, a row of the section listing --
+and `decoded` asks the second for each branch target, which is where a target landing
+mid-instruction becomes an edge dropped. Both are free functions over a slice, because `decoded`
+searches while it is still building its rows and has no `Assembly` to ask; only the first has a
+method, since only the first has a caller outside the crate.
 
 **The section listing** (`listing.rs`) is the crate's half of the unified section view: a whole
 section as one address-keyed listing, beside the symbol view and not instead of it. Nothing
@@ -818,7 +819,8 @@ section's placed range, two binary searches away (two sections of a relocatable 
 0; their places do not), and already ordered by `(address, SymbolIndex)`, so two names at one
 address are one stretch with two labels in the file's order. A symbol placed outside the section's
 bytes is not in the index. That is free, and it is what gives a view a stable structure to scroll
-while instructions arrive. **A stretch is decoded on demand**
+while instructions arrive. `Listing::new` is crate-private, so every `Listing` outside the crate is
+one a `CodeListing` built. **A stretch is decoded on demand**
 (`Listing::decode`), and that is when its symbol's extent is asked for: the code is literally
 `SymbolData::assembly`'s answer, so the section and the symbol view cannot disagree, and the bytes
 from where that answer says it stopped (`Assembly::range`) to the next label are the stretch's

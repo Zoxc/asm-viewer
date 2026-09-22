@@ -448,14 +448,14 @@ impl Section {
     /// [`u64::MAX`]. The range a symbol is decoded over, the one a listing partitions, the
     /// one an unwind entry is clamped to and the one a declared address is looked up in are
     /// this range, so they cannot say different things.
-    pub fn end(&self) -> Option<SectionAddress> {
+    pub(crate) fn end(&self) -> Option<SectionAddress> {
         self.address.checked_add(self.len())
     }
 
     /// The addresses this section's bytes take up, in the section's own terms. [`None`] for
     /// a section with no bytes — one holding no code among them — and for one that does not
     /// fit in the address space ([`end`](Self::end)).
-    pub fn bytes_range(&self) -> Option<Range<SectionAddress>> {
+    pub(crate) fn bytes_range(&self) -> Option<Range<SectionAddress>> {
         let end = self.end()?;
         (self.address < end).then_some(self.address..end)
     }

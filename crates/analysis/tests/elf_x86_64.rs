@@ -5,7 +5,7 @@ mod common;
 
 use analysis::{Bias, Operand, SpanKind};
 use common::{
-    at, branch_to_data, caller_and_target, elf_x86_64, elf_x86_64_absolute,
+    at, branch_to_data, caller_and_target, elf_x86_64, elf_x86_64_absolute, goes_to,
     indirect_caller_and_target, names, parse, rip_relative_store_to_data, symbol, text,
     TextRelocation, TextSymbol,
 };
@@ -999,7 +999,7 @@ fn a_call_and_a_relocated_branch_have_no_branch_span() {
     assert_eq!(assembly.instructions[0].branch(), None);
     // It still says where it goes, in the span the number was printed into: the door
     // into a listing of the whole object, which a branch's span is too.
-    assert_eq!(assembly.instructions[0].target(), Some(at(5)));
+    assert_eq!(goes_to(&assembly.instructions[0]), Some(at(5)));
     assert_eq!(
         target_span(&assembly.instructions[0]),
         Some(("5", SpanKind::Address))
@@ -1028,7 +1028,7 @@ fn a_call_and_a_relocated_branch_have_no_branch_span() {
     let jump = &assembly.instructions[0];
     assert_eq!(symbol_span(jump), Some(("target", SpanKind::Address)));
     assert_eq!(branch_span(jump), None);
-    assert_eq!(jump.target(), None);
+    assert_eq!(goes_to(jump), None);
     assert_eq!(target_span(jump), None);
 
     // And the same jump relocated against a data symbol, where nothing was substituted and
@@ -1039,7 +1039,7 @@ fn a_call_and_a_relocated_branch_have_no_branch_span() {
     assert_eq!(spans_of(jump, SpanKind::Address), ["5"]);
     assert!(matches!(jump.operand, Some(Operand::Placeholder)));
     assert_eq!(branch_span(jump), None);
-    assert_eq!(jump.target(), None);
+    assert_eq!(goes_to(jump), None);
     assert_eq!(target_span(jump), None);
 }
 

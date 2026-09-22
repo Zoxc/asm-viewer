@@ -10,8 +10,9 @@ use analysis::{
 };
 use common::{
     at, caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
-    elf_x86_64_with_dwarf, elf_x86_64_with_dwarf_declaring, named, parse, pe_dll, placed_at, text,
-    DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, TextSymbol, UnitRanges, TEXT_ADDRESS,
+    elf_x86_64_with_dwarf, elf_x86_64_with_dwarf_declaring, listing_of, named, parse, pe_dll,
+    placed_at, text, DwarfFixture, DwarfRow, DwarfSection, ExportedSymbol, SectionListing,
+    TextSymbol, UnitRanges, TEXT_ADDRESS,
 };
 use std::{path::PathBuf, sync::Arc};
 
@@ -201,17 +202,16 @@ fn last_byte(range: &std::ops::Range<SectionAddress>) -> SectionAddress {
     range.end.checked_sub(1).expect("a range above zero")
 }
 
-fn section_end(section: &Section) -> SectionAddress {
-    section.end().expect("a fixture fits in the address space")
-}
-
-fn listing_of(object: &Arc<Object>, name: &str) -> Listing {
-    let section = object
+fn section_named<'a>(object: &'a Object, name: &str) -> &'a Arc<Section> {
+    object
         .sections
         .iter()
         .find(|section| section.name == name)
-        .unwrap_or_else(|| panic!("a section named {name}"));
-    Listing::new(object, section.clone())
+        .unwrap_or_else(|| panic!("a section named {name}"))
+}
+
+fn listing_named(object: &Object, name: &str) -> SectionListing {
+    listing_of(object, section_named(object, name))
 }
 
 /// The names at each stretch's label, in stretch order.
@@ -244,17 +244,20 @@ fn ranges(listing: &Listing) -> Vec<(u64, u64)> {
 #[test]
 fn every_listing_partitions_its_section_and_agrees_with_the_symbols() {
     for (name, object) in corpus() {
+        let code = CodeListing::new(&object);
         for section in &object.sections {
-            let listing = Listing::new(&object, section.clone());
-            let stretches = listing.stretches();
             let context = format!("{name}, section {}", section.name);
-
-            if section.code().is_none_or(|code| code.data.is_empty()) {
-                assert!(stretches.is_empty(), "{context}: no bytes, no stretches");
+            let Some(index) = code.section_of(section) else {
+                assert!(
+                    section.code().is_none_or(|code| code.data.is_empty()),
+                    "{context}: a section with bytes is listed"
+                );
                 continue;
-            }
-
-            let end = section_end(section);
+            };
+            let placed = &code.sections()[index];
+            let listing = &placed.listing;
+            let stretches = listing.stretches();
+            let end = placed.local(placed.range().end);
             assert_eq!(
                 stretches.first().map(|s| s.range.start),
                 Some(section.address),
@@ -362,7 +365,7 @@ fn every_listing_partitions_its_section_and_agrees_with_the_symbols() {
 #[test]
 fn the_skeleton_is_the_symbol_addresses() {
     let object = parse(&caller_and_target());
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
 
     assert_eq!(labels(&listing), [vec!["caller"], vec!["target"]]);
     assert_eq!(ranges(&listing), [(0, 6), (6, 7)]);
@@ -371,7 +374,7 @@ fn the_skeleton_is_the_symbol_addresses() {
 #[test]
 fn padding_past_a_stated_extent_is_a_gap_of_bytes() {
     let object = parse(&padded());
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
     assert_eq!(ranges(&listing), [(0, 10), (10, 12)]);
 
     // `first` is six bytes of code by DWARF; the four `int3`s up to `second` are said, and
@@ -396,7 +399,7 @@ fn padding_past_a_stated_extent_is_a_gap_of_bytes() {
 #[test]
 fn the_rest_of_a_stretch_cut_at_a_megabyte_is_said_to_be_cut() {
     let object = parse(&huge());
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
     let length = (2 << 20) + 16;
     assert_eq!(ranges(&listing), [(0, length)]);
 
@@ -424,7 +427,7 @@ fn a_stated_extent_the_size_of_the_cap_is_not_a_cut() {
         })
     );
 
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
     let decoded = listing.decode(&object, 0).expect("huge decodes");
     let gap = decoded.gap.expect("the rest is a gap");
     assert_eq!(gap.range, at(1 << 20)..at((2 << 20) + 16));
@@ -434,7 +437,7 @@ fn a_stated_extent_the_size_of_the_cap_is_not_a_cut() {
 #[test]
 fn bytes_before_the_first_symbol_are_a_stretch_with_no_label() {
     let object = parse(&leading_gap(Architecture::X86_64));
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
 
     assert_eq!(labels(&listing), [vec![], vec!["first"], vec!["second"]]);
     assert_eq!(ranges(&listing), [(0, 3), (3, 5), (5, 6)]);
@@ -464,7 +467,7 @@ fn a_section_with_no_symbols_is_one_stretch_of_bytes() {
         &[],
         &[],
     ));
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
 
     assert_eq!(labels(&listing), [Vec::<&str>::new()]);
     assert_eq!(ranges(&listing), [(0, 3)]);
@@ -476,7 +479,7 @@ fn a_section_with_no_symbols_is_one_stretch_of_bytes() {
 #[test]
 fn two_names_at_one_address_share_a_stretch_in_the_files_order() {
     let object = parse(&aliased());
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
 
     assert_eq!(labels(&listing), [vec!["alias", "function"], vec!["next"]]);
     assert_eq!(ranges(&listing), [(0, 3), (3, 4)]);
@@ -488,7 +491,7 @@ fn two_names_at_one_address_share_a_stretch_in_the_files_order() {
 #[test]
 fn stretch_at_finds_the_stretch_an_address_is_in() {
     let object = parse(&padded());
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
 
     assert_eq!(listing.stretch_at(at(0)), Some(0));
     assert_eq!(listing.stretch_at(at(7)), Some(0), "inside first's padding");
@@ -501,7 +504,7 @@ fn stretch_at_finds_the_stretch_an_address_is_in() {
 #[test]
 fn a_tail_jump_names_the_next_symbols_stretch() {
     let object = parse(&tail_jump());
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
     assert_eq!(labels(&listing), [vec!["jumper"], vec!["target"]]);
 
     let jumper = listing.decode(&object, 0).expect("jumper decodes");
@@ -520,7 +523,7 @@ fn a_tail_jump_names_the_next_symbols_stretch() {
 #[test]
 fn an_architecture_nothing_decodes_still_has_its_skeleton() {
     let object = parse(&leading_gap(Architecture::Aarch64));
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
     assert_eq!(labels(&listing), [vec![], vec!["first"], vec!["second"]]);
 
     let first = listing.decode(&object, 1).expect("first decodes");
@@ -571,7 +574,7 @@ fn a_symbol_pointed_outside_its_section_is_left_out() {
 
     let object = parse(&data);
     assert_eq!(named(&object, "wild").address, at(0xDEAD_BEEF));
-    let listing = listing_of(&object, ".text");
+    let listing = listing_named(&object, ".text");
 
     // `good` runs to the section's end: the wild address is past it and bounds nothing.
     assert_eq!(labels(&listing), [vec!["good"]]);
@@ -596,8 +599,8 @@ fn a_linked_image_lists_its_declared_code_at_its_addresses() {
         }],
         Some(4),
     ));
-    let listing = listing_of(&object, ".text");
-    let end = section_end(listing.section());
+    let listing = listing_named(&object, ".text");
+    let end = listing.end();
     assert!(end >= at(TEXT_ADDRESS + 6));
 
     assert_eq!(labels(&listing), [vec!["first"], vec!["<entry point>"]]);
@@ -622,7 +625,7 @@ fn a_linked_image_lists_its_declared_code_at_its_addresses() {
 #[test]
 fn the_committed_objects_list_every_function_at_its_own_address() {
     let flat = committed("line_fixture.o");
-    let listing = listing_of(&flat, ".text");
+    let listing = listing_named(&flat, ".text");
     assert_eq!(
         labels(&listing),
         [vec!["add"], vec!["twice"], vec!["sum_to"]]
@@ -640,7 +643,7 @@ fn the_committed_objects_list_every_function_at_its_own_address() {
     // identity is what keeps each listing to its own section's symbol.
     let split = committed("line_fixture_split.o");
     for name in ["add", "twice", "sum_to"] {
-        let listing = listing_of(&split, &format!(".text.{name}"));
+        let listing = listing_named(&split, &format!(".text.{name}"));
         assert_eq!(labels(&listing), [vec![name]]);
         assert_eq!(listing.stretches()[0].range.start, at(0));
     }
@@ -670,15 +673,13 @@ fn a_section_at_the_end_of_the_address_space_lists_nothing() {
     }
 
     let object = parse(&data);
-    let listing = listing_of(&object, ".text");
-    assert_eq!(listing.section().address, at(u64::MAX));
-    assert_eq!(
-        listing.section().code().map(|code| code.data.len()),
-        Some(7)
-    );
-    assert!(listing.stretches().is_empty());
-    assert_eq!(listing.stretch_at(at(u64::MAX)), None);
-    assert!(listing.decode(&object, 0).is_none());
+    let section = section_named(&object, ".text");
+    assert_eq!(section.address, at(u64::MAX));
+    assert_eq!(section.code().map(|code| code.data.len()), Some(7));
+    let code = CodeListing::new(&object);
+    assert_eq!(code.section_of(section), None);
+    assert_eq!(code.stretch_count(), 0);
+    assert!(code.decode(&object, 0).is_none());
 }
 
 /// Two functions in two sections, both at 0, as `-ffunction-sections` and rustc emit them.

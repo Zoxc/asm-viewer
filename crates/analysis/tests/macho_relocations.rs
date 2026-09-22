@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{at, parse, symbol, text};
+use common::{at, goes_to, parse, symbol, text};
 use object::{
     write, Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags,
     RelocationKind, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
@@ -113,7 +113,7 @@ fn a_call_in_a_section_that_is_not_at_zero_resolves_through_its_relocation() {
     ));
     assert_eq!(text(call).trim_end(), "call      target");
     // A placeholder names nowhere, so the row is no door and the gutter draws no arrow.
-    assert_eq!(call.target(), None);
+    assert_eq!(goes_to(call), None);
     assert_eq!(call.branch(), None);
 }
 

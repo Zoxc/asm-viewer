@@ -272,15 +272,6 @@ impl Instruction {
             _ => None,
         }
     }
-
-    /// The address this instruction goes to and nothing here has named: a branch's own, or
-    /// an unnamed call's. See [`Operand::Branch`] and [`Operand::Call`].
-    pub fn target(&self) -> Option<SectionAddress> {
-        match self.operand {
-            Some(Operand::Branch { address, .. } | Operand::Call { address, .. }) => Some(address),
-            _ => None,
-        }
-    }
 }
 
 pub struct Assembly {
@@ -355,9 +346,8 @@ impl Assembly {
     ) -> Self {
         let instructions = backend.disassemble(code);
 
-        // The target's own row, found by `instruction_starting`'s search, spelt as the free
-        // function because there is no `Self` to ask yet. A target with no row is dropped;
-        // see `edges`.
+        // The target's own row: the instruction starting exactly there. A target with no
+        // row is dropped; see `edges`.
         let edges = instructions
             .iter()
             .enumerate()
@@ -401,15 +391,6 @@ impl Assembly {
         holding(&self.instructions, address)
     }
 
-    /// The instruction starting **exactly** at `address`, which is what a branch target
-    /// wants: a target landing mid-instruction has no row of its own.
-    ///
-    /// The same search as [`instruction_at`](Self::instruction_at), under the same
-    /// invariant, with the answer kept only where that instruction starts at `address`.
-    pub fn instruction_starting(&self, address: SectionAddress) -> Option<usize> {
-        starting(&self.instructions, address)
-    }
-
     /// The answer for an architecture no arm of `decode` claims: no rows, the architecture's
     /// name to say why, and the bytes that would have been decoded — an undecodable symbol
     /// still states its extent.
@@ -436,8 +417,9 @@ fn holding(instructions: &[Instruction], address: SectionAddress) -> Option<usiz
         .checked_sub(1)
 }
 
-/// [`Assembly::instruction_starting`] over the same: the holding instruction, kept only where
-/// it starts at `address`.
+/// The instruction starting **exactly** at `address`, which is what a branch target wants: a
+/// target landing mid-instruction has no row of its own. The holding instruction, kept only
+/// where it starts at `address`.
 fn starting(instructions: &[Instruction], address: SectionAddress) -> Option<usize> {
     let index = holding(instructions, address)?;
     (instructions[index].address == address).then_some(index)

@@ -25,10 +25,10 @@
 
 mod common;
 
-use analysis::{Architecture, Gap, GapKind, Listing, MadeUp};
+use analysis::{Architecture, Gap, GapKind, MadeUp};
 use common::{
-    at, committed_fixture, elf_shared_object, named, names, parse, pe_image, ExportedSymbol, PeDll,
-    SharedObject, TEXT_ADDRESS,
+    at, committed_fixture, elf_shared_object, listing_of, named, names, parse, pe_image,
+    ExportedSymbol, PeDll, SharedObject, TEXT_ADDRESS,
 };
 use object::{Object as _, ObjectSection as _};
 
@@ -213,7 +213,7 @@ fn a_stated_end_beats_the_next_symbols_address() {
     let assembly = first.assembly(&object).expect("first decodes");
     assert_eq!(assembly.instructions.len(), 6);
 
-    let listing = Listing::new(&object, first.section.clone().unwrap());
+    let listing = listing_of(&object, first.section.as_ref().unwrap());
     let stretch = listing.decode(&object, 0).expect("first decodes");
     assert_eq!(
         stretch.gap,
@@ -477,7 +477,7 @@ fn an_fdes_end_beats_the_next_symbols_address() {
     assert_eq!(first.extent(&object).map(|extent| extent.bytes), Some(6));
     assert_eq!(first.assembly(&object).unwrap().instructions.len(), 6);
 
-    let listing = Listing::new(&object, first.section.clone().unwrap());
+    let listing = listing_of(&object, first.section.as_ref().unwrap());
     let stretch = listing.decode(&object, 0).expect("first decodes");
     assert_eq!(
         stretch.gap,
