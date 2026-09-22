@@ -9,8 +9,9 @@
 //! module only reads. It is the one part of the crate that reads call-frame information;
 //! `line/dwarf.rs` is still the only one that knows DWARF's debug sections and `addr2line`.
 
+use crate::sections::runtime_endian;
 use crate::SectionAddress;
-use gimli::{BaseAddresses, CieOrFde, EhFrame, EhFrameOffset, RunTimeEndian, UnwindSection as _};
+use gimli::{BaseAddresses, CieOrFde, EhFrame, EhFrameOffset, UnwindSection as _};
 use object::{read::pe::PeFile64, Architecture, Object as _, ObjectKind, ObjectSection as _};
 use std::{collections::HashMap, ops::Range};
 
@@ -59,12 +60,7 @@ fn elf(file: &object::File<'_>) -> Vec<UnwindEntry> {
         return Vec::new();
     };
 
-    let endian = if file.is_little_endian() {
-        RunTimeEndian::Little
-    } else {
-        RunTimeEndian::Big
-    };
-    let mut eh_frame = EhFrame::new(data, endian);
+    let mut eh_frame = EhFrame::new(data, runtime_endian(file));
     if let Some(size) = file.architecture().address_size() {
         eh_frame.set_address_size(size.bytes());
     }

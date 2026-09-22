@@ -11,9 +11,9 @@
 //! question whichever backend answers it.
 
 use super::{recovered, LineBackend, RowCollector};
-use crate::sections::{section_biases, section_data};
+use crate::sections::{runtime_endian, section_biases, section_data};
 use crate::{Bias, PlacedAddress, SectionAddress};
-use gimli::{EndianArcSlice, RunTimeEndian};
+use gimli::{EndianArcSlice, Endianity as _, RunTimeEndian};
 use object::{
     Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget,
     SectionIndex,
@@ -52,11 +52,7 @@ impl Dwarf {
             return None;
         }
 
-        let endian = if file.is_little_endian() {
-            RunTimeEndian::Little
-        } else {
-            RunTimeEndian::Big
-        };
+        let endian = runtime_endian(file);
 
         let biases = section_biases(file);
 
@@ -463,30 +459,23 @@ fn relocate<'data, 'file>(
 /// The 4- or 8-byte unsigned at `bytes`. Any other width is not a DWARF address or offset and
 /// answers 0.
 fn read_uint(bytes: &[u8], endian: RunTimeEndian) -> u64 {
-    let mut buffer = [0u8; 8];
-    match (bytes.len(), endian) {
-        (4, RunTimeEndian::Little) | (8, RunTimeEndian::Little) => {
-            buffer[..bytes.len()].copy_from_slice(bytes);
-            u64::from_le_bytes(buffer)
-        }
-        (4, _) | (8, _) => {
-            buffer[8 - bytes.len()..].copy_from_slice(bytes);
-            u64::from_be_bytes(buffer)
-        }
+    // The length is matched first: `Endianity`'s reads panic on a short slice.
+    match bytes.len() {
+        4 => u64::from(endian.read_u32(bytes)),
+        8 => endian.read_u64(bytes),
         _ => 0,
     }
 }
 
-/// The inverse of [`read_uint`]; a width it does not understand is left untouched.
+/// The inverse of [`read_uint`]: a 4-byte field takes the low word, and a width it does not
+/// understand is left untouched.
 fn write_uint(bytes: &mut [u8], endian: RunTimeEndian, value: u64) {
-    let len = bytes.len();
-    match (len, endian) {
-        (4, RunTimeEndian::Little) | (8, RunTimeEndian::Little) => {
-            bytes.copy_from_slice(&value.to_le_bytes()[..len]);
-        }
-        (4, _) | (8, _) => {
-            bytes.copy_from_slice(&value.to_be_bytes()[8 - len..]);
-        }
+    match bytes.len() {
+        4 => endian.write_u32(bytes, value as u32),
+        8 => endian.write_u64(bytes, value),
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests;

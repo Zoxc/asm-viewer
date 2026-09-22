@@ -1,12 +1,22 @@
-//! Two rules about an object's sections that the parse and the DWARF loader both follow:
-//! where each code section is placed, and how a section's bytes are read with a believable
-//! size.
+//! Rules about an object's sections that more than one reader follows: where each code
+//! section is placed and how a section's bytes are read with a believable size, which the
+//! parse and the DWARF loader share, and the byte order `gimli` reads them in, which the DWARF
+//! loader and the unwind reader share.
 
 use crate::Bias;
 use object::{
     CompressionFormat, Object as _, ObjectKind, ObjectSection, SectionIndex, SectionKind,
 };
 use std::collections::HashMap;
+
+/// The file's byte order as `gimli` takes it.
+pub(crate) fn runtime_endian(file: &object::File<'_>) -> gimli::RunTimeEndian {
+    if file.is_little_endian() {
+        gimli::RunTimeEndian::Little
+    } else {
+        gimli::RunTimeEndian::Big
+    }
+}
 
 /// Where each code section is placed in the one address space the object's line info is read
 /// in and its code is listed in; what [`CodeSection::bias`](crate::model::CodeSection::bias) is
