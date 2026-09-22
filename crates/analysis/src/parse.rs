@@ -3,9 +3,9 @@
 
 use crate::demangle;
 use crate::line::{DebugInfo, Declared};
-use crate::sections::{section_biases, section_data};
+use crate::sections::{bias_of, section_biases, section_data};
 use crate::unwind::{self, UnwindEntry};
-use crate::{Bias, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData};
+use crate::{MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData};
 use object::{
     BinaryFormat, ExportTarget, Object as _, ObjectKind, ObjectSection, ObjectSymbol, SectionIndex,
     SectionKind, SymbolIndex, SymbolKind,
@@ -317,7 +317,7 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
                     Some((SectionAddress::new(base).checked_add(offset)?, relocation))
                 })
                 .collect();
-            let bias = biases.get(&index).copied().unwrap_or(Bias::NONE);
+            let bias = bias_of(&biases, Some(index));
             Some((
                 index,
                 Section::text(

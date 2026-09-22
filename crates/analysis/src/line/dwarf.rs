@@ -11,7 +11,7 @@
 //! question whichever backend answers it.
 
 use super::{recovered, LineBackend, RowCollector};
-use crate::sections::{runtime_endian, section_biases, section_data};
+use crate::sections::{bias_of, runtime_endian, section_biases, section_data};
 use crate::{Bias, PlacedAddress, SectionAddress};
 use gimli::{EndianArcSlice, Endianity as _, RunTimeEndian};
 use object::{
@@ -416,12 +416,7 @@ fn relocate<'data, 'file>(
         // A target's address is its section's address plus its offset in it, and in a
         // relocatable object that section address is the bias rather than the 0 the file
         // states.
-        let bias = |index: Option<SectionIndex>| {
-            index
-                .and_then(|index| biases.get(&index))
-                .copied()
-                .unwrap_or(Bias::NONE)
-        };
+        let bias = |index| bias_of(biases, index);
         let target = match relocation.target() {
             RelocationTarget::Symbol(index) => file
                 .symbol_by_index(index)

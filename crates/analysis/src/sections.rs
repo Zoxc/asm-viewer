@@ -89,6 +89,15 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, B
     biases
 }
 
+/// The bias of the section `index` names in a map [`section_biases`] made. A section with no
+/// entry, or no section at all, was not moved: a linked image's map is empty.
+pub(crate) fn bias_of(biases: &HashMap<SectionIndex, Bias>, index: Option<SectionIndex>) -> Bias {
+    index
+        .and_then(|index| biases.get(&index))
+        .copied()
+        .unwrap_or(Bias::NONE)
+}
+
 /// What [`section_biases`] rounds each section's placement up to. Nothing depends on the
 /// value; the gap it leaves means an off-by-one cannot walk into the next section.
 const SECTION_ALIGNMENT: u64 = 16;
