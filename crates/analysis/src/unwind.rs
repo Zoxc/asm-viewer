@@ -12,7 +12,10 @@
 use crate::sections::runtime_endian;
 use crate::SectionAddress;
 use gimli::{BaseAddresses, CieOrFde, EhFrame, EhFrameOffset, UnwindSection as _};
-use object::{read::pe::PeFile64, Architecture, Object as _, ObjectKind, ObjectSection as _};
+use object::pe::ImageRuntimeFunctionEntry;
+use object::{
+    read::pe::PeFile64, Architecture, LittleEndian, Object as _, ObjectKind, ObjectSection as _,
+};
 use std::{collections::HashMap, ops::Range};
 
 /// The entries the file's unwind table states, in file order, placed on the image base and
@@ -131,12 +134,13 @@ impl UnwindEntry {
     }
 }
 
-/// The entries an x86-64 PE's exception directory states: one `RUNTIME_FUNCTION` per function
-/// with unwind info, its begin and end RVAs read and placed on the image base, and one byte
-/// of the `UNWIND_INFO` its third word names, for the chained flag. Each is a **declaration
-/// of both ends** of a function — the loader's, not a debugger's — which is what makes it
-/// worth reading past the export table: a stripped image exports a handful of its functions,
-/// and every function between two exports is otherwise nameless and of no known length. In
+/// The entries an x86-64 PE's exception directory states: one `ImageRuntimeFunctionEntry` per
+/// function with unwind info, its begin and end RVAs read and placed on the image base, and one
+/// byte of the `UNWIND_INFO` its third field names, for the chained flag. A trailing partial
+/// record is dropped. Each is a **declaration of both ends** of a function — the loader's, not
+/// a debugger's — which is what makes it worth reading past the export table: a stripped image
+/// exports a handful of its functions, and every function between two exports is otherwise
+/// nameless and of no known length. In
 /// file order, an entry whose end is not past its begin dropped, and not yet placed in any
 /// section — that is `declared_code`'s lookup, which is also what drops one whose begin is
 /// not in code. An `UNWIND_INFO` that cannot be read, or is of a version other than the one
@@ -160,19 +164,28 @@ fn pe(pe: &PeFile64<'_>) -> Vec<UnwindEntry> {
         return Vec::new();
     };
 
+    let count = data.len() / size_of::<ImageRuntimeFunctionEntry>();
+    let Ok((entries, _)) = object::slice_from_bytes::<ImageRuntimeFunctionEntry>(data, count)
+    else {
+        return Vec::new();
+    };
+
     let base = SectionAddress::new(pe.relative_address_base());
-    data.chunks_exact(12)
+    entries
+        .iter()
         .filter_map(|entry| {
-            let word = |at: usize| entry[at..at + 4].try_into().ok().map(u32::from_le_bytes);
-            let begin = base.checked_add(u64::from(word(0)?))?;
-            let end = base.checked_add(u64::from(word(4)?))?;
+            let begin = base.checked_add(u64::from(entry.begin_address.get(LittleEndian)))?;
+            let end = base.checked_add(u64::from(entry.end_address.get(LittleEndian)))?;
             if begin >= end {
                 return None;
             }
             // `UNWIND_INFO`'s first byte: the version in its low three bits, the flags
             // above them.
             let chained = sections
-                .pe_data_at(pe.data(), word(8)?)
+                .pe_data_at(
+                    pe.data(),
+                    entry.unwind_info_address_or_data.get(LittleEndian),
+                )
                 .and_then(|info| info.first())
                 .is_some_and(|&first| first & 7 == 1 && (first >> 3) & 4 != 0);
             Some(UnwindEntry {
