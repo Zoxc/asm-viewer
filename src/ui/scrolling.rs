@@ -51,7 +51,7 @@ pub(crate) fn reveal_row(
     // below are held to (`scroll_extent`).
     let extent = scroll_extent(length, height, viewport);
     let (_, scrolled) = <(i32, i32)>::from(*controller);
-    let top = -(scrolled as f32).clamp(-extent, 0.0);
+    let top = -held_scroll(scrolled as f32, extent);
     let row = index as f32 * height;
     let margin = CONTEXT_ROWS * height;
     // The context rows are what the caller wants, never what it asks for: a caller hands
@@ -115,7 +115,7 @@ pub(crate) fn reveal_caret(
     index: usize,
 ) {
     let (_, scrolled) = <(i32, i32)>::from(*controller);
-    let top = -(scrolled as f32).clamp(-scroll_extent(length, height, viewport), 0.0);
+    let top = -held_scroll(scrolled as f32, scroll_extent(length, height, viewport));
     let row = index as f32 * height;
 
     if row < top {
@@ -391,7 +391,7 @@ pub(crate) fn use_kept_position(
             // the corrected offset all along, so this moves nothing on screen: it makes
             // the number the controller holds the one the rows are at. Written once, the
             // run it wakes finding the offset inside and nothing to do.
-            let inside = (offset as f32).clamp(-extent, 0.0) as i32;
+            let inside = held_scroll(offset as f32, extent) as i32;
             if seen > 0.0 && inside != offset {
                 controller.scroll_to_y(inside);
             }

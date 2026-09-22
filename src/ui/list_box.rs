@@ -23,11 +23,22 @@ use super::*;
 ///
 /// **The scroll controller is not held to it.** freya corrects an offset past the end as
 /// it draws and leaves the controller holding whatever it was given
-/// (`notes/upstream/freya.md`), so everything that scrolls a code listing clamps to this
-/// before writing, and everything that reads a scroll back as a row clamps to it after
-/// ([`Listing::scrolled`]).
+/// (`notes/upstream/freya.md`), so everything that scrolls a code listing holds the
+/// offset to this ([`held_scroll`]) before writing, and everything that reads a scroll
+/// back as a row holds it after ([`Listing::scrolled`]).
 pub(crate) fn scroll_extent(length: usize, height: f32, viewport: f32) -> f32 {
     (length as f32 * height - viewport).max(0.0)
+}
+
+/// `offset` held to `-extent ..= 0`, the range [`scroll_extent`] says a view can be at.
+pub(crate) fn held_scroll(offset: f32, extent: f32) -> f32 {
+    offset.clamp(-extent, 0.0)
+}
+
+/// [`held_scroll`] in the whole pixels the controller holds. The extent is cut toward
+/// zero to a whole pixel, so the offset never passes it.
+pub(crate) fn held_scroll_i32(offset: i32, extent: f32) -> i32 {
+    offset.clamp(-(extent as i32), 0)
 }
 
 /// One listing's box, as the list draws its rows against and closes over.

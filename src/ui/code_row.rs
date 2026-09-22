@@ -460,7 +460,7 @@ impl Listing {
     pub(crate) fn scrolled(&self) -> f32 {
         let (_, scrolled) = <(i32, i32)>::from(self.controller);
         let extent = scroll_extent(self.rows(), code_row_height(), self.height());
-        (scrolled as f32).clamp(-extent, 0.0)
+        held_scroll(scrolled as f32, extent)
     }
 
     /// Where row 0's top is, relative to the box's top: the nudge that puts the rows on
@@ -1411,14 +1411,14 @@ pub(crate) fn use_sweep_beyond(
                 let mut controller = listing.controller;
                 if down != 0 {
                     let extent = scroll_extent(listing.rows(), code_row_height(), area.height());
-                    let target = (y + down * step).clamp(-(extent as i32), 0);
+                    let target = held_scroll_i32(y + down * step, extent);
                     if target != y {
                         controller.scroll_to_y(target);
                     }
                 }
                 if across != 0 {
                     let extent = (listing.widest.extent(listing.key()) - area.width()).max(0.0);
-                    let target = (x + across * step).clamp(-(extent as i32), 0);
+                    let target = held_scroll_i32(x + across * step, extent);
                     if target != x {
                         controller.scroll_to_x(target);
                     }
