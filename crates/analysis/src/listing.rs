@@ -120,19 +120,14 @@ impl Listing {
             });
         }
 
-        let mut rest = symbols;
-        while let Some(address) = rest.first().map(local) {
-            let count = rest
-                .iter()
-                .take_while(|entry| local(entry) == address)
-                .count();
-            let (here, after) = rest.split_at(count);
-            let next = after.first().map_or(bytes.end, local);
+        // One stretch per address, running to the next address or the section's end.
+        let mut groups = symbols.chunk_by(|a, b| a.placed == b.placed).peekable();
+        while let Some(group) = groups.next() {
+            let next = groups.peek().map_or(bytes.end, |after| local(&after[0]));
             stretches.push(Stretch {
-                range: address..next,
-                symbols: here.iter().map(|entry| entry.symbol.clone()).collect(),
+                range: local(&group[0])..next,
+                symbols: group.iter().map(|entry| entry.symbol.clone()).collect(),
             });
-            rest = after;
         }
 
         Self { section, stretches }
