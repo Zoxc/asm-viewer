@@ -82,7 +82,7 @@ pub fn lowest_placed(symbols: &[Arc<SymbolData>]) -> Option<PlacedAddress> {
     symbols
         .iter()
         .filter(|data| data.section.is_some())
-        .map(|data| data.placed(data.address))
+        .map(|data| data.placed_start())
         .min()
 }
 

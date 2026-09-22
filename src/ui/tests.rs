@@ -21385,7 +21385,7 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
 
     // The caret is on the target's first row, and the place kept is its address.
     let landed = rows
-        .body_row_for(add.placed(add.address))
+        .body_row_for(add.placed_start())
         .expect("add has a row");
     let picked = marked
         .peek()
@@ -21398,8 +21398,8 @@ fn a_link_in_the_unified_view_moves_the_listing_and_opens_no_tab() {
             .places
             .code_at
             .peek()
-            .at(&code_entry_of(&states, &code, add.placed(add.address))),
-        Some(Spot::at(add.placed(add.address)))
+            .at(&code_entry_of(&states, &code, add.placed_start())),
+        Some(Spot::at(add.placed_start()))
     );
 
     // With Ctrl held it is the other door: the symbol alone, beside the listing. Pressed
@@ -21671,7 +21671,7 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     assert!(
         trail
             == [
-                Stop::at(object_of(&code), add.placed(add.address)),
+                Stop::at(object_of(&code), add.placed_start()),
                 Stop::whole(code.clone())
             ],
         "the place followed is not on the trail"
@@ -21711,8 +21711,8 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
             .places
             .code_at
             .peek()
-            .at(&code_entry_of(&states, &code, add.placed(add.address))),
-        Some(Spot::at(add.placed(add.address)))
+            .at(&code_entry_of(&states, &code, add.placed_start())),
+        Some(Spot::at(add.placed_start()))
     );
 }
 

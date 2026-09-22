@@ -303,7 +303,7 @@ fn one_line_in_two_sections_answers_in_placed_order() {
     };
     let (first, second) = (symbol("drawn_first"), symbol("drawn_second"));
     assert!(first.address > second.address);
-    assert!(first.placed(first.address) < second.placed(second.address));
+    assert!(first.placed_start() < second.placed_start());
 
     assert_eq!(at(&object, MAIN, 10), ["drawn_first", "drawn_second"]);
 }

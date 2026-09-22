@@ -382,7 +382,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
     // address that listing draws the target at; Ctrl opens the symbol on its own.
     assert!(matches!(
         in_code.opens(false),
-        Some(Opens::InCode { placed, .. }) if placed == target.placed(target.address)
+        Some(Opens::InCode { placed, .. }) if placed == target.placed_start()
     ));
     // With Ctrl either door is the symbol on its own, in a tab that stays: the two
     // listings differ in where a plain press goes and not in what Ctrl means.

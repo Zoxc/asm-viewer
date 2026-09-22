@@ -860,11 +860,11 @@ fn a_symbols_address_is_placed_by_its_sections_bias() {
     let second = named(&object, "second");
     let section = second.section.as_ref().expect("second is in a section");
     assert_eq!((second.address, section.bias()), (at(0), Bias::new(16)));
-    assert_eq!(second.placed(second.address), placed_at(16));
+    assert_eq!(second.placed_start(), placed_at(16));
     assert_eq!(second.placed(at(1)), placed_at(17));
 
     let loose = SymbolData::new("absolute".to_owned(), None, at(0x10), None, None);
-    assert_eq!(loose.placed(loose.address), placed_at(0x10));
+    assert_eq!(loose.placed_start(), placed_at(0x10));
 }
 
 #[test]

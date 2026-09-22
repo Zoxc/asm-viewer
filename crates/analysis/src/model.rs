@@ -586,6 +586,11 @@ impl SymbolData {
             .map_or(address.unplaced(), |section| section.place(address))
     }
 
+    /// Where this symbol starts, in the placed space.
+    pub fn placed_start(&self) -> PlacedAddress {
+        self.placed(self.address)
+    }
+
     /// Where this symbol is in [`Object::placed`]: its placed address, where its section is
     /// code and the address is inside the section's bytes. [`None`] for every other symbol,
     /// which no listing labels and no estimate is made for.
@@ -597,7 +602,7 @@ impl SymbolData {
     /// in — covers it. [`code_place`](Self::code_place) is this with the ask for the range,
     /// so a caller holding one already comes here and asks for it once.
     pub(crate) fn place_in(&self, range: &Range<PlacedAddress>) -> Option<PlacedAddress> {
-        let placed = self.placed(self.address);
+        let placed = self.placed_start();
         range.contains(&placed).then_some(placed)
     }
 

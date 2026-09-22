@@ -554,7 +554,7 @@ impl Door {
             // at the address that listing draws it at, which is the placed one.
             Door::Symbol { symbol, code_tab } if *code_tab && !ctrl => Opens::InCode {
                 object: symbol.object.clone(),
-                placed: symbol.data.placed(symbol.data.address),
+                placed: symbol.data.placed_start(),
             },
             Door::Symbol { symbol, .. } => Opens::Symbol(symbol.clone(), reach),
             Door::Address { object, address } => Opens::Code {
