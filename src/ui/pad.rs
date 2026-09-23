@@ -1042,6 +1042,10 @@ pub(crate) fn use_scratchpad_with(
                 }
             }
             PadAnswer::Created(made) => {
+                // A pad made is shown at once, so the one it replaces on screen is
+                // flushed first, as `show_pad` does.
+                let leaving = pad.peek().shown().clone();
+                save_if_changed(pad, &leaving, requests);
                 let opening = pad.write().created(made);
                 if let Some(open) = opening {
                     requests.send(open);
@@ -1186,7 +1190,7 @@ pub(crate) fn use_scratchpad_with(
             let pads = pad.read();
             let shown = pads.shown().clone();
             drop(pads);
-            save_if_changed(pad, &shown, &jobs);
+            save_if_changed(pad, &shown, &jobs.jobs);
         }
     });
 
@@ -1211,7 +1215,7 @@ pub(crate) fn use_scratchpad_with(
 /// it. An effect is a loop that runs and then waits to be notified, so a write of its own
 /// makes that wait return at once and the task never yields: a guard taken whatever the
 /// answer said would not cost a render but lock the window up.
-fn save_if_changed(mut pad: State<Pads>, name: &PadId, jobs: &PadJobs) {
+fn save_if_changed(mut pad: State<Pads>, name: &PadId, jobs: &Requests<PadJob>) {
     let owes = pad
         .peek()
         .get(name)
@@ -1223,7 +1227,7 @@ fn save_if_changed(mut pad: State<Pads>, name: &PadId, jobs: &PadJobs) {
     let Some(scratchpad) = pad.write().unsaved_change(name) else {
         return;
     };
-    jobs.jobs.send(PadJob::Save(scratchpad));
+    jobs.send(PadJob::Save(scratchpad));
 }
 
 /// Draw `name` from now on.
@@ -1238,7 +1242,7 @@ pub(crate) fn show_pad(mut pad: State<Pads>, jobs: &PadJobs, name: PadId) {
     if leaving == name {
         return;
     }
-    save_if_changed(pad, &leaving, jobs);
+    save_if_changed(pad, &leaving, &jobs.jobs);
 
     // Bound out of a statement of its own, so the guard is gone before the send.
     let arriving = pad.write().show(name);

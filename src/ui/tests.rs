@@ -17112,6 +17112,61 @@ fn a_new_pad_is_written_and_shown_at_once() {
     );
 }
 
+/// A pad made by New is shown at once, and the pad it replaces on screen is written first,
+/// as a switch writes it: the effect that saves writes only the pad shown, so an edit it
+/// had not written yet when the answer landed would be left unwritten.
+#[test]
+fn a_new_pad_writes_the_pad_it_replaces_first() {
+    let made = Scratchpad::new("pad-1").expect("an id");
+    let (letting, through) = async_channel::unbounded::<()>();
+    let (answered, answers) = async_channel::unbounded::<()>();
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("pad")]),
+            PadJob::New => {
+                let _ = through.recv_blocking();
+                let _ = answered.send_blocking(());
+                PadAnswer::Created(Ok(made.clone()))
+            }
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open {
+                scratchpad,
+                holding,
+            } => PadAnswer::Opened {
+                holding,
+                scratchpad: pad_on_disk(scratchpad),
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+    let mut pad = roots.pad;
+
+    pump(&mut test, |_| pad.peek().state().opened());
+    while asks.try_recv().is_ok() {}
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_new_pad(&jobs);
+    letting.send_blocking(()).expect("the worker is there");
+    answers.recv_blocking().expect("the worker answered");
+    // The answer on its way back, and then the state a keystroke leaves for one pass:
+    // the model edited and the effect that writes it out not yet run. Both wake at the
+    // next turn, the answer first.
+    std::thread::sleep(Duration::from_millis(50));
+    pad.write().state_mut().scratchpad.source = "// edited\n".to_owned();
+    pump(&mut test, |_| {
+        pad.peek().shown().as_str() == "pad-1" && pad.peek().state().opened()
+    });
+
+    assert_eq!(asks.try_recv(), Ok(Asked::New));
+    assert_eq!(asks.try_recv(), Ok(Asked::Save("// edited\n".to_owned())));
+    assert_eq!(asks.try_recv(), Ok(Asked::Open("pad-1".to_owned())));
+}
+
 /// Why a New or a Delete did not happen is kept by the app, and the newer answer replaces
 /// the older sentence: the pane it is drawn in is a dock tab that is unmounted while the
 /// reader is elsewhere, so a refusal that arrived meanwhile still has to be there when

@@ -404,8 +404,10 @@ what makes the reader's own switch draw the right text.
 **Switching pads writes the one being left before it opens the next, and through the worker.** The
 jobs are one ordered queue, so a save queued ahead of the arriving pad's read lands ahead of it. A
 save left to the effect would not: the effect is woken by the change it writes out, so a click
-landing between the two would leave that change unwritten. `Pads::unsaved_change` is the one
-comparison behind every caller: the save effect, `show_pad` for the pad being left, the mirror
+landing between the two would leave that change unwritten. A pad made by New is a switch too, and
+its answer writes the pad it replaces on screen the same way before showing the new one.
+`Pads::unsaved_change` is the one comparison behind every caller: the save effect, `show_pad` and
+New's answer for the pad being left, the mirror
 of the editor into the model, which saves an edit under the guard it writes it with, and a build's
 answer, which saves the artifact it names -- the reader may be in another pad by then, and the
 effect saves only the pad on screen. Every piece
