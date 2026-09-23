@@ -809,6 +809,11 @@ and that note arriving in either order, and the file on screen when the control 
 is asked in exactly that beat. Asking again only where the server has been busy and gone
 quiet is what keeps one that goes on refusing from being asked in a loop.
 
+A hover keeps them apart too (`Hover::refused`), for the same reason: filed as an empty
+answer, a refusal kept the name from being asked about until the pointer had been on some
+other name first. It is put again once the pointer moves on the name and rests there once
+more, and not while it rests still, which would be asking in a loop.
+
 Only `Broken` still says the server stopped answering, which is the one thing the control
 has to show.
 

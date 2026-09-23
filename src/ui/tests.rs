@@ -9603,6 +9603,40 @@ fn hover_says_whether_a_write_is_owed() {
     assert!(!hover.gone(), "an emptied state still held something");
 }
 
+/// **A refused hover is asked again once the pointer rests on the name again**, where an
+/// empty answer is not. rust-analyzer refuses while it is still reading the project; held
+/// as an empty answer, the refusal kept the name from being asked about until the pointer
+/// had been on some other name first.
+#[test]
+fn a_refused_hover_is_asked_again_when_the_pointer_rests_once_more() {
+    let mut hover = Hover::default();
+    let at = hovered_name(3).at;
+
+    hover.enter(hovered_name(3));
+    assert!(hover.resting_on(at.clone()));
+    hover.asking(ticket(1, 1), at.clone());
+    assert!(hover.refused(ticket(1, 1)), "the refusal was not taken");
+    // Held still, the pointer is not a question asked in a loop.
+    assert_eq!(hover.resting(1), None, "a refusal was asked again at once");
+
+    // Off the name and back onto it.
+    hover.left_name();
+    hover.enter(hovered_name(3));
+    assert_eq!(
+        hover.resting(1),
+        Some(&at),
+        "the name was not asked about again after a refusal"
+    );
+
+    // An empty answer is the server's answer, and is not asked again.
+    assert!(hover.resting_on(at.clone()));
+    hover.asking(ticket(1, 2), at.clone());
+    assert!(hover.answer(ticket(1, 2), None));
+    hover.left_name();
+    hover.enter(hovered_name(3));
+    assert_eq!(hover.resting(1), None, "an empty answer was asked again");
+}
+
 /// A name for the pointer to be on: the same place drawn in the same box, so two calls
 /// with the same column are the same name.
 fn hovered_name(column: usize) -> Pointed {

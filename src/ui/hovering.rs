@@ -68,8 +68,13 @@ pub(crate) struct Hover {
     /// waiting for is an answer to nobody -- and here it also keeps a second question
     /// about the one name from going out.
     asked: Option<(Ticket, Lookup)>,
-    /// What came back, and which place it was about.
-    said: Option<(Lookup, Arc<str>)>,
+    /// What came back, and which place it was about: `None` where the server refused.
+    ///
+    /// **A refusal is not an answer**, as it is not for a file's links (`Linked`): the
+    /// server may say the same name is nothing while it is still reading the project. So
+    /// it is held only to keep the pointer resting still from asking in a loop, and the
+    /// pointer moving on the name and resting again asks anew ([`Hover::enter`]).
+    said: Option<(Lookup, Option<Arc<str>>)>,
 }
 
 impl Hover {
@@ -84,7 +89,10 @@ impl Hover {
         // what was asked about the last one goes here rather than only in `gone`. The wait
         // goes with it: it was for the name the pointer has left.
         let moved = held.as_ref().map(|about| &about.pointed.at) != Some(&pointed.at);
-        if moved {
+        // A refusal about this name goes too at any move, so the pointer resting again
+        // asks again. An answer, even an empty one, stays: it is what the server says.
+        let refused = matches!(&self.said, Some((_, None)));
+        if moved || refused {
             self.asked = None;
             self.said = None;
         }
@@ -211,7 +219,26 @@ impl Hover {
         // A name the server has nothing to say about is a name with no box, and not a
         // question to ask again: `pending` is answered by the empty answer as much as by
         // a full one.
-        self.said = Some((about, Arc::from(said.unwrap_or_default())));
+        self.said = Some((about, Some(Arc::from(said.unwrap_or_default()))));
+        true
+    }
+
+    /// The server refused to answer the question `ticket`. Nothing is drawn, and the
+    /// question is put again once the pointer moves on the name and rests there once more.
+    /// Whether anything changed, so the caller writes only then.
+    pub(crate) fn refused(&mut self, ticket: Ticket) -> bool {
+        let Some((asked, about)) = self.asked.take() else {
+            return false;
+        };
+        if asked != ticket {
+            self.asked = Some((asked, about));
+            return false;
+        }
+        self.said = Some((about, None));
+        // The wait that asked is over, so the next rest arms one of its own.
+        if let Some(pointing) = &mut self.about {
+            pointing.resting = false;
+        }
         true
     }
 
@@ -226,6 +253,7 @@ impl Hover {
             .said
             .as_ref()
             .filter(|(at, _)| *at == about.pointed.at)?;
+        let said = said.as_ref()?;
         (!said.is_empty()).then_some((&about.pointed, said))
     }
 }

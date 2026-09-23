@@ -760,15 +760,16 @@ pub(crate) fn use_language_with(
                     }
                     Err(failure) => failure,
                 };
-                // The question is dropped either way: a box that stayed asked would keep
-                // the name from ever being asked about again.
-                write_if(hover, |waiting| waiting.answer(ticket, None));
                 // A refusal is no answer, as it is for a place: the server is answering,
                 // and the pointer resting on the name again asks anew.
                 if matches!(why, lsp::Failure::Refused { .. }) {
                     log::warn!("the language server refused a hover: {why}");
+                    write_if(hover, |waiting| waiting.refused(ticket));
                     return;
                 }
+                // The question is dropped: a box that stayed asked would keep the name
+                // from ever being asked about again.
+                write_if(hover, |waiting| waiting.answer(ticket, None));
                 write_if(language, |held| held.failed(ticket.run, why.to_string()));
             }
             LspAnswer::Answered { ticket, reply } => {
