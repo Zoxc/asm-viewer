@@ -763,7 +763,8 @@ effect writes only then, and not a hand-rolled copy of them. It is provided at t
 bar is mounted at most once, so it is the same one state either way, and at the root a test can
 read what the bar still holds a place for, which a component's own state gives nobody. The row's
 own measurement puts a shorter bar back inside its end, `scroll_by` clamping only as it moves, so a
-closed tab no longer leaves empty ground past the last chip. And freya's `ScrollController` was
+closed tab no longer leaves empty ground past the last chip; the strip's own measurement does the
+same for a widened window. And freya's `ScrollController` was
 tried first and given up: handed to a view from outside it only arrives when something else
 happens to re-render that view, and reading its
 position from an effect is a loop, since a write notifies every reader and the callback it reads

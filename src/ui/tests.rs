@@ -2319,8 +2319,9 @@ fn bar_rules() -> (TestingRunner, Bar) {
 
 /// The strip is never scrolled past either end: the first chip does not leave the left
 /// edge and the last does not leave the right. The floor is the chips against the window,
-/// so a bar that has lost one has to be put back inside its own end -- `scroll_by` clamps
-/// only as it moves, which leaves measuring the row to do it.
+/// so a bar that has lost one, or a strip that has widened, has to be put back inside its
+/// own end -- `scroll_by` clamps only as it moves, which leaves the two measurements to do
+/// it.
 #[test]
 fn the_strip_never_scrolls_past_either_end() {
     let (_test, bar) = bar_rules();
@@ -2358,6 +2359,17 @@ fn the_strip_never_scrolls_past_either_end() {
     // And one that now fits the window has no floor below nothing at all.
     bar.content_sized(120.0);
     assert_eq!(*bar.offset.peek(), 0.0, "a bar that fits was left slid");
+
+    // A wider window raises the floor as a shorter bar does, and measuring the strip is
+    // what puts the offset back.
+    bar.content_sized(500.0);
+    bar.scroll_by(-1000.0);
+    bar.viewport_sized(0.0, 400.0);
+    assert_eq!(
+        *bar.offset.peek(),
+        -100.0,
+        "a wider strip was left scrolled past its own end"
+    );
 }
 
 /// A chip that changed width or moved along the row is the bar taking a new shape; the

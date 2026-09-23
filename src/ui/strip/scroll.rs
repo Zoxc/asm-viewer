@@ -93,7 +93,10 @@ impl Bar {
     }
 
     /// Where the strip is cut off, which is what a chip is measured against. A strip of
-    /// another size is a new shape: what was in view was in view of the old one.
+    /// another size is a new shape: what was in view was in view of the old one. A wider
+    /// strip also raises the floor, so it takes the same scroll of nothing as
+    /// [`Bar::content_sized`]; otherwise widening the window leaves empty ground past the
+    /// last chip.
     pub(crate) fn viewport_sized(self, min_x: f32, max_x: f32) {
         let at = Some((min_x, max_x));
         if *self.viewport.peek() == at {
@@ -101,6 +104,7 @@ impl Bar {
         }
         let mut viewport = self.viewport;
         viewport.set(at);
+        self.scroll_by(0.0);
         self.reshaped();
     }
 
