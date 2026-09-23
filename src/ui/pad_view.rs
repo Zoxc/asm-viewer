@@ -939,11 +939,13 @@ impl Component for PadList {
             .child(section_heading(
                 "Scratchpads",
                 Some(
-                    Button::new()
-                        .compact()
-                        .on_press(move |_| request_new_pad(&jobs))
-                        .child("New")
-                        .into_element(),
+                    HeadingButton {
+                        icon: ("plus", lucide::plus()),
+                        text: "New",
+                        live: true,
+                        press: EventHandler::new(move |_| request_new_pad(&jobs)),
+                    }
+                    .into_element(),
                 ),
             ))
             // A plain `ScrollView` and not a `VirtualScrollView`: these are one-label rows
@@ -992,33 +994,36 @@ impl Component for PadHeader {
                 rect()
                     .horizontal()
                     .cross_align(Alignment::Center)
-                    .spacing(6.0)
-                    .child(
-                        Button::new()
-                            // "Two builds cannot be started at once" and "nothing is
-                            // written until the disk has been read", on the control as
-                            // well as in `request_build`.
-                            .enabled(opened && !building)
-                            .on_press(move |_| request_build(pad, &jobs))
-                            .child(match building {
-                                true => cargo::BUILDING,
-                                false => "Build",
-                            }),
-                    )
-                    .child(
-                        Button::new()
-                            // "Nothing runs while a build does", on the control as well as
-                            // in `request_run`: cargo is writing over the executable.
-                            .enabled(running || (runnable && !building))
-                            .on_press(move |_| match running {
-                                true => stop_run(pad, &run_jobs),
-                                false => request_run(pad, &run_jobs),
-                            })
-                            .child(match running {
-                                true => "Stop",
-                                false => "Run",
-                            }),
-                    )
+                    .spacing(2.0)
+                    .child(HeadingButton {
+                        icon: ("hammer", lucide::hammer()),
+                        text: match building {
+                            true => cargo::BUILDING,
+                            false => "Build",
+                        },
+                        // "Two builds cannot be started at once" and "nothing is written
+                        // until the disk has been read", on the control as well as in
+                        // `request_build`.
+                        live: opened && !building,
+                        press: EventHandler::new(move |_| request_build(pad, &jobs)),
+                    })
+                    .child(HeadingButton {
+                        icon: match running {
+                            true => ("square", lucide::square()),
+                            false => ("play", lucide::play()),
+                        },
+                        text: match running {
+                            true => "Stop",
+                            false => "Run",
+                        },
+                        // "Nothing runs while a build does", on the control as well as in
+                        // `request_run`: cargo is writing over the executable.
+                        live: running || (runnable && !building),
+                        press: EventHandler::new(move |_| match running {
+                            true => stop_run(pad, &run_jobs),
+                            false => request_run(pad, &run_jobs),
+                        }),
+                    })
                     // The control that puts the listing away, where a document's sits on
                     // the leading pane's bar: this heading row is the pad's own strip of
                     // controls and the one thing here that is always up, the editor having
@@ -1127,13 +1132,15 @@ impl Component for DependencyList {
         section(
             "Dependencies",
             Some(
-                Button::new()
-                    .compact()
-                    .on_press(move |_| {
+                HeadingButton {
+                    icon: ("plus", lucide::plus()),
+                    text: "Add",
+                    live: true,
+                    press: EventHandler::new(move |_| {
                         pad.write().state_mut().scratchpad.add_dependency("", "");
-                    })
-                    .child("Add")
-                    .into_element(),
+                    }),
+                }
+                .into_element(),
             ),
         )
         .child(rows_or(rows, "No crates asked for"))
