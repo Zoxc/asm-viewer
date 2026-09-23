@@ -84,8 +84,15 @@ pub(super) struct Saves {
     /// The same list as `written.binaries` in every state but one: while a load is in
     /// flight, the app holds what has landed so far while the file names the whole list.
     /// A write that is not about the binaries writes the file's list back rather than
-    /// this one, so a rename in that window cannot forget them.
+    /// this one, so a rename in that window cannot forget them. The file's list also keeps
+    /// the `unheld` ones, which this never has.
     binaries: Vec<PathBuf>,
+    /// The binaries the file named when the project was opened that the app has not held
+    /// since: the ones the load produced nothing for, because they were missing, unreadable
+    /// or not an object at all. Not the reader's to have removed, so a write about the
+    /// binaries puts them back where they were in the list. One leaves this set only by
+    /// being held, after which closing it is a removal like any other.
+    unheld: Vec<PathBuf>,
     /// The session as last written, empty for `binaries`' reason.
     session: Session,
     /// What `session.toml` holds. The baseline above only becomes that once something has
@@ -125,6 +132,7 @@ impl Saves {
         self.open = Some(path);
         self.written = project.clone();
         self.binaries = Vec::new();
+        self.unheld = project.binaries.clone();
         // The id and the agreement, and nothing else. Both are restored *synchronously*
         // -- the one from the file being opened, the other into `Proj` beside it -- so a
         // baseline without them would read the state the app boots into as a change.
@@ -216,6 +224,8 @@ impl Saves {
             id: self.written.id,
             ..session
         };
+        // Not a baseline: what the app has held, mid-load or not.
+        self.unheld.retain(|path| !binaries.contains(path));
         let binaries_changed = !loading && self.binaries != binaries;
         let details_changed = self.written.details != *details;
         let bookmarks_changed = self.written.bookmarks != bookmarks;
@@ -253,7 +263,7 @@ impl Saves {
                 // A write that is not about the binaries keeps the ones already in the
                 // file; see [`Saves::binaries`].
                 binaries: match binaries_changed {
-                    true => binaries.to_vec(),
+                    true => self.with_unheld(binaries),
                     false => self.written.binaries.clone(),
                 },
                 bookmarks: bookmarks.to_vec(),
@@ -261,6 +271,22 @@ impl Saves {
             binaries_changed,
             session: carried,
         })
+    }
+
+    /// `binaries` with each `unheld` path put back after the one before it in the file,
+    /// or first where none of those is held.
+    fn with_unheld(&self, binaries: &[PathBuf]) -> Vec<PathBuf> {
+        let mut list = binaries.to_vec();
+        let mut at = 0;
+        for path in &self.written.binaries {
+            if self.unheld.contains(path) {
+                list.insert(at, path.clone());
+                at += 1;
+            } else if let Some(held) = list.iter().position(|other| other == path) {
+                at = held + 1;
+            }
+        }
+        list
     }
 
     /// Take whatever was recorded but not written, or `None` when the two already agree.
@@ -284,11 +310,17 @@ impl Saves {
 
     /// Note that `project` reached `project.toml`: it is now what the file holds. The
     /// app's own list of binaries moves only when the change was to the binaries; any
-    /// other write put back the list the file already held.
+    /// other write put back the list the file already held. It moves to the list written
+    /// less the `unheld` ones, which is the list the app held.
     pub(super) fn wrote_project(&mut self, project: &Project, binaries_changed: bool) {
         self.written = project.clone();
         if binaries_changed {
-            self.binaries = project.binaries.clone();
+            self.binaries = project
+                .binaries
+                .iter()
+                .filter(|path| !self.unheld.contains(path))
+                .cloned()
+                .collect();
         }
     }
 

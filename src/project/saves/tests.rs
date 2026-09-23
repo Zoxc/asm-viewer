@@ -213,13 +213,13 @@ fn a_record_keeps_the_directory_the_project_was_given() {
         &Session::default(),
     );
 
-    let (project, _) = written(&mut saves, &["/tmp/lib.a"], None).expect("a write");
+    let (project, _) = written(&mut saves, &["/tmp/vmlinux", "/tmp/lib.a"], None).expect("a write");
     assert_eq!(
         project.details.directory,
         Some(PathBuf::from("/src/kernel"))
     );
     // And the binaries are the ones the app is showing: that half *is* derived.
-    assert_eq!(project.binaries, paths(&["/tmp/lib.a"]));
+    assert_eq!(project.binaries, paths(&["/tmp/vmlinux", "/tmp/lib.a"]));
 }
 
 /// A reopen seeds what the user *said* and not the contents: the directory is restored
@@ -301,6 +301,50 @@ fn a_binary_landing_mid_load_is_not_written() {
     .expect("a write");
     assert_eq!(project, loaded);
     assert_eq!(session, Some(session_with(Some("a.o"))));
+}
+
+/// A binary the file names that the load produced nothing for -- deleted, being relinked,
+/// never built on this machine -- is not one the reader removed. The next write about the
+/// binaries keeps it where it was in the list, and it goes only once the app has held it.
+#[test]
+fn a_binary_that_did_not_load_stays_in_the_file() {
+    let mut saves = Saves::default();
+    let loaded = Project {
+        id: None,
+        details: Details::default(),
+        binaries: paths(&["/tmp/tool", "/tmp/app", "/tmp/lib.a"]),
+        bookmarks: Vec::new(),
+    };
+    saves.opened(
+        &Store::at("/state"),
+        kept_at("kernel-1"),
+        &loaded,
+        &Session::default(),
+    );
+
+    // The load ends with `tool` missing. What is written names all three.
+    let (project, _) = written(&mut saves, &["/tmp/app", "/tmp/lib.a"], None).expect("a write");
+    assert_eq!(project.binaries, loaded.binaries);
+
+    // Opening another adds it and still keeps `tool`; closing one the app held drops it.
+    let (project, _) =
+        written(&mut saves, &["/tmp/app", "/tmp/lib.a", "/tmp/x.o"], None).expect("a write");
+    assert_eq!(
+        project.binaries,
+        paths(&["/tmp/tool", "/tmp/app", "/tmp/lib.a", "/tmp/x.o"])
+    );
+    let (project, _) = written(&mut saves, &["/tmp/lib.a", "/tmp/x.o"], None).expect("a write");
+    assert_eq!(
+        project.binaries,
+        paths(&["/tmp/tool", "/tmp/lib.a", "/tmp/x.o"])
+    );
+    // And the same state again is no change.
+    assert_eq!(written(&mut saves, &["/tmp/lib.a", "/tmp/x.o"], None), None);
+
+    // Once `tool` has been held, closing it is the reader's and it goes.
+    written(&mut saves, &["/tmp/lib.a", "/tmp/x.o", "/tmp/tool"], None);
+    let (project, _) = written(&mut saves, &["/tmp/lib.a", "/tmp/x.o"], None).expect("a write");
+    assert_eq!(project.binaries, paths(&["/tmp/lib.a", "/tmp/x.o"]));
 }
 
 /// The session is held back mid-load for the binaries' reason and one more: a session is
@@ -554,15 +598,17 @@ fn a_detail_changed_before_the_binaries_have_loaded_does_not_forget_them() {
     assert_eq!(project.binaries, loaded.binaries);
 
     // Once the parse lands the write *is* about the binaries, which is the one kind that
-    // may replace the list.
+    // may replace the list: closing one the parse opened drops it.
     let decided = saves.record(
         &saves.written.details.clone(),
-        &paths(&["/tmp/vmlinux"]),
+        &loaded.binaries,
         false,
         &[],
         Session::default(),
     );
-    let written = landed(&mut saves, decided).expect("a write");
+    landed(&mut saves, decided).expect("a write");
+    let written =
+        recorded(&mut saves, paths(&["/tmp/vmlinux"]), Session::default()).expect("a write");
     assert_eq!(written.0.binaries, paths(&["/tmp/vmlinux"]));
     // Closing the last one is still a real change and still empties the file.
     let written = recorded(&mut saves, Vec::new(), Session::default()).expect("a write");
