@@ -79,6 +79,36 @@ fn putting_a_project_somewhere_carries_the_id_and_the_session() {
     );
 }
 
+/// Saving a project into the file it is already in, under either spelling, leaves both
+/// files there: a move takes away the two it came from, and here those are the two it wrote.
+#[test]
+fn putting_a_project_where_it_already_is_keeps_it() {
+    let _saves = using_saves();
+    let base = directory();
+    let store = Store::at(&base);
+    let path = start_new(&store).expect("a project is started");
+    record(
+        &Details::default(),
+        &[],
+        false,
+        &[],
+        session_with(Some("a.o")),
+    );
+
+    let name = path.file_name().expect("the project's name");
+    let spelled = store.projects().join("..").join(PROJECTS_DIR).join(name);
+    for to in [path.clone(), spelled] {
+        assert!(put_in(&store, &to, Put::Move), "the project was written");
+        let (_, session) = load_project(&store, &path).expect("the project is still there");
+        assert_eq!(
+            session.active,
+            Some(saved_object("a.o")),
+            "{}",
+            to.display()
+        );
+    }
+}
+
 /// **Nothing makes a project but the reader asking for one.** With none open the two write
 /// paths do nothing at all: no file is claimed and none is remembered. The app used to claim
 /// one on the first write that had anything to say, which turned arranging the window, or

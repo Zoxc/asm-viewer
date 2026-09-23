@@ -188,7 +188,9 @@ re-read would hand it to its new place with no id, and so with no session either
 `Put::Copy` is Save as:
 a copy under a **new id**, because there are two projects afterwards and one id across both
 would mean each matched the other's session. `Put::Move` is an unsaved project's Save: the id
-stays, and the two files it came from go. `Saves::moved_to` then moves the id and nothing
+stays, and the two files it came from go -- unless they are the two it just wrote, which a Save
+dialog pointed at the project's own file makes them. That is asked of the canonical paths as well
+as the spellings, so `projects/../projects/3.avproj` is the same file too. `Saves::moved_to` then moves the id and nothing
 else -- only *where* the project is has changed, so every other baseline still describes what
 the app is holding.
 

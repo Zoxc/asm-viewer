@@ -221,7 +221,9 @@ pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
     // the log and nothing more: the project itself is already where the reader asked.
     write_or_warn(&session_beside(path), |path| session.save_to(store, path));
 
-    if put == Put::Move {
+    // A move onto the file the project is already in has nothing to leave behind, and the
+    // two files it would remove are the two just written.
+    if put == Put::Move && !same_file(&from, path) {
         for leaving in [from.clone(), session_beside(&from)] {
             if let Err(error) = fs::remove_file(&leaving) {
                 // The copy is made and the app has moved on; a file left behind is untidy
@@ -235,6 +237,17 @@ pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
     saves.moved_to(path.to_path_buf(), id);
     log::debug!("the project is now {}", path.display());
     true
+}
+
+/// Whether two paths name one file: the same spelling, or two the system resolves to one.
+fn same_file(one: &Path, other: &Path) -> bool {
+    if one == other {
+        return true;
+    }
+    match (fs::canonicalize(one), fs::canonicalize(other)) {
+        (Ok(one), Ok(other)) => one == other,
+        _ => false,
+    }
 }
 
 /// Leave the project the app is in, with nothing open afterwards. What is pending is
