@@ -114,8 +114,11 @@ row would otherwise silently win. A scratchpad with a bad row **refuses to write
 generating a manifest that differs from what is on screen. **Building is blocking and belongs on a worker thread**, exactly as `open_files`
 is. Running cargo and reading what it said is `src/cargo.rs`, shared with the project's own build
 (`agents/Sidebar.md`); `build_in` writes the package, calls it, and narrows what comes back to the
-one binary a generated package has. The artifact path is what cargo *named*, never
-`target/debug/<crate>` derived from the name and the profile, which a `CARGO_TARGET_DIR`, a config
+one binary a generated package has. A pad is always built in `release`: its code is read to see
+what the optimiser made of it. `release` carries no debug info by default, so the generated
+manifest sets `debug = "line-tables-only"` there. That is all the source side needs, and it is
+cheaper than full debug info. The artifact path is what cargo *named*, never
+`target/release/<crate>` derived from the name and the profile, which a `CARGO_TARGET_DIR`, a config
 above the directory or an executable suffix each make silently wrong. Turning that stream into an
 answer is a pure function of cargo's stdout, stderr and exit status, which is what lets a failed
 build be a test over a canned stream. Three answers, not two: the compiler said no (with cargo's own
@@ -187,7 +190,7 @@ that is accepted. **A program's output does not**, which is why a pad's run is n
 
 **What a build made is written into the package, so a pad opens on its program.** Nothing the
 app holds about a build survives a restart, and the artifact's path may never be derived --
-`target/debug/<id>` is silently wrong beneath a `CARGO_TARGET_DIR`, a config above the directory,
+`target/release/<id>` is silently wrong beneath a `CARGO_TARGET_DIR`, a config above the directory,
 or an executable suffix -- so what cargo *named* is kept, under `[package.metadata]` beside the
 pad's own name. That keeps "the package is the storage": nothing describes a pad outside its
 directory and `load_from` is still `write_to`'s inverse. Beside the path goes the **digest** of

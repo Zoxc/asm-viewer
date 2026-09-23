@@ -28,7 +28,7 @@ fn dependencies<N: Into<String>, V: Into<String>>(
 
 /// The whole generated manifest, asserted as text rather than as a value: cargo reads
 /// this file, so what it says is what matters -- the sorting, the trimming, and
-/// `[workspace]` being there at all.
+/// `[profile.release]` and `[workspace]` being there at all.
 #[test]
 fn a_package_is_a_manifest_and_a_main() {
     let mut scratchpad = scratchpad();
@@ -54,6 +54,9 @@ name = \"a name with spaces\"
 [dependencies]
 anyhow = \"1.0.86\"
 rand = \"0.8\"
+
+[profile.release]
+debug = \"line-tables-only\"
 
 [workspace]
 "

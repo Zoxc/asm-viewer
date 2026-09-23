@@ -197,7 +197,7 @@ pub struct Scratchpad {
     ///
     /// It is in the package like everything else here, under `[package.metadata]`, so
     /// `load_from` stays the exact inverse of `write_to` and nothing describes a pad
-    /// beside its own directory. The **path** and not a derivation of it: `target/debug/`
+    /// beside its own directory. The **path** and not a derivation of it: `target/release/`
     /// under the package is silently wrong beneath a `CARGO_TARGET_DIR`, a config above
     /// the directory, or an executable suffix, so what is kept is what cargo named
     /// ([`cargo::Artifact`]).
@@ -536,7 +536,8 @@ impl Scratchpad {
     }
 
     /// The `Cargo.toml` this scratchpad generates, as text. The empty `[workspace]` makes
-    /// the package its own workspace root wherever the state directory turns out to be.
+    /// the package its own workspace root wherever the state directory turns out to be,
+    /// which is also what makes its `[profile.release]` the one cargo reads.
     pub fn manifest(&self) -> Result<String, Failure> {
         let problems = self.problems().len();
         if problems > 0 {
@@ -560,6 +561,7 @@ impl Scratchpad {
                 .iter()
                 .map(|row| (row.name().to_owned(), row.version().to_owned()))
                 .collect(),
+            profile: Profiles::default(),
             workspace: Workspace {},
         };
 
@@ -644,9 +646,10 @@ impl Scratchpad {
     pub fn build_in(&self, directory: &Path) -> Result<Build, Failure> {
         self.write_to(directory)?;
 
-        // Always `dev`: a scratchpad is compiled to be read and run, not to be measured,
-        // and the wait is the reader's.
-        let run = cargo::run(directory, cargo::Profile::Debug);
+        // Always `release`: a reader looking at a pad's code is asking what the optimiser
+        // made of it. The manifest gives that profile line tables, which the source side
+        // needs.
+        let run = cargo::run(directory, cargo::Profile::Release);
         let executable = match &run {
             // The generated package has exactly one binary, so the one executable cargo
             // named for it is this pad's. A build that succeeded and named none is
@@ -880,10 +883,35 @@ struct Manifest {
     package: Package,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     dependencies: BTreeMap<String, String>,
+    /// Written the same every time; `default` on the way back in, like `workspace`.
+    #[serde(default)]
+    profile: Profiles,
     /// `default` on the way back in, since a hand-edited scratchpad that dropped it is
     /// still a scratchpad.
     #[serde(default)]
     workspace: Workspace,
+}
+
+/// `[profile.release]`: the profile a pad is built in, with the line tables its source side
+/// is drawn from and nothing more of the debug info.
+#[derive(Serialize, Deserialize)]
+struct Profiles {
+    release: Release,
+}
+
+impl Default for Profiles {
+    fn default() -> Self {
+        Profiles {
+            release: Release {
+                debug: "line-tables-only".to_owned(),
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Release {
+    debug: String,
 }
 
 /// `metadata` is last because it is a table and the three above it are not — the field
