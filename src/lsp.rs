@@ -1468,7 +1468,12 @@ fn places(answer: &Value) -> Vec<Place<Wire>> {
             .get("uri")
             .or_else(|| value.get("targetUri"))
             .and_then(Value::as_str)?;
-        let range = value.get("range").or_else(|| value.get("targetRange"))?;
+        // A link's name is `targetSelectionRange`. Its `targetRange` is the whole item,
+        // doc comment and attributes included, whose first line is not the name's.
+        let range = value
+            .get("range")
+            .or_else(|| value.get("targetSelectionRange"))
+            .or_else(|| value.get("targetRange"))?;
         let (line, columns) = spanned(range)?;
         Some(Place {
             file: path_of(uri)?,

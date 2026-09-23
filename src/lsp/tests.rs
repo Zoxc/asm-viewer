@@ -1604,3 +1604,28 @@ fn a_handshake_with_a_program_that_exits_at_once_says_it_would_not_start() {
         "a program that ended was reported as {failure}"
     );
 }
+
+/// A link names the item's name by its selection range: its target range is the whole item,
+/// doc comment and attributes included, which starts lines above the name.
+#[test]
+fn a_link_lands_on_the_name_and_not_the_start_of_the_item() {
+    let link = json!({
+        "targetUri": "file:///p/src/main.rs",
+        "targetRange": {
+            "start": { "line": 2, "character": 0 },
+            "end": { "line": 9, "character": 1 },
+        },
+        "targetSelectionRange": {
+            "start": { "line": 5, "character": 3 },
+            "end": { "line": 5, "character": 7 },
+        },
+    });
+    assert_eq!(
+        places(&json!([link])),
+        vec![Place {
+            file: PathBuf::from("/p/src/main.rs"),
+            line: 6,
+            columns: Wire::of(3..7),
+        }]
+    );
+}
