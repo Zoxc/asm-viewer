@@ -10,7 +10,7 @@ use crate::{
 };
 use object::{
     BinaryFormat, ExportTarget, Object as _, ObjectKind, ObjectSection, ObjectSymbol, SectionIndex,
-    SectionKind, SymbolIndex, SymbolKind,
+    SectionKind, SymbolIndex, SymbolKind, SymbolSection,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -354,7 +354,8 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
 /// A symbol whose name will not read is a place in the file all the same. It is set aside
 /// until the rest have claimed their addresses ([`SymbolTable::unnamed`]). An undefined one
 /// is an import and no place in the file: `object` calls an undefined ELF `STT_FUNC` and a
-/// COFF external of function type text too ([`SymbolTable::imports`]).
+/// COFF external of function type text too ([`SymbolTable::imports`]). So is a COFF weak
+/// external ([`weak_external`]).
 fn symbol_table(file: &object::File<'_>) -> SymbolTable {
     let mut table = SymbolTable {
         named: Vec::new(),
@@ -367,7 +368,7 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
         if symbol.kind() != SymbolKind::Text {
             continue;
         }
-        if symbol.is_undefined() {
+        if symbol.is_undefined() || weak_external(file, &symbol) {
             if let Ok(name) = symbol.name_bytes() {
                 let name = String::from_utf8_lossy(name).into_owned();
                 table.imports.push(import(name, symbol.address()));
@@ -395,6 +396,16 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
         }
     }
     table
+}
+
+/// Whether `symbol` is a COFF weak external with no section. `object` calls one of function
+/// type text, and neither undefined nor in a section, but the linker binds it to a
+/// definition elsewhere or to the default its auxiliary record names: it has no code of its
+/// own, and as a symbol it would be a row at address 0.
+fn weak_external(file: &object::File<'_>, symbol: &object::Symbol<'_, '_>) -> bool {
+    matches!(file.format(), BinaryFormat::Coff | BinaryFormat::Pe)
+        && symbol.is_weak()
+        && symbol.section() == SymbolSection::Unknown
 }
 
 /// An import named `name` at the address a symbol table states for it, where one does.

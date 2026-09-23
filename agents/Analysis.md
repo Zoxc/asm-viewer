@@ -34,8 +34,10 @@ each path and every member is cut from it. That is the thing streaming must not 
 symbols are kept. `object` calls an undefined ELF `STT_FUNC` or COFF function text too, but it has
 no code here: as a symbol it would be a row with nothing to draw, a link a relocation resolves to,
 and an address (usually 0) that hides a nameless function there. Those go to `Object::imports`, with
-the undefined functions of `.dynsym` the symbol table did not already name. Kept too, for a **linked
-image only**, is the code it declares elsewhere (`declared_code`):
+the undefined functions of `.dynsym` the symbol table did not already name. So does a COFF weak
+external with no section, which `object` calls neither undefined nor in a section, but which the
+linker binds elsewhere or to its default all the same. Kept too, for a **linked image only**, is the
+code it declares elsewhere (`declared_code`):
 `dynamic_symbols`, `exports` and `entry`; for a PE whose `.pdb` is found beside it and matches, the
 **procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a nonzero length) and then its
 **publics** (`S_PUB32` flagged as code or a function), which reach the parse as one list of

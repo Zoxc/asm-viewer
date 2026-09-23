@@ -669,7 +669,50 @@ pub fn branch_to_data() -> Vec<u8> {
 /// `caller` = `call rel32; ret`, relocated against `printf`, an undefined `STT_FUNC`: an
 /// import, which the file calls and does not define.
 pub fn call_to_import() -> Vec<u8> {
-    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    call_to(
+        BinaryFormat::Elf,
+        write::Symbol {
+            name: b"printf".to_vec(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Undefined,
+            // The writer would make it `STT_NOTYPE`, and a linker writes `STB_GLOBAL` `STT_FUNC`.
+            flags: SymbolFlags::Elf {
+                st_info: object::elf::SymbolInfo::new(
+                    object::elf::STB_GLOBAL,
+                    object::elf::STT_FUNC,
+                ),
+                st_other: object::elf::SymbolOther(0),
+            },
+        },
+    )
+}
+
+/// The same call in a COFF object, relocated against `hook`, a weak external of function
+/// type with section number 0. The writer puts the weak external's default, a data symbol
+/// at an absolute 0, just before it.
+pub fn call_to_weak_external() -> Vec<u8> {
+    call_to(
+        BinaryFormat::Coff,
+        write::Symbol {
+            name: b"hook".to_vec(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: true,
+            section: write::SymbolSection::Undefined,
+            flags: SymbolFlags::None,
+        },
+    )
+}
+
+/// `caller` = `call rel32; ret` in an x86-64 object of `format`, relocated against `callee`.
+fn call_to(format: BinaryFormat, callee: write::Symbol) -> Vec<u8> {
+    let mut obj = write::Object::new(format, Architecture::X86_64, Endianness::Little);
 
     let text = obj.section_id(write::StandardSection::Text);
     let offset = obj.append_section_data(text, &[0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3], 1);
@@ -683,26 +726,13 @@ pub fn call_to_import() -> Vec<u8> {
         section: write::SymbolSection::Section(text),
         flags: SymbolFlags::None,
     });
-    let printf = obj.add_symbol(write::Symbol {
-        name: b"printf".to_vec(),
-        value: 0,
-        size: 0,
-        kind: SymbolKind::Text,
-        scope: SymbolScope::Linkage,
-        weak: false,
-        section: write::SymbolSection::Undefined,
-        // The writer would make it `STT_NOTYPE`, and a linker writes `STB_GLOBAL` `STT_FUNC`.
-        flags: SymbolFlags::Elf {
-            st_info: object::elf::SymbolInfo::new(object::elf::STB_GLOBAL, object::elf::STT_FUNC),
-            st_other: object::elf::SymbolOther(0),
-        },
-    });
+    let callee = obj.add_symbol(callee);
 
     obj.add_relocation(
         text,
         write::Relocation {
             offset: offset + 1,
-            symbol: printf,
+            symbol: callee,
             addend: -4,
             flags: RelocationFlags::Generic {
                 kind: RelocationKind::Relative,

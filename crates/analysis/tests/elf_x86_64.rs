@@ -1,13 +1,13 @@
 //! Parsing, size estimation, disassembly, relocation resolution and branch edges on
-//! hand-built x86-64 ELF relocatable objects.
+//! hand-built x86-64 ELF relocatable objects, and one COFF object with a weak external.
 
 mod common;
 
 use analysis::{Bias, Operand, SpanKind};
 use common::{
-    at, branch_to_data, call_to_import, caller_and_target, elf_x86_64, elf_x86_64_absolute,
-    goes_to, indirect_caller_and_target, names, parse, rip_relative_store_to_data, symbol, text,
-    TextRelocation, TextSymbol,
+    at, branch_to_data, call_to_import, call_to_weak_external, caller_and_target, elf_x86_64,
+    elf_x86_64_absolute, goes_to, indirect_caller_and_target, names, parse,
+    rip_relative_store_to_data, symbol, text, TextRelocation, TextSymbol,
 };
 use std::sync::Arc;
 
@@ -444,6 +444,25 @@ fn a_call_to_an_import_is_a_placeholder() {
     let imports: Vec<_> = object.imports.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(imports, ["printf"]);
     assert_eq!(object.imports[0].address, None);
+
+    let assembly = symbol(&object, "caller")
+        .assembly(&object)
+        .expect("caller disassembles");
+    assert!(matches!(
+        assembly.instructions[0].operand,
+        Some(Operand::Placeholder)
+    ));
+}
+
+#[test]
+fn a_call_to_a_weak_external_is_a_placeholder() {
+    // A COFF weak external with no section is not undefined to `object`, but it is just as
+    // much an import: the linker binds it to a definition elsewhere or to its default.
+    let object = parse(&call_to_weak_external());
+    assert_eq!(object.format, analysis::BinaryFormat::Coff);
+    assert_eq!(names(&object), ["caller"]);
+    let imports: Vec<_> = object.imports.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(imports, ["hook"]);
 
     let assembly = symbol(&object, "caller")
         .assembly(&object)
