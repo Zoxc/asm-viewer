@@ -786,8 +786,8 @@ instruction has been decoded at yet), and `Assembly::decoded` resolves them, whi
 four rules below one decision rather than one per backend. The address stays on the row afterwards,
 judged by nothing: it is the address-keyed answer a listing of a whole section wants, where whether
 the target has a row is only known once the stretch it is in has been decoded. `from`/`to` are in
-*execution* order (a backward branch has `from > to`); `first()`/`last()`/`is_backward()` sit on
-top. A **call is not an edge** even when it lands inside the symbol, because control comes straight
+*execution* order (a backward branch has `from > to`); `first()`/`last()` sit on top. A
+**call is not an edge** even when it lands inside the symbol, because control comes straight
 back. Four things are dropped rather than drawn, each of which would be a line to a place it does
 not point at: a branch out of the symbol, one landing mid-instruction, one whose displacement is a
 relocation placeholder (tested on the *raw* relocation lookup, since a branch relocated against a

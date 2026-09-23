@@ -344,8 +344,8 @@ fn a_real_loop_is_two_edges_and_the_call_between_them_is_none() {
         let mnemonic = |index: usize| assembly.instructions[index].format[0].0.trim().to_owned();
         assert_eq!(mnemonic(6), "jmp", "{name}");
         assert_eq!(mnemonic(16), "jle", "{name}");
-        assert!(!assembly.edges[0].is_backward(), "{name}");
-        assert!(assembly.edges[1].is_backward(), "{name}");
+        assert!(assembly.edges[0].to > assembly.edges[0].from, "{name}");
+        assert!(assembly.edges[1].to < assembly.edges[1].from, "{name}");
 
         // The one branch out of the function, which is also the one relocated instruction.
         assert_eq!(mnemonic(11), "call", "{name}");

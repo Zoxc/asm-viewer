@@ -447,10 +447,6 @@ impl BranchEdge {
     pub fn last(&self) -> usize {
         self.from.max(self.to)
     }
-
-    pub fn is_backward(&self) -> bool {
-        self.to < self.from
-    }
 }
 
 #[cfg(test)]

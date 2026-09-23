@@ -646,11 +646,11 @@ fn a_forward_jump_and_a_backward_conditional_are_edges() {
     assert_eq!(edges(&assembly), [(1, 3), (4, 2)]);
 
     let forward = assembly.edges[0];
-    assert!(!forward.is_backward());
+    assert!(forward.to > forward.from);
     assert_eq!((forward.first(), forward.last()), (1, 3));
 
     let backward = assembly.edges[1];
-    assert!(backward.is_backward());
+    assert!(backward.to < backward.from);
     // The span is the same whichever way the branch runs, which is what nests edges.
     assert_eq!((backward.first(), backward.last()), (2, 4));
 }
