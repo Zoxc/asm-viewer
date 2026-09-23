@@ -699,7 +699,7 @@ fn on_listing_key(
                     });
                 }
             }
-            Key::Named(NamedKey::Escape) => peel(marked, pane),
+            Key::Named(NamedKey::Escape) => peel(marked, pane, &*file),
             _ => {}
         }
     }
@@ -767,13 +767,16 @@ pub(crate) fn carried(picked: &Picked, map: impl Fn(usize) -> Option<usize>) -> 
 /// Collapse `pane`'s selection to its caret where anything is selected, the rows to the
 /// caret's row with it, and otherwise drop the run: Escape peels the selection back a
 /// layer at a time, as an editor's does, and the second press takes the place the panes
-/// point at each other through.
-fn peel(marked: State<Marks>, pane: Pane) {
+/// point at each other through. The caret left is the anchor now, so the run is read in
+/// its row's file, which `file` answers.
+fn peel(marked: State<Marks>, pane: Pane, file: impl Fn(usize) -> Option<Arc<Path>>) {
     let Some(picked) = marked.peek().of(pane).clone() else {
         return;
     };
+    let collapsed = picked.chars.collapsed();
+    let file = file(collapsed.anchor().row);
     update(marked, |marks| {
-        *marks.of_mut(pane) = (!picked.chars.is_empty())
-            .then(|| Picked::settled(picked.chars.collapsed(), picked.file, picked.owed));
+        *marks.of_mut(pane) =
+            (!picked.chars.is_empty()).then(|| Picked::settled(collapsed, file, picked.owed));
     });
 }

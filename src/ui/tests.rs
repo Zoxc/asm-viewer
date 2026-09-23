@@ -27899,6 +27899,83 @@ fn a_caret_the_keys_move_is_a_run_of_its_new_rows_file() {
     );
 }
 
+/// Escape collapses a run to its caret, which is the anchor from then on, so the run is
+/// read in the caret row's file and not in the file of the row the sweep began on.
+#[test]
+fn a_caret_escape_leaves_is_a_run_of_its_rows_file() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let mut reading = Reading::of(Some(object.clone()));
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: None,
+        window: vec![0, 1, 2],
+    };
+    let Answer::Code { decoded, code, .. } = answer(Question::Code(ask.clone())) else {
+        panic!("a window is answered with a window");
+    };
+    assert!(reading.take(&ask, code, decoded));
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let mut marked = roots.doors.marked;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(object.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+
+    let (area, _, _) = paragraphs(&test)
+        .into_iter()
+        .find(|(_, text, _)| text.starts_with("push"))
+        .expect("an instruction is drawn");
+    test.move_cursor(left_of(&area));
+    test.press_cursor(left_of(&area));
+    test.release_cursor(left_of(&area));
+    settle(&mut test);
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the press picked the row out");
+    let file = picked.file.clone().expect("the pressed row has a line");
+
+    // A run swept down from the pressed row, begun in another file.
+    let lead = Caret {
+        row: picked.chars.lead().row + 1,
+        col: 0,
+    };
+    let swept = Picked {
+        chars: picked.chars.extended(lead),
+        file: Some(Arc::from(Path::new("/elsewhere.c"))),
+        ..picked
+    };
+    marked.set(Marks {
+        assembly: Some(swept),
+        source: None,
+    });
+    settle(&mut test);
+    test.press_key(Key::Named(NamedKey::Escape));
+    settle(&mut test);
+    let peeled = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("one Escape keeps the caret");
+    assert_eq!(peeled.chars.rows(), lead.row..=lead.row);
+    assert_eq!(
+        peeled.file.as_ref(),
+        Some(&file),
+        "the caret Escape left kept the file of the row the run began on"
+    );
+}
+
 /// A sweep held past the pane's bottom scrolls the view a row at a time towards the
 /// pointer and reaches the run out to each row that comes in, for as long as the button is
 /// down and the pointer stays past the edge; back inside, the view stops where it is.
