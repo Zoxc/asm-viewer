@@ -1411,9 +1411,6 @@ impl Component for InstructionList {
         let on_key_down = use_listing_keys(
             at,
             marked,
-            // An assembly run's file is the row's own, so a run of the whole listing is a
-            // run of no one file.
-            None,
             &list,
             length,
             Some(data.searchable()),
@@ -1437,6 +1434,16 @@ impl Component for InstructionList {
                             .instruction_at(row)
                             .map(|index| instruction_line(&assembly, index))
                             .unwrap_or_default()
+                    }
+                }),
+                // The file the row's instruction was compiled from, as a press takes it.
+                file: Rc::new({
+                    let (data, lanes) = (data.clone(), data.lanes().clone());
+                    move |row| {
+                        lanes
+                            .instruction_at(row)
+                            .and_then(|index| data.position(index))
+                            .map(|at| at.file)
                     }
                 }),
             },

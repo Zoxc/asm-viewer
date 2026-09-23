@@ -223,8 +223,6 @@ impl Component for SourceList {
         let keys = use_listing_keys(
             at,
             marked,
-            // Every run of this pane is a run of the file it is showing.
-            Some(self.file.clone()),
             &list,
             length,
             Some(searchable),
@@ -241,6 +239,11 @@ impl Component for SourceList {
                 text: Rc::new({
                     let drawn = self.source.clone();
                     move |index| source_line(&drawn, index)
+                }),
+                // Every run of this pane is a run of the file it is showing.
+                file: Rc::new({
+                    let file = self.file.clone();
+                    move |_| Some(file.clone())
                 }),
             },
         );

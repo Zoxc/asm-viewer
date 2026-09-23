@@ -806,9 +806,6 @@ impl Component for SectionList {
         let on_key_down = use_listing_keys(
             at,
             marked,
-            // An assembly run's file is the row's own, so a run of the whole listing is a
-            // run of no one file.
-            None,
             &list,
             length,
             None,
@@ -828,6 +825,10 @@ impl Component for SectionList {
                             .map(|built| code_line(built, row))
                             .unwrap_or_default()
                     }
+                }),
+                file: Rc::new({
+                    let rows = built.clone();
+                    move |row| rows.as_ref().and_then(|built| file_at(built, row))
                 }),
             },
         );

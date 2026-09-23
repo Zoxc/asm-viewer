@@ -27722,6 +27722,76 @@ fn the_keys_move_the_caret_along_a_row_the_worker_decoded() {
     );
 }
 
+/// A caret the keys move in the unified view is a run of the file its new row was
+/// compiled from, as a press there would be: the Source pane beside an object's code opens
+/// that file at that row's line, and a line of one file in another is a wrong place. The
+/// press gives the run its row's file; the run is then made to name another, as a press in
+/// a function from another file would have left it, and ArrowDown has to put it back.
+#[test]
+fn a_caret_the_keys_move_is_a_run_of_its_new_rows_file() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let mut reading = Reading::of(Some(object.clone()));
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: None,
+        window: vec![0, 1, 2],
+    };
+    let Answer::Code { decoded, code, .. } = answer(Question::Code(ask.clone())) else {
+        panic!("a window is answered with a window");
+    };
+    assert!(reading.take(&ask, code, decoded));
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let mut marked = roots.doors.marked;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(object.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+
+    let (area, _, _) = paragraphs(&test)
+        .into_iter()
+        .find(|(_, text, _)| text.starts_with("push"))
+        .expect("an instruction is drawn");
+    test.move_cursor(left_of(&area));
+    test.press_cursor(left_of(&area));
+    test.release_cursor(left_of(&area));
+    settle(&mut test);
+    let picked = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the press picked the row out");
+    let file = picked.file.clone().expect("the pressed row has a line");
+
+    let elsewhere = Picked {
+        file: Some(Arc::from(Path::new("/elsewhere.c"))),
+        ..picked
+    };
+    marked.set(Marks {
+        assembly: Some(elsewhere),
+        source: None,
+    });
+    settle(&mut test);
+    test.press_key(Key::Named(NamedKey::ArrowDown));
+    settle(&mut test);
+    let moved = marked.peek().assembly.clone().expect("the caret moved");
+    assert_eq!(moved.chars.lead().row, picked.chars.lead().row + 1);
+    assert_eq!(
+        moved.file.as_ref(),
+        Some(&file),
+        "the moved caret kept the file of the row it left"
+    );
+}
+
 /// A sweep held past the pane's bottom scrolls the view a row at a time towards the
 /// pointer and reaches the run out to each row that comes in, for as long as the button is
 /// down and the pointer stays past the edge; back inside, the view stops where it is.
@@ -30790,7 +30860,7 @@ fn a_step_on_a_bar_with_no_listing_is_left_where_it_is() {
     let (mut test, roots) = TestingRunner::new(
         || {
             let marked = use_consume::<Marked>().0;
-            use_find_steps(marking_at(), marked, None, |_| {});
+            use_find_steps(marking_at(), marked, Rc::new(|_| None), |_| {});
             rect().expanded()
         },
         (200., 200.).into(),

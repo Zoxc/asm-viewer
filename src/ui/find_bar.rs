@@ -852,8 +852,8 @@ fn seed_of(marks: &Marks, pane: Pane, text: impl Fn(usize) -> Line) -> Option<St
 /// it into view.
 ///
 /// **In the list and not in the bar**, because the answer is in rows: only the list knows
-/// how far to scroll to reach one. `file` is what a run of this listing is a run of -- the
-/// source list's own file, and `None` for the assembly's, where a run's file is the row's.
+/// how far to scroll to reach one. `file` answers the file a row is a line of, which the
+/// run picked out on a hit is read in (`ListingText::file`).
 ///
 /// **A bar with no listing has no step of this one's to spend.** [`use_listing_keys`] calls
 /// this for all three listings, a hook having to run on every render, and an object's code
@@ -862,60 +862,62 @@ fn seed_of(marks: &Marks, pane: Pane, text: impl Fn(usize) -> Line) -> Option<St
 pub(crate) fn use_find_steps<R: FnMut(usize) + 'static>(
     at: Where,
     marked: State<Marks>,
-    file: Option<Arc<Path>>,
+    file: Rc<dyn Fn(usize) -> Option<Arc<Path>>>,
     reveal: R,
 ) {
     let finds = use_try_consume::<Looking>().map(|looking| looking.0);
-    // The reveal this render made, which knows how long the listing is now. The effect's
-    // callback is built once, so a reveal it captured would clamp against the first
-    // listing's rows; `at` and `file` come in as its deps for the same reason.
-    let latest = use_hook(|| Rc::new(RefCell::new(None::<R>)));
-    *latest.borrow_mut() = Some(reveal);
-    use_side_effect_with_deps(
-        &(at, file),
-        move |(at, file): &(Where, Option<Arc<Path>>)| {
-            let at = *at;
-            let Some(mut finds) = finds else {
-                return;
-            };
-            // Bound before the write below, the read being a guard.
-            let bar = finds.read().get(&at).clone();
-            let Some(direction) = bar.step.filter(|_| bar.listing.is_some()) else {
-                return;
-            };
-            // A step asked before the answer came is left for the answer's write to wake
-            // this again, or the reader's Enter straight after typing would go nowhere.
-            if bar.owed() {
-                return;
-            }
-            // Where the pane is: its run, or a caret at the top of the listing where there
-            // is no run at all.
-            let run = marked
-                .peek()
-                .of(at.1)
-                .as_ref()
-                .map(|picked| picked.chars)
-                .unwrap_or(CharSelection::at(Caret { row: 0, col: 0 }));
-            let hits = bar.hits().cloned();
-            let next = hits
-                .as_ref()
-                .and_then(|hits| find::step(hits, bar.at, run, direction));
+    // The reveal and the rows' files this render made, which know the listing as it is
+    // now. The effect's callback is built once, so either captured there would answer for
+    // the first listing's rows; `at` comes in as its dep for the same reason.
+    let latest = use_hook(|| {
+        Rc::new(RefCell::new(
+            None::<(R, Rc<dyn Fn(usize) -> Option<Arc<Path>>>)>,
+        ))
+    });
+    *latest.borrow_mut() = Some((reveal, file));
+    use_side_effect_with_deps(&at, move |at: &Where| {
+        let at = *at;
+        let Some(mut finds) = finds else {
+            return;
+        };
+        // Bound before the write below, the read being a guard.
+        let bar = finds.read().get(&at).clone();
+        let Some(direction) = bar.step.filter(|_| bar.listing.is_some()) else {
+            return;
+        };
+        // A step asked before the answer came is left for the answer's write to wake
+        // this again, or the reader's Enter straight after typing would go nowhere.
+        if bar.owed() {
+            return;
+        }
+        // Where the pane is: its run, or a caret at the top of the listing where there
+        // is no run at all.
+        let run = marked
+            .peek()
+            .of(at.1)
+            .as_ref()
+            .map(|picked| picked.chars)
+            .unwrap_or(CharSelection::at(Caret { row: 0, col: 0 }));
+        let hits = bar.hits().cloned();
+        let next = hits
+            .as_ref()
+            .and_then(|hits| find::step(hits, bar.at, run, direction));
 
-            let mut state = finds.peek().clone();
-            let entry = state.get_mut(&at);
-            entry.step = None;
-            entry.at = next;
-            finds.set(state);
+        let mut state = finds.peek().clone();
+        let entry = state.get_mut(&at);
+        entry.step = None;
+        entry.at = next;
+        finds.set(state);
 
-            // A pattern nothing matched moves nothing: the bar says so instead.
-            let Some(hit) = next.and_then(|next| hits.as_ref().and_then(|hits| hits.get(next)))
-            else {
-                return;
-            };
-            mark_columns(marked, at.1, file.clone(), hit.row, hit.columns.clone());
-            if let Some(reveal) = latest.borrow_mut().as_mut() {
-                reveal(hit.row);
-            }
-        },
-    );
+        // A pattern nothing matched moves nothing: the bar says so instead.
+        let Some(hit) = next.and_then(|next| hits.as_ref().and_then(|hits| hits.get(next))) else {
+            return;
+        };
+        let mut latest = latest.borrow_mut();
+        let Some((reveal, file)) = latest.as_mut() else {
+            return;
+        };
+        mark_columns(marked, at.1, file(hit.row), hit.row, hit.columns.clone());
+        reveal(hit.row);
+    });
 }

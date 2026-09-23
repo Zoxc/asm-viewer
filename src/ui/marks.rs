@@ -24,7 +24,7 @@ pub(crate) struct Picked {
     /// numbers does; one started on the text goes by character.
     pub(crate) by_rows: bool,
     /// The file the run is read in: the source pane's own file for its run, and for the
-    /// assembly pane's the file the pressed row was compiled from -- which is what the
+    /// assembly pane's the file its anchor row was compiled from -- which is what the
     /// source pane shows beside an object's code. `None` where the row has no line.
     pub(crate) file: Option<Arc<Path>>,
     /// Which panes still owe a scroll to this run: the other pane, for a click made in
@@ -550,11 +550,11 @@ pub(crate) fn copy_text(
     }
 }
 
-/// The two ways a code listing reads one of its rows, which is everything its keys and the
+/// The ways a code listing reads one of its rows, which is everything its keys and the
 /// find bar over it ask of the rows.
 ///
-/// **Named fields and not two arguments.** Both are `Fn(usize)` over the same rows, so
-/// spelled out at a call site they are easy to swap; the pair travels as one value instead.
+/// **Named fields and not three arguments.** All are `Fn(usize)` over the same rows, so
+/// spelled out at a call site they are easy to swap; they travel as one value instead.
 pub(crate) struct ListingText {
     /// The row as a caret's row is copied: the line as it is on disk, address column and
     /// all, and never the row's spans.
@@ -563,6 +563,10 @@ pub(crate) struct ListingText {
     /// characters copies **and** what Ctrl+F seeds the box with -- one closure the two read,
     /// not two that have to agree.
     pub(crate) text: Rc<dyn Fn(usize) -> Line>,
+    /// The file the row is a line of, which a run anchored on it is read in
+    /// ([`Picked::file`]): the source list's own file for every row, and for an assembly
+    /// row the file it was compiled from.
+    pub(crate) file: Rc<dyn Fn(usize) -> Option<Arc<Path>>>,
 }
 
 /// A code listing's whole keyboard, wired once for all three of them (`SourceList`,
@@ -572,9 +576,7 @@ pub(crate) struct ListingText {
 /// A hook, [`use_find_steps`] and [`use_find_chord`] being hooks, so a list calls it once and
 /// on every render.
 ///
-/// `file` is what this listing's rows are rows of -- the source list's own file, and `None`
-/// for the two assembly listings, where a run's file is the row's own. `searchable` is the
-/// listing the chords name, which must be the one [`use_searching`] claimed: an answer is
+/// `searchable` is the listing the chords name, which must be the one [`use_searching`] claimed: an answer is
 /// judged by `Searchable::id`. It is [`None`] over an object's code, which is walked rather
 /// than searched whole (`hunt.rs`), and that is what leaves the step to [`use_code_hunt`].
 ///
@@ -583,7 +585,6 @@ pub(crate) struct ListingText {
 pub(crate) fn use_listing_keys(
     at: Where,
     marked: State<Marks>,
-    file: Option<Arc<Path>>,
     list: &ListBox,
     length: usize,
     searchable: Option<Searchable>,
@@ -593,14 +594,14 @@ pub(crate) fn use_listing_keys(
     let reveal = caret_reveal(list.controller, viewport, length);
     // The step the bar asked for, made here: the hits are rows, and only the list knows how
     // far to scroll to reach one.
-    use_find_steps(at, marked, file.clone(), reveal);
+    use_find_steps(at, marked, rows.file.clone(), reveal);
     let seed = rows.text.clone();
     use_find_chord(
         at,
         marked,
         searchable,
         seed,
-        on_listing_key(marked, at.1, file, length, viewport, rows, reveal),
+        on_listing_key(marked, at.1, length, viewport, rows, reveal),
     )
 }
 
@@ -612,25 +613,24 @@ pub(crate) fn use_listing_keys(
 /// stay the window's. `viewport` is how tall the list is, which is what a page is, and
 /// `reveal` is asked to bring the caret's row on screen after each move.
 ///
+/// A run the keys make or move is read in its anchor row's file (`ListingText::file`): a
+/// run reached by the keyboard need not have begun with a press on a row, a press on the
+/// tab's chip being enough, and a caret walked into another function is a run of that
+/// function's file.
+///
 /// Goes on the pane's own focusable box and **not** on a global key handler, which would
 /// fire while a filter bar had the keyboard and — sorting last (`EventName::cmp`) — would
 /// win, turning a copy out of the filter box into a page of disassembly. And it is the
 /// pane's own run that is copied: each pane has one, and the keyboard is in one of them.
-///
-/// `file` is what this listing's rows are rows of -- the source list's own file, and
-/// `None` for the two assembly listings, where a run's file is the row's own. It is what
-/// a run made from nothing takes ([`Picked::file`]): the keyboard reaches a pane with no
-/// press on a row, a press on the tab's chip being enough.
 fn on_listing_key(
     marked: State<Marks>,
     pane: Pane,
-    file: Option<Arc<Path>>,
     length: usize,
     viewport: State<f32>,
     rows: ListingText,
     mut reveal: impl FnMut(usize) + 'static,
 ) -> impl FnMut(Event<KeyboardEventData>) + 'static {
-    let ListingText { line, text } = rows;
+    let ListingText { line, text, file } = rows;
     move |e: Event<KeyboardEventData>| {
         let shift = e.modifiers.contains(Modifiers::SHIFT);
         // **A motion answers only for the modifiers that are its own.** Shift is every
@@ -663,7 +663,7 @@ fn on_listing_key(
         if let Some(motion) = motion {
             // A page is the rows the list shows whole; the motion makes one of none.
             let page = (*viewport.peek() / code_row_height()).floor().max(0.0) as usize;
-            let moved = move_caret(marked, pane, motion, shift, length, page, &*text);
+            let moved = move_caret(marked, pane, motion, shift, length, page, &*text, &*file);
             if let Some(row) = moved {
                 reveal(row);
             }
@@ -681,16 +681,10 @@ fn on_listing_key(
             }
             Key::Character(character) if command && character == "a" => {
                 // Every row of the listing, first row's start to last row's end, and
-                // nothing at all for one with no rows. The file stays what the run's was,
-                // or the listing's own where there is no run yet, and no scroll is owed:
-                // the whole listing names no one place to go to.
+                // nothing at all for one with no rows. No scroll is owed: the whole
+                // listing names no one place to go to.
                 if let Some(last) = length.checked_sub(1) {
-                    let file = marked
-                        .peek()
-                        .of(pane)
-                        .as_ref()
-                        .and_then(|picked| picked.file.clone())
-                        .or_else(|| file.clone());
+                    let file = file(0);
                     let whole = CharSelection::between(
                         Caret { row: 0, col: 0 },
                         Caret {
@@ -718,7 +712,9 @@ fn on_listing_key(
 /// through: a one-row run at the caret's row, or with `extend` the run reached out to
 /// it. No drag, and **no scroll owed** to the other pane: it would be paid on every
 /// repeat of a held key, yanking the other pane about while the reader walks this one.
-/// The file stays what the run's was.
+/// The file is the anchor row's, which `file` answers: a caret walked from one function
+/// into the next is a run of the next one's file.
+#[allow(clippy::too_many_arguments)]
 fn move_caret(
     marked: State<Marks>,
     pane: Pane,
@@ -727,13 +723,15 @@ fn move_caret(
     length: usize,
     page: usize,
     text: impl Fn(usize) -> Line,
+    file: impl Fn(usize) -> Option<Arc<Path>>,
 ) -> Option<usize> {
     let picked = marked.peek().of(pane).clone()?;
     length.checked_sub(1)?;
     let moved = picked.chars.moved(motion, extend, text, length, page);
     let row = moved.lead().row;
+    let file = file(moved.anchor().row);
     update(marked, |marks| {
-        *marks.of_mut(pane) = Some(Picked::settled(moved, picked.file, Owed::default()));
+        *marks.of_mut(pane) = Some(Picked::settled(moved, file, Owed::default()));
     });
     Some(row)
 }

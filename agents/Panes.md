@@ -445,7 +445,10 @@ in green is the *pair*: the rows of it that are the same place as the other pane
 instructions a selected line was compiled from, the line a selected instruction came from, every one
 of them and not the first. A run is a `CharSelection` -- a caret pair over the listing's rows and
 columns -- plus the file it is a run of, and the rows lit are the rows that pair touches
-(`CharSelection::rows`); there is no second copy of them to keep in step.
+(`CharSelection::rows`); there is no second copy of them to keep in step. The file is the anchor
+row's: the pressed row's for a press, and after a key moves the caret, the file of the row the
+anchor is on then (`ListingText::file`). A caret walked from one function into the next in the
+unified view is in the next one's file, and the Source pane beside it opens that file.
 So the assembly side pairs a row by asking the row's own `Studied::position` against the run's file
 and lines, and the source side pairs a line by turning the run's rows into positions
 (`Studied::places` for a symbol's listing, `code_places` over the held stretches for an object's
