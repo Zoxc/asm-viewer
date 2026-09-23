@@ -53,8 +53,16 @@ impl OpenProject {
     }
 
     /// The project's directory as a path, or `None` when the reader has not named one.
+    ///
+    /// Absolute, and with its `..` taken out, whatever was typed: this is where the box's
+    /// text becomes a path, so a file the app joins to the directory and one the debug
+    /// info names are spelled from the same root. Kept as typed, `dev/viewer` covered no
+    /// tab the debug info opened, those being absolute.
     pub(crate) fn workspace(&self) -> Option<PathBuf> {
-        given(&self.workspace_text).map(PathBuf::from)
+        given(&self.workspace_text).map(|text| {
+            let typed = Path::new(text);
+            cargo::lexical(&std::path::absolute(typed).unwrap_or_else(|_| typed.to_owned()))
+        })
     }
 
     /// The program to read this project with: what the reader named, or

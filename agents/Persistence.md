@@ -99,6 +99,13 @@ relative one would be read where the app was started and written under the store
 one can come in relative are made absolute where they enter, lexically (`std::path::absolute`):
 the project named on the command line, in `main`, and a relative `ASSEMBLY_VIEWER_STATE`, whose
 paths would otherwise come back through `Store::path` with the base joined on twice.
+The project's directory is a third, typed into a box that takes any spelling. It is made
+absolute where the text becomes a path (`OpenProject::workspace`), with its `..` taken out by
+text (`cargo::lexical`). Kept relative, the files joined to it never matched the debug info's,
+which are absolute, so a finished build forgot none of the source tabs the debug info had opened;
+and the project file saved it as typed, to be read back against the file's own directory.
+Taking `..` out by text is cargo's rule for a `[package] workspace` path; after a symlink it
+names another directory than the kernel would, the cost of one spelling for the whole project.
 `Store::relative` is the same rule the other way -- where an absolute path sits
 under the store, or `None` for one outside it -- so the directory stays a private field and
 nobody strips a prefix by hand. `Saves` keeps the one it was pointed at when the project was

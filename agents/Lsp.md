@@ -340,13 +340,16 @@ only cost: the reader's own spelling of their project, and on Windows a verbatim
 that no `file:` URI can carry. The process needs none of it: `current_dir` resolves a
 relative directory against the same place. `${workspaceFolder}` in a project's settings
 stands for the same absolute directory: a server resolves a relative path there against
-its root, so the typed spelling would be joined onto itself.
+its root, so the typed spelling would be joined onto itself. The UI hands the directory over
+absolute already (`OpenProject::workspace`, `agents/Persistence.md`); `rooted` is what makes
+the module right whatever it is given.
 
 The app's own spelling is not canonical either -- a project directory as the reader typed
-it joined with a Files row, or whatever the debug info said -- and the server's is. So a
-directory typed with a `..`, a `./` or through a symlink spells one file two ways on any
-platform. `open_source_place` names the document by the spelling an **open source tab**
-already has for that file, and by the answer's only where no tab has one.
+it joined with a Files row, or whatever the debug info said -- and the server's is. The
+directory is made absolute with its `.` and `..` taken out, but by text, so one reached
+through a symlink still spells one file two ways. `open_source_place` names the document by
+the spelling an **open source tab** already has for that file, and by the answer's only
+where no tab has one.
 
 **Reducing a path is not the same call on both platforms.** On Unix it is
 `fs::canonicalize`: a project directory reached through a symlink is the case the walk is

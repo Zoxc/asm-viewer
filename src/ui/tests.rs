@@ -31674,6 +31674,63 @@ fn a_finished_build_forgets_the_workspace_sources() {
     forget_source_under(&directory);
 }
 
+/// The same, with the directory typed relative and the file named absolute, as the debug
+/// info names it. A build forgets what is under the directory by its path, so the two have
+/// to be spelled from the same root: the typed spelling covered nothing the debug info
+/// opened, and the pane went on drawing the text from before the build.
+#[test]
+fn a_build_under_a_relative_directory_forgets_the_files_named_absolutely() {
+    let directory = Temporary::fresh_directory("run-test");
+    let path = directory.join("main.rs");
+    std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
+
+    // The directory from here: up to the root, and down again. The `..` is what a reader
+    // in a sibling directory types.
+    let here = std::env::current_dir().expect("the working directory");
+    let typed: PathBuf = here
+        .components()
+        .filter(|part| matches!(part, std::path::Component::Normal(_)))
+        .map(|_| std::path::Component::ParentDir)
+        .chain(
+            directory
+                .components()
+                .filter(|part| matches!(part, std::path::Component::Normal(_))),
+        )
+        .collect();
+    assert!(typed.is_relative());
+
+    let (mut test, roots, asking, _asks) = mount_project(|job: BuildJob| match job.what {
+        BuildWhat::Build => done(built(&[])),
+        _ => BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: true,
+            edit_refused: None,
+        }),
+    });
+    let states = roots.states;
+
+    let mut proj = states.proj;
+    proj.write().workspace_text = typed.to_string_lossy().into_owned();
+    test.sync_and_update();
+
+    let drawn = || source_text(&path).expect("the file").0.rope.to_string();
+    assert_eq!(drawn(), "fn one() {}\n");
+    std::fs::write(&path, b"fn two() {}\n").expect("writing the source file");
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    start_build(states.build, &jobs, typed, Profile::Release);
+    pump(&mut test, |_| !states.build.peek().building);
+
+    assert_eq!(
+        drawn(),
+        "fn two() {}\n",
+        "a file named absolutely was not forgotten under a directory typed relative"
+    );
+
+    forget_source_under(&directory);
+}
+
 /// The Source pane over a source-driven tab, with the build wiring beside it: what a
 /// finished build does to a pane that is showing a workspace file.
 fn built_source_harness() -> impl IntoElement {
