@@ -67,6 +67,21 @@ impl EditedFont {
 /// the desktops themselves store.
 const SIZE_STEP: f32 = 0.5;
 
+/// The size one press of the stepper moves `points` to: the next point on the half-point
+/// grid in the direction of `by`, so a desktop's 13.75 steps to 14 and to 13.5, its two
+/// neighbours, rather than drifting off the grid or past one of them.
+///
+/// The bounds are on the *stepper* only: a hand-edited `settings.toml` may still say
+/// anything.
+fn stepped(points: f32, by: f32) -> f32 {
+    let at = points / SIZE_STEP;
+    let next = match by > 0.0 {
+        true => at.floor() + 1.0,
+        false => at.ceil() - 1.0,
+    };
+    (next * SIZE_STEP).clamp(5.0, 32.0)
+}
+
 /// A point size as the page writes it: `9`, `10.5`, and never `10.50` or `9.0`. Rounded
 /// for display only -- the value stored is the value stepped.
 fn points_text(points: f32) -> String {
@@ -221,12 +236,7 @@ fn font_section(half: FontHalf) -> Element {
     };
     let step = move |by: f32| {
         move |_: Event<PressEventData>| {
-            // The bounds are on the *stepper* only: a hand-edited `settings.toml` may
-            // still say anything.
-            let moved = (points + by).clamp(5.0, 32.0);
-            // Back onto the half-point grid, so stepping away from a desktop's 13.75 and
-            // back lands on its neighbours rather than on a drift of its own.
-            set_size(Some((moved / SIZE_STEP).round() * SIZE_STEP));
+            set_size(Some(stepped(points, by)));
         }
     };
 
@@ -343,3 +353,6 @@ impl Component for SettingsTab {
         .into_element()
     }
 }
+
+#[cfg(test)]
+mod tests;
