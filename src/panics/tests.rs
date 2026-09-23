@@ -128,7 +128,8 @@ fn only_a_panic_the_crate_does_not_guard_is_told_about() {
 /// **One box, however many panics follow.** The hook runs before the unwind, so the thread
 /// that panicked goes on running -- back into the render loop it panicked in -- while the
 /// shutdown is still saving. A second panic there used to hand the reader a second box on
-/// top of the one they had just closed. It is written down like any other and stops there.
+/// top of the one they had just closed. It is written down like any other and told about
+/// never, but it still asks for the shutdown: on the main thread it has to wait for it.
 #[test]
 fn only_the_first_panic_is_told_about_and_the_rest_are_written_down() {
     let run = Run::new();
@@ -153,7 +154,7 @@ fn only_the_first_panic_is_told_about_and_the_rest_are_written_down() {
 
     assert_eq!(stored, 3, "a panic after the first was not written down");
     assert_eq!(told, 1, "the reader was handed more than one box");
-    assert_eq!(stopped, 1, "the app was brought down more than once");
+    assert_eq!(stopped, 3, "a later panic did not ask for the shutdown");
 }
 
 /// A stderr whose reader has gone answers `EPIPE`, and the hook has to survive it: a
@@ -422,6 +423,7 @@ fn a_waited_for_shutdown_has_finished_when_the_hook_returns() {
     let done = std::sync::Arc::new(AtomicBool::new(false));
     let doing = done.clone();
     stop_on_thread(
+        &Run::new(),
         move || {
             std::thread::sleep(Duration::from_millis(100));
             doing.store(true, Ordering::SeqCst);
@@ -441,6 +443,7 @@ fn a_stuck_shutdown_is_not_waited_for_past_the_patience() {
     let (release, stuck) = mpsc::channel::<()>();
     let started = std::time::Instant::now();
     stop_on_thread(
+        &Run::new(),
         move || {
             let _ = stuck.recv();
         },
@@ -448,4 +451,42 @@ fn a_stuck_shutdown_is_not_waited_for_past_the_patience() {
     );
     assert!(started.elapsed() < Duration::from_secs(30));
     drop(release);
+}
+
+/// A worker's panic started the shutdown and the main thread panics while it runs. Its
+/// unwind ends the process as the first one's would, so it waits for that shutdown and
+/// does not start another.
+#[test]
+fn a_later_panic_on_the_main_thread_waits_for_the_shutdown_already_running() {
+    let run = Run::new();
+    let (release, released) = mpsc::channel::<()>();
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let doing = done.clone();
+    // The worker's: it does not wait.
+    stop_on_thread(
+        &run,
+        move || {
+            let _ = released.recv();
+            std::thread::sleep(Duration::from_millis(100));
+            doing.store(true, Ordering::SeqCst);
+        },
+        None,
+    );
+
+    let started = std::sync::Arc::new(AtomicBool::new(false));
+    let starting = started.clone();
+    drop(release);
+    stop_on_thread(
+        &run,
+        move || starting.store(true, Ordering::SeqCst),
+        Some(Duration::from_secs(60)),
+    );
+    assert!(
+        done.load(Ordering::SeqCst),
+        "the main thread returned before the running shutdown finished"
+    );
+    assert!(
+        !started.load(Ordering::SeqCst),
+        "a second shutdown was started"
+    );
 }

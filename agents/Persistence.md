@@ -653,7 +653,11 @@ most: it is the UI thread, nothing between it and `main` catches an unwind (neit
 winit on Linux), and an unwind out of `main` ends the process with the save half written and
 rust-analyzer left running. The bound is for a lock the main thread itself holds, which only its
 unwind lets go. Any other thread returns into its unwind at once, since the main thread keeps the
-process alive. And it is installed from `ui::app`'s first render rather than from `main`,
+process alive. **A later panic on the main thread waits too**, for the one shutdown the run has:
+its unwind ends the process just as the first one's would. If the first panic's box is still open,
+that panic starts the shutdown itself rather than wait for the reader, and the box goes with the
+process: rfd shows a worker's box on macOS by handing it to the main thread, so waiting for it
+there would never end. And it is installed from `ui::app`'s first render rather than from `main`,
 which is freya's doing (`notes/upstream/freya.md`): a hook set before `launch` is the inner one,
 and freya's box would be up and the process gone before ours ran. The app's workers are named
 (`thread::Builder::name`) for the one reason that the box then says which of them died.

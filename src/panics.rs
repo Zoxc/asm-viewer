@@ -19,7 +19,8 @@
 //! reentrant, so the shutdown -- `crate::shutdown::before_exit`, which saves the projects
 //! and takes that lock -- goes on a thread of its own and only reaches the lock once the
 //! unwind has let it go. The main thread waits for it a while first all the same: its
-//! unwind leaves `main`, which ends the process.
+//! unwind leaves `main`, which ends the process. It waits on a later panic too, since that
+//! unwind ends the process just the same.
 //!
 //! **It must not panic itself**, which aborts. Everything here is best-effort: a store
 //! that cannot be written is one the reader is told about anyway, and the line put on
@@ -68,9 +69,29 @@ struct Run {
     /// unwinding -- back into freya's render loop, on the UI thread -- while the shutdown
     /// thread is still saving. A render that panicked once panics again on the next pass,
     /// and the reader who pressed Close on the first box is handed a second. So the first
-    /// unguarded panic is the one that is told about and the one that stops the app, and
-    /// every panic after it is written down and nothing more, exactly as a guarded one is.
+    /// unguarded panic is the only one told about, and every panic after it is written
+    /// down and asks for the shutdown the first one started ([`Shutdown`]).
     stopping: AtomicBool,
+    /// The shutdown thread, which only one panic starts and only the main thread waits for.
+    shutdown: Mutex<Shutdown>,
+}
+
+/// Where the one shutdown of a run has got to.
+///
+/// **A later panic on the main thread waits for it as the first does.** A worker panics
+/// and its box goes up; the UI thread then panics too, on the worker's closed channel, say.
+/// Its unwind ends the process as surely as the first one's would, so returning at once
+/// cut off a shutdown already saving, or one not yet started because the box was still
+/// open. So whichever comes first starts the shutdown: the box being closed, or a panic on
+/// the main thread. That one cannot wait for the reader instead -- rfd shows a worker's box
+/// on macOS by handing it to the main thread -- so the box goes with the process.
+enum Shutdown {
+    NotStarted,
+    /// Started, and the end of the wait for it: it ends when the thread does.
+    Started(mpsc::Receiver<()>),
+    /// Waited for already. Only the main thread waits, and its wait is followed by its
+    /// unwind, so there is no second one.
+    Waited,
 }
 
 impl Run {
@@ -78,6 +99,7 @@ impl Run {
         Run {
             file: Mutex::new(None),
             stopping: AtomicBool::new(false),
+            shutdown: Mutex::new(Shutdown::NotStarted),
         }
     }
 }
@@ -192,7 +214,7 @@ pub(crate) fn install(store: Option<Store>) {
                     .and_then(|store| write_to(&RUN, store, panic))
             },
             &mut tell,
-            &mut shut_down,
+            &mut || shut_down(&RUN),
         );
     }));
 }
@@ -210,8 +232,9 @@ fn echo(mut out: impl Write, panic: &Panic) {
 
 /// What a panic leads to, with the storing, the telling and the shutting down all handed
 /// in so a test can have the rule without a disk or a window: **every** panic is written
-/// down, and the **first** one the crate does not guard is told about and brings the app
-/// down after it.
+/// down, the **first** one the crate does not guard is told about, and every one it does
+/// not guard asks for the app to be brought down, which only the first ask does
+/// ([`stop_on_thread`]).
 fn handle(
     run: &Run,
     panic: &Panic,
@@ -226,10 +249,9 @@ fn handle(
     }
     // Claimed here and not after the telling: the box is a blocking call, and a second
     // panic arrives while the reader is still looking at the first.
-    if run.stopping.swap(true, Ordering::SeqCst) {
-        return;
+    if !run.stopping.swap(true, Ordering::SeqCst) {
+        tell(panic, file.as_deref());
     }
-    tell(panic, file.as_deref());
     stop();
 }
 
@@ -543,9 +565,10 @@ fn is_runtime(frame: &[&str]) -> bool {
 /// save or before a child is stopped. So it waits, for at most [`PATIENCE`]: if it holds a
 /// lock the shutdown needs, only its unwind lets that go. Any other thread returns into its
 /// unwind at once, the main thread keeping the process alive.
-fn shut_down() {
+fn shut_down(run: &Run) {
     let main = std::thread::current().name() == Some("main");
     stop_on_thread(
+        run,
         || {
             shutdown::before_exit();
             std::process::exit(1);
@@ -557,22 +580,34 @@ fn shut_down() {
 /// How long the main thread waits for the shutdown before it goes on into its unwind.
 const PATIENCE: Duration = Duration::from_secs(5);
 
-/// Run `stop` on a thread named `shutdown`, and wait up to `wait` for it to finish.
+/// Run `stop` on a thread named `shutdown`, unless `run` has started one already, and wait
+/// up to `wait` for whichever it has to finish.
 ///
 /// The thread holds the sender and never sends: the wait ends when the thread ends or
 /// could not be started, either of which drops it. [`shut_down`]'s thread ends the process
 /// instead, which ends the wait with it.
-fn stop_on_thread(stop: impl FnOnce() + Send + 'static, wait: Option<Duration>) {
-    let (working, finished) = mpsc::channel::<()>();
-    let _ = std::thread::Builder::new()
-        .name("shutdown".to_owned())
-        .spawn(move || {
-            let _working = working;
-            stop();
-        });
-    if let Some(wait) = wait {
-        let _ = finished.recv_timeout(wait);
+fn stop_on_thread(run: &Run, stop: impl FnOnce() + Send + 'static, wait: Option<Duration>) {
+    let mut shutdown = run.shutdown.lock().unwrap_or_else(|held| held.into_inner());
+    if let Shutdown::NotStarted = *shutdown {
+        let (working, finished) = mpsc::channel::<()>();
+        let _ = std::thread::Builder::new()
+            .name("shutdown".to_owned())
+            .spawn(move || {
+                let _working = working;
+                stop();
+            });
+        *shutdown = Shutdown::Started(finished);
     }
+    let Some(wait) = wait else {
+        return;
+    };
+    // Taken out and the lock let go before the wait, so a panic on another thread is
+    // never held up behind it.
+    let Shutdown::Started(finished) = std::mem::replace(&mut *shutdown, Shutdown::Waited) else {
+        return;
+    };
+    drop(shutdown);
+    let _ = finished.recv_timeout(wait);
 }
 
 /// The date and time `seconds` after the epoch, UTC, as `2026-09-04 14:12:33`.

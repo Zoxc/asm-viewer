@@ -1089,7 +1089,9 @@ panicking thread *before* the unwind, so when the UI thread is the one that died
 its own render, inside winit's `run_app` callback, with no frame to draw a window of its own in.
 `rfd` works there because on every platform it hands the box to something that is not us: on Linux
 under the default features a `zenity` child process, on Windows `TaskDialogIndirect`, on macOS
-`NSAlert` -- none of which needs our event loop, our GL surface or our main thread.
+`NSAlert` -- none of which needs our event loop or our GL surface. Only the macOS one needs the
+main thread: rfd hands a worker's box to it, so the main thread must not wait on that box
+(`src/panics.rs`, `Shutdown`).
 
 **A second freya instance is not possible and a second freya window would not help.**
 `winit::EventLoopBuilder::build` flips a process-wide `EVENT_LOOP_CREATED` and answers
