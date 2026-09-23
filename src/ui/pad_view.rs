@@ -818,7 +818,8 @@ fn use_driving_cursor(
             if !buffers.holds(pad) {
                 return;
             }
-            let line = LinePos::line_of(buffers.get(pad).cursor_row());
+            let editor = buffers.get(pad);
+            let line = LinePos::line_of(cursor_line(&editor.rope, editor.cursor_pos()));
             drop(buffers);
 
             // A read and not a peek: it is what wakes this when `use_land` wipes the run,
@@ -834,6 +835,20 @@ fn use_driving_cursor(
             }
         },
     );
+}
+
+/// The zero-based line the cursor at `at` is on, `at` counted in UTF-16 units as the
+/// editor counts it.
+///
+/// **In `\n`s, and not the editor's `cursor_row`**: the rope also ends a row at a form
+/// feed, a lone CR and four more (`notes/upstream/freya.md`), and rustc and the debug info
+/// count only `\n`. Linear in the text above the cursor, which is one hand-written file.
+fn cursor_line(rope: &Rope, at: usize) -> usize {
+    let at = rope.utf16_cu_to_char(at.min(rope.len_utf16_cu()));
+    rope.slice(..at)
+        .chunks()
+        .map(|chunk| chunk.bytes().filter(|&byte| byte == b'\n').count())
+        .sum()
 }
 
 impl Component for PadAssembly {

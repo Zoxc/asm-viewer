@@ -253,7 +253,9 @@ instruction that named a line could do nothing with it (`notes/upstream/freya.md
 compares against is **the run on screen** and never a line remembered beside it: `use_land` puts
 `Marks::default()` back on every change of the active entry, and the page becoming the tab on
 screen is one, so a drive that remembered would be wiped a beat after the reader arrived and would
-never say it again. That comparison is also what makes typing along one line write nothing.
+never say it again. That comparison is also what makes typing along one line write nothing. The
+line is counted in `\n`s (`cursor_line`) and not taken from the editor's row, which a form feed or
+a lone CR also ends (`notes/upstream/freya.md`).
 
 **An edit since the build says so over the listing**, the Source pane's checksum row in a second
 place -- and exact where that one is a guess, since the app wrote the source this program was

@@ -92,6 +92,18 @@ pointer with `pointer_move` (`ui/code_row.rs`).
 so anything else wanted from the parse -- the function spans for C and C++ -- is a second
 parse of the file (`ui/highlight.rs`). Not a bug; a gap worth a PR for a `tree()` getter.
 
+**`freya-code-editor` ends a row wherever ropey does.** It takes `ropey` with its default
+features, `unicode_lines` among them, so a vertical tab, a form feed, a lone CR, NEL and
+U+2028/9 each start a row, where rustc, the debug info and a language server count only `\n`.
+Nothing on `CodeEditorData` or the rows says which breaks count. **Cost:** the Source pane is
+read-only, so its rope is built from the text with those characters swapped for ones of the
+same length (`one_break`, `ui/highlight.rs`). The Scratchpad's editor cannot do that: the text
+is the reader's and is saved as it stands, and one typed or pasted in would split a row again.
+So after a `^L` or a U+2028 the editor's gutter numbers each line one past what rustc says it
+is. The drive into the listing counts the `\n`s itself (`cursor_line`, `ui/pad_view.rs`), and
+a jump to a diagnostic goes by byte offset, so both land on the right line; the gutter is left
+wrong. Not reported yet: a way to turn the extra breaks off would do it.
+
 **A scope reused under a different component type panics on the downcast.** `From<T> for
 Element` stores a render closure that downcasts the scope's props to `T`
 (`element.rs:407`, `downcast_ref::<T>().unwrap()`), and `Runner::run_scope`

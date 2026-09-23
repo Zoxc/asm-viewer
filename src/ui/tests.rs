@@ -18164,6 +18164,72 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
     );
 }
 
+/// The line the cursor drives the listing with is counted in `\n`s, as rustc and the
+/// debug info count it. The editor's own rows also end at a form feed, a lone CR and the
+/// rest, so its row for the cursor is one past the line for every such break above it: a
+/// `^L` on a line of its own put the drive a line below the cursor.
+#[test]
+fn the_cursor_drives_the_line_the_compiler_counts() {
+    let built = fixture_artifact();
+    let (mut test, roots, asking, _asks) =
+        mount_scratchpad(scratchpad_listing_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::Open {
+                scratchpad,
+                holding,
+            } => PadAnswer::Opened {
+                holding,
+                scratchpad: scratchpad,
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(scratchpad) => PadAnswer::Built {
+                pad: scratchpad.id().clone(),
+                build: pad_built(built.clone(), Vec::new()),
+                program: read_program(&built, scratchpad.digest()),
+                directory: None,
+            },
+            _ => unreachable!("this test only lists, opens, saves and builds"),
+        });
+    let pad = roots.pad;
+    let text = roots.pad_text;
+    let marked = roots.doors.marked;
+
+    pump(&mut test, |_| pad.peek().state().opened());
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_build(pad, &jobs);
+    pump(&mut test, |_| pad.peek().state().program.is_some());
+
+    // Any file will do: what is under test is the line the drive says, not what it lights.
+    let file: Arc<Path> = Arc::from(Path::new("src/main.rs"));
+    let mut pad = pad;
+    pad.write()
+        .state_mut()
+        .program
+        .as_mut()
+        .expect("a program")
+        .file = Some(file.clone());
+    // Lines 1 to 3, the second a form feed, and the cursor at the start of the third.
+    edit_shown(text, pad, |editor| {
+        // A buffer of its own, parsed, since the rows are drawn from the parse.
+        *editor = CodeEditorData::new(Rope::from_str("x\n\u{c}\ny\n"), None::<EditorLanguage>);
+        editor.parse();
+        editor.move_cursor_to(4);
+    });
+    settle(&mut test);
+
+    // Line 3 is row 2.
+    let said = marked
+        .peek()
+        .source
+        .as_ref()
+        .map(|run| (run.file.clone(), run.chars.rows()));
+    assert_eq!(said, Some((Some(file), 2..=2)));
+}
+
 /// An edit since the build says so over the listing, and a build that failed leaves the
 /// program before it there to be said about.
 #[test]
