@@ -184,10 +184,11 @@ impl Listing {
 /// them out in: what a reader scrolling "all the code" scrolls.
 ///
 /// Each section keeps its own [`Listing`] and is **placed** at
-/// [`CodeSection::bias`](crate::CodeSection::bias) past its own address. A linked image's sections already sit at distinct addresses and have no
-/// bias, so a placed address is the address; a relocatable object's code sections all start
-/// at 0 and the parse gave each a place of its own (`section_biases`), the same one its line
-/// info is read at. The air the layout leaves between two sections is nothing's bytes and is
+/// [`CodeSection::bias`](crate::CodeSection::bias) past its own address. A linked image's
+/// sections already sit at distinct addresses and have no bias, so a placed address is the
+/// address. A relocatable object's code sections mostly all state 0, though a Mach-O `.o`
+/// lays them out one after another; either way the parse gave each a place of its own
+/// (`section_biases`), the same one its line info is read at. The air the layout leaves between two sections is nothing's bytes and is
 /// not a gap: [`at`](Self::at) answers [`None`] there.
 ///
 /// Sections are in placed order. A section whose bytes have no place is left out: one holding
