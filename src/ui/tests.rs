@@ -915,10 +915,43 @@ fn the_bar_offers_a_close_or_a_save_and_a_delete() {
     };
     press_at(&mut test, middle(last));
     settle(&mut test);
-    assert_eq!(deleting.peek().as_deref(), Some("Unsaved project 1"));
+    assert_eq!(
+        deleting.peek().as_ref().map(|(name, _)| name.as_str()),
+        Some("Unsaved project 1")
+    );
     assert!(
         proj.peek().file.is_some(),
         "the project went without an answer"
+    );
+}
+
+/// **The question whether to delete a project goes when the reader leaves it.** A dialog
+/// that answers while it is up can open another project, and the window went on asking
+/// about the first while its Delete took away the one open then.
+#[test]
+fn the_delete_question_goes_with_its_project() {
+    fn popup_harness() -> impl IntoElement {
+        rect().expanded().child(DeleteProjectPopup)
+    }
+
+    let (mut test, (states, deleting)) = TestingRunner::new(
+        popup_harness,
+        (600., 400.).into(),
+        |runner: &mut _| {
+            runner.provide_root_context(|| (test_roots().states, consume_context::<Deleting>().0))
+        },
+        1.,
+    );
+    let mut deleting = deleting;
+    deleting.set(Some(("Unsaved project 1".to_owned(), states.stay())));
+    settle(&mut test);
+    assert!(label_area(&test, "Delete Unsaved project 1?").is_some());
+
+    clear_project(states);
+    settle(&mut test);
+    assert!(
+        label_area(&test, "Delete").is_none(),
+        "the window still offers to delete the project open now"
     );
 }
 

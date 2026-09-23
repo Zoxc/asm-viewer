@@ -849,7 +849,7 @@ impl Component for ChipButton {
                         let file = states.proj.peek().file.clone();
                         let name = file
                             .zip(store)
-                            .map(|(file, store)| project::label(&store, &file));
+                            .map(|(file, store)| (project::label(&store, &file), states.stay()));
                         deleting.set(name);
                     }
                 })
@@ -962,6 +962,16 @@ impl Component for UnopenedPopup {
     }
 }
 
+/// Delete the project open at `asked`, which is the one the reader was asked about.
+/// Nothing if they have left it since: a dialog that answers while the question is up can
+/// open another, and the window goes with the project only at its next render.
+pub(crate) fn confirmed_delete(states: ProjectStates, asked: Stay) {
+    if states.left(asked) {
+        return;
+    }
+    delete_project(states);
+}
+
 /// The window the app asks before deleting a project.
 ///
 /// Nothing is deleted until it is answered: the control in the bar sets [`Deleting`] and
@@ -975,9 +985,12 @@ impl Component for DeleteProjectPopup {
     fn render(&self) -> impl IntoElement {
         let states = use_project_states();
         let mut deleting = use_consume::<Deleting>().0;
-        let asking = deleting.read().clone();
+        // Read and not peeked, so a question about a project the reader has left goes
+        // with it.
+        let stay = *states.stay.read();
+        let asking = deleting.read().clone().filter(|&(_, asked)| asked == stay);
 
-        notice(move |_| deleting.set(None)).map(asking, |popup, name| {
+        notice(move |_| deleting.set(None)).map(asking, |popup, (name, asked)| {
             popup
                 .child(
                     notice_body()
@@ -1000,7 +1013,7 @@ impl Component for DeleteProjectPopup {
                                 .filled()
                                 .on_press(move |_| {
                                     deleting.set(None);
-                                    delete_project(states);
+                                    confirmed_delete(states, asked);
                                 })
                                 .child("Delete"),
                         ),

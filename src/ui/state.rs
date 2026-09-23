@@ -457,14 +457,15 @@ pub(crate) struct Rescued(pub(crate) State<Vec<PathBuf>>);
 #[derive(Clone, Copy)]
 pub(crate) struct Unopened(pub(crate) State<Option<project::Failure>>);
 
-/// Whether the reader is being asked to confirm deleting the open project, and what it is
-/// called while they answer.
+/// Whether the reader is being asked to confirm deleting the open project, what it is
+/// called while they answer, and the stay they asked in.
 ///
 /// The label and not the path: it is what the question names, and reading it once when the
 /// question is asked is what keeps [`DeleteProjectPopup`] from having to be told the
-/// project again.
+/// project again. The stay is what the answer is checked against: a dialog can take the
+/// reader to another project while the question is up (`ProjectStates::left`).
 #[derive(Clone, Copy)]
-pub(crate) struct Deleting(pub(crate) State<Option<String>>);
+pub(crate) struct Deleting(pub(crate) State<Option<(String, Stay)>>);
 
 /// Every state a project owns, in one `Copy` bundle of handles: a project switch closes
 /// all of them and reopens all of them. Provided by `app()` and taken whole

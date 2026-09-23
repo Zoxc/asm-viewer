@@ -244,7 +244,9 @@ component holding a `Doing` and not a handler, for `TabClose`'s reason: a `Compo
 `PartialEq` and a closure is not. Delete sets `Deleting` and nothing else -- what acts is
 `DeleteProjectPopup` on the app's `notice` shell, whose `on_close_request` is the "no" for free and
 which draws nothing at all while there is nothing to ask, the same shape the scratchpad's
-delete has.
+delete has. `Deleting` holds the `Stay` it was asked in, and the window draws nothing once the
+reader has left that project: a dialog answering while it was up could open another, and the
+press deleted that one instead (`ProjectStates::left`, `agents/Sidebar.md`).
 
 **The menu at the top left leaves out what would do nothing, except the one row that is
 about the reader's own past.** freya's `MenuItem` has no disabled state and freya has no
