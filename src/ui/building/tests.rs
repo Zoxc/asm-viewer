@@ -48,6 +48,41 @@ fn only_the_previous_builds_artifacts_that_are_open_are_reopened() {
     );
 }
 
+/// **What is replaced is the previous build's list, not this one's.** A file the build
+/// before did not produce was opened some other way, so it is the reader's even where this
+/// build has just written it; and one the build before produced that this one did not was
+/// not rewritten.
+#[test]
+fn a_build_replaces_only_what_the_build_before_produced() {
+    let mut state = Builds {
+        building: true,
+        previous: vec![
+            PathBuf::from("target/debug/viewer"),
+            PathBuf::from("target/debug/gone"),
+        ],
+        ..Builds::default()
+    };
+    let open = [
+        PathBuf::from("target/debug/viewer"),
+        PathBuf::from("target/debug/gone"),
+        PathBuf::from("target/debug/theirs"),
+    ];
+    let reopening = state.finished(
+        built(&["target/debug/viewer", "target/debug/theirs"]),
+        HashMap::new(),
+        &open,
+    );
+
+    assert_eq!(reopening, vec![PathBuf::from("target/debug/viewer")]);
+    assert_eq!(
+        state.previous,
+        vec![
+            PathBuf::from("target/debug/viewer"),
+            PathBuf::from("target/debug/theirs")
+        ],
+    );
+}
+
 #[test]
 fn a_failed_build_reopens_nothing_and_leaves_the_previous_list_standing() {
     let previous = vec![PathBuf::from("target/debug/viewer")];

@@ -599,8 +599,8 @@ it holds no code and a row for it could only ever fail to parse.
 **A build replaces the artifacts of the build before it, and nothing else.** A binary is a path, so
 two generations of one file cannot both be in the objects list -- but narrowed: a file the reader
 opened by hand is theirs even where a build has just written the same path. So the set replaced is
-the *previous* build's list intersected with what is open, closed one by one and reopened in a
-single load rather than a close and a spawn each. A build that failed replaces nothing and keeps
+the *previous* build's list intersected with what this one wrote and with what is open, closed one
+by one and reopened in a single load rather than a close and a spawn each. A build that failed replaces nothing and keeps
 the previous list: a typo is the usual reason, cargo wrote none of those files, and a close would
 take every tab into them for bytes that are the same. The load is registered with the closes and
 not in the task that reads it, or the save observer, woken by the closes, would run first and write

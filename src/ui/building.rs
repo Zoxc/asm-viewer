@@ -119,7 +119,8 @@ impl Builds {
     /// **Only the previous build's artifacts are replaced.** A binary is a path throughout
     /// the app, so two generations of one file cannot both be in the objects list; but a
     /// file the reader opened by hand is theirs, even where a build has just written the
-    /// same path.
+    /// same path. So what is replaced is what the build before listed, this one wrote again,
+    /// and the project has open.
     ///
     /// **A build that failed replaces nothing.** A compile error leaves the previous build's
     /// files as they were, so closing them would take every tab into them for nothing. The
@@ -145,10 +146,10 @@ impl Builds {
         let Some(produced) = produced else {
             return Vec::new();
         };
-        self.previous = produced;
+        let before = std::mem::replace(&mut self.previous, produced);
         self.previous
             .iter()
-            .filter(|path| open.contains(path))
+            .filter(|path| before.contains(path) && open.contains(path))
             .cloned()
             .collect()
     }
