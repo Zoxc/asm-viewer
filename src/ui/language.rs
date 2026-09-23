@@ -565,7 +565,7 @@ impl LspJobs {
     /// The [`Ticket`] the next question of run `run` goes out under. The id is never
     /// handed out twice, which is what lets an answer name the question it is to and not
     /// merely the server it came from.
-    fn ticket(&self, run: u64) -> Ticket {
+    pub(crate) fn ticket(&self, run: u64) -> Ticket {
         Ticket {
             run,
             id: self.asked.fetch_add(1, Ordering::Relaxed),
@@ -700,7 +700,12 @@ pub(crate) fn use_language_with(
                 }
                 write_if(language, |held| held.read_settings(settings));
             }
-            LspAnswer::Linked { run, file, links } => {
+            LspAnswer::Linked {
+                ticket,
+                file,
+                links,
+            } => {
+                let run = ticket.run;
                 if !is_run(language, run) {
                     return;
                 }
@@ -710,12 +715,12 @@ pub(crate) fn use_language_with(
                 // refusal is a question to put again, and an empty answer is the answer.
                 let why = match links {
                     Ok(links) => {
-                        write_if(linked, |waiting| waiting.answer(run, file, links));
+                        write_if(linked, |waiting| waiting.answer(ticket, file, links));
                         return;
                     }
                     Err(failure @ lsp::Failure::Refused { .. }) => {
                         log::warn!("the language server refused a question: {failure}");
-                        write_if(linked, |waiting| waiting.answer_refused(run, file));
+                        write_if(linked, |waiting| waiting.answer_refused(ticket, file));
                         return;
                     }
                     Err(failure) => failure,

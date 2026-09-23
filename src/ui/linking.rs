@@ -24,7 +24,7 @@ use super::*;
 /// The links in the file the pane is showing, and the question owed for it.
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Linked {
-    /// The question in flight: the file it is about and the run it went out in.
+    /// The question in flight: the file it is about and the ticket it went out under.
     ///
     /// Held for the reason `Follow` and `Located` hold theirs -- **an answer to a
     /// question nobody is waiting for is an answer to nobody** -- and here it is what
@@ -32,7 +32,10 @@ pub(crate) struct Linked {
     /// project it has got over and over, each word of it a reason for the effect below to
     /// look again; without this, every one of them sent the same question afresh, and the
     /// one that came back refused wrote over the one that had not.
-    asked: Option<(Arc<Path>, u64)>,
+    ///
+    /// **A ticket and not the run**, so a question dropped while in flight stays dropped
+    /// when the same file is asked about again in the same run ([`Linked::forget_answer`]).
+    asked: Option<(Arc<Path>, Ticket)>,
     /// The file the links below are of, the server run they came back under, and them --
     /// `None` where the server refused to answer.
     ///
@@ -48,11 +51,8 @@ impl Linked {
     /// Whether a question is owed for `showing`: nothing held answers it, and none is
     /// already on its way.
     pub(crate) fn pending(&self, showing: &Arc<Path>, run: u64) -> bool {
-        let about = |held: &Option<(Arc<Path>, u64)>| {
-            held.as_ref()
-                .is_some_and(|(file, at)| file == showing && *at == run)
-        };
-        if about(&self.asked) {
+        let asked = self.asked.as_ref();
+        if asked.is_some_and(|(file, ticket)| file == showing && ticket.run == run) {
             return false;
         }
         !matches!(&self.found, Some((file, at, _)) if file == showing && *at == run)
@@ -60,8 +60,8 @@ impl Linked {
 
     /// The question has gone out. Whether anything changed, so the caller writes only
     /// then.
-    pub(crate) fn asking(&mut self, run: u64, file: Arc<Path>) -> bool {
-        let going = Some((file, run));
+    pub(crate) fn asking(&mut self, ticket: Ticket, file: Arc<Path>) -> bool {
+        let going = Some((file, ticket));
         if self.asked == going {
             return false;
         }
@@ -79,29 +79,30 @@ impl Linked {
         }
     }
 
-    /// Take `links` as the answer about `file` in run `run`. Whether anything changed, so
-    /// the caller writes only then.
-    pub(crate) fn answer(&mut self, run: u64, file: Arc<Path>, links: links::Links) -> bool {
-        self.take(run, file, Some(links))
+    /// Take `links` as the answer about `file` to the question `ticket`. Whether anything
+    /// changed, so the caller writes only then.
+    pub(crate) fn answer(&mut self, ticket: Ticket, file: Arc<Path>, links: links::Links) -> bool {
+        self.take(ticket, file, Some(links))
     }
 
-    /// The server refused to answer about `file` in run `run`. Nothing is drawn for it,
-    /// and it is asked again once the server has read more of the project.
-    pub(crate) fn answer_refused(&mut self, run: u64, file: Arc<Path>) -> bool {
-        self.take(run, file, None)
+    /// The server refused to answer about `file` to the question `ticket`. Nothing is
+    /// drawn for it, and it is asked again once the server has read more of the project.
+    pub(crate) fn answer_refused(&mut self, ticket: Ticket, file: Arc<Path>) -> bool {
+        self.take(ticket, file, None)
     }
 
     /// Both answers, the guard being the same one.
-    fn take(&mut self, run: u64, file: Arc<Path>, links: Option<links::Links>) -> bool {
+    fn take(&mut self, ticket: Ticket, file: Arc<Path>, links: Option<links::Links>) -> bool {
         // An answer to a question nobody is waiting for: one already answered, one about
-        // a file the pane has since left, or one from a server that has been restarted
-        // since. Taking it would let a second question's refusal land on top of the names
-        // the first one came back with.
-        if self.asked.as_ref() != Some(&(file.clone(), run)) {
+        // a file the pane has since left, one from a server that has been restarted
+        // since, or one dropped because the server settled after it was asked. Taking it
+        // would let a second question's refusal land on top of the names the first one
+        // came back with.
+        if self.asked.as_ref() != Some(&(file.clone(), ticket)) {
             return false;
         }
         self.asked = None;
-        self.found = Some((file, run, links));
+        self.found = Some((file, ticket.run, links));
         true
     }
 
@@ -114,16 +115,23 @@ impl Linked {
         held
     }
 
-    /// Drop what the server said, so the next turn of [`use_linking`] asks again. Whether
-    /// anything changed, so the caller writes only then.
+    /// Drop what the server said, and the question still in flight, so the next turn of
+    /// [`use_linking`] asks again. Whether anything changed, so the caller writes only
+    /// then.
     ///
     /// Called where the server says it has **settled**, and what it answered before then
     /// was as far as it had got: fewer names, and some of them classified wrongly -- a
     /// `builtinType` the server had not resolved yet arrives as something the app draws
     /// as a link, and a link that leads nowhere is worse than no link at all.
+    ///
+    /// **The question in flight goes too.** It was asked before the server settled, and
+    /// its answer comes back on the worker's channel while the news came on the notes
+    /// channel, with nothing ordering the two: kept, an answer worked out before the
+    /// server settled could land after this and be held for the life of the server.
     pub(crate) fn forget_answer(&mut self) -> bool {
-        let held = self.found.is_some();
+        let held = self.found.is_some() || self.asked.is_some();
         self.found = None;
+        self.asked = None;
         held
     }
 
@@ -215,9 +223,14 @@ pub(crate) fn use_linking(
             // (`serves`).
             opened.read().holds(run, &file).then_some((run, file))
         },
+        // The ticket is minted as the question goes out, and not in the memo: a memo that
+        // minted one would be a new question every time it looked. So the mark is made
+        // here, still before the send.
+        unmarked,
         move |(run, file)| {
-            write_if(linked, |waiting| waiting.asking(*run, file.clone()));
+            let ticket = jobs.ticket(run);
+            write_if(linked, |waiting| waiting.asking(ticket, file.clone()));
+            jobs.send(LspJob::Tokens { ticket, file });
         },
-        move |(run, file)| jobs.send(LspJob::Tokens { run, file }),
     );
 }

@@ -8736,8 +8736,8 @@ fn mount_linking_beside(
         };
         let _ = asked.send_blocking(recorded);
         match &job {
-            LspJob::Tokens { run, file } => Some(LspAnswer::Linked {
-                run: *run,
+            LspJob::Tokens { ticket, file } => Some(LspAnswer::Linked {
+                ticket: *ticket,
                 file: file.clone(),
                 links: classify(),
             }),
@@ -10157,8 +10157,14 @@ fn an_answer_to_a_question_nobody_asked_is_not_taken() {
     let file: Arc<Path> = Arc::from(Path::new("/p/src/main.rs"));
     let mut linked = Linked::default();
 
-    assert!(linked.asking(1, file.clone()), "the question went out");
-    assert!(linked.answer(1, file.clone(), a_link()), "and was answered");
+    assert!(
+        linked.asking(ticket(1, 1), file.clone()),
+        "the question went out"
+    );
+    assert!(
+        linked.answer(ticket(1, 1), file.clone(), a_link()),
+        "and was answered"
+    );
     assert_eq!(
         linked.links_in(&file).map(|links| links.is_empty()),
         Some(false)
@@ -10166,7 +10172,7 @@ fn an_answer_to_a_question_nobody_asked_is_not_taken() {
 
     // The same question again, refused and so empty. Nobody is waiting for it.
     assert!(
-        !linked.answer(1, file.clone(), links::Links::default()),
+        !linked.answer(ticket(1, 1), file.clone(), links::Links::default()),
         "an answer arriving twice was taken twice"
     );
     assert_eq!(
@@ -10184,14 +10190,14 @@ fn a_question_on_its_way_is_not_asked_again() {
     let mut linked = Linked::default();
 
     assert!(linked.pending(&file, 1), "nothing asked, nothing held");
-    linked.asking(1, file.clone());
+    linked.asking(ticket(1, 1), file.clone());
     assert!(!linked.pending(&file, 1), "the question went out twice");
 
     // A server that has been restarted is a different question: what is in flight is the
     // old one's, and its answer will be an answer to nobody.
     assert!(linked.pending(&file, 2));
 
-    linked.answer(1, file.clone(), a_link());
+    linked.answer(ticket(1, 1), file.clone(), a_link());
     assert!(
         !linked.pending(&file, 1),
         "an answered question was asked again"
@@ -10199,6 +10205,36 @@ fn a_question_on_its_way_is_not_asked_again() {
 
     // And the pane moving to another file is a question of its own.
     assert!(linked.pending(&Arc::from(Path::new("/p/src/other.rs")), 1));
+}
+
+/// **An answer to a question asked before the server settled is not taken**, however late
+/// it arrives. The news that the server has settled and the answer come down two channels
+/// with nothing ordering them, so the news can land first and find nothing to drop; the
+/// answer after it was worked out from a half-read project, and would be held for the life
+/// of the server.
+#[test]
+fn an_answer_asked_for_before_the_server_settled_is_not_taken() {
+    let file: Arc<Path> = Arc::from(Path::new("/p/src/main.rs"));
+    let mut linked = Linked::default();
+
+    linked.asking(ticket(1, 1), file.clone());
+    // The server settles while the question is in flight.
+    assert!(linked.forget_answer(), "the question in flight was kept");
+    assert!(
+        linked.pending(&file, 1),
+        "the file is not asked about again"
+    );
+    // Asked again, in the same run.
+    linked.asking(ticket(1, 2), file.clone());
+
+    // The first answer arrives.
+    assert!(
+        !linked.answer(ticket(1, 1), file.clone(), a_link()),
+        "an answer from before the server settled was taken"
+    );
+    assert!(linked.links_in(&file).is_none());
+    // And the second is.
+    assert!(linked.answer(ticket(1, 2), file.clone(), a_link()));
 }
 
 /// **A definition in a file already open moves inside its tab.** The server answers with

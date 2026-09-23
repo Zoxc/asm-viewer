@@ -40,8 +40,9 @@ pub(crate) enum LspJob {
     },
     /// What every name in one file is, which is a question about the file and not about
     /// a place in it. The file travels as the `Arc<Path>` a document is named by, since
-    /// that is what the answer has to be matched against.
-    Tokens { run: u64, file: Arc<Path> },
+    /// that is what the answer has to be matched against. The [`Ticket`] is minted by
+    /// `use_linking` and copied into the answer, as [`LspJob::Ask`]'s is.
+    Tokens { ticket: Ticket, file: Arc<Path> },
     /// What the name under the pointer is. A question about a place like [`LspJob::Ask`]'s
     /// four, and **not** a fifth `lsp::Question`: those are bucketed by consumer, of which
     /// this is a third, and a pointer crossing a name must neither take back a definition
@@ -86,7 +87,7 @@ pub(crate) enum LspAnswer {
     /// What every name in one file is, and which file. Its own answer and not a `Reply`,
     /// since it is the one question about a file rather than about a place in one.
     Linked {
-        run: u64,
+        ticket: Ticket,
         file: Arc<Path>,
         links: Result<links::Links, lsp::Failure>,
     },
@@ -236,7 +237,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                     reply: replied(want, places, &mut lines),
                 })
             }
-            LspJob::Tokens { run, file } => {
+            LspJob::Tokens { ticket, file } => {
                 // Classified here rather than on the UI thread: it is a walk of every
                 // name in the file, and this is the thread that may take its time. Done
                 // while the conversation is still in hand, the legend being its.
@@ -244,7 +245,11 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                     talk.semantic_tokens(&file)
                         .map(|tokens| links::Links::of(talk.legend(), &tokens))
                 });
-                Some(LspAnswer::Linked { run, file, links })
+                Some(LspAnswer::Linked {
+                    ticket,
+                    file,
+                    links,
+                })
             }
             LspJob::Hover { ticket, at } => {
                 let said = asked(&mut talking, |talk| talk.hover(&at));

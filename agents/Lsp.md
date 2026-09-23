@@ -866,3 +866,10 @@ back `const` that are not const, five parameters were not parameters yet, and fi
 `builtinType`s were something else. `src/links.rs` draws a `const` as a link and a
 `builtinType` as nothing, so the early answer is not a smaller set of links but a **wrong**
 one, on names that lead nowhere.
+
+**The question in flight is dropped with it.** The notification and the worker's answers
+come down two channels with nothing ordering them, so an answer asked for before the server
+settled can arrive after the news and find nothing held to drop. So the question carries a
+`Ticket`, as a hover and a place do, and `forget_answer` lets go of it: the late answer names
+a question nobody holds, and the one asked again is told apart from it though it is about
+the same file in the same run.
