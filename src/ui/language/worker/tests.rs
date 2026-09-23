@@ -54,3 +54,42 @@ fn an_answer_comes_back_in_the_shape_the_question_was_asked_in() {
         assert_eq!(texts, ["ø = helper(n);"]);
     }
 }
+
+/// **A question with no server to ask is still answered**, failed: one queued behind a start
+/// that failed, or behind a question that saw the conversation end, is held by whoever
+/// asked it until an answer comes, and one that never came left the Locations panel
+/// looking for ever.
+#[test]
+fn a_question_with_no_server_to_ask_is_answered_failed() {
+    let work = language_work();
+    let ticket = Ticket { run: 1, id: 7 };
+    let at = Lookup {
+        file: PathBuf::from("/p/src/main.rs"),
+        line: 1,
+        column: 0,
+    };
+
+    let answer = work(LspJob::Ask {
+        ticket,
+        at: at.clone(),
+        want: lsp::Question::Listed(lsp::Listed::References),
+    });
+    let Some(LspAnswer::Answered {
+        ticket: answered,
+        reply: Reply::Listed(Err(lsp::Failure::Broken(_))),
+    }) = answer
+    else {
+        panic!("a question with no server is answered as a broken conversation");
+    };
+    assert_eq!(answered, ticket);
+
+    let answer = work(LspJob::Hover { ticket, at });
+    let Some(LspAnswer::Hovered {
+        ticket: answered,
+        said: Err(lsp::Failure::Broken(_)),
+    }) = answer
+    else {
+        panic!("a hover with no server is answered as a broken conversation");
+    };
+    assert_eq!(answered, ticket);
+}

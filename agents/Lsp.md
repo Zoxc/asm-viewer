@@ -139,8 +139,8 @@ every question a reader asks: it turns the `-32801` and `-32800` codes into a nu
 which every reader of an answer already takes as nothing found. `request` itself is left
 raw for the handshake, which needs the refusal, and for `semantic_tokens`, where a refusal
 is a question to put again. On the worker, `language::worker::asked` wraps every job that
-says anything to a server: no server is no answer, and a `Broken` conversation is dropped
-there rather than in each arm. Both were copied per question before, and the copy a new
+says anything to a server: no server is a `Broken` answer, and a `Broken` conversation is
+dropped there rather than in each arm. Both were copied per question before, and the copy a new
 question forgot would be the one that leaves a dead conversation in `talking`.
 
 **A reader thread owns the server's output.** It began without one -- a request read frames
@@ -594,8 +594,12 @@ stop: a reader clicking twice wants the second answer, a reader who asks for a n
 references has not taken back the definition they asked for, and a press is never dropped.
 A question asked
 while the server is still starting is sent all the same -- it queues behind the start and
-is answered once there is somebody to answer it, and finds nothing to talk to if the start
-failed. A question with the server off is not sent: the control is what starts one.
+is answered once there is somebody to answer it. If the start failed, or a conversation
+ended with questions still queued behind it, each is answered `Broken` all the same: the
+asker holds its ticket until an answer comes, and one that never came left the Locations
+panel "Finding..." for good. `Language::failed` writes only over a server still starting
+or running, so the control keeps the first reason and not "there is no server to ask". A
+question with the server off is not sent: the control is what starts one.
 
 Leaving the project ends its server, from a side effect on the project's file and directory
 rather than from `clear_project`: the server was started over that directory, and a

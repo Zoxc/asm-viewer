@@ -378,8 +378,12 @@ impl Language {
 
     /// Run `run`'s server stopped answering, `why` being what it said. The one thing the
     /// control has to show, and the end of that server as far as the app is concerned.
+    ///
+    /// Only a server still starting or running can fail: the questions queued behind the
+    /// first failure come back failed too, having nothing left to ask, and the reason the
+    /// control shows is the first one.
     fn failed(&mut self, run: u64, why: String) -> bool {
-        if self.run != run {
+        if self.run != run || !self.started() {
             return false;
         }
         self.state = Lsp::Failed(why);
@@ -1007,7 +1011,8 @@ pub(crate) fn stop_server(language: State<Language>, jobs: &LspJobs) {
 /// `None` with no server: there is nobody to ask, and a question is not what starts one --
 /// that is the control, and only the reader presses it. One that is still starting is
 /// asked all the same, the question queueing behind the start to be answered once there is
-/// somebody to answer it, and finding nothing to talk to if the start failed.
+/// somebody to answer it -- and answered as failed if the start failed, so the asker gives
+/// up.
 pub(crate) fn ask_where(
     language: State<Language>,
     jobs: &LspJobs,

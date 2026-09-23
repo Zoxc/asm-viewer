@@ -143,20 +143,25 @@ pub(crate) fn replied(
 
 /// Put one question to the server there is, and let go of a conversation that has ended.
 ///
-/// [`None`] with no server: there is nobody to ask, so there is no answer to send. A
-/// [`lsp::Failure::Broken`] is the conversation itself ending, so the server is dropped
-/// here -- the one place that decision is made -- and reported as the failure it is. Every
-/// job that says anything to a server goes through this, so a question added later cannot
-/// leave a dead conversation in `talking` for the next one to fail against.
+/// With no server the answer is [`lsp::Failure::Broken`], as it is for a conversation
+/// that ended mid-question: a question queued behind a start that failed, or behind one
+/// that saw the pipe close, is still held by whoever asked, and only an answer lets them
+/// give up. A `Broken` is the conversation itself ending, so the server is dropped here --
+/// the one place that decision is made. Every job that says anything to a server goes
+/// through this, so a question added later cannot leave a dead conversation in `talking`
+/// for the next one to fail against.
 fn asked<T>(
     talking: &mut Option<lsp::Server>,
     ask: impl FnOnce(&mut lsp::Server) -> Result<T, lsp::Failure>,
-) -> Option<Result<T, lsp::Failure>> {
-    let answer = ask(talking.as_mut()?);
+) -> Result<T, lsp::Failure> {
+    let Some(server) = talking.as_mut() else {
+        return Err(lsp::Failure::Broken("there is no server to ask".to_owned()));
+    };
+    let answer = ask(server);
     if matches!(answer, Err(lsp::Failure::Broken(_))) {
         *talking = None;
     }
-    Some(answer)
+    answer
 }
 
 /// The blocking half, and the only part that talks to a server.
@@ -210,7 +215,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 // through it and the rows it will be drawn as are counted through it, so
                 // a file an answer names is read once and not once per conversion.
                 let mut lines = lsp::Lines::reading(source::read_text);
-                let places = asked(&mut talking, |talk| talk.places(want, &at, &mut lines))?;
+                let places = asked(&mut talking, |talk| talk.places(want, &at, &mut lines));
                 Some(LspAnswer::Answered {
                     ticket,
                     reply: replied(want, places, &mut lines),
@@ -223,11 +228,11 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 let links = asked(&mut talking, |talk| {
                     talk.semantic_tokens(&file)
                         .map(|tokens| links::Links::of(talk.legend(), &tokens))
-                })?;
+                });
                 Some(LspAnswer::Linked { run, file, links })
             }
             LspJob::Hover { ticket, at } => {
-                let said = asked(&mut talking, |talk| talk.hover(&at))?;
+                let said = asked(&mut talking, |talk| talk.hover(&at));
                 Some(LspAnswer::Hovered { ticket, said })
             }
             LspJob::Opened {
@@ -246,13 +251,13 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                         return Ok(false);
                     };
                     talk.opened(&path, &language, &text).map(|()| true)
-                })?;
+                });
                 // Everything the server said about this file before it had it is what it
                 // could work out from the disk, which may have been nothing at all.
                 matches!(told, Ok(true)).then_some(LspAnswer::Reopened { run, file })
             }
             LspJob::Closed { file } => {
-                asked(&mut talking, |talk| talk.closed(&file));
+                let _ = asked(&mut talking, |talk| talk.closed(&file));
                 None
             }
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {

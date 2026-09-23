@@ -182,6 +182,20 @@ fn a_failure_reported_for_a_server_already_replaced_is_not_shown() {
     assert!(matches!(state.state, Lsp::Failed(_)));
 }
 
+/// The first failure is the one the control shows: the questions queued behind it come
+/// back failed too, with nothing left to ask, and must not write over the reason.
+#[test]
+fn only_a_server_still_there_can_fail() {
+    let mut state = Language {
+        state: Lsp::running_to_nothing(),
+        run: 5,
+        ..Language::default()
+    };
+    assert!(state.failed(5, "it died".to_owned()));
+    assert!(!state.failed(5, "there is no server to ask".to_owned()));
+    assert_eq!(state.state, Lsp::Failed("it died".to_owned()));
+}
+
 /// **A started server is named by what it was started as**, not by the Program box, which
 /// may have been typed into since.
 #[test]
