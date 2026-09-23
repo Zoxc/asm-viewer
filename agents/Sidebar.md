@@ -297,7 +297,7 @@ where nothing typed and a pattern it refuses are both no search.
 
 **The walk is ripgrep's** (`ignore`, `grep-searcher`, `grep-regex`), which is where the ignore
 rules, the binary detection and the line-at-a-time reading come from rather than being written here.
-Five decisions are the app's. `require_git(false)`, since a project directory is usually not a git
+Six decisions are the app's. `require_git(false)`, since a project directory is usually not a git
 working tree and the crate's default would then walk `target/` whole. The sort puts a directory's
 own files before the directories under it, which costs a `symlink_metadata` per comparison and buys
 the one thing a reader watching a list grow needs: it only ever grows at its end. The name half is
@@ -305,7 +305,11 @@ the one thing a reader watching a list grow needs: it only ever grows at its end
 lowercased a character at a time as they are compared, where each side used to be copied twice.
 `max_filesize` is `source::MAX_SIZE`, so the search reads only what the source pane could show and
 every hit can be opened. `follow_links(false)` is the crate's default written out, being the app's
-rule and not the crate's: a symlink is not a project file anywhere (`agents/Finding.md`). And a
+rule and not the crate's: a symlink is not a project file anywhere (`agents/Finding.md`). A line
+ends at `\r\n` as well as `\n`, as it does in the Source pane: the crate's default takes off only
+the `\n`, so a line of a CRLF file reached the matcher ending in `\r` and `;$` found nothing in it.
+The searcher is told and not the matcher: `grep-regex`'s `crlf` changes only a multi-line `$`, and
+the matcher is not multi-line. And a
 hit's line is decoded, **then** matched, **then** trimmed and cut, with the spans moved afterwards:
 matching a trimmed line changes what `^` and `\b` answer, and match offsets taken from raw bytes are
 wrong the moment a lossy decode replaces one.

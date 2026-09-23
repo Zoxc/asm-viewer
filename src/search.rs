@@ -89,6 +89,9 @@ pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlF
     };
 
     let mut searcher = SearcherBuilder::new()
+        // A line ends at `\r\n` as well as `\n`, and the matcher is handed it without
+        // either: the default takes off only the `\n`, and a `$` then fails on the `\r`.
+        .line_terminator(grep_matcher::LineTerminator::crlf())
         // Its default is to search a binary file like any other, which would put a row of
         // an object file's bytes in the list. `quit` abandons the file at the first NUL.
         .binary_detection(BinaryDetection::quit(0))

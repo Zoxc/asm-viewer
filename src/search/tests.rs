@@ -236,6 +236,24 @@ fn an_anchored_pattern_is_asked_of_the_whole_line() {
     assert!(places(&root, &hits) == ["x.rs:2"]);
 }
 
+/// A pattern anchored to the line's end finds a line ended by `\r\n` as it finds one ended
+/// by `\n`: the `\r` is part of the terminator and not of the line.
+#[test]
+fn an_end_anchored_pattern_finds_a_crlf_line() {
+    let root = Temporary::fresh_directory("search-crlf");
+    write(&root.join("x.rs"), "let a = 1;\r\nfn b() {\r\n");
+
+    let anchored = |pattern: &str| Filter {
+        pattern: pattern.to_owned(),
+        regex: true,
+        ..Filter::default()
+    };
+    let statement = hits(&root, anchored(";$"));
+    assert!(places(&root, &statement) == ["x.rs:1"], "{statement:?}");
+    let brace = hits(&root, anchored(r"\{$"));
+    assert!(places(&root, &brace) == ["x.rs:2"], "{brace:?}");
+}
+
 /// A match that starts in the whitespace the row does not draw is marked for the part of
 /// it that is drawn. The matches are found over the whole line -- a pattern that needs the
 /// indentation finds it -- and are moved to the drawn text afterwards.
