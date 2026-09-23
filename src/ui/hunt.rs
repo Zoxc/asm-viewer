@@ -110,7 +110,8 @@ const SAID_EVERY: usize = 64;
 ///
 /// **It wraps once.** The walk starts in the stretch the address is in and ends there,
 /// having been round the whole listing, so a match behind the reader is still found and no
-/// match is found twice.
+/// match is found twice. That stretch is read twice: first for what is past the address,
+/// and last, back round, for the rest of it. With no address it is read once, whole.
 pub(crate) fn hunt(
     object: &Object,
     code: &Arc<CodeListing>,
@@ -129,14 +130,17 @@ pub(crate) fn hunt(
         (None, Direction::Forward) => 0,
         (None, Direction::Back) => last,
     };
+    // One step more than there are stretches where there is an address: the step back
+    // into the first one.
+    let steps = if from.is_some() { total + 1 } else { total };
 
-    for step in 0..total {
+    for step in 0..steps {
         let flat = match direction {
             Direction::Forward => (first + step) % total,
             Direction::Back => (first + total - step % total) % total,
         };
         if step % SAID_EVERY == 0 {
-            let through = step as f32 / total as f32;
+            let through = (step as f32 / total as f32).min(1.0);
             if emit(Hunted::Through(through)).is_break() {
                 return;
             }
@@ -151,14 +155,19 @@ pub(crate) fn hunt(
         }
         for (address, line) in lines {
             // The stretch the walk started in holds the reader's own place: only what is
-            // past it counts, or a step would find the match the pane is already on.
-            let starting = step == 0 || (step == last && flat == first);
-            if let Some(from) = from.filter(|_| starting) {
+            // past it counts at the start, or a step would find the match the pane is
+            // already on, and only what is not at the end.
+            if let Some(from) = from {
                 let past = match direction {
                     Direction::Forward => address > from,
                     Direction::Back => address < from,
                 };
-                if !past {
+                let counts = match step {
+                    0 => past,
+                    _ if step == total => !past,
+                    _ => true,
+                };
+                if !counts {
                     continue;
                 }
             }

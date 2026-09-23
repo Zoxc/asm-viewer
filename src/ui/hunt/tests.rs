@@ -64,3 +64,52 @@ fn a_walk_with_no_caret_finds_a_match_at_address_zero() {
         );
     }
 }
+
+/// A walk comes back round into the stretch it started in, for the lines on the reader's
+/// side of the caret: a match earlier in the same function going forward, or later in it
+/// going back, is still found. The walk used to stop one stretch short of that.
+#[test]
+fn a_walk_wraps_back_into_the_stretch_it_started_in() {
+    let (object, code) = code();
+    let every: Vec<(usize, PlacedAddress, String)> = (0..code.stretch_count())
+        .flat_map(|flat| {
+            section_view::stretch_texts(&object, &code, flat)
+                .into_iter()
+                .map(move |(address, line)| (flat, address, line.to_string()))
+        })
+        .collect();
+    // A line no other line contains, with lines of its own stretch on both sides of it.
+    let (flat, address, text) = every
+        .iter()
+        .find(|(flat, address, text)| {
+            !text.is_empty()
+                && every
+                    .iter()
+                    .filter(|(_, _, t)| t.contains(text.as_str()))
+                    .count()
+                    == 1
+                && every.iter().any(|(f, a, _)| f == flat && a < address)
+                && every.iter().any(|(f, a, _)| f == flat && a > address)
+        })
+        .expect("the fixture has a line only it says, inside a stretch");
+    let (flat, address) = (*flat, *address);
+    let below = every
+        .iter()
+        .find(|(f, a, _)| *f == flat && *a > address)
+        .map(|(_, a, _)| *a);
+    let above = every
+        .iter()
+        .find(|(f, a, _)| *f == flat && *a < address)
+        .map(|(_, a, _)| *a);
+
+    assert_eq!(
+        walk(&object, &code, text, below, Direction::Forward),
+        Some(address),
+        "forward from below the match in its own stretch",
+    );
+    assert_eq!(
+        walk(&object, &code, text, above, Direction::Back),
+        Some(address),
+        "back from above the match in its own stretch",
+    );
+}
