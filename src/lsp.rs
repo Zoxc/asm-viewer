@@ -64,6 +64,11 @@ pub use settings::{settings_from, wanted};
 /// gigabyte is a broken conversation and not an allocation.
 const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 
+/// The longest header line that will be read, for the same reason: the program is whatever
+/// the reader named, and one that writes to stdout with no newline would otherwise have all
+/// of it kept.
+const MAX_HEADER: u64 = 8 * 1024;
+
 /// How many bytes of what the server writes to stderr are kept. The **first** of them,
 /// since what is wanted is why a program that would not run said no.
 const MAX_SAID: usize = 4096;
@@ -1503,11 +1508,15 @@ fn read_message(from: &mut impl BufRead) -> Result<Value, Failure> {
     let mut length = None;
     loop {
         let mut header = String::new();
-        let read = from
+        let read = (&mut *from)
+            .take(MAX_HEADER)
             .read_line(&mut header)
             .map_err(|error| Failure::Broken(error.to_string()))?;
         if read == 0 {
             return Err(Failure::Broken("it closed the connection".to_owned()));
+        }
+        if !header.ends_with('\n') {
+            return Err(Failure::Broken("a header line with no end".to_owned()));
         }
         let header = header.trim_end_matches(['\r', '\n']);
         if header.is_empty() {

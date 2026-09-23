@@ -165,6 +165,15 @@ fn a_body_that_stops_short_is_a_broken_conversation() {
     ));
 }
 
+/// A program that writes to stdout with no newline is not kept whole: the read stops a
+/// header's length in.
+#[test]
+fn a_header_line_with_no_end_is_a_broken_conversation() {
+    let mut pipe = Cursor::new(vec![b'x'; 4 * MAX_HEADER as usize]);
+    assert!(matches!(read_message(&mut pipe), Err(Failure::Broken(_))));
+    assert!(pipe.position() <= MAX_HEADER);
+}
+
 #[test]
 fn a_closed_connection_is_a_broken_conversation() {
     assert!(matches!(
