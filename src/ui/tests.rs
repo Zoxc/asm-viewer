@@ -5895,7 +5895,13 @@ fn a_wait_with_no_listing_keeps_the_sentence_that_is_up() {
 
     let mut held = Analyzed::default();
     // The first click, answered with no symbol at all.
-    held.take(barren(999_990), None, Some(&barren(999_990)), &open);
+    held.take(
+        barren(999_990),
+        None,
+        object_ids(&open),
+        Some(&barren(999_990)),
+        &open,
+    );
     let said = format!(
         "No code compiled from {}:999990",
         source::name_of(Path::new(&*at.file))
@@ -5960,11 +5966,13 @@ fn the_fixed_sentences_a_pane_draws_are_borrowed() {
     };
     let file = Document::Source(at.file.clone());
     let mut held = Analyzed::default();
+    let open = [symbol.object.clone()];
     held.take(
         barren.clone(),
         None,
+        object_ids(&open),
         Some(&barren),
-        &[symbol.object.clone()],
+        &open,
     );
     assert!(
         matches!(
@@ -5975,7 +5983,7 @@ fn the_fixed_sentences_a_pane_draws_are_borrowed() {
     );
 
     let mut waiting = Analyzed::default();
-    waiting.take(Ask::Symbol(symbol), None, None, &[]);
+    waiting.take(Ask::Symbol(symbol), None, Vec::new(), None, &[]);
     assert!(
         matches!(
             waiting.showing(&file),

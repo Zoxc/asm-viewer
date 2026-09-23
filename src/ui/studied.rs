@@ -203,6 +203,10 @@ pub(crate) struct Analyzed {
     /// source line no object holds code from leaves the listing that is up and is
     /// recorded only here.
     pub(crate) answered: Option<Ask>,
+    /// The objects `answered` was worked out over, by pointer ([`object_ids`]). A line
+    /// that compiled to nothing is answered only for those: a binary loaded since, or
+    /// rebuilt, may hold its code.
+    pub(crate) over: Vec<usize>,
     /// What the worker is working on, or `None` when it is idle -- which is what tells
     /// the two ways `shown` can be `None` apart: nothing asked, and nothing yet.
     pub(crate) pending: Option<Pending>,
@@ -218,6 +222,7 @@ impl Clone for Analyzed {
         Analyzed {
             shown: self.shown.clone(),
             answered: self.answered.clone(),
+            over: self.over.clone(),
             pending: self.pending.clone(),
         }
     }
@@ -233,6 +238,8 @@ counter!(
 #[derive(Clone, PartialEq)]
 pub(crate) struct Pending {
     pub(crate) ask: Ask,
+    /// The objects it was asked over, by pointer ([`object_ids`]).
+    over: Vec<usize>,
     /// Whether it has been outstanding for [`SLOW_ANALYSIS`] -- long enough to say so,
     /// which is what displaces the listing that is up. A property of the wait and so a
     /// field of it: there is nothing to be slow about while nothing is being waited for.
@@ -240,10 +247,23 @@ pub(crate) struct Pending {
 }
 
 impl Pending {
-    /// A question just sent: waited for, and not yet long enough to say so.
-    fn asked(ask: Ask) -> Pending {
-        Pending { ask, slow: false }
+    /// A question just sent over `over`: waited for, and not yet long enough to say so.
+    fn asked(ask: Ask, over: Vec<usize>) -> Pending {
+        Pending {
+            ask,
+            over,
+            slow: false,
+        }
     }
+}
+
+/// Whether an answer to `ask` worked out over the objects `over` still holds over
+/// `open`, both by pointer ([`object_ids`]). A symbol names its object, so its listing
+/// holds whatever else is open. A source line is answered out of every object open, so a
+/// set that has changed since -- a binary loaded, closed or rebuilt -- is a question
+/// asked again.
+fn holds_over(ask: &Ask, over: &[usize], open: &[usize]) -> bool {
+    matches!(ask, Ask::Symbol(_)) || over == open
 }
 
 /// What a pane draws, which is one decision and not two panes' worth of `if`s.
@@ -305,8 +325,8 @@ impl Analyzed {
         }
     }
 
-    /// Take the answer `studied` to `ask`, `wanted` being the question asked *now* and
-    /// `open` the binaries the project has. Whether anything changed, so the hook writes
+    /// Take the answer `studied` to `ask`, worked out `over` those objects, `wanted` being
+    /// the question asked *now* and `open` the binaries the project has. Whether anything changed, so the hook writes
     /// only then ([`write_if`]).
     ///
     /// **The supersession rule**: an answer is kept only if its question is the one being
@@ -317,15 +337,18 @@ impl Analyzed {
     ///
     /// And an answer out of a binary closed since it was asked for is not taken either
     /// ([`Shown::still_open`]) -- the same rule [`Analyzed::asked`] applies to the listing
-    /// that is up, so the two cannot drift.
+    /// that is up, so the two cannot drift. Nor is a source line's answer worked out over
+    /// other objects than are open now ([`holds_over`]): the effect has asked it again
+    /// over these, and that answer is the one to take.
     pub(crate) fn take(
         &mut self,
         ask: Ask,
         studied: Option<Studied>,
+        over: Vec<usize>,
         wanted: Option<&Ask>,
         open: &[Arc<Object>],
     ) -> bool {
-        if wanted != Some(&ask) {
+        if wanted != Some(&ask) || !holds_over(&ask, &over, &object_ids(open)) {
             return false;
         }
         // Each field says whether it moved, so that an answer the effect has already
@@ -342,6 +365,7 @@ impl Analyzed {
             changed = true;
         }
         changed |= put(&mut self.answered, Some(ask.clone()));
+        changed |= put(&mut self.over, over);
 
         match landed {
             Some(shown) => changed |= put(&mut self.shown, Some(shown)),
@@ -371,8 +395,9 @@ impl Analyzed {
     /// *retagged* rather than worked out afresh -- a source question that resolved to a
     /// symbol has already answered a later ask for that symbol outright, and
     /// re-disassembling it would be most of a second for nothing -- or the question has
-    /// been asked and answered with nothing, which is an answer. What is left is asked,
-    /// and marked pending so that it is not asked twice.
+    /// been asked and answered with nothing over the objects open now, which is an
+    /// answer. What is left is asked, and marked pending so that it is not asked twice,
+    /// unless the question pending was asked over other objects ([`holds_over`]).
     ///
     /// `visits` is where the reader has been, which ranks the candidates a source line
     /// resolves among ([`compiled::pick`]). It is an input to an answer and never part of
@@ -403,8 +428,9 @@ impl Analyzed {
             changed = true;
         }
 
+        let ids = object_ids(open);
         let held = self.shown.as_ref().is_some_and(|shown| shown.answers(ask))
-            || self.answered.as_ref() == Some(ask);
+            || (self.answered.as_ref() == Some(ask) && holds_over(ask, &self.over, &ids));
         if held {
             // Retagged, so the same listing is not asked for again under its new
             // question, and so nothing goes on saying it is waiting.
@@ -412,10 +438,15 @@ impl Analyzed {
                 changed |= put(&mut shown.ask, ask.clone());
             }
             changed |= put(&mut self.answered, Some(ask.clone()));
+            changed |= put(&mut self.over, ids);
             changed |= self.pending.take().is_some();
             return (None, changed);
         }
-        if self.waiting() == Some(ask) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.ask == *ask && holds_over(ask, &pending.over, &ids))
+        {
             return (None, changed);
         }
 
@@ -429,7 +460,7 @@ impl Analyzed {
                 recent: recent_symbols(self.shown.as_ref(), visits),
             },
         };
-        self.pending = Some(Pending::asked(ask.clone()));
+        self.pending = Some(Pending::asked(ask.clone(), ids));
         (Some(question), true)
     }
 

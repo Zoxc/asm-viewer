@@ -24,7 +24,8 @@ use super::*;
 /// `objects` and `recent` travel with the job because a worker thread can read no UI
 /// state. They are **not** the question: two asks that differ only in what was open are
 /// the same question asked twice, which is why [`Ask`] and not this is what supersession
-/// compares.
+/// compares. What was open decides only whether a source line's answer still holds
+/// ([`Analyzed::asked`]).
 pub(crate) enum Question {
     Study(Symbol),
     Resolve {
@@ -98,8 +99,13 @@ pub(crate) fn newest(first: Question, queued: impl Iterator<Item = Question>) ->
 /// What the worker sends back: the question, and what it came to.
 pub(crate) enum Answer {
     /// `studied` is `None` only for a source line no open object holds code from -- the
-    /// one listing question that can name no symbol at all.
-    Listing { ask: Ask, studied: Option<Studied> },
+    /// one listing question that can name no symbol at all. `over` is the objects a
+    /// source line was resolved among, by pointer, and empty for a symbol.
+    Listing {
+        ask: Ask,
+        studied: Option<Studied>,
+        over: Vec<usize>,
+    },
     /// The symbols `query` was compiled into, over the objects the question carried.
     Located { query: Query, symbols: Vec<Symbol> },
     /// The lines of `file` the objects the question carried have code from, and which
@@ -130,6 +136,7 @@ pub(crate) fn answer(question: Question) -> Answer {
         Question::Study(symbol) => Answer::Listing {
             ask: Ask::Symbol(symbol.clone()),
             studied: Some(Studied::new(symbol)),
+            over: Vec::new(),
         },
         Question::Resolve {
             at,
@@ -152,6 +159,7 @@ pub(crate) fn answer(question: Question) -> Answer {
             Answer::Listing {
                 ask: Ask::Source { at, chosen },
                 studied,
+                over: object_ids(&objects),
             }
         }
         Question::Locate { query, objects } => Answer::Located {
@@ -253,12 +261,12 @@ pub(crate) fn use_analysis_with(
         // state says it changed something: the rules are the four types' and not this
         // closure's ([`write_if`]).
         move |answer, _| match answer {
-            Answer::Listing { ask, studied } => {
+            Answer::Listing { ask, studied, over } => {
                 // The question being asked *now*, which is what an answer is kept for.
                 let wanted = asked.peek_ask();
                 let open = objects.peek().clone();
                 write_if(analysis, |next| {
-                    next.take(ask, studied, wanted.as_ref(), &open)
+                    next.take(ask, studied, over, wanted.as_ref(), &open)
                 });
             }
             Answer::Code { ask, code, decoded } => {

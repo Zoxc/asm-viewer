@@ -51,11 +51,11 @@ fn an_answer_to_a_question_the_reader_has_clicked_past_is_not_taken() {
     let since = source("other.c", 3);
 
     let mut state = Analyzed {
-        pending: Some(Pending::asked(since.clone())),
+        pending: Some(Pending::asked(since.clone(), Vec::new())),
         ..Analyzed::default()
     };
     let studied = Some(Studied::new(symbol));
-    assert!(!state.take(asked, studied, Some(&since), &[object]));
+    assert!(!state.take(asked, studied, Vec::new(), Some(&since), &[object]));
     assert!(state.shown.is_none(), "the listing is not put up");
     assert!(state.answered.is_none(), "and nothing is recorded of it");
 }
@@ -67,12 +67,12 @@ fn an_answer_out_of_a_binary_closed_since_it_was_asked_for_is_not_drawn() {
     let ask = source("line_fixture.c", 3);
 
     let mut state = Analyzed {
-        pending: Some(Pending::asked(ask.clone())),
+        pending: Some(Pending::asked(ask.clone(), Vec::new())),
         ..Analyzed::default()
     };
     let studied = Some(Studied::new(symbol));
     // Closed while the worker ran: the answer holds the whole file's bytes.
-    assert!(state.take(ask.clone(), studied, Some(&ask), &[]));
+    assert!(state.take(ask.clone(), studied, Vec::new(), Some(&ask), &[]));
     assert!(state.shown.is_none());
     assert!(
         state.answered == Some(ask),
@@ -92,14 +92,26 @@ fn a_line_that_named_no_symbol_leaves_this_tabs_listing_up_and_takes_another_tab
         shown: Some(shown(&up, &symbol)),
         ..Analyzed::default()
     };
-    assert!(state.take(nothing.clone(), None, Some(&nothing), &[object.clone()]));
+    assert!(state.take(
+        nothing.clone(),
+        None,
+        object_ids(&[object.clone()]),
+        Some(&nothing),
+        &[object.clone()]
+    ));
     assert!(
         state.shown.is_some(),
         "a line of the file the tab is showing leaves its listing up"
     );
 
     let elsewhere = source("other.c", 1);
-    assert!(state.take(elsewhere.clone(), None, Some(&elsewhere), &[object]));
+    assert!(state.take(
+        elsewhere.clone(),
+        None,
+        object_ids(&[object.clone()]),
+        Some(&elsewhere),
+        &[object]
+    ));
     assert!(
         state.shown.is_none(),
         "a line of another file does not leave that listing under its tab"
@@ -124,7 +136,13 @@ fn an_answer_the_ask_had_already_settled_writes_nothing() {
         ..Analyzed::default()
     };
     assert!(
-        !state.take(ask.clone(), Some(studied), Some(&ask), &[object]),
+        !state.take(
+            ask.clone(),
+            Some(studied),
+            Vec::new(),
+            Some(&ask),
+            &[object]
+        ),
         "an answer that leaves everything as it was costs no render"
     );
 }
@@ -203,7 +221,7 @@ fn a_question_already_on_its_way_is_not_asked_twice() {
     let object = fixture();
     let ask = Ask::Symbol(symbol_of(&object));
     let mut state = Analyzed {
-        pending: Some(Pending::asked(ask.clone())),
+        pending: Some(Pending::asked(ask.clone(), Vec::new())),
         ..Analyzed::default()
     };
     let visits = Visits::default();
@@ -214,11 +232,61 @@ fn a_question_already_on_its_way_is_not_asked_twice() {
 }
 
 #[test]
+fn a_line_that_came_to_nothing_is_asked_again_once_other_objects_are_open() {
+    // A rebuild: the binary closed, the line answered with nothing over what was left,
+    // and the new build read back in.
+    let rebuilt = fixture();
+    let line = source("line_fixture.c", 3);
+    let mut state = Analyzed::default();
+    assert!(state.take(line.clone(), None, Vec::new(), Some(&line), &[]));
+
+    let visits = Visits::default();
+    let (question, _) = state.asked(Some(&line), &[rebuilt.clone()], &visits);
+    assert!(
+        matches!(question, Some(Question::Resolve { .. })),
+        "the line is asked again of the new build"
+    );
+    assert!(
+        matches!(state.asked(Some(&line), &[rebuilt], &visits), (None, false)),
+        "and not a second time"
+    );
+}
+
+#[test]
+fn a_line_waiting_on_an_answer_over_other_objects_is_asked_again() {
+    let rebuilt = fixture();
+    let line = source("line_fixture.c", 3);
+    let mut state = Analyzed::default();
+    let visits = Visits::default();
+    // Asked while the rebuilt binary was still being read.
+    assert!(state.asked(Some(&line), &[], &visits).0.is_some());
+
+    let open = [rebuilt];
+    let (question, _) = state.asked(Some(&line), &open, &visits);
+    assert!(
+        matches!(question, Some(Question::Resolve { .. })),
+        "the question is asked again once it lands"
+    );
+    assert!(
+        !state.take(line.clone(), None, Vec::new(), Some(&line), &open),
+        "and the answer over the objects before it is not taken"
+    );
+    assert!(
+        state.waiting() == Some(&line),
+        "the new question is still out"
+    );
+}
+
+#[test]
 fn a_place_with_no_listing_leaves_nothing_waiting() {
     let object = fixture();
     let ask = Ask::Symbol(symbol_of(&object));
     let mut state = Analyzed {
-        pending: Some(Pending { ask, slow: true }),
+        pending: Some(Pending {
+            ask,
+            over: Vec::new(),
+            slow: true,
+        }),
         ..Analyzed::default()
     };
     let visits = Visits::default();

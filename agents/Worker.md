@@ -312,11 +312,15 @@ up there, since the file's lines still named it. Both are handed the open object
 reading them, which is what keeps them a state's rules and not a hook's. It lives here rather than
 in `close_binary` so that a close, a rebuild and a project switch are one line instead of three, and
 because no handler can reach the answer in flight. The effect **reads** `Objects` where it only peeks the visits: a question asked of a different set of objects is a
-different question, while the ranking is an input to an answer and a visit must not re-ask one. What
-is deliberately *not* covered: an answer is about the objects that were open when it was asked, so a
-line clicked while a file is still being read can answer with nothing where a later object would
-have answered. That costs one more click, against a generation counter for a case only a
-restore-time race reaches.
+different question, while the ranking is an input to an answer and a visit must not re-ask one. So a
+source line's answer, and the question still out for one, carry the objects they were worked out
+over by pointer (`object_ids`, the gutter marks' rule), and only a match counts as held
+(`holds_over`). A line that came to nothing is an answer about those objects alone: a rebuild closes
+the binary, the line is answered with nothing over what is left, and the new build landing has to
+ask it again, or the pane says "No code compiled from …" over a line that has code until the reader
+clicks. An answer over other objects than are open now is not taken, the question having been asked
+again over these. A listing that is up is not asked again when a binary is added: `still_open`
+already says whether it holds, and a line that resolved to something keeps it.
 
 **A superseded answer is recognised, not prevented.** Every answer carries the `Ask` it is about and
 is kept only if that is the question being asked *now* (`Analyzed::take`, which is handed the
