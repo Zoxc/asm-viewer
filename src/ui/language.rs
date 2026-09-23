@@ -610,6 +610,7 @@ pub(crate) fn use_language(
     linked: State<Linked>,
     hover: State<Hover>,
     proj: State<OpenProject>,
+    stay: State<Stay>,
 ) -> LspJobs {
     use_language_with(
         language,
@@ -618,6 +619,7 @@ pub(crate) fn use_language(
         linked,
         hover,
         proj,
+        stay,
         language_work(),
     )
 }
@@ -631,6 +633,7 @@ pub(crate) fn use_language_with(
     linked: State<Linked>,
     hover: State<Hover>,
     mut proj: State<OpenProject>,
+    stay: State<Stay>,
     work: impl Fn(LspJob) -> Option<LspAnswer> + Send + 'static,
 ) -> LspJobs {
     // What a server says while nothing was asked, under the run it was started in. A
@@ -816,15 +819,15 @@ pub(crate) fn use_language_with(
         asked: Arc::new(AtomicU64::new(0)),
     });
 
-    // The two paths that say which project is open. **A memo and not a read**: this hook
-    // is called at the root, and `Proj` is written by every keystroke in the Project
-    // view's boxes, so reading it here would re-render the whole window for each -- the
-    // cost `WindowBody` is a component of its own to avoid (`src/ui/no_project.rs`). The
-    // memo is subscribed to `Proj` and the effect below to the memo, so neither the root
-    // nor the effect wakes until one of the two paths changes.
+    // The two paths that say which project is open, and which stay in it this is. **A
+    // memo and not a read**: this hook is called at the root, and `Proj` is written by
+    // every keystroke in the Project view's boxes, so reading it here would re-render the
+    // whole window for each -- the cost `WindowBody` is a component of its own to avoid
+    // (`src/ui/no_project.rs`). The memo is subscribed to `Proj` and the effect below to
+    // the memo, so neither the root nor the effect wakes until one of the three changes.
     let places = use_memo(move || {
         let open = proj.read();
-        (open.file.clone(), open.workspace())
+        (open.file.clone(), open.workspace(), *stay.read())
     });
     // **The directory is what a change is judged by**: both paths are watched and only one
     // of them is what a server reads. A directory it is no longer over ends it, and the
@@ -845,13 +848,21 @@ pub(crate) fn use_language_with(
     // an earlier hook of the same render, so an agreement read out of `project.toml`
     // survives the launch that read it.
     //
+    // An unanswered question goes whenever the project is left, which only the `Stay`
+    // says: a stop takes it with it, but a project arriving over the same directory with
+    // an agreement of its own stops nothing, and "Start it" would then run the program
+    // the last project named.
+    //
     // The memo is read **in the deps and not in the render**, which is what subscribes the
     // effect to the two paths and leaves the root subscribed to neither: the box the
     // directory is typed into writes `Proj` on every keystroke.
     use_on_change(move || places.read().clone(), {
         let jobs = jobs.clone();
-        move |before, (file, directory): &(Option<PathBuf>, Option<PathBuf>)| {
-            let elsewhere = !before.is_some_and(|(_, was_directory)| was_directory == directory);
+        move |before, (file, directory, stay): &(Option<PathBuf>, Option<PathBuf>, Stay)| {
+            if before.is_some_and(|(_, _, was)| was != stay) {
+                decline_start(language);
+            }
+            let elsewhere = !before.is_some_and(|(_, was_directory, _)| was_directory == directory);
             if elsewhere {
                 // Read again here, where a directory arrives, so the answer is in hand
                 // before either press can ask for a server and whether or not one is ever
@@ -867,7 +878,7 @@ pub(crate) fn use_language_with(
             if elsewhere || !agreed {
                 stop_server(language, &jobs);
             }
-            let moved = before.is_some_and(|(was_file, was_directory)| {
+            let moved = before.is_some_and(|(was_file, was_directory, _)| {
                 was_file == file && was_directory != directory
             });
             if moved {

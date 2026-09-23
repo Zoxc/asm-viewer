@@ -8214,6 +8214,7 @@ fn linking_harness() -> impl IntoElement {
         linked,
         hover,
         states.proj,
+        states.stay,
         move |job| work(job),
     );
     let opened = use_consume::<Documents>().0;
@@ -31038,6 +31039,7 @@ fn project_view_harness() -> Element {
         linked,
         hover,
         states.proj,
+        states.stay,
         |job: LspJob| match job {
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
                 settings: lsp::settings_in(&directory),
@@ -32360,6 +32362,7 @@ fn server_harness() -> Element {
         linked,
         hover,
         states.proj,
+        states.stay,
         move |job| work(job),
     );
     use_hook(move || asking.set(Some(jobs)));
@@ -33731,6 +33734,44 @@ fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
     assert!(proj.read().trusted);
 }
 
+/// **A question about starting a server goes with the project it was asked in.** A project
+/// arriving over the same directory with an agreement of its own stops nothing, so the
+/// question stayed up, and "Start it" ran the program the last project named.
+#[test]
+fn the_trust_prompt_goes_with_its_project() {
+    let (mut test, roots, _asking, _asks) = mount_server(|_: LspJob| None);
+    let states = roots.states;
+    let language = roots.language;
+    let mut proj = states.proj;
+    {
+        let mut open = proj.write();
+        open.file = Some(PathBuf::from("/store/one.avproj"));
+        open.workspace_text = "/p".to_owned();
+        open.language_server = "my-wrapper".to_owned();
+    }
+    settle(&mut test);
+    press_at(&mut test, the_control());
+    settle(&mut test);
+    assert!(language.read().asking.is_some(), "the press asked nothing");
+
+    // The second project, over the same directory and agreed to, arrives the way a
+    // switch brings it.
+    clear_project(states);
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/store/two.avproj")),
+        workspace_text: "/p".to_owned(),
+        trusted: true,
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+
+    assert!(
+        language.read().asking.is_none(),
+        "the question about the last project's program is still up"
+    );
+    assert!(!labels(&test).iter().any(|text| text == "Start it"));
+}
+
 /// Declining starts nothing and is remembered nowhere: the next press asks again, since
 /// what was answered was the press and not the project.
 #[test]
@@ -33869,6 +33910,7 @@ fn root_language_harness() -> Element {
         linked,
         hover,
         states.proj,
+        states.stay,
         |_| None,
     );
     counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -37371,7 +37413,10 @@ fn use_root_key_states() {
     let located = use_consume::<Locations>().0;
     let linked = use_consume::<Linking>().0;
     let hover = use_consume::<Hovering>().0;
-    let jobs = use_language_with(language, follow, located, linked, hover, proj, |_| None);
+    let stay = use_project_states().stay;
+    let jobs = use_language_with(language, follow, located, linked, hover, proj, stay, |_| {
+        None
+    });
     let follows = use_consume::<Follows>().0;
     use_hook(move || {
         ROOT_STATES.with_borrow_mut(|held| {

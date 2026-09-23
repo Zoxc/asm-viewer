@@ -859,7 +859,7 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
     // and the server holds the text it was given until it is told otherwise.
     use_building(build, states, opened, sourced);
 
-    let jobs = use_language(language, follow, located, linked, hover, proj);
+    let jobs = use_language(language, follow, located, linked, hover, proj, states.stay);
     // What a name followed in the source opens, which the answer above fills in.
     use_follow(follow, doors);
     use_opened(language, opened, open, jobs.clone());

@@ -69,7 +69,8 @@ arriving over the directory the last one's server is reading **without having ag
 one itself: the agreement is one project's, and a server running for a project that never
 gave one is what the prompt is there to prevent.
 
-It sees those two paths through a **memo** rather than reading the project at the root.
+It sees those two paths through a **memo** rather than reading the project at the root, and
+the `Stay` beside them (`agents/Sidebar.md`).
 The hook is called from `app()`, and the Project view's boxes write the open project on
 every keystroke, so a read there would rebuild the whole window for each character -- the
 cost `WindowBody` is a component of its own to avoid (`agents/UI.md`). The memo is read in
@@ -81,7 +82,10 @@ that actually starts one; so neither the top bar's control nor the Project view'
 grow a path around it. The question holds the directory and program it named rather than
 working them out again when it is answered: what was agreed to is what was asked about, not
 whatever the directory box says by then. Declining remembers nothing -- the answer was to
-that press -- and a stop clears an unanswered question along with the server.
+that press -- and a stop clears an unanswered question along with the server. So does
+**leaving the project**, which only the `Stay` says: a project arriving over the same
+directory with an agreement of its own stops nothing, and the question it left up ran the
+program the last project named on "Start it".
 
 `TrustPrompt` draws it **at the root, under the top bar**, and not in the Project view's own
 section beside the other Start button. The control is pressed from wherever the reader is,
