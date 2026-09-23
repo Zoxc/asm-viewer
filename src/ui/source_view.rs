@@ -423,6 +423,27 @@ pub(crate) fn source_side(
     }
 }
 
+/// The checksum the debug info recorded for `file`, out of the listing the pane is drawn
+/// beside: the stretch of an object's code the assembly pane's run starts in where there
+/// are `code_rows`, and the drawn symbol's line info otherwise. A subject and a companion
+/// alike, since that listing is the one place a recorded checksum comes from.
+fn recorded_hash(
+    file: &Path,
+    analysis: &Analyzed,
+    marks: &Marks,
+    code_rows: Option<&Built>,
+) -> Option<analysis::SourceHash> {
+    let lines = match code_rows {
+        Some(built) => {
+            let anchor = marks.assembly.as_ref()?.chars.anchor().row;
+            let stretch = built.row(anchor)?.stretch;
+            &built.reading.held.get(&stretch)?.code.as_ref()?.lines
+        }
+        None => &analysis.shown.as_ref()?.studied.lines,
+    };
+    lines.hash_for(file)
+}
+
 /// What of `marks` [`source_side`] reads: the file of each run and the row the assembly
 /// pane's run started on. A sweep moves none of them.
 fn side_marks(marks: &Marks) -> (Option<Arc<Path>>, Option<usize>, Option<Arc<Path>>) {
@@ -613,18 +634,18 @@ impl Component for SourcePane {
         };
 
         // Whether the file on disk is the one the binary was built from, by the checksum
-        // the debug info recorded for it — where it recorded one, and where the file
-        // opened at all. Compared against the *drawn* symbol's line info, for a subject
-        // and a companion alike: it is the one place a recorded checksum comes from. The
-        // bytes are the ones the parse was made from, so nothing here reads a file to
-        // find out.
-        let stale = analysis
-            .read()
-            .shown
-            .as_ref()
-            .and_then(|shown| shown.studied.lines.hash_for(&file))
-            .zip(text)
-            .is_some_and(|(recorded, opened)| !opened.file.matches(recorded));
+        // the debug info recorded for it -- where it recorded one, and where the file
+        // opened at all. The bytes are the ones the parse was made from, so nothing here
+        // reads a file to find out.
+        let stale = {
+            let built = self
+                .document
+                .code()
+                .and_then(|object| sectioned.peek_rows_of(object));
+            recorded_hash(&file, &analysis.read(), &marked.peek(), built.as_deref())
+        }
+        .zip(text)
+        .is_some_and(|(recorded, opened)| !opened.file.matches(recorded));
 
         rect()
             .expanded()

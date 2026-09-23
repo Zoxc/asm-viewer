@@ -14872,6 +14872,82 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
     }
 }
 
+/// The same beside an object's code, which draws no symbol of its own: the checksum is the
+/// one the stretch holding the picked-out instruction recorded.
+#[test]
+fn a_source_file_beside_an_objects_code_that_differs_is_flagged() {
+    use analysis::{LineInfo, LineRow, SourceHash};
+
+    let dir = Seeded::directory("stale-code");
+    let file = dir.named("own.c", "abc");
+    let compiled = SourceHash::Md5([
+        0x90, 0x01, 0x50, 0x98, 0x3c, 0xd2, 0x4f, 0xb0, 0xd6, 0x96, 0x3f, 0x7d, 0x28, 0xe1, 0x7f,
+        0x72,
+    ]);
+    let another = SourceHash::Md5([0; 16]);
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+
+    for (recorded, flagged) in [(another, true), (compiled, false)] {
+        let mut reading = reading_of(&object, &[0]);
+        let mut studied = reading.held[&0]
+            .code
+            .clone()
+            .expect("stretch 0 is a symbol's");
+        let start = studied.symbol.data.address;
+        let rows = vec![LineRow {
+            range: start..start.saturating_add(1),
+            file: Some(0),
+            line: Some(1),
+            column: None,
+        }];
+        studied.lines.info =
+            LineInfo::new(rows, vec![(named(&file), Some(recorded))]).map(Arc::new);
+        reading.held.insert(
+            0,
+            Arc::new(Stretched {
+                code: Some(studied),
+                gap: None,
+            }),
+        );
+        let instruction = {
+            let rows = rows_of(&reading);
+            (0..rows.len())
+                .find(|&row| kind_at(&rows, row) == Some(Kind::Instruction(0)))
+                .expect("stretch 0 has an instruction row")
+        };
+
+        let (mut test, roots) = TestingRunner::new(
+            panes_harness,
+            (600., 300.).into(),
+            move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+            1.,
+        );
+        let states = roots.states;
+        open_document(
+            states.open,
+            states.visits,
+            Document::Code(object.clone()),
+            Reach::NewTab,
+        );
+        settle(&mut test);
+        let mut marked = roots.doors.marked;
+        marked.write().assembly = Some(picked_row(instruction, &file, Owed::NEITHER));
+        settle(&mut test);
+        settle(&mut test);
+
+        assert!(
+            label_area(&test, &format!("Source file not found: {}", file.display())).is_none(),
+            "{recorded:?}: the file was not opened"
+        );
+        assert_eq!(
+            label_area(&test, STALE_SOURCE).is_some(),
+            flagged,
+            "{recorded:?}"
+        );
+    }
+}
+
 /// A component with no props at all, which is what every view in the app is. Its parent
 /// reads nothing coloured, so the theme has to reach it on its own.
 #[derive(PartialEq)]

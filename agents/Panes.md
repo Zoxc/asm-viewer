@@ -127,9 +127,10 @@ it reads them (`SourceDigests`, once per file, held with the parse). So the pane
 render and says, in one row over the source rows, that *this file differs from the one the binary
 was built from* when they disagree. The file is still shown, being the best thing there is to show;
 what the row says is that its line numbers are the compiler's and not necessarily this file's. The
-recorded hash is looked up **by the name the pane is showing** in the drawn symbol's line info
-(`SymbolLines::hash_for`), for a subject and a companion alike, since that is the one place a
-checksum comes from. No hash, or a match, says nothing, and DWARF as read carries none yet
+recorded hash is looked up **by the name the pane is showing** in the line info of the listing
+beside it (`SymbolLines::hash_for`, `recorded_hash`), for a subject and a companion alike, since that
+is the one place a checksum comes from: the drawn symbol's, or, beside an object's code, which draws
+no symbol, that of the stretch the picked-out instruction is in. No hash, or a match, says nothing, and DWARF as read carries none yet
 (`notes/Goals.md`). Verify, not locate: a hash that disagrees does not send the pane looking for
 another file with that name. That is the path-mapping goal's, and the hash is what will pick among
 its candidates.
