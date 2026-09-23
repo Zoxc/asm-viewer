@@ -340,6 +340,24 @@ fn clearing_abandons_every_load() {
     assert!(loads.paths().is_empty());
 }
 
+/// A load is the project's that was left only when a clear stopped it: closing its files
+/// ends it too, and a load begun after the clear is the next project's.
+#[test]
+fn only_a_clear_leaves_a_load_behind() {
+    let mut loads = Loads::default();
+    let closed = loads.begin(&[PathBuf::from("/tmp/a")]);
+    loads.cancel(Path::new("/tmp/a"));
+    assert!(!loads.left(closed));
+
+    let running = loads.begin(&[PathBuf::from("/tmp/b")]);
+    loads.clear();
+    assert!(loads.left(closed));
+    assert!(loads.left(running));
+
+    let next = loads.begin(&[PathBuf::from("/tmp/b")]);
+    assert!(!loads.left(next));
+}
+
 /// A path is in the app from the moment it is asked for and not from the moment its first
 /// object lands, so the question spans both halves: the objects, and the loads still
 /// running. What a Files row's menu turns on.

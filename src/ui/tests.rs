@@ -3247,6 +3247,61 @@ fn a_restore_survives_the_row_that_asked_for_it() {
     );
 }
 
+/// The source file [`left_harness`]'s session had open.
+const LEFT_SOURCE: &str = "/src/left.rs";
+
+/// A restore whose project is left at once, before its load has read a byte. In a hook,
+/// the restore's task needing a scope to be spawned from.
+fn left_harness() -> impl IntoElement {
+    let states = use_project_states();
+    use_hook(move || {
+        let project = Project {
+            binaries: vec![Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("crates/analysis/tests/fixtures/line_fixture.o")],
+            ..Project::default()
+        };
+        let source = Document::Source(Arc::from(Path::new(LEFT_SOURCE)));
+        let session = Session {
+            active: Some(SavedDocument::from_document(&source)),
+            ..Session::default()
+        };
+        restore_project(states, project, session);
+        clear_project(states);
+    });
+    rect().expanded()
+}
+
+/// **A restore of a project left during its load puts nothing back.** Leaving stops the
+/// load, and the task waiting on it went on to restore the old session into whatever was
+/// open by then: its tabs, its record of visits and its rows.
+#[test]
+fn a_restore_does_not_land_in_the_project_after_it() {
+    let (mut test, states) = TestingRunner::new(
+        left_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+
+    // The file is parsed on a thread of its own, and its answer is what ends the load.
+    for _ in 0..100 {
+        settle(&mut test);
+        if !open_documents(states.open).is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    assert!(
+        open_documents(states.open).is_empty(),
+        "the project left put its tabs back"
+    );
+    assert!(
+        states.visits.peek().entries().is_empty(),
+        "the project left put its visits back"
+    );
+}
+
 /// Whether a load was registered each time the effect in [`boot_harness`] ran.
 #[derive(Clone)]
 struct Registered(Rc<RefCell<Vec<bool>>>);

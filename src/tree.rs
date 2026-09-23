@@ -35,6 +35,9 @@ pub struct LoadId(u64);
 pub struct Loads {
     entries: Vec<(LoadId, PathBuf)>,
     next: u64,
+    /// The first id the last [`Loads::clear`] did not stop: every load below it was begun
+    /// for a project since left.
+    left: u64,
 }
 
 impl Loads {
@@ -86,6 +89,14 @@ impl Loads {
     /// Stop everything, which is a project being left.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.left = self.next;
+    }
+
+    /// Whether this load was begun for a project since left. Not the same as no longer
+    /// [`Loads::active`]: a load also ends when it finishes or its files are closed, and
+    /// what waits on it then is still about the project on screen.
+    pub fn left(&self, id: LoadId) -> bool {
+        id.0 < self.left
     }
 
     /// The paths still being read, in the order they were asked for and without repeats:

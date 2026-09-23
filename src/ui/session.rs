@@ -375,6 +375,12 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         // resolving one against a half-filled list would drop the tabs whose object had
         // not landed yet.
         read_binaries(objects, loading, id, project.binaries).await;
+        // The project was left while its binaries were read, and its session is not the
+        // one open now. Asked of the load and not of which file is open: leaving and
+        // coming back to the same project starts a restore of its own.
+        if loading.peek().left(id) {
+            return;
+        }
         restore_documents(states, &session);
     });
 }

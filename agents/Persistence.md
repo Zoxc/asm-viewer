@@ -534,7 +534,11 @@ of it. `use_restore_on_startup` knows nothing about where they came from, which 
 project picker out of it. The binaries stream in the way any other open does, so the sidebar fills
 in behind them, but the **session waits for the whole load**: an object or symbol tab, a selection
 or a history entry is resolved against the objects by name, and resolving one against a half-filled
-list would drop the tabs whose object had not landed yet. The **pages go back before any of that
+list would drop the tabs whose object had not landed yet. A project left during that wait restores
+nothing: leaving ends the load, and the session waiting on it is not the open project's. The test
+is `Loads::left`, a load `clear` stopped, and not whether the load is still running, since closing
+its files ends it too; nor which project file is open, since leaving one and opening it again starts
+a restore of its own. The **pages go back before any of that
 and synchronously**, at the places they had in the bar and with the one that was on screen raised:
 a page resolves against no object, so a session whose only tab was Settings has nothing to wait
 for. The documents follow, in `restore_documents`: after the load where there are binaries, and
