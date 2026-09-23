@@ -58,3 +58,33 @@ fn a_read_is_dropped_only_for_a_forget_that_covers_it() {
     }
     assert!(forgets.since(at, file));
 }
+
+/// A row is a line as a compiler counts them, ended by `\n` alone. ropey also ends one at
+/// a form feed, a vertical tab, a lone CR, NEL and the two Unicode separators, so a `^L`
+/// on a line of its own, as GNU sources have, drew two rows and put every line below it
+/// one row down. The row keeps each byte where the file has it; a copy takes the file's own.
+#[test]
+fn only_a_newline_ends_a_row() {
+    let seeded = Seeded::directory("breaks");
+    let path = seeded.file("breaks.c", "a;\n\x0c\nb;\n");
+    let file = source::load(&path).expect("the seeded file loads");
+
+    let highlighted = Highlighted::new(file, Appearance::Light);
+
+    assert_eq!(highlighted.lines, 3);
+    assert_eq!(&*highlighted.text(2).whole, "b;");
+    assert_eq!(highlighted.line(1), "\x0c");
+
+    let text = "x\x0by\rz\u{85}w\u{2028}v\u{2029}u\r\nt\n";
+    let path = seeded.file("more.c", text);
+    let file = source::load(&path).expect("the seeded file loads");
+
+    let highlighted = Highlighted::new(file, Appearance::Light);
+
+    assert_eq!(highlighted.lines, 2);
+    let row = &*highlighted.text(0).whole;
+    assert_eq!(row.len(), "x\x0by\rz\u{85}w\u{2028}v\u{2029}u".len());
+    assert_eq!(row.encode_utf16().count(), 11);
+    assert_eq!(&*highlighted.text(1).whole, "t");
+    assert_eq!(highlighted.line(0), "x\x0by\rz\u{85}w\u{2028}v\u{2029}u");
+}

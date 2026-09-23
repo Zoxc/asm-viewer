@@ -235,15 +235,7 @@ impl Component for SourceList {
                         // The file's own text and not the row's spans: what is pasted is the
                         // line as it is on disk, tabs and all. The newline is the join's
                         // business.
-                        source
-                            .0
-                            .rope
-                            .get_line(index)
-                            .map(|line| {
-                                let line = line.to_string();
-                                line.trim_end_matches(|c| c == '\n' || c == '\r').to_owned()
-                            })
-                            .unwrap_or_default()
+                        source.0.line(index).to_owned()
                     }
                 }),
                 text: Rc::new({

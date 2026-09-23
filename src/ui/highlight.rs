@@ -29,6 +29,7 @@
 //! coloured pieces every row is put back together from ([`Highlighted::pieces`]).
 
 use super::*;
+use std::borrow::Cow;
 
 /// A loaded, highlighted source file, compared by pointer.
 #[derive(Clone)]
@@ -76,6 +77,7 @@ pub(crate) struct Highlighted {
     /// piece and not a name for one, so an entry parsed in the other theme is not stale
     /// but *wrong*, and this is what says so.
     appearance: Appearance,
+    /// The file's text with `\n` the only line break ([`one_break`]).
     pub(crate) rope: Rope,
     /// How many rows the pane draws, which is *not* the parse's count of lines.
     pub(crate) lines: usize,
@@ -101,7 +103,7 @@ impl Highlighted {
     /// and off the UI thread: [`colours`] is handed the theme where [`palette`] would ask
     /// the state for it.
     fn new(file: Arc<SourceFile>, appearance: Appearance) -> Highlighted {
-        let rope = Rope::from_str(file.text());
+        let rope = Rope::from_str(&one_break(file.text()));
         let theme = colours(appearance).syntax();
         let language = language(file.path());
 
@@ -159,6 +161,20 @@ impl Highlighted {
         self.cuts.get(index).unwrap_or(&EMPTY)
     }
 
+    /// Line `index` as the file has it, without its line break: what a copy takes. Empty
+    /// past the last line.
+    pub(crate) fn line(&self, index: usize) -> &str {
+        // The rope's lines are the file's, byte for byte (`one_break`).
+        let (Ok(start), Ok(end)) = (
+            self.rope.try_line_to_byte(index),
+            self.rope.try_line_to_byte(index + 1),
+        ) else {
+            return "";
+        };
+        let line = self.file.text().get(start..end).unwrap_or_default();
+        line.trim_end_matches(['\n', '\r'])
+    }
+
     /// What `line` is drawn as: its text in order, each piece with the colour it wears.
     ///
     /// **The pieces are the file's and not the line's**, five bytes apiece in two lists
@@ -187,6 +203,37 @@ impl Highlighted {
             }
         })
     }
+}
+
+/// `text` with every line break but `\n` and `\r\n` put out of the way, so the rope's lines
+/// are the ones a compiler, the language server and every other count in the app number.
+///
+/// ropey also ends a line at a vertical tab, a form feed, a lone CR, NEL and the two
+/// Unicode separators, and `freya-code-editor` asks for that. Each is replaced by
+/// characters of the same length in bytes and in UTF-16 units, so a column counted
+/// either way is the same in the row as in the file.
+fn one_break(text: &str) -> Cow<'_, str> {
+    let breaks = |c: char| {
+        matches!(
+            c,
+            '\u{b}' | '\u{c}' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        )
+    };
+    if !text.contains(breaks) {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(match c {
+            '\r' if chars.peek() == Some(&'\n') => c,
+            '\u{b}' | '\u{c}' | '\r' => ' ',
+            '\u{85}' => '\u{a0}',
+            '\u{2028}' | '\u{2029}' => char::REPLACEMENT_CHARACTER,
+            _ => c,
+        });
+    }
+    out.into()
 }
 
 /// One coloured run of a row's text.

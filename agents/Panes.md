@@ -326,7 +326,12 @@ parse with the same grammar for C and C++, and for Rust off a scanner of our own
 (`notes/upstream/tree-sitter-rust.md`). Either way a few hundred bytes are kept against
 a tree that would be most of the file again. Two things about `SyntaxBlocks` bite: `get_line`
 unwraps rather than answering `None`, and it holds one block per `Rope::len_lines()`, which counts a
-phantom line after a trailing newline (hence `Highlighted::lines`).
+phantom line after a trailing newline (hence `Highlighted::lines`). A third is ropey's: with the
+`unicode_lines` feature `freya-code-editor` turns on, a form feed, a vertical tab, a lone CR, NEL
+and U+2028/9 each end a line too, where a compiler and the language server count only `\n`. A `^L`
+on a line of its own, as GNU sources have, put every row below it one line off. So the rope is
+built from the text with each of those replaced by characters of the same length in bytes and in
+UTF-16 units (`one_break`), and a copy slices the file's own text at the rope's line starts.
 
 **Reading a file and parsing it are a worker thread's**, `use_source_reading`'s, for what they cost:
 in a release build, 27 ms for a 23 KB file and 333 ms for an 850 KB one, of which the read off disk
@@ -1150,7 +1155,7 @@ dropped by `use_clear_marks` at the root, keyed on the question and the file, no
 inside each list keyed on its listing: a list's listing changes on a switch of place as much as on
 a replacement, and the code listing's rows change with every stretch decoded. What is
 copied is what the row draws: `asm_line` (address plus the instruction with the target's name in its
-operand), the rope's own line for source, tabs and all, and, in an object's code, each kind of row
+operand), the file's own line for source, tabs and all, and, in an object's code, each kind of row
 as it draws (`row_line`), a separator and an empty row as the blank line they are. That listing's
 run **survives its rows being counted afresh under it**, though a run is listing rows. The section
 view's own rebuild (`use_kept_place`, which produces the new `Built` in the one run that moves the
