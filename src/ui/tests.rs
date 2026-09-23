@@ -29968,6 +29968,48 @@ fn a_walk_that_finds_nothing_says_so_and_stops() {
     );
 }
 
+/// **A step with nothing to look for walks nothing.** An empty box and a pattern that will
+/// not compile each match no line, so a walk for either decodes the whole object to say
+/// "No matches". The step is spent, and no walk is started. Fails on a walk started for
+/// any step, whatever the box holds.
+#[test]
+fn a_step_over_an_objects_code_with_nothing_to_look_for_walks_nothing() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, roots) = TestingRunner::new(
+        code_find_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let finds = states.places.finds;
+
+    open_find_bar(&mut test);
+    let nothing = Filter::default();
+    let broken = Filter {
+        pattern: "(".to_owned(),
+        regex: true,
+        ..Filter::default()
+    };
+    for filter in [nothing, broken] {
+        let pattern = filter.pattern.clone();
+        edit_find(finds, at, |bar| bar.filter = filter);
+        settle(&mut test);
+        test.press_key(Key::Named(NamedKey::Enter));
+        settle(&mut test);
+        let bar = finds.peek().get(&at).clone();
+        assert!(
+            bar.step.is_none(),
+            "the step for {pattern:?} was left unspent"
+        );
+        assert!(bar.hunt.is_none(), "a walk was started for {pattern:?}");
+    }
+}
+
 /// **A Ctrl+F that re-seeds the box gives up the walk under it.** A walk's answer is about
 /// the pattern it was asked with, and a bar over an object's code has nothing else to draw:
 /// left where it was, the bar would go on saying how far a walk for a pattern the reader

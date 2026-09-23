@@ -39,15 +39,9 @@ pub struct SearchQuery {
 }
 
 impl SearchQuery {
-    /// Whether this is a question at all: something typed ([`Filter::asks`]), and a
-    /// pattern that compiles. Nothing typed is not an empty search but no search, and an
-    /// invalid pattern is said under the box rather than searched for.
-    ///
-    /// The verdict is `regex`'s, since `regex`'s error is what the bar shows. The bar
-    /// compiles the same pattern for the same verdict: a [`Regex`](regex::Regex) is not
-    /// `PartialEq`, so no state can carry the one it built over to here.
+    /// Whether this is a question at all ([`Filter::searches`]).
     pub fn is_askable(&self) -> bool {
-        self.filter.asks() && self.filter.matcher().error().is_none()
+        self.filter.searches()
     }
 }
 

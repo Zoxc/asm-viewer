@@ -244,6 +244,13 @@ pub(crate) fn use_code_hunt(
             let Some(direction) = bar.step.filter(|_| bar.listing.is_none()) else {
                 return;
             };
+            // Nothing typed, or a pattern that will not compile, matches no line, and a
+            // walk for it would decode the whole object to say so. The step is spent on
+            // nothing, as a listing's is.
+            if !bar.filter.searches() {
+                edit_find(finds, at, |bar| bar.step = None);
+                return;
+            }
             let id = WALKS.fetch_add(1, Ordering::Relaxed);
             let from = start(direction);
             let object = Over::of(object);

@@ -59,6 +59,17 @@ impl Filter {
         !self.pattern.is_empty()
     }
 
+    /// Whether this is a search at all: something typed ([`asks`](Self::asks)), and a
+    /// pattern that compiles. Nothing typed is not an empty search but no search, and an
+    /// invalid pattern is said under the box rather than searched for.
+    ///
+    /// The verdict is `regex`'s, since `regex`'s error is what the bar shows. A
+    /// [`Regex`](regex::Regex) is not `PartialEq`, so no state can carry the one the bar
+    /// built over to here, and the pattern is compiled again.
+    pub fn searches(&self) -> bool {
+        self.asks() && self.matcher().error().is_none()
+    }
+
     /// `case_insensitive` is a flag on the builder rather than a `(?i)` prefix, so a regex
     /// carrying its own `(?i)`/`(?-i)` still overrides it for the part it covers.
     pub fn matcher(&self) -> Matcher {

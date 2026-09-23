@@ -1479,7 +1479,9 @@ symbol's labels and its first instruction share an address, so a walk that knew 
 landed a match in a label on the instruction under it, and a step on from it skipped every other
 row at that address and every later hit on the caret's own line. The column is read as `find::step`
 reads one. With no caret there is nothing to start from: a forward walk starts at the top of
-the code, a backward one at the bottom, and every line counts. What it says as it goes is how far it has got, every `SAID_EVERY` stretches rather than
+the code, a backward one at the bottom, and every line counts. A step with nothing to look for -- an empty
+box, or a pattern that will not compile (`Filter::searches`, the Search panel's test too) -- starts
+no walk: it would match no line, and decode the whole object to say so. What it says as it goes is how far it has got, every `SAID_EVERY` stretches rather than
 every one: a word per function on a binary with 115k of them is a write per function to a state the
 bar reads. The bar draws that where a count would be, and "No matches" when a walk comes back round
 with nothing.
