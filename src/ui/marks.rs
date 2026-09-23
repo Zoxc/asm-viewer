@@ -248,17 +248,20 @@ pub(crate) fn mark_press(
     let current = marked.peek().of(pane).clone();
     let picked = match current {
         Some(picked) if shift => Picked {
-            // The reach moves the lead to the column pressed on the text, and from the
-            // gutter to the row's far end, whole rows being what the gutter reaches. It
-            // arms the drag as well, so holding the button after a shift-click and
-            // sweeping on carries the run out from there.
+            // The reach moves the lead to the column pressed on the text. From the gutter
+            // it takes whole rows: a run begun there is swept by rows as a drag from it
+            // would be, the anchor's own row included, and one begun on the text reaches
+            // the far end of the row, measured from the anchor. It arms the drag as well,
+            // so holding the button after a shift-click and sweeping on carries the run
+            // out from there.
             chars: match press {
                 Some(Press::At(col)) | Some(Press::Span(_, col)) => {
                     picked.chars.extended(Caret { row, col })
                 }
+                None if picked.by_rows => picked.chars.by_rows(row),
                 None => picked.chars.extended(Caret {
                     row,
-                    col: if row >= picked.chars.ends().0.row {
+                    col: if row >= picked.chars.anchor().row {
                         crate::chars::END
                     } else {
                         0

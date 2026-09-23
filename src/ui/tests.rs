@@ -19841,6 +19841,47 @@ fn a_press_in_one_pane_leaves_the_others_run_alone() {
     assert_eq!(marks.source.as_ref().unwrap().chars.rows(), 3..=3);
 }
 
+/// A Shift+press in the gutter reaches whole rows, the anchor's own among them, as a
+/// sweep from the gutter does -- upwards too, and from a run swept upwards, where the
+/// lead is the first end and not the anchor.
+#[test]
+fn a_reach_from_the_gutter_takes_whole_rows_either_way() {
+    let (mut test, marked) = TestingRunner::new(
+        project_harness,
+        (100., 100.).into(),
+        |runner| {
+            runner
+                .provide_root_context(|| Marked(State::create(Marks::default())))
+                .0
+        },
+        1.,
+    );
+    test.sync_and_update();
+    let chars = || marked.peek().assembly.as_ref().unwrap().chars;
+    let whole = |from: usize, to: usize| {
+        CharSelection::between(
+            Caret {
+                row: from,
+                col: crate::chars::END,
+            },
+            Caret { row: to, col: 0 },
+        )
+    };
+
+    // Up from a caret in the gutter: the anchor's row is taken whole too.
+    mark_press(marked, false, Pane::Assembly, None, 5, None);
+    mark_release(marked);
+    mark_press(marked, true, Pane::Assembly, None, 3, None);
+    assert_eq!(chars(), whole(5, 3));
+
+    // Swept up from 10 to 5, then reached back down to 7: rows 7 to 10.
+    mark_press(marked, false, Pane::Assembly, None, 10, None);
+    mark_drag(marked, Pane::Assembly, 5, None);
+    mark_release(marked);
+    mark_press(marked, true, Pane::Assembly, None, 7, None);
+    assert_eq!(chars(), whole(10, 7));
+}
+
 /// A line picked out in the source pane lights, in the listing, every instruction it was
 /// compiled from and nothing else -- and the pointer lights nothing: moving over the rows
 /// leaves the pair as it was and picks nothing out.
