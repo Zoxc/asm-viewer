@@ -3212,6 +3212,34 @@ fn a_saved_source_tab_comes_back_with_no_binaries() {
     );
 }
 
+/// **The temporal tab comes back temporal when it was the tab on screen.** The restore
+/// landed on it by opening its document with `Reach::NewTab`, and opening a place a tab
+/// already shows promotes that tab, so every restart left the preview a tab that stays.
+#[test]
+fn a_restored_temporal_tab_on_screen_stays_temporal() {
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let session: Session = toml::from_str(
+        "[active.Source]\npath = \"/src/main.rs\"\n\n[[tabs]]\ntemporal = true\n\n[[tabs.entries]]\n[tabs.entries.document.Source]\npath = \"/src/main.rs\"\n",
+    )
+    .expect("a session naming one temporal source tab");
+
+    restore_project(states, Project::default(), session);
+    test.sync_and_update();
+
+    let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
+    assert!(states.open.active() == Some(file), "not on the file");
+    let docs = states.open.docs.peek();
+    assert!(
+        docs.temporal().is_some(),
+        "the temporal tab came back as a tab that stays"
+    );
+}
+
 /// Whether the row below is still drawn; its own press decides.
 #[derive(Clone, Copy)]
 struct Gone(State<bool>);

@@ -317,12 +317,13 @@ fn enter_project(states: ProjectStates, file: PathBuf, project: Project, session
 /// project with no binaries still comes back with the source files the reader had open.
 ///
 /// Two orderings are load-bearing among the documents. **Tabs before the active
-/// document**: `open_document` opens what it cannot find, so restoring the active one
-/// first would leave its tab out of place in the bar. **The rows go into the `Positions`
-/// maps before each tab is shown**: a pane puts its view back when it notices the tab it
-/// is showing has changed, so a row arriving after the tab is on screen arrives after the
-/// only moment anything looks at it. A tab's trail is opened whole and its rows go in per
-/// entry, so Back after a restart comes back to the rows that were left.
+/// document**: the active one is looked for among them and opened only when missing, so
+/// restoring it first would leave its tab out of place in the bar. **The rows go into
+/// the `Positions` maps before each tab is shown**: a pane puts its view back when it
+/// notices the tab it is showing has changed, so a row arriving after the tab is on
+/// screen arrives after the only moment anything looks at it. A tab's trail is opened
+/// whole and its rows go in per entry, so Back after a restart comes back to the rows
+/// that were left.
 pub(crate) fn restore_project(states: ProjectStates, project: Project, session: Session) {
     // How the window was arranged. Before everything else: it is about the window and not
     // about what is open in it, so a project with no binaries left still comes back
@@ -447,9 +448,20 @@ fn restore_documents(states: ProjectStates, session: &Session) {
         position += 1;
     }
     // The document the app lands on is a place it went: the tab showing it is raised, or
-    // -- degraded to its object, say -- it opens in a tab of its own.
+    // -- degraded to its object, say -- it opens in a tab of its own. Raised and not
+    // opened: opening a place a tab already shows promotes that tab, and the tab on screen
+    // is often the temporal one, which would come back as a tab that stays.
     if let Some(active) = restored.active {
-        open_document(open, visits, active, Reach::NewTab);
+        let showing = open.docs.peek().showing(&active);
+        match showing {
+            Some(id) => {
+                write_if(visits, |visits| visits.record(active));
+                raise(open, id);
+            }
+            None => {
+                open_document(open, visits, active, Reach::NewTab);
+            }
+        }
     }
 }
 

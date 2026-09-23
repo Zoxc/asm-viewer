@@ -586,15 +586,17 @@ and `shown_page` stay outside it, being the pages' half and going back first eit
 `restore_documents` sets the visits, then for each restored tab opens its trail whole
 (`Docs::open_trail`, temporal flag and all), calls `place_entries` and puts the tab in the bar at
 the place it had -- counted over what survived, so the tabs that resolved keep their order around
-the pages already there -- and then opens the active document with `Reach::NewTab`, which raises
-the tab already showing it and, for one that degraded, opens a tab. Two orderings are load-bearing.
+the pages already there -- and then raises the tab already showing the active document, or, for
+one that degraded, opens it with `Reach::NewTab`. It raises rather than opens because opening a
+place a tab already shows promotes that tab, and the tab on screen is often the temporal one. Two
+orderings are load-bearing.
 The **rows go into the `Positions` maps, and the driven line into `Driven`, per entry and before
 the tab is shown**: those maps are the one thing the restore writes directly, which is why the
 writes have a name of their own (`place_entries`), and a pane puts its view back when it notices
 the place it is showing has changed, so a row arriving after the tab is on screen arrives after the
-only moment anything looks at it. And tabs go before the active document, because `open_document`
-opens what it cannot find and would otherwise put it beside whichever tab was on screen instead of
-finding it in place. The saved order is stated outright rather than reproduced by opening each tab
+only moment anything looks at it. And tabs go before the active document, because the active
+document is looked for among them, and one opened first would go beside whichever tab was on screen
+instead of in place. The saved order is stated outright rather than reproduced by opening each tab
 beside the one before it. A place that no longer resolves is **dropped** off its trail, like a
 visit, and a tab left with none is dropped. A source-driven place is never resolved at all, so a
 file that has been deleted comes back as a tab over the pane's own "Source file not found" rather
