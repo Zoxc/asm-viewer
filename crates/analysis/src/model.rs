@@ -343,9 +343,10 @@ pub struct CodeSection {
 
     /// The section's relocations by the address the bytes each patches sit at, which is
     /// what a disassembly has to ask by. Not always what the file states: see
-    /// [`parse_object`](crate::parse_object). Ordered, because the disassembler, the only
-    /// reader, asks for the last one in an instruction's bytes.
-    pub relocations: BTreeMap<SectionAddress, Relocation>,
+    /// [`parse_object`](crate::parse_object). Every one at an address is kept, in the
+    /// file's order. Ordered, because the disassembler, the only reader, asks for every
+    /// one in an instruction's bytes.
+    pub relocations: BTreeMap<SectionAddress, Vec<Relocation>>,
 
     /// The address ranges the file's own unwind table states for the functions in this
     /// section — an x86-64 PE's `.pdata`, an ELF's `.eh_frame`, out of
@@ -371,7 +372,7 @@ impl Section {
         name: String,
         data: Vec<u8>,
         address: SectionAddress,
-        relocations: BTreeMap<SectionAddress, Relocation>,
+        relocations: BTreeMap<SectionAddress, Vec<Relocation>>,
         bias: Bias,
     ) -> Section {
         Section {

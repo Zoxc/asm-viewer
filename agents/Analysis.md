@@ -213,7 +213,9 @@ back what the format states, an address in ELF and COFF but an offset from the
 start of the section in Mach-O, which lays its sections out one after another. So `read_sections`
 adds a Mach-O section's address as it builds the map, and `Code::relocations` can ask by address
 whatever the file is. The map is a `BTreeMap`, so that question is one range over an instruction's
-bytes, every entry of which is an answer. The debug sections are relocated straight from `object`'s iterator
+bytes, every entry of which is an answer. Each address holds a list, in the file's order: one
+entry per address kept only the last of two relocations at one place, and nothing says a file
+will not state two. The debug sections are relocated straight from `object`'s iterator
 (`line/dwarf.rs`'s `relocate`) and want the offset as it comes, since it indexes the bytes being
 patched. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in `Object::placed`,
 **clipped to the section's own bytes**. The index holds only symbols inside a code section's bytes,

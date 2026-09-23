@@ -13,7 +13,7 @@ use object::{
     SectionKind, SymbolIndex, SymbolKind, SymbolSection,
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
     path::PathBuf,
     sync::Arc,
@@ -327,12 +327,12 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
                 BinaryFormat::MachO => section.address(),
                 _ => 0,
             };
-            let relocations = section
-                .relocations()
-                .filter_map(|(offset, relocation)| {
-                    Some((SectionAddress::new(base).checked_add(offset)?, relocation))
-                })
-                .collect();
+            let mut relocations = BTreeMap::<_, Vec<_>>::new();
+            for (offset, relocation) in section.relocations() {
+                if let Some(address) = SectionAddress::new(base).checked_add(offset) {
+                    relocations.entry(address).or_default().push(relocation);
+                }
+            }
             let bias = bias_of(&biases, Some(index));
             Some((
                 index,

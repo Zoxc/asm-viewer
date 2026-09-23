@@ -80,9 +80,9 @@ impl<'a> Code<'a> {
         }
     }
 
-    /// Every relocation at any of the `len` bytes at `address`, in address order. An x86
-    /// instruction can hold two, one per field: `mov dword ptr [g], f` relocates both its
-    /// displacement and its immediate.
+    /// Every relocation at any of the `len` bytes at `address`, in address order and, at one
+    /// address, in the file's. An x86 instruction can hold two, one per field: `mov dword
+    /// ptr [g], f` relocates both its displacement and its immediate.
     ///
     /// Both halves of each answer are different questions: one being there means the
     /// encoded field is a placeholder, while [`target`](Relocated::target) is [`None`]
@@ -103,7 +103,8 @@ impl<'a> Code<'a> {
         let code = self.section.and_then(Section::code);
         code.into_iter()
             .flat_map(move |code| code.relocations.range((Bound::Included(address), end)))
-            .map(|(&address, found)| {
+            .flat_map(|(&address, found)| found.iter().map(move |found| (address, found)))
+            .map(|(address, found)| {
                 let target = match found.target() {
                     RelocationTarget::Symbol(index) => self.object.symbols.get(&index).cloned(),
                     _ => None,

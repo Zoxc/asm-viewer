@@ -333,6 +333,42 @@ fn every_relocation_in_the_instruction_is_named() {
 }
 
 #[test]
+fn two_relocations_at_one_address_are_both_named() {
+    // Both at the call's displacement, in the file's order. A map with one entry per
+    // address kept only the second.
+    let relocation = |target| TextRelocation {
+        in_symbol: 0,
+        offset: 1,
+        target,
+    };
+    let data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "caller",
+                bytes: &[0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3],
+            },
+            TextSymbol {
+                name: "first",
+                bytes: &[0xC3],
+            },
+            TextSymbol {
+                name: "second",
+                bytes: &[0xC3],
+            },
+        ],
+        &[relocation(1), relocation(2)],
+    );
+    let object = parse(&data);
+    let assembly = assemble(&object, "caller");
+    let names = assembly.instructions[0]
+        .names()
+        .iter()
+        .map(|name| (name.symbol.name.as_str(), name.span.is_some()))
+        .collect::<Vec<_>>();
+    assert_eq!(names, [("first", true), ("second", false)]);
+}
+
+#[test]
 fn an_unrelocated_indirect_call_keeps_its_displacement() {
     // Control for the test below: with nothing relocating it, iced-x86 prints the absolute
     // address the displacement resolves to (the instruction is 6 bytes and starts at 0).
