@@ -3176,6 +3176,30 @@ fn a_saved_page_comes_back_with_no_binaries() {
     assert_eq!(strip.active(), Some(Tab::Page(Page::Settings)));
 }
 
+/// **The page on screen stays on screen when document tabs come back beside it.** Each
+/// restored tab is shown as it goes in the bar, and a session left on a page names no
+/// active document to land on, so the restore ended on the last document tab.
+#[test]
+fn a_saved_page_on_screen_stays_there_beside_document_tabs() {
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let session: Session = toml::from_str(
+        "active_page = \"settings\"\n\n[[tabs]]\npage = \"settings\"\n\n[[tabs]]\n\n[[tabs.entries]]\n[tabs.entries.document.Source]\npath = \"/src/main.rs\"\n",
+    )
+    .expect("a session naming a page and a source tab");
+
+    restore_project(states, Project::default(), session);
+    test.sync_and_update();
+
+    let strip = states.open.strip.peek();
+    assert_eq!(strip.tabs().len(), 2, "the tabs did not come back");
+    assert_eq!(strip.active(), Some(Tab::Page(Page::Settings)));
+}
+
 /// A source place resolves against no object either, so a session's **source tabs come
 /// back with no binaries**: a project opened by its directory and read in the Files view,
 /// or one whose only binary has since been deleted. The restore put the pages back and

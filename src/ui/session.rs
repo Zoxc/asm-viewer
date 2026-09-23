@@ -463,6 +463,11 @@ fn restore_documents(states: ProjectStates, session: &Session) {
             }
         }
     }
+    // Or the page that was on screen, raised again: each tab put in the bar above was
+    // shown as it went in. A session holds one of the two at most.
+    if let Some(page) = session.shown_page() {
+        raise_tab(open, Tab::Page(page));
+    }
 }
 
 /// Where each side of every place on one restored tab was left, and what drove it, into

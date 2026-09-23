@@ -588,8 +588,9 @@ and `shown_page` stay outside it, being the pages' half and going back first eit
 the place it had -- counted over what survived, so the tabs that resolved keep their order around
 the pages already there -- and then raises the tab already showing the active document, or, for
 one that degraded, opens it with `Reach::NewTab`. It raises rather than opens because opening a
-place a tab already shows promotes that tab, and the tab on screen is often the temporal one. Two
-orderings are load-bearing.
+place a tab already shows promotes that tab, and the tab on screen is often the temporal one. A
+session left on a page has no active document, and that page is raised again instead: every tab put
+in the bar is shown as it goes in. Two orderings are load-bearing.
 The **rows go into the `Positions` maps, and the driven line into `Driven`, per entry and before
 the tab is shown**: those maps are the one thing the restore writes directly, which is why the
 writes have a name of their own (`place_entries`), and a pane puts its view back when it notices
