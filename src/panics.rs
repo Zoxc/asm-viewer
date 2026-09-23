@@ -18,7 +18,8 @@
 //! unwinding out of is still alive while the hook runs, and a `std::sync::Mutex` is not
 //! reentrant, so the shutdown -- `crate::shutdown::before_exit`, which saves the projects
 //! and takes that lock -- goes on a thread of its own and only reaches the lock once the
-//! unwind has let it go.
+//! unwind has let it go. The main thread waits for it a while first all the same: its
+//! unwind leaves `main`, which ends the process.
 //!
 //! **It must not panic itself**, which aborts. Everything here is best-effort: a store
 //! that cannot be written is one the reader is told about anyway, and the line put on
@@ -46,9 +47,9 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex,
+        mpsc, Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 /// What one run of the app remembers across its panics.
@@ -535,15 +536,43 @@ fn is_runtime(frame: &[&str]) -> bool {
 ///
 /// On a thread of its own, and this is the whole reason: the panicking thread has not
 /// unwound yet, so any lock it holds is still held, and `project::flush` takes one.
-/// Started here and left to run; the thread that panicked returns into its unwind, which
-/// is what lets the lock go.
+///
+/// **The main thread waits for it, and no other does.** The UI thread is the main thread,
+/// and nothing between it and `main` catches an unwind (neither freya nor winit does), so
+/// its unwind leaves `main` and ends the process, killing the shutdown part way through a
+/// save or before a child is stopped. So it waits, for at most [`PATIENCE`]: if it holds a
+/// lock the shutdown needs, only its unwind lets that go. Any other thread returns into its
+/// unwind at once, the main thread keeping the process alive.
 fn shut_down() {
-    let _ = std::thread::Builder::new()
-        .name("shutdown".to_owned())
-        .spawn(|| {
+    let main = std::thread::current().name() == Some("main");
+    stop_on_thread(
+        || {
             shutdown::before_exit();
             std::process::exit(1);
+        },
+        main.then_some(PATIENCE),
+    );
+}
+
+/// How long the main thread waits for the shutdown before it goes on into its unwind.
+const PATIENCE: Duration = Duration::from_secs(5);
+
+/// Run `stop` on a thread named `shutdown`, and wait up to `wait` for it to finish.
+///
+/// The thread holds the sender and never sends: the wait ends when the thread ends or
+/// could not be started, either of which drops it. [`shut_down`]'s thread ends the process
+/// instead, which ends the wait with it.
+fn stop_on_thread(stop: impl FnOnce() + Send + 'static, wait: Option<Duration>) {
+    let (working, finished) = mpsc::channel::<()>();
+    let _ = std::thread::Builder::new()
+        .name("shutdown".to_owned())
+        .spawn(move || {
+            let _working = working;
+            stop();
         });
+    if let Some(wait) = wait {
+        let _ = finished.recv_timeout(wait);
+    }
 }
 
 /// The date and time `seconds` after the epoch, UTC, as `2026-09-04 14:12:33`.

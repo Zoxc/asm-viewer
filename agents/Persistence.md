@@ -641,7 +641,12 @@ written down and nothing else happens, since nothing has gone wrong with the app
 panicking thread while that thread still holds whatever it held, and `std::sync::Mutex` is not
 reentrant, so the shutdown -- `shutdown::before_exit`, the project and the settings flushed and
 then every child the app started stopped -- goes on **a thread of its own** and reaches the lock
-only once the unwind has let it go. And it is installed from `ui::app`'s first render rather than from `main`,
+only once the unwind has let it go. **The main thread waits for that thread**, for five seconds at
+most: it is the UI thread, nothing between it and `main` catches an unwind (neither freya nor
+winit on Linux), and an unwind out of `main` ends the process with the save half written and
+rust-analyzer left running. The bound is for a lock the main thread itself holds, which only its
+unwind lets go. Any other thread returns into its unwind at once, since the main thread keeps the
+process alive. And it is installed from `ui::app`'s first render rather than from `main`,
 which is freya's doing (`notes/upstream/freya.md`): a hook set before `launch` is the inner one,
 and freya's box would be up and the process gone before ours ran. The app's workers are named
 (`thread::Builder::name`) for the one reason that the box then says which of them died.

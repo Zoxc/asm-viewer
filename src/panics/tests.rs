@@ -414,3 +414,38 @@ fn a_message_cut_at_a_blank_line_does_not_end_on_one() {
     assert_eq!(first_lines("one\ntwo\n", 2), "one\ntwo\n");
     assert_eq!(first_lines("one\ntwo\n", 9), "one\ntwo\n");
 }
+
+/// The main thread's unwind leaves `main` and ends the process, so a shutdown it does not
+/// wait for is cut off part way. Waited for, it has finished by the time the hook returns.
+#[test]
+fn a_waited_for_shutdown_has_finished_when_the_hook_returns() {
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let doing = done.clone();
+    stop_on_thread(
+        move || {
+            std::thread::sleep(Duration::from_millis(100));
+            doing.store(true, Ordering::SeqCst);
+        },
+        Some(Duration::from_secs(60)),
+    );
+    assert!(
+        done.load(Ordering::SeqCst),
+        "the hook returned before the shutdown finished"
+    );
+}
+
+/// A shutdown stuck on a lock the panicking thread holds is waited for only so long: the
+/// unwind is what lets the lock go, so waiting for ever would never end.
+#[test]
+fn a_stuck_shutdown_is_not_waited_for_past_the_patience() {
+    let (release, stuck) = mpsc::channel::<()>();
+    let started = std::time::Instant::now();
+    stop_on_thread(
+        move || {
+            let _ = stuck.recv();
+        },
+        Some(Duration::from_millis(50)),
+    );
+    assert!(started.elapsed() < Duration::from_secs(30));
+    drop(release);
+}
