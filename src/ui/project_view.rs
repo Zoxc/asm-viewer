@@ -146,7 +146,7 @@ impl Component for BinaryRow {
         cut_tooltip(
             fitted.cut(),
             text.clone(),
-            dead_list_row()
+            dead_list_row(Chosen::No)
                 .child(tree_name_fitted(fitted, text, false, &[]))
                 .child(dim_line(counted(self.objects, "object", "objects"))),
         )
@@ -163,7 +163,7 @@ impl Component for BinaryRow {
 /// A row and not a `field_row`: these names are long enough to be the whole of the left
 /// column and there is no reason for the values to line up with the fields above.
 fn override_row(name: &str, value: &str) -> Element {
-    dead_list_row()
+    dead_list_row(Chosen::No)
         .child(
             label()
                 .text(name.to_owned())

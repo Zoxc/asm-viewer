@@ -49,18 +49,19 @@ impl Component for BookmarkRow {
         let Names { text, tooltip, .. } = Names::of_saved(&self.bookmark);
 
         // A dead row has no handlers at all, like a dimmed history button: nothing to go
-        // to, so nothing to light up for, and nothing to pick out either. Nothing about
-        // the tab on screen picks a live row out -- a bookmark is a place and the tab may
-        // be anywhere -- so a row here lights when the reader pressed it and not
-        // otherwise.
+        // to, so nothing to light up for. It still draws the pick, which the keys step
+        // onto it, or the list's cursor would vanish there. Nothing about the tab on
+        // screen picks a row out -- a bookmark is a place and the tab may be anywhere --
+        // so a row here lights when the reader picked it and not otherwise.
+        let chosen = picking.drawn(&pick, false);
         let row = match &self.live {
             Some(live) => {
                 let live = live.clone();
-                list_row(hovering, picking.drawn(&pick, false)).on_press(move |_| {
+                list_row(hovering, chosen).on_press(move |_| {
                     picking.press(pick.clone(), at, || opened(doors, ctrl, live.clone()));
                 })
             }
-            None => dead_list_row(),
+            None => dead_list_row(chosen),
         };
 
         name_tooltip(

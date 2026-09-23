@@ -289,10 +289,8 @@ pub(crate) fn invalid_line(error: String) -> Element {
 /// same frame with nothing to answer the pointer with.
 pub(crate) fn list_row(mut hovering: State<bool>, chosen: Chosen) -> Rect {
     let background = match chosen {
-        Chosen::Live => palette().text_select_bg,
-        Chosen::Idle => palette().selected_bg,
         Chosen::No if hovering() => palette().row_hover_bg,
-        Chosen::No => Color::TRANSPARENT,
+        chosen => pick_wash(chosen),
     };
     row_frame(background)
         .on_pointer_over(move |_| hovering.set_if_modified(true))
@@ -301,9 +299,19 @@ pub(crate) fn list_row(mut hovering: State<bool>, chosen: Chosen) -> Rect {
 
 /// A list row that answers the pointer with nothing: the bookmark whose place does not
 /// resolve, drawn dimmed and going nowhere, and the Project view's binary and override
-/// rows, which state what is there. Nothing to press, so no hover to light.
-pub(crate) fn dead_list_row() -> Rect {
-    row_frame(Color::TRANSPARENT)
+/// rows, which state what is there. Nothing to press, so no hover to light. `chosen` is
+/// still drawn: the keys step onto a dead bookmark, and a pick there must show.
+pub(crate) fn dead_list_row(chosen: Chosen) -> Rect {
+    row_frame(pick_wash(chosen))
+}
+
+/// What a row wears for being picked out, and nothing for not being.
+fn pick_wash(chosen: Chosen) -> Color {
+    match chosen {
+        Chosen::Live => palette().text_select_bg,
+        Chosen::Idle => palette().selected_bg,
+        Chosen::No => Color::TRANSPARENT,
+    }
 }
 
 /// What the two share: the frame, and the one padding and the one spacing every list row

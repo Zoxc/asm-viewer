@@ -25390,6 +25390,53 @@ fn removing_a_bookmark_leaves_the_pick_on_the_row_it_was_put_on() {
     );
 }
 
+/// **A dead bookmark draws the pick the keys put on it.** The arrows step onto every row,
+/// dead ones too, and a dead row drew no pick: the list's one cursor vanished there.
+#[test]
+fn the_arrows_onto_a_dead_bookmark_leave_it_picked_out() {
+    let symbols = fixture_symbols();
+    let (mut test, (states, mut alt)) = TestingRunner::new(
+        bookmarks_harness,
+        (300., 300.).into(),
+        |runner: &mut _| {
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.keys.alt)
+        },
+        1.,
+    );
+    // A file, which is live, over a symbol in a binary nothing has loaded.
+    let mut bookmarks = states.bookmarks;
+    bookmarks.set(Bookmarks::from_entries(vec![
+        bookmark_of(&Document::Source(Arc::from(Path::new("/src/a.rs")))),
+        bookmark_of(&Document::Symbol(symbols[0].clone())),
+    ]));
+    settle(&mut test);
+    let dead = label_area(&test, &symbols[0].data.name)
+        .expect("the dead bookmark is drawn")
+        .origin
+        .y;
+
+    alt.set(true);
+    settle(&mut test);
+    let row = centre_of(&test, "a.rs");
+    press_at(&mut test, row);
+    settle(&mut test);
+    alt.set(false);
+    settle(&mut test);
+
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    settle(&mut test);
+    assert_eq!(
+        drawn_at(&test, dead),
+        Chosen::Live,
+        "the pick on the dead row is not drawn"
+    );
+}
+
 /// The Symbols list with the context-menu viewer a right-click on a row needs, over the
 /// project's states and the `Symbols` memo `app()` derives from the objects.
 fn symbols_harness() -> impl IntoElement {
