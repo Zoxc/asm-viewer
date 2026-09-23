@@ -150,6 +150,9 @@ pub(crate) struct Pads {
     /// operation here that destroys their own source**, so it is a question and not a
     /// press, and the question is held beside the pads for `refused`'s reason.
     pub(crate) confirming: Option<PadId>,
+    /// How many states have entered the table, which numbers each one's
+    /// [`PadState::holding`].
+    holdings: u64,
 }
 
 impl Default for Pads {
@@ -166,6 +169,7 @@ impl Default for Pads {
             confirming: None,
             pads: HashMap::from([(shown.clone(), PadState::of(scratchpad))]),
             shown,
+            holdings: 0,
         }
     }
 }
@@ -195,11 +199,16 @@ impl Pads {
     }
 
     /// The state for `pad`, held if this is the first time it is named. The one place a
-    /// pad enters the table.
+    /// pad enters the table, and so the one place a state is numbered.
     fn held(&mut self, pad: &PadId) -> &mut PadState {
-        self.pads
-            .entry(pad.clone())
-            .or_insert_with(|| PadState::of(Scratchpad::of(pad.clone())))
+        let Pads { pads, holdings, .. } = self;
+        pads.entry(pad.clone()).or_insert_with(|| {
+            *holdings += 1;
+            PadState {
+                holding: *holdings,
+                ..PadState::of(Scratchpad::of(pad.clone()))
+            }
+        })
     }
 
     /// Hold a pad the listing named, so the panel can draw a name for one that has never
@@ -217,17 +226,19 @@ impl Pads {
     /// it to the front of the order the panel draws — the same `touch` the file goes
     /// through on the worker, so the two cannot say different things.
     ///
-    /// **Answers the pad to ask the worker for**, which is the disk read a
-    /// [`PadJob::Open`] is, and [`None`] for one whose disk has already been read. Every
-    /// door into a pad goes through here, so the rule that a pad already read is never
-    /// read again is written once rather than remembered by each of them
-    /// ([`PadState::opened`]).
-    fn show(&mut self, pad: PadId) -> Option<Scratchpad> {
+    /// **Answers the [`PadJob::Open`] to ask the worker for**, and [`None`] for a pad whose
+    /// disk has already been read. Every door into a pad goes through here, so the rule
+    /// that a pad already read is never read again is written once rather than remembered
+    /// by each of them ([`PadState::opened`]).
+    fn show(&mut self, pad: PadId) -> Option<PadJob> {
         self.held(&pad);
         self.order.touch(pad.clone());
         self.shown = pad;
         let state = self.state();
-        (!state.opened()).then(|| state.scratchpad.clone())
+        (!state.opened()).then(|| PadJob::Open {
+            scratchpad: state.scratchpad.clone(),
+            holding: state.holding,
+        })
     }
 
     /// The pads the disk has, as the worker read them. Answers with the pad to open,
@@ -243,7 +254,7 @@ impl Pads {
     /// The order is not written back before it has been read. Nothing here guards that:
     /// the only writer is `scratchpad::remember`, on the worker inside the `PadJob::Open`
     /// this answer sends. [`PadState::opened`]'s rule one level up.
-    fn listed(&mut self, listing: &[PadListing]) -> Option<Scratchpad> {
+    fn listed(&mut self, listing: &[PadListing]) -> Option<PadJob> {
         if !listing.is_empty() {
             self.order = PadOrder::of(listing);
             for listed in listing {
@@ -262,7 +273,7 @@ impl Pads {
     ///
     /// A pad that was made is written already, so there is nothing to read: it is shown
     /// and opened at once, which is what seeds its baseline.
-    fn created(&mut self, made: Result<Scratchpad, Failure>) -> Option<Scratchpad> {
+    fn created(&mut self, made: Result<Scratchpad, Failure>) -> Option<PadJob> {
         match made {
             Ok(scratchpad) => {
                 let id = scratchpad.id().clone();
@@ -292,25 +303,32 @@ impl Pads {
     /// so taking it would put the older text back on screen and make it the baseline --
     /// leaving the disk ahead of the screen with no save owing, until the next keystroke
     /// wrote the older text over it.
-    fn opened(&mut self, scratchpad: &Scratchpad, program: Option<Program>) -> bool {
-        let already = self.get(scratchpad.id()).is_some_and(PadState::opened);
-        if already {
+    ///
+    /// **Nor is an answer for a pad that has been deleted**, which the table no longer
+    /// holds -- or holds again under the same id, [`Pads::forget`] coming back to the
+    /// default pad and New claiming the lowest free id. That answer is the deleted pad's
+    /// package, read before the delete ran, so `holding` has to be the number of the state
+    /// that asked ([`PadState::holding`]).
+    fn opened(&mut self, holding: u64, scratchpad: &Scratchpad, program: Option<Program>) -> bool {
+        let Some(state) = self
+            .get_mut(scratchpad.id())
+            .filter(|state| state.holding == holding && !state.opened())
+        else {
             return false;
-        }
-        if let Some(state) = self.get_mut(scratchpad.id()) {
-            state.scratchpad = scratchpad.clone();
-            // The baseline, seeded by the answer and nowhere else: what the disk holds is
-            // what the worker just read off it.
-            state.disk = Some(scratchpad.clone());
-            state.program = program;
-        }
+        };
+        state.scratchpad = scratchpad.clone();
+        // The baseline, seeded by the answer and nowhere else: what the disk holds is
+        // what the worker just read off it.
+        state.disk = Some(scratchpad.clone());
+        state.program = program;
         true
     }
 
     /// A pad that could not be read, and why. It is left with no baseline, so nothing
-    /// here is ever written back: the reason is all the app does with it.
-    fn unopened(&mut self, name: &PadId, failure: Failure) {
-        if let Some(state) = self.get_mut(name) {
+    /// here is ever written back: the reason is all the app does with it. Taken only by
+    /// the state that asked, for [`Pads::opened`]'s reason.
+    fn unopened(&mut self, name: &PadId, holding: u64, failure: Failure) {
+        if let Some(state) = self.get_mut(name).filter(|state| state.holding == holding) {
             state.unsaved = Some(failure);
         }
     }
@@ -391,7 +409,7 @@ impl Pads {
     /// `Option`. The next one in the order takes over; when the last pad goes, the table
     /// comes back to what a first run holds -- the default pad, opened like any other, so
     /// nothing is written until something is typed into it.
-    fn forget(&mut self, name: &PadId) -> Option<Scratchpad> {
+    fn forget(&mut self, name: &PadId) -> Option<PadJob> {
         self.pads.remove(name);
         self.order.forget(name);
         if &self.shown != name {
@@ -454,6 +472,10 @@ pub(crate) struct Program {
 #[derive(Clone, Default)]
 pub(crate) struct PadState {
     pub(crate) scratchpad: Scratchpad,
+    /// Which state entered the table under this id, numbered by [`Pads::held`]. An open is
+    /// asked with it and answered with it, so a deleted pad's answer is not taken by a new
+    /// pad given the same id ([`Pads::opened`]).
+    holding: u64,
     /// What the worker last read off the disk or was last handed for this pad, and so
     /// what its package says. `None` until that pad's own answer lands, which is what
     /// [`PadState::opened`] asks: the app boots holding [`Scratchpad::default`] and the
@@ -702,7 +724,12 @@ pub(crate) enum PadJob {
     /// Take a pad's package off the disk. An id and not a whole scratchpad: the app has
     /// already let the pad go, and what is deleted is the directory the id names.
     Delete(PadId),
-    Open(Scratchpad),
+    /// Read a pad's package. `holding` is the [`PadState::holding`] that asked, handed
+    /// back with the answer.
+    Open {
+        scratchpad: Scratchpad,
+        holding: u64,
+    },
     Save(Scratchpad),
     Build(Scratchpad),
     /// Start what the last build made. It goes to the worker because it *forks* and
@@ -729,9 +756,9 @@ impl PadJob {
         match self {
             PadJob::List | PadJob::New => None,
             PadJob::Delete(pad) | PadJob::Run { pad, .. } => Some(pad),
-            PadJob::Open(scratchpad) | PadJob::Save(scratchpad) | PadJob::Build(scratchpad) => {
-                Some(scratchpad.id())
-            }
+            PadJob::Open { scratchpad, .. }
+            | PadJob::Save(scratchpad)
+            | PadJob::Build(scratchpad) => Some(scratchpad.id()),
         }
     }
 }
@@ -757,6 +784,7 @@ pub(crate) enum PadAnswer {
         /// [`None`] for a pad never built, one whose artifact has gone, and one built by
         /// a version of this app that wrote nothing down.
         program: Option<Program>,
+        holding: u64,
     },
     /// A pad that could not be read, and why.
     ///
@@ -764,7 +792,11 @@ pub(crate) enum PadAnswer {
     /// it, its baseline is never seeded, and [`save_if_changed`] steps over a pad that is
     /// not open. So a package this module cannot read stays on the disk as it is instead
     /// of being written over by the pad the app boots holding.
-    Unopened { pad: PadId, failure: Failure },
+    Unopened {
+        pad: PadId,
+        failure: Failure,
+        holding: u64,
+    },
     /// Why the package could not be written, or `None` when it was.
     Saved {
         pad: PadId,
@@ -835,7 +867,10 @@ pub(crate) fn pad_work(store: Option<&Store>, job: PadJob) -> PadAnswer {
             Some(store) => crate::scratchpad::delete_pad(store, &name).err(),
             None => Some(Failure::NoDirectory),
         }),
-        PadJob::Open(scratchpad) => match &store {
+        PadJob::Open {
+            scratchpad,
+            holding,
+        } => match &store {
             Some(store) => {
                 let directory = scratchpad.id().directory_in(store);
                 let pad = scratchpad.id().clone();
@@ -860,15 +895,21 @@ pub(crate) fn pad_work(store: Option<&Store>, job: PadJob) -> PadAnswer {
                         PadAnswer::Opened {
                             scratchpad: opened,
                             program,
+                            holding,
                         }
                     }
-                    Err(failure) => PadAnswer::Unopened { pad, failure },
+                    Err(failure) => PadAnswer::Unopened {
+                        pad,
+                        failure,
+                        holding,
+                    },
                 }
             }
             // Nowhere to have been read from, so what was handed in is what there is.
             None => PadAnswer::Opened {
                 scratchpad,
                 program: None,
+                holding,
             },
         },
         PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -989,14 +1030,14 @@ pub(crate) fn use_scratchpad_with(
                 // Bound out of a statement of its own, so the guard is gone before the
                 // send.
                 let opening = pad.write().listed(&listing);
-                if let Some(scratchpad) = opening {
-                    requests.send(PadJob::Open(scratchpad));
+                if let Some(open) = opening {
+                    requests.send(open);
                 }
             }
             PadAnswer::Created(made) => {
                 let opening = pad.write().created(made);
-                if let Some(scratchpad) = opening {
-                    requests.send(PadJob::Open(scratchpad));
+                if let Some(open) = opening {
+                    requests.send(open);
                 }
             }
             PadAnswer::Deleted(failure) => {
@@ -1005,12 +1046,13 @@ pub(crate) fn use_scratchpad_with(
             PadAnswer::Opened {
                 scratchpad,
                 program,
+                holding,
             } => {
                 // Whether the answer is wanted at all is the state's to say
                 // ([`Pads::opened`]), which is also what seeds the baseline; the buffer is
                 // made only where it was taken, so a second answer for a pad already open
                 // changes neither.
-                let taken = pad.write().opened(&scratchpad, program);
+                let taken = pad.write().opened(holding, &scratchpad, program);
                 if !taken {
                     return;
                 }
@@ -1018,8 +1060,12 @@ pub(crate) fn use_scratchpad_with(
                 text.write()
                     .make(scratchpad.id().clone(), &scratchpad.source);
             }
-            PadAnswer::Unopened { pad: name, failure } => {
-                pad.write().unopened(&name, failure);
+            PadAnswer::Unopened {
+                pad: name,
+                failure,
+                holding,
+            } => {
+                pad.write().unopened(&name, holding, failure);
             }
             PadAnswer::Saved { pad: name, failure } => {
                 // Written only where it changes something: a save is answered per
@@ -1179,8 +1225,8 @@ pub(crate) fn show_pad(mut pad: State<Pads>, jobs: &PadJobs, name: PadId) {
 
     // Bound out of a statement of its own, so the guard is gone before the send.
     let arriving = pad.write().show(name);
-    if let Some(arriving) = arriving {
-        jobs.jobs.send(PadJob::Open(arriving));
+    if let Some(open) = arriving {
+        jobs.jobs.send(open);
     }
 }
 
@@ -1260,8 +1306,8 @@ pub(crate) fn request_delete_pad(
     // Behind the delete, so a pad that has to be read is read after the directory has gone
     // rather than before -- which matters for the one id this can arrive at twice, the
     // default pad the last delete comes back to.
-    if let Some(arriving) = arriving {
-        jobs.jobs.send(PadJob::Open(arriving));
+    if let Some(open) = arriving {
+        jobs.jobs.send(open);
     }
 }
 

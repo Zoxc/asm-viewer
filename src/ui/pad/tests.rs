@@ -6,6 +6,11 @@ fn id(name: &str) -> PadId {
     PadId::new(name).expect("a valid id")
 }
 
+/// The number the state held for `name` asks its open with.
+fn holding(pads: &Pads, name: &str) -> u64 {
+    pads.get(&id(name)).expect("held").holding
+}
+
 fn listing(names: &[&str]) -> Vec<PadListing> {
     names
         .iter()
@@ -21,7 +26,10 @@ fn the_front_of_the_listing_is_what_a_restart_comes_back_to() {
     let mut pads = Pads::default();
     let opening = pads.listed(&listing(&["pad-a", "pad-b"]));
 
-    assert_eq!(opening.expect("the front is to be read").id(), &id("pad-a"));
+    assert_eq!(
+        opening.expect("the front is to be read").pad(),
+        Some(&id("pad-a"))
+    );
     assert_eq!(pads.shown(), &id("pad-a"));
     assert_eq!(
         pads.get(&id("pad-b"))
@@ -39,8 +47,10 @@ fn an_empty_listing_opens_the_pad_the_app_booted_holding() {
     let booted = pads.shown().clone();
     let opening = pads.listed(&[]);
     assert_eq!(
-        opening.expect("the booted pad is read like any other").id(),
-        &booted,
+        opening
+            .expect("the booted pad is read like any other")
+            .pad(),
+        Some(&booted),
         "which is what seeds its baseline"
     );
 }
@@ -59,7 +69,7 @@ fn a_listing_naming_a_pad_already_open_asks_for_nothing() {
         "a pad the disk has never been read for"
     );
     assert!(
-        pads.opened(&read, None),
+        pads.opened(holding(&pads, "pad-a"), &read, None),
         "the answer that seeds its baseline"
     );
 
@@ -75,7 +85,10 @@ fn a_pad_that_is_open_is_read_once_and_never_again() {
     let first = Scratchpad::new("pad-a").expect("a valid id");
     pads.show(id("pad-a"));
 
-    assert!(pads.opened(&first, None), "the answer it was waiting for");
+    assert!(
+        pads.opened(holding(&pads, "pad-a"), &first, None),
+        "the answer it was waiting for"
+    );
     let mut typed = first.clone();
     typed.source = "what the reader has since typed".to_owned();
     pads.state_mut().scratchpad = typed;
@@ -83,12 +96,48 @@ fn a_pad_that_is_open_is_read_once_and_never_again() {
     // The second answer to the same question: the disk as it was read before the save of
     // what has been typed since.
     assert!(
-        !pads.opened(&first, None),
+        !pads.opened(holding(&pads, "pad-a"), &first, None),
         "taking it would put the older text back and make it the baseline"
     );
     assert_eq!(
         pads.state().scratchpad.source,
         "what the reader has since typed"
+    );
+}
+
+/// A pad deleted while its open was on the queue: the answer is its package, read before
+/// the delete ran. Taken by the pad that now has its id, it would bring the deleted pad's
+/// source back as that pad's, with a baseline saying the disk holds it.
+#[test]
+fn an_open_answered_for_a_deleted_pad_is_not_taken() {
+    let mut pads = Pads::default();
+    pads.show(id("pad-a"));
+    pads.show(id("pad-b"));
+    let asked = holding(&pads, "pad-a");
+    let mut deleted = Scratchpad::new("pad-a").expect("a valid id");
+    deleted.source = "the deleted pad's source".to_owned();
+
+    pads.forget(&id("pad-a"));
+    assert!(
+        !pads.opened(asked, &deleted, None),
+        "an answer for a pad the table no longer holds"
+    );
+
+    // The id handed out again, as New does with the lowest free one.
+    pads.show(id("pad-a"));
+    assert!(
+        !pads.opened(asked, &deleted, None),
+        "the new pad took the deleted one's package"
+    );
+    pads.unopened(&id("pad-a"), asked, Failure::Unreadable);
+    let state = pads.state();
+    assert!(!state.opened() && state.unsaved.is_none());
+    assert_ne!(state.scratchpad.source, "the deleted pad's source");
+
+    let read = Scratchpad::new("pad-a").expect("a valid id");
+    assert!(
+        pads.opened(holding(&pads, "pad-a"), &read, None),
+        "the new pad's own answer"
     );
 }
 
@@ -113,7 +162,7 @@ fn nothing_is_owed_to_the_disk_before_it_has_been_read() {
 
     // The answer, which is both what opens the pad and what seeds its baseline.
     let read = Scratchpad::new("pad-a").expect("a valid id");
-    assert!(pads.opened(&read, None));
+    assert!(pads.opened(holding(&pads, "pad-a"), &read, None));
     assert!(pads.state().opened());
     assert!(
         pads.unsaved_change(&id("pad-a")).is_none(),

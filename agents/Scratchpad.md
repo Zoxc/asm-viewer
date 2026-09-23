@@ -217,7 +217,10 @@ delete is queued -- and it is now the whole story: there is no `Objects` entry t
 no tab, no saved path, and the parsed program is dropped with the answer value. The second is the
 `building` flag, read as well as written: `Pads::forget` comes back to the default pad's id when
 the last pad goes, so an answer can arrive for a *different pad under the same id*, and a pad that
-asked for no build is not building.
+asked for no build is not building. An open has no such flag -- the new pad under that id is
+waiting on an open of its own -- so each state is numbered as it enters the table
+(`PadState::holding`), and `PadJob::Open` carries the number and its answer hands it back. New
+claims the lowest free id, so that reuse is common rather than a corner.
 
 **The pane draws it as an object's whole code, beside the editor.** The two are a source-driven
 tab's two panes with a source side the reader types in, in a `ResizableContainer` of the pad's own
