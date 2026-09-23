@@ -498,6 +498,8 @@ pub(crate) struct ProjectStates {
     /// How the window itself is arranged. Not a project's state, and here all the same:
     /// it is written into the session, and a restore has to put it back.
     pub(crate) arranged: Arrangement,
+    /// Which stay in a project this is, for [`ProjectStates::left`].
+    pub(crate) stay: State<Stay>,
 }
 
 impl ProjectStates {
@@ -510,6 +512,32 @@ impl ProjectStates {
     /// belong to whatever scope happened to be rendering.
     pub(crate) fn holds_path(&self, path: &Path) -> bool {
         crate::tree::holds(&self.objects.peek(), &self.loading.peek(), path)
+    }
+
+    /// The project open now, for asking [`ProjectStates::left`] about later.
+    pub(crate) fn stay(&self) -> Stay {
+        *self.stay.peek()
+    }
+
+    /// Whether the reader has left the project that was open at `stay`. What an answer
+    /// that arrives late asks before it writes: a dialog, which is not modal to the
+    /// window, can answer after the reader has gone to another project or closed it.
+    pub(crate) fn left(&self, stay: Stay) -> bool {
+        *self.stay.peek() != stay
+    }
+}
+
+/// One stay in a project: from when it is entered to when it is left. Moved on by
+/// `clear_project`, which every way out of a project goes through. Not the project's file:
+/// leaving a project and opening it again is a stay of its own, and "Save as..." moves the
+/// file without leaving.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) struct Stay(u64);
+
+impl Stay {
+    /// The stay after this one.
+    pub(crate) fn next(self) -> Stay {
+        Stay(self.0.wrapping_add(1))
     }
 }
 

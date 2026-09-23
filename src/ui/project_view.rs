@@ -317,22 +317,34 @@ impl Component for RecentRow {
     }
 }
 
+/// Make `path` the directory of the project open at `asked`, which is the one "Choose..."
+/// was pressed in. Nothing if the reader has left that project while the dialog was up.
+pub(crate) fn chose_directory(states: ProjectStates, asked: Stay, path: &Path) {
+    if states.left(asked) {
+        return;
+    }
+    let mut proj = states.proj;
+    proj.write().workspace_text = path.to_string_lossy().into_owned();
+}
+
 /// The project the app is in: the directory it is over, and the file it is kept in.
 #[derive(PartialEq)]
 struct IdentitySection;
 
 impl Component for IdentitySection {
     fn render(&self) -> impl IntoElement {
-        let mut proj = use_consume::<Proj>().0;
+        let proj = use_consume::<Proj>().0;
         let file = use_consume::<ProjFile>().0.read().clone();
+        let states = use_project_states();
 
         let on_choose = move |_| {
             // On a task that outlives this view, which is drawn only while its tab is on
             // screen and the dialog is not modal to the window (`ask_file`).
+            let asked = states.stay();
             ask_file(
                 AsyncFileDialog::new().set_title("Choose the project's directory..."),
                 AskFor::Folder,
-                move |path| proj.write().workspace_text = path.to_string_lossy().into_owned(),
+                move |path| chose_directory(states, asked, &path),
             );
         };
 

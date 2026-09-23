@@ -156,6 +156,8 @@ fn record_now(states: ProjectStates) {
         searched: _,
         build,
         arranged,
+        // Which stay this is, which no file holds.
+        stay: _,
     } = states;
 
     let objects = objects.peek();
@@ -553,6 +555,12 @@ pub(crate) fn clear_project(states: ProjectStates) {
     // have the first build over there replace binaries opened over here.
     let mut build = states.build;
     build.set(Builds::default());
+
+    // What was asked in the project being left and answers later is told so
+    // (`ProjectStates::left`).
+    let mut stay = states.stay;
+    let next = stay.peek().next();
+    stay.set(next);
 }
 
 /// Name every file `store` moves aside in the window, as it is moved.
@@ -610,7 +618,9 @@ pub(crate) enum AskFor {
 /// and, through the xdg portal, not modal to the window, so the reader can raise another
 /// tab or drag a panel out from under the button while it is up -- and that unmounts the
 /// scope a `spawn` would belong to, losing the file they then chose. Everything `then`
-/// writes is a root state, so the write is good whatever is on screen.
+/// writes is a root state, so the write is good whatever is on screen. It is not good
+/// whatever project is open, since the reader can leave that too: a `then` about the open
+/// project drops the answer if [`ProjectStates::left`] says so.
 ///
 /// The one place that reason is written, so the next dialog cannot be the one that gets
 /// it wrong.
@@ -734,6 +744,7 @@ pub(crate) fn ask_where_to_save(states: ProjectStates, put: project::Put) {
         .filter(|_| put == project::Put::Copy)
         .unwrap_or_else(|| format!("project.{}", project::PROJECT_EXTENSION));
 
+    let asked = states.stay();
     ask_file(
         AsyncFileDialog::new()
             .set_title("Save the project as...")
@@ -741,6 +752,11 @@ pub(crate) fn ask_where_to_save(states: ProjectStates, put: project::Put) {
             .set_file_name(suggested),
         AskFor::Save,
         move |path| {
+            // The project the reader asked to save, and not whichever is open when the
+            // dialog answers.
+            if states.left(asked) {
+                return;
+            }
             let store = store.peek().clone();
             if store.is_some_and(|store| project::put_in(&store, &path, put)) {
                 // The only thing that changed is where the project is kept, so this is

@@ -3302,6 +3302,45 @@ fn a_restore_does_not_land_in_the_project_after_it() {
     );
 }
 
+/// **A directory chosen for a project the reader has since left goes nowhere.** The
+/// folder dialog is not modal to the window, so the reader can go to another project while
+/// it is up, and its answer replaced that project's directory.
+#[test]
+fn a_directory_chosen_for_a_project_left_is_dropped() {
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let mut proj = states.proj;
+    let project = |file: &str, directory: &str| OpenProject {
+        file: Some(PathBuf::from(file)),
+        workspace_text: directory.to_owned(),
+        ..OpenProject::default()
+    };
+    proj.set(project("/store/a.avproj", "/a"));
+    settle(&mut test);
+
+    // "Choose..." pressed in the first project, and the second opened over it, the file
+    // and all, before the dialog answers.
+    let asked = states.stay();
+    clear_project(states);
+    proj.set(project("/store/b.avproj", "/b"));
+    settle(&mut test);
+    chose_directory(states, asked, Path::new("/chosen"));
+    assert_eq!(
+        proj.peek().workspace_text,
+        "/b",
+        "the answer went into the project opened after it was asked"
+    );
+
+    // Asked and answered in the same project, it lands.
+    let asked = states.stay();
+    chose_directory(states, asked, Path::new("/chosen"));
+    assert_eq!(proj.peek().workspace_text, "/chosen");
+}
+
 /// Whether a load was registered each time the effect in [`boot_harness`] ran.
 #[derive(Clone)]
 struct Registered(Rc<RefCell<Vec<bool>>>);

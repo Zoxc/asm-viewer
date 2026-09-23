@@ -633,6 +633,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         searched,
         build,
         arranged,
+        stay: State::create(Stay::default()),
     });
 
     let analysis = context(Analysis, Analyzed::default());
