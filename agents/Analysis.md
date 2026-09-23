@@ -76,8 +76,12 @@ of them in one list are told apart, with the entry's stated length as its declar
 `<fragment 0x140001000>` instead where the entry's unwind info is **chained**
 (`UNW_FLAG_CHAININFO`): a cold part, or the piece after a mid-body stack adjustment, of a function
 with a primary entry elsewhere, which Microsoft calls a *function fragment* (195 of the LLVM DLL's
-68 507 entries, 481 of `rustc_driver`'s 218 434). An unwind info that cannot be read, or is of
-another version, leaves the entry a function, its range being stated either way. Not to be confused
+68 507 entries, 481 of `rustc_driver`'s 218 434). Versions 1 and 2 of the unwind info share the
+header the flag is in (2 only adds epilog codes, which MSVC's `/d2epilogunwind` and LLVM's unwind v2
+write). An entry whose unwind-info RVA is odd (`RUNTIME_FUNCTION_INDIRECT`) names another entry,
+whose unwind info it shares, so it is a fragment too, and nothing is read at that odd address. An
+unwind info that cannot be read, or is of another version, leaves the entry a function, its range
+being stated either way. Not to be confused
 with a *funclet*, an outlined `catch` or cleanup body, which has a primary entry of its own and is
 told from a function only by the handler's private data (Goals). Parsed with no `.pdb` beside it,
 the no-export DLL fixture goes from no symbols to its three. Measured, release: the LLVM DLL goes

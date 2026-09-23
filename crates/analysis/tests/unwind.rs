@@ -374,6 +374,84 @@ fn a_chained_entry_at_a_named_address_keeps_the_name() {
     );
 }
 
+/// [`a_chained_entry_is_a_fragment`]'s image, with its fragment's `RUNTIME_FUNCTION` handed
+/// to `edit` as the image, the file offset of the entry's third field, and the RVA of the
+/// first entry: the ways a real linker writes one that the writer does not.
+fn edited_fragment(edit: impl FnOnce(&mut [u8], usize, u32)) -> Vec<u8> {
+    let mut image = pe_image(PeDll {
+        text: TEXT,
+        symbols: &[FIRST],
+        entry: None,
+        codeview: None,
+        unwind: &[(0, 4), (7, 10)],
+        fragments: &[(4, 6)],
+    });
+    let (field, pdata_rva) = {
+        let file = object::File::parse(image.as_slice()).expect("a PE image");
+        let object::File::Pe64(pe) = &file else {
+            panic!("the writer emits PE32+");
+        };
+        let pdata_rva = pe
+            .data_directories()
+            .get(object::pe::IMAGE_DIRECTORY_ENTRY_EXCEPTION)
+            .expect("an exception directory")
+            .virtual_address
+            .get(object::LittleEndian);
+        // The fragment is the third entry, after the two plain ones.
+        let (offset, _) = pe
+            .section_table()
+            .pe_file_range_at(pdata_rva + 2 * 12)
+            .expect("the fragment's entry");
+        (offset as usize + 8, pdata_rva)
+    };
+    edit(&mut image, field, pdata_rva);
+    image
+}
+
+/// [`edited_fragment`] with the first byte of the fragment's `UNWIND_INFO` replaced.
+fn fragment_with_first_byte(first: u8) -> Vec<u8> {
+    edited_fragment(|image, field, _| {
+        let rva = u32::from_le_bytes(image[field..field + 4].try_into().unwrap());
+        let file = object::File::parse(&*image).expect("a PE image");
+        let object::File::Pe64(pe) = &file else {
+            panic!("the writer emits PE32+");
+        };
+        let (offset, _) = pe
+            .section_table()
+            .pe_file_range_at(rva)
+            .expect("the fragment's unwind info");
+        drop(file);
+        image[offset as usize] = first;
+    })
+}
+
+/// Version 2 of `UNWIND_INFO` (epilog codes, which MSVC's `/d2epilogunwind` and LLVM's unwind
+/// v2 write) has version 1's header, so its `UNW_FLAG_CHAININFO` makes a fragment too, and
+/// its absence does not.
+#[test]
+fn a_version_2_chained_entry_is_a_fragment() {
+    let fragment = format!("<fragment {:#x}>", TEXT_ADDRESS + 4);
+    let function = format!("<function {:#x}>", TEXT_ADDRESS + 4);
+    // Version 2, flags `UNW_FLAG_CHAININFO`.
+    let object = parse(&fragment_with_first_byte(0x22));
+    assert!(names(&object).contains(&fragment.as_str()));
+    // Version 2, no flags.
+    let object = parse(&fragment_with_first_byte(0x02));
+    assert!(names(&object).contains(&function.as_str()));
+}
+
+/// An entry whose unwind-info RVA is odd (`RUNTIME_FUNCTION_INDIRECT`) names another
+/// `RUNTIME_FUNCTION`, whose unwind info it shares: a fragment, with no `UNWIND_INFO` read
+/// at that address.
+#[test]
+fn an_indirect_entry_is_a_fragment() {
+    let image = edited_fragment(|image, field, pdata_rva| {
+        image[field..field + 4].copy_from_slice(&(pdata_rva | 1).to_le_bytes());
+    });
+    let object = parse(&image);
+    assert!(names(&object).contains(&format!("<fragment {:#x}>", TEXT_ADDRESS + 4).as_str()));
+}
+
 /// The in-memory ELF writer's `.eh_frame` reads back through `gimli` as `gcc`'s does: a
 /// section by that name, ending in the zero-length terminator, whose FDEs — pc-relative,
 /// resolved against the section's own address — state exactly the ranges asked for.

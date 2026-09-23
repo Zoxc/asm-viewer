@@ -136,15 +136,16 @@ impl UnwindEntry {
 
 /// The entries an x86-64 PE's exception directory states: one `ImageRuntimeFunctionEntry` per
 /// function with unwind info, its begin and end RVAs read and placed on the image base, and one
-/// byte of the `UNWIND_INFO` its third field names, for the chained flag. A trailing partial
+/// byte of the `UNWIND_INFO` its third field names, for the chained flag; where that field
+/// is odd it names another entry instead, and the entry is chained. A trailing partial
 /// record is dropped. Each is a **declaration of both ends** of a function — the loader's, not
 /// a debugger's — which is what makes it worth reading past the export table: a stripped image
 /// exports a handful of its functions, and every function between two exports is otherwise
 /// nameless and of no known length. In
 /// file order, an entry whose end is not past its begin dropped, and not yet placed in any
 /// section — that is `declared_code`'s lookup, which is also what drops one whose begin is
-/// not in code. An `UNWIND_INFO` that cannot be read, or is of a version other than the one
-/// there is, makes its entry a plain function: the range is still stated.
+/// not in code. An `UNWIND_INFO` that cannot be read, or is of a version other than 1 or 2,
+/// makes its entry a plain function: the range is still stated.
 ///
 /// x86-64 only: ARM64's `.pdata` record is another shape, 8 bytes, and a PE32 has none. A
 /// COFF `.obj` carries a relocatable `.pdata` section and no data directory; it is not a
@@ -179,15 +180,17 @@ fn pe(pe: &PeFile64<'_>) -> Vec<UnwindEntry> {
             if begin >= end {
                 return None;
             }
-            // `UNWIND_INFO`'s first byte: the version in its low three bits, the flags
-            // above them.
-            let chained = sections
-                .pe_data_at(
-                    pe.data(),
-                    entry.unwind_info_address_or_data.get(LittleEndian),
-                )
-                .and_then(|info| info.first())
-                .is_some_and(|&first| first & 7 == 1 && (first >> 3) & 4 != 0);
+            // An odd RVA (`RUNTIME_FUNCTION_INDIRECT`) names another `RUNTIME_FUNCTION`,
+            // whose unwind info this range shares, so it is chained without a byte read.
+            // Otherwise it names an `UNWIND_INFO`, whose first byte holds the version in
+            // its low three bits and the flags above them. Versions 1 and 2 share that
+            // header; 2 only adds epilog codes.
+            let rva = entry.unwind_info_address_or_data.get(LittleEndian);
+            let chained = rva & 1 != 0
+                || sections
+                    .pe_data_at(pe.data(), rva)
+                    .and_then(|info| info.first())
+                    .is_some_and(|&first| matches!(first & 7, 1 | 2) && (first >> 3) & 4 != 0);
             Some(UnwindEntry {
                 range: begin..end,
                 chained,
