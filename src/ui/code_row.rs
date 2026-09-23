@@ -729,12 +729,15 @@ pub(crate) fn use_code_row(
 
     // The run of the row's own text under the pointer, drawn as a link where a press on
     // it would be a door: the link's own rule, which the pointer's icon is picked by too,
-    // and Alt, which says no to every link in every pane.
+    // and Alt and Shift, which say no to every link in every pane.
     //
-    // Both are read only while the pointer is on a run, so a row nobody is pointing at is
-    // on neither modifier's list -- and read whether or not the answer is yes, or the row
-    // would never be drawn again when the modifier came up.
-    let lit = over().filter(|_| open(&links) && !*alt.read());
+    // The modifiers are read only while the pointer is on a run, so a row nobody is
+    // pointing at is on neither one's list -- and both read whether or not the answer is
+    // yes, or the row would never be drawn again when one came up.
+    let lit = over().filter(|_| {
+        let held = (*alt.read(), *shift.read());
+        open(&links) && held == (false, false)
+    });
     let columns = lit
         .and_then(|lit| links.as_ref()?.columns.get(lit))
         .cloned();
@@ -787,7 +790,9 @@ pub(crate) fn use_code_row(
             el.border(pair_border(chrome.paired.unwrap_or_default()))
         })
         .on_pointer_down(on_down(&cells, &chrome, &links, menu, marked, shift, alt))
-        .on_pointer_move(on_move(&cells, &chrome, &links, tell, over, marked, alt))
+        .on_pointer_move(on_move(
+            &cells, &chrome, &links, tell, over, marked, shift, alt,
+        ))
         .on_pointer_out(move |_| {
             over.set_if_modified(None);
             if let Some(tell) = &tell_out {
@@ -1110,11 +1115,15 @@ fn on_down(
             let presses = EventsCombos::pressed(e.global_location());
             // A link is followed on a single press with nothing held, and only while it
             // is a door: two presses on a name are what take the word, Alt says this one
-            // is not a door, and a label is one only under Ctrl -- without which the
-            // press is the row's, as it is over any other text.
+            // is not a door, Shift reaches the run out to it, and a label is one only
+            // under Ctrl -- without which the press is the row's, as it is over any other
+            // text.
             let followed = links.as_ref().and_then(|links| {
                 let link = links.columns.get(links.at(on)?)?;
-                let door = presses == PressEventType::Single && !*alt.peek() && (links.is_link)();
+                let door = presses == PressEventType::Single
+                    && !*alt.peek()
+                    && !*shift.peek()
+                    && (links.is_link)();
                 door.then(|| (links, link.clone()))
             });
             if let Some((links, link)) = followed {
@@ -1145,6 +1154,7 @@ fn on_down(
 ///
 /// Every move and not `pointer_over`, which fires once on entry: a sweep along a row has
 /// to follow the pointer.
+#[allow(clippy::too_many_arguments)]
 fn on_move(
     cells: &RowCells,
     chrome: &Chrome,
@@ -1152,6 +1162,7 @@ fn on_move(
     tell: Option<Rc<dyn Fn(Option<usize>)>>,
     mut over: State<Option<usize>>,
     marked: State<Marks>,
+    shift: State<bool>,
     alt: State<bool>,
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
     let (cells, links) = (cells.clone(), links.clone());
@@ -1177,8 +1188,10 @@ fn on_move(
         }
         let on_text = cells.x_into_text(at).is_some_and(|x| x >= 0.0);
         // The hand over a link, and only while a press on it would be a door: the link's
-        // own rule, which is what lights it, so the two cannot disagree.
-        set_icon(if hovered.is_some() && !alt && open(&links) {
+        // own rule and the two modifiers that say no, which is what lights it, so the two
+        // cannot disagree.
+        let door = !alt && !*shift.peek() && open(&links);
+        set_icon(if hovered.is_some() && door {
             CursorIcon::Pointer
         } else if on_text {
             CursorIcon::Text

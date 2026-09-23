@@ -792,6 +792,9 @@ where the one guard is: while `Alt` is held it follows nothing, and the press is
 the row's own text is -- the caret on the link's column and a sweep begun. Alt is read by its own
 name and its own bit alone, having no Caps Lock to be made out of; right Alt on a European layout
 is `AltGraph` and is not it.
+Shift is the same guard for another reason: a Shift+press reaches the run out to where it lands,
+and a link at the end of a row is where a reader Shift-clicks to take the block above it. Neither
+modifier lights a link or shows the hand, so nothing offers what the press will not do.
 
 **A door that names an instruction puts the caret on it, and does so when the listing is drawn and
 not when the document arrives.** A line is a row of a file, which has the same rows every time, so

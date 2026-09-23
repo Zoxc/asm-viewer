@@ -26406,6 +26406,69 @@ fn alt_held_makes_a_press_on_a_link_a_selection_and_not_a_door() {
     );
 }
 
+/// Shift held makes a press on a link a reach of the run out to it, as a Shift+press
+/// anywhere else in the row is: a reader who picks one row and Shift-clicks the operand
+/// of a call further down asked for the block between them, not for the call's target.
+#[test]
+fn shift_held_reaches_the_run_out_to_a_link_rather_than_following_it() {
+    let shown = shown_sum_to();
+    let assembly = shown.studied.assembly.clone().expect("sum_to decodes");
+    let lanes = shown.studied.lanes.clone();
+    let (index, instruction) = assembly
+        .instructions
+        .iter()
+        .enumerate()
+        .find(|(_, instruction)| instruction.symbol().is_some())
+        .expect("sum_to calls add");
+    let target = instruction.symbol().cloned().expect("a target");
+    let row = lanes.row_of(index);
+    assert!(row > 0, "the call is the listing's first row");
+
+    let (mut test, (states, marked, shift)) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        |runner| {
+            let roots = runner.provide_root_context(move || listing_states(shown));
+            (roots.states, roots.doors.marked, roots.keys.shift)
+        },
+        1.,
+    );
+    let mut shift = shift;
+    settle(&mut test);
+    let (first, _, _) = paragraphs(&test)
+        .into_iter()
+        .min_by(|a, b| a.0.origin.y.total_cmp(&b.0.origin.y))
+        .expect("a row is drawn");
+    press_at(&mut test, left_of(&first));
+    settle(&mut test);
+    let anchor = marked
+        .peek()
+        .assembly
+        .clone()
+        .expect("the press picked the row out")
+        .chars
+        .anchor()
+        .row;
+    assert!(anchor < row);
+
+    shift.set(true);
+    settle(&mut test);
+    let link = link_area(&test, target.display()).expect("the link is drawn");
+    press_at(&mut test, inside(link));
+    settle(&mut test);
+
+    assert!(
+        states.open.active().is_none(),
+        "the link opened its symbol with Shift held"
+    );
+    let picked = marked.peek().assembly.clone().expect("a run");
+    assert_eq!(
+        picked.chars.rows(),
+        anchor..=row,
+        "the Shift+press did not reach the run out to the link's row"
+    );
+}
+
 /// And the door the unified view has of its own -- a Ctrl-press on a symbol's label,
 /// which is a run of the row's own text and not an element inside it -- is shut by Alt
 /// the same way: the tab stays, and the press is the row's, which picks it out.
