@@ -105,10 +105,18 @@ pub(super) struct Saves {
     stored: Session,
     /// A newer session that has not been written yet.
     pending: Option<Session>,
-    /// A `project.toml` owed for a change to the details alone, written by the next flush
-    /// rather than at once: a box being typed in changes them on every keystroke. A write
-    /// for the binaries or the bookmarks takes it along, since it carries the details too.
-    owed_project: Option<Project>,
+    /// A `project.toml` owed to the next flush: for a change to the details alone, which
+    /// waits because a box being typed in changes them on every keystroke, or for a write
+    /// made at once that did not land. A write for the binaries or the bookmarks takes it
+    /// along, since it carries the details too.
+    owed_project: Option<OwedProject>,
+}
+
+/// A `project.toml` owed to the next flush, and what it takes to note that it landed.
+pub(super) struct OwedProject {
+    pub(super) project: Project,
+    /// Whether it is a change to the binaries, as [`Recorded::binaries_changed`].
+    pub(super) binaries_changed: bool,
 }
 
 impl Saves {
@@ -247,10 +255,13 @@ impl Saves {
         if !binaries_changed && !bookmarks_changed {
             // The details alone, or nothing: owed, or no longer owed where they have been
             // changed back to what the file holds.
-            self.owed_project = details_changed.then(|| Project {
-                id: self.written.id,
-                details: details.clone(),
-                ..self.written.clone()
+            self.owed_project = details_changed.then(|| OwedProject {
+                project: Project {
+                    id: self.written.id,
+                    details: details.clone(),
+                    ..self.written.clone()
+                },
+                binaries_changed: false,
             });
             return None;
         }
@@ -298,15 +309,16 @@ impl Saves {
         self.pending.take()
     }
 
-    /// Take the `project.toml` a change to the details owes, for [`Saves::take_owing`]'s
-    /// reason. It keeps the binaries the file holds, so its write moves only `written`.
-    pub(super) fn take_owed_project(&mut self) -> Option<Project> {
+    /// Take the `project.toml` that is owed, for [`Saves::take_owing`]'s reason.
+    pub(super) fn take_owed_project(&mut self) -> Option<OwedProject> {
         self.owed_project.take()
     }
 
-    /// Its write did not happen: owed again, for the next flush.
-    pub(super) fn owes_project(&mut self, project: Project) {
-        self.owed_project = Some(project);
+    /// Its write did not happen: owed, for the next flush. Whether it was taken out by a
+    /// flush or handed back by a record whose write at once failed: either way the
+    /// close hook's flush must not find nothing to do.
+    pub(super) fn owes_project(&mut self, owed: OwedProject) {
+        self.owed_project = Some(owed);
     }
 
     /// Note that `project` reached `project.toml`: it is now what the file holds. The
@@ -345,7 +357,7 @@ impl Saves {
             pending.id = id;
         }
         if let Some(owed) = &mut self.owed_project {
-            owed.id = id;
+            owed.project.id = id;
         }
     }
 

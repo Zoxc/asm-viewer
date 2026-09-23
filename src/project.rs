@@ -320,9 +320,20 @@ pub fn record(
     };
     let project = recorded.project;
 
-    if write_or_warn(&file, |path| project.save_to(&store, path)) {
-        saves.wrote_project(&project, recorded.binaries_changed);
+    // A write that failed is owed, so the next flush tries it again. The session it
+    // carries is owed with it rather than written, so it never names a tab into a binary
+    // the project file does not list.
+    if !write_or_warn(&file, |path| project.save_to(&store, path)) {
+        saves.owes_project(OwedProject {
+            project,
+            binaries_changed: recorded.binaries_changed,
+        });
+        if let Some(session) = recorded.session {
+            saves.owes_session(session);
+        }
+        return;
     }
+    saves.wrote_project(&project, recorded.binaries_changed);
     if let Some(session) = recorded.session {
         match write_or_warn(&session_beside(&file), |path| session.save_to(&store, path)) {
             true => saves.wrote_session(session),
@@ -331,12 +342,15 @@ pub fn record(
     }
 }
 
-/// Write out anything recorded but not yet written: the project file a change to the
-/// details owes, then the pending session. A no-op when nothing has changed, which is what
-/// makes it safe to call on a timer.
+/// Write out anything recorded but not yet written: the project file that is owed, then
+/// the pending session. A no-op when nothing has changed, which is what makes it safe to
+/// call on a timer. The session waits while a change to the binaries is still owed, for
+/// [`record`]'s reason.
 pub fn flush() {
     let mut saves = saves();
-    write_owed_project(&mut saves);
+    if !write_owed_project(&mut saves) {
+        return;
+    }
     let Some(session) = saves.take_owing() else {
         return;
     };
@@ -357,18 +371,27 @@ pub fn flush_project() {
     write_owed_project(&mut saves());
 }
 
-fn write_owed_project(saves: &mut Saves) {
-    let Some(project) = saves.take_owed_project() else {
-        return;
+/// Answers whether the session may follow: false only where a change to the binaries is
+/// still owed.
+fn write_owed_project(saves: &mut Saves) -> bool {
+    let Some(owed) = saves.take_owed_project() else {
+        return true;
     };
+    let binaries_changed = owed.binaries_changed;
     let Some((store, file)) = writing_into(saves) else {
         log::warn!("no state directory to save the project in");
-        saves.owes_project(project);
-        return;
+        saves.owes_project(owed);
+        return !binaries_changed;
     };
-    match write_or_warn(&file, |path| project.save_to(&store, path)) {
-        true => saves.wrote_project(&project, false),
-        false => saves.owes_project(project),
+    match write_or_warn(&file, |path| owed.project.save_to(&store, path)) {
+        true => {
+            saves.wrote_project(&owed.project, binaries_changed);
+            true
+        }
+        false => {
+            saves.owes_project(owed);
+            !binaries_changed
+        }
     }
 }
 

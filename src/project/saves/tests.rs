@@ -25,11 +25,11 @@ fn flushed(saves: &mut Saves) -> Option<Session> {
     Some(session)
 }
 
-/// The same for the project file a change to the details owes.
+/// The same for the project file that is owed.
 fn owed(saves: &mut Saves) -> Option<Project> {
-    let project = saves.take_owed_project()?;
-    saves.wrote_project(&project, false);
-    Some(project)
+    let owed = saves.take_owed_project()?;
+    saves.wrote_project(&owed.project, owed.binaries_changed);
+    Some(owed.project)
 }
 
 /// `record` with the details the project already has, so every test using this is asking

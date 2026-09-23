@@ -492,3 +492,41 @@ fn a_session_written_for_another_project_is_ignored() {
     let (_, restored) = load_project(&store, &path).expect("the project opens");
     assert_eq!(restored.active, session.active);
 }
+
+/// **A write at once that failed is owed to the next flush**, and the session it carries
+/// waits with it. Only the next record used to see the change again, so a close straight
+/// after a failed write lost it; and the session was written anyway, naming a binary the
+/// project file did not list.
+#[test]
+fn a_failed_write_at_once_is_owed_and_holds_its_session_back() {
+    let _saves = using_saves();
+    let base = directory();
+    let store = Store::at(&base);
+    let path = start_new(&store).expect("a project is started");
+    // A directory where the project file goes, which no file can be renamed over.
+    fs::remove_file(&path).expect("the claimed file taken away");
+    fs::create_dir(&path).expect("the directory in the way");
+
+    let binaries = [PathBuf::from("/tmp/a.o")];
+    record(
+        &Details::default(),
+        &binaries,
+        false,
+        &[],
+        session_with(Some("a.o")),
+    );
+    flush();
+    assert!(
+        !session_beside(&path).exists(),
+        "the session went out ahead of the project file"
+    );
+
+    fs::remove_dir(&path).expect("the directory taken away");
+    flush();
+    let (project, session) = load_project(&store, &path).expect("the project reads back");
+    assert_eq!(
+        project.binaries, binaries,
+        "the flush did not write the project"
+    );
+    assert_eq!(session.active, Some(saved_object("a.o")));
+}

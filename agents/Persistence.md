@@ -496,9 +496,13 @@ why the policy is a static).
 **A baseline is what the file holds, so it moves with the write and not with the decision to write
 it.** `record` and `take_owing` only hand back what to write; the caller moves the baselines
 afterwards, through `wrote_project` and `wrote_session` and only where `write_or_warn` answered that
-the file was written. A failure leaves the change for the next `record` to see again and hands the
-session back to `owes_session`, which is pending again for the next `flush`. `take_owing` empties
-pending rather than copying it for that reason: what it hands out is either written or handed back.
+the file was written. A failure leaves the change for the next `record` to see again, and hands
+what was being written back to be owed to the next `flush`: the session to `owes_session`, the
+project file to `owes_project`, with the `binaries_changed` its write needs. A session carried by a
+binaries change whose project write failed is owed with it rather than written, and `flush` holds
+the session back while that project file is still owed, so the session never names a tab into a
+binary the project file does not list. `take_owing` empties pending rather than copying it for
+that reason: what it hands out is either written or handed back.
 Advancing first meant that a disk full for one tick left the app believing a
 file held a session that never reached it: nothing marked the session pending again, so the close
 hook's flush found nothing to do and the reader kept the one from before, for one warning in a log a
