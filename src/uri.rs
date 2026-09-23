@@ -90,8 +90,7 @@ pub fn path_of(uri: &str) -> Option<PathBuf> {
         }
     }
 
-    let path = String::from_utf8(bytes).ok()?;
-    Some(PathBuf::from(spelled(&path).as_ref()))
+    path_from(spelled(bytes))
 }
 
 /// A decoded URI path as the platform it names spells one.
@@ -102,12 +101,31 @@ pub fn path_of(uri: &str) -> Option<PathBuf> {
 /// canonicalised, so the two spellings are two tabs of one file.
 ///
 /// Whether the path is Windows' is [`drive`]'s rule, so a Unix `/a:b/x.rs` keeps its leading
-/// slash and every character after it.
-fn spelled(path: &str) -> Cow<'_, str> {
-    match path.strip_prefix('/') {
-        Some(rest) if drive(rest.as_bytes()) => Cow::Owned(rest.replace('/', "\\")),
-        _ => Cow::Borrowed(path),
+/// slash and every byte after it. The rule reads bytes, and a `/` byte is never part of a
+/// longer UTF-8 character, so text comes out as it would have as text.
+fn spelled(mut bytes: Vec<u8>) -> Vec<u8> {
+    if bytes.first() == Some(&b'/') && drive(&bytes[1..]) {
+        bytes.remove(0);
+        for byte in &mut bytes {
+            if *byte == b'/' {
+                *byte = b'\\';
+            }
+        }
     }
+    bytes
+}
+
+/// A Unix path is bytes, so any it decodes to is one.
+#[cfg(unix)]
+fn path_from(bytes: Vec<u8>) -> Option<PathBuf> {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    Some(PathBuf::from(OsString::from_vec(bytes)))
+}
+
+/// Anywhere else a path is text, so bytes that are not UTF-8 name none.
+#[cfg(not(unix))]
+fn path_from(bytes: Vec<u8>) -> Option<PathBuf> {
+    String::from_utf8(bytes).ok().map(PathBuf::from)
 }
 
 #[cfg(test)]

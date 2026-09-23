@@ -94,3 +94,13 @@ fn a_file_uri_encodes_a_path_that_is_not_text() {
     let path = PathBuf::from(OsStr::from_bytes(b"/tmp/\xff.o"));
     assert_eq!(uri_of(&path), "file:///tmp/%FF.o");
 }
+
+/// A server's answer naming that path comes back as the same bytes, not as nothing.
+#[cfg(unix)]
+#[test]
+fn a_path_that_is_not_text_comes_back() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+    let path = PathBuf::from(OsStr::from_bytes(b"/tmp/\xff/a:b\\c.o"));
+    assert_eq!(path_of(&uri_of(&path)), Some(path));
+}

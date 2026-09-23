@@ -319,8 +319,11 @@ which read a Unix path's bytes. The server's read text, so a name that is not UT
 as `%EF%BF%BD`, and it wrote every `\` as `/`, so a Unix `a\b.rs` went out as `a/b.rs`. Now a Unix
 path is its bytes, a Windows path its text, and `\` is a separator only on a path with a
 drive. A UNC path (`\\srv\share`) has none, so it goes out as `file:///%5C%5Csrv…` where it
-once went out as `file://///srv/…`; `path_of` reads neither back. A path that is not UTF-8 is
-not read back either: `path_of` decodes to text.
+once went out as `file://///srv/…`; `path_of` reads neither back. `path_of` decodes to
+bytes too, and spells a drive's path on those, so on Unix a name that is not UTF-8 comes
+back as it went out. Elsewhere a path is text, and bytes that are not UTF-8 name no file.
+The app goes no further with such a name: a `Document::Source` is text, so opening one
+names the file lossily (`spelling`, `src/ui/documents.rs`).
 
 **The root goes out absolute.** The directory box is free text, and `.` is what a reader
 who launched the app from their project types; a `rootUri` built from that names a place
