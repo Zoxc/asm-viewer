@@ -37197,6 +37197,41 @@ fn a_ctrl_held_through_the_roots_handler_is_the_ctrl_a_row_reads() {
     );
 }
 
+/// The probe harness, and the effect `app()` lets go of the keyboard with when the
+/// window loses the focus.
+fn blur_probe_harness() -> impl IntoElement {
+    use_let_go_on_blur(use_consume::<ModifierKeys>());
+    ctrl_probe_harness()
+}
+
+/// **A key let go of over another window is let go of here.** No key-up arrives for it,
+/// so the window losing the focus is what clears the keyboard: an Alt+Tab away used to
+/// leave Alt held, and every link a press on it started a sweep, until the next key.
+#[test]
+fn losing_the_focus_lets_go_of_the_modifiers() {
+    let (mut test, platform) = TestingRunner::new(
+        blur_probe_harness,
+        (300., 100.).into(),
+        |runner: &mut _| {
+            runner.provide_root_context(|| test_roots().states);
+            runner.provide_root_context(Platform::get)
+        },
+        1.,
+    );
+    settle(&mut test);
+    key_with(&mut test, Key::Named(NamedKey::Control), Modifiers::empty());
+    assert!(labels(&test).contains(&"ctrl: true".to_string()));
+
+    let mut focused = platform.is_app_focused;
+    focused.set(false);
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"ctrl: false".to_string()),
+        "Ctrl is still held with the window unfocused: {drawn:?}"
+    );
+}
+
 /// What the `Ctrl` and `Alt` contexts say, drawn.
 #[derive(Clone, PartialEq)]
 struct HeldProbe;

@@ -2,7 +2,8 @@
 //! *global* key handlers: a freya pointer event carries no modifiers at all, so a press
 //! that means something else under one has to read these rather than the event. Every
 //! door reads one -- a row that opens something, a link in a listing -- and so does the
-//! pages menu, which offers the Debug page only under Alt.
+//! pages menu, which offers the Debug page only under Alt. The window losing the focus
+//! lets go of all three, a key released over another window sending no key-up here.
 //!
 //! The three are read off [`ModifierKeys`], which is the whole keyboard: those three and
 //! the two states a Caps Lock made into Ctrl is learnt with. One value and not five
@@ -113,6 +114,26 @@ impl ModifierKeys {
             *key != Key::Named(NamedKey::Alt) && modifiers.contains(Modifiers::ALT),
         );
     }
+
+    /// Every key let go of: what the window losing the focus means, a key released over
+    /// another window sending this one no key-up. What was learnt about Caps Lock stays.
+    pub(crate) fn let_go(mut self) {
+        self.shift.set_if_modified(false);
+        self.ctrl.set_if_modified(false);
+        self.alt.set_if_modified(false);
+        self.control_held.set_if_modified(false);
+    }
+}
+
+/// Let go of every key whenever the window loses the focus ([`ModifierKeys::let_go`]),
+/// read off freya's `Platform::is_app_focused`: no event says it.
+pub(crate) fn use_let_go_on_blur(keys: ModifierKeys) {
+    let focused = Platform::get().is_app_focused;
+    use_side_effect(move || {
+        if !*focused.read() {
+            keys.let_go();
+        }
+    });
 }
 
 /// The keyboard, and the three contexts read off it, made and provided together.

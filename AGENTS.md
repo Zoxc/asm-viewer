@@ -322,7 +322,8 @@ command.
 - `src/ui/keys.rs` — whether Shift, Ctrl and Alt are held, kept by the root's global key
   handlers because a pointer event carries no modifiers: `ModifierKeys`, those three and the
   two states a Caps Lock made into Ctrl is learnt with, made and provided in one call
-  (`provide_modifiers`) so no caller can join five booleans in the wrong order.
+  (`provide_modifiers`) so no caller can join five booleans in the wrong order; and all
+  let go of when the window loses the focus.
 - `src/ui/chords.rs` — the chords the window answers wherever the keyboard is, and the one
   hook every text box declines them with: freya's own default for each of its two boxes,
   written once, with the modifier keys let through to the root.

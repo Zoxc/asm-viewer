@@ -801,6 +801,7 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
     // The ask an opened row or a pressed chip leaves, spent on the leading pane of the tab
     // on screen -- which is why it is handed `open` -- and on the caret that pane wants.
     use_keyboard_asked(keyboard, open, marked);
+    use_let_go_on_blur(keys);
     use_save_on_change(states);
     use_land(doors, active, sectioned);
     use_periodic_save();

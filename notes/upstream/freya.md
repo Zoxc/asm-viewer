@@ -579,8 +579,10 @@ and Alt itself from the root's global key handlers and provides each as a contex
 door and menu that acts differently under one reads (`ModifierKeys`, `src/ui/keys.rs`). As the
 mask is late, a Caps Lock the desktop made into Ctrl has to be learnt from its first release.
 And a tracker cannot see what changed while the window was not focused: a key let go over
-another window leaves its modifier stuck until the next key event. The current mask on every
-event, pointer ones included, would remove all of it.
+another window left its modifier stuck until the next key event, so the app lets go of all three
+when `Platform::is_app_focused` goes false (`use_let_go_on_blur`), and a modifier pressed over
+another window and held back into this one is not seen until the next key event. The current
+mask on every event, pointer ones included, would remove all of it.
 
 **A highlight and a caret the size of the line box, on whole pixels.** A paragraph's
 `highlights` are painted as the glyphs' tight boxes, stretched by `CursorMode::Expanded` to
