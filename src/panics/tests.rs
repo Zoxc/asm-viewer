@@ -117,7 +117,10 @@ fn only_a_panic_the_crate_does_not_guard_is_told_about() {
                 assert_eq!(file, Some(Path::new("panics/one.txt")));
                 told += 1;
             },
-            &mut || stopped += 1,
+            &mut |first| {
+                assert!(first, "the one panic was not the one told about");
+                stopped += 1;
+            },
         );
         assert_eq!(stored, 1, "guarded: {guarded}");
         assert_eq!(told, usize::from(!guarded), "guarded: {guarded}");
@@ -129,11 +132,12 @@ fn only_a_panic_the_crate_does_not_guard_is_told_about() {
 /// that panicked goes on running -- back into the render loop it panicked in -- while the
 /// shutdown is still saving. A second panic there used to hand the reader a second box on
 /// top of the one they had just closed. It is written down like any other and told about
-/// never, but it still asks for the shutdown: on the main thread it has to wait for it.
+/// never, but it is still handed on, as not the one told about: on the main thread it has
+/// to wait for the shutdown.
 #[test]
 fn only_the_first_panic_is_told_about_and_the_rest_are_written_down() {
     let run = Run::new();
-    let (mut stored, mut told, mut stopped) = (0, 0, 0);
+    let (mut stored, mut told, mut stopped) = (0, 0, Vec::new());
     let mut again = |message: &str| {
         handle(
             &run,
@@ -144,7 +148,7 @@ fn only_the_first_panic_is_told_about_and_the_rest_are_written_down() {
                 None
             },
             &mut |_, _| told += 1,
-            &mut || stopped += 1,
+            &mut |first| stopped.push(first),
         );
     };
 
@@ -154,7 +158,11 @@ fn only_the_first_panic_is_told_about_and_the_rest_are_written_down() {
 
     assert_eq!(stored, 3, "a panic after the first was not written down");
     assert_eq!(told, 1, "the reader was handed more than one box");
-    assert_eq!(stopped, 3, "a later panic did not ask for the shutdown");
+    assert_eq!(
+        stopped,
+        [true, false, false],
+        "a later panic was not handed on, or was handed on as the one told about"
+    );
 }
 
 /// A stderr whose reader has gone answers `EPIPE`, and the hook has to survive it: a
@@ -428,6 +436,7 @@ fn a_waited_for_shutdown_has_finished_when_the_hook_returns() {
             std::thread::sleep(Duration::from_millis(100));
             doing.store(true, Ordering::SeqCst);
         },
+        true,
         Some(Duration::from_secs(60)),
     );
     assert!(
@@ -447,6 +456,7 @@ fn a_stuck_shutdown_is_not_waited_for_past_the_patience() {
         move || {
             let _ = stuck.recv();
         },
+        true,
         Some(Duration::from_millis(50)),
     );
     assert!(started.elapsed() < Duration::from_secs(30));
@@ -470,6 +480,7 @@ fn a_later_panic_on_the_main_thread_waits_for_the_shutdown_already_running() {
             std::thread::sleep(Duration::from_millis(100));
             doing.store(true, Ordering::SeqCst);
         },
+        true,
         None,
     );
 
@@ -479,6 +490,7 @@ fn a_later_panic_on_the_main_thread_waits_for_the_shutdown_already_running() {
     stop_on_thread(
         &run,
         move || starting.store(true, Ordering::SeqCst),
+        true,
         Some(Duration::from_secs(60)),
     );
     assert!(
@@ -489,4 +501,25 @@ fn a_later_panic_on_the_main_thread_waits_for_the_shutdown_already_running() {
         !started.load(Ordering::SeqCst),
         "a second shutdown was started"
     );
+}
+
+/// A worker's box is up and a second worker panics, on the channel the first one held, say.
+/// That panic starts nothing: the shutdown waits for the box to be closed, or the process
+/// would end under the box the reader is reading.
+#[test]
+fn a_later_panic_on_a_worker_does_not_start_the_shutdown() {
+    let run = Run::new();
+    let started = std::sync::Arc::new(AtomicBool::new(false));
+    let starting = started.clone();
+    stop_on_thread(
+        &run,
+        move || starting.store(true, Ordering::SeqCst),
+        false,
+        None,
+    );
+    assert!(
+        matches!(*run.shutdown.lock().unwrap(), Shutdown::NotStarted),
+        "a later worker panic started the shutdown"
+    );
+    assert!(!started.load(Ordering::SeqCst));
 }

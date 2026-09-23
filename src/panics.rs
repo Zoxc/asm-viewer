@@ -70,7 +70,7 @@ struct Run {
     /// thread is still saving. A render that panicked once panics again on the next pass,
     /// and the reader who pressed Close on the first box is handed a second. So the first
     /// unguarded panic is the only one told about, and every panic after it is written
-    /// down and asks for the shutdown the first one started ([`Shutdown`]).
+    /// down and, on the main thread, waits for the shutdown ([`Shutdown`]).
     stopping: AtomicBool,
     /// The shutdown thread, which only one panic starts and only the main thread waits for.
     shutdown: Mutex<Shutdown>,
@@ -85,6 +85,10 @@ struct Run {
 /// open. So whichever comes first starts the shutdown: the box being closed, or a panic on
 /// the main thread. That one cannot wait for the reader instead -- rfd shows a worker's box
 /// on macOS by handing it to the main thread -- so the box goes with the process.
+///
+/// **A later panic on any other thread starts nothing.** Workers tend to fail together: one
+/// cause, or a second dying on the channel the first held. A second worker's panic used to
+/// start the shutdown too, and the process ended under the box the reader was still reading.
 enum Shutdown {
     NotStarted,
     /// Started, and the end of the wait for it: it ends when the thread does.
@@ -214,7 +218,7 @@ pub(crate) fn install(store: Option<Store>) {
                     .and_then(|store| write_to(&RUN, store, panic))
             },
             &mut tell,
-            &mut || shut_down(&RUN),
+            &mut |told| shut_down(&RUN, told),
         );
     }));
 }
@@ -233,15 +237,14 @@ fn echo(mut out: impl Write, panic: &Panic) {
 /// What a panic leads to, with the storing, the telling and the shutting down all handed
 /// in so a test can have the rule without a disk or a window: **every** panic is written
 /// down, the **first** one the crate does not guard is told about, and every one it does
-/// not guard asks for the app to be brought down, which only the first ask does
-/// ([`stop_on_thread`]).
+/// not guard is handed to `stop`, with whether it was the one told about ([`shut_down`]).
 fn handle(
     run: &Run,
     panic: &Panic,
     guarded: bool,
     store: &mut impl FnMut(&Panic) -> Option<PathBuf>,
     tell: &mut impl FnMut(&Panic, Option<&Path>),
-    stop: &mut impl FnMut(),
+    stop: &mut impl FnMut(bool),
 ) {
     let file = store(panic);
     if guarded {
@@ -249,10 +252,11 @@ fn handle(
     }
     // Claimed here and not after the telling: the box is a blocking call, and a second
     // panic arrives while the reader is still looking at the first.
-    if !run.stopping.swap(true, Ordering::SeqCst) {
+    let told = !run.stopping.swap(true, Ordering::SeqCst);
+    if told {
         tell(panic, file.as_deref());
     }
-    stop();
+    stop(told);
 }
 
 /// Append `panic`'s record to the file `run` names, making it and the directory over it on
@@ -565,7 +569,11 @@ fn is_runtime(frame: &[&str]) -> bool {
 /// save or before a child is stopped. So it waits, for at most [`PATIENCE`]: if it holds a
 /// lock the shutdown needs, only its unwind lets that go. Any other thread returns into its
 /// unwind at once, the main thread keeping the process alive.
-fn shut_down(run: &Run) {
+///
+/// `told` is whether this panic was the one whose box the reader was shown, which has been
+/// closed by now. That panic starts the shutdown, and so does one on the main thread; a
+/// later one on any other thread leaves it to them ([`Shutdown`]).
+fn shut_down(run: &Run, told: bool) {
     let main = std::thread::current().name() == Some("main");
     stop_on_thread(
         run,
@@ -573,6 +581,7 @@ fn shut_down(run: &Run) {
             shutdown::before_exit();
             std::process::exit(1);
         },
+        told || main,
         main.then_some(PATIENCE),
     );
 }
@@ -580,15 +589,20 @@ fn shut_down(run: &Run) {
 /// How long the main thread waits for the shutdown before it goes on into its unwind.
 const PATIENCE: Duration = Duration::from_secs(5);
 
-/// Run `stop` on a thread named `shutdown`, unless `run` has started one already, and wait
-/// up to `wait` for whichever it has to finish.
+/// Run `stop` on a thread named `shutdown`, unless `run` has started one already or `start`
+/// is false, and wait up to `wait` for whichever it has to finish.
 ///
 /// The thread holds the sender and never sends: the wait ends when the thread ends or
 /// could not be started, either of which drops it. [`shut_down`]'s thread ends the process
 /// instead, which ends the wait with it.
-fn stop_on_thread(run: &Run, stop: impl FnOnce() + Send + 'static, wait: Option<Duration>) {
+fn stop_on_thread(
+    run: &Run,
+    stop: impl FnOnce() + Send + 'static,
+    start: bool,
+    wait: Option<Duration>,
+) {
     let mut shutdown = run.shutdown.lock().unwrap_or_else(|held| held.into_inner());
-    if let Shutdown::NotStarted = *shutdown {
+    if start && matches!(*shutdown, Shutdown::NotStarted) {
         let (working, finished) = mpsc::channel::<()>();
         let _ = std::thread::Builder::new()
             .name("shutdown".to_owned())
