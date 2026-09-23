@@ -61,12 +61,14 @@ impl Widest {
 
 impl Widest {
     /// The key a listing is held under: the identity of what outlives its rows -- the
-    /// disassembly, the highlighted file, the object -- under the fixed-width font's size,
-    /// so a font made smaller does not keep the width the larger one measured. Read in
-    /// the list's render, which is what subscribes the list to the font.
+    /// disassembly, the highlighted file, the object -- under the fixed-width font's
+    /// families and size, so a font made smaller or narrower does not keep the width the
+    /// old one measured. Read in the list's render, which is what subscribes the list to
+    /// the font.
     pub(crate) fn key(addr: usize) -> u64 {
         let mut hasher = DefaultHasher::new();
-        (addr, fonts().mono.size().to_bits()).hash(&mut hasher);
+        let fonts = fonts();
+        (addr, &fonts.mono.families, fonts.mono.size().to_bits()).hash(&mut hasher);
         hasher.finish()
     }
 

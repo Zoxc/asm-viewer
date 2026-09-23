@@ -495,8 +495,8 @@ the content again; the cost of the width is one layout, a row wider than anythin
 until it has reported. **The separator never reports**: its rule fills the row, so it would report
 the row plus its gutter and the widest would grow by a gutter every layout without end. **The key is
 the identity of what outlives the rows** (the disassembly, the highlighted file, the *object* for
-the section view, whose `Built` is rebuilt every generation) hashed with the mono font's size; a key
-that no longer matches is a floor of nothing, which is the reset, made without an effect: the old
+the section view, whose `Built` is rebuilt every generation) hashed with the mono font's families
+and size; a key that no longer matches is a floor of nothing, which is the reset, made without an effect: the old
 listing's rows drop to the pane's width on the new one's first render and report again. The key is
 **the list's and not the row's**: it lives in the `Listing` the list provides, in a cell every
 render of the list writes (`Listing::drawing`) and every row reads as it draws, so the one fact has

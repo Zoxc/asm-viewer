@@ -13134,6 +13134,23 @@ fn a_smaller_fixed_font_gives_up_the_width_the_larger_one_measured() {
     );
 }
 
+/// And the same for a font of another family at the same size: the key carries the
+/// families as well as the size, or a narrower family would keep every row as wide as the
+/// wider one measured it.
+#[test]
+fn another_fixed_font_family_is_another_listing_key() {
+    set_fonts(fixed_fonts(9.0, 10.5));
+    let before = Widest::key(1);
+    let mut narrower = fixed_fonts(9.0, 10.5);
+    narrower.mono.families.insert(0, "Narrower".into());
+    set_fonts(narrower);
+    assert_ne!(
+        Widest::key(1),
+        before,
+        "a change of family kept the key the old one measured under"
+    );
+}
+
 /// Pressing a branch's displacement puts the row it lands on on screen **and picks that
 /// row out** -- the run a press on the target row itself would have made, of the file the
 /// target was compiled from, with the Source pane owed the scroll and the Assembly pane
