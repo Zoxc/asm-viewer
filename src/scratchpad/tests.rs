@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::MAX_ORDER;
+use crate::store::{temporaries, MAX_ORDER};
 use crate::temporary::Temporary;
 
 fn scratchpad() -> Scratchpad {
@@ -189,8 +189,8 @@ fn writes_and_reads_back() {
     assert_eq!(Scratchpad::load_from(&directory), Some(scratchpad.clone()));
 
     // The temporaries were renamed, not left behind.
-    assert!(!directory.join("Cargo.toml.tmp").exists());
-    assert!(!directory.join("src").join("main.rs.tmp").exists());
+    assert_eq!(temporaries(&directory), Vec::<PathBuf>::new());
+    assert_eq!(temporaries(&directory.join("src")), Vec::<PathBuf>::new());
 
     // Writing again replaces rather than merges -- the name included, a rename being an
     // ordinary edit now that nothing is filed under it.

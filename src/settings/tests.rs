@@ -1,6 +1,7 @@
-use std::fs;
+use std::{fs, path::PathBuf};
 
 use super::*;
+use crate::store::temporaries;
 use crate::temporary::Temporary;
 
 fn settings() -> Settings {
@@ -79,7 +80,10 @@ fn writes_atomically_and_reads_back_with_its_tables_last() {
         settings
     );
     // The temporary was renamed, not left behind.
-    assert!(!path.with_extension("toml.tmp").exists());
+    assert_eq!(
+        temporaries(&directory.join("nested")),
+        Vec::<PathBuf>::new()
+    );
 }
 
 /// Unspecified is an *absent* key, so nothing can later mistake it for a value that was

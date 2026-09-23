@@ -13,6 +13,7 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use async_channel::{Receiver, Sender};
@@ -331,11 +332,16 @@ fn desktop_base() -> Option<PathBuf> {
     Some(base.join(APP_DIR))
 }
 
-/// Write `contents` to `path` by writing `path.tmp` first and renaming it over the top,
-/// so an interrupted write cannot leave a half-written file behind and a concurrent reader
-/// sees either the old file or the new one, never a truncated one. The parent directory is
-/// made if it is not there, which is what lets a project's first write create its
-/// directory.
+/// Write `contents` to `path` by writing a temporary beside it first and renaming it over
+/// the top, so an interrupted write cannot leave a half-written file behind and a concurrent
+/// reader sees either the old file or the new one, never a truncated one. The parent
+/// directory is made if it is not there, which is what lets a project's first write create
+/// its directory.
+///
+/// **Each write has a temporary of its own** ([`temporary_beside`]), made with
+/// `create_new`. Two apps on one store write `recents.toml` together, and a temporary they
+/// shared would be one file both wrote into: the rename would put their bytes spliced
+/// together in place. A temporary a write fails with is removed.
 ///
 /// The temporary is **synced before the rename**. A rename is atomic against a crash of
 /// the process, but not against a power loss: the directory entry can reach the disk
@@ -353,17 +359,34 @@ pub fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         fs::create_dir_all(directory)?;
     }
 
+    let temporary = temporary_beside(path);
+    let mut file = File::create_new(&temporary)?;
+    let written = file
+        .write_all(contents)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| {
+            drop(file);
+            fs::rename(&temporary, path)
+        });
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
+}
+
+/// A name beside `path` that no other write is given: `<file>.<pid>.<n>.tmp`, the process
+/// id telling two apps apart and `n`, one count for the whole process, two threads.
+fn temporary_beside(path: &Path) -> PathBuf {
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+    let n = COUNT.fetch_add(1, Ordering::Relaxed);
     let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = PathBuf::from(temporary);
-
-    let mut file = fs::File::create(&temporary)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    drop(file);
-
-    fs::rename(&temporary, path)
+    temporary.push(format!(".{}.{n}.tmp", std::process::id()));
+    PathBuf::from(temporary)
 }
 
 #[cfg(test)]
 mod tests;
+
+/// What a test checks a write left behind with, kept with the tests it belongs to.
+#[cfg(test)]
+pub use tests::temporaries;

@@ -11,6 +11,16 @@ impl Store {
     }
 }
 
+/// The temporaries [`write_atomically`] left in `directory`, which is none once every write
+/// has answered, whether it succeeded or not.
+pub fn temporaries(directory: &Path) -> Vec<PathBuf> {
+    fs::read_dir(directory)
+        .expect("reading the test directory")
+        .map(|entry| entry.expect("an entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "tmp"))
+        .collect()
+}
+
 /// A file with `data` in it, made along with the directories above it.
 fn written(path: &Path, data: &[u8]) {
     fs::create_dir_all(path.parent().expect("a parent")).expect("creating the test directory");
@@ -221,13 +231,48 @@ fn a_save_that_fails_leaves_the_file_that_was_there() {
     let store = Store::at(&base);
     written(&base.join("settings.toml"), b"name = \"a\"\n");
 
-    // A directory where the atomic write wants to put its temporary, so the write fails
-    // after the good file is already on the disk.
-    fs::create_dir_all(base.join("settings.toml.tmp")).expect("creating the test directory");
-    store.save("settings.toml", &Named { name: "b".into() });
+    // TOML has no spelling for a file that is one number, so this save cannot happen.
+    store.save("settings.toml", &5);
 
     assert_eq!(
         store.read::<Named>("settings.toml"),
         Some(Named { name: "a".into() })
     );
+}
+
+/// Two writes of one file at once, as two apps on one store make of `recents.toml`, each
+/// land whole. A temporary they shared was one file both wrote into, and what the rename
+/// put in place was the shorter write followed by the tail of the longer one.
+#[test]
+fn writes_of_one_file_at_once_each_land_whole() {
+    let base = Temporary::fresh_directory("store-test");
+    let path = base.join(RECENTS_FILE);
+    let long = vec![b'a'; 64 * 1024];
+    let short = vec![b'b'; 1024];
+
+    std::thread::scope(|scope| {
+        for contents in [&long, &short] {
+            let path = &path;
+            scope.spawn(move || {
+                for _ in 0..50 {
+                    write_atomically(path, contents).expect("every write lands");
+                }
+            });
+        }
+    });
+
+    let landed = fs::read(&path).expect("the file reads");
+    assert!(landed == long || landed == short, "a spliced file");
+    assert_eq!(temporaries(&base), Vec::<PathBuf>::new());
+}
+
+/// A write that fails takes its temporary with it: here the rename, over a directory.
+#[test]
+fn a_write_that_fails_leaves_no_temporary() {
+    let base = Temporary::fresh_directory("store-test");
+    let path = base.join("settings.toml");
+    written(&path.join("inside"), b"");
+
+    assert!(write_atomically(&path, b"name = \"a\"\n").is_err());
+    assert_eq!(temporaries(&base), Vec::<PathBuf>::new());
 }

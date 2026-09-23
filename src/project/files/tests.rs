@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::store::write_atomically;
+use crate::store::{temporaries, write_atomically};
 use crate::temporary::Temporary;
 
 /// A store to write a file through where the path is the whole of the question: these
@@ -213,7 +213,10 @@ fn writes_atomically_and_reads_back() {
 
     assert_eq!(load_session(&path), Some(session));
     // The temporary was renamed, not left behind.
-    assert!(!path.with_extension("toml.tmp").exists());
+    assert_eq!(
+        temporaries(&directory.join("nested")),
+        Vec::<PathBuf>::new()
+    );
 }
 
 /// The rename is the last thing `write_atomically` does, so nothing that goes wrong on the
@@ -223,21 +226,27 @@ fn writes_atomically_and_reads_back() {
 /// What this cannot see is the `sync_all` itself, which is the point of the ordering: no
 /// test in a process can observe whether the data reached the disk before the directory
 /// entry did. It pins that a failure before the rename is an error and not a replacement.
+#[cfg(unix)]
 #[test]
 fn a_write_that_fails_leaves_the_good_file_where_it_is() {
+    use std::os::unix::fs::PermissionsExt;
+
     let directory = Temporary::fresh("project-test");
     let _ = fs::remove_dir_all(&directory);
     let path = directory.join("one.avproj");
 
     write_atomically(&path, b"the good file").expect("the first write");
-    assert!(
-        !path.with_extension("avproj.tmp").exists(),
-        "a temporary was left"
-    );
+    assert_eq!(temporaries(&directory), Vec::<PathBuf>::new());
 
-    // A temporary that cannot be created at all: a directory is already sitting there.
-    fs::create_dir_all(path.with_extension("avproj.tmp")).expect("the temporary's stand-in");
-    assert!(write_atomically(&path, b"the new file").is_err());
+    // A temporary that cannot be created at all: the directory takes no new names.
+    let mode = |mode| fs::set_permissions(&directory, fs::Permissions::from_mode(mode));
+    mode(0o555).expect("chmod");
+    let failed = write_atomically(&path, b"the new file").is_err();
+    mode(0o755).expect("chmod");
+    if !failed {
+        // Running as root, which writes anything: nothing here can be asserted.
+        return;
+    }
     assert_eq!(fs::read(&path).expect("the file reads"), b"the good file");
 }
 

@@ -109,7 +109,10 @@ with them in `store/tests.rs`: a store under a directory of a test's own, which 
 
 Each file under it is written atomically via `.tmp` + rename (`Store::write`, over the one
 `write_atomically`; the free function is there because `cargo.rs` edits a manifest that is not the
-app's at all). The temporary is **synced before the rename**, because a rename is
+app's at all). **Each write has a temporary of its own**, `<file>.<pid>.<n>.tmp` made with
+`create_new`, and one a failed write leaves is removed: two apps on one store write `recents.toml`
+together, and a temporary they shared was one file both wrote into, so the rename put a splice of
+the two in place. The temporary is **synced before the rename**, because a rename is
 atomic against a crash of the process and not against a power loss: the directory entry can reach
 the disk ahead of the data, and the file the next launch reads is then zero bytes or a truncated
 tail -- one that will not parse, so the rescue moves the reader's project or session aside and
