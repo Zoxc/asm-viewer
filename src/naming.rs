@@ -58,6 +58,11 @@ pub fn short_name(name: &str) -> String {
     let mut pending: Vec<&str> = segments.into_iter().rev().collect();
     let mut opened = 0;
     let mut index = 0;
+    // Whether a lambda has been named since the last name, and whether that name is the
+    // lambda's `operator()`. A lambda inside that one drops it: the call operator is only
+    // where the inner lambda was written, as the function is for a single lambda.
+    let mut in_lambda = false;
+    let mut lambda_call = false;
     while let Some(segment) = pending.pop() {
         if opened < QUOTED_SCOPES {
             if let Some(scope) = quoted_function(segment) {
@@ -66,10 +71,19 @@ pub fn short_name(name: &str) -> String {
                 continue;
             }
         }
+        if is_lambda(segment) {
+            if lambda_call {
+                path.pop();
+                lambda_call = false;
+            }
+            in_lambda = true;
+        }
         let first = index == 0;
         index += 1;
         match reduce(segment, first) {
             Some(Part::Name(name)) => {
+                lambda_call = in_lambda && name == "operator()";
+                in_lambda = false;
                 path.push(name);
                 annotation = None;
             }
@@ -143,9 +157,9 @@ fn split_path(name: &str) -> Vec<&str> {
 }
 
 /// One segment as the name it contributes, or nothing when it contributes none -- an
-/// empty segment, C++'s `(anonymous namespace)` (MSVC's `` `anonymous namespace' ``), or
-/// the `` `1' `` MSVC numbers a block inside a function with, all noise a tab is better
-/// off without.
+/// empty segment, C++'s `(anonymous namespace)` (MSVC's `` `anonymous namespace' ``), the
+/// `` `1' `` MSVC numbers a block inside a function with, or Clang's `$_0` for a type with
+/// no name, all noise a tab is better off without.
 ///
 /// `first` is whether the segment opens the path, and it is what tells a `<Type as
 /// Trait>` qualifier from a turbofish: `drop_glue::<Vec<T>>` names `drop_glue`, and the
@@ -158,7 +172,10 @@ fn reduce(segment: &str, first: bool) -> Option<Part<'_>> {
         b'<' => None,
         _ => {
             let name = last_word(head(segment));
-            let noise = name.is_empty() || name == "`anonymous namespace'" || is_block(name);
+            let noise = name.is_empty()
+                || name == "`anonymous namespace'"
+                || is_block(name)
+                || is_unnamed(name);
             (!noise).then_some(Part::Name(name))
         }
     }
@@ -271,6 +288,21 @@ fn last_word(text: &str) -> &str {
         Some(space) => text[space..].trim_start(),
         None => text,
     }
+}
+
+/// Whether a segment names a lambda: `{lambda(int)#2}` in an Itanium name, `<lambda_1>` in
+/// an MSVC one, and Clang's `$_0`.
+fn is_lambda(segment: &str) -> bool {
+    let segment = segment.trim();
+    segment.starts_with("{lambda(")
+        || segment.starts_with("<lambda_") && segment.ends_with('>')
+        || is_unnamed(segment)
+}
+
+/// Whether a name is the `$_0` Clang gives a lambda or another type with no name.
+fn is_unnamed(name: &str) -> bool {
+    name.strip_prefix("$_")
+        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Whether a name is the `` `1' `` MSVC writes for a block inside a function.

@@ -279,6 +279,28 @@ fn a_function_msvc_quotes_as_a_scope_is_read_as_one() {
     );
 }
 
+/// A lambda in a lambda is titled as the outer one is: the outer call operator is only
+/// where it was written. Clang's `$_0` is a lambda like `{lambda()#1}`. Written by hand.
+#[test]
+fn a_lambda_in_a_lambda_is_titled_as_the_lambda_around_it() {
+    assert_eq!(
+        short_name("g()::{lambda()#1}::operator()() const::{lambda()#1}::operator()() const"),
+        "g::operator()"
+    );
+    assert_eq!(
+        short_name(
+            "public: `public: void `void g(void)'::`1'::<lambda_1>::operator()(void) const'\
+             ::`1'::<lambda_1>::operator()(void) const"
+        ),
+        "g::operator()"
+    );
+    assert_eq!(short_name("g()::$_0::operator()()"), "g::operator()");
+    assert_eq!(
+        short_name("g()::$_0::operator()() const::$_1::operator()() const"),
+        "g::operator()"
+    );
+}
+
 /// The `>` of a `->` closes nothing, and an `extern "C"` puts a quoted run inside the
 /// arguments. Read either wrong and the group ends early, taking the function with it.
 #[test]
@@ -350,6 +372,12 @@ fn a_name_that_makes_no_sense_is_answered_rather_than_panicked_on() {
         "`(' '",
         "'`'::`('::x",
         "`λ(字)'::`漢'",
+        "$_",
+        "$_0",
+        "{lambda(",
+        "<lambda_",
+        "<lambda_>::operator()",
+        "$_0::operator()::$_1::operator()",
     ] {
         // Whatever comes back, it came back.
         assert!(!short_name(name).is_empty() || name.trim().is_empty());
