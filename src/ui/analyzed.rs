@@ -246,7 +246,7 @@ pub(crate) fn use_analysis_with(
     showing: State<Option<Arc<Path>>>,
     work: impl Fn(Question) -> Answer + Send + 'static,
 ) -> Requests<Question> {
-    let (beside, reading) = (sectioned.beside, sectioned.reading);
+    let (beside, reading, window) = (sectioned.beside, sectioned.reading, sectioned.window);
     // The worker and the task that listens to it, started once and never restarted.
     //
     // A `std::thread` and not a spawned task: this is seconds of decoding, DWARF parsing
@@ -278,7 +278,9 @@ pub(crate) fn use_analysis_with(
                 if !holding(&objects.peek(), &beside.peek(), &ask.object) {
                     return;
                 }
-                write_if(reading, |next| next.take(&ask, code, decoded));
+                // Let go around where the reader is now, which is not where they asked.
+                let now = window.peek().clone();
+                write_if(reading, |next| next.take(&ask, now.as_ref(), code, decoded));
             }
             Answer::Marked { file, lines, over } => {
                 // The file the pane is showing *now*, which is what an answer is kept

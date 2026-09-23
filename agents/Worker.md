@@ -130,7 +130,9 @@ object and the stretch and is never stale**, unlike a listing, which is stale th
 moves on. So an answer is taken whenever it is about the object and the skeleton on screen,
 whichever window asked for it, and no ask is marked as in flight (`use_asking`'s memo sends each
 window once); what a scroll superseded is exactly what the next window asks for again. Two things
-bound it. A stretch farther than `KEEP` (512) from the last window is dropped as the answer lands. The whole reading is dropped
+bound it. A stretch farther than `KEEP` (512) from the window asked for **now** is dropped as the answer lands,
+and nothing is dropped while no window is asked: judged by the window the answer was asked for, a
+late answer for a place the reader had left dropped the stretches they had come back to. The whole reading is dropped
 when what is on screen stops being that object's code or the object closes under it
 (`use_reading_of`, an effect reading `Active`, `Objects` and the claim below), and the rows the view
 built of it go with it: they hold the object too, and the view that clears them otherwise is not

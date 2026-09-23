@@ -6246,8 +6246,9 @@ fn a_window_answer_for_a_reading_that_moved_on_is_dropped() {
     );
 }
 
-/// What is held is bounded: a stretch farther than `KEEP` from the window an answer was
-/// asked for is let go when the answer lands.
+/// What is held is bounded: a stretch farther than `KEEP` from the window asked for now is
+/// let go when an answer lands -- the window **now**, not the one the answer was asked
+/// for, which the reader may have left.
 #[test]
 fn a_stretch_far_from_the_window_is_let_go() {
     let (_path, objects) = fixture_objects(1);
@@ -6263,32 +6264,33 @@ fn a_stretch_far_from_the_window_is_let_go() {
         code: Some(code.clone()),
         window,
     };
+    let held = |reading: &Reading| reading.held.keys().copied().collect::<Vec<_>>();
 
     // Two answers, one at each end of a long listing (the indices need not exist to be
-    // held; only the worker cares).
-    assert!(reading.take(&ask(vec![0]), code.clone(), vec![(0, empty())]));
-    assert!(reading.take(
-        &ask(vec![KEEP * 3]),
-        code.clone(),
-        vec![(KEEP * 3, empty())]
-    ));
-    assert_eq!(reading.held.keys().copied().collect::<Vec<_>>(), [KEEP * 3]);
+    // held; only the worker cares), each landing while its own window is the one asked.
+    let (start, far) = (ask(vec![0]), ask(vec![KEEP * 3]));
+    assert!(reading.take(&start, Some(&start), code.clone(), vec![(0, empty())]));
+    assert!(reading.take(&far, Some(&far), code.clone(), vec![(KEEP * 3, empty())]));
+    assert_eq!(held(&reading), [KEEP * 3]);
     // One within reach of the window stays.
-    assert!(reading.take(
-        &ask(vec![KEEP * 2]),
-        code.clone(),
-        vec![(KEEP * 2, empty())]
-    ));
-    assert_eq!(
-        reading.held.keys().copied().collect::<Vec<_>>(),
-        [KEEP * 2, KEEP * 3]
-    );
+    let near = ask(vec![KEEP * 2]);
+    assert!(reading.take(&near, Some(&near), code.clone(), vec![(KEEP * 2, empty())]));
+    assert_eq!(held(&reading), [KEEP * 2, KEEP * 3]);
     assert_eq!(reading.generation, 3);
 
     // An answer with another skeleton is not this reading's.
     let other = skeleton(&object);
-    assert!(!reading.take(&ask(vec![1]), other, vec![(1, empty())]));
+    assert!(!reading.take(&ask(vec![1]), None, other, vec![(1, empty())]));
     assert_eq!(reading.generation, 3);
+
+    // The reader went far off and came back before the answer landed: nothing is asked
+    // now, and the stretches they are back on stay.
+    let gone = ask(vec![KEEP * 6]);
+    assert!(reading.take(&gone, None, code.clone(), vec![(KEEP * 6, empty())]));
+    assert_eq!(held(&reading), [KEEP * 2, KEEP * 3, KEEP * 6]);
+    // And with a window asked near them, what is let go is judged by it.
+    assert!(reading.take(&gone, Some(&near), code.clone(), vec![]));
+    assert_eq!(held(&reading), [KEEP * 2, KEEP * 3]);
 }
 
 /// A line's locations are every symbol compiled from it over every open object, and a
@@ -21581,7 +21583,7 @@ fn reading_of(object: &Arc<Object>, held: &[usize]) -> Reading {
         code: Some(code.clone()),
         window: held.to_vec(),
     };
-    assert!(reading.take(&ask, code, decoded));
+    assert!(reading.take(&ask, Some(&ask), code, decoded));
     reading
 }
 
@@ -21699,7 +21701,7 @@ fn an_answer_counts_the_rows_of_the_stretches_held_and_no_others() {
     };
     assert!(code.code().sections()[0].listing.stretches().len() > 1);
     let before = section::stretches_counted();
-    assert!(sections.write().take(&ask, code, decoded));
+    assert!(sections.write().take(&ask, Some(&ask), code, decoded));
     settle(&mut test);
 
     let held = built.peek().as_ref().map(|built| built.reading.held.len());
@@ -23760,7 +23762,7 @@ fn a_cut_gap_says_the_listing_was_cut() {
                 kind,
             }),
         };
-        assert!(reading.take(&ask, code, vec![(0, stretched)]));
+        assert!(reading.take(&ask, Some(&ask), code, vec![(0, stretched)]));
         reading
     };
 
@@ -23817,6 +23819,7 @@ fn a_gap_row_is_marked_as_data() {
     };
     assert!(reading.take(
         &ask,
+        Some(&ask),
         code,
         vec![(
             0,
@@ -24831,7 +24834,7 @@ fn a_second_objects_first_answer_draws_its_rows_whatever_its_generation() {
             code: None,
             window: vec![],
         };
-        assert!(reading.write().take(&ask, code, vec![]));
+        assert!(reading.write().take(&ask, Some(&ask), code, vec![]));
     };
 
     open_document(
@@ -24882,6 +24885,7 @@ fn a_stretch_let_go_under_the_rows_on_screen_still_draws_as_it_was() {
     };
     assert!(reading.take(
         &ask,
+        Some(&ask),
         code.clone(),
         vec![(
             0,
@@ -27977,7 +27981,7 @@ fn the_keys_move_the_caret_along_a_row_the_worker_decoded() {
     let Answer::Code { decoded, code, .. } = answer(Question::Code(ask.clone())) else {
         panic!("a window is answered with a window");
     };
-    assert!(reading.take(&ask, code, decoded));
+    assert!(reading.take(&ask, Some(&ask), code, decoded));
     let (mut test, roots) = TestingRunner::new(
         code_harness,
         (600., 900.).into(),
@@ -28055,7 +28059,7 @@ fn a_caret_the_keys_move_is_a_run_of_its_new_rows_file() {
     let Answer::Code { decoded, code, .. } = answer(Question::Code(ask.clone())) else {
         panic!("a window is answered with a window");
     };
-    assert!(reading.take(&ask, code, decoded));
+    assert!(reading.take(&ask, Some(&ask), code, decoded));
     let (mut test, roots) = TestingRunner::new(
         code_harness,
         (600., 900.).into(),
@@ -28122,7 +28126,7 @@ fn a_caret_escape_leaves_is_a_run_of_its_rows_file() {
     let Answer::Code { decoded, code, .. } = answer(Question::Code(ask.clone())) else {
         panic!("a window is answered with a window");
     };
-    assert!(reading.take(&ask, code, decoded));
+    assert!(reading.take(&ask, Some(&ask), code, decoded));
     let (mut test, roots) = TestingRunner::new(
         code_harness,
         (600., 900.).into(),
@@ -38603,6 +38607,7 @@ fn each_kind_of_row_of_an_objects_code_copies_the_same_text_both_ways() {
     };
     assert!(gapped.take(
         &ask,
+        Some(&ask),
         code,
         vec![(
             0,

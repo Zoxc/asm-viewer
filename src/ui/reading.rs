@@ -6,8 +6,8 @@
 //! reader is near it. The answers land here, in [`Reading`], and never in [`Analyzed`]:
 //! that state is one symbol's, and everything reading it -- the symbol bar, the source
 //! side, the Locations panel -- would have to learn a second shape. What is held is
-//! **bounded**: a stretch farther than [`KEEP`] from the last window is let go when an
-//! answer lands, so a scroll through the app's own binary does not pile up its whole
+//! **bounded**: a stretch farther than [`KEEP`] from the window asked for now is let go
+//! when an answer lands, so a scroll through the app's own binary does not pile up its whole
 //! `.text`; and it is the view's answer rather than a cache, dropped whole when the reader
 //! leaves the object's tab and decoded again when they come back, which is
 //! `Analyzed`'s own rule for a symbol.
@@ -265,16 +265,23 @@ impl Reading {
         self.held.get(&flat).map(|stretched| stretched.body())
     }
 
-    /// Take an answer to `ask`. Whether anything was taken.
+    /// Take an answer to `ask`. Whether anything was taken. `now` is the window the view
+    /// is asking for now, if any.
     ///
     /// **A decoded stretch is a pure function of the object and the stretch and is never
     /// stale**, unlike a listing answer, which is stale the moment the ask moves on: so
     /// an answer is taken whenever it is about this object and this skeleton, whichever
     /// window asked for it -- what a scroll superseded is exactly what the next window
     /// will ask for again.
+    ///
+    /// **What is let go is judged by `now` and not by `ask`**: the reader may have left
+    /// the place they asked from, and letting go around it dropped the stretches on
+    /// screen. With no window asked for now, everything near the reader is held and
+    /// nothing is let go.
     pub(crate) fn take(
         &mut self,
         ask: &CodeAsk,
+        now: Option<&CodeAsk>,
         code: Arc<Layout>,
         decoded: Vec<(usize, Stretched)>,
     ) -> bool {
@@ -289,12 +296,14 @@ impl Reading {
         for (flat, stretched) in decoded {
             self.held.insert(flat, Arc::new(stretched));
         }
-        self.let_go(&ask.window);
+        if let Some(now) = now.filter(|now| self.is_about(&now.object)) {
+            self.let_go(&now.window);
+        }
         self.generation += 1;
         true
     }
 
-    /// Drop every held stretch farther than [`KEEP`] from the stretches `window` asked
+    /// Drop every held stretch farther than [`KEEP`] from the stretches `window` asks
     /// for, which is where the reader is.
     fn let_go(&mut self, window: &[usize]) {
         let (Some(&near), Some(&far)) = (window.iter().min(), window.iter().max()) else {
