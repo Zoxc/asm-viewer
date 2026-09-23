@@ -119,24 +119,32 @@ impl Builds {
     /// **Only the previous build's artifacts are replaced.** A binary is a path throughout
     /// the app, so two generations of one file cannot both be in the objects list; but a
     /// file the reader opened by hand is theirs, even where a build has just written the
-    /// same path. A build that produced nothing leaves the previous list standing: those
-    /// paths are still what is open, and still what the next build that succeeds replaces.
+    /// same path.
+    ///
+    /// **A build that failed replaces nothing.** A compile error leaves the previous build's
+    /// files as they were, so closing them would take every tab into them for nothing. The
+    /// previous list stands: it is still what the next build that succeeds replaces.
     fn finished(
         &mut self,
         run: cargo::Run,
         sources: HashMap<String, PathBuf>,
         open: &[PathBuf],
     ) -> Vec<PathBuf> {
-        let produced: Vec<PathBuf> = match &run {
-            cargo::Run::Built { artifacts, .. } => artifacts
-                .iter()
-                .map(|artifact| artifact.path.clone())
-                .collect(),
-            _ => self.previous.clone(),
+        let produced: Option<Vec<PathBuf>> = match &run {
+            cargo::Run::Built { artifacts, .. } => Some(
+                artifacts
+                    .iter()
+                    .map(|artifact| artifact.path.clone())
+                    .collect(),
+            ),
+            _ => None,
         };
         self.building = false;
         self.built = Some(Arc::new(run));
         self.sources = Arc::new(sources);
+        let Some(produced) = produced else {
+            return Vec::new();
+        };
         self.previous = produced;
         self.previous
             .iter()

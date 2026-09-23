@@ -49,7 +49,7 @@ fn only_the_previous_builds_artifacts_that_are_open_are_reopened() {
 }
 
 #[test]
-fn a_build_that_produced_nothing_leaves_the_previous_list_standing() {
+fn a_failed_build_reopens_nothing_and_leaves_the_previous_list_standing() {
     let previous = vec![PathBuf::from("target/debug/viewer")];
     let mut state = Builds {
         building: true,
@@ -62,7 +62,7 @@ fn a_build_that_produced_nothing_leaves_the_previous_list_standing() {
     };
     let reopening = state.finished(run, HashMap::new(), &previous);
 
-    assert_eq!(reopening, previous, "those paths are still what is open");
+    assert!(reopening.is_empty(), "a failed build wrote over nothing");
     assert_eq!(state.previous, previous);
     assert!(!state.building);
 }
