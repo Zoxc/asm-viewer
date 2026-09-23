@@ -7,9 +7,10 @@
 //! four seconds into a two-file crate and longer for anything real. Measured over the
 //! same file: its names at 0.0s where it had been opened, and at 4.3s where it had not.
 //!
-//! What is opened is what the reader has in tabs, less the files this project's server is
-//! not for ([`spoken_as`]). A server that has stopped holds nothing, so the app lets go
-//! of the whole set and the next one is told everything afresh.
+//! What is opened is what the reader has in tabs and the file the Source pane is showing,
+//! less the files this project's server is not for ([`spoken_as`]). A server that has
+//! stopped holds nothing, so the app lets go of the whole set and the next one is told
+//! everything afresh.
 
 use super::*;
 
@@ -139,11 +140,15 @@ fn spoken_as(serving: &Serving, path: &Path) -> Option<String> {
 }
 
 /// Every open tab's source file the project's server is for, in the reader's own order,
-/// each with what the server is told it is.
+/// then the file the Source pane is showing, each with what the server is told it is.
+///
+/// **The pane's file too**, whatever tab it is on: a symbol's tab draws the file the symbol
+/// was compiled from, which is no tab's document, and [`use_linking`] asks only about a
+/// file the server has been told about.
 ///
 /// **Each file once**, however many tabs show it: two tabs can show one place, and a
 /// server is told a file is open once until it is told it has closed.
-fn shown(open: Open, serving: &Serving) -> Vec<(Arc<Path>, String)> {
+fn shown(open: Open, showing: Option<Arc<Path>>, serving: &Serving) -> Vec<(Arc<Path>, String)> {
     let strip = open.strip.read();
     let docs = open.docs.read();
     let mut seen = HashSet::new();
@@ -156,6 +161,7 @@ fn shown(open: Open, serving: &Serving) -> Vec<(Arc<Path>, String)> {
             // whole of one: neither is a document a server has anything to say about.
             Document::Object(..) | Document::Symbol(..) | Document::Code(..) => None,
         })
+        .chain(showing)
         .filter(|file| seen.insert(file.clone()))
         .filter_map(|file| {
             let spoken = spoken_as(serving, &file)?;
@@ -174,6 +180,7 @@ pub(crate) fn use_opened(
     language: State<Language>,
     opened: State<Opened>,
     open: Open,
+    showing: State<Option<Arc<Path>>>,
     jobs: LspJobs,
 ) {
     // The run and what it was started with, out of the state and not read off it: a
@@ -185,15 +192,15 @@ pub(crate) fn use_opened(
         Some((held.run, serving.clone()))
     });
     use_side_effect(move || {
-        // Both read and not peeked: a tab opened or closed and a server started are each
-        // half of what this is about. Which files the server is for is what it was started
-        // with, and not what the Project view's boxes say now.
+        // All read and not peeked: a tab opened or closed, the pane moving to another file
+        // and a server started are each part of what this is about. Which files the server
+        // is for is what it was started with, and not what the Project view's boxes say now.
         let started = started.read().clone();
         let Some((run, serving)) = started else {
             write_if(opened, |waiting| waiting.forget());
             return;
         };
-        let shown = shown(open, &serving);
+        let shown = shown(open, showing.read().clone(), &serving);
         // One read, bound before any write: the three lists are all cut out of what it
         // said.
         let told = opened.read().clone();

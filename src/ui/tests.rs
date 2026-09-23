@@ -8380,14 +8380,9 @@ fn linking_harness() -> impl IntoElement {
         move |job| work(job),
     );
     let opened = use_consume::<Documents>().0;
-    use_opened(language, opened, states.open, jobs.clone());
-    use_linking(
-        language,
-        linked,
-        use_consume::<ShowingFile>().0,
-        opened,
-        jobs.clone(),
-    );
+    let showing = use_consume::<ShowingFile>().0;
+    use_opened(language, opened, states.open, showing, jobs.clone());
+    use_linking(language, linked, showing, opened, jobs.clone());
     use_hovering(language, hover, jobs.clone());
     // Handed out, so a test that is about the server itself can start one and be given
     // the channel its remarks come back on. The rest reach the server through the pane.
@@ -10132,6 +10127,28 @@ fn a_stopped_server_leaves_no_links_behind() {
     );
 }
 
+/// **The file the pane is showing is opened with the server even when no tab is a source
+/// tab of it**, which is what a symbol's tab is: its source side draws the file the symbol
+/// was compiled from, and links are asked for only in a file the server has been told
+/// about. The pane here is mounted over the file with nothing in the strip at all.
+#[test]
+fn the_panes_file_has_links_with_no_source_tab_of_it() {
+    let (file, _directory) = calling_file("untabbed");
+    let (mut test, roots, _asks) = mount_linking(|_job: LspJob| None, file.clone());
+    settle(&mut test);
+    serving(&mut test, &roots);
+
+    let run = roots.language.peek().run;
+    assert!(
+        roots.opened.peek().holds(run, &file),
+        "the server was never told about the pane's file"
+    );
+    assert!(
+        roots.linked.peek().links_in(&file).is_some(),
+        "the pane's file has no links"
+    );
+}
+
 /// The file the server was next asked to classify, waited for while the app runs: the
 /// question goes out from an effect, and what wakes that effect is a note the server's own
 /// channel carries.
@@ -10287,6 +10304,9 @@ fn the_server_is_told_which_files_the_reader_has_open() {
     // And the tab goes.
     let id = states.open.now().map(|(id, _)| id).expect("a tab");
     close_tab(states.open, states.places, id);
+    // The pane goes with its tab in the app, and not in this harness, which mounts one
+    // over the file whatever the strip holds; the file it showed is opened too.
+    roots.showing.clone().set(None);
     // The close is sent from an effect on this thread; `told` is what waits for the
     // worker to record it.
     settle(&mut test);
@@ -10375,6 +10395,8 @@ fn a_file_in_two_tabs_is_opened_with_the_server_once() {
 
     close_tab(states.open, states.places, first);
     close_tab(states.open, states.places, second);
+    // As in `the_server_is_told_which_files_the_reader_has_open`: the pane goes with them.
+    roots.showing.clone().set(None);
     settle(&mut test);
     assert_eq!(
         told(&asks),

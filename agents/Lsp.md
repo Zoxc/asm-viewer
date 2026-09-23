@@ -387,8 +387,12 @@ is the courtesy.
 
 **What is opened is what the reader has in tabs**, which is what an editor does
 (`src/ui/opened.rs`): `Opened` holds the set and the run it was sent to, `use_opened`
-diffs it against the source documents in the strip, each file once however many tabs
-show it, and a server that has been restarted holds nothing so everything open is new. A server that has *stopped* leaves the app
+diffs it against the source documents in the strip and the file the Source pane is
+showing, each file once however many tabs show it, and a server that has been restarted
+holds nothing so everything open is new. The pane's file is there for a symbol's tab,
+whose source side is no tab's document: left out, it got links only while a source tab
+had the same file open, links being asked for only in a file the server has been told
+about. A server that has *stopped* leaves the app
 holding nothing either: a build under no server would otherwise mark those files stale,
 and the server started after it would be sent a `didClose` for a file it had never been
 given. Measured, opening is nearly free: 41 files in **7 ms**, and one megabyte of the
