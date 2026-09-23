@@ -1,4 +1,7 @@
+use std::path::{Component, PathBuf};
+
 use super::*;
+use crate::temporary::Temporary;
 
 /// Read a settings file over `/p`, which is the directory `${workspaceFolder}` stands for
 /// in every test below.
@@ -339,6 +342,41 @@ fn a_project_with_no_settings_file_says_nothing() {
     assert_eq!(settings, Settings::none());
     assert_eq!(settings.options(), &wanted());
     assert!(settings.overrides.is_empty());
+}
+
+/// A directory typed relative is made absolute before `${workspaceFolder}` stands for it: a
+/// server resolves a relative path in its settings against its absolute root, which would
+/// put the project's spelling in twice.
+#[test]
+fn the_workspace_folder_is_absolute_when_the_directory_was_typed_relative() {
+    let project = Temporary::fresh_directory("settings-relative");
+    std::fs::create_dir_all(project.join(".vscode")).expect("a directory");
+    std::fs::write(
+        project.join(SETTINGS),
+        r#"{ "rust-analyzer.procMacro.server": "${workspaceFolder}/srv" }"#,
+    )
+    .expect("a file");
+    // The same directory spelled from the working directory: up to its root, then down.
+    let here = std::env::current_dir().expect("a working directory");
+    let named = |part: &Component| matches!(part, Component::Normal(_));
+    let up = here
+        .components()
+        .filter(named)
+        .map(|_| Component::ParentDir);
+    let down = project.components().filter(named);
+    let relative: PathBuf = up.chain(down).collect();
+    assert!(relative.is_relative());
+
+    let settings = settings_in(&relative).expect("the file");
+
+    let server = settings.options()["procMacro"]["server"]
+        .as_str()
+        .expect("a string");
+    assert!(Path::new(server).is_absolute(), "{server}");
+    assert_eq!(
+        Path::new(server),
+        std::path::absolute(&relative).unwrap().join("srv")
+    );
 }
 
 /// The file is spelled once: what the Project view names the reader is what [`settings_in`]

@@ -338,7 +338,9 @@ only logs -- a control that turns green and every question afterwards answering 
 because nothing here has to match a spelling something else prints back. Resolving would
 only cost: the reader's own spelling of their project, and on Windows a verbatim prefix
 that no `file:` URI can carry. The process needs none of it: `current_dir` resolves a
-relative directory against the same place.
+relative directory against the same place. `${workspaceFolder}` in a project's settings
+stands for the same absolute directory: a server resolves a relative path there against
+its root, so the typed spelling would be joined onto itself.
 
 The app's own spelling is not canonical either -- a project directory as the reader typed
 it joined with a Files row, or whatever the debug info said -- and the server's is. So a

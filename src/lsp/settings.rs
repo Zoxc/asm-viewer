@@ -136,10 +136,15 @@ impl fmt::Display for Unreadable {
 /// The thin half: everything below this is a function of the file's text. **No file is no
 /// overrides**, since most projects have none and a viewer that warned about it would be
 /// warning about every project.
+///
+/// `${workspaceFolder}` stands for the directory made absolute, as the server's root is
+/// ([`super::rooted`]). The box takes any spelling, and a server resolves a relative path
+/// in its settings against that root, so `dev/viewer` would name a file under
+/// `dev/viewer/dev/viewer` that is not there.
 pub fn settings_in(directory: &Path) -> Result<Settings, Unreadable> {
     let file = directory.join(SETTINGS);
     match std::fs::read_to_string(&file) {
-        Ok(text) => settings_from(&text, directory),
+        Ok(text) => settings_from(&text, &super::rooted(directory)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Settings::none()),
         Err(error) => Err(Unreadable::Unread(error.to_string())),
     }
