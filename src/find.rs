@@ -33,8 +33,11 @@ pub enum Direction {
 /// **`at` is the hit the pane is on, for as long as `run` is still that hit.** A step
 /// leaves the run on the hit it landed on, and asking the caret again would answer that
 /// hit rather than the next. Anything that has moved the run since -- a click, a key --
-/// leaves `at` naming a place the reader has left, so the step reads the caret instead,
-/// as a first step does: a find starts from where the reader is looking.
+/// leaves `at` naming a place the reader has left, so the step reads the run instead, as
+/// a first step does: a find starts from where the reader is looking. Forward it starts
+/// from the run's far end and back from its near end, whichever end the lead is at, so
+/// a run that is itself a hit -- a selected word the bar was opened over -- is behind
+/// the step either way, as the walk through an object's code reads it (`ui/hunt.rs`).
 pub fn step(
     hits: &[Hit],
     at: Option<usize>,
@@ -61,19 +64,20 @@ pub fn step(
         });
     }
 
-    let place = |hit: &Hit| (hit.row, hit.columns.start);
-    let from = run.lead();
-    let caret = (from.row, from.col);
+    let (near, far) = run.ends();
     match direction {
-        // The last hit that ends at or before the caret, so a caret sitting inside one
-        // steps out of it rather than back onto it.
+        // The last hit that ends at or before the run starts, so a caret sitting inside
+        // one steps out of it rather than back onto it.
         Direction::Back => hits
             .iter()
-            .rposition(|hit| (hit.row, hit.columns.end) <= caret)
+            .rposition(|hit| (hit.row, hit.columns.end) <= (near.row, near.col))
             .or(Some(last)),
-        // The first hit at or after the caret: a caret put at the start of a hit by a
+        // The first hit at or after the run ends: a caret put at the start of a hit by a
         // click means that hit, which is what the reader pointed at.
-        Direction::Forward => hits.iter().position(|hit| place(hit) >= caret).or(Some(0)),
+        Direction::Forward => hits
+            .iter()
+            .position(|hit| (hit.row, hit.columns.start) >= (far.row, far.col))
+            .or(Some(0)),
     }
 }
 

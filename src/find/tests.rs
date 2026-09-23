@@ -106,3 +106,21 @@ fn a_step_after_a_click_starts_from_the_click() {
     assert_eq!(step(&hits, Some(1), at_end, Direction::Back), Some(1));
     assert_eq!(step(&hits, Some(1), on(&hits[1]), Direction::Back), Some(0));
 }
+
+/// **A run that is itself a hit is stepped off on the first press**, whichever end its lead
+/// is at: a word picked out and then found has the bar's index cleared, and the step
+/// must not land back on the word it was opened over.
+#[test]
+fn a_first_step_from_a_run_on_a_hit_leaves_it() {
+    let hits = [hit(0, 0..3), hit(4, 1..4), hit(9, 0..2)];
+
+    // A double-click leaves the lead at the end.
+    let rightward = on(&hits[1]);
+    assert_eq!(step(&hits, None, rightward, Direction::Back), Some(0));
+    assert_eq!(step(&hits, None, rightward, Direction::Forward), Some(2));
+
+    // A sweep leftward leaves it at the start.
+    let leftward = CharSelection::between(Caret { row: 4, col: 4 }, Caret { row: 4, col: 1 });
+    assert_eq!(step(&hits, None, leftward, Direction::Back), Some(0));
+    assert_eq!(step(&hits, None, leftward, Direction::Forward), Some(2));
+}
