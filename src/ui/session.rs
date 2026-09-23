@@ -552,7 +552,8 @@ pub(crate) fn clear_project(states: ProjectStates) {
     });
 
     // What one project built says nothing about the next, and a list left standing would
-    // have the first build over there replace binaries opened over here.
+    // have the first build over there replace binaries opened over here. A build still
+    // running is disowned by the stay moving on below (`BuildJobs`).
     let mut build = states.build;
     build.set(Builds::default());
 

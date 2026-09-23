@@ -273,7 +273,21 @@ fn read(
 }
 
 /// How the view reaches the worker.
-pub(crate) type BuildJobs = Requests<BuildJob>;
+///
+/// Every job goes out under the [`Stay`] it was sent in, and its answer comes back under
+/// it: a build takes seconds, the reader can leave the project meanwhile, and what one
+/// project's build said is nothing to the next (`ProjectStates::left`).
+#[derive(Clone)]
+pub(crate) struct BuildJobs {
+    jobs: Requests<(Stay, BuildJob)>,
+    stay: State<Stay>,
+}
+
+impl BuildJobs {
+    pub(crate) fn send(&self, job: BuildJob) {
+        self.jobs.send((*self.stay.peek(), job));
+    }
+}
 
 /// Start the worker and keep the state in step with it. Called once, at the root.
 pub(crate) fn use_building(
@@ -299,16 +313,27 @@ pub(crate) fn use_building_with(
         // Nothing supersedes: a build takes seconds and is asked for by a press, and the
         // two manifest jobs are cheap and each of them is the answer to the one after it.
         |job, _| vec![job],
-        move |job| Some(work(job)),
-        move |answer, _| match answer {
-            BuildAnswer::Read(said) => {
-                write_if(build, |next| next.read(said));
+        move |(stay, job)| Some((stay, work(job))),
+        move |(stay, answer), _| {
+            // An answer for a project the reader has left: its build would land in the
+            // one open now, replacing binaries that project opened.
+            if states.left(stay) {
+                return;
             }
-            BuildAnswer::Done { run, sources } => {
-                finished(build, states, opened, sourced, run, sources)
+            match answer {
+                BuildAnswer::Read(said) => {
+                    write_if(build, |next| next.read(said));
+                }
+                BuildAnswer::Done { run, sources } => {
+                    finished(build, states, opened, sourced, run, sources)
+                }
             }
         },
     );
+    let jobs = BuildJobs {
+        jobs,
+        stay: states.stay,
+    };
 
     // A context, because the button that asks is inside a tab that is handed
     // nothing; returned as well, so a test can ask directly.

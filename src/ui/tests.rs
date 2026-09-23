@@ -31398,6 +31398,68 @@ fn an_artifact_load_survives_the_view_being_left() {
     );
 }
 
+/// **A build started in a project the reader has left lands nowhere.** Its answer was
+/// taken by whichever project was open when it came: that project showed the other's
+/// status line, and saved the other's artifacts as the ones its next build replaces.
+#[test]
+fn a_build_answer_for_a_project_left_is_dropped() {
+    let artifact = fixture_artifact();
+    // The build waits to be let go, so the reader can leave while it runs.
+    let (release, gate) = async_channel::bounded::<()>(1);
+    let answer = {
+        let artifact = artifact.clone();
+        move |job: BuildJob| match job.what {
+            BuildWhat::Build => {
+                let _ = gate.recv_blocking();
+                done(built(&[artifact.clone()]))
+            }
+            _ => BuildAnswer::Read(Manifest {
+                path: Some(job.directory.join("Cargo.toml")),
+                profiles: None,
+                debug_lines: true,
+                edit_refused: None,
+            }),
+        }
+    };
+    let (mut test, roots, asking, _asks) = mount_project(answer);
+    let states = roots.states;
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/store/a.avproj")),
+        workspace_text: "/work/a".to_owned(),
+        ..OpenProject::default()
+    });
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    start_build(
+        states.build,
+        &jobs,
+        PathBuf::from("/work/a"),
+        Profile::Release,
+    );
+    clear_project(states);
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/store/b.avproj")),
+        workspace_text: "/work/b".to_owned(),
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+
+    // The second project's manifest is read behind the build, so once it is in, the
+    // build's answer has been taken.
+    let _ = release.send_blocking(());
+    let read_b = Some(PathBuf::from("/work/b/Cargo.toml"));
+    pump(&mut test, |_| states.build.peek().manifest.path == read_b);
+
+    let build = states.build.peek();
+    assert!(
+        build.built.is_none(),
+        "the build of the project left is shown in the one open"
+    );
+    assert!(build.previous.is_empty());
+}
+
 /// A build is the app's one word that the files under the project's directory have
 /// changed, so a finished one drops what the panes read of them. Without it the pane draws
 /// the text from before the build under the new build's line numbers, and the checksum row

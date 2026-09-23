@@ -559,7 +559,10 @@ section: what cargo is run over is otherwise a rule the reader has to know. Four
 in `ProjectTab` would be lost the moment the reader looked at something else while it ran. `Builds`
 is therefore provided at the root beside `Pad`, and it is in `ProjectStates`, because what one
 project built says nothing about the next: a switch clears it, or the first build over there would
-replace binaries opened over here.
+replace binaries opened over here. A build still running when the reader leaves is not stopped but
+disowned: every job goes out under the `Stay` it was sent in (`BuildJobs`), and an answer for a
+stay that has ended is dropped. Before, it landed in the next project, whose status line and
+saved artifacts became the other's.
 
 **One worker thread, for the scratchpad's reason.** The work blocks, and it is one thread rather
 than several so the project's directory has a single writer -- the debug-lines edit cannot land
