@@ -659,15 +659,18 @@ ignores a member's own table, so asking the directory's manifest answers about a
 no attention to: a root that already asks for debug information goes unseen and the offer is made
 for ever, and taking that offer writes a table cargo ignores while the view says the lines are
 there. `profile_manifest` is that rule -- a manifest with a `[workspace]` table is a root, a package
-may name its root outright, and failing both it is the nearest ancestor with one -- and it is a walk
-up the directories rather than `cargo locate-project`, so it costs no process and is a unit test
-over some files rather than over a toolchain. The walk is a read and a parse per directory, so a
-job makes it **once**: `build_work` resolves the file and hands it to the read and to the edit,
-rather than each working it out for itself. Whether the root's `members` really cover the
-directory is not checked: cargo refuses to build a package its ancestor workspace does not claim, so
-there is no build there to ask about. When that file is not the project's own, the view **names**
-it, beside the manifest cargo is run over: the offer edits a file outside the project, and a write
-the reader was not told about is the one thing it must not be.
+may name its root outright, and failing both it is the nearest ancestor with one that does not
+`exclude` the directory -- and it is a walk up the directories rather than `cargo locate-project`,
+so it costs no process and is a unit test over some files rather than over a toolchain. The walk is
+a read and a parse per directory, so a job makes it **once**: `build_work` resolves the file and
+hands it to the read and to the edit, rather than each working it out for itself. Whether the root's
+`members` really cover the directory is not checked: cargo refuses to build a package its ancestor
+workspace neither claims nor excludes, so there is no build there to ask about. `exclude` is
+checked, as cargo checks it: a path in it the directory is under passes that root over, unless
+`members` names the directory too, and the walk goes on up. Missing it had the offer rewrite the
+manifest of a workspace the build ignores. When that file is not the project's own, the view
+**names** it, beside the manifest cargo is run over: the offer edits a file outside the project, and
+a write the reader was not told about is the one thing it must not be.
 
 **What a read of the manifest said is one value** (`Manifest`), the same one from the worker's
 answer through `Builds` to the rows: which file cargo is run over, which file the profile comes

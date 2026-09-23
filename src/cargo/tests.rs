@@ -478,6 +478,39 @@ fn a_package_that_is_its_own_workspace_stops_the_walk() {
     assert_eq!(profile_manifest(&named), other.join("Cargo.toml"));
 }
 
+/// A workspace that excludes the package is not its root: cargo passes over it, and the
+/// package is a workspace of its own. Its profiles are its own and its diagnostics are
+/// relative to it, and the offer to add lines must not edit the workspace above it.
+#[test]
+fn a_workspace_that_excludes_the_package_is_passed_over() {
+    let root = Temporary::fresh_directory("cargo-test");
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nexclude = [\"tools\"]\n\n[profile.release]\ndebug = 1\n",
+    )
+    .expect("the root manifest");
+
+    let child = root.join("tools").join("child");
+    fs::create_dir_all(&child).expect("the directory");
+    fs::write(
+        child.join("Cargo.toml"),
+        "[package]\nname = \"child\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("a manifest");
+
+    assert_eq!(profile_manifest(&child), child.join("Cargo.toml"));
+    assert_eq!(workspace_root(&child), child);
+    assert!(!debug_lines(&profile_manifest(&child), Profile::Release));
+
+    // Named in `members` as well, it is a member after all.
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"tools/child\"]\nexclude = [\"tools\"]\n",
+    )
+    .expect("the root manifest");
+    assert_eq!(profile_manifest(&child), root.join("Cargo.toml"));
+}
+
 /// `..` is taken out by the text: a step back over a name removes it, one above a root is
 /// nothing, and a relative path keeps the steps it cannot take.
 #[test]

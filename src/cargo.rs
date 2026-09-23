@@ -336,11 +336,12 @@ pub fn manifest(directory: &Path) -> Option<PathBuf> {
 /// stops this at a package that is its own workspace — a scratchpad's, whose manifest
 /// carries an empty one for that reason. A member may name its root outright, with
 /// `[package] workspace`. Failing both it is the nearest ancestor whose manifest has a
-/// `[workspace]` table, and the directory's own when there is no such ancestor.
+/// `[workspace]` table that does not exclude the directory ([`excludes`]), and the
+/// directory's own when there is no such ancestor.
 ///
 /// What is **not** checked is whether that root's `members` really cover this directory:
-/// cargo refuses to build a package its ancestor workspace does not claim, so there is no
-/// build there to ask about.
+/// cargo refuses to build a package its ancestor workspace neither claims nor excludes, so
+/// there is no build there to ask about.
 ///
 /// A read and a parse per directory, so the answer is resolved **once** per job and handed
 /// to [`debug_lines`] and [`add_debug_lines`] rather than worked out again by each.
@@ -365,9 +366,34 @@ pub fn profile_manifest(directory: &Path) -> PathBuf {
     directory
         .ancestors()
         .skip(1)
-        .map(|ancestor| ancestor.join(MANIFEST))
-        .find(|manifest| read_manifest(manifest).is_some_and(|read| read.contains_key("workspace")))
-        .unwrap_or(own)
+        .find(|ancestor| {
+            read_manifest(&ancestor.join(MANIFEST))
+                .as_ref()
+                .and_then(|read| read.get("workspace"))
+                .is_some_and(|workspace| !excludes(workspace, ancestor, &own))
+        })
+        .map_or(own, |ancestor| ancestor.join(MANIFEST))
+}
+
+/// Whether the `[workspace]` table of the manifest in `root` leaves out the package whose
+/// manifest is `manifest`. cargo's rule: a path in `exclude` that the manifest is under
+/// leaves it out, unless a path in `members` names it as well. A `members` glob is not
+/// expanded for this, and cargo does not expand it either.
+///
+/// An excluded package is a workspace of its own, which is why the walk goes on past a
+/// root that excludes it.
+fn excludes(workspace: &toml::Value, root: &Path, manifest: &Path) -> bool {
+    let manifest = lexical(manifest);
+    let under = |key: &str| {
+        workspace
+            .get(key)
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .any(|path| manifest.starts_with(lexical(&root.join(path))))
+    };
+    under("exclude") && !under("members")
 }
 
 /// The directory cargo runs the compiler in for a build in `directory`, which is what the
