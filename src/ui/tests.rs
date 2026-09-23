@@ -10028,6 +10028,46 @@ fn the_server_is_told_which_files_the_reader_has_open() {
     );
 }
 
+/// **A server whose pipe closes as it is told about a file is shown failed**, with the
+/// reason the conversation ended. The worker drops the server there, so a control left
+/// saying Running would be naming one that is gone.
+#[test]
+fn a_server_lost_while_told_about_a_file_is_shown_failed() {
+    let (file, _directory) = calling_file("untold");
+    let (mut test, roots, _asks) = mount_linking(
+        |job: LspJob| match job {
+            LspJob::Opened { run, .. } => Some(LspAnswer::Untold {
+                run,
+                why: lsp::Failure::Broken("the pipe closed".to_owned()),
+            }),
+            _ => None,
+        },
+        file.clone(),
+    );
+    let states = roots.states;
+    let language = roots.language;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+    pump(&mut test, |_| {
+        matches!(language.peek().state, Lsp::Failed(_))
+    });
+
+    let state = language.peek().state.clone();
+    let Lsp::Failed(why) = state else {
+        panic!("the control still says the server is there: {state:?}");
+    };
+    assert!(
+        why.contains("the pipe closed"),
+        "not the reason it ended: {why}"
+    );
+}
+
 /// **A file shown in two tabs is opened with the server once, and closed once.** Two tabs
 /// can show one place (`open_stop`), and the protocol allows one `didOpen` per file until
 /// its `didClose`: rust-analyzer logs a second one as a duplicate, and a close with nothing

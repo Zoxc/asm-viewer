@@ -59,9 +59,9 @@ pub(crate) enum LspJob {
         file: Arc<Path>,
         language: String,
     },
-    /// The other half, and the one job that names **no run**: a job's run is what stamps
-    /// the answer it comes back as, and a close is answered with nothing.
-    Closed { file: Arc<Path> },
+    /// The other half, which needs no language. The run is for the answer a failure comes
+    /// back as.
+    Closed { run: u64, file: Arc<Path> },
     /// Let go of the server: it has been stopped already, and this is what reaps it.
     Stop,
 }
@@ -94,6 +94,10 @@ pub(crate) enum LspAnswer {
     /// what it could work out without it. Not an answer to a question -- an opening is
     /// not one -- but the same shape, since what it does is put the question again.
     Reopened { run: u64, file: Arc<Path> },
+    /// The conversation ended while the server was told a file was opened or closed. The
+    /// only answer either job has for a failure: the server has been dropped, and nothing
+    /// else would tell the control.
+    Untold { run: u64, why: lsp::Failure },
     /// What the server says the name at one place is. Its own answer and not a `Reply`,
     /// for the reason the links are: it is contents and a range where the four are places.
     Hovered {
@@ -252,14 +256,17 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                     };
                     talk.opened(&path, &language, &text).map(|()| true)
                 });
-                // Everything the server said about this file before it had it is what it
-                // could work out from the disk, which may have been nothing at all.
-                matches!(told, Ok(true)).then_some(LspAnswer::Reopened { run, file })
+                match told {
+                    // Everything the server said about this file before it had it is what
+                    // it could work out from the disk, which may have been nothing at all.
+                    Ok(true) => Some(LspAnswer::Reopened { run, file }),
+                    Ok(false) => None,
+                    Err(why) => Some(LspAnswer::Untold { run, why }),
+                }
             }
-            LspJob::Closed { file } => {
-                let _ = asked(&mut talking, |talk| talk.closed(&file));
-                None
-            }
+            LspJob::Closed { run, file } => asked(&mut talking, |talk| talk.closed(&file))
+                .err()
+                .map(|why| LspAnswer::Untold { run, why }),
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
                 settings: lsp::settings_in(&directory),
                 directory,

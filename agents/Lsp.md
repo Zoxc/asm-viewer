@@ -599,7 +599,10 @@ ended with questions still queued behind it, each is answered `Broken` all the s
 asker holds its ticket until an answer comes, and one that never came left the Locations
 panel "Finding..." for good. `Language::failed` writes only over a server still starting
 or running, so the control keeps the first reason and not "there is no server to ask". A
-question with the server off is not sent: the control is what starts one.
+file opened or closed is no question and answers nothing, except that the conversation
+ended there (`LspAnswer::Untold`): the worker drops the server, and without it the control
+went on saying Running. A question with the server off is not sent: the control is what
+starts one.
 
 Leaving the project ends its server, from a side effect on the project's file and directory
 rather than from `clear_project`: the server was started over that directory, and a

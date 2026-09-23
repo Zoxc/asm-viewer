@@ -728,6 +728,10 @@ pub(crate) fn use_language_with(
                 // file.
                 write_if(linked, |waiting| waiting.forget_file(&file));
             }
+            // No run check of its own: `Language::failed` writes only over the run named.
+            LspAnswer::Untold { run, why } => {
+                write_if(language, |held| held.failed(run, why.to_string()));
+            }
             LspAnswer::Hovered { ticket, said } => {
                 // No run check of its own: the ticket carries the run, so an answer to a
                 // question nobody holds lands on nobody -- and so does a failure named

@@ -93,3 +93,34 @@ fn a_question_with_no_server_to_ask_is_answered_failed() {
     };
     assert_eq!(answered, ticket);
 }
+
+/// **Telling no server about a file is answered failed**, as a question is: the pipe
+/// closing as a file is opened or closed drops the server, and this answer is the only
+/// thing that tells the control.
+#[test]
+fn a_file_opened_or_closed_with_no_server_is_answered_failed() {
+    let work = language_work();
+    let file: Arc<Path> = Arc::from(Path::new("/p/src/main.rs"));
+
+    let answer = work(LspJob::Opened {
+        run: 3,
+        file: file.clone(),
+        language: "rust".to_owned(),
+    });
+    let Some(LspAnswer::Untold {
+        run: 3,
+        why: lsp::Failure::Broken(_),
+    }) = answer
+    else {
+        panic!("an open with no server is not answered as a broken conversation");
+    };
+
+    let answer = work(LspJob::Closed { run: 3, file });
+    let Some(LspAnswer::Untold {
+        run: 3,
+        why: lsp::Failure::Broken(_),
+    }) = answer
+    else {
+        panic!("a close with no server is not answered as a broken conversation");
+    };
+}
