@@ -1,9 +1,9 @@
 //! The end of the process: everything that has to happen before it, in one place.
 
-use crate::{process, project, settings};
+use crate::{process, project, scratchpad, settings};
 
-/// Everything that must happen before the process ends: the project and the settings
-/// saved, then every program the app started stopped.
+/// Everything that must happen before the process ends: the project, the settings and
+/// the scratchpads saved, then every program the app started stopped.
 ///
 /// The window's close hook and the panic hook's shutdown thread are the two ways the app
 /// comes down, and nothing else may end the process. Both call this, so neither can drift
@@ -16,5 +16,6 @@ use crate::{process, project, settings};
 pub fn before_exit() {
     project::flush();
     settings::flush();
+    scratchpad::flush();
     process::stop_all();
 }

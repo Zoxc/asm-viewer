@@ -16857,7 +16857,7 @@ fn scratchpad_wiring() {
     let work = use_consume::<Working>().0;
     let mut asking = use_consume::<Asking>().0;
     let sourced = use_consume::<Sourcing>().0;
-    let jobs = use_scratchpad_with(pad, text, sourced, move |job| work(job));
+    let jobs = use_scratchpad_with(pad, text, sourced, None, move |job| work(job));
     use_hook(move || asking.set(Some(jobs)));
 }
 

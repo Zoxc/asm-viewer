@@ -356,7 +356,14 @@ the package would quietly fall behind what is on screen. The baseline has alread
 dropped save, so nothing would ever write that edit again. So `superseded` replaces a save only with
 a job that names the same pad *and* writes or removes its package, and hands anything else back to a
 hold-back queue rather than stepping over it. That a build of one pad delays another's save is
-accepted: the reader types in one pad at a time. Two builds cannot start at once, on the button
+accepted: the reader types in one pad at a time. **But the close does not wait for it.** A window
+closed during a build ended the process with every save asked for since still queued, and what
+was typed went with it. So each save and each build is also *owed* as it is asked for
+(`Scratchpad::owe`, by directory), `write_to` pays what it writes, and the close hook writes what
+is still owed (`scratchpad::flush`, from `shutdown::before_exit`). Both write under one lock,
+which the UI thread never takes, so a keystroke never waits for a write; and a package the close
+wrote is not written over, whatever the worker still holds being older. A
+delete forgives what its pad is owed, or the close would put the pad back. Two builds cannot start at once, on the button
 (`enabled`) and in `request_build` both, because a build takes seconds and a second job queued
 behind the first would compile bytes that have since changed. **Nor does anything run while a build
 does**, on the button and in `request_run` both: cargo is writing over the very executable a run

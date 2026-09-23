@@ -858,7 +858,7 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
     use_finder_with(finder, |root, emit| crate::walk::walk_files(root, emit));
     // The run's own store, handed to the worker at its spawn.
     let pad_store = store.peek().clone();
-    use_scratchpad_with(pad, pad_text, sourced, move |job| {
+    use_scratchpad_with(pad, pad_text, sourced, pad_store.clone(), move |job| {
         pad_work(pad_store.as_ref(), job)
     });
     // After the scratchpad and before the server: a build says which files it rewrote,

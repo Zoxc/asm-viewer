@@ -126,6 +126,9 @@ pub(crate) struct PadJobs {
     jobs: Requests<PadJob>,
     events: async_channel::Sender<(PadId, u64, RunEvent)>,
     pub(crate) runs: State<Runs>,
+    /// Where the pads' packages are, for what a save or a build owes the close hook
+    /// ([`send_save`]). `None` in a harness, whose work writes nothing.
+    store: Option<Store>,
 }
 
 /// Every pad the app is holding, and which of them the pane draws.
@@ -974,13 +977,17 @@ pub(crate) fn pad_work(store: Option<&Store>, job: PadJob) -> PadAnswer {
 /// supersede, and why a run and a stop do not go through it.
 ///
 /// The work is handed in, so a test can drive the wiring without writing to the machine's
-/// own state directory or waiting on a compiler.
+/// own state directory or waiting on a compiler. `store` is the one that work writes into,
+/// which is what a save asked for is owed to until the work has written it
+/// ([`send_save`]).
 pub(crate) fn use_scratchpad_with(
     mut pad: State<Pads>,
     mut text: State<PadBuffers>,
     mut sourced: State<Sourced>,
+    store: Option<Store>,
     work: impl Fn(PadJob) -> PadAnswer + Send + 'static,
 ) -> PadJobs {
+    let owing = store.clone();
     let mut runs = use_state(Runs::default);
 
     // What a running program is saying, on a channel of the app's own and taken by a task
@@ -1045,7 +1052,7 @@ pub(crate) fn use_scratchpad_with(
                 // A pad made is shown at once, so the one it replaces on screen is
                 // flushed first, as `show_pad` does.
                 let leaving = pad.peek().shown().clone();
-                save_if_changed(pad, &leaving, requests);
+                save_if_changed(pad, &leaving, requests, owing.as_ref());
                 let opening = pad.write().created(made);
                 if let Some(open) = opening {
                     requests.send(open);
@@ -1104,7 +1111,7 @@ pub(crate) fn use_scratchpad_with(
                     (taken, taken.then(|| pads.unsaved_change(&name)).flatten())
                 };
                 if let Some(scratchpad) = saving {
-                    requests.send(PadJob::Save(scratchpad));
+                    send_save(requests, owing.as_ref(), scratchpad);
                 }
                 // The build wrote the package on its way, to the same `src/main.rs` as
                 // last time, so what a pane has read of this pad is the version before
@@ -1129,6 +1136,7 @@ pub(crate) fn use_scratchpad_with(
         jobs: requests,
         events: emitted,
         runs,
+        store,
     });
 
     // What pads there are, asked for once: `use_hook` runs on mount and never again. The
@@ -1176,7 +1184,7 @@ pub(crate) fn use_scratchpad_with(
                 pads.unsaved_change(&shown)
             };
             if let Some(scratchpad) = saving {
-                jobs.jobs.send(PadJob::Save(scratchpad));
+                send_save(&jobs.jobs, jobs.store.as_ref(), scratchpad);
             }
         }
     });
@@ -1190,7 +1198,7 @@ pub(crate) fn use_scratchpad_with(
             let pads = pad.read();
             let shown = pads.shown().clone();
             drop(pads);
-            save_if_changed(pad, &shown, &jobs.jobs);
+            save_if_changed(pad, &shown, &jobs.jobs, jobs.store.as_ref());
         }
     });
 
@@ -1215,7 +1223,12 @@ pub(crate) fn use_scratchpad_with(
 /// it. An effect is a loop that runs and then waits to be notified, so a write of its own
 /// makes that wait return at once and the task never yields: a guard taken whatever the
 /// answer said would not cost a render but lock the window up.
-fn save_if_changed(mut pad: State<Pads>, name: &PadId, jobs: &Requests<PadJob>) {
+fn save_if_changed(
+    mut pad: State<Pads>,
+    name: &PadId,
+    jobs: &Requests<PadJob>,
+    store: Option<&Store>,
+) {
     let owes = pad
         .peek()
         .get(name)
@@ -1227,6 +1240,16 @@ fn save_if_changed(mut pad: State<Pads>, name: &PadId, jobs: &Requests<PadJob>) 
     let Some(scratchpad) = pad.write().unsaved_change(name) else {
         return;
     };
+    send_save(jobs, store, scratchpad);
+}
+
+/// Ask the worker to write `scratchpad`'s package, and owe it to the close hook until the
+/// worker has ([`Scratchpad::owe`]): a save asked for during a build waits for the build,
+/// and a window closed meanwhile does not wait at all.
+fn send_save(jobs: &Requests<PadJob>, store: Option<&Store>, scratchpad: Scratchpad) {
+    if let Some(store) = store {
+        scratchpad.owe(scratchpad.id().directory_in(store));
+    }
     jobs.send(PadJob::Save(scratchpad));
 }
 
@@ -1242,7 +1265,7 @@ pub(crate) fn show_pad(mut pad: State<Pads>, jobs: &PadJobs, name: PadId) {
     if leaving == name {
         return;
     }
-    save_if_changed(pad, &leaving, &jobs.jobs);
+    save_if_changed(pad, &leaving, &jobs.jobs, jobs.store.as_ref());
 
     // Bound out of a statement of its own, so the guard is gone before the send.
     let arriving = pad.write().show(name);
@@ -1323,6 +1346,11 @@ pub(crate) fn request_delete_pad(
 
     text.write().forget(&name);
 
+    // Nothing more is owed to a package about to go: written at the close, it would put
+    // the pad back.
+    if let Some(store) = &jobs.store {
+        crate::scratchpad::forgive(&name.directory_in(store));
+    }
     jobs.jobs.send(PadJob::Delete(name));
     // Behind the delete, so a pad that has to be read is read after the directory has gone
     // rather than before -- which matters for the one id this can arrive at twice, the
@@ -1392,6 +1420,11 @@ pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
     stop_run(pad, jobs);
 
     pad.write().state_mut().building = true;
+    // Owed as a save is: the build writes the package first, and it may be queued behind
+    // another pad's.
+    if let Some(store) = &jobs.store {
+        scratchpad.owe(scratchpad.id().directory_in(store));
+    }
     jobs.jobs.send(PadJob::Build(scratchpad));
 }
 

@@ -658,8 +658,8 @@ Three things the hook's own position decides. It runs **before the unwind**, so 
 `analysis::guard::guarded()` whether the panic is one the crate catches on purpose: those are
 written down and nothing else happens, since nothing has gone wrong with the app. It runs on the
 panicking thread while that thread still holds whatever it held, and `std::sync::Mutex` is not
-reentrant, so the shutdown -- `shutdown::before_exit`, the project and the settings flushed and
-then every child the app started stopped -- goes on **a thread of its own** and reaches the lock
+reentrant, so the shutdown -- `shutdown::before_exit`, the project, the settings and the
+scratchpads flushed and then every child the app started stopped -- goes on **a thread of its own** and reaches the lock
 only once the unwind has let it go. **The main thread waits for that thread**, for five seconds at
 most: it is the UI thread, nothing between it and `main` catches an unwind (neither freya nor
 winit on Linux), and an unwind out of `main` ends the process with the save half written and

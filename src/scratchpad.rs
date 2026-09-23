@@ -8,10 +8,11 @@
 //! thread.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt, fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::{LazyLock, Mutex, MutexGuard},
 };
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -584,8 +585,44 @@ impl Scratchpad {
     /// Both files go down through `.tmp` + rename, which `src/main.rs` earns: it is the
     /// reader's document, so an interrupted write must leave the last good version behind.
     /// The manifest goes first, so a directory that exists at all is a package.
+    ///
+    /// Under the lock the close hook writes under ([`flush`]), so the two never write one
+    /// package at once. What the hook has written is not written over: the process is
+    /// ending, and anything the worker still holds is older. A package that was
+    /// [owed](Scratchpad::owe) is no longer owed once it is written here.
     pub fn write_to(&self, directory: &Path) -> Result<(), Failure> {
         let manifest = self.manifest()?;
+        let _writing = writing();
+        if matches!(owed().get(directory), Some(Owed::Written)) {
+            return Ok(());
+        }
+        self.write_package(directory, &manifest)?;
+        // Asked again rather than remembered: a newer package may have been owed while
+        // this one was being written, and that one is still owed.
+        let mut owed = owed();
+        if matches!(owed.get(directory), Some(Owed::Due(due)) if due == self) {
+            owed.remove(directory);
+        }
+        Ok(())
+    }
+
+    /// Note this as the package `directory` is owed, in place of any owed before: what a
+    /// save or a build is asked with, on the UI thread, as it is asked.
+    ///
+    /// **The worker does the write, and the close hook the one it did not get to**
+    /// ([`flush`]). The worker is one thread and a build holds it for as long as cargo
+    /// runs, so a save asked for meanwhile waits behind it -- and a window closed then
+    /// ends the process with the save still queued, taking what the reader typed with it.
+    pub fn owe(&self, directory: PathBuf) {
+        let mut owed = owed();
+        if !matches!(owed.get(&directory), Some(Owed::Written)) {
+            owed.insert(directory, Owed::Due(self.clone()));
+        }
+    }
+
+    /// The two files, written: [`Scratchpad::write_to`] less the locks, for the one caller
+    /// already holding them.
+    fn write_package(&self, directory: &Path, manifest: &str) -> Result<(), Failure> {
         let source = directory.join(SOURCE_FILE);
 
         let write = || -> io::Result<()> {
@@ -861,6 +898,62 @@ pub fn delete_pad(store: &Store, id: &PadId) -> Result<(), Failure> {
     }
 
     fs::remove_dir_all(&directory).map_err(|error| Failure::Delete(error.to_string()))
+}
+
+/// Let go of what `directory` is owed: its pad is being deleted, and a package written
+/// by the close hook would put it back.
+pub fn forgive(directory: &Path) {
+    owed().remove(directory);
+}
+
+/// Write every package still owed ([`Scratchpad::owe`]), and nothing after it over them.
+/// What the window's close hook does before the process ends (`src/shutdown.rs`); a
+/// failure is logged, there being nobody left to tell.
+pub fn flush() {
+    flush_where(|_| true);
+}
+
+/// [`flush`] for the directories `under` answers true for: a test's own, the table being
+/// the process's.
+fn flush_where(under: impl Fn(&Path) -> bool) {
+    let _writing = writing();
+    let mut owed = owed();
+    for (directory, owing) in owed.iter_mut().filter(|(directory, _)| under(directory)) {
+        let Owed::Due(scratchpad) = std::mem::replace(owing, Owed::Written) else {
+            continue;
+        };
+        let written = scratchpad
+            .manifest()
+            .and_then(|manifest| scratchpad.write_package(directory, &manifest));
+        if let Err(failure) = written {
+            log::warn!("could not save {}: {failure}", directory.display());
+        }
+    }
+}
+
+/// What each pad's directory is owed, by the directory. A `static` for `project::saves`'
+/// reason: the close hook is outside the component tree.
+static OWED: LazyLock<Mutex<HashMap<PathBuf, Owed>>> = LazyLock::new(Mutex::default);
+
+fn owed() -> MutexGuard<'static, HashMap<PathBuf, Owed>> {
+    OWED.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// Held for the whole of a package's write. Apart from [`OWED`], which the UI thread takes
+/// on every keystroke and so is never held across a write; taken before it wherever both
+/// are.
+static WRITING: Mutex<()> = Mutex::new(());
+
+fn writing() -> MutexGuard<'static, ()> {
+    WRITING.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// Where one directory's package stands.
+enum Owed {
+    /// Asked for and not written yet.
+    Due(Scratchpad),
+    /// Written by the close hook, which nothing after it may write over.
+    Written,
 }
 
 /// Start the program a build made in `directory`, streaming what it writes into `emit`

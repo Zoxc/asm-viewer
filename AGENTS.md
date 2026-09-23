@@ -185,7 +185,8 @@ command.
   each applies: the list the Shortcuts page draws, written by hand.
 - `src/shutdown.rs` — everything that has to happen before the process ends, in the one
   order both the window's close hook and the panic hook's shutdown thread run it in: the
-  project and the settings flushed, then every program the app started stopped.
+  project, the settings and the scratchpads flushed, then every program the app started
+  stopped.
 - `src/languages.rs` — `Language`: the one list of extensions the app knows, and the one
   place a per-language fact is decided -- what compiles, which tree-sitter grammar colours
   it, how its functions are found, and which language server reads it. Plural because

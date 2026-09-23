@@ -705,3 +705,67 @@ fn a_write_to_a_row_that_has_gone_lands_on_the_spare() {
     assert_eq!(scratchpad.dependency(rows[1]).name(), "anyhow");
     assert_ne!(scratchpad.add_dependency("serde", "1"), rows[0]);
 }
+
+/// **A package owed and not written yet is written by the close.** The worker writes a
+/// pad's saves one at a time and a build holds it for as long as cargo runs, so an edit
+/// made during a build waited behind it -- and a window closed then took the edit with
+/// it.
+#[test]
+fn the_close_writes_what_the_worker_has_not() {
+    let directory = Temporary::fresh("scratchpad-test");
+    let mut pad = Scratchpad::new("pad-1").expect("a valid id");
+    pad.write_to(&directory).expect("the package is written");
+
+    pad.source = "fn main() { typed(); }".to_owned();
+    pad.owe(directory.to_path_buf());
+    super::flush_where(|owed| owed.starts_with(&*directory));
+
+    let read = Scratchpad::load_from(&directory).expect("the package loads");
+    assert_eq!(read.source, pad.source, "the owed edit is not on disk");
+}
+
+/// What the close wrote is not written over by the worker behind it, which is only ever
+/// holding something older; and a package the worker has written is no longer owed, so
+/// the close does not write it again over something newer.
+#[test]
+fn the_close_and_the_worker_do_not_write_over_each_other() {
+    let directory = Temporary::fresh("scratchpad-test");
+    let mut pad = Scratchpad::new("pad-1").expect("a valid id");
+    let older = pad.clone();
+    pad.source = "fn main() { newer(); }".to_owned();
+
+    // Written by the worker: paid, so a close after it has nothing to write.
+    pad.owe(directory.to_path_buf());
+    pad.write_to(&directory).expect("the package is written");
+    let mut by_hand = pad.clone();
+    by_hand.source = "fn main() { by_hand(); }".to_owned();
+    by_hand
+        .write_to(&directory)
+        .expect("the package is written");
+    super::flush_where(|owed| owed.starts_with(&*directory));
+    let read = Scratchpad::load_from(&directory).expect("the package loads");
+    assert_eq!(
+        read.source, by_hand.source,
+        "a paid package was written again"
+    );
+
+    // Written by the close: the worker's older save lands on nothing.
+    pad.owe(directory.to_path_buf());
+    super::flush_where(|owed| owed.starts_with(&*directory));
+    older
+        .write_to(&directory)
+        .expect("a skipped write is no failure");
+    let read = Scratchpad::load_from(&directory).expect("the package loads");
+    assert_eq!(read.source, pad.source, "the worker wrote over the close");
+}
+
+/// A pad being deleted is owed nothing: written at the close, it would come back.
+#[test]
+fn a_deleted_pad_is_not_written_by_the_close() {
+    let directory = Temporary::fresh("scratchpad-test");
+    let pad = Scratchpad::new("pad-1").expect("a valid id");
+    pad.owe(directory.to_path_buf());
+    super::forgive(&directory);
+    super::flush_where(|owed| owed.starts_with(&*directory));
+    assert!(!directory.join(SOURCE_FILE).exists());
+}
