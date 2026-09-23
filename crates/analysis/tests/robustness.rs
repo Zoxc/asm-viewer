@@ -611,9 +611,91 @@ fn a_line_program_that_runs_backwards_does_not_panic() {
     }
 }
 
+/// A line program whose one sequence runs backwards: a row at `from`, then a row at `to`
+/// below it, then the end at `from + 0x80`.
+///
+/// `gimli` takes a `DW_LNE_set_address` below the current address as a tombstone and skips
+/// to the next one, so the way down is through one: the tombstoned `DW_LNE_end_sequence`
+/// is never handed on, but still resets the address, and `addr2line` goes on filling the
+/// same sequence.
+fn backwards_program(from: u64, to: u64) -> Vec<u8> {
+    let mut program = Vec::new();
+    let set_address = |program: &mut Vec<u8>, address: u64| {
+        program.extend_from_slice(&[0x00, 0x09, 0x02]); // DW_LNE_set_address
+        program.extend_from_slice(&address.to_le_bytes());
+    };
+    set_address(&mut program, from);
+    program.push(0x01); // DW_LNS_copy: a row at `from`
+    set_address(&mut program, 0); // below `from`: a tombstone
+    program.extend_from_slice(&[0x00, 0x01, 0x01]); // DW_LNE_end_sequence, swallowed
+    set_address(&mut program, to);
+    program.push(0x01); // DW_LNS_copy: a row at `to`, in the same sequence
+    set_address(&mut program, from + 0x80);
+    program.extend_from_slice(&[0x00, 0x01, 0x01]); // DW_LNE_end_sequence
+    program
+}
+
+/// One compile unit written by hand: the addresses it covers, its one file, and its line
+/// program's opcodes.
+struct HandUnit {
+    low: u64,
+    high: u64,
+    file: &'static str,
+    program: Vec<u8>,
+}
+
 /// An ELF whose DWARF is written by hand, because no writer will produce this: both
 /// `gimli::write` and every real compiler assert that a sequence's addresses ascend.
 fn elf_with_backwards_line_program() -> Vec<u8> {
+    elf_with_hand_written_dwarf(
+        &[HandUnit {
+            low: 0,
+            high: 0x400,
+            file: "a.c",
+            program: backwards_program(0x100, 0x80),
+        }],
+        &[],
+    )
+}
+
+/// Defect: the walk behind the source index hands over each unit's rows as it goes, so a
+/// later unit's backwards line program panicked after an earlier unit's rows were in, and
+/// the index kept those: a partial index, cached for the object's life, answering as if the
+/// later unit had no rows. The walk not finishing is now an empty index, as the budget is.
+#[test]
+fn a_walk_that_panics_part_way_leaves_no_source_index() {
+    let good = || HandUnit {
+        low: 0,
+        high: 0x100,
+        file: "good.c",
+        program: {
+            let mut program = vec![0x00, 0x09, 0x02]; // DW_LNE_set_address
+            program.extend_from_slice(&0u64.to_le_bytes());
+            program.push(0x01); // DW_LNS_copy: a row at 0
+            program.extend_from_slice(&[0x02, 0x10]); // DW_LNS_advance_pc by 0x10
+            program.extend_from_slice(&[0x00, 0x01, 0x01]); // DW_LNE_end_sequence
+            program
+        },
+    };
+    let bad = HandUnit {
+        low: 0x200,
+        high: 0x400,
+        file: "bad.c",
+        program: backwards_program(0x300, 0x280),
+    };
+    let symbols = [("good", 0, 0x10)];
+
+    // The good unit alone is indexed, so an empty answer below is the panic's doing.
+    let alone = parse(&elf_with_hand_written_dwarf(&[good()], &symbols));
+    assert_eq!(alone.source_files(), vec!["good.c".into()]);
+
+    let object = parse(&elf_with_hand_written_dwarf(&[good(), bad], &symbols));
+    assert!(object.source_files().is_empty());
+}
+
+/// An ELF with `units` for its DWARF, a `.text` of 0x400 bytes, and `symbols` in it as
+/// `(name, address, size)`.
+fn elf_with_hand_written_dwarf(units: &[HandUnit], symbols: &[(&str, u64, u64)]) -> Vec<u8> {
     use object::{write, Architecture, BinaryFormat, Endianness, SectionKind};
 
     fn uleb(out: &mut Vec<u8>, mut value: u64) {
@@ -647,55 +729,63 @@ fn elf_with_backwards_line_program() -> Vec<u8> {
     uleb(&mut abbrev, 0);
     uleb(&mut abbrev, 0); // end of the abbreviation table
 
-    // .debug_info: that one unit, covering 0..0x400 and pointing at the line program.
-    let mut die = vec![1u8];
-    die.extend_from_slice(&0u64.to_le_bytes()); // low_pc
-    die.extend_from_slice(&0x400u64.to_le_bytes()); // high_pc
-    die.extend_from_slice(&0u32.to_le_bytes()); // stmt_list
-    die.push(0); // end of children
-
     let mut info = Vec::new();
-    info.extend_from_slice(&((2 + 4 + 1 + die.len()) as u32).to_le_bytes()); // unit_length
-    info.extend_from_slice(&4u16.to_le_bytes()); // version
-    info.extend_from_slice(&0u32.to_le_bytes()); // debug_abbrev offset
-    info.push(8); // address size
-    info.extend_from_slice(&die);
-
-    // .debug_line: a DWARF 4 header, then the sequence that walks backwards.
-    let mut header = vec![
-        1,    // minimum_instruction_length
-        1,    // maximum_operations_per_instruction
-        1,    // default_is_stmt
-        0xFB, // line_base = -5
-        14,   // line_range
-        13,   // opcode_base
-    ];
-    header.extend_from_slice(&[0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1]); // standard_opcode_lengths
-    header.push(0); // no include_directories
-    header.extend_from_slice(b"a.c\0");
-    uleb(&mut header, 0); // directory index
-    uleb(&mut header, 0); // mtime
-    uleb(&mut header, 0); // length
-    header.push(0); // end of file_names
-
-    let mut program = Vec::new();
-    program.extend_from_slice(&[0x00, 0x09, 0x02]); // DW_LNE_set_address
-    program.extend_from_slice(&0x100u64.to_le_bytes());
-    program.push(0x01); // DW_LNS_copy: a row at 0x100
-    program.extend_from_slice(&[0x00, 0x09, 0x02]); // DW_LNE_set_address, backwards
-    program.extend_from_slice(&0u64.to_le_bytes());
-    program.extend_from_slice(&[0x00, 0x01, 0x01]); // DW_LNE_end_sequence, at 0
-
     let mut line = Vec::new();
-    line.extend_from_slice(&((2 + 4 + header.len() + program.len()) as u32).to_le_bytes());
-    line.extend_from_slice(&4u16.to_le_bytes()); // version
-    line.extend_from_slice(&(header.len() as u32).to_le_bytes()); // header_length
-    line.extend_from_slice(&header);
-    line.extend_from_slice(&program);
+    for unit in units {
+        // .debug_info: the unit, covering low..high and pointing at its line program.
+        let mut die = vec![1u8];
+        die.extend_from_slice(&unit.low.to_le_bytes()); // low_pc
+        die.extend_from_slice(&(unit.high - unit.low).to_le_bytes()); // high_pc
+        die.extend_from_slice(&(line.len() as u32).to_le_bytes()); // stmt_list
+        die.push(0); // end of children
+
+        info.extend_from_slice(&((2 + 4 + 1 + die.len()) as u32).to_le_bytes()); // unit_length
+        info.extend_from_slice(&4u16.to_le_bytes()); // version
+        info.extend_from_slice(&0u32.to_le_bytes()); // debug_abbrev offset
+        info.push(8); // address size
+        info.extend_from_slice(&die);
+
+        // .debug_line: a DWARF 4 header, then the unit's program.
+        let mut header = vec![
+            1,    // minimum_instruction_length
+            1,    // maximum_operations_per_instruction
+            1,    // default_is_stmt
+            0xFB, // line_base = -5
+            14,   // line_range
+            13,   // opcode_base
+        ];
+        header.extend_from_slice(&[0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1]); // standard_opcode_lengths
+        header.push(0); // no include_directories
+        header.extend_from_slice(unit.file.as_bytes());
+        header.push(0);
+        uleb(&mut header, 0); // directory index
+        uleb(&mut header, 0); // mtime
+        uleb(&mut header, 0); // length
+        header.push(0); // end of file_names
+
+        let program = &unit.program;
+        line.extend_from_slice(&((2 + 4 + header.len() + program.len()) as u32).to_le_bytes());
+        line.extend_from_slice(&4u16.to_le_bytes()); // version
+        line.extend_from_slice(&(header.len() as u32).to_le_bytes()); // header_length
+        line.extend_from_slice(&header);
+        line.extend_from_slice(program);
+    }
 
     let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
     let text = obj.section_id(write::StandardSection::Text);
-    obj.append_section_data(text, &[0xC3], 1);
+    obj.append_section_data(text, &[0xC3; 0x400], 1);
+    for &(name, value, size) in symbols {
+        obj.add_symbol(write::Symbol {
+            name: name.as_bytes().to_vec(),
+            value,
+            size,
+            kind: object::SymbolKind::Text,
+            scope: object::SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(text),
+            flags: object::SymbolFlags::None,
+        });
+    }
     for (name, contents) in [
         (".debug_abbrev", abbrev),
         (".debug_info", info),

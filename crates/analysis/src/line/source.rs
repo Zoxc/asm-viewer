@@ -71,7 +71,8 @@ pub(super) struct SourceIndex {
 impl SourceIndex {
     /// Walk every line program once and attribute each row to the `ranges` it falls in. No
     /// net of its own: the calls that reach a dependency, the extents and the walk, are each
-    /// guarded at the seam.
+    /// guarded at the seam. A walk that panicked part way is an empty index, for the reason
+    /// the budget is below.
     ///
     /// Given the ranges rather than the object, so the visitor has no object to ask
     /// ([`DebugInfo::each_row`]).
@@ -90,7 +91,7 @@ impl SourceIndex {
 
         // The whole address space in one pass; every row the backend hands over names a file
         // and a line, and covers at least one byte.
-        debug.each_row(&mut |range, file, line| {
+        let finished = debug.each_row(&mut |range, file, line| {
             rows += 1;
             over |= pairs > budget(rows);
             if over {
@@ -109,7 +110,7 @@ impl SourceIndex {
             }
         });
 
-        if over {
+        if over || !finished {
             return SourceIndex::default();
         }
 

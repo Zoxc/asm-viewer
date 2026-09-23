@@ -4,12 +4,15 @@ The DWARF line-table reader behind `crates/analysis/src/line/dwarf.rs`.
 
 **A row's length is `next.address - row.address`, unchecked.** `LineLocationRangeIter::next`
 (`src/line.rs`) takes the length of a row from the address of the row after it, and nothing
-stops a line program from moving its address backwards — `DW_LNS_advance_pc` takes an
-unsigned operand, but `DW_LNE_set_address` sets whatever it is given. So a file the reader
-merely opened is a subtract-with-overflow panic. Not something this crate can check without
-reading the line program a second time, so it is caught instead, by `without_panicking`
-(`crates/analysis/src/line.rs`), and pinned by `robustness.rs`'
-`a_line_program_that_runs_backwards_does_not_panic`.
+stops a line program from moving its address backwards. `gimli` skips a `DW_LNE_set_address`
+below the current address as a tombstone, but the `DW_LNE_end_sequence` it skips then still
+resets the address, and `addr2line` never saw the sequence end, so the next row joins it
+lower down. So a file the reader merely opened is a subtract-with-overflow panic. Not something
+this crate can check without reading the line program a second time, so it is caught instead, by
+`without_panicking` (`crates/analysis/src/line.rs`), and pinned by `robustness.rs`'
+`a_line_program_that_runs_backwards_does_not_panic`. The walk the source index is built from
+hands over rows as it goes, so a panic there leaves the index partial; it is dropped instead,
+pinned by `a_walk_that_panics_part_way_leaves_no_source_index`.
 
 **What it cost**: the clip in `RowCollector::push` (`crates/analysis/src/line.rs`). Overflow
 checks are off in a release build, so there the panic is a wrap: the backwards row's length

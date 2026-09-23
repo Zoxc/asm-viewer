@@ -214,8 +214,11 @@ impl DebugInfo {
     /// and `extent` and `line_info` take the same one, so `visit` must not ask the object
     /// anything: the one caller, `SourceIndex::build`, is handed the extents it needs
     /// instead of the object.
-    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
-        without_panicking(|| self.backend().each_row(visit));
+    ///
+    /// Whether the walk finished: `false` when a backend panicked part way, after `visit` may
+    /// already have been handed some of the rows.
+    fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) -> bool {
+        without_panicking(|| self.backend().each_row(visit)).is_some()
     }
 
     /// The one backend this object has, as the three questions the seam puts.

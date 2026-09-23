@@ -544,7 +544,9 @@ built on the **first source question against an object** and never before one, b
 on `DebugInfo` beside the backend, not inside one, because it is built from what every backend
 answers and not from any one's internals. It has no net of its own: a dependency's panic inside the
 build is caught where the build calls it (`each_row`, `extent`), and any other panic is a bug here
-and shows.
+and shows. A walk caught part way has already handed over the rows before the panic, so `each_row`
+says whether it finished and the build hands back an empty index when it did not, for the reason the
+budget below does.
 It is what the source-driven tab, find-all and the instance picker each need, and it is the whole of
 what the crate owes them. *Where inside* a symbol the line's code sits is the forward direction's
 question and is already answered, so a caller walks index → symbol → `line_info` → rows and there is
