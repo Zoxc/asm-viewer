@@ -52,8 +52,23 @@ pub fn short_name(name: &str) -> String {
     // symbol is.
     let mut path: Vec<&str> = Vec::new();
     let mut annotation: Option<&str> = None;
-    for (index, segment) in segments.into_iter().enumerate() {
-        match reduce(segment, index == 0) {
+    // The segments left to read, the next one last. A function MSVC quotes as the scope
+    // of what is inside it is opened into its own segments here, as many times as it
+    // nests: a loop and a cap rather than a recursion, for the reason `qualifier` gives.
+    let mut pending: Vec<&str> = segments.into_iter().rev().collect();
+    let mut opened = 0;
+    let mut index = 0;
+    while let Some(segment) = pending.pop() {
+        if opened < QUOTED_SCOPES {
+            if let Some(scope) = quoted_function(segment) {
+                opened += 1;
+                pending.extend(split_path(scope).into_iter().rev());
+                continue;
+            }
+        }
+        let first = index == 0;
+        index += 1;
+        match reduce(segment, first) {
             Some(Part::Name(name)) => {
                 path.push(name);
                 annotation = None;
@@ -76,6 +91,23 @@ pub fn short_name(name: &str) -> String {
     } else {
         short
     }
+}
+
+/// How many functions MSVC quotes as a scope one name is read through. A lambda inside a
+/// lambda is one more; nothing real nests anywhere near this deep.
+const QUOTED_SCOPES: usize = 32;
+
+/// The function inside a segment that is one MSVC quotes as the scope of what follows:
+/// `` `void ns::g(int)' `` in `` `void ns::g(int)'::`1'::<lambda_1>::operator() ``, which
+/// is where that lambda was written. An argument list is what tells one from a name MSVC
+/// quotes whole, such as `` `scalar deleting destructor' ``.
+fn quoted_function(segment: &str) -> Option<&str> {
+    let quoted = last_word(head(segment))
+        .strip_prefix('`')?
+        .strip_suffix('\'')?;
+    top_level(quoted)
+        .any(|(at, top)| matches!(top, Top::Group { .. }) && quoted.as_bytes()[at] == b'(')
+        .then_some(quoted)
 }
 
 /// Whether a name is one of the app's own: a single angle-bracket group, closed, with
@@ -111,8 +143,9 @@ fn split_path(name: &str) -> Vec<&str> {
 }
 
 /// One segment as the name it contributes, or nothing when it contributes none -- an
-/// empty segment, or C++'s `(anonymous namespace)` (MSVC's `` `anonymous namespace' ``),
-/// which is noise a tab is better off without.
+/// empty segment, C++'s `(anonymous namespace)` (MSVC's `` `anonymous namespace' ``), or
+/// the `` `1' `` MSVC numbers a block inside a function with, all noise a tab is better
+/// off without.
 ///
 /// `first` is whether the segment opens the path, and it is what tells a `<Type as
 /// Trait>` qualifier from a turbofish: `drop_glue::<Vec<T>>` names `drop_glue`, and the
@@ -125,7 +158,8 @@ fn reduce(segment: &str, first: bool) -> Option<Part<'_>> {
         b'<' => None,
         _ => {
             let name = last_word(head(segment));
-            (!name.is_empty() && name != "`anonymous namespace'").then_some(Part::Name(name))
+            let noise = name.is_empty() || name == "`anonymous namespace'" || is_block(name);
+            (!noise).then_some(Part::Name(name))
         }
     }
 }
@@ -220,19 +254,30 @@ fn head(segment: &str) -> &str {
 /// return type: `void* operator new`.
 fn last_word(text: &str) -> &str {
     let text = text.trim();
+    // First, as an `operator` quoted inside it is not this one's name.
+    let quote = top_level(text)
+        .filter(|(_, top)| matches!(top, Top::Byte(b'`')))
+        .last();
+    if let Some((open, _)) = quote.filter(|(open, _)| skip_quote(text, *open) == text.len()) {
+        return &text[open..];
+    }
     let operator = text
         .match_indices("operator")
         .find(|(at, _)| operator_token(text, *at).is_some());
     if let Some((at, _)) = operator {
         return &text[at..];
     }
-    if let Some(open) = text.strip_suffix('\'').and_then(|text| text.rfind('`')) {
-        return &text[open..];
-    }
     match text.rfind(char::is_whitespace) {
         Some(space) => text[space..].trim_start(),
         None => text,
     }
+}
+
+/// Whether a name is the `` `1' `` MSVC writes for a block inside a function.
+fn is_block(name: &str) -> bool {
+    name.strip_prefix('`')
+        .and_then(|name| name.strip_suffix('\''))
+        .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Whether a name is rustc's legacy `h`-and-sixteen-hex-digits suffix. Sixteen exactly:
@@ -257,7 +302,7 @@ enum Top {
 
 /// Every offset of `name` that is not inside a bracket group, a quoted run or an
 /// `operator` token, in order, with what is there: a byte, or a whole group at the offset
-/// it opens on.
+/// it opens on. An MSVC quote at the top level is yielded as its opening `` ` `` alone.
 ///
 /// The one walk in this file. The three bracket kinds share a depth, since nothing here
 /// has to tell a well-formed name from a broken one, and the rules about what does *not*
@@ -288,6 +333,12 @@ impl Iterator for TopLevel<'_> {
             self.at = at + 1;
             match bytes[at] {
                 b'"' => self.at = skip_string(self.name, at),
+                b'`' => {
+                    self.at = skip_quote(self.name, at);
+                    if depth == 0 {
+                        return Some((at, Top::Byte(b'`')));
+                    }
+                }
                 b'<' | b'(' | b'[' => {
                     if depth == 0 {
                         open = at;
@@ -333,6 +384,31 @@ fn skip_string(name: &str, open: usize) -> usize {
             b'"' => return at + 1,
             _ => at += 1,
         }
+    }
+    bytes.len()
+}
+
+/// Past an MSVC `` `...' ``, which holds anything at all: a function's whole signature,
+/// `::` and brackets included, or `` `dynamic initializer for 'Foo::x'' ``, where a `'`
+/// after a space opens a quote of its own. Quotes nest, so this counts them; one never
+/// closed runs to the end of the name.
+fn skip_quote(name: &str, open: usize) -> usize {
+    let bytes = name.as_bytes();
+    let mut depth = 0usize;
+    let mut at = open;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'`' => depth += 1,
+            b'\'' if at > open && bytes[at - 1] == b' ' => depth += 1,
+            b'\'' => {
+                depth -= 1;
+                if depth == 0 {
+                    return at + 1;
+                }
+            }
+            _ => {}
+        }
+        at += 1;
     }
     bytes.len()
 }

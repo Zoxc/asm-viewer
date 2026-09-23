@@ -243,6 +243,42 @@ fn a_name_msvc_quotes_is_one_word() {
     );
 }
 
+/// MSVC quotes the function a lambda or a static was written in and numbers the block
+/// inside it: the function is a scope like any other, and the number is noise. A lambda's
+/// call operator then gets the title an Itanium one gets. What `symbolic-demangle` makes
+/// of `??R<lambda_1>@?0??g@ns@@YAXH@Z@QEBA@XZ` and its neighbours.
+#[test]
+fn a_function_msvc_quotes_as_a_scope_is_read_as_one() {
+    assert_eq!(
+        short_name("public: `void ns::g(int)'::`1'::<lambda_1>::operator()(void) const"),
+        "g::operator()"
+    );
+    assert_eq!(
+        short_name("ns::g(int)::{lambda(int)#2}::operator()(int) const"),
+        "g::operator()"
+    );
+    assert_eq!(short_name("int `void g(void)'::`2'::x"), "g::x");
+    assert_eq!(
+        short_name(
+            "public: `void `anonymous namespace'::g(void)'::`1'::<lambda_1>::operator()(void) \
+             const"
+        ),
+        "g::operator()"
+    );
+    // An operator inside the quote is not the name, and nor is a quote's inner `'`.
+    assert_eq!(
+        short_name(
+            "public: `public: void Foo::operator()(void)'::`1'::<lambda_1>::operator()(void) \
+             const"
+        ),
+        "operator()::operator()"
+    );
+    assert_eq!(
+        short_name("void __cdecl `dynamic initializer for 'Foo::x''(void)"),
+        "`dynamic initializer for 'Foo::x''"
+    );
+}
+
 /// The `>` of a `->` closes nothing, and an `extern "C"` puts a quoted run inside the
 /// arguments. Read either wrong and the group ends early, taking the function with it.
 #[test]
@@ -307,6 +343,13 @@ fn a_name_that_makes_no_sense_is_answered_rather_than_panicked_on() {
         "`'",
         "λ `字'",
         "`anonymous namespace'",
+        "`",
+        "``''",
+        "a::`b(",
+        "`1'",
+        "`(' '",
+        "'`'::`('::x",
+        "`λ(字)'::`漢'",
     ] {
         // Whatever comes back, it came back.
         assert!(!short_name(name).is_empty() || name.trim().is_empty());
