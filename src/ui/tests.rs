@@ -21554,6 +21554,58 @@ fn a_caret_walked_past_the_panes_edge_brings_the_pane_sideways_to_it() {
     );
 }
 
+/// A caret the reader has scrolled away from sideways stays where it was left: the pane
+/// follows the caret when it moves, and not whenever its row is drawn again -- here, as
+/// the row comes back into the list after being scrolled out of it.
+#[test]
+fn a_caret_left_behind_by_a_sideways_scroll_stays_behind() {
+    let shown = shown_sum_to();
+    let (mut test, roots) = TestingRunner::new(
+        listing_harness,
+        (300., 100.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let marked = roots.doors.marked;
+    let text_x = |test: &TestingRunner| paragraphs(test)[0].0.origin.x;
+    settle(&mut test);
+    let first = paragraphs(&test)[0].0;
+    let at = (
+        (first.origin.x + 2.0) as f64,
+        (first.origin.y + first.height() / 2.0) as f64,
+    );
+    test.move_cursor(at);
+    test.press_cursor(at);
+    test.release_cursor(at);
+    settle(&mut test);
+    // End: past the pane's edge, which brings the pane to the caret.
+    test.press_key(Key::Named(NamedKey::End));
+    settle(&mut test);
+    settle(&mut test);
+    let caret = marked.peek().assembly.clone().unwrap().chars.lead();
+    assert!(text_x(&test) < first.origin.x);
+
+    // The wheel takes the pane back to its left edge, leaving the caret out of sight.
+    test.scroll((150., 60.), (300., 0.));
+    settle(&mut test);
+    let scrolled = text_x(&test);
+    assert_eq!(scrolled, first.origin.x, "the sideways wheel moved nothing");
+    assert!(carets(&test)[0].min_x() > 300.0, "the caret is in sight");
+
+    // Down until the caret's row is no longer built, and back: the row is drawn afresh.
+    let height = code_row_height() as f64;
+    test.scroll((150., 60.), (0., -20.0 * height));
+    settle(&mut test);
+    assert!(carets(&test).is_empty(), "the caret's row is still built");
+    test.scroll((150., 60.), (0., 20.0 * height));
+    settle(&mut test);
+    settle(&mut test);
+    assert_eq!(carets(&test).len(), 1);
+    assert_eq!(marked.peek().assembly.clone().unwrap().chars.lead(), caret);
+    let after = text_x(&test);
+    assert_eq!(after, scrolled, "the pane was brought back to the caret");
+}
+
 /// A run copied out of an object's code spells each kind of row as it is drawn: the
 /// section's header and a symbol's label, each after its address, an instruction as its
 /// own tab copies it, and a blank row -- the space over a stretch as much as an undecoded

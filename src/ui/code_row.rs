@@ -326,6 +326,10 @@ pub(crate) struct Listing {
     /// How tall the list is: see [`Listing::viewport`]. The `VirtualScrollView` measures
     /// itself but keeps the answer, so the box around it is what is measured.
     viewport: State<f32>,
+    /// The caret last brought into sight, under the listing it is in: see
+    /// [`bring_caret_into_view`]. The list's and not the row's, which a scroll away and
+    /// back mounts afresh.
+    revealed: Rc<Cell<Option<(u64, Caret)>>>,
 }
 
 /// A row's laid-out paragraph and where it starts, lent to the list by the row as it
@@ -376,6 +380,7 @@ impl Listing {
             rows: Rc::new(Cell::new(0)),
             nudge,
             viewport,
+            revealed: Rc::new(Cell::new(None)),
         }
     }
 
@@ -738,7 +743,7 @@ pub(crate) fn use_code_row(
         .map_or(palette().name_hover_fg, |links| links.lit_fg);
     let drawn = text.map(|text| {
         let len = text.line.len();
-        let (selected, caret) = marks(&cells, &listing, grid, text.chars, len);
+        let (selected, caret) = marks(&cells, &listing, chrome.row, grid, text.chars, len);
         let wash = lit_box(&cells, grid, columns.as_ref(), len, lit_fg);
         let finds = text
             .marking
@@ -869,6 +874,7 @@ fn box_over(span: Stroke, top: f32, height: f32) -> Rect {
 fn marks(
     cells: &RowCells,
     listing: &Listing,
+    row: usize,
     grid: Grid,
     chars: RowChars,
     len: usize,
@@ -894,8 +900,9 @@ fn marks(
     // sit on the glyph's fractional edge and two pixels wide. Drawn over a selection too,
     // at its lead: it is where the next key moves from.
     let at = chars.cursor.and_then(|col| cells.column_x(col, len));
-    if let Some(x) = at {
-        bring_caret_into_view(listing, cells.row_x.get(), cells.row_x.get() + ROW_PAD + x);
+    if let (Some(col), Some(x)) = (chars.cursor, at) {
+        let left = cells.row_x.get();
+        bring_caret_into_view(listing, Caret { row, col }, left, left + ROW_PAD + x);
     }
     let caret = at.map(|x| {
         // From the column rightward, so a caret on column 0 starts where the text does.
@@ -915,10 +922,19 @@ fn marks(
 /// answers with a layout, whose `on_sized` moves `visible`, and a caret then inside asks
 /// for nothing more.
 ///
+/// **Once for each place the caret is put**, and not on every render of its row: a row is
+/// drawn again for much else -- a wider row measured, a link lit, a find typed, the row
+/// scrolled out of the list and back -- and the reader who has scrolled sideways away from
+/// the caret would be pulled back to it each time.
+///
 /// The one write drawing a row makes.
-fn bring_caret_into_view(listing: &Listing, row_left: f32, at: f32) {
+fn bring_caret_into_view(listing: &Listing, caret: Caret, row_left: f32, at: f32) {
     let seen = listing.bounds.get();
     if seen.width() <= 0.0 {
+        return;
+    }
+    let place = Some((listing.key(), caret));
+    if listing.revealed.replace(place) == place {
         return;
     }
     let shove = if at < seen.min_x() {

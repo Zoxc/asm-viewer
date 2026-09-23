@@ -1347,8 +1347,11 @@ when the caret has left it, a row above coming to the top and one below to the b
 walked **past the pane's edge** brings the pane sideways to it: the row that draws the caret knows
 its x, the list's box (`Listing`, a context each list provides its rows, with its scroll and its
 bounds; freya reports a row's own `visible_area` unclipped) says where the pane ends, and a task
-scrolls the list by the difference, from a task and not the render since a scroll is a write. A
-listing with no run does nothing with the key. A page is `viewport / code_row_height()`, floored,
+scrolls the list by the difference, from a task and not the render since a scroll is a write. It
+does so **once for each place the caret is put**, remembered by the list rather than the row: the
+row is drawn again for much else (a wider row measured, a link lit, a find typed, the row scrolled
+out of the list and back), and each of those pulled a reader who had scrolled sideways away from
+the caret back to it. A listing with no run does nothing with the key. A page is `viewport / code_row_height()`, floored,
 and the motion makes one of none. Nothing edits: no Backspace, no typing.
 
 ## Find in a pane
