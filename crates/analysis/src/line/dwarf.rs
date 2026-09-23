@@ -398,7 +398,9 @@ fn load_section(
 ///
 /// The value written is `symbol/section address + addend`, plus the bytes already there when
 /// the format keeps the addend in the section (ELF `REL`, COFF) rather than in the relocation
-/// (ELF `RELA`), plus the target section's bias. Every step wraps and every write is
+/// (ELF `RELA`), plus the target section's bias. A Mach-O `SUBTRACTOR` pair states the
+/// difference of two symbols, so the second symbol's address, bias included, is taken off;
+/// a pair whose second symbol does not resolve is skipped. Every step wraps and every write is
 /// bounds-checked, so no relocation table, however corrupt, can do more than scribble on this
 /// copy.
 fn relocate<'data, 'file>(
@@ -417,11 +419,13 @@ fn relocate<'data, 'file>(
         // relocatable object that section address is the bias rather than the 0 the file
         // states.
         let bias = |index| bias_of(biases, index);
-        let target = match relocation.target() {
-            RelocationTarget::Symbol(index) => file
-                .symbol_by_index(index)
+        let symbol = |index| {
+            file.symbol_by_index(index)
                 .ok()
-                .map(|s| SectionAddress::new(s.address()).placed(bias(s.section_index()))),
+                .map(|s| SectionAddress::new(s.address()).placed(bias(s.section_index())))
+        };
+        let target = match relocation.target() {
+            RelocationTarget::Symbol(index) => symbol(index),
             RelocationTarget::Section(index) => file
                 .section_by_index(index)
                 .ok()
@@ -429,6 +433,14 @@ fn relocate<'data, 'file>(
             _ => None,
         };
         let Some(target) = target else { continue };
+        // A Mach-O difference: `object` folds the `SUBTRACTOR` into the `UNSIGNED` after it.
+        let subtracted = match relocation.subtractor() {
+            Some(index) => match symbol(index) {
+                Some(subtracted) => subtracted.get(),
+                None => continue,
+            },
+            None => 0,
+        };
 
         let Ok(offset) = usize::try_from(offset) else {
             continue;
@@ -445,6 +457,7 @@ fn relocate<'data, 'file>(
         };
         let value = implicit
             .wrapping_add(target.get())
+            .wrapping_sub(subtracted)
             .wrapping_add(relocation.addend() as u64);
 
         write_uint(bytes, endian, value);

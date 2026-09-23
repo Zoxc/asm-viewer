@@ -423,7 +423,10 @@ or debug info that says nothing about the range asked about. Four design points 
   `--emit-relocs` keeps the relocations that resolved them, which `object` attaches to their
   target section whatever the file kind. Applying one again adds the symbol's address a second
   time wherever the addend sits in the bytes rather than in the relocation (ELF `REL`, so i386 and
-  ARM32), moving every address the debug info states.
+  ARM32), moving every address the debug info states. A Mach-O `SUBTRACTOR` pair is a difference
+  of two symbols, which `object` hands over as one `Absolute` relocation carrying the second as
+  its `subtractor`; `relocate` takes that symbol's placed address off, where adding the first
+  alone would write an address in place of a length.
 
 The bias moves exactly what `relocate` moves (`line/dwarf.rs`), and a unit's declared ranges need
 not be among them. A line program's `DW_LNE_set_address` is always relocated in a relocatable
