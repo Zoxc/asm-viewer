@@ -5,7 +5,9 @@ use crate::demangle;
 use crate::line::{DebugInfo, Declared};
 use crate::sections::{bias_of, section_biases, section_data};
 use crate::unwind::{self, UnwindEntry};
-use crate::{MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData};
+use crate::{
+    Import, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData,
+};
 use object::{
     BinaryFormat, ExportTarget, Object as _, ObjectKind, ObjectSection, ObjectSymbol, SectionIndex,
     SectionKind, SymbolIndex, SymbolKind,
@@ -58,16 +60,18 @@ struct SymbolTable {
     /// entry can still give it a real name, and a name at the same offset of another section
     /// of a relocatable object does not drop it.
     unnamed: Vec<Pending>,
+    /// Each undefined one whose name reads, in table order: an import, with no code here.
+    imports: Vec<Import>,
     /// The first index past the table, which declared code is numbered from.
     next: usize,
 }
 
 /// The code a file declares outside its symbol table: its **entry point**, its **exports**,
-/// its ELF `.dynsym`, the functions its **debug file** names where there is one (`named`, out
-/// of [`DebugInfo::declared`]), and the **unwind entries** of an x86-64 PE's exception
-/// directory or an ELF's `.eh_frame` (`unwind`, out of [`unwind::entries`]). A stripped
-/// shared library is otherwise a file with nothing in it, and a `/DEBUG` image has no symbol
-/// table at all.
+/// its ELF `.dynsym` (whose undefined functions go to `imports`), the functions its **debug
+/// file** names where there is one (`named`, out of [`DebugInfo::declared`]), and the
+/// **unwind entries** of an x86-64 PE's exception directory or an ELF's `.eh_frame`
+/// (`unwind`, out of [`unwind::entries`]). A stripped shared library is otherwise a file with
+/// nothing in it, and a `/DEBUG` image has no symbol table at all.
 /// Every address here is one the file — or the debug file matched to it by GUID and age —
 /// states outright, so the "nothing is scanned for" rule still holds.
 ///
@@ -98,6 +102,7 @@ fn declared_code(
     file: &object::File<'_>,
     code: &[(Range<SectionAddress>, SectionIndex)],
     known: &mut HashSet<PlacedAddress>,
+    imports: &mut Vec<Import>,
     next: usize,
     named: Vec<Declared>,
     unwind: &[UnwindEntry],
@@ -126,6 +131,8 @@ fn declared_code(
         });
     };
 
+    // An import the symbol table already named is not listed twice.
+    let mut imported: HashSet<String> = imports.iter().map(|i| i.name.clone()).collect();
     for symbol in file.dynamic_symbols() {
         if symbol.kind() != SymbolKind::Text {
             continue;
@@ -134,6 +141,13 @@ fn declared_code(
             continue;
         };
         if name.is_empty() {
+            continue;
+        }
+        if symbol.is_undefined() {
+            let name = String::from_utf8_lossy(name).into_owned();
+            if imported.insert(name.clone()) {
+                imports.push(import(name, symbol.address()));
+            }
             continue;
         }
         take(
@@ -226,6 +240,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     let SymbolTable {
         named: mut symbols,
         unnamed,
+        mut imports,
         next,
     } = symbol_table(&file);
     // Keyed by placed address: in a relocatable object every section starts at 0, so an
@@ -247,7 +262,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
     };
     let unwind = unwind::entries(&file);
     let code = code_sections(&sections);
-    let declared = declared_code(&file, &code, &mut known, next, named, &unwind);
+    let declared = declared_code(&file, &code, &mut known, &mut imports, next, named, &unwind);
     let ranges = place_unwind(&code, &unwind);
 
     // After `declared_code`, so `known` holds every address anything named.
@@ -269,6 +284,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         format,
         architecture,
         symbols,
+        imports,
         sections.into_values().collect(),
         data,
         preloaded,
@@ -336,16 +352,26 @@ fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
 /// The file's text symbols.
 ///
 /// A symbol whose name will not read is a place in the file all the same. It is set aside
-/// until the rest have claimed their addresses ([`SymbolTable::unnamed`]).
+/// until the rest have claimed their addresses ([`SymbolTable::unnamed`]). An undefined one
+/// is an import and no place in the file: `object` calls an undefined ELF `STT_FUNC` and a
+/// COFF external of function type text too ([`SymbolTable::imports`]).
 fn symbol_table(file: &object::File<'_>) -> SymbolTable {
     let mut table = SymbolTable {
         named: Vec::new(),
         unnamed: Vec::new(),
+        imports: Vec::new(),
         next: 0,
     };
     for symbol in file.symbols() {
         table.next = table.next.max(symbol.index().0 + 1);
         if symbol.kind() != SymbolKind::Text {
+            continue;
+        }
+        if symbol.is_undefined() {
+            if let Ok(name) = symbol.name_bytes() {
+                let name = String::from_utf8_lossy(name).into_owned();
+                table.imports.push(import(name, symbol.address()));
+            }
             continue;
         }
 
@@ -369,6 +395,14 @@ fn symbol_table(file: &object::File<'_>) -> SymbolTable {
         }
     }
     table
+}
+
+/// An import named `name` at the address a symbol table states for it, where one does.
+fn import(name: String, address: u64) -> Import {
+    Import {
+        name,
+        address: (address != 0).then(|| SectionAddress::new(address)),
+    }
 }
 
 /// A symbol table's size field as a size: a symbol whose field is 0 states none, which is

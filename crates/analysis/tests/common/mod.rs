@@ -666,6 +666,56 @@ pub fn branch_to_data() -> Vec<u8> {
     obj.write().expect("writing the fixture object")
 }
 
+/// `caller` = `call rel32; ret`, relocated against `printf`, an undefined `STT_FUNC`: an
+/// import, which the file calls and does not define.
+pub fn call_to_import() -> Vec<u8> {
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+
+    let text = obj.section_id(write::StandardSection::Text);
+    let offset = obj.append_section_data(text, &[0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3], 1);
+    obj.add_symbol(write::Symbol {
+        name: b"caller".to_vec(),
+        value: offset,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Section(text),
+        flags: SymbolFlags::None,
+    });
+    let printf = obj.add_symbol(write::Symbol {
+        name: b"printf".to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: write::SymbolSection::Undefined,
+        // The writer would make it `STT_NOTYPE`, and a linker writes `STB_GLOBAL` `STT_FUNC`.
+        flags: SymbolFlags::Elf {
+            st_info: object::elf::SymbolInfo::new(object::elf::STB_GLOBAL, object::elf::STT_FUNC),
+            st_other: object::elf::SymbolOther(0),
+        },
+    });
+
+    obj.add_relocation(
+        text,
+        write::Relocation {
+            offset: offset + 1,
+            symbol: printf,
+            addend: -4,
+            flags: RelocationFlags::Generic {
+                kind: RelocationKind::Relative,
+                encoding: RelocationEncoding::X86Branch,
+                size: 32,
+            },
+        },
+    )
+    .expect("adding a relocation to .text");
+
+    obj.write().expect("writing the fixture object")
+}
+
 /// Deterministic pseudo-random bytes (xorshift64*), so a failure is reproducible from its
 /// seed alone — never `rand`, never the clock.
 pub fn garbage(seed: u64, len: usize) -> Vec<u8> {

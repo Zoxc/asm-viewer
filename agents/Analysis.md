@@ -30,8 +30,12 @@ against archives the `object` writer built, with nothing on a disk. The digest s
 each path and every member is cut from it. That is the thing streaming must not quietly turn into
 196 hashes of the same 20 MB.
 
-**Data model**, built once at open time and shared via `Arc`. Only `SymbolKind::Text` symbols are
-kept, plus, for a **linked image only**, the code it declares elsewhere (`declared_code`):
+**Data model**, built once at open time and shared via `Arc`. Only *defined* `SymbolKind::Text`
+symbols are kept. `object` calls an undefined ELF `STT_FUNC` or COFF function text too, but it has
+no code here: as a symbol it would be a row with nothing to draw, a link a relocation resolves to,
+and an address (usually 0) that hides a nameless function there. Those go to `Object::imports`, with
+the undefined functions of `.dynsym` the symbol table did not already name. Kept too, for a **linked
+image only**, is the code it declares elsewhere (`declared_code`):
 `dynamic_symbols`, `exports` and `entry`; for a PE whose `.pdb` is found beside it and matches, the
 **procedures** that PDB records (`S_GPROC32`/`S_LPROC32` with a nonzero length) and then its
 **publics** (`S_PUB32` flagged as code or a function), which reach the parse as one list of

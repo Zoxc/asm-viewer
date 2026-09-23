@@ -5,8 +5,8 @@ mod common;
 
 use analysis::{Bias, Operand, SpanKind};
 use common::{
-    at, branch_to_data, caller_and_target, elf_x86_64, elf_x86_64_absolute, goes_to,
-    indirect_caller_and_target, names, parse, rip_relative_store_to_data, symbol, text,
+    at, branch_to_data, call_to_import, caller_and_target, elf_x86_64, elf_x86_64_absolute,
+    goes_to, indirect_caller_and_target, names, parse, rip_relative_store_to_data, symbol, text,
     TextRelocation, TextSymbol,
 };
 use std::sync::Arc;
@@ -433,6 +433,25 @@ fn an_unresolvable_relocation_keeps_the_rip_form() {
     // placeholder bytes are zero, and a zero displacement is not printed.
     assert_eq!(text(mov).trim_end(), "mov       dword ptr [rip], 7");
     assert_eq!(spans_of(mov, SpanKind::Number), ["7"]);
+}
+
+#[test]
+fn a_call_to_an_import_is_a_placeholder() {
+    // `object` calls an undefined `STT_FUNC` text. It has no code here, so it is an import
+    // and not a symbol, and the call relocated against it names nothing to open.
+    let object = parse(&call_to_import());
+    assert_eq!(names(&object), ["caller"]);
+    let imports: Vec<_> = object.imports.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(imports, ["printf"]);
+    assert_eq!(object.imports[0].address, None);
+
+    let assembly = symbol(&object, "caller")
+        .assembly(&object)
+        .expect("caller disassembles");
+    assert!(matches!(
+        assembly.instructions[0].operand,
+        Some(Operand::Placeholder)
+    ));
 }
 
 #[test]

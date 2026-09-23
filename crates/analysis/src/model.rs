@@ -31,6 +31,11 @@ pub struct Object {
     /// order. The Symbols list draws them in this order and a saved place is found in it by
     /// [`Object::symbols_named`]. [`Object::new`] sorts them.
     pub symbols_sorted: Vec<Arc<SymbolData>>,
+    /// The functions the file calls and does not define, in its symbol table's order and
+    /// then its dynamic one's. They have no code here, so they are not among `symbols`: not
+    /// a row in the Symbols list, and a relocation against one names nothing
+    /// ([`Operand::Placeholder`](crate::Operand::Placeholder)).
+    pub imports: Vec<Import>,
     pub sections: Vec<Arc<Section>>,
     /// The bytes this object was parsed from. See [`ObjectData`].
     pub data: ObjectData,
@@ -70,9 +75,9 @@ pub(crate) struct PlacedSymbol {
 }
 
 impl Object {
-    /// An object holding `symbols`, which may come in any order. This is where
-    /// [`symbols_sorted`](Self::symbols_sorted) and [`placed`](Self::placed) are sorted,
-    /// and it starts `debug_info` empty, to be built on its first use.
+    /// An object holding `symbols`, which may come in any order, and no imports. This is
+    /// where [`symbols_sorted`](Self::symbols_sorted) and [`placed`](Self::placed) are
+    /// sorted, and it starts `debug_info` empty, to be built on its first use.
     pub fn new(
         path: PathBuf,
         name: String,
@@ -88,15 +93,16 @@ impl Object {
             format,
             architecture,
             symbols,
+            Vec::new(),
             sections,
             data,
             None,
         )
     }
 
-    /// [`new`](Self::new) with `debug_info` started on `preloaded`, the backend the parse
-    /// already built; [`None`] means nothing is loaded yet, and the first line question
-    /// loads it.
+    /// [`new`](Self::new) with `imports`, and with `debug_info` started on `preloaded`, the
+    /// backend the parse already built; [`None`] means nothing is loaded yet, and the first
+    /// line question loads it.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn preloaded(
         path: PathBuf,
@@ -104,6 +110,7 @@ impl Object {
         format: BinaryFormat,
         architecture: Architecture,
         symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
+        imports: Vec<Import>,
         sections: Vec<Arc<Section>>,
         data: ObjectData,
         preloaded: Option<DebugInfo>,
@@ -136,6 +143,7 @@ impl Object {
             architecture,
             symbols,
             symbols_sorted,
+            imports,
             sections,
             data,
             debug_info: DebugInfoCache::new(preloaded),
@@ -508,6 +516,17 @@ impl Section {
         let bytes = self.bytes_range()?;
         Some(self.place_checked(bytes.start)?..self.place_checked(bytes.end)?)
     }
+}
+
+/// A function the file calls and does not define: an undefined text symbol. See
+/// [`Object::imports`].
+#[derive(Debug)]
+pub struct Import {
+    /// The file's own spelling, not demangled.
+    pub name: String,
+    /// The address the file states for it, where it states one: a non-PIE executable's ELF
+    /// import is at its PLT slot. [`None`] where the file states 0.
+    pub address: Option<SectionAddress>,
 }
 
 #[derive(Debug)]
