@@ -778,9 +778,9 @@ impl<W: Write + Send + 'static> Talk<W> {
     ///
     /// The file has been opened first, for [`Talk::places`]'s reason.
     ///
-    /// **A refusal is an empty answer**, as it is for a place and not as it is for the
-    /// names in a file: the pointer resting on the name again is what asks anew, and it
-    /// costs nothing to wait for that.
+    /// A refusal other than a "not now" is passed on, as it is for a place. The caller
+    /// takes it as no answer and not as the server gone: the pointer resting on the name
+    /// again is what asks anew, and it costs nothing to wait for that.
     pub fn hover(&mut self, at: &Lookup) -> Result<Option<Hovered>, Failure> {
         let mut lines = self.lines();
         let column = self.out(&mut lines, &at.file, at.line, at.column);

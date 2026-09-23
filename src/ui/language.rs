@@ -729,10 +729,8 @@ pub(crate) fn use_language_with(
                 // question nobody holds lands on nobody -- and so does a failure named
                 // for a server that has moved on (`Language::failed`).
                 //
-                // A refusal is already no answer by the time it is here
-                // (`lsp::Talk::hover`), so what is left is a name the server had nothing
-                // to say about -- no box, and no question to put again -- or a
-                // conversation that ended.
+                // A name the server had nothing to say about draws no box, and is no
+                // question to put again.
                 let why = match said {
                     Ok(said) => {
                         write_if(hover, |waiting| {
@@ -745,6 +743,12 @@ pub(crate) fn use_language_with(
                 // The question is dropped either way: a box that stayed asked would keep
                 // the name from ever being asked about again.
                 write_if(hover, |waiting| waiting.answer(ticket, None));
+                // A refusal is no answer, as it is for a place: the server is answering,
+                // and the pointer resting on the name again asks anew.
+                if matches!(why, lsp::Failure::Refused { .. }) {
+                    log::warn!("the language server refused a hover: {why}");
+                    return;
+                }
                 write_if(language, |held| held.failed(ticket.run, why.to_string()));
             }
             LspAnswer::Answered { ticket, reply } => {

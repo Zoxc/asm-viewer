@@ -9256,6 +9256,49 @@ fn a_name_the_server_says_nothing_about_draws_no_box() {
     assert!(hover_box(&test).is_none(), "an empty answer drew a box");
 }
 
+/// A hover the server refuses draws nothing and leaves the server running: rust-analyzer
+/// refuses one about a file it has not read yet, and a server that refuses is answering.
+#[test]
+fn a_refused_hover_leaves_the_server_running() {
+    let (file, _directory) = calling_file("hover-refused");
+    let (mut test, roots, asks) = mount_linking(
+        move |job: LspJob| match job {
+            LspJob::Hover { ticket, .. } => Some(LspAnswer::Hovered {
+                ticket,
+                said: Err(lsp::Failure::Refused {
+                    code: -32603,
+                    said: "file not found".to_owned(),
+                }),
+            }),
+            _ => None,
+        },
+        file.clone(),
+    );
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+    test.move_cursor(word_point(&test, "helper"));
+    hovered(&mut test);
+
+    // The control: the question went out, so the refusal came back.
+    assert!(
+        std::iter::from_fn(|| next_job(&asks)).any(|job| matches!(job, AskedOfServer::Hover(_))),
+        "the server was never asked about the name"
+    );
+    settle(&mut test);
+    assert!(hover_box(&test).is_none(), "a refusal drew a box");
+    assert!(
+        matches!(roots.language.peek().state, Lsp::Running { .. }),
+        "the control was told the server broke"
+    );
+}
+
 /// The question is asked where the pointer is, and about a name where one is **defined**
 /// as much as about a link: `main` is a definition and no link, and hovering it is how a
 /// reader reads its own signature.
