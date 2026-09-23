@@ -89,26 +89,18 @@ pub enum GapKind {
 }
 
 impl Listing {
-    /// The skeleton for `section`: one stretch per distinct symbol address inside its bytes,
-    /// plus a leading one when the first symbol is not at its start. Decodes nothing.
+    /// The skeleton for `section`, whose bytes are placed at `range`: one stretch per
+    /// distinct symbol address inside them, plus a leading one when the first symbol is not
+    /// at their start. Decodes nothing.
     ///
-    /// A symbol placed outside the section's bytes — a wild `st_value` — is left out; a
-    /// section with no bytes has no stretches, and so does one placed at the very end of
-    /// the address space, whose bytes have no addresses to be at.
-    pub(crate) fn new(object: &Object, section: Arc<Section>) -> Self {
-        let Some(bytes) = section.bytes_range() else {
-            return Self {
-                section,
-                stretches: Vec::new(),
-            };
-        };
+    /// A symbol placed outside the section's bytes — a wild `st_value` — is left out.
+    pub(crate) fn new(object: &Object, section: Arc<Section>, range: Range<PlacedAddress>) -> Self {
+        let bytes = section.local(range.start)..section.local(range.end);
         // The object's symbols over the section's placed range, already sorted by address
         // and then by index: two sections of a relocatable object share address 0, and
         // their places do not. Each placed address less the bias is the address in the
         // section, which for the section's own symbols is the address they state.
-        let symbols = section
-            .placed_range()
-            .map_or(&[][..], |range| object.placed_in(range));
+        let symbols = object.placed_in(range);
         let local = |entry: &PlacedSymbol| section.local(entry.placed);
 
         let mut stretches = Vec::new();
@@ -258,7 +250,7 @@ impl CodeListing {
             .filter_map(|section| {
                 let range = section.placed_range()?;
                 Some(Placed {
-                    listing: Listing::new(object, section.clone()),
+                    listing: Listing::new(object, section.clone(), range.clone()),
                     range,
                 })
             })
