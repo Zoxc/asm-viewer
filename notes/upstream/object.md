@@ -23,3 +23,23 @@ Not reported, and unchanged from 0.32 through 0.40. One difference to keep in mi
 decodes *every* frame in the section, where `zstd_data` reads one, `ruzstd`'s
 `StreamingDecoder` still ending at the first frame's end. A section written as several frames
 therefore decodes short here, and short is dropped.
+
+**A Mach-O `LC_MAIN` entry point is a file offset, not an address.** `MachOFile::entry`
+(`read/macho/file.rs`) takes the first `LC_MAIN`, or `LC_UNIXTHREAD` whose PC it can read,
+that it finds. For `LC_UNIXTHREAD` it answers that PC, an address. For `LC_MAIN`, which every
+executable linked for macOS 10.8 or later has, it answers `entryoff` unchanged, and that is
+the offset of `main` in the file. ELF and PE answer addresses. The trait's doc says only "the
+virtual address of the entry point", so callers take it as one.
+
+**What it cost**: with `__TEXT` at `0x100000000` the offset is in no section, so every
+Mach-O executable lost its `<entry point>`. With `__TEXT` low, as in an i386 image, the offset
+could land inside another function and put `<entry point>` in its middle, cutting its extent
+short. The fix is `macho_entry` in `crates/analysis/src/parse.rs`, which does not call
+`entry()` for a Mach-O at all. It walks the load commands in the same order. For `LC_MAIN` it
+finds the segment whose file range holds the offset and adds that segment's `vmaddr`. For
+`LC_UNIXTHREAD` it reads the PC itself (`thread_pc`, the same CPU table and offsets), and goes
+on to the next command when it cannot, as `object` does; calling `entry()` there would have
+handed back a later `LC_MAIN`'s raw offset. Pinned by `declared_code.rs`' three
+`a_macho_…` tests.
+
+Not reported.

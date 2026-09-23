@@ -7,7 +7,8 @@
 mod common;
 
 use common::{
-    at, elf_shared_object, named, parse, pe_dll, ExportedSymbol, SharedObject, TEXT_ADDRESS,
+    at, elf_shared_object, macho_executable, named, parse, pe_dll, ExportedSymbol, SharedObject,
+    MACHO_CODE_OFFSET, TEXT_ADDRESS,
 };
 
 /// Four functions back to back, each `nop`s then a `ret`, so every offset below is a real
@@ -251,4 +252,41 @@ fn an_export_that_is_already_a_symbol_table_entry_is_not_listed_twice() {
         .collect();
     names.sort_unstable();
     assert_eq!(names, ["first_internal", "second"]);
+}
+
+#[test]
+fn a_macho_entry_point_from_lc_main_is_placed_through_its_segment() {
+    // `LC_MAIN` states a file offset, not an address. At `__TEXT`'s usual 0x100000000 the
+    // offset as it stands is in no section, so the entry point was lost.
+    const TEXT: u64 = 0x1_0000_0000;
+    let entry = MACHO_CODE_OFFSET + 0x180;
+    let object = parse(&macho_executable(TEXT, entry, false));
+    assert_eq!(named(&object, "<entry point>").address, at(TEXT + entry));
+}
+
+#[test]
+fn a_macho_entry_offset_is_never_taken_for_an_address_inside_another_function() {
+    // With `__TEXT` at 0x100, the offset as it stands is 0x80 bytes into `_first`.
+    const TEXT: u64 = 0x100;
+    let entry = MACHO_CODE_OFFSET + 0x180;
+    let object = parse(&macho_executable(TEXT, entry, false));
+    assert_eq!(named(&object, "<entry point>").address, at(TEXT + entry));
+    assert!(
+        object
+            .symbols_sorted
+            .iter()
+            .all(|symbol| symbol.address != at(entry)),
+        "{:?}",
+        common::names(&object),
+    );
+}
+
+#[test]
+fn a_macho_thread_state_without_a_pc_leaves_the_entry_point_to_lc_main() {
+    // The `LC_UNIXTHREAD` comes first but stops short of its PC, so the `LC_MAIN` after it
+    // is the entry point, and its offset is placed like any other.
+    const TEXT: u64 = 0x1_0000_0000;
+    let entry = MACHO_CODE_OFFSET + 0x180;
+    let object = parse(&macho_executable(TEXT, entry, true));
+    assert_eq!(named(&object, "<entry point>").address, at(TEXT + entry));
 }

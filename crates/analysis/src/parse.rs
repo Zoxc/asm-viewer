@@ -8,9 +8,11 @@ use crate::unwind::{self, UnwindEntry};
 use crate::{
     Import, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData,
 };
+use object::macho;
+use object::read::macho::{MachHeader, MachOFile};
 use object::{
-    BinaryFormat, ExportTarget, Object as _, ObjectKind, ObjectSection, ObjectSymbol, SectionIndex,
-    SectionKind, SymbolIndex, SymbolKind, SymbolSection,
+    BinaryFormat, Endian, ExportTarget, Object as _, ObjectKind, ObjectSection, ObjectSegment,
+    ObjectSymbol, ReadRef, SectionIndex, SectionKind, SymbolIndex, SymbolKind, SymbolSection,
 };
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -180,8 +182,12 @@ fn declared_code(
     }
 
     // 0 is "this image has no entry point", which is how a DLL built without one states it.
-    let entry = file.entry();
-    if entry != 0 {
+    let entry = match file {
+        object::File::MachO32(file) => macho_entry(file),
+        object::File::MachO64(file) => macho_entry(file),
+        _ => Some(file.entry()),
+    };
+    if let Some(entry) = entry.filter(|&entry| entry != 0) {
         take(
             Name::MadeUp(MadeUp::EntryPoint),
             SectionAddress::new(entry),
@@ -208,6 +214,58 @@ fn declared_code(
     }
 
     declared
+}
+
+/// A Mach-O's entry point as an address, from the first `LC_MAIN` or `LC_UNIXTHREAD` whose
+/// entry can be read, as in `object`'s own walk. Not through `entry()`, which answers
+/// `LC_MAIN`'s `entryoff`, a file offset, as it is (`notes/upstream/object.md`). That offset
+/// is placed through the segment whose file bytes hold it, and is no entry point when none
+/// does. An `LC_UNIXTHREAD`'s PC is already an address ([`thread_pc`]).
+fn macho_entry<'data, Mach: MachHeader, R: ReadRef<'data>>(
+    file: &MachOFile<'data, Mach, R>,
+) -> Option<u64> {
+    let endian = file.endian();
+    let mut commands = file.macho_load_commands().ok()?;
+    while let Ok(Some(command)) = commands.next() {
+        if let Ok(Some(main)) = command.entry_point() {
+            let offset = main.entryoff.get(endian);
+            let (segment, into) = file.segments().find_map(|segment| {
+                let (start, size) = segment.file_range();
+                let into = offset.checked_sub(start).filter(|&into| into < size)?;
+                Some((segment, into))
+            })?;
+            return segment.address().checked_add(into);
+        }
+        if let Ok(Some((_, state))) = command.unix_thread() {
+            let cputype = file.macho_header().cputype(endian);
+            if let Some(pc) = thread_pc(endian, cputype, state) {
+                return Some(pc);
+            }
+        }
+    }
+    None
+}
+
+/// The PC in an `LC_UNIXTHREAD`'s thread state, at the place `object` 0.40 reads it from:
+/// past the flavor and the count, then after the registers each CPU puts before it. [`None`]
+/// for any other CPU or a state too short to hold it.
+fn thread_pc<E: Endian>(endian: E, cputype: macho::CpuType, state: &[u8]) -> Option<u64> {
+    let (offset, size): (usize, usize) = match cputype {
+        // x86_thread_state64: rax to r15, then rip.
+        macho::CPU_TYPE_X86_64 => (8 + 16 * 8, 8),
+        // arm_thread_state64: x0 to x28, fp, lr, sp, then pc.
+        macho::CPU_TYPE_ARM64 => (8 + 32 * 8, 8),
+        // x86_thread_state32: ten registers, then eip.
+        macho::CPU_TYPE_X86 => (8 + 10 * 4, 4),
+        // arm_thread_state32: r0 to r12, sp, lr, then pc.
+        macho::CPU_TYPE_ARM => (8 + 15 * 4, 4),
+        _ => return None,
+    };
+    let bytes = state.get(offset..offset.checked_add(size)?)?;
+    match size {
+        8 => Some(endian.read_u64(bytes.try_into().ok()?)),
+        _ => Some(u64::from(endian.read_u32(bytes.try_into().ok()?))),
+    }
 }
 
 /// The address ranges code can be in, each with its section: what [`declared_code`] looks a

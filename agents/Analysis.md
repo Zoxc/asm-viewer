@@ -115,7 +115,11 @@ relocatable object is another place and claims nothing. Not quite always: a clai
 code section's bytes drops the symbol without taking its place, and the symbol below then runs on to
 the next one listed. It takes an unreadable name to get there. The section comes from looking the address up in the kept **text** sections, which
 doubles as the filter keeping exported *data* out. A relocatable object is skipped entirely:
-`entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. The two nameless
+`entry()` answers 0 for a `.o`, and 0 there is a real function's first byte. For a Mach-O,
+`entry()` answers an `LC_MAIN` as a file offset, so `macho_entry` walks the load commands
+itself and is not asked at all: an `LC_MAIN`'s offset is placed through the segment whose file
+bytes hold it (no such segment, no entry point), and an `LC_UNIXTHREAD`'s PC is read as
+`object` reads it (`notes/upstream/object.md`). The two nameless
 declarations, the entry point and an unwind entry, are called `<entry point>` and `<function 0x…>`
 or `<fragment 0x…>`, in angle brackets because no assembler, linker or mangling scheme emits them,
 so none can collide with a real one. The three are one type, `made_up::MadeUp`, whose `Display` is

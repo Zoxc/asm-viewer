@@ -2043,8 +2043,9 @@ pub fn pe_image(dll: PeDll) -> Vec<u8> {
 /// The images `declared_code` reads, each with the number of symbols it declares: a stripped
 /// ELF `.so` whose only symbol table is `.dynsym`, and a PE DLL whose declarations are its
 /// export directory, its entry point and its unwind table — three entries in either table,
-/// two of them on the export and the entry point and the third on a function nothing names.
-/// An `.o` declares none of these, so a corpus of relocatable objects leaves the export,
+/// two of them on the export and the entry point and the third on a function nothing names;
+/// and a Mach-O executable whose entry point is its `LC_MAIN`, beside the one function its
+/// symbol table names. An `.o` declares none of these, so a corpus of relocatable objects leaves the export,
 /// entry-point and unwind paths unexercised entirely.
 pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
     const TEXT: &[u8] = &[0x90, 0x90, 0x90, 0xC3, 0x90, 0xC3, 0xC3];
@@ -2106,7 +2107,136 @@ pub fn declared_code_images() -> Vec<(&'static str, Vec<u8>, usize)> {
             }),
             3,
         ),
+        (
+            "mach-o executable",
+            macho_executable(0x1_0000_0000, MACHO_CODE_OFFSET + 0x180, false),
+            2,
+        ),
     ]
+}
+
+/// Where [`macho_executable`] puts its code in the file: past the load commands, which is
+/// where `__text` sits in an image `ld64` links.
+pub const MACHO_CODE_OFFSET: u64 = 0x200;
+
+/// An x86-64 Mach-O **executable** (`MH_EXECUTE`), assembled with `object`'s encoder because
+/// its writer emits `MH_OBJECT` only, with neither segments nor `LC_MAIN`. `__PAGEZERO`, then
+/// `__TEXT` at `text_vmaddr` holding the file from its first byte, as `ld64` lays it out, with
+/// one `__text` section at [`MACHO_CODE_OFFSET`]: 0x200 bytes of two functions, `_first` at
+/// offset 0, which the symbol table names, and one at 0x180, which nothing names. `entryoff`
+/// is `LC_MAIN`'s, a file offset. With `unreadable_thread`, an `LC_UNIXTHREAD` comes first
+/// whose state stops before its PC, which leaves the entry to the `LC_MAIN`.
+pub fn macho_executable(text_vmaddr: u64, entryoff: u64, unreadable_thread: bool) -> Vec<u8> {
+    use object::macho;
+    use object::write::macho::{
+        Encoder, MachHeader, Nlist, SectionHeader, SegmentCommand, SymtabCommand,
+    };
+
+    const CODE_LEN: u64 = 0x200;
+    const SYMBOLS: u64 = MACHO_CODE_OFFSET + CODE_LEN;
+    const NAMES: &[u8] = b"\0_first\0";
+    let name = |name: &[u8]| {
+        let mut padded = [0; 16];
+        padded[..name.len()].copy_from_slice(name);
+        padded
+    };
+    let mut code = vec![0x90; CODE_LEN as usize];
+    code[0x17f] = 0xC3;
+    code[0x1ff] = 0xC3;
+
+    let encoder = Encoder::new(Endianness::Little, true);
+    let mut commands = Vec::new();
+    encoder.segment_command(
+        &mut commands,
+        &SegmentCommand {
+            segname: name(b"__PAGEZERO"),
+            vmaddr: 0,
+            vmsize: text_vmaddr,
+            fileoff: 0,
+            filesize: 0,
+            maxprot: macho::VmProt(0),
+            initprot: macho::VmProt(0),
+            nsects: 0,
+            flags: macho::SegmentFlags(0),
+        },
+    );
+    encoder.segment_command(
+        &mut commands,
+        &SegmentCommand {
+            segname: name(b"__TEXT"),
+            vmaddr: text_vmaddr,
+            vmsize: SYMBOLS,
+            fileoff: 0,
+            filesize: SYMBOLS,
+            maxprot: macho::VM_PROT_READ | macho::VM_PROT_EXECUTE,
+            initprot: macho::VM_PROT_READ | macho::VM_PROT_EXECUTE,
+            nsects: 1,
+            flags: macho::SegmentFlags(0),
+        },
+    );
+    encoder.section_header(
+        &mut commands,
+        &SectionHeader {
+            sectname: name(b"__text"),
+            segname: name(b"__TEXT"),
+            addr: text_vmaddr + MACHO_CODE_OFFSET,
+            size: CODE_LEN,
+            offset: MACHO_CODE_OFFSET as u32,
+            align: 4,
+            reloff: 0,
+            nreloc: 0,
+            flags: macho::S_ATTR_PURE_INSTRUCTIONS | macho::S_ATTR_SOME_INSTRUCTIONS,
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: 0,
+        },
+    );
+    if unreadable_thread {
+        // x86_THREAD_STATE64 and its count of 42 words, and none of the words.
+        let mut state = 4u32.to_le_bytes().to_vec();
+        state.extend_from_slice(&42u32.to_le_bytes());
+        encoder.load_command(&mut commands, macho::LC_UNIXTHREAD, &state);
+    }
+    let mut main = entryoff.to_le_bytes().to_vec();
+    main.extend_from_slice(&[0; 8]);
+    encoder.load_command(&mut commands, macho::LC_MAIN, &main);
+    encoder.symtab_command(
+        &mut commands,
+        &SymtabCommand {
+            symoff: SYMBOLS as u32,
+            nsyms: 1,
+            stroff: SYMBOLS as u32 + encoder.nlist_size() as u32,
+            strsize: NAMES.len() as u32,
+        },
+    );
+
+    let mut file = Vec::new();
+    encoder.mach_header(
+        &mut file,
+        &MachHeader {
+            cputype: macho::CPU_TYPE_X86_64,
+            cpusubtype: macho::CPU_SUBTYPE_X86_64_ALL.into(),
+            filetype: macho::MH_EXECUTE,
+            ncmds: 5 + u32::from(unreadable_thread),
+            sizeofcmds: commands.len() as u32,
+            flags: macho::FileFlags(0),
+        },
+    );
+    file.extend_from_slice(&commands);
+    file.resize(MACHO_CODE_OFFSET as usize, 0);
+    file.extend_from_slice(&code);
+    encoder.nlist(
+        &mut file,
+        &Nlist {
+            n_strx: 1,
+            n_type: macho::N_SECT | macho::N_EXT,
+            n_sect: 1,
+            n_desc: macho::SymbolDesc(0),
+            n_value: text_vmaddr + MACHO_CODE_OFFSET,
+        },
+    );
+    file.extend_from_slice(NAMES);
+    file
 }
 
 /// A GNU `ar` archive holding `members`: the `object` writer cannot produce one.
