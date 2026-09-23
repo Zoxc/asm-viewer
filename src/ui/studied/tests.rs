@@ -175,6 +175,30 @@ fn a_listing_whose_binary_has_closed_is_asked_for_again_out_of_what_is_left() {
 }
 
 #[test]
+fn a_listing_retagged_onto_a_symbol_tab_goes_with_its_binary_back_on_the_source_tab() {
+    let object = fixture();
+    let symbol = symbol_of(&object);
+    let line = source("line_fixture.c", 3);
+    let outright = Ask::Symbol(symbol.clone());
+
+    let mut state = Analyzed {
+        shown: Some(shown(&line, &symbol)),
+        answered: Some(line.clone()),
+        ..Analyzed::default()
+    };
+    let visits = Visits::default();
+    // The symbol's own tab opened: the source tab's listing now says it is that tab's.
+    state.asked(Some(&outright), &[object], &visits);
+    // Its file closed, and the bar landed back on the source tab.
+    let (question, _) = state.asked(Some(&line), &[], &visits);
+    assert!(matches!(question, Some(Question::Resolve { .. })));
+    assert!(
+        state.shown.is_none(),
+        "the closed file's listing is gone whatever it was tagged"
+    );
+}
+
+#[test]
 fn a_question_already_on_its_way_is_not_asked_twice() {
     let object = fixture();
     let ask = Ask::Symbol(symbol_of(&object));

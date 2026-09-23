@@ -166,8 +166,12 @@ impl Shown {
     /// Asked in the two places an answer is judged: by the effect, so a closed binary is
     /// a question asked again out of what is left, and by the task taking answers, so the
     /// one already in flight when the file closed is not taken either.
-    fn still_open(&self, objects: &[Arc<Object>]) -> bool {
-        match self.ask {
+    ///
+    /// Judged by `asking`, the question put now, and **not by the listing's tag**: a
+    /// retag moves a source tab's listing onto the symbol's own tab, and that tab closing
+    /// with its file lands back on the source tab with the listing still tagged a symbol.
+    fn still_open(&self, asking: &Ask, objects: &[Arc<Object>]) -> bool {
+        match asking {
             Ask::Symbol(_) => true,
             Ask::Source { .. } => objects
                 .iter()
@@ -330,7 +334,7 @@ impl Analyzed {
             ask: ask.clone(),
             studied,
         });
-        let landed = landed.filter(|shown| shown.still_open(open));
+        let landed = landed.filter(|shown| shown.still_open(&shown.ask, open));
 
         let mut changed = false;
         if self.waiting() == Some(&ask) {
@@ -393,7 +397,7 @@ impl Analyzed {
         if self
             .shown
             .as_ref()
-            .is_some_and(|shown| !shown.still_open(open))
+            .is_some_and(|shown| !shown.still_open(ask, open))
         {
             *self = Analyzed::default();
             changed = true;

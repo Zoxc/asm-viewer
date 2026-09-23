@@ -302,11 +302,14 @@ doctrine, so its answer would go on being drawn. A `Studied` holds a `Symbol`, w
 `Arc<Object>`, which holds the whole file's bytes: `Positions::forgetting`'s leak in a second place.
 `Shown::still_open` is asked in the two places an answer is judged, and both are `Analyzed`'s own:
 `Analyzed::asked`, so a closed binary means the question is asked again of what is left, and
-`Analyzed::take`, so an answer already in flight when the file closed is not taken either. Both are
-handed the open objects rather than reading them, which is what keeps them a state's rules and not
-a hook's. It lives here rather than in `close_binary` so that a close, a rebuild and a project
-switch are one line instead of three, and because no handler can reach the answer in flight. The
-effect **reads** `Objects` where it only peeks the visits: a question asked of a different set of objects is a
+`Analyzed::take`, so an answer already in flight when the file closed is not taken either. It is
+judged by the question asked now and not by the listing's tag: a retag (below) moves a source tab's
+listing onto the symbol's own tab, and when that tab closes with its file the bar lands back on the
+source tab with the listing still tagged a symbol. Judged by the tag, the old build's listing stayed
+up there, since the file's lines still named it. Both are handed the open objects rather than
+reading them, which is what keeps them a state's rules and not a hook's. It lives here rather than
+in `close_binary` so that a close, a rebuild and a project switch are one line instead of three, and
+because no handler can reach the answer in flight. The effect **reads** `Objects` where it only peeks the visits: a question asked of a different set of objects is a
 different question, while the ranking is an input to an answer and a visit must not re-ask one. What
 is deliberately *not* covered: an answer is about the objects that were open when it was asked, so a
 line clicked while a file is still being read can answer with nothing where a later object would
