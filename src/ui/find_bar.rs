@@ -152,7 +152,8 @@ pub(crate) struct Find {
     /// whether it has a listing, and an object's code is the one that has none.
     pub(crate) hunt: Option<Hunt>,
     /// Which hit the pane is on, `None` until a step has landed. A new pattern clears it,
-    /// so the next step starts from the caret and not from wherever the last one ended.
+    /// so the next step starts from the caret and not from wherever the last one ended;
+    /// and a step reads it only while the pane's run is still that hit ([`find::step`]).
     pub(crate) at: Option<usize>,
     /// A step the bar has asked for and the pane has not made yet, and which way. Spent
     /// by the list, which is what knows where its rows are and can scroll to one.
@@ -864,18 +865,18 @@ pub(crate) fn use_find_steps<R: FnMut(usize) + 'static>(
             let Some(direction) = bar.step.filter(|_| bar.listing.is_some()) else {
                 return;
             };
-            // Where the pane is, for a first step: the caret, or the top of the listing
-            // where there is no run at all.
-            let caret = marked
+            // Where the pane is: its run, or a caret at the top of the listing where there
+            // is no run at all.
+            let run = marked
                 .peek()
                 .of(at.1)
                 .as_ref()
-                .map(|picked| picked.chars.lead())
-                .unwrap_or(Caret { row: 0, col: 0 });
+                .map(|picked| picked.chars)
+                .unwrap_or(CharSelection::at(Caret { row: 0, col: 0 }));
             let hits = bar.hits().cloned();
             let next = hits
                 .as_ref()
-                .and_then(|hits| find::step(hits, bar.at, caret, direction));
+                .and_then(|hits| find::step(hits, bar.at, run, direction));
 
             let mut state = finds.peek().clone();
             let entry = state.get_mut(&at);

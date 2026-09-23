@@ -7,7 +7,7 @@
 
 use std::ops::Range;
 
-use crate::chars::Caret;
+use crate::chars::{Caret, CharSelection};
 
 /// One hit in a listing: the line it is on and the columns it covers.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -27,17 +27,34 @@ pub enum Direction {
 }
 
 /// Which hit a step goes to: the one after `at`, or the one before it going back, wrapping
-/// at the ends. `None` where there is nothing to step to.
+/// at the ends. `None` where there is nothing to step to. `run` is what the pane has
+/// picked out now.
 ///
-/// **`at` is where the pane already is**, and it wins over the caret: once a step has
-/// landed the caret sits inside that hit, and asking the caret again would answer the hit
-/// the pane is on rather than the next one. The caret is what a *first* step reads --
-/// the bar just opened, or the reader has clicked since -- so a find starts from where
-/// they are looking and not from the top.
-pub fn step(hits: &[Hit], at: Option<usize>, from: Caret, direction: Direction) -> Option<usize> {
+/// **`at` is the hit the pane is on, for as long as `run` is still that hit.** A step
+/// leaves the run on the hit it landed on, and asking the caret again would answer that
+/// hit rather than the next. Anything that has moved the run since -- a click, a key --
+/// leaves `at` naming a place the reader has left, so the step reads the caret instead,
+/// as a first step does: a find starts from where the reader is looking.
+pub fn step(
+    hits: &[Hit],
+    at: Option<usize>,
+    run: CharSelection,
+    direction: Direction,
+) -> Option<usize> {
     let last = hits.len().checked_sub(1)?;
 
-    if let Some(at) = at.filter(|at| *at <= last) {
+    let on = |hit: &Hit| {
+        let start = Caret {
+            row: hit.row,
+            col: hit.columns.start,
+        };
+        let end = Caret {
+            row: hit.row,
+            col: hit.columns.end,
+        };
+        run.ends() == (start, end)
+    };
+    if let Some(at) = at.filter(|at| hits.get(*at).is_some_and(on)) {
         return Some(match direction {
             Direction::Back => at.checked_sub(1).unwrap_or(last),
             Direction::Forward => (at + 1) % hits.len(),
@@ -45,6 +62,7 @@ pub fn step(hits: &[Hit], at: Option<usize>, from: Caret, direction: Direction) 
     }
 
     let place = |hit: &Hit| (hit.row, hit.columns.start);
+    let from = run.lead();
     let caret = (from.row, from.col);
     match direction {
         // The last hit that ends at or before the caret, so a caret sitting inside one

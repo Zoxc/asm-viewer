@@ -29240,6 +29240,53 @@ fn f3_steps_the_find_bar_with_the_keyboard_still_in_the_pane() {
     assert_ne!(moved, landed, "the pane did not answer its own arrow key");
 }
 
+/// **A click since the last step is where the next one starts.** The bar remembers which
+/// hit the pane is on, and a step goes on from that only while the pane's run is still
+/// that hit; once the reader has clicked elsewhere, the step starts from the click, as the
+/// first one did. Fails on a step that trusts the hit whatever the run is: Shift+F3 from
+/// the top of the listing would go back to the first match instead of round to the last.
+#[test]
+fn a_step_after_a_click_starts_from_the_click() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let (mut test, roots) = TestingRunner::new(
+        find_harness,
+        (600., 600.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    let mnemonic = drawn_twice(&test);
+
+    open_find_bar(&mut test);
+    test.write_text(&mnemonic);
+    let at = find_at(&states, &document);
+    let finds = states.places.finds;
+    find_answered(&mut test, finds, at, &mnemonic);
+    let hits = finds.peek().get(&at).hits().cloned().expect("an answer");
+
+    // The keyboard back in the code, twice for the reason F3's own test gives, and on to
+    // the second match.
+    let top = left_of(&paragraphs(&test)[0].0);
+    press_at(&mut test, top);
+    press_at(&mut test, top);
+    settle(&mut test);
+    press_chord(&mut test, Chord::FindNext);
+    press_chord(&mut test, Chord::FindNext);
+    assert_eq!(finds.peek().get(&at).at, Some(1), "two steps from the top");
+
+    // A click at the top of the listing, and a step back from there: round to the last.
+    press_at(&mut test, top);
+    settle(&mut test);
+    press_chord(&mut test, Chord::FindPrevious);
+    assert_eq!(
+        finds.peek().get(&at).at,
+        Some(hits.len() - 1),
+        "the step went on from the match and not from the click"
+    );
+}
+
 /// **The bar's two step buttons go opposite ways**, and the glyph says which: the one
 /// pointing left steps back and the one pointing right steps on. `Direction` (`src/find.rs`)
 /// names the way once, for the glyph, the tooltip and the ask a press writes, so the three
