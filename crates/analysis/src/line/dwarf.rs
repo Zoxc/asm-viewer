@@ -15,8 +15,8 @@ use crate::sections::{bias_of, runtime_endian, section_biases, section_data};
 use crate::{Bias, PlacedAddress, SectionAddress};
 use gimli::{EndianArcSlice, Endianity as _, RunTimeEndian};
 use object::{
-    Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget,
-    SectionIndex,
+    BinaryFormat, Object as _, ObjectKind, ObjectSection, ObjectSymbol, RelocationKind,
+    RelocationTarget, SectionIndex,
 };
 use std::collections::HashMap;
 use std::ops::Range;
@@ -398,11 +398,12 @@ fn load_section(
 ///
 /// The value written is `symbol/section address + addend`, plus the bytes already there when
 /// the format keeps the addend in the section (ELF `REL`, COFF) rather than in the relocation
-/// (ELF `RELA`), plus the target section's bias. A Mach-O `SUBTRACTOR` pair states the
-/// difference of two symbols, so the second symbol's address, bias included, is taken off;
-/// a pair whose second symbol does not resolve is skipped. Every step wraps and every write is
-/// bounds-checked, so no relocation table, however corrupt, can do more than scribble on this
-/// copy.
+/// (ELF `RELA`), plus the target section's bias. A Mach-O relocation against a section
+/// already holds the section's address in its bytes, so that address is not added again. A
+/// Mach-O `SUBTRACTOR` pair states the difference of two symbols, so the second symbol's
+/// address, bias included, is taken off; a pair whose second symbol does not resolve is
+/// skipped. Every step wraps and every write is bounds-checked, so no relocation table,
+/// however corrupt, can do more than scribble on this copy.
 fn relocate<'data, 'file>(
     data: &mut [u8],
     file: &object::File<'data>,
@@ -426,6 +427,15 @@ fn relocate<'data, 'file>(
         };
         let target = match relocation.target() {
             RelocationTarget::Symbol(index) => symbol(index),
+            // A Mach-O relocation against a section keeps the whole target address in the
+            // bytes, the section's own address included, so only the bias is added to them.
+            RelocationTarget::Section(index)
+                if file.format() == BinaryFormat::MachO && relocation.has_implicit_addend() =>
+            {
+                file.section_by_index(index)
+                    .ok()
+                    .map(|_| SectionAddress::ZERO.placed(bias(Some(index))))
+            }
             RelocationTarget::Section(index) => file
                 .section_by_index(index)
                 .ok()

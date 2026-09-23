@@ -1,10 +1,11 @@
 use super::{read_uint, relocate, write_uint};
 use crate::sections::section_biases;
+use crate::SectionAddress;
 use gimli::RunTimeEndian::{Big, Little};
 use object::{
     write, Architecture, BinaryFormat, Endianness, Object as _, ObjectSection as _,
-    RelocationEncoding, RelocationFlags, RelocationKind, SectionKind, SymbolFlags, SymbolKind,
-    SymbolScope,
+    RelocationEncoding, RelocationFlags, RelocationKind, RelocationTarget, SectionKind,
+    SymbolFlags, SymbolKind, SymbolScope,
 };
 
 /// Both widths in both byte orders, the way a relocation's field is read and patched. A
@@ -106,4 +107,67 @@ fn a_mach_o_subtractor_pair_writes_a_difference() {
     let mut data = section.data().expect("the debug section reads").to_vec();
     relocate(&mut data, &file, &section, Little, &section_biases(&file));
     assert_eq!(read_uint(&data, Little), 4);
+}
+
+/// A Mach-O relocation against a section, rather than a symbol, keeps the whole target
+/// address in the bytes, the section's own address included, as an assembler writes it. Here
+/// a debug field names 2 bytes into `__StaticInit`, which the file puts at 16 after `__text`:
+/// the field comes out as that section's placed start plus 2, and not with its address added
+/// twice.
+#[test]
+fn a_mach_o_section_relocation_counts_the_section_address_once() {
+    let mut obj = write::Object::new(
+        BinaryFormat::MachO,
+        Architecture::X86_64,
+        Endianness::Little,
+    );
+    let text = obj.add_section(b"__TEXT".to_vec(), b"__text".to_vec(), SectionKind::Text);
+    obj.append_section_data(text, &[0x90, 0x90, 0x90, 0xC3], 1);
+    let init = obj.add_section(
+        b"__TEXT".to_vec(),
+        b"__StaticInit".to_vec(),
+        SectionKind::Text,
+    );
+    obj.append_section_data(init, &[0x90, 0x90, 0x90, 0xC3], 16);
+    let init_symbol = obj.section_symbol(init);
+    let debug = obj.add_section(
+        b"__DWARF".to_vec(),
+        b"__debug_info".to_vec(),
+        SectionKind::Debug,
+    );
+    obj.append_section_data(debug, &[0; 8], 1);
+    obj.add_relocation(
+        debug,
+        write::Relocation {
+            offset: 0,
+            symbol: init_symbol,
+            addend: 0,
+            flags: RelocationFlags::Generic {
+                kind: RelocationKind::Absolute,
+                encoding: RelocationEncoding::Generic,
+                size: 64,
+            },
+        },
+    )
+    .expect("adding the relocation");
+    let bytes = obj.write().expect("writing the fixture object");
+
+    let file = object::File::parse(&*bytes).expect("parsing the fixture object");
+    let init = file
+        .section_by_name("__StaticInit")
+        .expect("the fixture has a second code section");
+    assert_eq!(init.address(), 16);
+    let section = file
+        .section_by_name("__debug_info")
+        .expect("the fixture has a debug section");
+    let (_, relocation) = section.relocations().next().expect("one relocation");
+    assert_eq!(relocation.target(), RelocationTarget::Section(init.index()));
+
+    // The `object` writer leaves the offset alone in the bytes; an assembler writes the address.
+    let mut data = section.data().expect("the debug section reads").to_vec();
+    write_uint(&mut data, Little, init.address() + 2);
+    let biases = section_biases(&file);
+    relocate(&mut data, &file, &section, Little, &biases);
+    let placed = SectionAddress::new(init.address() + 2).placed(biases[&init.index()]);
+    assert_eq!(read_uint(&data, Little), placed.get());
 }

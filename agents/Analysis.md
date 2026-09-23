@@ -426,7 +426,11 @@ or debug info that says nothing about the range asked about. Four design points 
   ARM32), moving every address the debug info states. A Mach-O `SUBTRACTOR` pair is a difference
   of two symbols, which `object` hands over as one `Absolute` relocation carrying the second as
   its `subtractor`; `relocate` takes that symbol's placed address off, where adding the first
-  alone would write an address in place of a length.
+  alone would write an address in place of a length. A Mach-O relocation against a section
+  rather than a symbol (`r_extern` clear) keeps the whole target address in the bytes, the
+  section's own address included, where ELF and COFF keep an offset into a section at 0; so
+  `relocate` adds only the bias there. `__text` states 0 and hides the difference; a second code
+  section (`__StaticInit`, cold text) would have its rows moved by its own address.
 
 The bias moves exactly what `relocate` moves (`line/dwarf.rs`), and a unit's declared ranges need
 not be among them. A line program's `DW_LNE_set_address` is always relocated in a relocatable
