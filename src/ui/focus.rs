@@ -372,13 +372,22 @@ struct Step {
 /// ([`take_kept`]). **A kept run wins over the driven line**, being the more specific
 /// ([`source_run`]). **A restored run owes no scroll** ([`keep_leaving`]).
 ///
+/// **A place shown for the first time with nothing to land on takes the keyboard**, with a
+/// caret on the first line of the side it is driven from ([`fresh_run`]): a file, a symbol
+/// or an object's code just opened is what the reader is about to read.
+///
 /// **One effect, because the order is the whole of it**: detect the switch, keep the runs
 /// of the place being left ([`keep_leaving`]), decide whose landing this is and hand its
 /// instruction on ([`take_landing`]), look up what the arriving place kept
 /// ([`take_kept`]), and write the two runs ([`source_run`], [`assembly_run`]). Each stage
 /// is a function over the [`Step`] they share -- what one stage tells the next is a field
 /// of it -- and the rule a stage keeps is written on the stage.
-pub(crate) fn use_land(doors: Doors, active: Memo<Option<Entry>>, sectioned: Sectioned) {
+pub(crate) fn use_land(
+    doors: Doors,
+    active: Memo<Option<Entry>>,
+    sectioned: Sectioned,
+    keyboard: Keyboard,
+) {
     let Doors {
         open,
         places,
@@ -415,10 +424,13 @@ pub(crate) fn use_land(doors: Doors, active: Memo<Option<Entry>>, sectioned: Sec
             take_landing(&mut step, open, landing, plant);
             take_kept(&mut step, marks_at);
 
-            let marks = Marks {
+            let mut marks = Marks {
                 assembly: assembly_run(&step, sectioned),
                 source: source_run(&step, driven),
             };
+            if fresh_run(&step, &mut marks) {
+                ask_for_keyboard(keyboard);
+            }
             marked.set_if_modified(marks);
         },
     );
@@ -599,6 +611,28 @@ fn assembly_run(step: &Step, sectioned: Sectioned) -> Option<Picked> {
     } else {
         kept.carry(|spot| row_of(&built, spot))
     }
+}
+
+/// Put a caret on the first line of the driven side of a place shown for the first time
+/// with no landing, where that side has no run already. Whether the place was such a one,
+/// which is when the keyboard goes to it too.
+///
+/// Written into the runs this arrival writes, and not left to the ask for the keyboard:
+/// that ask is spent in an effect of its own, and a caret it put there before this ran
+/// would be written over by the arriving place's empty runs.
+fn fresh_run(step: &Step, marks: &mut Marks) -> bool {
+    let Some((_, stop)) = &step.active else {
+        return false;
+    };
+    if step.landed.is_some() || step.kept.is_some() {
+        return false;
+    }
+    let run = match stop.document.driven_from() {
+        Pane::Assembly => &mut marks.assembly,
+        Pane::Source => &mut marks.source,
+    };
+    run.get_or_insert_with(top_pick);
+    true
 }
 
 #[cfg(test)]

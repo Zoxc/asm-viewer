@@ -805,7 +805,7 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
     use_keyboard_asked(keyboard, open, marked);
     use_let_go_on_blur(keys);
     use_save_on_change(states);
-    use_land(doors, active, sectioned);
+    use_land(doors, active, sectioned, keyboard);
     use_periodic_save();
     // After the save effect on purpose: its empty baseline must be in place before the
     // restore writes anything, so the restored session is seen as an ordinary change.

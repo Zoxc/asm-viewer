@@ -6686,7 +6686,12 @@ fn the_marks_question_is_asked_per_file_and_again_when_a_binary_arrives() {
 /// row's press is answered by it.
 fn locations_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), active, use_sectioned());
+    use_land(
+        use_doors(),
+        active,
+        use_sectioned(),
+        use_consume::<Keyboard>(),
+    );
 
     rect().expanded().child(LocationsPanel)
 }
@@ -8391,7 +8396,7 @@ fn linking_harness() -> impl IntoElement {
 
     let doors = use_doors();
     let active = use_consume::<Active>().0;
-    use_land(doors, active, use_sectioned());
+    use_land(doors, active, use_sectioned(), use_consume::<Keyboard>());
     use_follow(follow, doors);
 
     let file = use_consume::<SubjectFile>().0;
@@ -10803,8 +10808,9 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
     );
     settle(&mut test);
 
+    // The caret the opened file was given, and nothing picked out over it.
     assert!(
-        roots.doors.marked.peek().source.is_none(),
+        roots.doors.marked.peek().source == Some(top_pick()),
         "an answer naming the line it was asked about picked a line out"
     );
     assert_eq!(
@@ -11523,7 +11529,7 @@ fn a_press_on_a_call_asks_where_the_name_is_defined() {
     // trait `impl`, whose definition is itself.
     assert_eq!(want, lsp::Question::Followed(lsp::Followed::Definition));
     assert!(
-        roots.doors.marked.peek().source.is_none(),
+        roots.doors.marked.peek().source == Some(top_pick()),
         "the press picked a line out"
     );
 }
@@ -21158,7 +21164,12 @@ fn bare_harness() -> impl IntoElement {
 /// the caret it plants is what these tests ask about.
 fn code_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), active, use_sectioned());
+    use_land(
+        use_doors(),
+        active,
+        use_sectioned(),
+        use_consume::<Keyboard>(),
+    );
 
     let reading = use_sectioned().reading;
     let object = reading.read().object.clone();
@@ -23695,7 +23706,7 @@ fn doors_harness() -> impl IntoElement {
     let open = use_open();
     let objects = use_consume::<Objects>().0;
     let sectioned = use_sectioned();
-    use_land(use_doors(), active, sectioned);
+    use_land(use_doors(), active, sectioned, use_consume::<Keyboard>());
     use_reading_of(active, objects, sectioned);
 
     let entry = {
@@ -23718,7 +23729,7 @@ fn door_panes_harness() -> impl IntoElement {
     let open = use_open();
     let objects = use_consume::<Objects>().0;
     let sectioned = use_sectioned();
-    use_land(use_doors(), active, sectioned);
+    use_land(use_doors(), active, sectioned, use_consume::<Keyboard>());
     use_reading_of(active, objects, sectioned);
 
     let id = {
@@ -24128,8 +24139,9 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
     settle(&mut test);
     settle(&mut test);
     assert!(states.open.active() == Some(first_tab));
+    // The caret a place shown with nothing kept is given, and not the landing's.
     assert!(
-        doors.marked.peek().assembly.is_none(),
+        doors.marked.peek().assembly == Some(top_pick()),
         "a spent landing planted a caret"
     );
 }
@@ -24196,7 +24208,7 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
         "the listing spent a planting left for another document"
     );
     assert!(
-        doors.marked.peek().assembly.is_none(),
+        doors.marked.peek().assembly == Some(top_pick()),
         "another document's planting planted a caret here"
     );
 
@@ -24212,7 +24224,7 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
         "a planting no row could be found for was left lying"
     );
     assert!(
-        doors.marked.peek().assembly.is_none(),
+        doors.marked.peek().assembly == Some(top_pick()),
         "a caret was planted for an address before the first instruction"
     );
 }
@@ -28136,7 +28148,7 @@ fn navigating_harness() -> impl IntoElement {
     let places = use_places();
     let active = use_consume::<Active>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(doors, active, use_sectioned());
+    use_land(doors, active, use_sectioned(), use_consume::<Keyboard>());
     use_clear_marks(
         active,
         super::analyzed::Asked {
@@ -28288,7 +28300,7 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
     assert_eq!(carets(&test).len(), 2, "a caret per pane");
 
     // A link followed in place: the runs are kept under the place left, and the place
-    // arriving -- never shown before -- starts with none.
+    // arriving -- never shown before -- starts with only the caret an opened place gets.
     open_document(states.open, states.visits, add.clone(), Reach::InPlace);
     settle(&mut test);
     settle(&mut test);
@@ -28303,10 +28315,14 @@ fn navigating_brings_back_each_panes_caret_and_selection() {
     assert!(kept.marks.source.as_ref().map(|p| p.chars) == Some(source.chars));
     let (now_assembly, now_source) = runs_of(marked);
     assert!(
-        now_assembly.is_none() && now_source.is_none(),
+        now_assembly == Some(top_pick()) && now_source.is_none(),
         "the runs outlived their place"
     );
-    assert!(carets(&test).is_empty(), "a caret with no run");
+    assert_eq!(
+        carets(&test).len(),
+        1,
+        "not the one caret the opened place was given"
+    );
     // A run of this place's own, in one pane.
     sweep(&mut test, marked, Pane::Assembly, 5, 5);
     let (theirs, _) = runs_of(marked);
@@ -28410,7 +28426,12 @@ fn a_landing_on_arrival_wins_over_the_kept_runs() {
 /// state and needs no pane to say what it is.
 fn land_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), active, use_sectioned());
+    use_land(
+        use_doors(),
+        active,
+        use_sectioned(),
+        use_consume::<Keyboard>(),
+    );
 
     rect().expanded()
 }
@@ -28451,7 +28472,10 @@ fn a_standing_run_of_another_line_is_not_kept_over_the_driven_one() {
     // standing in the pane: the symbol's tab is the one on screen, and its source side is
     // showing that file.
     let entry = entry_of(&states, &source);
-    states.places.driven.write().remember(entry, 12);
+    states.places.driven.write().remember(entry.clone(), 12);
+    // The caret the file's tab was given when it opened, forgotten: in the app a driven
+    // line comes with a run of its own, and a kept run wins over the driven line.
+    states.places.marks_at.write().forgetting(|at| *at != entry);
     marked.set(Marks {
         assembly: None,
         source: line_pick(file.clone(), 5, Some(4..9), Owed::default()),
@@ -28568,7 +28592,7 @@ fn code_navigating_harness() -> impl IntoElement {
     let places = use_places();
     let active = use_consume::<Active>().0;
     let analysis = use_consume::<Analysis>().0;
-    use_land(doors, active, use_sectioned());
+    use_land(doors, active, use_sectioned(), use_consume::<Keyboard>());
     use_clear_marks(
         active,
         super::analyzed::Asked {
@@ -28656,7 +28680,7 @@ fn a_run_in_an_objects_code_comes_back_by_the_places_its_rows_stood_for() {
     settle(&mut test);
     settle(&mut test);
     assert!(sections.peek().object.is_none(), "the reading was kept");
-    assert!(marked.peek().assembly.is_none());
+    assert!(marked.peek().assembly == Some(top_pick()));
 
     // Back to the code, and an answer with nothing decoded: the label is on another row.
     raise_document(&states, &code);
@@ -30734,7 +30758,12 @@ fn search_harness() -> impl IntoElement {
     // What spends the landing a hit's press leaves, as `app()` does: without it a row
     // opens its tab and picks nothing out.
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), active, use_sectioned());
+    use_land(
+        use_doors(),
+        active,
+        use_sectioned(),
+        use_consume::<Keyboard>(),
+    );
 
     rect().expanded().child(SearchPanel)
 }
@@ -34592,7 +34621,12 @@ fn the_project_views_button_asks_before_it_starts_too() {
 /// door from outside a document reaches, and what answers it.
 fn landing_panes_harness() -> impl IntoElement {
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), active, use_sectioned());
+    use_land(
+        use_doors(),
+        active,
+        use_sectioned(),
+        use_consume::<Keyboard>(),
+    );
     panes_harness()
 }
 
@@ -35891,6 +35925,78 @@ fn a_chip_puts_the_keyboard_back_in_the_pane_it_was_left_in() {
         drawn.contains(&"source has it".to_owned()),
         "the keyboard did not go back to the pane it was left in: {drawn:?}"
     );
+}
+
+/// [`two_panes_harness`] with the arrival of a place wired in, as `app()` wires it.
+fn arriving_harness() -> impl IntoElement {
+    let keyboard = use_consume::<Keyboard>();
+    use_land(
+        use_doors(),
+        use_consume::<Active>().0,
+        use_sectioned(),
+        keyboard,
+    );
+    two_panes_harness()
+}
+
+/// **A file, a symbol or an object's code opened afresh takes the keyboard**, with a caret
+/// on the first line of the side it is driven from -- whatever door opened it, and in the
+/// temporal tab too, whose panes are the ones the last document had.
+#[test]
+fn opening_a_place_puts_the_keyboard_on_its_first_line() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, marked)) = TestingRunner::new(
+        arriving_harness,
+        (300., 400.).into(),
+        |runner: &mut _| {
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.doors.marked)
+        },
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![object.clone()]);
+    settle(&mut test);
+
+    let top = |marked: State<Marks>, pane: Pane| {
+        marked
+            .peek()
+            .of(pane)
+            .clone()
+            .is_some_and(|run| run.chars.rows() == (0..=0) && run.chars.is_empty())
+    };
+    let opened = [
+        (Document::Symbol(symbols[0].clone()), Reach::Preview),
+        (Document::Symbol(symbols[1].clone()), Reach::Preview),
+        (
+            Document::Source(Arc::from(Path::new("/src/main.rs"))),
+            Reach::NewTab,
+        ),
+        (Document::Code(object), Reach::NewTab),
+    ];
+    for (document, reach) in opened {
+        let pane = document.driven_from();
+        // The keyboard put in the other side first, so its going over is the open's doing.
+        let other = match pane {
+            Pane::Assembly => "source",
+            Pane::Source => "assembly",
+        };
+        if let Some(at) = label_area(&test, &format!("{other} has not")) {
+            press_at(&mut test, (at.center().x as f64, at.center().y as f64));
+            settle(&mut test);
+        }
+        open_document(states.open, states.visits, document, reach);
+        settle(&mut test);
+        settle(&mut test);
+        assert!(top(marked, pane), "no caret on the first line");
+        let has = match pane {
+            Pane::Assembly => "assembly has it",
+            Pane::Source => "source has it",
+        };
+        let drawn = labels(&test);
+        assert!(drawn.contains(&has.to_owned()), "{drawn:?}");
+    }
 }
 
 /// The same two, over a pane that mounts late: what the app does, a tab opening before the

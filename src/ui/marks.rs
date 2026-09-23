@@ -357,8 +357,14 @@ fn row_run(row: usize, columns: Option<Range<usize>>) -> CharSelection {
 /// already is.
 pub(crate) fn mark_top(marked: State<Marks>, pane: Pane) {
     update(marked, |marks| {
-        *marks.of_mut(pane) = Some(row_pick(None, 0, Owed::NEITHER));
+        *marks.of_mut(pane) = Some(top_pick());
     });
+}
+
+/// The caret [`mark_top`] puts at the top of a listing, for a caller writing the runs
+/// whole.
+pub(crate) fn top_pick() -> Picked {
+    row_pick(None, 0, Owed::NEITHER)
 }
 
 /// Pick out the one row `line` of `file` in the source pane, as a click from outside the

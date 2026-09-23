@@ -630,7 +630,13 @@ caret in that pane** where it has no run of its own (`mark_top`): nothing was cl
 listing with no run draws no caret, so the arrows, Home, End and Ctrl+C would have nothing to act on
 and a pane that had just been handed the keyboard would read as though it had not. Only the ask does
 this, never a press -- a press in a pane says where the caret goes, including the press under the
-last row that deliberately picks nothing out. The temporal tab is told from one that stays by its
+last row that deliberately picks nothing out. **A place shown for the first time with nothing to
+land on takes the keyboard too**, with that caret on the first line of its driven side, whatever
+door opened it (`fresh_run`, `ui/focus.rs`). That is done in `use_land` and not by the ask, because
+`use_land` writes both runs whole as a place arrives: a caret the ask's effect put there first, which
+it does when the temporal tab's panes already hold boxes, was written over with the new place's empty
+runs. The caret is kept with the place once it is left, so coming back to it does not move the
+keyboard again. The temporal tab is told from one that stays by its
 name being **italic** (`font_slant`) and by nothing else, the chip reading the flag through the same memo
 beside the document. Every tab has a ×, pages included, because there is a way back to one now: the
 **menu at the top left of the window** (`PagesButton`), which is the whole of it. It lists all three
