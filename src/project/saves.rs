@@ -199,7 +199,8 @@ impl Saves {
     /// disk over the good ones. The session needs the guard as much as the list, since
     /// pending is what the next flush writes and a close, a switch or the timer can land
     /// inside the load. A session left pending *before* the load began describes a real
-    /// state and stays. Both baselines are left where they were for the record that
+    /// state and stays; a restore registers its load before any record runs, so the boot
+    /// state is never one. Both baselines are left where they were for the record that
     /// follows the load, which is the one that sees the change. A binaries change the
     /// reader makes in that window waits for the same record.
     ///

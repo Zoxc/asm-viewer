@@ -3247,6 +3247,56 @@ fn a_restore_survives_the_row_that_asked_for_it() {
     );
 }
 
+/// Whether a load was registered each time the effect in [`boot_harness`] ran.
+#[derive(Clone)]
+struct Registered(Rc<RefCell<Vec<bool>>>);
+
+/// `app`'s order: an effect standing in for the save observer, then a restore in a hook.
+fn boot_harness() -> impl IntoElement {
+    let states = use_project_states();
+    let registered = use_consume::<Registered>().0;
+    let loading = states.loading;
+    use_side_effect(move || {
+        registered.borrow_mut().push(!loading.peek().is_empty());
+    });
+    use_hook(move || {
+        let project = Project {
+            binaries: vec![PathBuf::from("/nowhere/boot.o")],
+            ..Project::default()
+        };
+        restore_project(states, project, Session::default());
+    });
+    rect().expanded()
+}
+
+/// **A restore's load is registered before the save observer first runs.** That run is a
+/// task queued ahead of the restore's, and one that saw no load recorded the tabless boot
+/// session as pending, for a close or a switch during the load to write over the saved
+/// one.
+#[test]
+fn a_restore_registers_its_load_before_the_first_record() {
+    let registered = Registered(Rc::new(RefCell::new(Vec::new())));
+    let (mut test, _states) = TestingRunner::new(
+        boot_harness,
+        (200., 200.).into(),
+        {
+            let registered = registered.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || registered.clone());
+                runner.provide_root_context(test_roots).states
+            }
+        },
+        1.,
+    );
+    test.sync_and_update();
+
+    assert_eq!(
+        registered.0.borrow().first(),
+        Some(&true),
+        "the first record ran before the load was registered"
+    );
+}
+
 /// **A restore leaves the hook order alone.** `app` restores inside a `use_hook`, and a
 /// session that saved an arrangement had that restore reach the three states it writes
 /// through `use_consume` -- hooks, called from inside a hook, which take slots in the
@@ -30873,6 +30923,65 @@ fn a_build_replaces_what_the_build_before_it_produced() {
         held(&other),
         before_other,
         "a binary the reader opened was closed by a build that did not produce it"
+    );
+}
+
+thread_local! {
+    /// What each run of [`reopen_harness`]'s effect saw: whether the artifact was held,
+    /// and whether anything was loading.
+    static SEEN: RefCell<Vec<(bool, bool)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The build wiring, and an effect ahead of it standing in for the save observer.
+fn reopen_harness() -> impl IntoElement {
+    let states = use_project_states();
+    use_side_effect(move || {
+        let artifact = fixture_artifact();
+        let held = states.objects.read().iter().any(|o| o.path == artifact);
+        let loading = !states.loading.read().is_empty();
+        SEEN.with(|seen| seen.borrow_mut().push((held, loading)));
+    });
+    build_wiring();
+    rect()
+}
+
+/// **A build's reopen is registered with its close.** A record that ran between the two
+/// saw the artifact gone and nothing loading, and wrote a project file without it.
+#[test]
+fn a_build_registers_its_reopen_before_a_record_can_run() {
+    let artifact = fixture_artifact();
+    let answer = {
+        let artifact = artifact.clone();
+        move |job: BuildJob| match job.what {
+            BuildWhat::Build => done(built(&[artifact.clone()])),
+            _ => BuildAnswer::Read(Manifest {
+                path: None,
+                profiles: None,
+                debug_lines: true,
+                edit_refused: None,
+            }),
+        }
+    };
+    let (mut test, roots, asking, _asks) = mount_project_over(reopen_harness, answer);
+    let states = roots.states;
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+
+    let mut build = states.build;
+    build.write().previous = vec![artifact.clone()];
+    let mut objects = states.objects;
+    objects.set(analysis::open_files(vec![artifact.clone()]));
+    settle(&mut test);
+    SEEN.with(|seen| seen.borrow_mut().clear());
+
+    start_build(build, &jobs, PathBuf::from("/work/app"), Profile::Release);
+    pump(&mut test, |_| {
+        !build.peek().building && states.loading.peek().is_empty() && !objects.peek().is_empty()
+    });
+
+    let seen = SEEN.with(|seen| seen.take());
+    assert!(
+        !seen.contains(&(false, false)),
+        "a run saw the artifact closed and no load for it: {seen:?}"
     );
 }
 

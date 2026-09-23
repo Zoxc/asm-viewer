@@ -512,9 +512,12 @@ holds until `restore_project` has resolved its tabs is held back the same way, a
 reason: a session is only ever marked pending, so marking that tabless one is already enough to
 lose the tabs -- the next flush writes whatever is pending, and the close hook, `switch`, `close`
 and the 30-second timer all flush. A session left pending *before* the load began describes a real
-state and is left alone. Both baselines stay behind the streamed list, so the record that follows
-the load is the one that sees the change and writes both files -- the save observer reads `Loads`
-as well, which is what re-runs it when the load ends. The cost is that a binary opened or closed
+state and is left alone. The boot state is never one: `restore_project` registers its load before
+it spawns the task that reads it, since the save observer's first run is a task queued ahead of
+that one, and a record there would mark the tabless boot session pending. A build's reopen does
+the same for the same reason (`agents/Sidebar.md`). Both baselines stay behind the streamed list,
+so the record that follows the load is the one that sees the change and writes both files -- the
+save observer reads `Loads` as well, which is what re-runs it when the load ends. The cost is that a binary opened or closed
 while another is being read waits for that same record instead of reaching the disk at once.
 
 **Which project is open is `Saves`' too**, and changing it at runtime is `switch(id)` or

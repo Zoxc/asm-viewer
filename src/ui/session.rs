@@ -360,6 +360,11 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         return;
     }
 
+    // Registered here and not in the task: the save observer is a task queued ahead of it,
+    // and a record that ran before the load began would mark the tabless boot session
+    // pending, for a flush during the load to write over the saved one.
+    let id = begin_load(loading, &project.binaries);
+
     // `spawn_forever`, not `spawn`: a task belongs to the scope that spawned it, and on a
     // switch that scope is the recent project's row, which the press unmounts -- the row
     // is left out of the list the moment its project is the open one, so the restore
@@ -369,7 +374,7 @@ pub(crate) fn restore_project(states: ProjectStates, project: Project, session: 
         // load: an object or a symbol tab is resolved against the objects by name, and
         // resolving one against a half-filled list would drop the tabs whose object had
         // not landed yet.
-        open_binaries(objects, loading, project.binaries.clone()).await;
+        read_binaries(objects, loading, id, project.binaries).await;
         restore_documents(states, &session);
     });
 }

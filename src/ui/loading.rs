@@ -30,11 +30,25 @@ pub(crate) async fn open_binaries(
     paths: Vec<PathBuf>,
 ) {
     // Registered before a byte is read, so the rows are on screen for the whole wait.
-    let id = {
-        let mut loading = loading;
-        loading.write().begin(&paths)
-    };
+    let id = begin_load(loading, &paths);
+    read_binaries(objects, loading, id, paths).await;
+}
 
+/// The first half of [`open_binaries`]: register `paths` as being read now, rather than
+/// at the task's first poll. For a caller whose load the save observer must see the next
+/// time it runs: a restore, and a build's reopen. The task reading it must not be dropped
+/// before it runs, or the load is never finished.
+pub(crate) fn begin_load(mut loading: State<Loads>, paths: &[PathBuf]) -> LoadId {
+    loading.write().begin(paths)
+}
+
+/// The second half: read the load [`begin_load`] registered as `id`.
+pub(crate) async fn read_binaries(
+    objects: State<Vec<Arc<Object>>>,
+    loading: State<Loads>,
+    id: LoadId,
+    paths: Vec<PathBuf>,
+) {
     // Unbounded: the worker should run flat out. What stops it is the receiver going,
     // which is `take_load` deciding that nothing more from this load is wanted -- and is
     // what keeps a closed 331 MB file from being parsed to the end into a value that will

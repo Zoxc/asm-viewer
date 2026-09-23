@@ -583,7 +583,9 @@ it holds no code and a row for it could only ever fail to parse.
 two generations of one file cannot both be in the objects list -- but narrowed: a file the reader
 opened by hand is theirs even where a build has just written the same path. So the set replaced is
 the *previous* build's list intersected with what is open, closed one by one and reopened in a
-single `open_binaries` rather than a close and a spawn each. That list is saved with the session, which is what makes the
+single load rather than a close and a spawn each. The load is registered with the closes and
+not in the task that reads it, or the save observer, woken by the closes, would run first and write
+a project file without those binaries. That list is saved with the session, which is what makes the
 rule survive a restart (`agents/Persistence.md`). A finished build also forgets everything read of
 the sources under the project's directory, which nothing else in the app ever re-reads
 (`forget_source_under`, `agents/Panes.md`).
