@@ -136,7 +136,8 @@ from the parent's. It is `BLACK` in the light palette because that was already t
 ask is a runtime question**, not a compile-time one, since one Linux build runs on both. So
 `XDG_CURRENT_DESKTOP` only *sorts* `kreadconfig6`/`kreadconfig5` (KDE's `font` and `fixed`, a
 comma-separated spec) against `gsettings` (Gnome's `font-name` and `monospace-font-name`, a quoted
-Pango `Family Size` whose family can hold spaces and trailing style words), and the other is tried
+Pango `Family Size` whose family can hold spaces and trailing style words, and be a comma-separated
+list of which the first is taken), and the other is tried
 anyway: a tool that is not installed is already a `None` here. Gnome's `text-scaling-factor`
 multiplies the point size, because it is *how* Gnome says "make text bigger": `font-name` keeps its
 nominal size and the accessibility slider moves this instead. winit's own display scale is separate,

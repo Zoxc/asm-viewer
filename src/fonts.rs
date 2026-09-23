@@ -209,6 +209,10 @@ mod desktop_parse {
     /// last word is a number, and there may be no size at all. Style words are a weight
     /// to Pango rather than part of the name, so they are dropped -- except where they
     /// are all there is, since an empty family is no answer.
+    ///
+    /// The family is a comma-separated list, which may end in a comma (`Cantarell, 11`,
+    /// `Noto Sans,Noto Color Emoji 11`). The first name in it is the family; a word ending
+    /// in a comma ends the style words, as it ends Pango's own scan.
     pub fn pango(value: &str) -> Option<Spec> {
         let mut words: Vec<&str> = unquote(value.trim()).split_whitespace().collect();
 
@@ -221,7 +225,12 @@ mod desktop_parse {
             words.pop();
         }
 
-        Spec::new(&words.join(" "), points)
+        let family = words.join(" ");
+        let first = family
+            .split(',')
+            .map(str::trim)
+            .find(|name| !name.is_empty());
+        Spec::new(first.unwrap_or(""), points)
     }
 
     /// Pango's weight, style, variant and stretch words, which is the closed set its own
@@ -267,9 +276,7 @@ mod desktop_parse {
             "ultra-expanded",
         ];
 
-        STYLES
-            .iter()
-            .any(|style| style.eq_ignore_ascii_case(word.trim_end_matches(',')))
+        STYLES.iter().any(|style| style.eq_ignore_ascii_case(word))
     }
 
     /// `gsettings get` prints `'Cantarell 11'`. The quote is only stripped when it is on

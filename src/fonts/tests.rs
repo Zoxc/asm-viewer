@@ -64,6 +64,24 @@ fn a_pango_description_can_omit_its_size() {
     assert_eq!(pango("'M+ 1m'"), spec("M+ 1m", None));
 }
 
+/// Pango's family is a list: the first name in it is the family, and the commas are not
+/// part of it.
+#[test]
+fn a_pango_family_list_names_its_first_family() {
+    assert_eq!(pango("'Cantarell, 11'"), spec("Cantarell", Some(11.0)));
+    assert_eq!(
+        pango("'Noto Sans,Noto Color Emoji 11'"),
+        spec("Noto Sans", Some(11.0))
+    );
+    assert_eq!(
+        pango("'DejaVu Sans, Bold 10'"),
+        spec("DejaVu Sans", Some(10.0))
+    );
+    // A comma ends the style words: what is before it is all family.
+    assert_eq!(pango("'Foo Bold, 10'"), spec("Foo Bold", Some(10.0)));
+    assert_eq!(pango("', 10'"), None);
+}
+
 #[test]
 fn nothing_is_not_a_font() {
     assert_eq!(kde(""), None);
