@@ -21,7 +21,7 @@ use crate::counter;
 use crate::order::Order;
 use crate::process::{self, RunEvent};
 use crate::store::{write_atomically, Store, RECENTS_FILE};
-use crate::verdict::Verdict;
+use crate::verdict::{counted, Verdict};
 
 /// The one file a scratchpad's source is, as cargo and rustc spell it: relative to the
 /// directory cargo ran in. What the package is written from, what a diagnostic's span
@@ -1032,10 +1032,11 @@ impl fmt::Display for Failure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             // The rows say the detail; this is the sentence over the top of them.
-            Failure::Dependencies(problems) => match problems {
-                1 => write!(formatter, "1 dependency to fix"),
-                count => write!(formatter, "{count} dependencies to fix"),
-            },
+            Failure::Dependencies(problems) => write!(
+                formatter,
+                "{} to fix",
+                counted(*problems, "dependency", "dependencies")
+            ),
             Failure::NoDirectory => write!(formatter, "nowhere to keep a scratchpad"),
             Failure::Write(error) => write!(formatter, "could not write the package: {error}"),
             Failure::Delete(error) => write!(formatter, "could not delete the package: {error}"),

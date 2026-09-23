@@ -666,8 +666,10 @@ impl PadRun {
     pub(crate) fn verdict(&self) -> Option<Verdict> {
         let dropped = match self.output.dropped() {
             0 => String::new(),
-            1 => " (1 earlier line dropped)".to_owned(),
-            count => format!(" ({count} earlier lines dropped)"),
+            count => format!(
+                " ({} dropped)",
+                counted(count, "earlier line", "earlier lines")
+            ),
         };
 
         let (text, bad) = match &self.state {

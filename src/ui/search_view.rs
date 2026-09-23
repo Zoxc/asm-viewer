@@ -259,15 +259,18 @@ fn heading(summary: Summary) -> String {
         files,
         capped,
     } = summary;
-    let matches = if hits == 1 { "match" } else { "matches" };
-    let files_word = if files == 1 { "file" } else { "files" };
+    let found = format!(
+        "{} in {}",
+        counted(hits, "match", "matches"),
+        counted(files, "file", "files")
+    );
     if running {
-        return format!("{hits} {matches} in {files} {files_word}\u{2026}");
+        return format!("{found}\u{2026}");
     }
     if capped {
-        return format!("First {hits} {matches} in {files} {files_word}");
+        return format!("First {found}");
     }
-    format!("{hits} {matches} in {files} {files_word}")
+    found
 }
 
 #[cfg(test)]

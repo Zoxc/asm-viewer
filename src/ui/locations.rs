@@ -171,11 +171,7 @@ impl Query {
     /// The heading over `count` rows: what they are, and what they are of.
     fn heading(&self, count: usize) -> String {
         let (one, many) = self.words();
-        format!(
-            "{count} {} {}",
-            if count == 1 { one } else { many },
-            self.spell()
-        )
+        format!("{} {}", counted(count, one, many), self.spell())
     }
 }
 
