@@ -429,7 +429,11 @@ every server answers it, and a `didOpen` to a server that declined them is a cli
 call broken.
 
 **The one document the app has of a file is version 1**, always. It shows what is on disk
-and edits nothing, so a version that counted would only ever count re-reads.
+and edits nothing, so a version that counted would only ever count re-reads. Its text is
+`source::read_text`'s, the one rule for reading a source file: a file with one bad byte is
+sent decoded lossily, as the pane draws it and the columns are counted in, rather than
+never sent, and a path that has become a fifo is refused rather than read on the worker for
+ever.
 
 **A file read afresh is closed and opened again**, which is the overlay's cost and the
 whole of it. The server answers about the text it was handed until told otherwise, so a

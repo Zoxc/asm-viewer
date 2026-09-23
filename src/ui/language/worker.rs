@@ -262,7 +262,11 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                     if !talk.opens() {
                         return Ok(false);
                     }
-                    let Ok(text) = std::fs::read_to_string(&path) else {
+                    // The one rule for reading a source file, so the server is given
+                    // the text the pane draws and the columns are counted in: a file with
+                    // one bad byte is decoded lossily rather than never sent, and a path
+                    // that has become a fifo is refused rather than read for ever.
+                    let Some(text) = source::read_text(&path) else {
                         return Ok(false);
                     };
                     talk.opened(&path, &language, &text).map(|()| true)
