@@ -9,6 +9,7 @@
 
 mod common;
 
+use analysis::Operand;
 use common::{at, goes_to, parse, symbol, text};
 use object::{
     write, Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags,
@@ -157,4 +158,57 @@ fn a_code_section_that_is_not_called_text_is_still_code() {
 
     let assembly = symbol.assembly(&object).expect("inline_copy disassembles");
     assert_eq!(text(&assembly.instructions[0]).trim_end(), "ret");
+}
+
+/// `mov rax, target - caller` in `__text`: a SUBTRACTOR pair, which `object` hands over as
+/// one relocation to `target` carrying `caller` as its subtractor. The bytes hold a
+/// distance and not an address, so naming `target` would call a length a symbol: the
+/// operand names nothing and keeps its placeholder.
+#[test]
+fn a_subtractor_pair_names_nothing() {
+    let mut obj = write::Object::new(
+        BinaryFormat::MachO,
+        Architecture::X86_64,
+        Endianness::Little,
+    );
+    obj.mangling = write::Mangling::None;
+    let code = obj.add_section(b"__TEXT".to_vec(), b"__text".to_vec(), SectionKind::Text);
+    obj.append_section_data(code, &[0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0xC3, 0xC3], 1);
+    let mut add = |name: &[u8], value| {
+        obj.add_symbol(write::Symbol {
+            name: name.to_vec(),
+            value,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(code),
+            flags: SymbolFlags::None,
+        })
+    };
+    let caller = add(b"caller", 0);
+    let target = add(b"target", 11);
+    obj.add_relocation_with_subtractor(
+        code,
+        write::Relocation {
+            offset: 2,
+            symbol: target,
+            addend: 0,
+            flags: RelocationFlags::Generic {
+                kind: RelocationKind::Absolute,
+                encoding: RelocationEncoding::Generic,
+                size: 64,
+            },
+        },
+        Some(caller),
+    )
+    .expect("adding the subtractor pair");
+    let data = obj.write().expect("writing the fixture object");
+
+    let object = parse(&data);
+    let caller = symbol(&object, "caller");
+    let assembly = caller.assembly(&object).expect("caller disassembles");
+    let mov = &assembly.instructions[0];
+    assert_eq!(text(mov).trim_end(), "mov       rax, 0");
+    assert!(matches!(mov.operand, Some(Operand::Placeholder)));
 }

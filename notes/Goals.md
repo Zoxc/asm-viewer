@@ -222,7 +222,8 @@ leaves this list when it is. That is a move made on request, like everything els
 - [ ] Let a call target with no symbol be opened, where a relocation names it as a section and
   an addend. `Code::relocations` answers a `Relocated` whose `target` is `None` whenever the
   relocation points at something the object has no text symbol for — a section symbol with an
-  addend (`.text+0x40`), a data symbol, an undefined import — and the operand is then drawn as
+  addend (`.text+0x40`), a data symbol, an undefined import — or states a distance, as a Mach-O
+  `A - B` does, and the operand is then drawn as
   the placeholder the linker will overwrite, with nothing to click. The section-plus-addend
   case is an address the object could compute, but the parse keeps no section symbols and
   reads no relocation kind, both of which the sum depends on (`S + A` against a PC-relative

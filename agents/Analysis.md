@@ -687,7 +687,9 @@ indexing past the symbol.
 
 **Relocation handling** is the subtle part, and all of it is x86's (`disasm/x86.rs`). Every
 relocation whose address falls anywhere in the instruction's byte range is resolved to an
-`Arc<SymbolData>`, and each target's name is printed *in place of* its placeholder operand through iced-x86's
+`Arc<SymbolData>`, except a Mach-O `A - B`: `object` hands that pair over as one relocation to `A`
+carrying `B` as its `subtractor`, and the bytes hold a distance, so naming `A` would draw a length
+as a link to a function. It names nothing and its operand keeps its placeholder. Each target's name is printed *in place of* its placeholder operand through iced-x86's
 `SymbolResolver` hook, not by suppressing the number, which left the brackets the formatter had
 already opened empty (`call qword ptr []`). A relocation names no operand, so the loop works out
 which of the instruction's fields it is in from where the decoder found each

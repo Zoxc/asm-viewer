@@ -87,7 +87,8 @@ impl<'a> Code<'a> {
     /// Both halves of each answer are different questions: one being there means the
     /// encoded field is a placeholder, while [`target`](Relocated::target) is [`None`]
     /// whenever the relocation points at something this object has no text symbol for (a
-    /// section, a data symbol, an undefined import).
+    /// section, a data symbol, an undefined import), or states the distance between two
+    /// symbols (a Mach-O `A - B`) rather than one's address.
     pub fn relocations(
         &self,
         address: SectionAddress,
@@ -105,8 +106,12 @@ impl<'a> Code<'a> {
             .flat_map(move |code| code.relocations.range((Bound::Included(address), end)))
             .flat_map(|(&address, found)| found.iter().map(move |found| (address, found)))
             .map(|(address, found)| {
+                // A Mach-O SUBTRACTOR pair comes as one relocation carrying its second
+                // symbol: the bytes hold a distance between two symbols, which names neither.
                 let target = match found.target() {
-                    RelocationTarget::Symbol(index) => self.object.symbols.get(&index).cloned(),
+                    RelocationTarget::Symbol(index) if found.subtractor().is_none() => {
+                        self.object.symbols.get(&index).cloned()
+                    }
                     _ => None,
                 };
                 Relocated { address, target }
@@ -138,7 +143,8 @@ pub(crate) struct Relocated {
     /// in: it names no operand.
     pub address: SectionAddress,
 
-    /// The text symbol the relocation names, where it names one this object kept.
+    /// The text symbol the relocation names, where it names one this object kept. Never
+    /// one of the two a difference is taken between: see [`Code::relocations`].
     pub target: Option<Arc<SymbolData>>,
 }
 
@@ -200,9 +206,10 @@ pub enum Operand {
     Names(Vec<SymbolName>),
 
     /// A relocation covered the bytes and named nothing this object kept — a section, a
-    /// data symbol, an undefined import. What is printed is the placeholder itself, so the
-    /// row names neither a symbol nor an address and has no link. Kept apart from having no
-    /// operand at all because it is the one case where the number means nothing.
+    /// data symbol, an undefined import, the distance between two symbols. What is printed
+    /// is the placeholder itself, so the row names neither a symbol nor an address and has
+    /// no link. Kept apart from having no operand at all because it is the one case where
+    /// the number means nothing.
     ///
     /// [`Names`](Self::Names)' other half, and reached on the same rule: a relocation
     /// covers these bytes. Nothing about the opcode enters into it.
