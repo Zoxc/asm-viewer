@@ -11,6 +11,8 @@ use std::{
     ffi::OsString,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc,
+    time::Duration,
 };
 
 /// Show `path` in the desktop's file manager, on a thread of its own.
@@ -33,16 +35,42 @@ pub fn reveal(path: PathBuf) {
     }
 }
 
-/// The same on **this** thread, for a caller that is about to leave: the panic box, whose
+/// The same, waited for, for a caller that is about to leave: the panic box, whose
 /// shutdown would kill the thread [`reveal`] starts before it had spawned anything.
 /// Answers whether a program ran.
 ///
-/// Safe to wait on because each attempt is a program that hands the path to the desktop
-/// and exits, rather than the file manager itself ([`run`]); the caller is a reader who
-/// has just pressed a button and is waiting either way. Nothing is said in a box when
-/// nothing answers -- the caller is already showing one.
+/// Waited for [`PATIENCE`] at most, because an attempt can be the file manager itself:
+/// `xdg-open` on a desktop it does not know runs the handler in the foreground and exits
+/// only when its window is closed. Waiting for that held up the shutdown until the reader
+/// closed the window they had just asked for. An attempt still running when the wait ends
+/// has started, and is taken to have worked. Nothing is said in a box when nothing
+/// answers -- the caller is already showing one.
 pub fn reveal_now(path: &Path) -> bool {
-    show(path)
+    let path = path.to_path_buf();
+    within(PATIENCE, move || show(&path))
+}
+
+/// How long [`reveal_now`] waits for an answer.
+const PATIENCE: Duration = Duration::from_secs(2);
+
+/// Run `work` on a thread of its own and answer what it does, or `true` if it has not
+/// finished within `patience`. `false` when the thread cannot be started.
+fn within(patience: Duration, work: impl FnOnce() -> bool + Send + 'static) -> bool {
+    let (answer, answered) = mpsc::channel();
+    // Named, so that a panic on it says which thread died (`crate::panics`).
+    let started = std::thread::Builder::new()
+        .name("the file manager call".to_owned())
+        .spawn(move || {
+            let _ = answer.send(work());
+        });
+    if started.is_err() {
+        return false;
+    }
+    match answered.recv_timeout(patience) {
+        Ok(shown) => shown,
+        Err(mpsc::RecvTimeoutError::Timeout) => true,
+        Err(mpsc::RecvTimeoutError::Disconnected) => false,
+    }
 }
 
 /// Try the platform's ways of showing `path` in order, and say whether one worked.
@@ -125,8 +153,9 @@ fn run(attempt: &Attempt) -> bool {
     let Ok(mut child) = command.spawn() else {
         return false;
     };
-    // Waited for, always: nothing else here would reap it, and each of these programs
-    // hands the file to the desktop and exits rather than being the file manager.
+    // Waited for, always: nothing else here would reap it. Each of these programs hands
+    // the file to the desktop and exits, except `xdg-open` on a desktop it does not know,
+    // which runs the file manager in the foreground ([`reveal_now`]).
     let finished = child.wait();
     match attempt.judged {
         Judged::ByStatus => finished.is_ok_and(|status| status.success()),

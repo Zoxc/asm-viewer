@@ -184,3 +184,26 @@ fn the_finder_reveals_a_folder_the_same_way() {
         ["-R", "/Users/r/dev"]
     );
 }
+
+/// `xdg-open` on a desktop it does not know runs the file manager in the foreground and
+/// returns only when its window is closed. The panic box's wait for it ends anyway, and
+/// takes the attempt still running as one that started.
+#[test]
+fn a_reveal_still_running_is_not_waited_for_past_the_patience() {
+    let (release, held) = mpsc::channel::<()>();
+    let started = std::time::Instant::now();
+    let shown = within(Duration::from_millis(50), move || {
+        let _ = held.recv();
+        false
+    });
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(shown, "an attempt still running was taken to have failed");
+    drop(release);
+}
+
+/// An answer inside the wait is the answer.
+#[test]
+fn a_reveal_that_answers_in_time_is_taken_at_its_word() {
+    assert!(!within(Duration::from_secs(60), || false));
+    assert!(within(Duration::from_secs(60), || true));
+}
