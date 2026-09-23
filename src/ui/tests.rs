@@ -13092,6 +13092,66 @@ fn a_symbol_with_no_stated_size_says_its_size_is_unknown() {
     );
 }
 
+/// A symbol the crate made no listing of has no extent either, so the bar says so rather
+/// than "0 bytes" above a pane saying the assembly is unavailable. A symbol in no section
+/// is one the crate cannot list.
+#[test]
+fn a_symbol_with_no_listing_says_its_extent_is_unknown() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let unlisted = Symbol {
+        object: sum_to.object.clone(),
+        data: Arc::new(SymbolData::new(
+            sum_to.data.name.clone(),
+            None,
+            sum_to.data.address,
+            None,
+            sum_to.data.size,
+        )),
+    };
+    let shown = Shown {
+        ask: Ask::Symbol(unlisted.clone()),
+        studied: Studied::new(unlisted.clone()),
+    };
+
+    let (mut test, roots) = TestingRunner::new(
+        listing_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Symbol(unlisted),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    let triangle = triangle_of(&test);
+    test.move_cursor(triangle);
+    test.press_cursor(triangle);
+    test.release_cursor(triangle);
+    settle(&mut test);
+
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "Assembly unavailable"),
+        "{drawn:?}"
+    );
+    let at = drawn
+        .iter()
+        .position(|text| text == "Extent")
+        .expect("the section names the extent");
+    assert_eq!(
+        drawn.get(at + 1).map(String::as_str),
+        Some("Unknown size"),
+        "{drawn:?}"
+    );
+}
+
 /// **The bar prints the extent of the listing it is drawing, and asks the crate for
 /// nothing.** `SymbolData::extent` is the most expensive answer in the crate -- an unwind
 /// lookup, an ELF size, or a DWARF DIE walk under the debug backend's mutex -- and `facts`

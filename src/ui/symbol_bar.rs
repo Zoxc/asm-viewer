@@ -104,8 +104,9 @@ fn fact(name: &str, value: String) -> impl IntoElement {
 pub(crate) enum Heading {
     Symbol {
         symbol: Symbol,
-        /// How many bytes the pane below is drawing, from the listing it is drawing.
-        extent: u64,
+        /// How many bytes the pane below is drawing, from the listing it is drawing, or
+        /// `None` where there is no listing.
+        extent: Option<u64>,
     },
     Object(Arc<Object>),
 }
@@ -153,7 +154,14 @@ fn facts(heading: &Heading) -> Vec<Element> {
                     },
                 )
                 .into_element(),
-                fact("Extent", format!("{extent} bytes")).into_element(),
+                fact(
+                    "Extent",
+                    match extent {
+                        Some(extent) => format!("{extent} bytes"),
+                        None => "Unknown size".to_owned(),
+                    },
+                )
+                .into_element(),
                 fact("Object", symbol.object.name.clone()).into_element(),
             ]
         }

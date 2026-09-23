@@ -505,15 +505,14 @@ impl Studied {
 
 impl Studied {
     /// How many bytes of code this listing was decoded over: the extent the crate worked
-    /// out for the symbol, and 0 for a symbol with nothing to decode.
+    /// out for the symbol, or `None` where the crate made no listing.
     ///
     /// **Read off the answer and never asked again.** `SymbolData::extent` is the crate's
     /// most expensive decision -- an unwind lookup, or a DWARF DIE walk under the debug
     /// backend's mutex -- and the bar over the pane prints this number in a render.
-    pub(crate) fn extent(&self) -> u64 {
-        self.assembly.as_ref().map_or(0, |assembly| {
-            assembly.range.start.bytes_to_saturating(assembly.range.end)
-        })
+    pub(crate) fn extent(&self) -> Option<u64> {
+        let assembly = self.assembly.as_ref()?;
+        Some(assembly.range.start.bytes_to_saturating(assembly.range.end))
     }
 
     /// The source position the instruction at `index` was compiled from, or `None` where
