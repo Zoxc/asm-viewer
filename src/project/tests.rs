@@ -251,6 +251,38 @@ fn a_project_missing_a_half_still_reopens() {
     assert_eq!(fs::read(&moved).ok().as_deref(), Some(&b"{ not toml"[..]));
 }
 
+/// The session beside a project the reader gave a place is outside the store and still the
+/// app's own: one that will not parse is moved aside rather than left for the next flush to
+/// write over.
+#[test]
+fn a_placed_project_s_corrupt_session_is_moved_aside() {
+    let base = directory();
+    let store = Store::at(base.join("state"));
+    let path = base.join("code").join(format!("app.{PROJECT_EXTENSION}"));
+    store
+        .write_toml(&path, &a_project())
+        .expect("saving the project");
+    let session = session_beside(&path);
+    fs::write(&session, b"{ not toml").expect("writing the corrupt half");
+
+    let (_, restored) = load_project(&store, &path).expect("the project opens");
+    assert_eq!(restored, Session::default());
+    assert!(
+        !session.exists(),
+        "the session was left for a flush to replace"
+    );
+    let moved = store
+        .path(crate::store::INCOMPATIBLE_DIR)
+        .join(crate::store::OUTSIDE_DIR)
+        .join(
+            session
+                .components()
+                .filter(|part| matches!(part, std::path::Component::Normal(_)))
+                .collect::<PathBuf>(),
+        );
+    assert_eq!(fs::read(&moved).ok().as_deref(), Some(&b"{ not toml"[..]));
+}
+
 /// The project file is the reader's own, wherever it is kept, so one that will not parse is
 /// **not** moved aside: the project simply does not open, and nothing writes over what
 /// could not be read. Telling the reader is therefore the whole of what happens, so what

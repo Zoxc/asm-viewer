@@ -126,16 +126,25 @@ fn a_missing_file_moves_nothing() {
     assert!(!base.join(INCOMPATIBLE_DIR).exists());
 }
 
-/// A path this app does not store is one it has no mirror for, and moving it would be
-/// taking away a file that is somebody else's.
+/// A file the app keeps outside the store -- the session beside a project the reader gave
+/// a place -- is the app's all the same, and the next write would replace it just as
+/// surely. It is moved aside under `outside/`, at its whole path less the root.
 #[test]
-fn a_path_outside_the_base_is_left_where_it_is() {
+fn a_path_outside_the_base_is_moved_aside_too() {
     let base = Temporary::fresh("store-test");
     let outside = base.join("elsewhere").join("settings.toml");
     written(&outside, b"{ not toml");
 
-    assert_eq!(Store::at(&base.join("state")).read::<Named>(&outside), None);
-    assert!(outside.exists());
+    let state = base.join("state");
+    assert_eq!(Store::at(&state).read::<Named>(&outside), None);
+    assert!(!outside.exists());
+
+    let named: PathBuf = outside
+        .components()
+        .filter(|part| matches!(part, Component::Normal(_)))
+        .collect();
+    let moved = state.join(INCOMPATIBLE_DIR).join(OUTSIDE_DIR).join(named);
+    assert_eq!(fs::read(&moved).ok().as_deref(), Some(&b"{ not toml"[..]));
 }
 
 /// The variable that points this app's storage somewhere of its own, so a second copy does

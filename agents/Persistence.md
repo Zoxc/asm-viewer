@@ -23,8 +23,14 @@ answers `None` -- which is what every one of these loads already meant by "not t
 changed shape. It being the store's only read is the point: the pad order used to parse its file
 itself and so let the next write destroy it, which is exactly the drift a second reader of the
 rule invites. A file the system will not hand over at all is left alone: nothing can be salvaged
-from it, and nothing is about to write over it either, and neither is one outside the store, which
-is not this app's to move. The mirror (`incompatible/projects/1.avproj.session`) is so that a moved
+from it, and nothing is about to write over it either. **Only the app's own files are read through
+it, wherever they sit**: the session beside a project the reader gave a place is outside the store
+and is the app's all the same, and the next flush would replace it as surely as any other. It used
+to be read and left where it was, a path outside the store taken for somebody else's, so a session
+a newer build wrote was overwritten with the default and never named. The reader's own file, the
+project file, is read another way (below). The mirror (`incompatible/projects/1.avproj.session`, or
+`incompatible/outside/home/me/app/app.avproj.session` for one outside the store, so it cannot be
+taken for one of the store's own) is so that a moved
 file keeps the shape of the path it had rather than being flattened into one heap, and the
 destination is claimed through `Store::claim` -- `settings.toml`, then `2-settings.toml` -- which
 is `unsaved_project`'s "a create that fails rather than opens", and for its reason: nothing there

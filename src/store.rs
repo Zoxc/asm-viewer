@@ -12,7 +12,7 @@
 use std::{
     fs::{self, File},
     io::Write,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use async_channel::{Receiver, Sender};
@@ -42,6 +42,10 @@ const PANICS_DIR: &str = "panics";
 
 /// Where a file that will not parse goes, under the directory everything is stored in.
 pub(crate) const INCOMPATIBLE_DIR: &str = "incompatible";
+
+/// Where under [`INCOMPATIBLE_DIR`] a file the app keeps outside the store goes: the session
+/// beside a project the reader gave a place.
+pub(crate) const OUTSIDE_DIR: &str = "outside";
 
 /// What an order of ids is kept in, wherever one is kept ([`crate::order::Order`]): the
 /// projects' is at the top of the store and the scratchpads' is beside the pads.
@@ -197,8 +201,12 @@ impl Store {
     /// The bytes and not a string: a file that is not UTF-8 will not parse either, and is
     /// lost in exactly the same way. A file the system will not hand over at all is left
     /// where it is — nothing can be salvaged from it, and nothing is about to write over
-    /// it either. A path outside the store is read and not moved: it is not this app's to
-    /// take away.
+    /// it either.
+    ///
+    /// **Only the app's own files are read here**, wherever they are: a session sits
+    /// beside its project file, outside the store once the reader gave the project a
+    /// place, and is moved aside all the same. A file that is the reader's, like the
+    /// project file itself, is read some other way.
     pub fn read<T: DeserializeOwned>(&self, path: impl AsRef<Path>) -> Option<T> {
         let path = self.path(path);
         let data = fs::read(&path).ok()?;
@@ -264,9 +272,9 @@ impl Store {
     /// rather than copied, since nothing writes over `settings.toml` until a setting
     /// changes and a file left in place would be rescued again on every launch.
     fn move_aside(&self, path: &Path, data: &[u8]) -> Option<PathBuf> {
-        let relative = self.relative(path)?;
-        let name = relative.file_name()?.to_string_lossy().into_owned();
-        let directory = Path::new(INCOMPATIBLE_DIR).join(relative.parent()?);
+        let mirrored = self.mirrored(path);
+        let name = mirrored.file_name()?.to_string_lossy().into_owned();
+        let directory = Path::new(INCOMPATIBLE_DIR).join(mirrored.parent()?);
 
         let moved = self.claim(
             directory,
@@ -282,6 +290,20 @@ impl Store {
             log::warn!("could not remove {}: {error}", path.display());
         }
         Some(moved)
+    }
+
+    /// The path `path` is mirrored at under `incompatible/`: where it sits under the store,
+    /// or, for a file outside it, its whole path under [`OUTSIDE_DIR`] less the root, so
+    /// it cannot be taken for one of the store's own.
+    fn mirrored(&self, path: &Path) -> PathBuf {
+        if let Some(relative) = self.relative(path) {
+            return relative.to_path_buf();
+        }
+        let named = path.components().filter_map(|part| match part {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        });
+        Path::new(OUTSIDE_DIR).join(named.collect::<PathBuf>())
     }
 }
 
