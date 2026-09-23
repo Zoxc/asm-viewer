@@ -279,6 +279,75 @@ fn a_function_msvc_quotes_as_a_scope_is_read_as_one() {
     );
 }
 
+/// A lambda outside any function has only its call operator to be called by: the access
+/// and the return type in front of `<lambda_1>` are not a scope. What `symbolic-demangle`
+/// makes of `??R<lambda_1>@@QEBA@XZ` and its neighbours, and the report's own spelling.
+#[test]
+fn a_lambda_outside_any_function_is_titled_after_its_call_operator() {
+    assert_eq!(
+        short_name("public: <lambda_1>::operator()(void) const"),
+        "operator()"
+    );
+    assert_eq!(
+        short_name("public: void <lambda_1>::operator()(void) const"),
+        "operator()"
+    );
+    assert_eq!(
+        short_name("public: <lambda_1>::operator()<int>(int) const"),
+        "operator()"
+    );
+    assert_eq!(
+        short_name("public: auto __cdecl <lambda_1>::operator()(void) const"),
+        "operator()"
+    );
+    assert_eq!(
+        short_name("public: void ns::<lambda_1>::operator()(void) const"),
+        "ns::operator()"
+    );
+    // A lambda as the return type is a word in front of the name.
+    assert_eq!(short_name("<lambda_1> f(void)"), "f");
+}
+
+/// MSVC opens a thunk's name with `[thunk]:`, which is a word in front of it and not a
+/// group hanging off an empty one. What `symbolic-demangle` makes of `?f@Foo@@W7EAAXXZ`,
+/// `??_EFoo@@W7EAAPEAXI@Z` and `??_9Foo@@$BA@AA`.
+#[test]
+fn a_thunk_is_named_after_what_it_is_a_thunk_for() {
+    assert_eq!(
+        short_name("[thunk]: public: virtual void Foo::f(void)"),
+        "Foo::f"
+    );
+    assert_eq!(
+        short_name(
+            "[thunk]: public: virtual void* Foo::`vector deleting destructor'(unsigned int)"
+        ),
+        "Foo::`vector deleting destructor'"
+    );
+    assert_eq!(
+        short_name("[thunk]: Foo::`vcall'{0, {flat}}"),
+        "Foo::`vcall'"
+    );
+}
+
+/// A function returning a function pointer has its name inside the declarator, and its
+/// return type all around it. What `symbolic-demangle` makes of `?f@ns@@YAP6AHH@ZXZ`,
+/// `?f@@YAP6AP6AHH@ZH@ZXZ`, `?f@Foo@@QEAAP8Foo@@EAAXXZXZ` and `_Z1fIiEPFiiEv`.
+#[test]
+fn a_function_pointer_return_type_is_not_the_name() {
+    assert_eq!(short_name("int (* ns::f(void))(int)"), "ns::f");
+    assert_eq!(short_name("int (* (* f(void))(int))(int)"), "f");
+    assert_eq!(
+        short_name("public: void (Foo::* Foo::f(void))(void)"),
+        "Foo::f"
+    );
+    assert_eq!(short_name("int (*)(int) f<int>()"), "f");
+    // The template arguments after an operator still hang off it.
+    assert_eq!(
+        short_name("std::operator<< <std::char_traits<char> >(std::ostream&, char const*)"),
+        "std::operator<<"
+    );
+}
+
 /// A lambda in a lambda is titled as the outer one is: the outer call operator is only
 /// where it was written. Clang's `$_0` is a lambda like `{lambda()#1}`. Written by hand.
 #[test]
@@ -378,6 +447,19 @@ fn a_name_that_makes_no_sense_is_answered_rather_than_panicked_on() {
         "<lambda_",
         "<lambda_>::operator()",
         "$_0::operator()::$_1::operator()",
+        "(",
+        "[",
+        "[thunk]:",
+        "int (",
+        "int (*",
+        "int (* (",
+        "int (*)",
+        "a (&)(",
+        "public: <lambda_1>",
+        "<lambda_1> ",
+        "x <",
+        "operator<< <",
+        "λ (字* 漢)(",
     ] {
         // Whatever comes back, it came back.
         assert!(!short_name(name).is_empty() || name.trim().is_empty());
@@ -446,4 +528,14 @@ fn a_name_that_is_all_brackets_is_answered_rather_than_overflowing_the_stack() {
 
     let nested = format!("{}Foo{}::bar", "<".repeat(100_000), ">".repeat(100_000));
     assert!(short_name(&nested).ends_with("bar"));
+
+    // Declarators nest as deep as the name likes, and only [`OPENED`] of them are opened.
+    let declarators = format!(
+        "int {}f(void){}",
+        "(* ".repeat(10_000),
+        ")(int)".repeat(10_000)
+    );
+    assert!(!short_name(&declarators).is_empty());
+    let words = "a (b) ".repeat(100_000);
+    assert!(!short_name(&words).is_empty());
 }

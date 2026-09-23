@@ -53,8 +53,9 @@ pub fn short_name(name: &str) -> String {
     let mut path: Vec<&str> = Vec::new();
     let mut annotation: Option<&str> = None;
     // The segments left to read, the next one last. A function MSVC quotes as the scope
-    // of what is inside it is opened into its own segments here, as many times as it
-    // nests: a loop and a cap rather than a recursion, for the reason `qualifier` gives.
+    // of what is inside it, and the name inside a declarator, are opened into their own
+    // segments here, as many times as they nest: a loop and a cap rather than a
+    // recursion, for the reason `qualifier` gives.
     let mut pending: Vec<&str> = segments.into_iter().rev().collect();
     let mut opened = 0;
     let mut index = 0;
@@ -64,8 +65,8 @@ pub fn short_name(name: &str) -> String {
     let mut in_lambda = false;
     let mut lambda_call = false;
     while let Some(segment) = pending.pop() {
-        if opened < QUOTED_SCOPES {
-            if let Some(scope) = quoted_function(segment) {
+        if opened < OPENED {
+            if let Some(scope) = quoted_function(segment).or_else(|| declarator(segment)) {
                 opened += 1;
                 pending.extend(split_path(scope).into_iter().rev());
                 continue;
@@ -107,9 +108,9 @@ pub fn short_name(name: &str) -> String {
     }
 }
 
-/// How many functions MSVC quotes as a scope one name is read through. A lambda inside a
+/// How many quoted functions and declarators one name is read through. A lambda inside a
 /// lambda is one more; nothing real nests anywhere near this deep.
-const QUOTED_SCOPES: usize = 32;
+const OPENED: usize = 32;
 
 /// The function inside a segment that is one MSVC quotes as the scope of what follows:
 /// `` `void ns::g(int)' `` in `` `void ns::g(int)'::`1'::<lambda_1>::operator() ``, which
@@ -122,6 +123,26 @@ fn quoted_function(segment: &str) -> Option<&str> {
     top_level(quoted)
         .any(|(at, top)| matches!(top, Top::Group { .. }) && quoted.as_bytes()[at] == b'(')
         .then_some(quoted)
+}
+
+/// The name inside the declarator of a function that returns a function pointer, from the
+/// last `*` or `&` on: `ns::f(void)` in `int (* ns::f(void))(int)`. The declarator is the
+/// first group, and a space comes before it where an argument list follows a name.
+fn declarator(segment: &str) -> Option<&str> {
+    let (at, end) = top_level(segment).find_map(|(at, top)| match top {
+        Top::Group { end } => Some((at, end)),
+        Top::Byte(_) => None,
+    })?;
+    let bytes = segment.as_bytes();
+    if bytes[at] != b'(' || at == 0 || !bytes[at - 1].is_ascii_whitespace() {
+        return None;
+    }
+    let inner = inside(&segment[at..end]);
+    let (star, _) = top_level(inner)
+        .filter(|(_, top)| matches!(top, Top::Byte(b'*' | b'&')))
+        .last()?;
+    let name = &inner[star + 1..];
+    (!name.trim().is_empty()).then_some(name)
 }
 
 /// Whether a name is one of the app's own: a single angle-bracket group, closed, with
@@ -168,11 +189,15 @@ fn reduce(segment: &str, first: bool) -> Option<Part<'_>> {
     let segment = segment.trim();
     match segment.as_bytes().first()? {
         b'{' => Some(Part::Annotation(segment)),
-        b'<' if first => qualifier(segment).map(Part::Name),
-        b'<' => None,
+        b'<' if skip_group(segment, 0) == segment.len() => {
+            first.then(|| qualifier(segment).map(Part::Name)).flatten()
+        }
         _ => {
             let name = last_word(head(segment));
+            // A name that is a group has nothing to call it by: MSVC's `<lambda_1>`, or
+            // the `[T]` of a `<[T] as Clone>`.
             let noise = name.is_empty()
+                || name.starts_with(['<', '[', '('])
                 || name == "`anonymous namespace'"
                 || is_block(name)
                 || is_unnamed(name);
@@ -235,12 +260,12 @@ fn qualifier(segment: &str) -> Option<&str> {
     None
 }
 
-/// What a `<...>` group holds: one `<` off the front, and the `>` off the end when there
-/// is one -- a name whose brackets do not balance has the group running to its end
-/// instead.
+/// What a group holds: its opening bracket off the front, and its closing one off the end
+/// when there is one -- a name whose brackets do not balance has the group running to its
+/// end instead.
 fn inside(group: &str) -> &str {
     let end = skip_group(group, 0);
-    let closed = end > 1 && group.as_bytes()[end - 1] == b'>';
+    let closed = end > 1 && matches!(group.as_bytes()[end - 1], b'>' | b')' | b']' | b'}');
     &group[1..if closed { end - 1 } else { end }]
 }
 
@@ -257,8 +282,31 @@ fn split_as(inside: &str) -> Option<(&str, &str)> {
 
 /// A segment up to the first group that hangs off it: the generic arguments, the C++
 /// argument list, and with them the ` const` and the `&` that follow one.
+///
+/// A group that starts a word hangs off nothing: it is a word of its own, such as MSVC's
+/// `<lambda_1>` and `[thunk]:`, or part of a return type, with the groups right after it:
+/// `int (*)(int)`. The template arguments after an `operator<< ` are the exception.
 fn head(segment: &str) -> &str {
-    match top_level(segment).find(|(_, top)| matches!(top, Top::Group { .. })) {
+    let bytes = segment.as_bytes();
+    // Where the last group that is a word ended, which a group right after continues.
+    let mut word_end = None;
+    let hanging = top_level(segment).find(|&(at, ref top)| {
+        let Top::Group { end } = *top else {
+            return false;
+        };
+        // Only the word before is read, so a segment of many groups is still one pass.
+        let after_operator = || {
+            let before = segment[..at].trim_end();
+            before[before.rfind(' ').map_or(0, |space| space + 1)..].starts_with("operator")
+        };
+        let starts_word = word_end == Some(at)
+            || (at == 0 || bytes[at - 1].is_ascii_whitespace()) && !after_operator();
+        if starts_word {
+            word_end = Some(end);
+        }
+        !starts_word
+    });
+    match hanging {
         Some((at, _)) => &segment[..at],
         None => segment,
     }
@@ -284,18 +332,23 @@ fn last_word(text: &str) -> &str {
     if let Some((at, _)) = operator {
         return &text[at..];
     }
-    match text.rfind(char::is_whitespace) {
-        Some(space) => text[space..].trim_start(),
+    // Outside every group, since [`head`] leaves a word that is a group in.
+    let space = top_level(text)
+        .filter(|(_, top)| matches!(top, Top::Byte(byte) if byte.is_ascii_whitespace()))
+        .last();
+    match space {
+        Some((space, _)) => text[space..].trim_start(),
         None => text,
     }
 }
 
 /// Whether a segment names a lambda: `{lambda(int)#2}` in an Itanium name, `<lambda_1>` in
-/// an MSVC one, and Clang's `$_0`.
+/// an MSVC one, and Clang's `$_0`. MSVC may put `public:` and a return type in front.
 fn is_lambda(segment: &str) -> bool {
     let segment = segment.trim();
+    let name = last_word(head(segment));
     segment.starts_with("{lambda(")
-        || segment.starts_with("<lambda_") && segment.ends_with('>')
+        || name.starts_with("<lambda_") && name.ends_with('>')
         || is_unnamed(segment)
 }
 
@@ -336,7 +389,7 @@ enum Top {
 /// `operator` token, in order, with what is there: a byte, or a whole group at the offset
 /// it opens on. An MSVC quote at the top level is yielded as its opening `` ` `` alone.
 ///
-/// The one walk in this file. The three bracket kinds share a depth, since nothing here
+/// The one walk in this file. The four bracket kinds share a depth, since nothing here
 /// has to tell a well-formed name from a broken one, and the rules about what does *not*
 /// open or close a group are kept here rather than once per searcher, which is where they
 /// drifted apart.
@@ -371,7 +424,7 @@ impl Iterator for TopLevel<'_> {
                         return Some((at, Top::Byte(b'`')));
                     }
                 }
-                b'<' | b'(' | b'[' => {
+                b'<' | b'(' | b'[' | b'{' => {
                     if depth == 0 {
                         open = at;
                     }
@@ -380,7 +433,7 @@ impl Iterator for TopLevel<'_> {
                 // The `>` of a `->`: `fn(*mut c_void) -> *mut c_void` is a type, and its
                 // arrow closes nothing.
                 b'>' if depth > 0 && at > 0 && bytes[at - 1] == b'-' => {}
-                b'>' | b')' | b']' if depth > 0 => {
+                b'>' | b')' | b']' | b'}' if depth > 0 => {
                     depth -= 1;
                     if depth == 0 {
                         return Some((open, Top::Group { end: at + 1 }));
