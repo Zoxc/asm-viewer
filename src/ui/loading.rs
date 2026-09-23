@@ -31,7 +31,7 @@ pub(crate) async fn open_binaries(
 ) {
     // Registered before a byte is read, so the rows are on screen for the whole wait.
     let id = begin_load(loading, &paths);
-    read_binaries(objects, loading, id, paths).await;
+    read_binaries(objects, loading, id, paths, Vec::new()).await;
 }
 
 /// The first half of [`open_binaries`]: register `paths` as being read now, rather than
@@ -42,12 +42,14 @@ pub(crate) fn begin_load(mut loading: State<Loads>, paths: &[PathBuf]) -> LoadId
     loading.write().begin(paths)
 }
 
-/// The second half: read the load [`begin_load`] registered as `id`.
+/// The second half: read the load [`begin_load`] registered as `id`. `order` is what a
+/// file read again goes back among ([`crate::tree::slot`]).
 pub(crate) async fn read_binaries(
     objects: State<Vec<Arc<Object>>>,
     loading: State<Loads>,
     id: LoadId,
     paths: Vec<PathBuf>,
+    order: Vec<PathBuf>,
 ) {
     // Unbounded: the worker should run flat out. What stops it is the receiver going,
     // which is `take_load` deciding that nothing more from this load is wanted -- and is
@@ -57,7 +59,7 @@ pub(crate) async fn read_binaries(
         open_files_streaming(paths, emit)
     });
 
-    take_load(objects, loading, id, events).await;
+    take_load(objects, loading, id, events, order).await;
 }
 
 /// Take one load's answers until it has nothing left to say.
@@ -73,6 +75,7 @@ pub(crate) async fn take_load(
     mut loading: State<Loads>,
     id: LoadId,
     events: async_channel::Receiver<Progress>,
+    order: Vec<PathBuf>,
 ) {
     // A batch per wake, so a burst costs one write.
     while let Some(batch) = next_batch(&events).await {
@@ -102,10 +105,8 @@ pub(crate) async fn take_load(
                 // groups a file by the run its objects make (`crate::tree`). Appended,
                 // one archive would be drawn as several file rows, each with a fold of
                 // its own, for the rest of the session.
-                match objects.iter().rposition(|held| held.path == object.path) {
-                    Some(last) => objects.insert(last + 1, object),
-                    None => objects.push(object),
-                }
+                let at = crate::tree::slot(&objects, &object.path, &order);
+                objects.insert(at, object);
             }
         }
         if !finished.is_empty() {

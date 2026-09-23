@@ -599,8 +599,11 @@ opened by hand is theirs even where a build has just written the same path. So t
 the *previous* build's list intersected with what is open, closed one by one and reopened in a
 single load rather than a close and a spawn each. The load is registered with the closes and
 not in the task that reads it, or the save observer, woken by the closes, would run first and write
-a project file without those binaries. That list is saved with the session, which is what makes the
-rule survive a restart (`agents/Persistence.md`). A finished build also forgets everything read of
+a project file without those binaries. The previous build's list is saved with the session, which
+is what makes the rule survive a restart (`agents/Persistence.md`). The load is also handed the
+binaries as they were listed before the closes, and a file's first object goes back before the
+first file listed after it (`tree::slot`): appended, every rebuild would reorder the project file.
+A finished build also forgets everything read of
 the sources under the project's directory, which nothing else in the app ever re-reads
 (`forget_source_under`, `agents/Panes.md`).
 

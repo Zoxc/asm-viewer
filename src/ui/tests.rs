@@ -4575,7 +4575,7 @@ fn load_harness() -> impl IntoElement {
                 let mut loading = loading;
                 loading.write().begin(&paths)
             };
-            spawn(async move { take_load(objects, loading, id, events).await });
+            spawn(async move { take_load(objects, loading, id, events, Vec::new()).await });
         }
     });
 
@@ -31722,7 +31722,7 @@ fn a_source_pane_reads_its_file_again_after_a_build() {
 
 /// The rule the session carries: a build replaces the artifacts of the build **before**
 /// it, and leaves a binary the reader opened some other way alone -- even at a path this
-/// build also wrote.
+/// build also wrote. What it replaces goes back to its place in the list.
 #[test]
 fn a_build_replaces_what_the_build_before_it_produced() {
     let artifact = fixture_artifact();
@@ -31788,6 +31788,11 @@ fn a_build_replaces_what_the_build_before_it_produced() {
         held(&other),
         before_other,
         "a binary the reader opened was closed by a build that did not produce it"
+    );
+    assert_eq!(
+        project::binaries(&states.objects.peek()),
+        [artifact, other],
+        "the rebuilt binary went back at the end of the project's list"
     );
 }
 

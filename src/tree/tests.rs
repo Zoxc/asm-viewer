@@ -378,3 +378,47 @@ fn a_path_is_held_while_it_loads_and_after_it_has_landed() {
     // Another file is another question.
     assert!(!holds(&objects, &loads, Path::new("/tmp/b")));
 }
+
+/// A file read again goes back to its place among the files `order` lists, before any it
+/// does not list; the rest of a file's objects follow its first, and a file `order` does
+/// not name goes at the end.
+#[test]
+fn a_file_read_again_goes_back_to_its_place() {
+    let order = [
+        PathBuf::from("a.o"),
+        PathBuf::from("b.a"),
+        PathBuf::from("c.o"),
+    ];
+    let path = |path: &str| PathBuf::from(path);
+    let mut objects = vec![
+        object("a.o", "a.o"),
+        object("c.o", "c.o"),
+        object("d.o", "d.o"),
+    ];
+
+    assert_eq!(
+        slot(&objects, &path("b.a"), &order),
+        1,
+        "b.a goes between a.o and c.o"
+    );
+    objects.insert(1, object("b.a", "one.o"));
+    assert_eq!(
+        slot(&objects, &path("b.a"), &order),
+        2,
+        "its second member after its first"
+    );
+
+    // Listed after everything held, or not listed at all: the end.
+    let held = [object("a.o", "a.o")];
+    assert_eq!(slot(&held, &path("c.o"), &order), 1);
+    assert_eq!(slot(&objects, &path("e.o"), &order), objects.len());
+    assert_eq!(
+        slot(&objects, &path("c.o"), &[]),
+        3,
+        "after its own file's last object"
+    );
+
+    // Before a file opened after the reload began, which `order` does not list.
+    let later = [object("a.o", "a.o"), object("d.o", "d.o")];
+    assert_eq!(slot(&later, &path("b.a"), &order), 1);
+}

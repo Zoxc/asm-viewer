@@ -5,7 +5,7 @@
 //! runs rather than a map keyed by path, so the rows keep the order the files were opened
 //! in. One file opened twice therefore folds into one row over both copies. The run is the
 //! writer's to keep: an object is put after the last one of its own file, so two loads
-//! arriving at once cannot split a file in two. A file that contributed exactly one object
+//! arriving at once cannot split a file in two ([`slot`]). A file that contributed exactly one object
 //! is its own row and grows no parent. [`Loads`] is the other half: the files being read
 //! right now, which have a row before they have an object.
 
@@ -121,6 +121,28 @@ impl Loads {
 /// press asks before it starts a load.
 pub fn holds(objects: &[Arc<Object>], loads: &Loads, path: &Path) -> bool {
     objects_have(objects, path) || loads.is_loading(path)
+}
+
+/// Where an object read from `path` goes in `objects`.
+///
+/// After the last object of its own file, so a file stays one run however loads
+/// interleave. A file's first object goes before the first object of a file `order` lists
+/// after it, or of one it does not list at all, since that was opened later; with no such
+/// object, or a `path` that `order` does not list, it goes at the end. `order` is the
+/// binaries as they were listed when a load closed them to read them again, so a rebuilt
+/// file goes back to its own place in the list; any other load hands in an empty one.
+pub fn slot(objects: &[Arc<Object>], path: &Path, order: &[PathBuf]) -> usize {
+    if let Some(last) = objects.iter().rposition(|held| held.path == path) {
+        return last + 1;
+    }
+    let rank = |path: &Path| order.iter().position(|listed| listed == path);
+    let Some(own) = rank(path) else {
+        return objects.len();
+    };
+    objects
+        .iter()
+        .position(|held| rank(&held.path).is_none_or(|other| other > own))
+        .unwrap_or(objects.len())
 }
 
 /// Whether any object in the list came out of `path`.
