@@ -5269,6 +5269,7 @@ fn source_text(path: &Path) -> Option<SourceText> {
     read(&SourceAsk {
         file: path.to_path_buf(),
         appearance: appearance(),
+        since: 0,
     })
 }
 
@@ -12725,6 +12726,67 @@ fn showing_harness() -> impl IntoElement {
     })
 }
 
+/// [`showing_harness`] with the app's rereading on a load ([`use_rereading`]) beside it.
+fn rereading_harness() -> impl IntoElement {
+    use_rereading(use_consume::<Sourcing>().0, use_consume::<Objects>().0);
+    showing_harness()
+}
+
+/// A file read before a binary landed is read again, since the binary may have been built
+/// from what it holds now -- a rebuild outside the app, the binary opened again.
+#[test]
+fn a_binary_landing_has_the_file_on_screen_read_again() {
+    let directory = Seeded::directory("reread");
+    let file = directory.named("lib.rs", "fn before() {}\n");
+    let path = PathBuf::from(&*file);
+    let (mut test, states) = TestingRunner::new(
+        rereading_harness,
+        (400., 300.).into(),
+        {
+            let file = file.clone();
+            move |runner: &mut _| {
+                runner.provide_root_context(move || {
+                    provide(Showing(State::create(file.clone())));
+                    test_roots().states
+                })
+            }
+        },
+        1.,
+    );
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    settle(&mut test);
+    let text = |path: &Path| {
+        let cache = highlighted();
+        let filed = cache.files.get(path).expect("the file was read");
+        let text = filed.text.as_ref().expect("the file is there");
+        text.file.text().to_owned()
+    };
+    assert_eq!(text(&path), "fn before() {}\n");
+
+    // Edited and rebuilt outside the app: nothing has said so yet.
+    directory.file("lib.rs", "fn after() {}\n");
+    settle(&mut test);
+    assert_eq!(text(&path), "fn before() {}\n");
+
+    let (_, objects) = fixture_objects(1);
+    let mut open = states.objects;
+    open.write().extend(objects);
+    settle(&mut test);
+    settle(&mut test);
+    assert_eq!(
+        text(&path),
+        "fn after() {}\n",
+        "the file was not read again once the binary landed"
+    );
+    forget_source_under(&directory);
+}
+
 /// The Source pane over `file`, with the contexts its rows read, in a window `size`,
 /// the file's document activated so the tab's place-keeping sees it open.
 fn source_file_harness(
@@ -14893,7 +14955,12 @@ fn a_theme_switch_has_the_file_read_again() {
     // text colour -- and the reason this is a `.rs` file and not any file at all.
     let keyword = |path: &Path| {
         let cache = highlighted();
-        let text = cache.files.get(path).expect("the file was read").clone();
+        let text = cache
+            .files
+            .get(path)
+            .expect("the file was read")
+            .text
+            .clone();
         let text = text.expect("the file is there");
         let piece = text.pieces(text.text(0)).next();
         piece.expect("a first piece").colour
@@ -18814,9 +18881,11 @@ fn a_finished_pad_build_forgets_the_directory_it_built_in() {
     let pad = roots.pad;
 
     pump(&mut test, |_| pad.peek().state().opened());
-    highlighted()
-        .files
-        .insert(source.clone(), Some(stand_in.0.clone()));
+    let stand_in = Filed {
+        text: Some(stand_in.0.clone()),
+        loads: 0,
+    };
+    highlighted().files.insert(source.clone(), stand_in);
 
     let jobs = asking.peek().clone().expect("the wiring handed one back");
     request_build(pad, &jobs);

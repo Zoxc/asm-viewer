@@ -842,6 +842,9 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
     // thread of its own. Not the analysis worker's queue, which a click can put seconds
     // of DWARF into (`agents/Worker.md`).
     use_source_reading(sourced, showing);
+    // And read again once a binary lands, which may have been built from files that have
+    // changed since they were read.
+    use_rereading(sourced, objects);
     // The find bars' worker. Its own for the reason the source reader has one: a pattern
     // supersedes on every keystroke and must not queue behind the seconds of DWARF a
     // click costs (`agents/Worker.md`).

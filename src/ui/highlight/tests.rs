@@ -28,6 +28,7 @@ fn a_missing_file_is_asked_about_until_it_is_forgotten() {
     assert!(read(&SourceAsk {
         file: path.clone(),
         appearance: Appearance::Light,
+        since: 0,
     })
     .is_none());
     assert!(sourced.pending(&showing, Appearance::Light).is_none());

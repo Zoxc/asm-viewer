@@ -338,8 +338,8 @@ pub(crate) fn language(path: &Path) -> Option<EditorLanguage> {
     Some(EditorLanguage::new(grammar, query))
 }
 
-/// Every file read so far and what came back, `None` included, and what has been
-/// forgotten of them.
+/// Every file read so far and what came back, `None` included, what has been forgotten
+/// of them, and how many binaries have been loaded.
 ///
 /// **The misses are cached too**: a path out of debug info that is not on this machine is
 /// answered as often as it is drawn, and a miss that was not written down would be a
@@ -362,8 +362,17 @@ pub(crate) fn highlighted() -> MutexGuard<'static, Cache> {
 #[derive(Default)]
 pub(crate) struct Cache {
     /// Every file read so far, by path.
-    pub(crate) files: HashMap<PathBuf, Option<Arc<Highlighted>>>,
+    pub(crate) files: HashMap<PathBuf, Filed>,
     forgets: Forgets,
+    /// How many times a binary has landed, in any app on this process ([`Sourced::loaded`]).
+    loads: u64,
+}
+
+/// One file in [`HIGHLIGHTED`]: what was read, `None` for a miss, and [`Cache::loads`] as
+/// the read began.
+pub(crate) struct Filed {
+    pub(crate) text: Option<Arc<Highlighted>>,
+    pub(crate) loads: u64,
 }
 
 /// What has been forgotten so far: how many times, and the last few directories it was.
@@ -459,6 +468,8 @@ pub(crate) enum Drawing {
 pub(crate) struct SourceAsk {
     pub(crate) file: PathBuf,
     pub(crate) appearance: Appearance,
+    /// A copy read before this [`Cache::loads`] is read off the disk again.
+    pub(crate) since: u64,
 }
 
 /// The reader, shared through context: the worker writes the parse of the file
@@ -480,6 +491,9 @@ pub(crate) struct Sourcing(pub(crate) State<Sourced>);
 pub(crate) struct Sourced {
     /// How many times the cache has changed: a file filed, or files forgotten.
     changes: u64,
+    /// [`Cache::loads`] as of the last binary this app loaded. A file read before then is
+    /// read again the next time it is shown.
+    since: u64,
 }
 
 impl Sourced {
@@ -493,29 +507,37 @@ impl Sourced {
     /// half a theme old, for the beat it takes to be read again -- where drawing nothing
     /// would blank every source pane on a theme switch.
     pub(crate) fn drawing(&self, file: &Path) -> Drawing {
-        match highlighted().files.get(file) {
+        match highlighted().files.get(file).map(|filed| &filed.text) {
             Some(Some(text)) => Drawing::Text(SourceText(text.clone())),
             Some(None) => Drawing::Missing,
             None => Drawing::Waiting,
         }
     }
 
-    /// The question owed for `showing`: the cache has no parse of it in this appearance.
+    /// The question owed for `showing`: the cache has no parse of it in this appearance,
+    /// or has one read before the last binary landed ([`Sourced::loaded`]).
     ///
     /// A miss answers for every appearance -- a file that is not there is not there in
-    /// either theme -- so it is asked about once and not again.
+    /// either theme -- so it is asked about once a load and not again.
     ///
-    /// It reads no field, and is a method for what reading the state does: an answer or
-    /// a forget bumps [`Sourced::changes`], which is what has the effect below look in
-    /// the cache again.
+    /// A method for what reading the state does: an answer or a forget bumps
+    /// [`Sourced::changes`], and a load moves `since`, which is what has the effect below
+    /// look in the cache again.
     fn pending(&self, showing: &Arc<Path>, appearance: Appearance) -> Option<SourceAsk> {
         let file = showing.to_path_buf();
         let owed = match highlighted().files.get(&file) {
-            Some(Some(text)) => text.appearance != appearance,
-            Some(None) => false,
+            Some(filed) if filed.loads < self.since => true,
+            Some(Filed {
+                text: Some(text), ..
+            }) => text.appearance != appearance,
+            Some(Filed { text: None, .. }) => false,
             None => true,
         };
-        owed.then_some(SourceAsk { file, appearance })
+        owed.then_some(SourceAsk {
+            file,
+            appearance,
+            since: self.since,
+        })
     }
 
     /// A file has been read: the write both readers end with, which is what has the
@@ -539,13 +561,48 @@ impl Sourced {
         forget_source_under(root);
         self.changes = self.changes.wrapping_add(1);
     }
+
+    /// A binary has landed ([`use_rereading`]): every file read before now is read again
+    /// the next time it is shown.
+    ///
+    /// **The other word the app gets that the files have changed.** A binary rebuilt
+    /// outside the app and opened again was built from the files as they are now, and its
+    /// line numbers are theirs. Not a forget: the pane goes on drawing what it has until
+    /// the new read lands, where a forget would blank it for every batch of a load. And
+    /// counted in this app's own state, so a load in one app asks nothing of another's
+    /// files.
+    pub(crate) fn loaded(&mut self) {
+        let mut cache = highlighted();
+        cache.loads += 1;
+        self.since = cache.loads;
+    }
+}
+
+/// Have [`Sourced::loaded`] said whenever a binary lands that was not open before: one
+/// opened, or one closed and read in again, which is what a rebuild is.
+///
+/// By path and not by object, so an archive read in many batches says it once.
+pub(crate) fn use_rereading(mut sourced: State<Sourced>, objects: State<Vec<Arc<Object>>>) {
+    let open = use_hook(|| Rc::new(RefCell::new(HashSet::<PathBuf>::new())));
+    use_side_effect(move || {
+        let now: HashSet<PathBuf> = objects
+            .read()
+            .iter()
+            .map(|object| object.path.clone())
+            .collect();
+        let landed = now.iter().any(|path| !open.borrow().contains(path));
+        *open.borrow_mut() = now;
+        if landed {
+            sourced.write().loaded();
+        }
+    });
 }
 
 /// Read and parse the file `ask` names into [`HIGHLIGHTED`], and hand back what was filed
 /// there. **The worker's whole job**, and the one place a file becomes rows.
 ///
 /// A file already parsed in the other appearance is parsed again from the text that parse
-/// holds, and read off the disk only when there is none.
+/// holds, and read off the disk only when there is none or it was read before `ask.since`.
 ///
 /// A file forgotten while it was being read is read again rather than filed: what is in
 /// hand is the file as it was before whatever said it had changed, and filing it would
@@ -555,20 +612,27 @@ impl Sourced {
 /// waiting on the read; giving up files nothing, and the pane asks again.
 pub(crate) fn read(ask: &SourceAsk) -> Option<SourceText> {
     for _ in 0..TRIES {
-        let (at, held) = {
+        let (at, loads, held) = {
             let cache = highlighted();
             let held = match cache.files.get(&ask.file) {
-                Some(Some(text)) => Some(text.file.clone()),
+                Some(Filed {
+                    text: Some(text),
+                    loads,
+                }) if *loads >= ask.since => Some(text.file.clone()),
                 _ => None,
             };
-            (cache.forgets.count, held)
+            (cache.forgets.count, cache.loads, held)
         };
         let file = held.or_else(|| source::load(&ask.file));
         let parsed = file.map(|file| Arc::new(Highlighted::new(file, ask.appearance)));
 
         let mut cache = highlighted();
         if !cache.forgets.since(at, &ask.file) {
-            cache.files.insert(ask.file.clone(), parsed.clone());
+            let filed = Filed {
+                text: parsed.clone(),
+                loads,
+            };
+            cache.files.insert(ask.file.clone(), filed);
             return parsed.map(SourceText);
         }
     }

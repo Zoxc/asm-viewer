@@ -419,8 +419,13 @@ blank every source pane on a switch. That is also what makes a theme switch a fi
 in would be a `stat` per render, since the pane asks on every one. So a **build** forgets it. A finished build of the project's workspace or of a scratchpad drops
 every entry under the directory it built (`Sourced::forget_under`, `ui/building.rs`, `ui/pad.rs`),
 whatever the build came to -- a build that failed is as much a sign the files have changed as one
-that did not, and a build is the only word the app gets that they have. Nothing else re-reads a
-file for the life of the process. The forget bumps the same count the reader's answer does: the
+that did not. **A binary landing is the other word**: one opened, or closed and opened again after
+a build outside the app, was built from the files as they are now, and its line numbers are theirs.
+So a path new to the objects list (`use_rereading`) has every file read before it read again the
+next time it is shown (`Sourced::loaded`). Not a forget: the pane keeps drawing what it has until
+the new read lands, where a forget would blank it for every batch of a load. The mark is a count in
+the cache and a copy of it in the app's own `Sourced`, so a load in one headless test asks nothing
+of another's files. Nothing else re-reads a file for the life of the process. The forget bumps the same count the reader's answer does: the
 cache is a `static`, and emptying it wakes nothing, so a pane showing one of those files would
 render next to an empty entry and draw nothing, with no question asked, until the reader moved
 to another file. Since the reading is a thread's, a build can now finish *during*
