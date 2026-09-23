@@ -10028,6 +10028,52 @@ fn the_server_is_told_which_files_the_reader_has_open() {
     );
 }
 
+/// **A file shown in two tabs is opened with the server once, and closed once.** Two tabs
+/// can show one place (`open_stop`), and the protocol allows one `didOpen` per file until
+/// its `didClose`: rust-analyzer logs a second one as a duplicate, and a close with nothing
+/// open as an orphan.
+#[test]
+fn a_file_in_two_tabs_is_opened_with_the_server_once() {
+    let (file, directory) = calling_file("twice");
+    let other = directory.named("other.rs", "fn other() {}\n");
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let opening = |document: &Arc<Path>, reach| {
+        open_document(
+            states.open,
+            states.visits,
+            Document::Source(document.clone()),
+            reach,
+        )
+    };
+    let first = opening(&file, Reach::NewTab).expect("a tab");
+    let second = opening(&other, Reach::NewTab).expect("a tab");
+    // A link followed in place in the second tab, to the file the first is showing.
+    opening(&file, Reach::InPlace);
+    settle(&mut test);
+    serving(&mut test, &roots);
+
+    let told = |asks: &async_channel::Receiver<AskedOfServer>| -> Vec<AskedOfServer> {
+        std::iter::from_fn(|| next_job(asks))
+            .filter(|job| matches!(job, AskedOfServer::Opened(_) | AskedOfServer::Closed(_)))
+            .collect()
+    };
+    assert_eq!(
+        told(&asks),
+        [AskedOfServer::Opened(file.clone())],
+        "a file in two tabs was opened with the server twice"
+    );
+
+    close_tab(states.open, states.places, first);
+    close_tab(states.open, states.places, second);
+    settle(&mut test);
+    assert_eq!(
+        told(&asks),
+        [AskedOfServer::Closed(file.clone())],
+        "a file in two tabs was closed with the server twice"
+    );
+}
+
 /// **A file read afresh is given to the server again.** It answers about the text it was
 /// handed until it is told otherwise, so a build that rewrites a file under an open tab
 /// leaves it answering about the version before -- names at columns that have moved, and a

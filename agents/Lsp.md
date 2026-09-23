@@ -377,8 +377,8 @@ is the courtesy.
 
 **What is opened is what the reader has in tabs**, which is what an editor does
 (`src/ui/opened.rs`): `Opened` holds the set and the run it was sent to, `use_opened`
-diffs it against the source documents in the strip, and a server that has been restarted
-holds nothing so everything open is new. A server that has *stopped* leaves the app
+diffs it against the source documents in the strip, each file once however many tabs
+show it, and a server that has been restarted holds nothing so everything open is new. A server that has *stopped* leaves the app
 holding nothing either: a build under no server would otherwise mark those files stale,
 and the server started after it would be sent a `didClose` for a file it had never been
 given. Measured, opening is nearly free: 41 files in **7 ms**, and one megabyte of the

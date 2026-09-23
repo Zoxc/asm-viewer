@@ -140,9 +140,13 @@ fn spoken_as(serving: &Serving, path: &Path) -> Option<String> {
 
 /// Every open tab's source file the project's server is for, in the reader's own order,
 /// each with what the server is told it is.
+///
+/// **Each file once**, however many tabs show it: two tabs can show one place, and a
+/// server is told a file is open once until it is told it has closed.
 fn shown(open: Open, serving: &Serving) -> Vec<(Arc<Path>, String)> {
     let strip = open.strip.read();
     let docs = open.docs.read();
+    let mut seen = HashSet::new();
     strip
         .documents()
         .filter_map(|id| docs.get(id))
@@ -152,6 +156,7 @@ fn shown(open: Open, serving: &Serving) -> Vec<(Arc<Path>, String)> {
             // whole of one: neither is a document a server has anything to say about.
             Document::Object(..) | Document::Symbol(..) | Document::Code(..) => None,
         })
+        .filter(|file| seen.insert(file.clone()))
         .filter_map(|file| {
             let spoken = spoken_as(serving, &file)?;
             Some((file, spoken))
