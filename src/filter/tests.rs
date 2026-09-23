@@ -87,6 +87,49 @@ fn whole_word_wraps_the_whole_regex() {
     assert!(!hits(&filter, "iterator::nextish"));
 }
 
+/// A pattern that will not compile alone is an error under Word too, and not whatever the
+/// wrapper makes of it: `a)|(b` closes the wrapper's group and opens one of its own, and
+/// wrapped it compiles as "`\ba` or `b\b`".
+#[test]
+fn whole_word_does_not_mend_a_broken_regex() {
+    let filter = Filter {
+        regex: true,
+        whole_word: true,
+        ..plain("a)|(b")
+    };
+    assert!(filter.matcher().error().is_some());
+    assert!(filter.grep_matcher().is_none());
+    assert!(!filter.searches());
+}
+
+/// A verbose pattern's trailing comment runs to the end of the line, so under Word it
+/// swallowed the wrapper's `)\b` and a valid pattern was an error. The wrapper is closed on
+/// a line of its own where the pattern ends in verbose mode, and only there: anywhere else
+/// the newline would be a character to match.
+#[test]
+fn whole_word_leaves_a_trailing_comment_a_comment() {
+    use grep_matcher::Matcher as _;
+
+    let word = |pattern: &str| Filter {
+        regex: true,
+        whole_word: true,
+        ..plain(pattern)
+    };
+
+    let commented = word("(?x) foo  # a note");
+    assert!(commented.matcher().error().is_none());
+    assert!(hits(&commented, "a foo b"));
+    assert!(!hits(&commented, "a foobar b"));
+    let grep = commented.grep_matcher().expect("the pattern builds");
+    assert!(grep
+        .is_match(b"a foo b")
+        .expect("grep-regex reports no errors"));
+
+    // Verbose mode turned off again, or only ever on inside a group, is not on at the end.
+    assert!(hits(&word("(?x) a (?-x)b"), "ab"));
+    assert!(hits(&word("(?x:a)b"), "ab"));
+}
+
 /// A regex carrying its own case flag overrides the toggle for the part it covers, which
 /// is what setting the flag on the builder buys over a `(?i)` prefix.
 #[test]

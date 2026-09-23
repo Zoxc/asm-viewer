@@ -16,6 +16,7 @@ use std::ops::Range;
 
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use regex::{Regex, RegexBuilder};
+use regex_syntax::ast::{Ast, Flag, FlagsItemKind};
 
 use crate::shared::Shared;
 
@@ -32,24 +33,26 @@ pub struct Filter {
 
 impl Filter {
     /// The pattern as a regular expression: what the two toggles that are *written* into
-    /// the expression come to, leaving the third to the builder below.
+    /// the expression come to, leaving the third to the builder below. The error is the
+    /// pattern's own, where Word is on over a regex that will not parse alone.
     ///
     /// Its own function because the source search compiles the same expression with
     /// another crate's builder (`src/search.rs`), and the two searches must agree about
     /// what a toggle means. `grep-regex` has a `word` flag of its own and it is
     /// deliberately looser than `\b`, so this is what is handed over instead.
-    pub fn expression(&self) -> String {
-        let expression = if self.regex {
-            self.pattern.clone()
-        } else {
-            regex::escape(&self.pattern)
-        };
-        if self.whole_word {
-            // The group is load-bearing and must be non-capturing: `\ba|b\b` would bind
-            // the boundaries to the first and last branch only.
-            return format!(r"\b(?:{expression})\b");
+    fn expression(&self) -> Result<String, String> {
+        if !self.regex {
+            return Ok(wrap(&regex::escape(&self.pattern), self.whole_word, false));
         }
-        expression
+        if !self.whole_word {
+            return Ok(self.pattern.clone());
+        }
+        // Parsed alone first, since the wrapper would mend some broken patterns into
+        // something else: `a)|(b` closes its group and opens one of its own.
+        let ast = regex_syntax::ast::parse::Parser::new()
+            .parse(&self.pattern)
+            .map_err(|error| message(&error))?;
+        Ok(wrap(&self.pattern, true, verbose_at_end(&ast, false)))
     }
 
     /// Whether anything was typed, and so whether there is anything to look for. The
@@ -77,7 +80,11 @@ impl Filter {
             return Matcher::Everything;
         }
 
-        match RegexBuilder::new(&self.expression())
+        let expression = match self.expression() {
+            Ok(expression) => expression,
+            Err(error) => return Matcher::Invalid(error),
+        };
+        match RegexBuilder::new(&expression)
             .case_insensitive(!self.case_sensitive)
             .build()
         {
@@ -109,7 +116,7 @@ impl Filter {
 
         RegexMatcherBuilder::new()
             .case_insensitive(!self.case_sensitive)
-            .build(&self.expression())
+            .build(&self.expression().ok()?)
             .ok()
     }
 }
@@ -310,9 +317,54 @@ impl<T> Filtered<T> {
     }
 }
 
+/// `expression` in `\b(?:…)\b` where `word` says so. The group is load-bearing and must
+/// be non-capturing: `\ba|b\b` would bind the boundaries to the first and last branch
+/// only.
+///
+/// `verbose` is whether the expression ends in verbose mode, where a trailing `#` comment
+/// runs to the end of the line and would swallow the `)\b`: the group is then closed on a
+/// line of its own. Anywhere else the newline would be a character to match.
+fn wrap(expression: &str, word: bool, verbose: bool) -> String {
+    match (word, verbose) {
+        (false, _) => expression.to_owned(),
+        (true, false) => format!(r"\b(?:{expression})\b"),
+        (true, true) => format!("\\b(?:{expression}\n)\\b"),
+    }
+}
+
+/// Whether verbose mode (`x`) is on at the end of `ast`, given whether it was on at the
+/// start. A flag set at the top level lasts to the end of the pattern, across a `|`; one
+/// set inside a group ends with the group, so no group is looked into.
+fn verbose_at_end(ast: &Ast, on: bool) -> bool {
+    match ast {
+        Ast::Alternation(alternation) => alternation
+            .asts
+            .iter()
+            .fold(on, |on, branch| verbose_at_end(branch, on)),
+        Ast::Concat(concat) => concat
+            .asts
+            .iter()
+            .fold(on, |on, item| verbose_at_end(item, on)),
+        Ast::Flags(set) => {
+            let mut negated = false;
+            let mut on = on;
+            for item in &set.flags.items {
+                match item.kind {
+                    FlagsItemKind::Negation => negated = true,
+                    FlagsItemKind::Flag(Flag::IgnoreWhitespace) => on = !negated,
+                    FlagsItemKind::Flag(_) => {}
+                }
+            }
+            on
+        }
+        _ => on,
+    }
+}
+
 /// The one line of a `regex` error worth putting in a filter bar: its `Display` is a
 /// four-line report, of which the sentence is the last non-empty line, prefixed `error:`.
-fn message(error: &regex::Error) -> String {
+/// A `regex-syntax` parse error is written the same way, `regex`'s being made from it.
+fn message(error: &impl std::fmt::Display) -> String {
     let text = error.to_string();
     let line = text
         .lines()

@@ -71,6 +71,11 @@ rfd = "0.17"
 # regex 1 is already compiled in this tree, as a dependency of both `env_logger` and the
 # `tree-sitter` under freya's syntax highlighter.
 regex = "1"
+# The syntax tree of a pattern the Word toggle wraps (`Filter::expression`), which is how the
+# wrapper knows whether the pattern ends in verbose mode. Not a new crate in the build: it is
+# the copy `regex` itself parses with, and no feature is asked for, so nothing is compiled
+# again. `cargo tree -d` is how that stays true.
+regex-syntax = { version = "0.8", default-features = false }
 # The source search (`src/search.rs`): ripgrep's own walker and searcher rather than a
 # hand-rolled walk and a `regex` over whole files. `ignore` is what reads git's ignore
 # files, the whole reason the search skips `target/` without being told to; `grep-searcher`

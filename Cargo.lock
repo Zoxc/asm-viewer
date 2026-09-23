@@ -4852,6 +4852,7 @@ dependencies = [
  "libc",
  "log",
  "regex",
+ "regex-syntax",
  "rfd",
  "serde",
  "serde_json",
