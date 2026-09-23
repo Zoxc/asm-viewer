@@ -446,6 +446,8 @@ pub(crate) struct PadSplit(pub(crate) Split);
 /// rebuild costs the reader none (`agents/Scratchpad.md`).
 #[derive(Clone)]
 pub(crate) struct Program {
+    /// The file the image was read from, and so what Run starts ([`PadState::executable`]).
+    executable: PathBuf,
     /// The parsed image. An `Arc<Object>` holds the whole file's bytes, so a pad holds its
     /// program's until the next build replaces it or the pad is deleted.
     pub(crate) object: Arc<Object>,
@@ -594,9 +596,13 @@ impl PadState {
         })
     }
 
-    /// What the last build made, and so what there is to run.
+    /// What there is to run: the program the pane shows. That is the last build's only
+    /// when it made one -- a failed build leaves the program before it, and a pad opened
+    /// in a later run shows the one its package names.
     pub(crate) fn executable(&self) -> Option<&Path> {
-        self.ran().and_then(|build| build.executable.as_deref())
+        self.program
+            .as_ref()
+            .map(|program| program.executable.as_path())
     }
 
     /// Whether what is on screen has moved on from the program that is: an edit since the
@@ -732,7 +738,7 @@ pub(crate) enum PadJob {
     },
     Save(Scratchpad),
     Build(Scratchpad),
-    /// Start what the last build made. It goes to the worker because it *forks* and
+    /// Start the program the pad shows. It goes to the worker because it *forks* and
     /// because the directory it hands the program is that thread's, not because it blocks.
     ///
     /// An id and not a whole scratchpad, like [`PadJob::Delete`]: all the worker wants of
@@ -844,6 +850,7 @@ pub(crate) fn read_program(executable: &Path, built_from: String) -> Option<Prog
         .and_then(|file| compiled::lowest_placed(&object.symbols_from_lines(file, 0..=u32::MAX)));
     let file: Option<Arc<Path>> = named.map(|file| Arc::from(Path::new(file)));
     Some(Program {
+        executable: executable.to_path_buf(),
         object,
         built_from,
         file,
@@ -1384,7 +1391,7 @@ pub(crate) fn request_build(mut pad: State<Pads>, jobs: &PadJobs) {
     jobs.jobs.send(PadJob::Build(scratchpad));
 }
 
-/// Run what the last build made. Nothing happens without an executable, and nothing
+/// Run the program the pad shows. Nothing happens without one, and nothing
 /// happens while a build is running: cargo is about to write over the very file this
 /// would start, and the run would not be stopped by that build the way a run started
 /// before it is. Both guards are here as well as on the button, so they are properties of

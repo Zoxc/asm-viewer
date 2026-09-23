@@ -138,8 +138,10 @@ had already drifted over a cargo that would not start.
 
 **Running is the artifact and not `cargo run`.** `run_in` builds a `Command` for the executable
 `build_in` already asked cargo to name, in the scratchpad's own directory with a null stdin, and
-hands it to `process::run`. Re-entering cargo would redo resolution to arrive back at that same
-path, or could arrive at a *different* one (the reader has usually typed since, so what ran would
+hands it to `process::run`. The executable is the one the shown program was read from
+(`Program::executable`) and not the last build's answer, which has none after a restart or a
+failed build while the pane still shows a program. Re-entering cargo would redo resolution to
+arrive back at that same path, or could arrive at a *different* one (the reader has usually typed since, so what ran would
 not be what the diagnostics describe). It would
 interleave cargo's progress into the stream the reader is reading as their program's output, and it
 would make stopping meaningless, since killing a `cargo run` kills cargo and leaves its child with

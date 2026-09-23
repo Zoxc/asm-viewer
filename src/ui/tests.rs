@@ -18713,7 +18713,11 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
 /// state rather than answered through `PadJob::Build`, so a test about running one does
 /// not have to drive a build to get there.
 fn already_built(mut pad: State<Pads>, executable: PathBuf) {
-    pad.write().state_mut().built = Some(pad_built(executable, Vec::new()));
+    let program = read_program(&executable, pad.peek().state().scratchpad.digest());
+    let mut pads = pad.write();
+    let state = pads.state_mut();
+    state.built = Some(pad_built(executable, Vec::new()));
+    state.program = program;
 }
 
 /// A build cargo ran and made `executable` from, as [`Scratchpad::build_in`] answers one:
@@ -19289,6 +19293,72 @@ fn the_pads_run_and_new_chords_press_its_buttons() {
         std::iter::from_fn(|| asks.try_recv().ok()).any(|asked| asked == Asked::New),
         "Ctrl+N asked the worker for no pad"
     );
+}
+
+/// F5 runs the program the pane shows, wherever it came from: the one a pad's package
+/// named when it was opened, and the one a failed build left in place. Neither is the
+/// last build's own executable -- there was no build, then there was one that made
+/// nothing.
+#[test]
+fn the_program_a_pad_shows_is_the_one_it_runs() {
+    let built = fixture_artifact();
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            // A pad built in an earlier run, opened on its program.
+            PadJob::Open {
+                scratchpad,
+                holding,
+            } => PadAnswer::Opened {
+                holding,
+                program: read_program(&built, scratchpad.digest()),
+                scratchpad: pad_on_disk(scratchpad),
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            PadJob::Build(scratchpad) => PadAnswer::Built {
+                pad: scratchpad.id().clone(),
+                build: pad_rejected(Vec::new(), "would not compile".to_owned()),
+                program: None,
+                directory: None,
+            },
+            // Never answered, so the run stays `Starting` until it is stopped.
+            PadJob::Run { pad, .. } => PadAnswer::Saved { pad, failure: None },
+        });
+    let pad = roots.pad;
+
+    pump(&mut test, |_| pad.peek().state().program.is_some());
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    let run = |test: &mut TestingRunner| {
+        let (key, modifiers) = Chord::Run.pressed();
+        key_with(test, key, modifiers);
+        shown_run(pad, &jobs).is_running()
+    };
+    assert!(
+        run(&mut test),
+        "F5 did not run the program the pad opened on"
+    );
+    stop_run(pad, &jobs);
+
+    request_build(pad, &jobs);
+    pump(&mut test, |_| !pad.peek().state().building);
+    assert!(
+        pad.peek().state().program.is_some(),
+        "the failed build took the program before it away"
+    );
+    assert!(
+        run(&mut test),
+        "F5 did not run the program a failed build left"
+    );
+
+    let runs = std::iter::from_fn(|| asks.try_recv().ok())
+        .filter(|asked| *asked == Asked::Run)
+        .count();
+    assert_eq!(runs, 2, "a run did not reach the worker");
 }
 
 /// The lines a run has written, for [`output_harness`] to draw and a test to push into.
