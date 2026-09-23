@@ -1176,14 +1176,14 @@ fn a_row_attributed_to_every_symbol_at_once_does_not_grow_the_index_without_boun
     // address always have been.
     let data = aliased_at_one_address(8, 100);
     let object = parse(&data);
-    assert_eq!(object.symbols_at_line("/src/main.c", 1).len(), 8);
+    assert_eq!(object.symbols_from_lines("/src/main.c", 1..=1).len(), 8);
     assert_eq!(object.lines_from_source("/src/main.c").len(), 100);
 
     // Past it the index says nothing, which is the answer a build that panicked gives. This
     // fixture is 35 KB and asks for a million pairs; the shape scales.
     let data = aliased_at_one_address(1000, 1000);
     let object = parse(&data);
-    assert!(object.symbols_at_line("/src/main.c", 1).is_empty());
+    assert!(object.symbols_from_lines("/src/main.c", 1..=1).is_empty());
     assert!(object.lines_from_source("/src/main.c").is_empty());
 }
 

@@ -20,7 +20,7 @@ const OTHER: &str = "/src/other.c";
 
 /// The names a query answers with, which is what the expectations are written in.
 fn at(object: &Object, file: &str, line: u32) -> Vec<String> {
-    named(object.symbols_at_line(file, line))
+    named(object.symbols_from_lines(file, line..=line))
 }
 
 fn named(symbols: Vec<Arc<SymbolData>>) -> Vec<String> {
@@ -142,7 +142,7 @@ fn a_file_names_every_line_it_has_code_for_and_says_each_once() {
     for line in 0..20 {
         assert_eq!(
             object.lines_from_source(MAIN).contains(&line),
-            !object.symbols_at_line(MAIN, line).is_empty(),
+            !object.symbols_from_lines(MAIN, line..=line).is_empty(),
             "line {line}"
         );
     }
@@ -159,16 +159,18 @@ fn nothing_is_invented_for_a_line_a_file_or_an_object_that_says_nothing() {
     let object = parse(&shared_line());
 
     // A line of the file no code came from.
-    assert!(object.symbols_at_line(MAIN, 12).is_empty());
+    assert!(object.symbols_from_lines(MAIN, 12..=12).is_empty());
     // A file this object does not name — including the one it names, spelt differently.
-    assert!(object.symbols_at_line("/src/absent.c", 10).is_empty());
-    assert!(object.symbols_at_line("main.c", 10).is_empty());
-    assert!(object.symbols_at_line("/SRC/MAIN.C", 10).is_empty());
+    assert!(object
+        .symbols_from_lines("/src/absent.c", 10..=10)
+        .is_empty());
+    assert!(object.symbols_from_lines("main.c", 10..=10).is_empty());
+    assert!(object.symbols_from_lines("/SRC/MAIN.C", 10..=10).is_empty());
 
     // An object with no DWARF at all: an empty answer rather than a panic or a guess.
     let without = parse(&common::caller_and_target());
     assert!(!without.symbols_sorted.is_empty());
-    assert!(without.symbols_at_line(MAIN, 10).is_empty());
+    assert!(without.symbols_from_lines(MAIN, 10..=10).is_empty());
 }
 
 /// The shape rustc emits: one `.text.<name>` per function, both at address 0. Read without
@@ -322,7 +324,7 @@ fn round_trips(object: &Object) {
             let (Some(file), Some(line)) = (common::file_of(&info, row), row.line) else {
                 continue;
             };
-            let back = object.symbols_at_line(file, line);
+            let back = object.symbols_from_lines(file, line..=line);
             assert!(
                 back.iter().any(|found| Arc::ptr_eq(found, symbol)),
                 "{}:{line} is in {} but answers with {:?}",
@@ -402,7 +404,7 @@ fn a_files_name_is_the_comp_dir_joined_onto_it() {
     assert_eq!(object.source_files()[0], Arc::<str>::from("/src/main.c"));
     // And the joined name is the only one the questions answer to.
     assert_eq!(at(&object, "/src/main.c", 10), ["first", "second"]);
-    assert!(object.symbols_at_line("main.c", 10).is_empty());
+    assert!(object.symbols_from_lines("main.c", 10..=10).is_empty());
 }
 
 /// In the file's order and not the map's, which is a hash seed's: `RandomState` reseeds per

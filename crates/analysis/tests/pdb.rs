@@ -384,7 +384,7 @@ fn a_line_maps_back_to_the_symbol_compiled_from_it() {
     let object = parse();
     let names_at = |line: u32| -> Vec<String> {
         object
-            .symbols_at_line(SOURCE, line)
+            .symbols_from_lines(SOURCE, line..=line)
             .iter()
             .map(|symbol| symbol.name.clone())
             .collect()
@@ -407,7 +407,9 @@ fn a_line_maps_back_to_the_symbol_compiled_from_it() {
     assert_eq!(all, ["add", "twice", "sum_to"], "address order");
 
     assert!(
-        object.symbols_at_line("line_fixture.c", 23).is_empty(),
+        object
+            .symbols_from_lines("line_fixture.c", 23..=23)
+            .is_empty(),
         "matched exactly"
     );
 
@@ -441,7 +443,7 @@ fn a_pdb_with_another_guid_or_age_is_not_this_images() {
     other_guid[record + 4] ^= 0x01;
     let object = parse_at(&other_guid, path.clone());
     assert!(symbol(&object, "add").line_info(&object).is_none());
-    assert!(object.symbols_at_line(SOURCE, 23).is_empty());
+    assert!(object.symbols_from_lines(SOURCE, 23..=23).is_empty());
 
     let mut other_age = committed_fixture(DLL);
     other_age[record + 20] = 2;
@@ -480,7 +482,7 @@ fn the_pdb_is_found_beside_the_binary_by_either_name_or_not_at_all() {
     let dir = scratch("alone");
     let object = parse_at(&dll, dir.join("alone.dll"));
     assert!(symbol(&object, "add").line_info(&object).is_none());
-    assert!(object.symbols_at_line(SOURCE, 23).is_empty());
+    assert!(object.symbols_from_lines(SOURCE, 23..=23).is_empty());
 }
 
 /// The recorded path itself is tried first where it is absolute — the build machine's path,
@@ -685,7 +687,7 @@ fn procedures_are_symbols_where_the_image_names_none() {
     assert_eq!(rows(&line_info(&object, "sum_to")).len(), 14);
 
     let at_23: Vec<String> = object
-        .symbols_at_line(SOURCE, 23)
+        .symbols_from_lines(SOURCE, 23..=23)
         .iter()
         .map(|symbol| symbol.name.clone())
         .collect();

@@ -363,7 +363,7 @@ fn a_source_line_names_the_function_it_was_compiled_into() {
         let object = parse(name);
         let found = |line: u32| {
             object
-                .symbols_at_line(SOURCE, line)
+                .symbols_from_lines(SOURCE, line..=line)
                 .iter()
                 .map(|symbol| symbol.name.clone())
                 .collect::<Vec<_>>()
@@ -381,7 +381,9 @@ fn a_source_line_names_the_function_it_was_compiled_into() {
         }
         // The file under any other spelling is a file this object does not name.
         assert!(
-            object.symbols_at_line("line_fixture.c", 23).is_empty(),
+            object
+                .symbols_from_lines("line_fixture.c", 23..=23)
+                .is_empty(),
             "{name}"
         );
     }
@@ -401,7 +403,7 @@ fn every_line_a_function_names_finds_that_function_again() {
                 let (Some(file), Some(line)) = (common::file_of(&info, row), row.line) else {
                     continue;
                 };
-                let back = object.symbols_at_line(file, line);
+                let back = object.symbols_from_lines(file, line..=line);
                 assert!(
                     back.iter().any(|found| Arc::ptr_eq(found, &symbol)),
                     "{name}: {file}:{line} is in {function} but answers with {:?}",

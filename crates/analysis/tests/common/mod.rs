@@ -285,7 +285,7 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
             continue;
         };
 
-        for found in object.symbols_at_line(&file, line) {
+        for found in object.symbols_from_lines(&file, line..=line) {
             assert!(
                 object
                     .symbols_sorted
@@ -296,11 +296,13 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
         }
         // A range holding the line answers with everything the line does.
         let range = object.symbols_from_lines(&file, line..=line.saturating_add(1));
-        for found in object.symbols_at_line(&file, line) {
+        for found in object.symbols_from_lines(&file, line..=line) {
             assert!(range.iter().any(|known| Arc::ptr_eq(known, &found)));
         }
     }
-    assert!(object.symbols_at_line("\u{0}no such file", 1).is_empty());
+    assert!(object
+        .symbols_from_lines("\u{0}no such file", 1..=1)
+        .is_empty());
 
     Some(object)
 }

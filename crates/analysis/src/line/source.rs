@@ -208,7 +208,6 @@ impl Object {
     ///
     /// Inclusive because that is the shape the index answers in ([`SourceIndex::lookup`]) and
     /// the one a caller holding a function's first and last line has, `u32::MAX` included.
-    /// [`symbols_at_line`](Self::symbols_at_line) asks about one line.
     ///
     /// Worker-thread work by construction: the first call against an object walks every unit's
     /// line program and takes every symbol's extent, and every call afterwards is two binary
@@ -246,11 +245,6 @@ impl Object {
             .filter_map(|position| placed.get(position as usize))
             .map(|entry| entry.symbol.clone())
             .collect()
-    }
-
-    /// [`symbols_from_lines`](Self::symbols_from_lines) for one line.
-    pub fn symbols_at_line(&self, file: &str, line: u32) -> Vec<Arc<SymbolData>> {
-        self.symbols_from_lines(file, line..=line)
     }
 
     /// Every line of `file` this object has code compiled from, ascending and without

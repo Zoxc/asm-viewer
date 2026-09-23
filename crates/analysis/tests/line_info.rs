@@ -489,7 +489,7 @@ fn a_symbol_beginning_in_a_gap_between_two_sequences_is_answered_from_the_later_
         (at(6), Some(0x10))
     );
     let named: Vec<String> = object
-        .symbols_at_line("/src/other.c", 42)
+        .symbols_from_lines("/src/other.c", 42..=42)
         .iter()
         .map(|symbol| symbol.name.clone())
         .collect();
