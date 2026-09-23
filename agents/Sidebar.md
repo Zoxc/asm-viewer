@@ -763,9 +763,11 @@ the tabs has moved for one to be derived from. `src/ui/picks.rs` is the whole of
 its own pick where it has one and the row the tab shows where it has not; a press in the list is the
 only thing that moves that list's pick, so a tab switched to or a link followed leaves it where the
 reader put it. The cost is stated rather than hidden: a list that has been pressed in no longer
-follows the tabs. A `Pick` is one enum over what the eight lists each call a row -- an object, a
-symbol, a visit, a bookmark, a path, a place in a file -- compared by `Arc` pointer identity where
-there is an `Arc` behind it, and the table is one per `Panel`, held at the root because a panel that
+follows the tabs. The one other writer is a close: three kinds of pick hold the whole `Object`, so
+`close_binary` drops every pick into the file it closes, and `clear_project` empties the table. A
+`Pick` is one enum over what the eight lists each call a row -- an object, a symbol, a visit, a
+bookmark, a path, a place in a file -- compared by `Arc` pointer identity where there is an `Arc`
+behind it, and the table is one per `Panel`, held at the root because a panel that
 is not its dock tab's is unmounted. **The keyboard picks the colour**: the list holding it draws its
 pick in `text_select_bg`, the code panes' own selection, and every other list draws its in
 `selected_bg`'s grey, so what the next key would act on is the one thing in blue. What answers for a

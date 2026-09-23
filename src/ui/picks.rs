@@ -10,6 +10,8 @@
 //! So a list draws **its own pick where it has one, and the row the tab shows where it has
 //! not**. A press in the list is the only thing that moves that list's pick: a tab
 //! switched to, a link followed, a bookmark opened all leave it where the reader put it.
+//! The one other writer is a close, which drops the picks into the closed binary
+//! ([`Pick::in_file`]).
 //! The cost is worth writing down -- a list that has been pressed in no longer follows the
 //! tabs -- and what it buys is that the lit row is the row last pointed at, in every list
 //! and not only in the four with a document behind them. A pick is one per [`Panel`] and
@@ -81,6 +83,20 @@ impl PartialEq for Pick {
                 ours == theirs && line == other
             }
             _ => false,
+        }
+    }
+}
+
+impl Pick {
+    /// Whether this names something in the binary at `path`, which a close lets go of: an
+    /// object, a symbol and a visit each hold the whole `Object`. A path, a place and a
+    /// bookmark hold none.
+    pub(crate) fn in_file(&self, path: &Path) -> bool {
+        match self {
+            Pick::Object(object) => object.path == path,
+            Pick::Symbol(symbol) => symbol.object.path == path,
+            Pick::Visit(document) => document.in_file(path),
+            Pick::Bookmark(_) | Pick::Path(_) | Pick::Place(..) => false,
         }
     }
 }

@@ -4180,6 +4180,52 @@ fn a_bulk_close_takes_the_trails_with_the_chips() {
     );
 }
 
+/// **A close lets go of the picks into its file.** Nothing but a press in a list moves
+/// that list's pick, so a pick of an object, a symbol or a visit into a closed binary held
+/// its whole `Object` until the reader pressed in that list again. A pick of a path holds
+/// no object and is left.
+#[test]
+fn closing_a_binary_lets_go_of_the_picks_into_it() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let path = object.path.clone();
+
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    test.sync_and_update();
+    let mut objects = states.objects;
+    objects.write().push(object.clone());
+    let mut picks = states.picks;
+    let picked = |pick: Pick| PickedRow { pick, at: 0 };
+    picks.write().extend([
+        (Panel::Objects, picked(Pick::Object(object.clone()))),
+        (Panel::Symbols, picked(Pick::Symbol(symbols[0].clone()))),
+        (
+            Panel::History,
+            picked(Pick::Visit(Document::Symbol(symbols[1].clone()))),
+        ),
+        (Panel::Files, picked(Pick::Path(path.clone()))),
+    ]);
+    drop(symbols);
+
+    close_binary(states, &path);
+    test.sync_and_update();
+    let left: Vec<Panel> = picks.peek().keys().copied().collect();
+    assert!(
+        left == [Panel::Files],
+        "picks into the closed file stayed: {left:?}"
+    );
+    assert_eq!(
+        Arc::strong_count(&object),
+        1,
+        "the closed file's bytes are still held"
+    );
+}
+
 /// What a bulk closer closed and what it lets go of are one list: `Open::close_tabs`
 /// answers the documents it took and `Places::forgetting` is handed that answer. A second
 /// walk over the bar could name a second set, and a place kept for a tab that has gone
@@ -34705,21 +34751,13 @@ fn a_pick_made_in_one_list_draws_no_row_of_another() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
     let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
-    let (mut test, (states, picks)) = TestingRunner::new(
+    let (mut test, states) = TestingRunner::new(
         two_lists_harness,
         (600., 300.).into(),
-        |runner: &mut _| {
-            runner.provide_root_context(|| {
-                let roots = test_roots();
-                let picks = try_consume_context::<Picks>()
-                    .expect("the root provides the picks")
-                    .0;
-                (roots.states, picks)
-            })
-        },
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
-    let (mut objects, mut picks) = (states.objects, picks);
+    let (mut objects, mut picks) = (states.objects, states.picks);
     objects.set(vec![object]);
     open_document(states.open, states.visits, file.clone(), Reach::NewTab);
     settle(&mut test);
@@ -35730,10 +35768,12 @@ fn a_long_list(
         (300., 300.).into(),
         |runner: &mut _| {
             let roots = runner.provide_root_context(test_roots);
-            // The one context a test wants back that no field of `Roots` carries: taken
-            // out of the root the way freya's own states are taken (`agents/Headless.md`).
-            let picks = runner.provide_root_context(consume_context::<Picks>).0;
-            (roots.states, picks, roots.keys.alt, roots.keys.ctrl)
+            (
+                roots.states,
+                roots.states.picks,
+                roots.keys.alt,
+                roots.keys.ctrl,
+            )
         },
         1.,
     );

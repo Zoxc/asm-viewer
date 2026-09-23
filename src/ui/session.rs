@@ -153,6 +153,8 @@ fn record_now(states: ProjectStates) {
         places,
         visits,
         bookmarks,
+        // Not saved.
+        picks: _,
         searched: _,
         build,
         arranged,
@@ -537,6 +539,10 @@ pub(crate) fn clear_project(states: ProjectStates) {
     // And the record outright, which neither walk above does.
     let mut visits = visits;
     visits.set(Visits::default());
+
+    // The picks likewise: every list they were made in is the project's being left.
+    let mut picks = states.picks;
+    picks.set(HashMap::new());
 
     // The search likewise: its hits are places in the directory being left, and dropping
     // the question is also what stops a walk still running -- the task takes the next

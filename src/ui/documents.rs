@@ -390,6 +390,7 @@ pub(crate) fn close_binary(states: ProjectStates, path: &Path) {
         open,
         places,
         mut visits,
+        mut picks,
         ..
     } = states;
     let mut docs = open.docs;
@@ -430,6 +431,9 @@ pub(crate) fn close_binary(states: ProjectStates, path: &Path) {
 
     let remaining = visits.peek().retaining(|entry| !entry.in_file(path));
     visits.set(remaining);
+    // A list's pick holds its row, the whole `Object` for three kinds, and only a press in
+    // that list would move it.
+    picks.write().retain(|_, picked| !picked.pick.in_file(path));
 
     objects.write().retain(|object| object.path != path);
     // Dropping the entry is what makes the next batch of objects out of this file be

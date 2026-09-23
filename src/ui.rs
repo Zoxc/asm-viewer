@@ -561,7 +561,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
     context(Expanded, HashSet::new());
     // The row each list has picked out. At the root and not in the panels: a panel that is
     // not its dock tab's is unmounted, and a pick outlives the reader looking elsewhere.
-    context(Picks, HashMap::new());
+    let picks = context(Picks, HashMap::new());
     let keyboard = provide(Keyboard::create());
     let follows = context(Follows, HashMap::new());
     // The Shortcuts page's box. At the root for the reason the type gives: the page is
@@ -630,6 +630,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         places,
         visits: doors.visits,
         bookmarks,
+        picks,
         searched,
         build,
         arranged,

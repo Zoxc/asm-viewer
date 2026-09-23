@@ -492,6 +492,8 @@ pub(crate) struct ProjectStates {
     /// Everywhere the reader has been, across every tab: what the History panel lists.
     pub(crate) visits: State<Visits>,
     pub(crate) bookmarks: State<Bookmarks>,
+    /// The row each list has picked out, which a close thins and a switch empties.
+    pub(crate) picks: State<HashMap<Panel, PickedRow>>,
     /// What the project's directory was last searched for, and what was found in it.
     pub(crate) searched: State<Searched>,
     /// What the project's own workspace built, and what a build replaces.
