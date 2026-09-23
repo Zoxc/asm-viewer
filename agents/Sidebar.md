@@ -690,8 +690,9 @@ dialog in the app goes up through `ask_file` or `ask_files` (`ui/session.rs`), w
 and that reason written once. Six sites each spelled it out, which is the shape where the seventh
 gets it wrong -- and the header over four of them called them three. The same freedom lets the
 reader **leave the project** while the dialog is up, and an answer written into whatever project
-was open by then went into the wrong one: "Choose..." replaced the next project's directory, and
-"Save as..." put the next project where the first was to go. So an answer about the open project
+was open by then went into the wrong one: "Choose..." replaced the next project's directory,
+"Save as..." put the next project where the first was to go, and "Add binaries..." loaded the files
+into the next project or onto the window with none. So an answer about the open project
 takes a `Stay` at the press and drops itself if `ProjectStates::left` says the reader has left
 since. A counter moved on by `clear_project`, every way out of a project, and not the project's
 file: leaving and coming back is another stay, and "Save as..." moves the file without leaving.

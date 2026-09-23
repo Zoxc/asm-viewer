@@ -526,6 +526,15 @@ impl Component for HistoryRow {
 #[derive(PartialEq)]
 pub(crate) struct ObjectsPanel;
 
+/// Load `paths` into the project open at `asked`, which is the one "Add binaries..." was
+/// pressed in. Nothing if the reader has left that project while the dialog was up.
+pub(crate) async fn added_binaries(states: ProjectStates, asked: Stay, paths: Vec<PathBuf>) {
+    if states.left(asked) {
+        return;
+    }
+    open_binaries(states.objects, states.loading, paths).await;
+}
+
 /// The control at the top of the Objects panel: what the top bar's Open button was.
 ///
 /// It moved here because this is the list it adds to. The bar is about the *project* --
@@ -538,8 +547,7 @@ struct AddBinaries;
 
 impl Component for AddBinaries {
     fn render(&self) -> impl IntoElement {
-        let objects = use_consume::<Objects>().0;
-        let loading = use_consume::<Loading>().0;
+        let states = use_project_states();
 
         rect()
             .width(Size::fill())
@@ -551,9 +559,10 @@ impl Component for AddBinaries {
                         // The same dialog the menu's "Open a file as a project..." puts
                         // up, and on a task that outlives this panel: the reader can drag
                         // it elsewhere in the dock while the dialog is up (`ask_files`).
+                        let asked = states.stay();
                         ask_files(
                             binaries_dialog("Add binaries to the project..."),
-                            move |paths| open_binaries(objects, loading, paths),
+                            move |paths| added_binaries(states, asked, paths),
                         );
                     })
                     .child("Add binaries..."),

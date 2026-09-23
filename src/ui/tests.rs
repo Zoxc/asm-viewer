@@ -3341,6 +3341,40 @@ fn a_directory_chosen_for_a_project_left_is_dropped() {
     assert_eq!(proj.peek().workspace_text, "/chosen");
 }
 
+/// **Binaries picked for a project the reader has since left are not loaded.** The same
+/// dialog as "Choose...", and the files went into the next project and its file, or onto
+/// the window with none.
+#[test]
+fn binaries_added_to_a_project_left_are_dropped() {
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    settle(&mut test);
+
+    let asked = states.stay();
+    clear_project(states);
+    settle(&mut test);
+    // One poll is as far as a load gets before it waits on its thread: the load is
+    // registered by then.
+    let answer = std::pin::pin!(added_binaries(
+        states,
+        asked,
+        vec![PathBuf::from("/no/such/binary.o")]
+    ));
+    let polled = std::future::Future::poll(
+        answer,
+        &mut std::task::Context::from_waker(std::task::Waker::noop()),
+    );
+    assert!(polled.is_ready(), "the answer went on to load");
+    assert!(
+        states.loading.peek().paths().is_empty(),
+        "the files were loaded into the project opened after they were asked for"
+    );
+}
+
 /// Whether a load was registered each time the effect in [`boot_harness`] ran.
 #[derive(Clone)]
 struct Registered(Rc<RefCell<Vec<bool>>>);
