@@ -11,6 +11,13 @@ pub(crate) fn held(modifiers: Modifiers) -> Modifiers {
     modifiers & (Modifiers::CONTROL | Modifiers::META | Modifiers::SHIFT | Modifiers::ALT)
 }
 
+/// Whether `key` is the character `text` in either case, as a chord's is matched: the one
+/// matcher for a key a handler answers on its own and no chord names, such as a listing's
+/// Ctrl+C.
+pub(crate) fn typed(key: &Key, text: &'static str) -> bool {
+    Stroke::Typed(text).is(key)
+}
+
 /// The one key a chord is pressed on.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stroke {

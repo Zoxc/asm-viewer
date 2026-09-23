@@ -27706,6 +27706,33 @@ fn select_all_with_no_run_is_a_run_of_the_file_the_pane_shows() {
     );
 }
 
+/// Caps Lock makes Ctrl+A arrive as `A`, and the listing still picks everything out, as
+/// the window's chords answer their letters in either case (`chords.rs`). Ctrl+C is
+/// matched by the same one call.
+#[test]
+fn select_all_is_answered_with_caps_lock_on() {
+    let directory = Seeded::directory("caps-lock");
+    let file = directory.named("two.c", "int x;\nint y;\n");
+    let (mut test, _states, _showing, marked) = source_file_harness(&file, (300., 200.));
+    let under = (150., 180.);
+    test.move_cursor(under);
+    test.press_cursor(under);
+    test.release_cursor(under);
+    settle(&mut test);
+
+    key_with(
+        &mut test,
+        Key::Character("A".into()),
+        Modifiers::CONTROL | Modifiers::CAPS_LOCK,
+    );
+    let picked = marked.peek().source.clone();
+    assert_eq!(
+        picked.map(|picked| picked.chars.rows()),
+        Some(0..=1),
+        "Ctrl+A with Caps Lock on picked nothing out"
+    );
+}
+
 /// The keys move the caret along a row of the unified view, and the row draws it there:
 /// an answer taken into the reading as the app takes it, the code tab opened, a press on
 /// an instruction, then Right, End and Home. The drawing is the point: the view's row data

@@ -671,7 +671,9 @@ fn on_listing_key(
         }
 
         match &e.key {
-            Key::Character(character) if command && character == "c" => {
+            // Ctrl alone, as a motion's modifiers are exact; the letter in either case,
+            // which is what Caps Lock makes of it.
+            key if command && !shift && chords::typed(key, "c") => {
                 let copied = copy_text(&marked.peek(), pane, &*line, &*text);
                 if let Some(copied) = copied {
                     // Failing silently: a platform whose display handle gave freya-winit
@@ -679,7 +681,7 @@ fn on_listing_key(
                     Clipboard::set(copied).ok();
                 }
             }
-            Key::Character(character) if command && character == "a" => {
+            key if command && !shift && chords::typed(key, "a") => {
                 // Every row of the listing, first row's start to last row's end, and
                 // nothing at all for one with no rows. No scroll is owed: the whole
                 // listing names no one place to go to.
