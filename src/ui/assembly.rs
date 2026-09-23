@@ -1,6 +1,6 @@
 //! The assembly half of a document, from the row up: what a row is drawn out of, the
-//! branch gutter, the three operands a row can make a link of -- a relocation target's
-//! name, a branch's own displacement where the listing has its row, and the address an
+//! branch gutter, the three kinds of operand a row can make a link of -- a relocation
+//! target's name, one per operand a relocation named, a branch's own displacement where the listing has its row, and the address an
 //! unnamed call or branch goes to, a door into the object's code that opens with Ctrl --
 //! the virtual list of instructions and the pane holding it.
 //!
@@ -42,19 +42,47 @@ pub(crate) fn asm_line(instruction: &Instruction, address: Address) -> String {
     format!("{}{}", address_column(address), text_of(instruction).0)
 }
 
-/// What one piece of an instruction's text is: one of the formatter's spans, or the link.
+/// What one piece of an instruction's text is: one of the formatter's spans, or one of its
+/// links, by its place in [`links`]' answer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Piece {
     Span(SpanKind),
-    Link,
+    Link(usize),
+}
+
+/// An instruction's links, in the order [`doors_of`] gives their doors: the span of
+/// `format` each replaces, or [`None`] for one appended after the row, and what it says.
+/// A relocation's link says the target's own name -- what [`SymbolData::display`] says,
+/// the rule the disassembler substituted the operand by -- and a branch's or a call's the
+/// number the formatter printed. A row has a name for each operand a relocation named,
+/// and one number at most.
+///
+/// The crate records a span into `format`'s own length, so the bounds only guard a
+/// listing built by hand: a name whose span is past the end is appended, and a number
+/// whose span is past it is no link.
+fn links(instruction: &Instruction) -> Vec<(Option<usize>, &str)> {
+    let format = &instruction.format;
+    match &instruction.operand {
+        Some(Operand::Names(names)) => names
+            .iter()
+            .map(|name| {
+                (
+                    name.span.filter(|&i| i < format.len()),
+                    name.symbol.display(),
+                )
+            })
+            .collect(),
+        Some(Operand::Branch { span, .. } | Operand::Call { span, .. }) => format
+            .get(*span)
+            .map(|(text, _)| (Some(*span), text.as_str()))
+            .into_iter()
+            .collect(),
+        Some(Operand::Placeholder) | None => Vec::new(),
+    }
 }
 
 /// An instruction's text after its address, piece by piece: the formatter's spans, with
-/// the link in place of the one it replaced. There is at most one link because the crate
-/// says so: an [`Operand`] is one case and carries the one span it has. A relocation's
-/// link says the target's own name -- what [`SymbolData::display`] says, the rule the
-/// disassembler substituted the operand by -- and a branch's or a call's the number the
-/// formatter printed.
+/// each link in place of the one it replaced.
 ///
 /// A name the formatter offered no operand for is a link all the same, appended after
 /// every span behind a space.
@@ -63,63 +91,51 @@ enum Piece {
 /// ([`text_of`]) and the spans it draws ([`instruction_text`]), so a column into one is a
 /// column into the other.
 fn pieces(instruction: &Instruction) -> Vec<(&str, Piece)> {
-    fn spans(run: &[(String, SpanKind)]) -> Vec<(&str, Piece)> {
-        run.iter()
-            .map(|(text, kind)| (text.as_str(), Piece::Span(*kind)))
-            .collect()
-    }
-    let format = &instruction.format;
-    // Where the link goes and what it says. The crate records a span into `format`'s own
-    // length, so the bounds only guard a listing built by hand.
-    let (at, text) = match &instruction.operand {
-        Some(Operand::SymbolName { symbol, span }) => {
-            (span.filter(|&i| i < format.len()), symbol.display())
-        }
-        Some(Operand::Branch { span, .. } | Operand::Call { span, .. }) => {
-            let Some((text, _)) = format.get(*span) else {
-                return spans(format);
-            };
-            (Some(*span), text.as_str())
-        }
-        Some(Operand::Placeholder) | None => return spans(format),
-    };
-    match at {
-        Some(i) => {
-            let mut pieces = spans(&format[..i]);
-            pieces.push((text, Piece::Link));
-            pieces.extend(spans(&format[i + 1..]));
-            pieces
-        }
-        None => {
-            let mut pieces = spans(format);
+    let links = links(instruction);
+    let mut pieces = instruction
+        .format
+        .iter()
+        .enumerate()
+        .map(
+            |(i, (text, kind))| match links.iter().position(|&(at, _)| at == Some(i)) {
+                Some(link) => (links[link].1, Piece::Link(link)),
+                None => (text.as_str(), Piece::Span(*kind)),
+            },
+        )
+        .collect::<Vec<_>>();
+    for (link, &(at, text)) in links.iter().enumerate() {
+        if at.is_none() {
             pieces.push((" ", Piece::Span(SpanKind::Other)));
-            pieces.push((text, Piece::Link));
-            pieces
+            pieces.push((text, Piece::Link(link)));
         }
     }
+    pieces
 }
 
-/// An instruction's text as the line a row copies, and the columns of its link in it.
+/// An instruction's text as the line a row copies, and the columns of each of its links
+/// in it, by the link's place in [`links`]' answer.
 ///
 /// The formatter's padding after the last span is not text, so it is trimmed; a link that
 /// ended in whitespace, or said nothing but it, loses what was trimmed. The file names
 /// the symbol, so either can happen, and the columns never run past the line.
-fn text_of(instruction: &Instruction) -> (Line, Option<Range<usize>>) {
+fn text_of(instruction: &Instruction) -> (Line, Vec<(usize, Range<usize>)>) {
     let mut text = String::new();
-    let mut link = None;
+    let mut links = Vec::new();
     for (piece, kind) in pieces(instruction) {
         let start = text.len();
         text.push_str(piece);
-        if kind == Piece::Link {
-            link = Some(start..text.len());
+        if let Piece::Link(link) = kind {
+            links.push((link, start..text.len()));
         }
     }
     text.truncate(text.trim_end().len());
     let len = text.len();
-    let link = link
-        .map(|link: Range<usize>| link.start.min(len)..link.end.min(len))
-        .filter(|link| !link.is_empty());
-    (Line::text(text), link)
+    let links = links
+        .into_iter()
+        .map(|(link, columns)| (link, columns.start.min(len)..columns.end.min(len)))
+        .filter(|(_, columns)| !columns.is_empty())
+        .collect();
+    (Line::text(text), links)
 }
 
 /// The text instruction `index`'s row draws after its address, as the clipboard sees it,
@@ -611,26 +627,36 @@ pub(crate) fn use_link_states(doors: Doors) -> LinkStates {
 }
 
 impl LinkStates {
-    /// The link at `columns` of a row, through `door`: lit and followed while the door is
-    /// open, and followed by carrying out what it [`opens`](Door::opens). Ctrl is read in
-    /// the closure the row asks from its render, so only a row the pointer is on is
-    /// subscribed to it, and peeked at the press.
+    /// The links at these columns of a row, each through its own door: lit and followed
+    /// while the doors are open, and a press on one followed by carrying out what its door
+    /// [`opens`](Door::opens). Ctrl is read in the closure the row asks from its render, so
+    /// only a row the pointer is on is subscribed to it, and peeked at the press. [`None`]
+    /// for no links.
+    ///
+    /// The row answers one "is it a door now" and draws one lit colour for all its links,
+    /// so they are asked of every door and taken from the first. A row's doors are all of
+    /// one kind -- the names in its operands, or the one address it goes to -- so the two
+    /// are what each door would say.
     ///
     /// The row's text is in no file, so it has no names a language server could be asked
     /// about: a question is put by file, line and column.
-    pub(crate) fn link(&self, columns: Range<usize>, door: Door) -> TextLinks {
+    pub(crate) fn links(&self, links: Vec<(Range<usize>, Door)>) -> Option<TextLinks> {
         let LinkStates {
             ctrl,
             doors,
             ref listing,
         } = *self;
         let listing = listing.clone();
-        let lit_fg = door.colours().1;
-        let asked = door.clone();
-        TextLinks {
-            columns: vec![columns],
-            is_link: Rc::new(move || asked.open_now(|| ctrl())),
-            follow: Rc::new(move |_| {
+        let lit_fg = links.first()?.1.colours().1;
+        let links = Rc::new(links);
+        let asked = links.clone();
+        Some(TextLinks {
+            columns: links.iter().map(|(columns, _)| columns.clone()).collect(),
+            is_link: Rc::new(move || asked.iter().all(|(_, door)| door.open_now(|| ctrl()))),
+            follow: Rc::new(move |pressed| {
+                let Some((_, door)) = links.iter().find(|(columns, _)| *columns == pressed) else {
+                    return;
+                };
                 if let Some(opens) = door.opens(*ctrl.peek()) {
                     opens.go(doors, &listing);
                 }
@@ -638,7 +664,7 @@ impl LinkStates {
             lit_fg,
             names: Vec::new(),
             on_hover: None,
-        }
+        })
     }
 }
 
@@ -980,23 +1006,31 @@ impl InstructionRow {
     }
 }
 
-/// Where a press on instruction `index`'s link goes, picked by what its operand names: a
-/// relocation target's symbol; a branch's own row where this listing has the row it lands
-/// on, which is the same set the gutter draws an arrow for; and otherwise the address it
-/// goes to, a door into the object's code there in either listing -- the unified view's
-/// own rows included, where the target may be screens away.
-fn door_of(data: &AsmData, index: usize) -> Option<Door> {
-    let instruction = data.assembly().instructions.get(index)?;
-    Some(match instruction.operand.as_ref()? {
-        Operand::SymbolName { symbol, .. } => Door::Symbol {
-            symbol: Symbol {
-                object: data.object().clone(),
-                data: symbol.clone(),
-            },
-            code_tab: data.code_tab(),
-        },
+/// Where a press on each of instruction `index`'s links goes, in [`links`]' order, picked
+/// by what its operands name: each relocation target's symbol; a branch's own row where
+/// this listing has the row it lands on, which is the same set the gutter draws an arrow
+/// for; and otherwise the address it goes to, a door into the object's code there in
+/// either listing -- the unified view's own rows included, where the target may be
+/// screens away.
+fn doors_of(data: &AsmData, index: usize) -> Vec<Door> {
+    let Some(instruction) = data.assembly().instructions.get(index) else {
+        return Vec::new();
+    };
+    let door = match instruction.operand.as_ref() {
+        Some(Operand::Names(names)) => {
+            return names
+                .iter()
+                .map(|name| Door::Symbol {
+                    symbol: Symbol {
+                        object: data.object().clone(),
+                        data: name.symbol.clone(),
+                    },
+                    code_tab: data.code_tab(),
+                })
+                .collect();
+        }
         // The run a press on the row landed on would have made.
-        Operand::Branch { address, .. } => match data.assembly().edge_from(index) {
+        Some(Operand::Branch { address, .. }) => match data.assembly().edge_from(index) {
             Some(edge) => Door::Row {
                 to: data.base() + data.lanes().row_of(edge.to),
                 at: data.position(edge.to),
@@ -1006,16 +1040,17 @@ fn door_of(data: &AsmData, index: usize) -> Option<Door> {
                 address: data.placed(*address),
             },
         },
-        Operand::Call { address, .. } => Door::Address {
+        Some(Operand::Call { address, .. }) => Door::Address {
             object: data.object().clone(),
             address: data.placed(*address),
         },
-        Operand::Placeholder => return None,
-    })
+        Some(Operand::Placeholder) | None => return Vec::new(),
+    };
+    vec![door]
 }
 
 /// The text instruction `index`'s row draws after its address, and the line that row
-/// copies, both out of one walk ([`pieces`]). The link keeps the operand's own position,
+/// copies, both out of one walk ([`pieces`]). Each link keeps its operand's own position,
 /// inside the brackets of a memory operand and after the `rip+` of a rip-relative one,
 /// and is a span of the row's text like any other, so a sweep selects across it.
 ///
@@ -1029,11 +1064,13 @@ fn instruction_text(
     states: &LinkStates,
 ) -> Text {
     let instruction = &data.assembly().instructions[index];
-    let door = door_of(data, index);
-    // The link's text in the colour its door is drawn in at rest.
-    let rest = door
-        .as_ref()
-        .map_or(palette().name_fg, |door| door.colours().0);
+    let doors = doors_of(data, index);
+    // Each link's text in the colour its door is drawn in at rest.
+    let rest = |link: usize| {
+        doors
+            .get(link)
+            .map_or(palette().name_fg, |door| door.colours().0)
+    };
     let spans = pieces(instruction)
         .into_iter()
         .map(|(text, piece)| {
@@ -1045,7 +1082,7 @@ fn instruction_text(
                         _ => FontWeight::NORMAL,
                     },
                 ),
-                Piece::Link => (rest, FontWeight::NORMAL),
+                Piece::Link(link) => (rest(link), FontWeight::NORMAL),
             };
             Span::new(text.to_owned())
                 .color(colour)
@@ -1053,16 +1090,18 @@ fn instruction_text(
                 .assembly_font()
         })
         .collect();
-    let (line, columns) = text_of(instruction);
+    let (line, links) = text_of(instruction);
+    let links = links
+        .into_iter()
+        .filter_map(|(link, columns)| Some((columns, doors.get(link)?.clone())))
+        .collect();
 
     Text {
         marking,
         line,
         spans,
         chars,
-        links: door
-            .zip(columns)
-            .map(|(door, columns)| states.link(columns, door)),
+        links: states.links(links),
     }
 }
 

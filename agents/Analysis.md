@@ -211,9 +211,9 @@ debug sections would be a second one held for as long as the object lives, and t
 section, and none has been taken again since.) That key is the parse's own doing: `object` hands
 back what the format states, an address in ELF and COFF but an offset from the
 start of the section in Mach-O, which lays its sections out one after another. So `read_sections`
-adds a Mach-O section's address as it builds the map, and `Code::relocation` can ask by address
+adds a Mach-O section's address as it builds the map, and `Code::relocations` can ask by address
 whatever the file is. The map is a `BTreeMap`, so that question is one range over an instruction's
-bytes, whose last entry is the answer. The debug sections are relocated straight from `object`'s iterator
+bytes, every entry of which is an answer. The debug sections are relocated straight from `object`'s iterator
 (`line/dwarf.rs`'s `relocate`) and want the offset as it comes, since it indexes the bytes being
 patched. `SymbolData::estimate_size` derives a symbol's extent from the *next* address in `Object::placed`,
 **clipped to the section's own bytes**. The index holds only symbols inside a code section's bytes,
@@ -665,7 +665,7 @@ a caller. What that buys is not the virtual call, one per symbol being nothing, 
 going away and the backend's formatting and span-mapping becoming inlinable into the per-instruction
 loop. The trade is that a new architecture is a new arm rather than a new impl behind a registry,
 which is what a set closed at compile time wants anyway. `Code` is the bytes, the address they sit
-at, the object they belong to, and two questions asked per instruction: `Code::relocation`, because
+at, the object they belong to, and two questions asked per instruction: `Code::relocations`, because
 a relocation names a byte range and never an operand number, and `Code::symbol_at`, for the address
 an unrelocated call names. A row carries the *address* its own branch names (`Operand::Branch`);
 turning those into row indices is `Assembly::decoded`'s binary search, so `edges`' drop rules hold
@@ -673,8 +673,8 @@ for every backend rather than once per backend. What stays *behind* the seam is 
 spells its own way: the `SymbolResolver` substitution, the per-instruction `rip_relative_addresses`
 flip, `branch_target`'s flow-control judgement and `FormatterTextKind -> SpanKind`. Each instruction
 is formatted into a `Formatted`, the backend's own scratch struct implementing
-`iced_x86::FormatterOutput`, capturing `(String, SpanKind)` spans for the UI to colour and the one
-span a link could be made of; the crate's `Instruction` holds no scratch state and implements no
+`iced_x86::FormatterOutput`, capturing `(String, SpanKind)` spans for the UI to colour and the
+spans a link could be made of; the crate's `Instruction` holds no scratch state and implements no
 `iced-x86` trait. `SpanKind` is the backend-independent stand-in for
 `FormatterTextKind`; the app has no `iced-x86` or `object` dependency (`BinaryFormat`,
 `Architecture` and `SectionIndex` are re-exported from `analysis` for that reason). The decode
@@ -683,19 +683,24 @@ decoded, both of them the file's numbers, so a section placed at the end of the 
 it and the offset derived from it is a slice index. The listing stops at the wrap rather than
 indexing past the symbol.
 
-**Relocation handling** is the subtle part, and all of it is x86's (`disasm/x86.rs`). A relocation
-whose address falls anywhere in the instruction's byte range is resolved to an `Arc<SymbolData>`,
-and the target's name is printed *in place of* the placeholder operand through iced-x86's
+**Relocation handling** is the subtle part, and all of it is x86's (`disasm/x86.rs`). Every
+relocation whose address falls anywhere in the instruction's byte range is resolved to an
+`Arc<SymbolData>`, and each target's name is printed *in place of* its placeholder operand through iced-x86's
 `SymbolResolver` hook, not by suppressing the number, which left the brackets the formatter had
 already opened empty (`call qword ptr []`). A relocation names no operand, so the loop works out
 which of the instruction's fields it is in from where the decoder found each
 (`get_constant_offsets`): the displacement or the immediate, a branch's rel32 counting as an
-immediate. The resolver is armed once per instruction with the name and that field, and the first
-operand asked about that the field encodes takes it: a memory operand for a displacement, an
-immediate or a branch for an immediate. The field matters because iced asks about every memory
-operand, so without it `mov dword ptr [esp+4], imm32` relocated at its immediate put the name inside
-the brackets. A relocation in neither field still goes to the first operand asked about. Any other
-numeric operand keeps its real value. A rip-relative operand keeps its `rip+` wherever a relocation
+immediate. The resolver is armed once per instruction with a name per relocation that named
+something, each with its field, and the first operand asked about that a name's field encodes takes
+that name: a memory operand for a displacement, an immediate or a branch for an immediate. The field
+matters because iced asks about every memory operand, so without it `mov dword ptr [esp+4], imm32`
+relocated at its immediate put the name inside the brackets. It is also what lets one instruction
+carry two names: an x86 operand has at most one field a relocation can be in, so two relocations are
+two operands', and i386 non-PIC `mov dword ptr [handler_ptr], handler` is relocated at both. When
+only the last relocation was asked for, the displacement printed its placeholder beside a named
+immediate. A relocation in neither field goes to the first operand asked about that no other name's
+field claims, and a name no operand takes is named beside the row. Any other numeric operand keeps
+its real value. A rip-relative operand keeps its `rip+` wherever a relocation
 covers it: `assembly` flips `rip_relative_addresses` **per instruction**, on exactly those with both
 a relocation -- resolved to a name or not, and anywhere but the immediate -- and a rip-relative
 memory operand, because `format_memory` would otherwise fold the displacement into an absolute
@@ -708,19 +713,18 @@ replaces the whole number, whichever operand takes it -- a displacement, an imme
 own rel32 -- so an addend a format stores in the operand rather than in the relocation entry (COFF,
 Mach-O) is not printed beside the name. A near branch has no rip-like form to fall back on either:
 iced prints its target as the address the displacement works out to, so a relocated one reads as an
-address it does not go to. Where the name landed is the span `write_symbol` records, which becomes
-`Operand::SymbolName`'s own. That is what lets `InstructionRow` draw the name in the operand's own
-place as a link, a run of the row's text between the spans before and after it. The other override,
-`write_number`, is how a branch target reaches the output: the span an instruction's *own*
-displacement was printed into. One field holds either, because the two never both matter -- the
-resolver is armed exactly when the instruction names a symbol, and an operand a name went into
-printed no address of its own -- and the loop decides which operand it belongs to afterwards.
+address it does not go to. Where each name landed is the span `write_symbol` records, in the order
+the resolver handed the names out, which becomes that name's `SymbolName::span`. That is what lets
+`InstructionRow` draw each name in its operand's own place as a link, a run of the row's text between
+the spans around it. The other override, `write_number`, is how a branch target reaches the output:
+the span an instruction's *own* displacement was printed into. The loop decides which operand the
+spans belong to afterwards.
 
 **A linked image's calls resolve by address**, since the linker consumed the relocations that named
 their targets and left the displacement as the answer. Where no relocation covers an instruction and
 it is a direct near `call`, the backend asks `Code::symbol_at_local` for the text symbol that
 **starts exactly** at the address the encoding names, and hands it out as the same
-`Operand::SymbolName` a relocated call gets: the resolver substitutes the name for the operand, `write_symbol` records the
+`Operand::Names` a relocated call gets: the resolver substitutes the name for the operand, `write_symbol` records the
 span, and the UI draws it as the same link with no change of its own. Three limits, each deliberate.
 *Exact start only*: a call into the middle of a function
 stays the number it is, and a target no symbol starts at (a PLT stub, a stripped static) stays plain
@@ -764,33 +768,40 @@ binary search.
 be six fields and sixty lines of doc saying which was `Some` exactly when which other was, with the
 backend establishing the pairings after the fact and the UI reconstructing the enum by hand. **The
 four cases split by how the address was arrived at and not by what the instruction is**, which is
-the thing the old fields were easiest to misread about. Any operand a relocation covers is
-`SymbolName` or `Placeholder`, whatever the opcode and whichever operand it is -- an immediate, a
-memory displacement and a branch's own rel32 are one question, whether the relocation named a text
-symbol this object kept. `lea rdi, [rip+0x0]` relocated against a function is a `SymbolName` exactly
-as a `call` is, and the same `lea` against a data symbol is a `Placeholder`; `Branch` and `Call` are
+the thing the old fields were easiest to misread about. Any operand a relocation covers is one of
+the `Names` or leaves a `Placeholder`, whatever the opcode and whichever operand it is -- an
+immediate, a memory displacement and a branch's own rel32 are one question, whether the relocation
+named a text symbol this object kept. `lea rdi, [rip+0x0]` relocated against a function is `Names`
+exactly as a `call` is, and the same `lea` against a data symbol is a `Placeholder`; `Branch` and `Call` are
 the unrelocated cases alone. The decision is one `match` in the decode loop and everything else
 matches on the answer.
 
-`SymbolName { symbol, span }` is a text symbol: the relocation's, or a linked image's call resolved
-by address (above). It is spelt out rather than called `Symbol`, which the crate already exports for
-the object-and-`SymbolData` pair, and named after what it holds rather than after what happened to
-the operand. Its `span` is where the name was substituted -- an index into `format`, as every `span`
-here is, and never an offset into the symbol -- and `None` there is the fifth state the old fields
-left unnamed: the formatter offered no operand to put the name in, so it goes *beside* the row
-(`Link::Appended`, `agents/Panes.md`). `Placeholder` is a relocation that named nothing this object
-kept: what is printed is a linker's fill and the row has no link, which is worth telling apart from
+`Names` is every text symbol the row's operands name, in the order they are printed and never
+none: one per relocation that named something, or a linked image's call resolved by address
+(above). **A list and not one name**, because an instruction can hold two relocations, one per
+field; a list beside the other cases rather than an `Operand` per x86 operand, because a branch or
+a call has one operand and a placeholder has no link, so only names come more than one to a row.
+`symbol()` is the first name, which is the only one on every row but the few with two, and
+`names()` the list. A relocation that named nothing adds no name and leaves its operand's
+placeholder printed; the row is a `Placeholder` only where no relocation named anything. Each is a
+`SymbolName { symbol, span }`, spelt out rather than called `Symbol`, which the crate already
+exports for the object-and-`SymbolData` pair. Its `span` is where the name was substituted -- an
+index into `format`, as every `span` here is, and never an offset into the symbol -- and `None`
+there is the fifth state the old fields left unnamed: the formatter offered no operand to put the
+name in, so it goes *beside* the row (`Link::Appended`, `agents/Panes.md`). `Placeholder` is
+relocations that named nothing this object kept: what is printed is a linker's fill and the row has no link, which is worth telling apart from
 having no operand at all. `Branch { address, span }` is the instruction's own displacement, real --
 a `jmp`, a `jcc`, a `loop`, an `xbegin`, never a `call`, since control comes straight back.
 `Call { address, span }` is a direct near `call` whose displacement is real and whose target no
 symbol starts at: into the middle of a function, or into a function a stripped image has no symbol
-for. Both addresses are in the section's own space, as `address` is. `symbol()` and `branch()` are
-one-line projections for a caller that wants one value, `Assembly::decoded`'s edges among them.
+for. Both addresses are in the section's own space, as `address` is. `symbol()`, `names()` and
+`branch()` are one-line projections for a caller that wants one answer, `Assembly::decoded`'s edges
+among them.
 
 The exclusions the old doc comments spelled out are the enum's shape now. A relocated operand is a
 placeholder, so a row naming a symbol names no address of its own; a call the resolver named goes to
-that symbol's address rather than to one of its own; and a row has at most one link because an
-operand has at most one span. Nothing is judged here either: a branch out of the symbol, into the
+that symbol's address rather than to one of its own; and a row has one link per name, or one for
+its own address, because each has one span. Nothing is judged here either: a branch out of the symbol, into the
 middle of an instruction, or `jmp $` all keep their address, and what the UI does with one is a
 **Ctrl** door into the object's code there (`agents/Panes.md`). What none of it covers is a
 relocation against a section symbol with an addend (`Relocated { target: None }`, so `Placeholder`;

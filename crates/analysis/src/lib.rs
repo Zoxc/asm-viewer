@@ -13,7 +13,7 @@ mod sections;
 mod unwind;
 
 pub use address::{Bias, PlacedAddress, SectionAddress};
-pub use disasm::{Assembly, BranchEdge, Instruction, Operand, SpanKind};
+pub use disasm::{Assembly, BranchEdge, Instruction, Operand, SpanKind, SymbolName};
 pub use extent::Extent;
 pub use line::{LineInfo, LineRow, SourceDigests, SourceHash};
 pub use listing::{CodeListing, Gap, GapKind, Listing, Placed, Stretch};

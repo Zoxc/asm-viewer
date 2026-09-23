@@ -612,7 +612,7 @@ release
 goes to when nothing names it**: a call into the middle of a function, a call to a function a
 stripped image has no symbol for, a jump out of the symbol in a listing with no row for it
 (`Operand::Call` and an `Operand::Branch` with no edge, `agents/Analysis.md`). The number is drawn
-as `Door::Address` (`door_of`, which picks each link's door from its operand), a run of the row's
+as `Door::Address` (`doors_of`, which picks each link's door from its operand), a run of the row's
 text as the other two are, and a press on it is `show_in_code` with the **placed** address and no line. A link on its own, as
 every operand link is: a plain press opens that code in place, Ctrl opens it in a tab of its own.
 Either lands on the row **at or below** the address, the view and the caret both. That rounding is
@@ -634,8 +634,10 @@ it opens as well as what, the two variants that open a document carrying the `Re
 carrying it out, which are `Opens::go` and read no modifier. `go` used to read the Ctrl a second
 time, which put half the decision where a test of `opens` could not see it. Alt is not part of it:
 the row asks Alt of every link before any door. A label is a door only with Ctrl held, so it
-always opens its symbol in a tab of its own, through the same `LinkStates::link` as an operand. **All three operand doors are one
-kind of link**, a run of the row's text with a `Door` saying which (`LinkStates::link`). The hover,
+always opens its symbol in a tab of its own, through the same `LinkStates::links` as an operand. **All three operand doors are one
+kind of link**, a run of the row's text with a `Door` saying which (`LinkStates::links`). A row can
+have several, one per name its operands carry (`mov dword ptr [handler_ptr], handler` names two),
+and a press follows the door of the link it hit, found by the columns `use_code_row` hands back. The hover,
 the chrome, the Alt rule and the text are the same for each; the press and the two colours are all
 that differ. Ctrl is read in the render only by the row the pointer is on, so only that row is drawn
 again as Ctrl goes down and up.
@@ -1202,12 +1204,13 @@ UTF-16. A `Line` is the row's text as it is drawn, so a column into what is
 drawn is a column into what is copied: `instruction_line`, `source_line` and `code_line` are built from the same
 text the rows draw, and `asm_line` is the address plus the same text -- not a third way of building
 the same string. An instruction's two halves are one walk, `pieces` (`src/ui/assembly.rs`): the
-formatter's spans with the link in place of the one it replaced, and a name the formatter offered
+formatter's spans with each link in place of the one it replaced, and a name the formatter offered
 no operand for appended after them all behind a space, a link like any other and not a `None` each
-side has to spot for itself. `instruction_text` draws the pieces and `text_of` joins them into the
+side has to spot for itself. Each link piece carries its place in `links`, which is also the order
+`doors_of` gives the doors in, so the columns of a link and its door are matched by that index. `instruction_text` draws the pieces and `text_of` joins them into the
 copy, trimming the formatter's padding after the last span -- which is all the two differ in --
-and clamping the link's columns to what is left, a name from the file being free to end in
-whitespace or be nothing else. Which door a link is is not the walk's business: `door_of` picks it
+and clamping the links' columns to what is left, a name from the file being free to end in
+whitespace or be nothing else. Which door a link is is not the walk's business: `doors_of` picks it
 from the crate's own `Operand` (`agents/Analysis.md`), a branch being its row where the listing
 has an edge for it and its address where it has not. The padding was once drawn in non-breaking
 spaces, when the text before a link was a paragraph of its own and skia trimmed its end; inside

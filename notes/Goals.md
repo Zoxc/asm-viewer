@@ -220,7 +220,7 @@ leaves this list when it is. That is a move made on request, like everything els
   or a Ctrl+G dialog -- whether it is the placed address the listing draws or the object's
   own, and what happens to one that falls between rows or outside every section.
 - [ ] Let a call target with no symbol be opened, where a relocation names it as a section and
-  an addend. `Code::relocation` answers a `Relocated` whose `target` is `None` whenever the
+  an addend. `Code::relocations` answers a `Relocated` whose `target` is `None` whenever the
   relocation points at something the object has no text symbol for — a section symbol with an
   addend (`.text+0x40`), a data symbol, an undefined import — and the operand is then drawn as
   the placeholder the linker will overwrite, with nothing to click. The section-plus-addend
@@ -233,8 +233,8 @@ leaves this list when it is. That is a move made on request, like everything els
   name replaces the *whole* number the operand held, so `[rip+g]` is drawn for what is really
   `g+8`: COFF and Mach-O store the addend in the operand bytes where an ELF RELA keeps it in
   the relocation entry, and a field read off a struct is exactly where a non-zero one comes
-  from. Nothing about this is rip's. The resolver is taken by the first operand the formatter
-  asks about, whatever kind that is, so the same number goes missing from a plain absolute
+  from. Nothing about this is rip's. Each name replaces the whole number of the operand its
+  relocation is in, whatever kind that is, so the same number goes missing from a plain absolute
   displacement, one under a base register (`[rax+g]`), an immediate (`mov eax, g`, `push g`),
   a 64-bit immediate or `moffs`, and a branch (`call g` where a COFF `REL32` placeholder said
   `g+10h`) — pinned across the kinds in `tests/elf_x86_64.rs`. The reader is shown the right
@@ -267,7 +267,7 @@ leaves this list when it is. That is a move made on request, like everything els
   `Assembly::edges` asks the same question of both, and a call inside the symbol is drawn and
   followed as a branch is. Open: whether a call's line looks different from a jump's, since
   control comes back to the next row, and whether its target gets a block separator, which
-  today marks only where a branch lands. A call to the symbol's own start is a `SymbolName` and
+  today marks only where a branch lands. A call to the symbol's own start is `Names` and
   not a `Call`, so recursion is not covered. Also update `notes/specs/Assembly View.md`, whose
   Operands, Blocks and Branch arrows sections speak of branches only.
 

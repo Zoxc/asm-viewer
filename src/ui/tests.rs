@@ -26217,6 +26217,81 @@ fn a_sweep_selects_across_a_link_and_a_press_still_opens_it() {
     );
 }
 
+/// A row whose operands name two symbols draws two links, and a press on each follows its
+/// own symbol: `mov dword ptr [add], twice`, relocated at the displacement and at the
+/// immediate, stood in for `sum_to`'s call.
+#[test]
+fn a_press_on_a_rows_second_name_follows_the_second_symbol() {
+    let symbols = fixture_symbols();
+    let named = |name: &str| {
+        symbols
+            .iter()
+            .find(|symbol| symbol.data.name == name)
+            .unwrap_or_else(|| panic!("the fixture holds {name}"))
+            .clone()
+    };
+    let (sum_to, add, twice) = (named("sum_to"), named("add"), named("twice"));
+    let decoded = Studied::new(sum_to.clone())
+        .assembly
+        .expect("sum_to decodes");
+    let mut assembly = Assembly {
+        instructions: decoded.instructions.clone(),
+        edges: decoded.edges.clone(),
+        undecodable: decoded.undecodable,
+        range: decoded.range.clone(),
+        extent: decoded.extent,
+    };
+    let call = assembly
+        .instructions
+        .iter_mut()
+        .find(|instruction| instruction.symbol().is_some())
+        .expect("sum_to calls add");
+    let span = |text: &str, kind| (text.to_owned(), kind);
+    call.format = vec![
+        span("mov", SpanKind::Mnemonic),
+        span("       ", SpanKind::Other),
+        span("dword ptr [", SpanKind::Other),
+        span("add", SpanKind::Address),
+        span("], ", SpanKind::Other),
+        span("twice", SpanKind::Address),
+    ];
+    call.operand = Some(Operand::Names(vec![
+        analysis::SymbolName {
+            symbol: add.data.clone(),
+            span: Some(3),
+        },
+        analysis::SymbolName {
+            symbol: twice.data.clone(),
+            span: Some(5),
+        },
+    ]));
+    let shown = Shown {
+        ask: Ask::Symbol(sum_to.clone()),
+        studied: Studied::with_assembly(sum_to, Some(Arc::new(assembly))),
+    };
+
+    let (mut test, roots) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    assert!(
+        link_area(&test, "add").is_some(),
+        "the first name is not drawn"
+    );
+
+    let second = link_centre(&test, "twice");
+    press_at(&mut test, second);
+    settle(&mut test);
+    assert!(
+        states.open.active() == Some(Document::Symbol(twice)),
+        "the second name did not open its own symbol"
+    );
+}
+
 /// Alt held makes a press on a link the start of a selection and nothing else. Every
 /// door in a code row acts on a plain press, which leaves no way to put the pointer down
 /// on one and sweep: the press follows the link. Alt is what says "not a door this time",
@@ -39782,7 +39857,7 @@ fn call_row(symbol: &Symbol) -> usize {
         .expect("the symbol decodes")
         .instructions
         .iter()
-        .position(|instruction| matches!(instruction.operand, Some(Operand::SymbolName { .. })))
+        .position(|instruction| matches!(instruction.operand, Some(Operand::Names(_))))
         .expect("the symbol calls something");
     studied.lanes.row_of(call)
 }

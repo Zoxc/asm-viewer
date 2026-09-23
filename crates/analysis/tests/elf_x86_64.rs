@@ -291,8 +291,10 @@ fn a_relocation_anywhere_in_the_instruction_counts() {
 }
 
 #[test]
-fn the_last_relocation_in_the_instruction_wins() {
-    // Two in the call, at its second byte and its last, and one on the `ret` after it.
+fn every_relocation_in_the_instruction_is_named() {
+    // Two in the call's one field, at its second byte and its last, and one on the `ret`
+    // after it. The field's operand takes the first; the second has no operand left and
+    // is named beside the row, and the `ret`'s is not the call's.
     let relocation = |offset, target| TextRelocation {
         in_symbol: 0,
         offset,
@@ -320,11 +322,14 @@ fn the_last_relocation_in_the_instruction_wins() {
     let target = symbol(&object, "target");
 
     let assembly = caller.assembly(&object).expect("caller disassembles");
-    let resolved = assembly.instructions[0]
-        .symbol()
-        .expect("the call has a relocation");
-    assert_eq!(resolved.name, "target");
-    assert!(Arc::ptr_eq(resolved, &target));
+    let call = &assembly.instructions[0];
+    let names = call
+        .names()
+        .iter()
+        .map(|name| (name.symbol.name.as_str(), name.span.is_some()))
+        .collect::<Vec<_>>();
+    assert_eq!(names, [("other", true), ("target", false)]);
+    assert!(Arc::ptr_eq(&call.names()[1].symbol, &target));
 }
 
 #[test]
@@ -402,7 +407,7 @@ fn the_relocation_span_is_the_only_one_replaced() {
     assert_eq!(spans_of(mov, SpanKind::Number), ["7"]);
     // A store's memory operand, not a call's displacement: what the relocation named is
     // what decides the case, and the opcode has nothing to do with it.
-    assert!(matches!(mov.operand, Some(Operand::SymbolName { .. })));
+    assert!(matches!(mov.operand, Some(Operand::Names(_))));
     // The `rip+` is *not* part of the link: the operand's span still isolates the name.
     assert_eq!(symbol_span(mov), Some(("target", SpanKind::Address)));
     assert_eq!(
@@ -472,6 +477,64 @@ fn a_relocated_immediate_leaves_a_rip_relative_displacement_real() {
 
     assert_eq!(text(mov).trim_end(), "mov       dword ptr [1Ah], g");
     assert_eq!(symbol_span(mov), Some(("g", SpanKind::Address)));
+}
+
+#[test]
+fn each_relocated_field_names_its_own_operand() {
+    // `mov dword ptr [rip+0x0], imm32`, relocated at both the displacement and the
+    // immediate: each operand takes its own name, and the row records both.
+    let data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "storer",
+                bytes: &[
+                    0xC7, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3,
+                ],
+            },
+            TextSymbol {
+                name: "slot",
+                bytes: &[0xC3],
+            },
+            TextSymbol {
+                name: "handler",
+                bytes: &[0xC3],
+            },
+        ],
+        &[
+            TextRelocation {
+                in_symbol: 0,
+                offset: 2,
+                target: 1,
+            },
+            TextRelocation {
+                in_symbol: 0,
+                offset: 6,
+                target: 2,
+            },
+        ],
+    );
+    let object = parse(&data);
+    let mov = &assemble(&object, "storer").instructions[0];
+
+    assert_eq!(
+        text(mov).trim_end(),
+        "mov       dword ptr [rip+slot], handler"
+    );
+    let names = mov
+        .names()
+        .iter()
+        .map(|name| {
+            let span = name.span.and_then(|span| span_at(mov, span));
+            (name.symbol.name.as_str(), span)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        [
+            ("slot", Some(("slot", SpanKind::Address))),
+            ("handler", Some(("handler", SpanKind::Address))),
+        ]
+    );
 }
 
 #[test]
@@ -1179,11 +1242,12 @@ fn edges(assembly: &analysis::Assembly) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// The index of the one span `instruction`'s operand carries, whichever kind it is.
+/// The index of the one span `instruction`'s operand carries, whichever kind it is: the
+/// first name's, where it names more than one.
 fn span_index(instruction: &analysis::Instruction) -> Option<usize> {
-    match instruction.operand {
-        Some(Operand::SymbolName { span, .. }) => span,
-        Some(Operand::Branch { span, .. } | Operand::Call { span, .. }) => Some(span),
+    match &instruction.operand {
+        Some(Operand::Names(names)) => names.first()?.span,
+        Some(Operand::Branch { span, .. } | Operand::Call { span, .. }) => Some(*span),
         Some(Operand::Placeholder) | None => None,
     }
 }
@@ -1194,11 +1258,9 @@ fn span_at(instruction: &analysis::Instruction, index: usize) -> Option<(&str, S
     Some((text.as_str(), *kind))
 }
 
-/// The span an [`Operand::SymbolName`]'s name was substituted into, with its kind.
+/// The span the first of an [`Operand::Names`] was substituted into, with its kind.
 fn symbol_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
-    let Some(Operand::SymbolName { span, .. }) = instruction.operand else {
-        return None;
-    };
+    let span = instruction.names().first()?.span;
     span_at(instruction, span?)
 }
 

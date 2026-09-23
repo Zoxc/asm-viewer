@@ -12,7 +12,10 @@
 
 use crate::{Extent, Object, Section, SectionAddress, SymbolData};
 use object::{Architecture, RelocationTarget};
-use std::{ops::Range, sync::Arc};
+use std::{
+    ops::{Bound, Range},
+    sync::Arc,
+};
 
 mod x86;
 
@@ -77,31 +80,36 @@ impl<'a> Code<'a> {
         }
     }
 
-    /// The relocation at any of the `len` bytes at `address`, if there is one; where there
-    /// are several, the one at the *last* address wins.
+    /// Every relocation at any of the `len` bytes at `address`, in address order. An x86
+    /// instruction can hold two, one per field: `mov dword ptr [g], f` relocates both its
+    /// displacement and its immediate.
     ///
-    /// Both halves of the answer are different questions: [`Some`] means the encoded operand
-    /// is a placeholder, while [`target`](Relocated::target) is [`None`] whenever the
-    /// relocation points at something this object has no text symbol for (a section, a data
-    /// symbol, an undefined import).
-    pub fn relocation(&self, address: SectionAddress, len: usize) -> Option<Relocated> {
-        let code = self.section?.code()?;
+    /// Both halves of each answer are different questions: one being there means the
+    /// encoded field is a placeholder, while [`target`](Relocated::target) is [`None`]
+    /// whenever the relocation points at something this object has no text symbol for (a
+    /// section, a data symbol, an undefined import).
+    pub fn relocations(
+        &self,
+        address: SectionAddress,
+        len: usize,
+    ) -> impl Iterator<Item = Relocated> + '_ {
         // Checked because the address is the file's number, and a section placed at the very
         // end of the address space would wrap it: there the bytes that have an address run to
         // the top of it.
         let end = u64::try_from(len)
             .ok()
-            .and_then(|len| address.checked_add(len));
-        let (&address, found) = match end {
-            Some(end) => code.relocations.range(address..end).next_back(),
-            None => code.relocations.range(address..).next_back(),
-        }?;
-
-        let target = match found.target() {
-            RelocationTarget::Symbol(index) => self.object.symbols.get(&index).cloned(),
-            _ => None,
-        };
-        Some(Relocated { address, target })
+            .and_then(|len| address.checked_add(len))
+            .map_or(Bound::Unbounded, Bound::Excluded);
+        let code = self.section.and_then(Section::code);
+        code.into_iter()
+            .flat_map(move |code| code.relocations.range((Bound::Included(address), end)))
+            .map(|(&address, found)| {
+                let target = match found.target() {
+                    RelocationTarget::Symbol(index) => self.object.symbols.get(&index).cloned(),
+                    _ => None,
+                };
+                Relocated { address, target }
+            })
     }
 
     /// The text symbol starting at `address`, an address in this code's own section — the
@@ -123,7 +131,7 @@ impl<'a> Code<'a> {
     }
 }
 
-/// A relocation covering an instruction's bytes. See [`Code::relocation`].
+/// A relocation covering an instruction's bytes. See [`Code::relocations`].
 pub(crate) struct Relocated {
     /// Where the relocation starts, which is what says the field of the instruction it is
     /// in: it names no operand.
@@ -160,15 +168,15 @@ pub enum SpanKind {
     Other,
 }
 
-/// What an instruction's operand names, where it names anything: the one link a row of it
-/// can draw, and the whole of what a backend decided about it.
+/// What an instruction's operands name, where they name anything: the links a row of it
+/// can draw, and the whole of what a backend decided about them.
 ///
 /// **The four cases split by how the address was arrived at, not by what the instruction
-/// is.** Any operand a relocation covers is [`SymbolName`](Self::SymbolName) or
+/// is.** Any operand a relocation covers is one of the [`Names`](Self::Names) or leaves a
 /// [`Placeholder`](Self::Placeholder), whatever the opcode and whichever operand it is: an
 /// immediate, a memory displacement and a branch's own rel32 are all one question, which is
 /// whether the relocation named a text symbol this object kept. A `lea rdi, [rip+0x0]`
-/// relocated against a function is a [`SymbolName`](Self::SymbolName) exactly as a `call`
+/// relocated against a function is one of the [`Names`](Self::Names) exactly as a `call`
 /// is; the same `lea` against a data symbol is a [`Placeholder`](Self::Placeholder).
 /// [`Branch`](Self::Branch) and [`Call`](Self::Call) are the *unrelocated* cases alone,
 /// where the encoding's own displacement is the answer.
@@ -180,33 +188,23 @@ pub enum SpanKind {
 /// A caller matches on this; nothing outside a backend works out which case a row is in.
 #[derive(Clone)]
 pub enum Operand {
-    /// A text symbol the operand names, whatever kind of operand it is: the target of a
-    /// relocation covering the instruction's bytes, or, with no relocation, the function a
-    /// direct `call` reaches, by the address it names — which is what a linked image's calls
-    /// are, the linker having applied theirs.
+    /// Every text symbol the instruction's operands name, in the order they are printed,
+    /// and never none. An x86 operand has at most one field a relocation can be in, so
+    /// each name is a different operand's: `mov dword ptr [g], f` relocated at both its
+    /// displacement and its immediate names two.
     ///
-    /// Spelt out rather than called `Symbol`, which the crate already exports for the
-    /// object-and-[`SymbolData`] pair, and named after what it holds rather than after what
-    /// happened to the operand.
-    SymbolName {
-        symbol: Arc<SymbolData>,
-
-        /// Where in [`format`](Instruction::format) the name was substituted for the
-        /// operand's placeholder value — one whole span, so a renderer can lift it out and
-        /// draw it as a link. An index into `format` and never an offset into the symbol.
-        ///
-        /// [`None`] means the formatter offered no operand to substitute into, and the
-        /// symbol can only be named *beside* the instruction.
-        span: Option<usize>,
-    },
+    /// A relocation that named nothing adds no name here and leaves its operand's
+    /// placeholder printed; the row is a [`Placeholder`](Self::Placeholder) only where no
+    /// relocation named anything.
+    Names(Vec<SymbolName>),
 
     /// A relocation covered the bytes and named nothing this object kept — a section, a
     /// data symbol, an undefined import. What is printed is the placeholder itself, so the
     /// row names neither a symbol nor an address and has no link. Kept apart from having no
     /// operand at all because it is the one case where the number means nothing.
     ///
-    /// [`SymbolName`](Self::SymbolName)'s other half, and reached on the same rule: a
-    /// relocation covers these bytes. Nothing about the opcode enters into it.
+    /// [`Names`](Self::Names)' other half, and reached on the same rule: a relocation
+    /// covers these bytes. Nothing about the opcode enters into it.
     Placeholder,
 
     /// The address this instruction's own encoding branches to, no relocation covering it —
@@ -230,8 +228,8 @@ pub enum Operand {
     },
 
     /// The address a direct near `call` goes to, its displacement real — no relocation
-    /// covers its bytes — and no text symbol starting there, since a call one does is a
-    /// [`SymbolName`](Self::SymbolName) and its address is the symbol's.
+    /// covers its bytes — and no text symbol starting there, since a call to one is
+    /// [`Names`](Self::Names) and its address is the symbol's.
     ///
     /// [`Branch`](Self::Branch)'s counterpart for the one kind of branch it leaves out, and
     /// kept apart from it because the two answer different questions: a branch is a line
@@ -247,25 +245,52 @@ pub enum Operand {
     },
 }
 
+/// A text symbol one operand names, whatever kind of operand it is: the target of a
+/// relocation covering that operand's field, or, with no relocation, the function a direct
+/// `call` reaches, by the address it names — which is what a linked image's calls are, the
+/// linker having applied theirs.
+///
+/// Spelt out rather than called `Symbol`, which the crate already exports for the
+/// object-and-[`SymbolData`] pair, and named after what it holds rather than after what
+/// happened to the operand.
+#[derive(Clone)]
+pub struct SymbolName {
+    pub symbol: Arc<SymbolData>,
+
+    /// Where in [`format`](Instruction::format) the name was substituted for the operand's
+    /// placeholder value — one whole span, so a renderer can lift it out and draw it as a
+    /// link. An index into `format` and never an offset into the symbol.
+    ///
+    /// [`None`] means the formatter offered no operand to substitute into, and the symbol
+    /// can only be named *beside* the instruction.
+    pub span: Option<usize>,
+}
+
 #[derive(Clone)]
 pub struct Instruction {
     pub address: SectionAddress,
     pub bytes: Vec<u8>,
     pub format: Vec<(String, SpanKind)>,
 
-    /// What this instruction's operand names, where it names anything. [`None`] for a row
+    /// What this instruction's operands name, where they name anything. [`None`] for a row
     /// with nothing to point at: a `ret`, a register move, a number that is only a number.
     pub operand: Option<Operand>,
 }
 
 impl Instruction {
-    /// The text symbol this instruction's operand names, where it names one. See
-    /// [`Operand::SymbolName`].
-    pub fn symbol(&self) -> Option<&Arc<SymbolData>> {
+    /// Every text symbol this instruction's operands name, in the order they are printed.
+    /// See [`Operand::Names`].
+    pub fn names(&self) -> &[SymbolName] {
         match &self.operand {
-            Some(Operand::SymbolName { symbol, .. }) => Some(symbol),
-            _ => None,
+            Some(Operand::Names(names)) => names,
+            _ => &[],
         }
+    }
+
+    /// The first text symbol this instruction's operands name, where they name one: the
+    /// one there is, on every row but the few with two.
+    pub fn symbol(&self) -> Option<&Arc<SymbolData>> {
+        self.names().first().map(|name| &name.symbol)
     }
 
     /// The address this instruction's own encoding branches to. See [`Operand::Branch`],

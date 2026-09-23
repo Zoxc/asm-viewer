@@ -34,11 +34,9 @@ const FUNCTIONS: &[ExportedSymbol] = &[
     },
 ];
 
-/// The span an [`Operand::SymbolName`]'s name was substituted into, with its kind.
+/// The span the first of an [`Operand::Names`] was substituted into, with its kind.
 fn symbol_span(instruction: &analysis::Instruction) -> Option<(&str, SpanKind)> {
-    let Some(Operand::SymbolName { span, .. }) = instruction.operand else {
-        return None;
-    };
+    let span = instruction.names().first()?.span;
     let (text, kind) = instruction.format.get(span?)?;
     Some((text.as_str(), *kind))
 }

@@ -470,12 +470,12 @@ impl Component for TextRow {
         // is the row's, picking it out like any other.
         let line = text_line(self.text.mark, &self.text.text);
         let whole = 0..line.len();
-        let links = self.text.opens.clone().map(|data| {
+        let links = self.text.opens.clone().and_then(|data| {
             let symbol = Symbol {
                 object: self.object.clone(),
                 data,
             };
-            link_states.link(whole, Door::Label { symbol })
+            link_states.links(vec![(whole, Door::Label { symbol })])
         });
         let text = Text {
             marking: self.marking.clone(),

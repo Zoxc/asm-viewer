@@ -1,7 +1,7 @@
 //! What an instruction row draws, held against what the same row copies.
 
 use super::*;
-use analysis::{BranchEdge, Extent};
+use analysis::{BranchEdge, Extent, SymbolName};
 use freya_testing::TestingRunner;
 use std::path::Path;
 
@@ -119,15 +119,15 @@ fn listing(target: Arc<SymbolData>) -> Assembly {
     ];
 
     // The relocation's name, in the operand it applies to.
-    instructions[1].operand = Some(Operand::SymbolName {
+    instructions[1].operand = Some(Operand::Names(vec![SymbolName {
         symbol: target.clone(),
         span: Some(2),
-    });
+    }]));
     // The same name with no operand to go in: appended, as `asm_line` appends it.
-    instructions[2].operand = Some(Operand::SymbolName {
+    instructions[2].operand = Some(Operand::Names(vec![SymbolName {
         symbol: target.clone(),
         span: None,
-    });
+    }]));
     // A branch back to the first row, which this listing has.
     instructions[3].operand = Some(Operand::Branch {
         address: SectionAddress::new(0x00),
@@ -139,10 +139,10 @@ fn listing(target: Arc<SymbolData>) -> Assembly {
         span: 2,
     });
     // The name inside a memory operand, so the row has a tail.
-    instructions[5].operand = Some(Operand::SymbolName {
+    instructions[5].operand = Some(Operand::Names(vec![SymbolName {
         symbol: target,
         span: Some(4),
-    });
+    }]));
 
     // The bytes the six rows above cover, eight apiece.
     Assembly {
@@ -199,12 +199,13 @@ fn a_column_into_what_a_row_draws_is_a_column_into_what_it_copies() {
     // relocation wherever its name goes, the row a branch lands on where this listing has
     // it, and the object's code at the address a call goes to.
     let doors = (0..assembly.instructions.len())
-        .map(|index| match door_of(&data, index) {
-            None => "none",
-            Some(Door::Symbol { .. }) => "symbol",
-            Some(Door::Row { .. }) => "row",
-            Some(Door::Address { .. }) => "address",
-            Some(Door::Label { .. }) => "label",
+        .map(|index| match doors_of(&data, index).as_slice() {
+            [] => "none",
+            [Door::Symbol { .. }] => "symbol",
+            [Door::Row { .. }] => "row",
+            [Door::Address { .. }] => "address",
+            [Door::Label { .. }] => "label",
+            _ => "several",
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -233,10 +234,10 @@ fn every_kind_of_link_is_one_run_of_the_text() {
         .map(text_of)
         .collect::<Vec<_>>();
     // The text the link's columns cover, which is what a press on it follows.
-    let linked_text = |(line, columns): &(Line, Option<Range<usize>>)| {
-        columns
-            .clone()
-            .map(|columns| line.slice(columns.start, columns.end).to_owned())
+    let linked_text = |(line, links): &(Line, Vec<(usize, Range<usize>)>)| match &links[..] {
+        [] => None,
+        [(0, columns)] => Some(line.slice(columns.start, columns.end).to_owned()),
+        _ => panic!("more than one link: {links:?}"),
     };
 
     // The padding after the last span is not text, and a row with no link has no run.
@@ -271,7 +272,7 @@ fn a_link_named_in_whitespace_stays_inside_the_line() {
                 span("   ", SpanKind::Other),
             ],
         );
-        nop.operand = Some(Operand::SymbolName {
+        nop.operand = Some(Operand::Names(vec![SymbolName {
             symbol: Arc::new(SymbolData::new(
                 name.to_owned(),
                 None,
@@ -280,17 +281,17 @@ fn a_link_named_in_whitespace_stays_inside_the_line() {
                 None,
             )),
             span: None,
-        });
+        }]));
         text_of(&nop)
     };
 
-    let (line, link) = named("   ");
+    let (line, links) = named("   ");
     assert_eq!(line.to_string(), "nop");
-    assert_eq!(link, None, "a name of spaces alone is a link past the line");
+    assert_eq!(links, [], "a name of spaces alone is a link past the line");
 
-    let (line, link) = named("f  ");
+    let (line, links) = named("f  ");
     assert_eq!(line.to_string(), "nop    f");
-    assert_eq!(link, Some(7..8), "the link runs past the trimmed line");
+    assert_eq!(links, [(0, 7..8)], "the link runs past the trimmed line");
 }
 
 /// **A reveal the pane owes goes to a listing row, and the pair's is an instruction.**
