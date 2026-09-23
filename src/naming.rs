@@ -215,12 +215,19 @@ fn head(segment: &str) -> &str {
 
 /// The last space-separated word of a segment, which is what drops a C++ return type
 /// (`void std` in `void std::sort<..>(..)`) and an MSVC `public: void __cdecl`. An
-/// `operator` is one word however many spaces it is written with.
+/// `operator` is one word however many spaces it is written with, and what is in front
+/// of one is a return type: `void* operator new`.
 fn last_word(text: &str) -> &str {
     let text = text.trim();
+    let operator = text
+        .match_indices("operator")
+        .find(|(at, _)| operator_token(text, *at).is_some());
+    if let Some((at, _)) = operator {
+        return &text[at..];
+    }
     match text.rfind(char::is_whitespace) {
-        Some(space) if !is_operator(text) => text[space..].trim_start(),
-        _ => text,
+        Some(space) => text[space..].trim_start(),
+        None => text,
     }
 }
 
@@ -344,13 +351,14 @@ fn operator_token(name: &str, at: usize) -> Option<usize> {
     if !name.as_bytes()[at..].starts_with(KEYWORD.as_bytes()) {
         return None;
     }
-    // A word of its own, not the tail of `my_operator`.
-    if at > 0 && is_word_byte(name.as_bytes()[at - 1]) {
-        return None;
-    }
-
     // Past the keyword is a character boundary, the eight bytes before it being ASCII.
     let rest = &name.as_bytes()[at + KEYWORD.len()..];
+    // A word of its own, not the tail of `my_operator` or the head of `operator_base`.
+    if at > 0 && is_word_byte(name.as_bytes()[at - 1])
+        || rest.first().is_some_and(|byte| is_word_byte(*byte))
+    {
+        return None;
+    }
     let spaces = rest.iter().take_while(|byte| **byte == b' ').count();
     let symbol = &rest[spaces..];
     let taken = SYMBOLS
@@ -365,12 +373,6 @@ fn operator_token(name: &str, at: usize) -> Option<usize> {
 
 fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
-}
-
-/// Whether a name is a C++ `operator`, which is a word however it is spelled and never
-/// the return type of what follows it.
-fn is_operator(text: &str) -> bool {
-    operator_token(text, 0).is_some()
 }
 
 #[cfg(test)]

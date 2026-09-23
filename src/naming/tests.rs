@@ -153,10 +153,35 @@ fn an_operator_is_a_name_and_not_a_bracket() {
         short_name("Foo::operator new[](unsigned long)"),
         "Foo::operator new[]"
     );
-    // Not an operator: a word that merely ends in one.
+    // Not an operator: a word that merely ends in one, or starts with one.
     assert_eq!(
         short_name("skia::my_operator<int>::run()"),
         "my_operator::run"
+    );
+    assert_eq!(short_name("operator_base* make_base(void)"), "make_base");
+}
+
+/// A free operator with a return type in front: the name is the operator, not the last
+/// word of it. What `symbolic-demangle` makes of MSVC's global `operator new` and
+/// `operator delete`, and an Itanium template of one.
+#[test]
+fn a_return_type_in_front_of_an_operator_is_not_the_name() {
+    assert_eq!(short_name("void* operator new(uint64_t)"), "operator new");
+    assert_eq!(
+        short_name("void operator delete(void*, uint64_t)"),
+        "operator delete"
+    );
+    assert_eq!(
+        short_name("void* operator new[](uint64_t)"),
+        "operator new[]"
+    );
+    assert_eq!(
+        short_name("void* operator new<int>(unsigned long)"),
+        "operator new"
+    );
+    assert_eq!(
+        short_name("public: int foo::operator int(void)"),
+        "foo::operator int"
     );
 }
 
