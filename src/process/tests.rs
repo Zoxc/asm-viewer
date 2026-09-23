@@ -60,6 +60,22 @@ fn a_character_on_the_cut_is_not_split_between_two_rows() {
     );
 }
 
+/// A line the cut falls exactly at the end of is one row, not that row and an empty one
+/// made of its terminator. Either terminator, and a line that is two cuts long too; an
+/// empty line the program did write after one is still a row.
+#[test]
+fn a_line_as_long_as_the_cut_is_one_row() {
+    let full = "x".repeat(MAX_LINE as usize);
+    let written = format!("{full}\n{full}\r\n{full}{full}\n\nlast");
+    let mut lines = Vec::new();
+    stream_lines(Cursor::new(written), Stream::Out, |line| lines.push(line));
+
+    let lengths: Vec<usize> = lines.iter().map(|line| line.text.len()).collect();
+    let cut = MAX_LINE as usize;
+    // The `\r` of the second line is past the cut, so it is read with its `\n`.
+    assert_eq!(lengths, [cut, cut, cut, cut, 0, 4]);
+}
+
 /// What is not a character is still delivered, lossily, as it always was. The carry is for
 /// a cut this module made, and `error_len() == None` is what tells that from output that is
 /// simply not UTF-8: bytes that are genuinely invalid must not be held back for a

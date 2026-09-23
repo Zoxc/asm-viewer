@@ -477,8 +477,13 @@ pub enum Ended {
 /// count wherever that lands, and a multi-byte character straddling it would arrive as a
 /// replacement character on each of the two rows with the character itself on neither, so
 /// what is left of one is carried to the front of the next read.
+///
+/// **A line the cut falls at the very end of** has its terminator read on its own, next
+/// time round. That is no row: the program wrote one line, not a line and an empty one.
 pub fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnMut(OutputLine)) {
     let mut carry = Vec::new();
+    // Whether the last row was cut rather than ended by a newline.
+    let mut cut = false;
     loop {
         let mut buffer = std::mem::take(&mut carry);
         let room = MAX_LINE - buffer.len() as u64;
@@ -494,6 +499,7 @@ pub fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnM
             }
             Ok(_) => {}
         }
+        let ended = buffer.last() == Some(&b'\n');
 
         // `error_len() == None` is exactly "an incomplete sequence at the end", so bytes
         // that are genuinely invalid still go through lossily below.
@@ -511,6 +517,11 @@ pub fn stream_lines(mut reader: impl BufRead, stream: Stream, mut emit: impl FnM
         while matches!(buffer.last(), Some(b'\n' | b'\r')) {
             buffer.pop();
         }
+        if buffer.is_empty() && cut {
+            cut = false;
+            continue;
+        }
+        cut = !ended;
 
         emit(output_line(stream, &buffer));
     }
