@@ -636,6 +636,21 @@ impl Rows {
         (body < self.start(flat + 1)).then_some(body)
     }
 
+    /// The row of kind `kind` in stretch `flat`. [`None`] where the stretch has no such
+    /// row, which is every body row of a stretch not decoded yet.
+    pub fn row_of_kind(&self, flat: usize, kind: Kind) -> Option<usize> {
+        let stretch = self.stretch_rows(flat)?;
+        let local = match stretch.heading().position(|row| row == kind) {
+            Some(local) => local,
+            None => {
+                let body = (0..stretch.body_rows())
+                    .find(|&local| stretch.body_kind(local) == Some(kind))?;
+                stretch.above() + body
+            }
+        };
+        Some(self.start(flat) + local)
+    }
+
     /// The stretches whose rows intersect `rows`, as a range of flat indices.
     pub fn stretches_in(&self, rows: Range<usize>) -> Range<usize> {
         if rows.start >= rows.end || rows.start >= self.len() {

@@ -14,7 +14,30 @@ fn code() -> (Arc<Object>, Arc<CodeListing>) {
     (object, code)
 }
 
-/// What a walk found, if anything.
+/// What a walk found, if anything: the line and its columns.
+fn found(
+    object: &Object,
+    code: &Arc<CodeListing>,
+    pattern: &str,
+    from: Option<(CodeLine, usize)>,
+    direction: Direction,
+) -> Option<(CodeLine, Range<usize>)> {
+    let filter = Filter {
+        pattern: pattern.to_owned(),
+        ..Filter::default()
+    };
+    let mut found = None;
+    hunt(object, code, &filter, from, direction, &mut |event| {
+        if let Hunted::Found(line, columns) = event {
+            found = Some((line, columns));
+        }
+        ControlFlow::Continue(())
+    });
+    found
+}
+
+/// The address of the line a walk found, if anything, from a caret at the start of the
+/// line at `from`.
 fn walk(
     object: &Object,
     code: &Arc<CodeListing>,
@@ -22,18 +45,19 @@ fn walk(
     from: Option<PlacedAddress>,
     direction: Direction,
 ) -> Option<PlacedAddress> {
-    let filter = Filter {
-        pattern: pattern.to_owned(),
-        ..Filter::default()
-    };
-    let mut found = None;
-    hunt(object, code, &filter, from, direction, &mut |event| {
-        if let Hunted::Found(address, _) = event {
-            found = Some(address);
-        }
-        ControlFlow::Continue(())
-    });
-    found
+    let from = from.map(|address| (line_at(object, code, address), 0));
+    found(object, code, pattern, from, direction).map(|(line, _)| line.address)
+}
+
+/// The last line drawn at `address`, which for a stretch's start is its first instruction.
+fn line_at(object: &Object, code: &Arc<CodeListing>, address: PlacedAddress) -> CodeLine {
+    let flat = code.at(address).expect("the address is in the code");
+    let (_, kind, _) = section_view::stretch_texts(object, code, flat)
+        .into_iter()
+        .filter(|(at, _, _)| *at == address)
+        .last()
+        .expect("a line is drawn at the address");
+    CodeLine { address, kind }
 }
 
 /// With no caret, a walk starts at the very top of the code, so a match at placed address
@@ -43,16 +67,16 @@ fn walk(
 fn a_walk_with_no_caret_finds_a_match_at_address_zero() {
     let (object, code) = code();
     let lines = section_view::stretch_texts(&object, &code, 0);
-    let (address, line) = lines
+    let (address, _, line) = lines
         .iter()
-        .min_by_key(|(address, _)| *address)
+        .min_by_key(|(address, _, _)| *address)
         .expect("the first stretch draws something");
     assert_eq!(*address, PlacedAddress::ZERO, "the fixture's layout moved");
     let pattern = line.to_string();
     // The pattern is only found at 0, or a match further on would hide the bug.
     let elsewhere = (0..code.stretch_count())
         .flat_map(|flat| section_view::stretch_texts(&object, &code, flat))
-        .filter(|(at, text)| *at != PlacedAddress::ZERO && text.to_string().contains(&pattern))
+        .filter(|(at, _, text)| *at != PlacedAddress::ZERO && text.to_string().contains(&pattern))
         .count();
     assert_eq!(elsewhere, 0, "the pattern is not unique to address 0");
 
@@ -75,7 +99,7 @@ fn a_walk_wraps_back_into_the_stretch_it_started_in() {
         .flat_map(|flat| {
             section_view::stretch_texts(&object, &code, flat)
                 .into_iter()
-                .map(move |(address, line)| (flat, address, line.to_string()))
+                .map(move |(address, _, line)| (flat, address, line.to_string()))
         })
         .collect();
     // A line no other line contains, with lines of its own stretch on both sides of it.
@@ -112,4 +136,56 @@ fn a_walk_wraps_back_into_the_stretch_it_started_in() {
         Some(address),
         "back from above the match in its own stretch",
     );
+}
+
+/// A walk names the row it found and starts from the caret's row and column, not from an
+/// address: a section's header, a label and the first instruction share one, and a line
+/// can hit twice. A walk that knew only addresses answered a label as the instruction
+/// under it, and stepped past every other hit at the address the caret was on.
+#[test]
+fn a_walk_tells_apart_the_rows_at_one_address_and_the_hits_on_one_line() {
+    let (object, code) = code();
+    let at = |address: u64, kind: section::Kind| CodeLine {
+        address: PlacedAddress::ZERO.saturating_add(address),
+        kind,
+    };
+    let (header, push) = (
+        at(0, section::Kind::Header),
+        at(0, section::Kind::Instruction(0)),
+    );
+
+    let (label, _) = found(&object, &code, "sum_to", None, Direction::Forward).expect("sum_to");
+    assert_eq!(
+        label,
+        at(0x30, section::Kind::Label(0)),
+        "not found on its label"
+    );
+
+    // `section .text` and `push rbp`, both at 0.
+    assert_eq!(
+        found(&object, &code, "s", None, Direction::Forward),
+        Some((header, 0..1)),
+        "the fixture's layout moved",
+    );
+    assert_eq!(
+        found(&object, &code, "s", Some((header, 1)), Direction::Forward),
+        Some((push, 2..3)),
+        "forward past the header skipped the instruction at its address",
+    );
+    assert_eq!(
+        found(&object, &code, "s", Some((push, 2)), Direction::Back),
+        Some((header, 0..1)),
+        "back from the instruction skipped the header at its address",
+    );
+
+    // `mov rbp, rsp` hits `r` twice.
+    let mov = at(1, section::Kind::Instruction(1));
+    let second = found(&object, &code, "r", Some((mov, 11)), Direction::Forward);
+    assert_eq!(
+        second,
+        Some((mov, 15..16)),
+        "forward skipped the second hit"
+    );
+    let first = found(&object, &code, "r", Some((mov, 15)), Direction::Back);
+    assert_eq!(first, Some((mov, 10..11)), "back skipped the first hit");
 }

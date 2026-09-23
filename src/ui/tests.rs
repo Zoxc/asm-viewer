@@ -29538,6 +29538,9 @@ fn code_find_harness() -> impl IntoElement {
 /// Nothing is decoded to begin with, which is the case the walk exists for: the match is
 /// in a stretch the pane has never read, and a search over what is drawn would find
 /// nothing at all.
+///
+/// The match is a label, which shares its address with the instruction under it: it lands
+/// on the label. Fails on a landing that finds the row by the address alone.
 #[test]
 fn a_step_through_an_objects_code_walks_on_until_it_finds_a_match() {
     let (_path, objects) = fixture_objects(1);
@@ -29549,7 +29552,7 @@ fn a_step_through_an_objects_code_walks_on_until_it_finds_a_match() {
         move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
         1.,
     );
-    let states = roots.states;
+    let (states, sectioned) = (roots.states, roots.sectioned);
     let marked = roots.doors.marked;
     settle(&mut test);
     let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
@@ -29581,6 +29584,12 @@ fn a_step_through_an_objects_code_walks_on_until_it_finds_a_match() {
     let (from, to) = picked.chars.ends();
     assert_eq!(from.row, to.row);
     assert_eq!(to.col - from.col, columns.len());
+    let rows = sectioned.peek_rows_of(&object).expect("the pane has rows");
+    assert_eq!(
+        code_line(&rows, from.row).to_string(),
+        "sum_to:",
+        "the match was not landed on its label"
+    );
     assert!(
         picked.owed == Owed::NEITHER,
         "a step owed the other pane a scroll"
@@ -36647,7 +36656,7 @@ fn the_walk_over_an_objects_code_holds_every_line_the_pane_draws() {
         let mut walked: Vec<(PlacedAddress, String)> = held
             .iter()
             .flat_map(|&flat| section_view::stretch_texts(&object, &code, flat))
-            .map(|(address, line)| (address, line.to_string()))
+            .map(|(address, _, line)| (address, line.to_string()))
             .collect();
 
         drawn.sort();

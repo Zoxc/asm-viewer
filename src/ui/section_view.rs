@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::counter;
+use crate::find::Direction;
 use crate::positions::Spot;
 use crate::section::{Body, Kind, Row, Rows, StretchRows, GAP_BYTES_PER_ROW};
 use analysis::Stretch;
@@ -265,7 +266,8 @@ fn line_at(
 }
 
 /// Every line stretch `flat` of `object`'s code draws, in listing order: the placed
-/// address each sits at and its text.
+/// address each sits at, the kind of row it is and its text. The kind is what tells apart
+/// the rows at one address: a header, the labels and the first instruction share theirs.
 ///
 /// **The one statement of what a stretch says.** The pane draws it a row at a time
 /// through [`Rows`], which counts its rows out of the very same [`StretchRows`]. The
@@ -282,7 +284,7 @@ pub(crate) fn stretch_texts(
     object: &Object,
     code: &CodeListing,
     flat: usize,
-) -> Vec<(PlacedAddress, Line)> {
+) -> Vec<(PlacedAddress, Kind, Line)> {
     let Some((placed, stretch)) = code.stretch(flat) else {
         return Vec::new();
     };
@@ -291,7 +293,10 @@ pub(crate) fn stretch_texts(
         .map(|decoded| Body::of(decoded.code, decoded.gap));
     let rows = StretchRows::of(placed, stretch, code.opens_section(flat), flat, decoded);
     rows.kinds()
-        .filter_map(|kind| line_at(placed, stretch, rows.body(), kind))
+        .filter_map(|kind| {
+            let (address, line) = line_at(placed, stretch, rows.body(), kind)?;
+            Some((address, kind, line))
+        })
         .collect()
 }
 
@@ -747,27 +752,39 @@ impl Component for SectionList {
                 at,
                 self.object.clone(),
                 reading,
-                move || {
-                    // Where the pane is, as an address; none where there is no run in it
+                move |direction| {
+                    // Where the pane is, as a line and a column: the run's far end for a
+                    // walk forward and its near end for one back, so a match picked out
+                    // is behind the walk either way. None where there is no run in it
                     // yet, and the walk starts at the top.
-                    let row = caret
-                        .peek()
-                        .assembly
-                        .as_ref()
-                        .map(|picked| picked.chars.lead().row)?;
+                    let (near, far) = caret.peek().assembly.as_ref()?.chars.ends();
+                    let at = match direction {
+                        Direction::Forward => far,
+                        Direction::Back => near,
+                    };
                     let built = held.peek().clone()?;
-                    built.address_of(row)
+                    let line = CodeLine {
+                        address: built.address_of(at.row)?,
+                        kind: built.row(at.row)?.kind,
+                    };
+                    Some((line, at.col))
                 },
-                move |address, columns| {
-                    // The row the address is in **now**: the rows are counted afresh as
-                    // stretches decode, so the walk answers an address and the row is
-                    // worked out here, where there are rows to work it out against. A
-                    // walk that answers before there are is landed by the wake the rows
-                    // bring, which is why this says whether it landed.
+                move |line: CodeLine, columns| {
+                    // The row the line is in **now**: the rows are counted afresh as
+                    // stretches decode, so the walk answers a line and the row is worked
+                    // out here, where there are rows to work it out against. Its own row
+                    // where its stretch has it, else the row holding its address, which
+                    // is where an instruction in a stretch not decoded yet is guessed to
+                    // be. A walk that answers before there are rows is landed by the wake
+                    // the rows bring, which is why this says whether it landed.
                     let Some(built) = held.peek().clone() else {
                         return false;
                     };
-                    let Some(row) = built.body_row_for(address) else {
+                    let own = built
+                        .code()
+                        .at(line.address)
+                        .and_then(|flat| built.row_of_kind(flat, line.kind));
+                    let Some(row) = own.or_else(|| built.body_row_for(line.address)) else {
                         return false;
                     };
                     mark_columns(caret, Pane::Assembly, file_at(&built, row), row, columns);

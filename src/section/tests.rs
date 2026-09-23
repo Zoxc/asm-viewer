@@ -400,6 +400,23 @@ fn a_caret_goes_on_the_row_holding_the_byte_and_never_on_a_label() {
     assert_eq!(empty.body_row_for(air), None);
 }
 
+/// A row named by its stretch and its kind is found again, which is how a match is landed
+/// on the label it was found in rather than on the instruction sharing its address. A
+/// body row of a stretch not decoded yet is no row at all.
+#[test]
+fn a_row_is_found_by_its_stretch_and_kind() {
+    let (object, code) = split();
+    let body = decode(&object, &code, 1);
+    let half = Rows::new(code.clone(), |flat| (flat == 1).then(|| body.clone()));
+
+    for at in 0..half.len() {
+        let Row { stretch, kind } = half.row(at).unwrap();
+        assert_eq!(half.row_of_kind(stretch, kind), Some(at), "row {at}");
+    }
+    assert_eq!(half.row_of_kind(0, Kind::Instruction(0)), None);
+    assert_eq!(half.row_of_kind(1, Kind::Empty(0)), None);
+}
+
 /// Decoding a stretch replaces its guess with its rows; every row above it stays where it
 /// was and every row below moves by the difference, which is what an address-keyed anchor
 /// absorbs.

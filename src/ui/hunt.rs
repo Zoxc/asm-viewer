@@ -4,7 +4,7 @@
 //! **Not a pass over a listing.** The other two code panes draw a file or a function, and
 //! the find worker searches either whole (`find_bar.rs`). An object's code is neither: it
 //! is decoded a stretch at a time, so there is nothing to pass over, and searching it means
-//! reading on from where the reader is until a match turns up. Hence one address and no
+//! reading on from where the reader is until a match turns up. Hence one line and no
 //! count -- the bar shows how far the reading has got where a count would be.
 //!
 //! **Nothing is kept.** A stretch is decoded exactly as the view's own window ask decodes
@@ -17,6 +17,7 @@
 
 use super::*;
 use crate::find::Direction;
+use crate::section;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Weak;
 
@@ -24,20 +25,20 @@ use std::sync::Weak;
 ///
 /// **No count and no list of hits**, which is what tells this apart from a listing searched
 /// whole: the code is read a piece at a time, so what a step asks for is the *next* match
-/// and the whole of the answer is one address.
+/// and the whole of the answer is one line.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Hunt {
     /// Which walk this is: two asks with the same question are two walks, and only the
     /// newest one's events are taken.
     pub(crate) id: u64,
-    /// The object whose code it walks. Its answer is an address in that code and nowhere
+    /// The object whose code it walks. Its answer is a line of that code and nowhere
     /// else.
     pub(crate) object: Over,
     pub(crate) filter: Filter,
     pub(crate) direction: Direction,
-    /// The address it started from, which is where the pane was, or [`None`] where the
-    /// pane had no caret.
-    pub(crate) from: Option<PlacedAddress>,
+    /// The line and the column it started from, which is where the pane was, or [`None`]
+    /// where the pane had no caret.
+    pub(crate) from: Option<(CodeLine, usize)>,
     /// Where it has got to.
     pub(crate) walked: Walked,
 }
@@ -47,6 +48,15 @@ impl Hunt {
     pub(crate) fn walking(&self) -> bool {
         matches!(self.walked, Walked::Walking(_))
     }
+}
+
+/// A line of an object's code as a walk names it: the placed address it stands at, and
+/// which of the rows there it is. An address alone names no one row: a section's header,
+/// a symbol's labels and its first instruction all stand at the symbol's address.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CodeLine {
+    pub(crate) address: PlacedAddress,
+    pub(crate) kind: section::Kind,
 }
 
 /// The object a walk is over: by pointer, and without holding it. A bar outlives the
@@ -79,8 +89,8 @@ impl PartialEq for Over {
 pub(crate) enum Walked {
     /// Still going, and how much of the code it has been through, none to all of it.
     Walking(f32),
-    /// The match it stopped on: the address of the line it is on, and its columns.
-    Found(PlacedAddress, Range<usize>),
+    /// The match it stopped on: the line it is on, and its columns.
+    Found(CodeLine, Range<usize>),
     /// All the way round, and nothing.
     Nothing,
 }
@@ -89,8 +99,8 @@ pub(crate) enum Walked {
 pub(crate) enum Hunted {
     /// How much of the code has been walked.
     Through(f32),
-    /// The first match: the placed address of the line it is on, and its columns.
-    Found(PlacedAddress, Range<usize>),
+    /// The first match: the line it is on, and its columns.
+    Found(CodeLine, Range<usize>),
 }
 
 /// How many stretches are walked between one word about the progress and the next. A
@@ -100,23 +110,25 @@ const SAID_EVERY: usize = 64;
 
 /// Walk `object`'s code for the next match of `filter` from `from`, the way `direction`
 /// says, and say how far it has got as it goes. With no `from` the walk starts at the top
-/// going forward and at the bottom going back, and every line counts.
+/// going forward and at the bottom going back, and every line counts. `from`'s column is
+/// read as [`crate::find::step`] reads a caret: going forward a hit starting there is
+/// ahead of it, and going back one ending there is behind it.
 ///
 /// **Stretch by stretch, and nothing kept.** Each is decoded exactly as the view's own
 /// window ask decodes one (`answer`'s `Question::Code` arm) and thrown away again: what
-/// comes back is an address, so a walk over a whole object leaves the app's memory where
+/// comes back is a line, so a walk over a whole object leaves the app's memory where
 /// it found it, and the landing pays for the one stretch it lands in through the ordinary
 /// window ask.
 ///
-/// **It wraps once.** The walk starts in the stretch the address is in and ends there,
+/// **It wraps once.** The walk starts in the stretch the caret is in and ends there,
 /// having been round the whole listing, so a match behind the reader is still found and no
-/// match is found twice. That stretch is read twice: first for what is past the address,
-/// and last, back round, for the rest of it. With no address it is read once, whole.
+/// match is found twice. That stretch is read twice: first for what is past the caret,
+/// and last, back round, for the rest of it. With no caret it is read once, whole.
 pub(crate) fn hunt(
     object: &Object,
     code: &Arc<CodeListing>,
     filter: &Filter,
-    from: Option<PlacedAddress>,
+    from: Option<(CodeLine, usize)>,
     direction: Direction,
     emit: &mut dyn FnMut(Hunted) -> ControlFlow<()>,
 ) {
@@ -126,12 +138,12 @@ pub(crate) fn hunt(
         return;
     };
     let first = match (from, direction) {
-        (Some(from), _) => code.at(from).unwrap_or(0),
+        (Some((from, _)), _) => code.at(from.address).unwrap_or(0),
         (None, Direction::Forward) => 0,
         (None, Direction::Back) => last,
     };
-    // One step more than there are stretches where there is an address: the step back
-    // into the first one.
+    // One step more than there are stretches where there is a caret: the step back into
+    // the first one.
     let steps = if from.is_some() { total + 1 } else { total };
 
     for step in 0..steps {
@@ -149,34 +161,42 @@ pub(crate) fn hunt(
         let mut lines = section_view::stretch_texts(object, code, flat);
         // In the order the listing draws them, and backwards for a walk that way, so the
         // match found is the nearest one behind the reader and not the first of a stretch.
-        lines.sort_by_key(|(address, _)| *address);
+        lines.sort_by_key(|(address, _, _)| *address);
+        // In the stretch the walk started in, the reader's place is the caret's address,
+        // which of the lines there it is on, and its column, and each hit is placed
+        // against all three. A caret on a row that draws nothing sits just above the
+        // lines at its address.
+        let caret = from
+            .filter(|_| step == 0 || step == total)
+            .map(|(at, col)| {
+                let rank = lines
+                    .iter()
+                    .position(|(address, kind, _)| *address == at.address && *kind == at.kind);
+                (at.address, rank, col)
+            });
+        let mut ranked: Vec<_> = lines.into_iter().enumerate().collect();
         if direction == Direction::Back {
-            lines.reverse();
+            ranked.reverse();
         }
-        for (address, line) in lines {
-            // The stretch the walk started in holds the reader's own place: only what is
-            // past it counts at the start, or a step would find the match the pane is
-            // already on, and only what is not at the end.
-            if let Some(from) = from {
-                let past = match direction {
-                    Direction::Forward => address > from,
-                    Direction::Back => address < from,
-                };
-                let counts = match step {
-                    0 => past,
-                    _ if step == total => !past,
-                    _ => true,
-                };
-                if !counts {
-                    continue;
-                }
-            }
+        for (rank, (address, kind, line)) in ranked {
             let mut hits = matcher.marks(line.as_str());
             if direction == Direction::Back {
                 hits.reverse();
             }
-            if let Some(columns) = hits.into_iter().next() {
-                let _ = emit(Hunted::Found(address, columns));
+            let found = hits.into_iter().find(|columns| {
+                let Some(caret) = caret else {
+                    return true;
+                };
+                let past = match direction {
+                    Direction::Forward => (address, Some(rank), columns.start) >= caret,
+                    Direction::Back => (address, Some(rank), columns.end) <= caret,
+                };
+                // Only what is past the caret counts at the start, or a step would find
+                // the match the pane is already on, and only what is not at the end.
+                past == (step == 0)
+            });
+            if let Some(columns) = found {
+                let _ = emit(Hunted::Found(CodeLine { address, kind }, columns));
                 return;
             }
         }
@@ -188,13 +208,14 @@ pub(crate) fn hunt(
 /// here, and landed by `land`.
 ///
 /// **Its own hook and not [`use_find_steps`]**, which steps through an answer the pane
-/// already holds. There is no such answer here: what a step asks for is one address, found
+/// already holds. There is no such answer here: what a step asks for is one line, found
 /// by reading on, and the bar shows how far the reading has got instead of a count. The
 /// two divide the step between them by whether the bar has a listing.
 ///
-/// `from` is where the pane is, as an address, and [`None`] where there is no caret in it
-/// yet. `land` is given the match, and is the section view's own: only it can put a caret
-/// on the row an address is in, the rows being counted afresh as stretches decode.
+/// `from` is where the pane is, as a line and a column, for a walk the way it is given,
+/// and [`None`] where there is no caret in it yet. `land` is given the match, and is the
+/// section view's own: only it can put a caret on the row a line is drawn in, the rows
+/// being counted afresh as stretches decode.
 ///
 /// **`at` and `object` reach every effect through its deps**, never as a capture: an
 /// effect's callback is built once, and a switch of tab re-renders this list with another
@@ -204,8 +225,8 @@ pub(crate) fn use_code_hunt(
     at: Where,
     object: Arc<Object>,
     reading: State<Reading>,
-    from: impl Fn() -> Option<PlacedAddress> + 'static,
-    mut land: impl FnMut(PlacedAddress, Range<usize>) -> bool + 'static,
+    from: impl Fn(Direction) -> Option<(CodeLine, usize)> + 'static,
+    mut land: impl FnMut(CodeLine, Range<usize>) -> bool + 'static,
 ) {
     let finds = use_try_consume::<Looking>().map(|looking| looking.0);
     let from = Rc::new(from);
@@ -224,7 +245,7 @@ pub(crate) fn use_code_hunt(
                 return;
             };
             let id = WALKS.fetch_add(1, Ordering::Relaxed);
-            let from = start();
+            let from = start(direction);
             let object = Over::of(object);
             edit_find(finds, at, move |bar| {
                 bar.step = None;
@@ -276,7 +297,7 @@ pub(crate) fn use_code_hunt(
                 // The pane has moved to another object mid-walk: start again over this
                 // one, under a new id, which is what calls the old walk off.
                 let id = WALKS.fetch_add(1, Ordering::Relaxed);
-                let (object, from) = (Over::of(object), from());
+                let (object, from) = (Over::of(object), from(direction));
                 edit_find(finds, at, move |bar| {
                     if let Some(hunt) = &mut bar.hunt {
                         *hunt = Hunt {
@@ -326,7 +347,7 @@ pub(crate) fn use_code_hunt(
             let Some(hunt) = hunt.filter(|hunt| hunt.object.is(object)) else {
                 return;
             };
-            let Walked::Found(address, columns) = hunt.walked else {
+            let Walked::Found(line, columns) = hunt.walked else {
                 return;
             };
             if *landed.peek() == Some(hunt.id) {
@@ -334,7 +355,7 @@ pub(crate) fn use_code_hunt(
             }
             // Marked as landed only where it was: a walk that answers before the pane has
             // rows to land in is landed by the wake the rows bring.
-            if land(address, columns) {
+            if land(line, columns) {
                 landed.set(Some(hunt.id));
             }
         },
@@ -343,7 +364,14 @@ pub(crate) fn use_code_hunt(
 
 /// A walk as a step starts it: the bar it is for, which walk, the object it walks, the
 /// pattern, where it starts and which way it goes.
-type Walk = (Where, u64, Over, Filter, Option<PlacedAddress>, Direction);
+type Walk = (
+    Where,
+    u64,
+    Over,
+    Filter,
+    Option<(CodeLine, usize)>,
+    Direction,
+);
 
 /// Where the next walk's id comes from: one count for every listing, so no two walks
 /// anywhere share an id, and a list mounted again cannot reuse one a bar still holds.
@@ -372,7 +400,7 @@ async fn take_hunt(
             // A walk says nothing after the match it found, so nothing here undoes one.
             hunt.walked = match event {
                 Hunted::Through(through) => Walked::Walking(through),
-                Hunted::Found(address, columns) => Walked::Found(address, columns),
+                Hunted::Found(line, columns) => Walked::Found(line, columns),
             };
         }
         let done = !hunt.walking();

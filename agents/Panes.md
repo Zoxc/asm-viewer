@@ -1452,7 +1452,7 @@ As an `Option<bool>` it left a reader at `Some(true)` to go and find out what tr
 
 **An object's code is walked, not passed over** (`src/ui/hunt.rs`). It is read a piece at a time,
 so there is no listing to search whole and nothing to count: a step asks for the *next* match from
-where the pane is, and the whole of the answer is one address. **A bar over it has no listing at
+where the pane is, and the whole of the answer is one line. **A bar over it has no listing at
 all** (`Find::listing`), and that one fact divides the two mechanisms: the find worker is asked
 nothing, and `use_find_steps` -- which `use_listing_keys` calls for all three listings, a hook
 having to run on every render -- leaves the step for `use_code_hunt`. Without the question it spends
@@ -1465,11 +1465,16 @@ about the pattern it was asked with: one `Find::reset`, which both doors to a pa
 the box, and a Ctrl+F seeding a bar already open. The walk is the one-shot
 `stream` shape the Search panel has -- the receiver dropping is what calls it off -- and it decodes
 each stretch exactly as the view's own window ask does and **throws it away again**: what comes back
-is an address, so walking a whole object leaves the app's memory where it found it and the landing
+is a line, so walking a whole object leaves the app's memory where it found it and the landing
 pays for the one stretch it lands in through the ordinary window ask. It wraps once, starting and
-ending in the stretch the reader's address is in, so a match behind them is still found and none is
-found twice. That stretch is read at both ends of the walk, first for what is past the address and
-last for the rest, or a match earlier in the reader's own function was never found. With no caret there is no address to start from: a forward walk starts at the top of
+ending in the stretch the reader's caret is in, so a match behind them is still found and none is
+found twice. That stretch is read at both ends of the walk, first for what is past the caret and
+last for the rest, or a match earlier in the reader's own function was never found. **A line is its
+address and its row's `Kind`, and a caret that line and a column** (`CodeLine`): a section's header, a
+symbol's labels and its first instruction share an address, so a walk that knew only addresses
+landed a match in a label on the instruction under it, and a step on from it skipped every other
+row at that address and every later hit on the caret's own line. The column is read as `find::step`
+reads one. With no caret there is nothing to start from: a forward walk starts at the top of
 the code, a backward one at the bottom, and every line counts. What it says as it goes is how far it has got, every `SAID_EVERY` stretches rather than
 every one: a word per function on a binary with 115k of them is a write per function to a state the
 bar reads. The bar draws that where a count would be, and "No matches" when a walk comes back round
@@ -1499,7 +1504,7 @@ listing's length -- is held in a cell each render writes, as `use_kept_position`
 A walk's id is drawn from one count for the whole app, and the list keeps the ids it has started a
 walk for: a switch away from a walking bar and back hands the walk effect the same walk again, and
 its first taker is still running. A switch leaves the bar it left with its claim: that tab still
-draws that listing. A walk also names the object it walks, since its answer is an address in that
+draws that listing. A walk also names the object it walks, since its answer is a line of that
 object's code: a pane moved in place to another object lands no match found in the old one, and a
 walk still going is started again over the new one. It names it by a `Weak`, so a bar keeps no
 closed binary's bytes.
@@ -1508,8 +1513,10 @@ closed binary's bytes.
 `use_kept_place`, whose effect wakes on the document changing or the reading's generation moving --
 which is exactly what a door does and exactly what a find does not: the tab is already on top and
 nothing else about it has changed, so a planting written there would sit unspent. The walk's answer
-is landed where there are rows to land it in, the row worked out from the address at that moment
-(`body_row_for`), and the closure says whether it landed, so a walk that answers before the pane has
+is landed where there are rows to land it in, the row worked out from the line at that moment --
+its own row where its stretch has it (`row_of_kind`), else the row holding its address
+(`body_row_for`), which is where a stretch not decoded yet guesses an instruction to be -- and the
+closure says whether it landed, so a walk that answers before the pane has
 rows is landed by the wake the rows bring. A run carried across a recount is `Kept::spots`'s
 business, as it is for every other run here.
 
