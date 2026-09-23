@@ -88,3 +88,19 @@ fn only_a_newline_ends_a_row() {
     assert_eq!(&*highlighted.text(1).whole, "t");
     assert_eq!(highlighted.line(0), "x\x0by\rz\u{85}w\u{2028}v\u{2029}u");
 }
+
+/// A file no grammar parses gets one plain span per line, and freya's runs over the line
+/// break. The row stops before it, as a coloured one does: a two-row copy was double-spaced,
+/// End put the caret past the line, and a CRLF file drew a `\r` in every row.
+#[test]
+fn a_plain_row_ends_before_its_line_break() {
+    let seeded = Seeded::directory("plain");
+    let path = seeded.file("plain.go", "first\r\n\tsecond\nthird");
+    let file = source::load(&path).expect("the seeded file loads");
+
+    let highlighted = Highlighted::new(file, Appearance::Light);
+
+    assert_eq!(&*highlighted.text(0).whole, "first");
+    assert_eq!(&*highlighted.text(1).whole, "\tsecond");
+    assert_eq!(&*highlighted.text(2).whole, "third");
+}

@@ -331,7 +331,9 @@ phantom line after a trailing newline (hence `Highlighted::lines`). A third is r
 and U+2028/9 each end a line too, where a compiler and the language server count only `\n`. A `^L`
 on a line of its own, as GNU sources have, put every row below it one line off. So the rope is
 built from the text with each of those replaced by characters of the same length in bytes and in
-UTF-16 units (`one_break`), and a copy slices the file's own text at the rope's line starts.
+UTF-16 units (`one_break`), and a copy slices the file's own text at the rope's line starts. A
+fourth is freya's: a grammar's spans stop before a line's break, but the one plain span a file with
+no grammar gets runs over it, so the cut stops every span at the break (`Cutting::cut`).
 
 **Reading a file and parsing it are a worker thread's**, `use_source_reading`'s, for what they cost:
 in a release build, 27 ms for a 23 KB file and 333 ms for an 850 KB one, of which the read off disk

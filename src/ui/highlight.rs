@@ -264,11 +264,21 @@ impl Cutting {
         // The character the next piece starts at: the indentation says only how long it
         // is, and is read from the rope at this place.
         let mut at = rope.line_to_char(index);
+        // Where the line's text ends, before its break. A grammar's spans stop there, but
+        // the one plain span a file with no grammar gets runs over the break.
+        let line = rope.line(index);
+        let breaks = line
+            .chars_at(line.len_chars())
+            .reversed()
+            .take_while(|c| matches!(c, '\n' | '\r'))
+            .count();
+        let end = at + line.len_chars() - breaks;
         for (colour, node) in blocks.get_line(index) {
             match node {
                 // Pushed chunk by chunk rather than through a `String` of its own: the
                 // row's text is one allocation whatever it is cut into.
                 TextNode::Range(range) => {
+                    let range = range.start.min(end)..range.end.min(end);
                     for chunk in rope.slice(range.clone()).chunks() {
                         whole.push_str(chunk);
                     }
