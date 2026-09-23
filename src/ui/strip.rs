@@ -232,6 +232,14 @@ impl Component for TabListButton {
         // tabs, and not a read of it: the strip is written by every tab opened, closed,
         // moved or raised.
         let any = use_memo(move || !strip.read().tabs().is_empty());
+        // The menu is unmounted with the bar's last tab, and nothing that closes it runs:
+        // that close was a key answered at the root. Left set, the flag would open the
+        // menu again with the next tab.
+        use_side_effect(move || {
+            if !any() {
+                showing.set_if_modified(false);
+            }
+        });
         if !any() {
             return rect().into_element();
         }

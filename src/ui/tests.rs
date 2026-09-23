@@ -1686,6 +1686,51 @@ fn the_document_menu_opens_and_closes() {
     assert_eq!(nodes(&test), shut, "the menu did not close");
 }
 
+/// **The tab list stays shut once the bar has emptied under it.** Ctrl+W is answered at
+/// the root while the menu is up, and the last close unmounts the menu without closing
+/// it. The flag it was drawn from stayed set, so the next tab opened brought the menu
+/// back unasked.
+#[test]
+fn the_tab_list_does_not_reopen_after_the_bar_empties() {
+    let (mut test, states) = TestingRunner::new(
+        menu_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    test.sync_and_update();
+    let open = states.open;
+    let mut strip = open.strip;
+    strip.write().show(Tab::Page(Page::Project));
+    settle(&mut test);
+
+    let below = |test: &TestingRunner| {
+        test.find_many(|node, _| (node.layout().area.origin.y >= tab_row_height()).then_some(()))
+            .len()
+    };
+    let button = test
+        .find(|node, _| {
+            let area = node.layout().area;
+            (area.width() == TAB_LIST_WIDTH).then_some(area)
+        })
+        .expect("the button is in the bar");
+    press_at(&mut test, ((button.origin.x + 10.0) as f64, 10.0));
+    settle(&mut test);
+    assert!(below(&test) > 0, "the press did not open the menu");
+
+    // The last tab closed from the keyboard, as Ctrl+W does, and a tab opened after it.
+    close_page(open, Page::Project);
+    settle(&mut test);
+    strip.write().show(Tab::Page(Page::Settings));
+    settle(&mut test);
+    assert!(
+        test.find(|node, _| (node.layout().area.width() == TAB_LIST_WIDTH).then_some(()))
+            .is_some(),
+        "the button did not come back with the tab"
+    );
+    assert_eq!(below(&test), 0, "the menu came back unasked");
+}
+
 /// The toolbar's two history buttons and nothing else, abutting at the window's corner so
 /// the test can work out where each is from [`toggle_size`] alone.
 fn nav_harness() -> impl IntoElement {
