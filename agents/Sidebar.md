@@ -645,8 +645,13 @@ default profile, since a reader inspecting a binary is usually asking what the o
 cargo's own default for release is *no* debug information -- which is a binary with no source side,
 the app's whole other half. So the view says so where the profile is chosen and offers to fix it,
 writing `debug = "line-tables-only"` into that profile: exactly what the source side reads, and the
-cheapest to build. The write is `toml_edit` and not `toml`, since it is the reader's own manifest
-and a round trip through a value would take every comment and blank line with it.
+cheapest to build. **A profile that strips has no lines**, whatever `debug` says: `strip = true`
+(or `"symbols"`, or `"debuginfo"`) has the linker take the debug information out, so the read
+answers no and the write sets `strip = "none"` beside `debug`. Taking the offer used to leave the
+strip in place, and the offer went away over a binary that still had no lines. Symbols cannot be
+stripped without the debug information, so there was nothing narrower to keep. The write is
+`toml_edit` and not `toml`, since it is the reader's own manifest and a round trip through a value
+would take every comment and blank line with it.
 
 **The manifest that is read and written is the workspace root's**, which is the project's own only
 when the project is not a member of a workspace. cargo takes `[profile.*]` from the root alone and

@@ -345,6 +345,43 @@ fn adding_debug_lines_keeps_the_rest_of_the_manifest() {
     assert!(debug_lines(&profile_manifest(&directory), Profile::Release));
 }
 
+/// A profile that strips carries no lines whatever `debug` says, since the linker takes
+/// them out. Adding lines lifts the strip too, or the offer would go away and the binary
+/// would still have none.
+#[test]
+fn a_stripped_profile_has_no_lines_until_they_are_added() {
+    let directory = Temporary::fresh_directory("cargo-test");
+    let manifest_at = directory.join("Cargo.toml");
+    let says = |text: &str| {
+        fs::write(&manifest_at, format!("[profile.release]\n{text}\n")).expect("a manifest");
+        debug_lines(&profile_manifest(&directory), Profile::Release)
+    };
+
+    assert!(!says("strip = true\ndebug = true"));
+    assert!(!says("strip = \"symbols\"\ndebug = 2"));
+    assert!(!says("strip = \"debuginfo\"\ndebug = true"));
+    assert!(says("strip = false\ndebug = true"));
+    assert!(says("strip = \"none\"\ndebug = true"));
+
+    for strip in ["true", "\"symbols\"", "\"debuginfo\""] {
+        fs::write(
+            &manifest_at,
+            format!("[profile.release]\nstrip = {strip}\n"),
+        )
+        .expect("a manifest");
+        add_debug_lines(&profile_manifest(&directory), Profile::Release).expect("the write");
+        let after = fs::read_to_string(&manifest_at).expect("the file");
+        assert!(after.contains("strip = \"none\""), "{after}");
+        assert!(debug_lines(&profile_manifest(&directory), Profile::Release));
+    }
+
+    // A strip that keeps the lines is left as it was.
+    fs::write(&manifest_at, "[profile.release]\nstrip = false\n").expect("a manifest");
+    add_debug_lines(&profile_manifest(&directory), Profile::Release).expect("the write");
+    let after = fs::read_to_string(&manifest_at).expect("the file");
+    assert!(after.contains("strip = false"), "{after}");
+}
+
 /// A profile the manifest already has keeps everything else it said.
 #[test]
 fn adding_debug_lines_to_a_profile_that_is_there_keeps_its_other_keys() {

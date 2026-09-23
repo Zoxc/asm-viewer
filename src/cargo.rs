@@ -410,25 +410,39 @@ pub fn lexical(path: &Path) -> PathBuf {
 /// that walk once for this and for the write. A manifest that says nothing gets cargo's own
 /// default, which is *no* debug information under `release` — the reason the view offers to
 /// add it.
+///
+/// A profile that strips carries none whatever `debug` says: the linker takes it out of
+/// every executable.
 pub fn debug_lines(profiles: &Path, profile: Profile) -> bool {
-    let Some(value) = read_manifest(profiles)
-        .as_ref()
-        .and_then(|manifest| manifest.get("profile"))
-        .and_then(|profiles| profiles.get(profile.name()))
-        .and_then(|profile| profile.get("debug"))
-        .cloned()
-    else {
+    let manifest = read_manifest(profiles);
+    let key = |name: &str| {
+        manifest
+            .as_ref()
+            .and_then(|manifest| manifest.get("profile"))
+            .and_then(|profiles| profiles.get(profile.name()))
+            .and_then(|profile| profile.get(name))
+    };
+    if key("strip").is_some_and(|strip| strips(strip.as_bool(), strip.as_str())) {
+        return false;
+    }
+    let Some(value) = key("debug") else {
         return profile.debug_by_default();
     };
 
     // The three spellings cargo accepts, and the values of each that mean none. Anything
     // else it accepts -- `1`, `2`, `"limited"`, `"full"` -- carries lines.
     match value {
-        toml::Value::Boolean(on) => on,
-        toml::Value::Integer(level) => level > 0,
+        toml::Value::Boolean(on) => *on,
+        toml::Value::Integer(level) => *level > 0,
         toml::Value::String(name) => !matches!(name.as_str(), "none" | "false" | "0"),
         _ => false,
     }
+}
+
+/// Whether a profile's `strip`, read as a bool or as a string, takes the debug information
+/// out: `true` is `"symbols"`, which takes it with the symbols. `false` and `"none"` keep it.
+fn strips(on: Option<bool>, name: Option<&str>) -> bool {
+    on == Some(true) || matches!(name, Some("symbols" | "debuginfo"))
 }
 
 /// Ask `profile` for line tables, in `profiles` -- the manifest cargo would read them from.
@@ -437,7 +451,9 @@ pub fn debug_lines(profiles: &Path, profile: Profile) -> bool {
 /// file the build ignores; which file that is, is [`profile_manifest`]'s to say.
 ///
 /// `line-tables-only` and not `true`: the source side wants the line table and nothing
-/// else, and it is the cheapest debug information to build.
+/// else, and it is the cheapest debug information to build. A `strip` that would take it
+/// out again becomes `"none"`: stripping symbols takes the debug information with them, so
+/// there is no keeping the one without the other.
 pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> {
     let text = fs::read_to_string(profiles).map_err(|error| error.to_string())?;
     let mut document = text
@@ -463,6 +479,12 @@ pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> 
         .as_table_mut()
         .ok_or_else(|| format!("`profile.{}` is not a table", profile.name()))?;
     one["debug"] = toml_edit::value("line-tables-only");
+    if one
+        .get("strip")
+        .is_some_and(|strip| strips(strip.as_bool(), strip.as_str()))
+    {
+        one["strip"] = toml_edit::value("none");
+    }
 
     write_atomically(profiles, document.to_string().as_bytes()).map_err(|error| error.to_string())
 }
