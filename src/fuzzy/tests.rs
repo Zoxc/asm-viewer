@@ -145,3 +145,17 @@ fn folding_the_query_once_answers_what_folding_both_sides_did() {
         }
     }
 }
+
+/// A name that holds the query is a match in the name, however early a directory above it
+/// holds it too: both passes start from the first place the query fits.
+#[test]
+fn a_name_holding_the_query_is_a_match_in_the_name_whatever_the_directory_holds() {
+    assert!(better("main", "src/main_loop/main.rs", "src/domain.rs"));
+    assert_eq!(marked("main", "src/main_loop/main.rs"), ["main"]);
+    assert_eq!(
+        hit("main", "src/main_loop/main.rs")
+            .expect("the query matched")
+            .marks,
+        [14..18]
+    );
+}

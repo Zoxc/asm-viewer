@@ -32,7 +32,9 @@ character of a name where walking back would start it inside a word, and walking
 together into the `src/ui/` it names where reading forward is already right but `sv` is not.
 Walking back from the end of the *path* rather than from the first whole match is the version
 that looks clever and is wrong: it takes `ui`'s `i` from `files_view`, four words past the
-directory the reader was typing. `Score` compares in the order the spec ranks them — the file's
+directory the reader was typing. Both passes start where the query first fits, so where that is in
+a directory the same two are made over the file's own name as well: `main` fits in
+`src/main_loop/main.rs`'s directory first, and without them that path scored below `domain.rs`. `Score` compares in the order the spec ranks them — the file's
 own name, then runs, then a word's start, then the shorter path — and is a plain `Ord` struct,
 `filter::Rank`'s shape, so the order is in the field order and nowhere else. The pass back is
 skipped where reading forward already scored the best a path can — in the name, one run, at a

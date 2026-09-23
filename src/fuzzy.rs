@@ -93,14 +93,40 @@ impl Query {
             return Some(forward);
         }
         let tightened = scored(shown, name_at, self.tightened(&shown[..end]));
+        // The same two placements over the file's own name alone, where the query fits
+        // there too. Both passes above start from the first place the query fits, so a
+        // directory that holds it -- `main` in `src/main_loop/main.rs` -- would otherwise
+        // score the path as reaching above its name when the name holds it as well.
+        let named = shown
+            .get(name_at..)
+            .filter(|_| forward.score.place == Place::Above)
+            .and_then(|name| self.in_name(name, name_at))
+            .into_iter()
+            .flat_map(|(forward, tightened)| {
+                [
+                    scored(shown, name_at, forward),
+                    scored(shown, name_at, tightened),
+                ]
+            });
 
-        // Both, and the better of the two. Reading the path once takes each character as
-        // early as it can go, which is what puts `sv`'s `s` on `src`; walking back from
+        // Every placement, and the best of them. Reading the path once takes each character
+        // as early as it can go, which is what puts `sv`'s `s` on `src`; walking back from
         // there takes each as late as it can, which is what pulls `ui` together into the
         // directory it names. Neither wins everywhere, and scoring is what says which.
         [forward, tightened]
             .into_iter()
+            .chain(named)
             .min_by(|a, b| a.score.cmp(&b.score))
+    }
+
+    /// The query placed in `name` both ways, as bytes of the whole path, `name` starting
+    /// at byte `name_at` of it. [`None`] where the name alone does not hold the query.
+    fn in_name(&self, name: &str, name_at: usize) -> Option<(Vec<usize>, Vec<usize>)> {
+        let forward = self.forward(name)?;
+        let end = forward.last().map(|&at| at + width(name, at))?;
+        let tightened = self.tightened(&name[..end]);
+        let shifted = |places: Vec<usize>| places.into_iter().map(|at| at + name_at).collect();
+        Some((shifted(forward), shifted(tightened)))
     }
 
     /// Where each of the query's characters matched reading the path once, each as early
