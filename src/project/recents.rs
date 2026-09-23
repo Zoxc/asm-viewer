@@ -1,7 +1,11 @@
 //! The projects the reader has had open, most recently first: `recents.toml`, the two
 //! ways it changes, and the rows the recent list is drawn from.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 use crate::order::Order;
 use crate::store::{Store, RECENTS_FILE};
@@ -88,13 +92,14 @@ pub struct Recent {
 }
 
 /// The projects the reader has had open, most recently first, each described by its own
-/// file.
+/// file: the order, then the unsaved projects it does not name ([`strays`]).
 ///
 /// A path whose file has gone is dropped here rather than repaired, since a [`Recents`]
 /// never prunes itself on load and this is the point of use where the repair is free.
 pub fn recent_projects(store: &Store) -> Vec<Recent> {
-    load_recents(store)
-        .into_entries()
+    let mut paths = load_recents(store).into_entries();
+    paths.extend(strays(store, &paths));
+    paths
         .into_iter()
         .filter_map(|path| {
             if !path.is_file() {
@@ -109,6 +114,28 @@ pub fn recent_projects(store: &Store) -> Vec<Recent> {
             })
         })
         .collect()
+}
+
+/// The unsaved projects `named` leaves out, the most recently written first.
+///
+/// An unsaved project is reached by this list and nothing else, so one that fell off the
+/// end of the order would be kept in app storage and never shown again. A project the
+/// reader gave a place is their own file, and can be opened again by it.
+fn strays(store: &Store, named: &[PathBuf]) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(store.projects()) else {
+        return Vec::new();
+    };
+    let mut strays: Vec<(SystemTime, PathBuf)> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| super::is_project_file(path) && !named.contains(path))
+        .map(|path| {
+            let written = fs::metadata(&path).and_then(|metadata| metadata.modified());
+            (written.unwrap_or(SystemTime::UNIX_EPOCH), path)
+        })
+        .collect();
+    strays.sort_by(|one, other| other.cmp(one));
+    strays.into_iter().map(|(_, path)| path).collect()
 }
 
 #[cfg(test)]

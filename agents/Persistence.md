@@ -289,8 +289,11 @@ opened first.
 **Which project to reopen is the first entry and not a field of its own**; a `last` beside the list
 would be a second answer the order already gives. It is an *order* and not an index of what exists
 (the files are that), which is why `MAX_ORDER` (50) is safe and why nothing prunes a path
-whose file has gone: repairing it on load would write a file on a startup where the reader did
-nothing. A path under the store is written **relative to it** and every other path absolutely, so
+whose file has gone. Safe because the list puts back what the file did not name:
+`recent_projects` follows the order with every unsaved project it left out, most recently written
+first, since the list is the only way to reach one. A project with a place that falls off is the
+reader's own file and opens again by it. Nothing prunes because
+repairing it on load would write a file on a startup where the reader did nothing. A path under the store is written **relative to it** and every other path absolutely, so
 moving the state directory does not lose every unsaved project at once; in memory they are all
 absolute, the relative spelling belonging to the file and nowhere else (`write_recents`).
 The **cap is the store's own**: `Store::save_order` is the one writer of an order file and cuts to
@@ -545,7 +548,8 @@ while another is being read waits for that same record instead of reaching the d
 the one being entered at the front of `recents.toml`, and re-point every baseline through
 `Saves::opened`, to empty, because the app is about to be emptied. Emptying it is the caller's half
 and stays in `ui/session.rs`, the states being the UI's. `recent_projects(&store)` is the
-list the views draw, read once per project into the root's `Recents`: `recents.toml`'s order, each row described by reading *that project's own* file,
+list the views draw, read once per project into the root's `Recents`: `recents.toml`'s order and
+then the unsaved projects it does not name, each row described by reading *that project's own* file,
 with an id whose directory has gone dropped here. The list never prunes itself on load, and this is
 the point of use where the repair is free.
 

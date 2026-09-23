@@ -756,8 +756,8 @@ fn load_order(store: &Store) -> PadOrder {
 /// the order whose directory has gone — or was never a package — is dropped here rather
 /// than repaired on load. The strays are appended because this is the list a reader
 /// picks from and every pad has to be reachable: one that fell off the end of the order, or
-/// one made outside the app, is still a scratchpad. That is the difference from
-/// `recent_projects`, which lists the projects a reader has *opened*.
+/// one made outside the app, is still a scratchpad. `recent_projects` does the same for the
+/// unsaved projects.
 pub fn pads(store: &Store) -> Vec<PadListing> {
     let scratchpads = store.scratchpads();
     let listing = |id: PadId| {

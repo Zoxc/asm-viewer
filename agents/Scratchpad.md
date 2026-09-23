@@ -71,10 +71,10 @@ it was not: it parsed its own file and answered a default, so the next `remember
 order the reader never heard was unreadable. **`pads()` is the order's ids then the pads it does
 not name**, in id order. Each row carries the name out of that pad's own manifest, read at the
 moment the list is asked for, which is what lets the panel draw a pad nothing has ever opened.
-That second half is the
-difference from `recent_projects`, which lists only the projects a reader has opened: this is the
-list a reader picks a pad from, so a pad that fell off the end of `MAX_ORDER` or was made
-outside the app has to be reachable. The manifest and no more: a name is all a row shows, so
+The pads it does not name
+are there because this is the list a reader picks a pad from, so a pad that fell off the end of
+`MAX_ORDER` or was made outside the app has to be reachable; `recent_projects` puts back the
+unsaved projects for the same reason. The manifest and no more: a name is all a row shows, so
 listing N pads reads N small files and not the N sources with them. A pad is remembered when it is **opened**, and only if there is
 a directory for it, which keeps the "nothing is written until there is something to say" rule: the
 pad a first run holds is in memory until something is typed into it.

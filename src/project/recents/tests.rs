@@ -1,6 +1,6 @@
 //! The recent order and the rows it is drawn as.
 
-use std::fs;
+use std::{fs, time::SystemTime};
 
 use super::*;
 use crate::project::files::tests::{directory, kept_at, paths, round_trip};
@@ -169,4 +169,44 @@ fn a_recent_project_that_is_gone_is_dropped_and_an_empty_one_is_not() {
     assert_eq!(recents[0].path, empty);
     assert_eq!(recents[0].directory, None);
     assert_eq!(recents[0].binaries, 0);
+}
+
+/// Past the cap, an unsaved project is still listed: the list is the only way to reach one.
+/// It comes after the order, the most recently written first, and a project with a place
+/// that fell off is not looked for.
+#[test]
+fn an_unsaved_project_the_order_has_dropped_is_still_listed() {
+    let base = directory();
+    let store = Store::at(&base);
+    let older = unsaved_project(&store).expect("a project");
+    let newer = unsaved_project(&store).expect("a project");
+    let written = SystemTime::now();
+    let age = |path: &Path, ago: u64| {
+        let file = fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("the file");
+        file.set_modified(written - std::time::Duration::from_secs(ago))
+            .expect("setting the time");
+    };
+    age(&older, 60);
+    age(&newer, 30);
+
+    let mut recents = Recents::default();
+    recents.touch(older.as_path());
+    recents.touch(newer.as_path());
+    for n in 0..MAX_ORDER {
+        recents.touch(kept_at(&format!("{n}")));
+    }
+    let kept = unsaved_project(&store).expect("a project");
+    recents.touch(kept.as_path());
+    write_recents(&store, recents);
+    let stored = load_recents(&store);
+    assert!(!stored.entries().contains(&older) && !stored.entries().contains(&newer));
+
+    let listed: Vec<PathBuf> = recent_projects(&store)
+        .into_iter()
+        .map(|row| row.path)
+        .collect();
+    assert_eq!(listed, [kept, newer, older]);
 }
