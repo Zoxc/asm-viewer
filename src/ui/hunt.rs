@@ -300,7 +300,13 @@ pub(crate) fn use_code_hunt(
                 return;
             };
             // The memo is a render behind a switch of tab, when the walk is another bar's.
-            if at == *here && !walked.is(object) {
+            // That walk is left alone, and out of `taking`: `object` is this tab's, and
+            // walked here its match would be a line of the wrong code in the other bar. It
+            // is started once the memo catches up with its tab.
+            if at != *here {
+                return;
+            }
+            if !walked.is(object) {
                 // The pane has moved to another object mid-walk: start again over this
                 // one, under a new id, which is what calls the old walk off.
                 let id = WALKS.fetch_add(1, Ordering::Relaxed);

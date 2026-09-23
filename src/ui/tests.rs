@@ -31243,6 +31243,75 @@ fn a_switch_of_code_tab_walks_for_the_second_tabs_bar() {
     });
 }
 
+/// **A walk is only started for the bar on screen.** The memo naming the walk is a render
+/// behind a switch of tab, so the render after one hands the effect the tab left behind's
+/// walk beside the object of the tab now on screen. Started there, it walked the wrong
+/// object into the old bar, and was never walked again: here the second object has no
+/// `helper`, so the first tab's bar said there was none. Fails on a walk started for a bar
+/// whose tab is not on screen.
+#[test]
+fn a_walk_asked_as_its_tab_is_left_walks_its_own_object() {
+    let (_path, ones) = fixture_objects_of("line_fixture_public.dll", 1);
+    let (_path, twos) = fixture_objects_of("line_fixture.o", 1);
+    let (first, second) = (ones[0].clone(), twos[0].clone());
+    let (mut test, roots) = TestingRunner::new(
+        switched_code_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(|| code_states(Reading::default())),
+        1.,
+    );
+    let states = roots.states;
+    let finds = states.places.finds;
+    let mut open = states.objects;
+    open.write().extend([first.clone(), second.clone()]);
+    settle(&mut test);
+
+    let one = Document::Code(first.clone());
+    let one = open_document(states.open, states.visits, one, Reach::NewTab).expect("a tab");
+    let two = Document::Code(second.clone());
+    let two = open_document(states.open, states.visits, two, Reach::NewTab).expect("a tab");
+    raise(states.open, one);
+    settle(&mut test);
+    let at = (Placing::Tab(one), Pane::Assembly);
+    open_find(finds, at, Some("helper".to_owned()), None);
+    settle(&mut test);
+
+    // The walk is asked for on the first tab. Two passes: one renders the write, and the
+    // next hands it to the memo, with nothing rendered since.
+    let filter = finds.peek().get(&at).filter.clone();
+    edit_find(finds, at, move |bar| {
+        bar.hunt = Some(Hunt {
+            id: u64::MAX,
+            object: Over::of(&first),
+            filter,
+            direction: crate::find::Direction::Forward,
+            from: None,
+            walked: Walked::Walking(0.0),
+        })
+    });
+    test.sync_and_update();
+    test.sync_and_update();
+    // And the second tab is raised before the memo's answer is rendered.
+    raise(states.open, two);
+    settle(&mut test);
+
+    raise(states.open, one);
+    pump(&mut test, |_| {
+        finds
+            .peek()
+            .get(&at)
+            .hunt
+            .as_ref()
+            .is_some_and(|hunt| !hunt.walking())
+    });
+    let hunt = finds.peek().get(&at).hunt.clone().expect("a walk");
+    assert!(
+        matches!(hunt.walked, Walked::Found(..)),
+        "the first tab's walk went over another object: {:?}",
+        hunt.walked
+    );
+}
+
 /// An object's code with the find worker and the walk behind it.
 fn code_find_harness() -> impl IntoElement {
     use_find(use_consume::<Looking>().0);
