@@ -361,7 +361,8 @@ impl Component for IdentitySection {
                         )
                         .placeholder("None")
                         .compact()
-                        .width(Size::flex(1.0)),
+                        .width(Size::flex(1.0))
+                        .on_pre_key_down(plain_keys()),
                     )
                     .child(Button::new().on_press(on_choose).child("Choose...")),
             ))
@@ -663,7 +664,8 @@ impl Component for LanguageSection {
                 |open| &mut open.language_server,
             ))
             .placeholder(OpenProject::default_server())
-            .width(Size::fill()),
+            .width(Size::fill())
+            .on_pre_key_down(plain_keys()),
         ))
         // Which of the project's files that server is for. A server answers about a
         // file whatever language it is -- rust-analyzer reads a C file as Rust and
@@ -679,7 +681,8 @@ impl Component for LanguageSection {
                 true => "every file opened",
                 false => languages::Language::Rust.spoken(),
             })
-            .width(Size::fill()),
+            .width(Size::fill())
+            .on_pre_key_down(plain_keys()),
         ))
         // Whether the reader has agreed to a server reading this directory, and the
         // way back. Agreeing happens where the question is asked, at the start it

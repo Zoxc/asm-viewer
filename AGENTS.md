@@ -325,7 +325,7 @@ command.
   (`provide_modifiers`) so no caller can join five booleans in the wrong order.
 - `src/ui/chords.rs` — the chords the window answers wherever the keyboard is, and the one
   hook every text box declines them with: freya's own default for each of its two boxes,
-  written once.
+  written once, with the modifier keys let through to the root.
 - `src/ui/marks.rs` — the run picked out in each pane, the pair it lights on the other
   side, the scroll it owes, the keyboard's moves over it, and what Ctrl+C copies. Also
   the one hook all three code listings wire their keyboard with, and the two ways each

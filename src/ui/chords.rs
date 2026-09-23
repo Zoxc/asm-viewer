@@ -285,13 +285,23 @@ pub(crate) enum Boxed {
 
 impl Boxed {
     /// What the box itself does with a key nothing above it declined: freya's own hook,
-    /// written out once (`notes/upstream/freya.md`).
+    /// written out once (`notes/upstream/freya.md`), but for the modifiers.
+    ///
+    /// **A modifier's own key is let through.** freya's cancels a Ctrl, Alt or Caps Lock
+    /// key-down like any other key, which cancels the global key-down the root tracks the
+    /// modifiers from ([`ModifierKeys`]): a Ctrl held in a box was never seen. The box
+    /// itself does nothing with them.
     fn tail(self, e: &Event<KeyboardEventData>) -> bool {
         match self {
             Boxed::Input => match &e.key {
-                Key::Named(NamedKey::Enter)
-                | Key::Named(NamedKey::Escape)
-                | Key::Named(NamedKey::Shift) => true,
+                Key::Named(
+                    NamedKey::Enter
+                    | NamedKey::Escape
+                    | NamedKey::Shift
+                    | NamedKey::Control
+                    | NamedKey::Alt
+                    | NamedKey::CapsLock,
+                ) => true,
                 Key::Named(NamedKey::Tab) => false,
                 _ => {
                     e.stop_propagation();
@@ -339,4 +349,11 @@ pub(crate) fn box_keys(
         answer(&e.key, e.modifiers);
         boxed.tail(&e)
     })
+}
+
+/// The hook a box that declines no chord is given: [`Boxed::tail`] alone, which is freya's
+/// default with the modifiers let through. Every `Input` takes this or [`box_keys`], since
+/// freya's own default hides a held Ctrl or Alt from the root.
+pub(crate) fn plain_keys() -> Callback<Event<KeyboardEventData>, bool> {
+    Callback::new(|e: Event<KeyboardEventData>| Boxed::Input.tail(&e))
 }

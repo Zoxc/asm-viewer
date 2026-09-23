@@ -428,6 +428,16 @@ its rect, and `SvgViewer` sets it by default (`svg_viewer.rs:112`). With the upg
 `Glyph` can go back to an `SvgViewer`, though a rounded rect of 18.75 still stretches a
 raster of 19.
 
+## An `Input` cancels a modifier's own key-down
+
+`Input`'s default `on_pre_key_down` cancels every key-down but Enter, Escape, Shift and Tab
+(`freya-components-0.4.3/src/input.rs:217-227`), the bare Ctrl, Alt and Caps Lock included, and
+cancelling a key-down cancels the global one (`freya-core-0.4.3/src/events/name.rs:179-190`). A
+root that tracks the modifiers from its global key-down never sees one pressed in a box, and no
+pointer event carries them (below). **Cost:** with the keyboard in a filter box, a Ctrl-press on
+a row opened a preview and an Alt-press on a link followed it. The app's copy of the default,
+`Boxed::tail` (`ui/chords.rs`), lets them through, and every `Input` takes it. Not reported yet.
+
 ## Wanted
 
 **A `MenuItem` that says its key.** Nothing on it takes one: the struct is a theme, its

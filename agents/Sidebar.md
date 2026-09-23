@@ -78,8 +78,11 @@ the bar still has to decline it: an `Input` inserts a character it has no chord 
 Ctrl+F would type an `f` into the pattern. The hook is `box_keys` (`ui/chords.rs`), which every box
 that must not eat a chord takes: it declines every chord in `Chord::ALL` before the edit, named
 keys among them, and is otherwise freya's own default, written out once because the hook replaces
-it wholesale. The Project and Settings boxes are
-still that default — they filter no list — and declining is one call if that changes. Two ids are
+it wholesale. **Written out, it lets the modifier keys through**: freya's cancels a Ctrl, Alt or
+Caps Lock key-down, which cancels the global one the root tracks the modifiers from, so a Ctrl held
+in a filter box was never seen by the row it was held for. The Project, Settings and Scratchpad
+boxes filter no list and decline no chord, so they take that tail alone, `plain_keys`; declining is
+one call if that changes. Two ids are
 minted in the pane, the rows' and the box's, the pane being what holds them both. The headless tests pin the whole door — the chord ignored with
 nothing focused, answered from a pressed row, and not typed into the box it reaches.
 

@@ -237,7 +237,8 @@ fn font_section(half: FontHalf) -> Element {
             Input::new(family.clone())
                 .placeholder(inherited_family)
                 .compact()
-                .width(Size::flex(1.0)),
+                .width(Size::flex(1.0))
+                .on_pre_key_down(plain_keys()),
             move |_| family.clone().set(String::new()),
         ))
         .child(setting_row(

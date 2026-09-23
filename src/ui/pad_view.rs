@@ -152,14 +152,16 @@ impl Component for DependencyRow {
                         Input::new(name)
                             .placeholder("crate")
                             .compact()
-                            .width(Size::flex(NAME_FLEX)),
+                            .width(Size::flex(NAME_FLEX))
+                            .on_pre_key_down(plain_keys()),
                         Half::Name,
                     ))
                     .child(marked(
                         Input::new(version)
                             .placeholder("version")
                             .compact()
-                            .width(Size::flex(VERSION_FLEX)),
+                            .width(Size::flex(VERSION_FLEX))
+                            .on_pre_key_down(plain_keys()),
                         Half::Version,
                     ))
                     .child(
@@ -1079,7 +1081,8 @@ impl Component for PadDetails {
                 // called elsewhere rather than a word that is true of any of them -- and
                 // typing replaces it, where a seeded name would have to be cleared first.
                 .placeholder(pad_label(&shown, ""))
-                .width(Size::flex(1.0)),
+                .width(Size::flex(1.0))
+                .on_pre_key_down(plain_keys()),
             ))
             // Where it is on disk: the package cargo is handed *is* the storage. In a
             // tooltip too, a state directory being longer than any pane.

@@ -37197,6 +37197,82 @@ fn a_ctrl_held_through_the_roots_handler_is_the_ctrl_a_row_reads() {
     );
 }
 
+/// What the `Ctrl` and `Alt` contexts say, drawn.
+#[derive(Clone, PartialEq)]
+struct HeldProbe;
+
+impl Component for HeldProbe {
+    fn render(&self) -> impl IntoElement {
+        let ctrl = *use_consume::<Ctrl>().0.read();
+        let alt = *use_consume::<Alt>().0.read();
+        label().text(format!("ctrl: {ctrl} alt: {alt}"))
+    }
+}
+
+/// A text box of each kind: one that declines the chords and one that declines none.
+#[derive(Clone, PartialEq)]
+struct TwoBoxes;
+
+impl Component for TwoBoxes {
+    fn render(&self) -> impl IntoElement {
+        let filter = use_state(String::new);
+        let name = use_state(String::new);
+        let boxed = |input: Input| rect().height(Size::px(40.)).child(input);
+        rect()
+            .child(boxed(Input::new(filter).on_pre_key_down(box_keys(
+                Boxed::Input,
+                &[],
+                |_, _| {},
+            ))))
+            .child(boxed(Input::new(name).on_pre_key_down(plain_keys())))
+    }
+}
+
+/// The root's key handler, the two boxes and the probe.
+fn boxed_probe_harness() -> impl IntoElement {
+    use_root_key_states();
+    rect()
+        .expanded()
+        .child(ChordKeys)
+        .child(TwoBoxes)
+        .child(HeldProbe)
+}
+
+/// **A Ctrl or an Alt pressed in a text box is held for the rows.** freya's `Input`
+/// cancels the key-down of every key but a few, and a cancelled key-down cancels the
+/// global one the root tracks the modifiers from; so with the keyboard in a filter box a
+/// Ctrl-press on a row opened a preview. Both hooks an `Input` is given let them through.
+#[test]
+fn a_modifier_pressed_in_a_text_box_reaches_the_roots_handler() {
+    let (mut test, _states) = TestingRunner::new(
+        boxed_probe_harness,
+        (300., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(|| test_roots().states),
+        1.,
+    );
+    settle(&mut test);
+
+    // The box that declines the chords.
+    test.click_cursor((50., 20.));
+    settle(&mut test);
+    key_with(&mut test, Key::Named(NamedKey::Control), Modifiers::empty());
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"ctrl: true alt: false".to_string()),
+        "the filter box ate the Ctrl: {drawn:?}"
+    );
+
+    // The box that declines none, and Alt: the mask carries the Ctrl still held.
+    test.click_cursor((50., 60.));
+    settle(&mut test);
+    key_with(&mut test, Key::Named(NamedKey::Alt), Modifiers::CONTROL);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"ctrl: true alt: true".to_string()),
+        "the plain box ate the Alt: {drawn:?}"
+    );
+}
+
 /// The harness over the app's own states, with the finder and the modifiers the root's
 /// handler wants.
 fn mount_chords() -> (TestingRunner, ProjectStates) {
