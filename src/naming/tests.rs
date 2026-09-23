@@ -223,6 +223,24 @@ fn an_anonymous_namespace_is_not_a_segment() {
         ),
         "Maker::bufferSizeBytes"
     );
+    // MSVC's spelling, as `symbolic-demangle` writes `?helper@?A0x1234@@YAXXZ`.
+    assert_eq!(
+        short_name("void `anonymous namespace'::helper(void)"),
+        "helper"
+    );
+    assert_eq!(
+        short_name("public: void `anonymous namespace'::Foo<int>::f(void)"),
+        "Foo::f"
+    );
+}
+
+/// A name MSVC made up and quotes is one word, spaces and all.
+#[test]
+fn a_name_msvc_quotes_is_one_word() {
+    assert_eq!(
+        short_name("public: virtual void* Foo::`scalar deleting destructor'(unsigned int)"),
+        "Foo::`scalar deleting destructor'"
+    );
 }
 
 /// The `>` of a `->` closes nothing, and an `extern "C"` puts a quoted run inside the
@@ -285,6 +303,10 @@ fn a_name_that_makes_no_sense_is_answered_rather_than_panicked_on() {
         "→::λ<Ω>::漢字",
         "<漢字 as 字>::λ",
         "operator→",
+        "'",
+        "`'",
+        "λ `字'",
+        "`anonymous namespace'",
     ] {
         // Whatever comes back, it came back.
         assert!(!short_name(name).is_empty() || name.trim().is_empty());

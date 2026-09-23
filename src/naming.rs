@@ -111,8 +111,8 @@ fn split_path(name: &str) -> Vec<&str> {
 }
 
 /// One segment as the name it contributes, or nothing when it contributes none -- an
-/// empty segment, or C++'s `(anonymous namespace)`, which is noise a tab is better off
-/// without.
+/// empty segment, or C++'s `(anonymous namespace)` (MSVC's `` `anonymous namespace' ``),
+/// which is noise a tab is better off without.
 ///
 /// `first` is whether the segment opens the path, and it is what tells a `<Type as
 /// Trait>` qualifier from a turbofish: `drop_glue::<Vec<T>>` names `drop_glue`, and the
@@ -125,7 +125,7 @@ fn reduce(segment: &str, first: bool) -> Option<Part<'_>> {
         b'<' => None,
         _ => {
             let name = last_word(head(segment));
-            (!name.is_empty()).then_some(Part::Name(name))
+            (!name.is_empty() && name != "`anonymous namespace'").then_some(Part::Name(name))
         }
     }
 }
@@ -215,8 +215,9 @@ fn head(segment: &str) -> &str {
 
 /// The last space-separated word of a segment, which is what drops a C++ return type
 /// (`void std` in `void std::sort<..>(..)`) and an MSVC `public: void __cdecl`. An
-/// `operator` is one word however many spaces it is written with, and what is in front
-/// of one is a return type: `void* operator new`.
+/// `operator` is one word however many spaces it is written with, and so is a name MSVC
+/// quotes (`` `scalar deleting destructor' ``). What is in front of an operator is a
+/// return type: `void* operator new`.
 fn last_word(text: &str) -> &str {
     let text = text.trim();
     let operator = text
@@ -224,6 +225,9 @@ fn last_word(text: &str) -> &str {
         .find(|(at, _)| operator_token(text, *at).is_some());
     if let Some((at, _)) = operator {
         return &text[at..];
+    }
+    if let Some(open) = text.strip_suffix('\'').and_then(|text| text.rfind('`')) {
+        return &text[open..];
     }
     match text.rfind(char::is_whitespace) {
         Some(space) => text[space..].trim_start(),
