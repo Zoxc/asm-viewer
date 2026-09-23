@@ -54,10 +54,11 @@ pub(crate) struct Sectioned {
     /// mechanism asking would have to know about pages and pads, and would hold a
     /// skeleton for a pad's program while the reader sat on the Settings page.
     pub(crate) beside: State<Option<Arc<Object>>>,
-    /// The rows the section view is drawing: [`None`] until the skeleton has come, and
-    /// rebuilt by the view's place-keeping effect with every answer. One slot and not a
-    /// map, since one code listing is mounted at a time; which listing it is about is the
-    /// [`Reading`] the rows were counted from, and asking for them is
+    /// The rows the section view is drawing: [`None`] until the skeleton has come and
+    /// again once the reading is reset ([`use_reading_of`]), and rebuilt by the view's
+    /// place-keeping effect with every answer. One slot and not a map, since one code
+    /// listing is mounted at a time; which listing it is about is the [`Reading`] the rows
+    /// were counted from, and asking for them is
     /// [`Sectioned::rows_of`]. Here and not in the view because the Source pane beside an
     /// object's code reads them too, to find the lines the picked-out instructions were
     /// compiled from.
@@ -309,7 +310,8 @@ impl Reading {
 /// when the object is closed under it -- the latter here and not in `close_binary`, since
 /// the skeleton holds every section's bytes and a rebuild or a project switch has to drop
 /// it too. The window goes with it, so nothing is asked for an object that is not on
-/// screen.
+/// screen, and so do the rows: they hold the reading they were counted from, and only the
+/// view clears them, which it cannot do once it is unmounted.
 pub(crate) fn use_reading_of(
     active: Memo<Option<Entry>>,
     objects: State<Vec<Arc<Object>>>,
@@ -319,7 +321,7 @@ pub(crate) fn use_reading_of(
         mut reading,
         mut window,
         beside,
-        ..
+        mut rows,
     } = sectioned;
     use_side_effect(move || {
         let active = active.read().clone().map(|(_, stop)| stop.document);
@@ -341,6 +343,9 @@ pub(crate) fn use_reading_of(
         if !same_arc(&reading.peek().object, &wanted) {
             reading.set(Reading::of(wanted));
             window.set(None);
+            if rows.peek().is_some() {
+                rows.set(None);
+            }
         }
     });
 }

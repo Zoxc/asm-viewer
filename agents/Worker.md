@@ -132,7 +132,9 @@ whichever window asked for it, and no ask is marked as in flight (`use_asking`'s
 window once); what a scroll superseded is exactly what the next window asks for again. Two things
 bound it. A stretch farther than `KEEP` (512) from the last window is dropped as the answer lands. The whole reading is dropped
 when what is on screen stops being that object's code or the object closes under it
-(`use_reading_of`, an effect reading `Active`, `Objects` and the claim below). It is an effect and not part
+(`use_reading_of`, an effect reading `Active`, `Objects` and the claim below), and the rows the view
+built of it go with it: they hold the object too, and the view that clears them otherwise is not
+mounted when a tab it left is closed. It is an effect and not part
 of `close_binary` because the skeleton holds every section's bytes, and the effect makes a rebuild
 and a project switch drop it by the same line.
 

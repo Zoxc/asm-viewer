@@ -4238,6 +4238,61 @@ fn closing_a_binary_lets_go_of_the_picks_into_it() {
     );
 }
 
+/// **A close lets go of the code view's rows**, which hold the object they were counted
+/// from. Only the view's own effect cleared them, and it runs only while the view is on
+/// screen: a binary whose Code tab was left for another tab and then closed stayed in
+/// memory until some code listing was shown again.
+#[test]
+fn closing_a_binary_lets_go_of_the_code_rows_counted_from_it() {
+    let (path, mut objects) = fixture_objects(1);
+    let object = objects.remove(0);
+    let symbol = Symbol {
+        object: object.clone(),
+        data: object.symbols_sorted[0].clone(),
+    };
+
+    let (mut test, roots) = TestingRunner::new(
+        doors_harness,
+        (600., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let states = roots.states;
+    let mut open = states.objects;
+    open.write().push(object.clone());
+    settle(&mut test);
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(object.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    let mut sections = roots.sectioned.reading;
+    sections.set(reading_of(&object, &[0]));
+    settle(&mut test);
+    assert!(
+        roots.sectioned.rows.peek().is_some(),
+        "the view built no rows"
+    );
+
+    // Off the Code tab, so its view is unmounted, and then the file closed.
+    let document = Document::Symbol(symbol);
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    settle(&mut test);
+    close_binary(states, &path);
+    settle(&mut test);
+    assert!(
+        roots.sectioned.rows.peek().is_none(),
+        "the rows of the closed file stayed"
+    );
+    assert_eq!(
+        Arc::strong_count(&object),
+        1,
+        "the closed file's bytes are still held"
+    );
+}
+
 /// What a bulk closer closed and what it lets go of are one list: `Open::close_tabs`
 /// answers the documents it took and `Places::forgetting` is handed that answer. A second
 /// walk over the bar could name a second set, and a place kept for a tab that has gone
