@@ -13,7 +13,7 @@ use std::{
     borrow::Cow,
     ffi::OsString,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -176,8 +176,9 @@ pub struct Diagnostic {
     pub span: Option<Span>,
 }
 
-/// A place in a file the compiler named. `file` is as cargo gave it — relative to where
-/// cargo ran for the package's own source, a registry path for a dependency's.
+/// A place in a file the compiler named. `file` is as cargo gave it: relative to the
+/// workspace root ([`workspace_root`]) for a file of the workspace, absolute for anything
+/// else, a dependency's out of the registry among them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
     pub file: String,
@@ -354,7 +355,7 @@ pub fn profile_manifest(directory: &Path) -> PathBuf {
             .get("package")
             .and_then(|package| package.get("workspace"))
             .and_then(toml::Value::as_str)
-            .map(|root| directory.join(root).join(MANIFEST));
+            .map(|root| lexical(&directory.join(root)).join(MANIFEST));
         if let Some(named) = named.filter(|named| named.is_file()) {
             return named;
         }
@@ -367,6 +368,38 @@ pub fn profile_manifest(directory: &Path) -> PathBuf {
         .map(|ancestor| ancestor.join(MANIFEST))
         .find(|manifest| read_manifest(manifest).is_some_and(|read| read.contains_key("workspace")))
         .unwrap_or(own)
+}
+
+/// The directory cargo runs the compiler in for a build in `directory`, which is what the
+/// relative paths its diagnostics name are relative to: the workspace root, the directory
+/// holding [`profile_manifest`].
+pub fn workspace_root(directory: &Path) -> PathBuf {
+    let manifest = profile_manifest(directory);
+    manifest
+        .parent()
+        .map_or_else(|| directory.to_path_buf(), Path::to_path_buf)
+}
+
+/// `path` with its `.` and `..` taken out by the text alone, as cargo takes them out of a
+/// `[package] workspace` path. Not `canonicalize`: that asks the filesystem, and a path
+/// through a symlink would stop being under the directory the reader typed.
+pub fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            // Nothing goes above a root, and a relative path keeps the steps it cannot take.
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                Some(Component::ParentDir) | None => out.push(part),
+                _ => {}
+            },
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Whether a binary built with `profile` would carry the line information the source side

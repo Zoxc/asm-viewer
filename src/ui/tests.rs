@@ -30481,7 +30481,7 @@ fn mount_project_over<E: IntoElement + 'static>(
 fn done(run: cargo::Run) -> BuildAnswer {
     BuildAnswer::Done {
         run,
-        sources: HashSet::new(),
+        sources: HashMap::new(),
     }
 }
 
@@ -31201,9 +31201,8 @@ fn a_manifest_job_reads_and_writes_the_root_manifest() {
     );
 }
 
-/// A diagnostic's place is a target when this pane can reach it: cargo spells the file
-/// relative to where it ran, so the project's directory joined with it is the file, and
-/// pressing it opens that file as source on the line the compiler named. A place in a
+/// A diagnostic's place is a target when this pane can reach it: the worker names the file
+/// cargo's spelling stands for (`building::openable`), and pressing it opens that file as source on the line the compiler named. A place in a
 /// dependency stays a plain label, since the app opens a file it can read and a target that
 /// did nothing when pressed would be worse than none.
 #[test]
@@ -31249,7 +31248,10 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     // Both halves of what the worker answers with: the run, and the diagnostic files it
     // picked out as ones this pane may open (`building::openable`).
     build.write().built = Some(Arc::new(run));
-    build.write().sources = Arc::new(HashSet::from([directory.join("src/main.rs")]));
+    build.write().sources = Arc::new(HashMap::from([(
+        "src/main.rs".to_owned(),
+        directory.join("src/main.rs"),
+    )]));
     settle(&mut test);
 
     // Both places are drawn, each spelled as the file, the line and the column.
@@ -31280,9 +31282,9 @@ fn a_diagnostics_place_opens_the_file_it_names() {
 }
 
 /// **A diagnostic's place opens in the tab the file is already in.** The place is the
-/// project's directory as the reader typed it joined with what cargo said, so a directory
-/// typed with a `..` -- or reached through a symlink -- spells a file the reader already
-/// has open a second way. `Document::Source` is never canonicalised, so that second spelling
+/// workspace root, found from the project's directory as the reader typed it, joined with
+/// what cargo said, so a directory reached through a symlink spells a file the reader
+/// already has open a second way. (A `..` stands in for the symlink here.) `Document::Source` is never canonicalised, so that second spelling
 /// would be a second tab of one file, splitting its trail and its positions.
 ///
 /// The press goes through `open_source_place` for this: `spelling` is where one file
@@ -31332,7 +31334,7 @@ fn a_diagnostics_place_opens_in_the_tab_the_file_is_already_in() {
     pump(&mut test, |_| states.build.peek().manifest.path.is_some());
     let mut build = states.build;
     build.write().built = Some(Arc::new(run));
-    build.write().sources = Arc::new(HashSet::from([file]));
+    build.write().sources = Arc::new(HashMap::from([("src/main.rs".to_owned(), file)]));
 
     // The reader has the file open already, under the spelling with no `..` in it.
     open_document(
@@ -31354,8 +31356,8 @@ fn a_diagnostics_place_opens_in_the_tab_the_file_is_already_in() {
 }
 
 /// **How a place is spelled and whether it can be pressed are two questions.** cargo spells
-/// a file it built relative to where it ran, so a file under the directory is a short path
-/// already and is drawn whole; a path from outside is a registry path, most of a line on its
+/// a file of the workspace relative to its root, so it is a short path already and is drawn
+/// whole; a path from outside is a registry path, most of a line on its
 /// own, and is cut down to its name. A file under the directory that the source cache would
 /// not read -- a symlink, one too big -- is no target, and it keeps its own path all the
 /// same: whether a place can be pressed says nothing about how long it is.
@@ -31463,7 +31465,7 @@ fn drawing_a_builds_diagnostics_asks_the_filesystem_nothing() {
 
     let mut build = states.build;
     build.write().built = Some(Arc::new(run));
-    build.write().sources = Arc::new(HashSet::from([file]));
+    build.write().sources = Arc::new(HashMap::from([("src/main.rs".to_owned(), file)]));
 
     let before = source::touches();
     settle(&mut test);

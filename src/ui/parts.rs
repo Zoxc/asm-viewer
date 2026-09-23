@@ -978,14 +978,13 @@ pub(crate) fn diagnostic_block(diagnostic: &Diagnostic, place: Option<Element>) 
 }
 
 /// How a diagnostic's place is spelled: the file, the line and the column. The file as cargo
-/// named it, which for one under the directory being built is a short path relative to where
-/// it ran.
+/// named it, which for a file of the workspace is a short path relative to its root.
 pub(crate) fn diagnostic_place(span: &cargo::Span) -> String {
     place_of(&span.file, span)
 }
 
 /// The same place with the file cut down to its own name, which is what a file outside the
-/// directory being built gets: a registry path is most of a line on its own, and which crate
+/// workspace gets: a registry path is most of a line on its own, and which crate
 /// it is in is the useful half.
 pub(crate) fn diagnostic_place_by_name(span: &cargo::Span) -> String {
     place_of(&source::name_of(Path::new(&span.file)), span)

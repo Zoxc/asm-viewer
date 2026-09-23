@@ -436,6 +436,22 @@ fn a_package_that_is_its_own_workspace_stops_the_walk() {
     .expect("a manifest");
 
     assert!(debug_lines(&profile_manifest(&named), Profile::Release));
+    // Spelled without the `..`, as cargo spells the root it runs the compiler in: the paths
+    // a build's diagnostics name are joined to it (`building::openable`).
+    assert_eq!(profile_manifest(&named), other.join("Cargo.toml"));
+}
+
+/// `..` is taken out by the text: a step back over a name removes it, one above a root is
+/// nothing, and a relative path keeps the steps it cannot take.
+#[test]
+fn a_path_is_made_lexical_by_its_text() {
+    assert_eq!(lexical(Path::new("/w/crates/app/../..")), Path::new("/w"));
+    assert_eq!(
+        lexical(Path::new("/w/./src/../lib.rs")),
+        Path::new("/w/lib.rs")
+    );
+    assert_eq!(lexical(Path::new("/..")), Path::new("/"));
+    assert_eq!(lexical(Path::new("../a/../../b")), Path::new("../../b"));
 }
 
 /// A directory with no manifest in it is a placeholder and not an error: nothing to build,

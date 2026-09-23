@@ -590,21 +590,26 @@ rule survive a restart (`agents/Persistence.md`). A finished build also forgets 
 the sources under the project's directory, which nothing else in the app ever re-reads
 (`forget_source_under`, `agents/Panes.md`).
 
-**Which of a build's places can be opened is worked out beside the build.** cargo spells a file
-relative to where it ran, so a diagnostic's place is the project's directory joined with it, and it
-is drawn as a target where that file is under the directory and the source cache would read it; a
-place in a dependency gets no press, which `PlaceTarget` draws as the plain dim line it would have
-been (`agents/Scratchpad.md`), a target that did nothing when pressed being worse than never
-offering one. Both questions are the worker's (`openable`), asked once per distinct file and carried
-back beside the run as `Builds::sources`. Asked at the row instead they were a `stat` per diagnostic
-per frame, for as long as the section was on screen, and a build says two hundred things as readily
-as two.
+**Which of a build's places can be opened is worked out beside the build.** cargo runs the
+compiler in the workspace root and spells a file of the workspace relative to it, so a diagnostic's
+place is that root joined with it (`cargo::workspace_root`, the directory holding the manifest the
+profiles are read from). For a project directory that is a member of a larger workspace the root is
+not the directory, and joining the directory made a path that was not there. The place is drawn as
+a target where that file is under the directory and the source cache would read it; a place in a
+dependency gets no press, which `PlaceTarget` draws as the plain dim line it would have been
+(`agents/Scratchpad.md`), a target that did nothing when pressed being worse than never offering
+one. Both questions are the worker's (`openable`), asked once per distinct file and carried back
+beside the run as `Builds::sources`, keyed by cargo's spelling so the row joins nothing. Asked at
+the row instead they were a `stat` per diagnostic per frame, for as long as the section was on
+screen, and a build says two hundred things as readily as two. The file and the directory are
+compared by their text, with `..` taken out of both (`cargo::lexical`): the root was found from the
+directory's text, and `canonicalize` would move a directory reached through a symlink out from
+under itself.
 
-**How a place is spelled is a separate question**, and the row's own: a file under the
-directory is a short path as cargo named it and is drawn whole, and a path from outside is a
-registry path, cut down to its name (`diagnostic_place`, `diagnostic_place_by_name`). A file
-under the directory that the source cache would not read is no target and keeps its path all
-the same -- whether a place can be pressed says nothing about how long it is.
+**How a place is spelled is a separate question**, and the row's own: a path cargo spelled
+relative is a file of the workspace, short already, and is drawn whole, and an absolute one is
+a registry path, cut down to its name (`diagnostic_place`, `diagnostic_place_by_name`). A file
+of the workspace that cannot be opened is no target and keeps its path all the same -- whether a place can be pressed says nothing about how long it is.
 
 **Pressing one is `open_source_place`** (`agents/Panes.md`), the arrival every door into a place
 in a file makes, so a file the reader already has open under another spelling opens in that tab

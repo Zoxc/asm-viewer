@@ -32,7 +32,7 @@ fn only_the_previous_builds_artifacts_that_are_open_are_reopened() {
     ];
     let reopening = state.finished(
         built(&["target/debug/viewer", "target/debug/other"]),
-        HashSet::new(),
+        HashMap::new(),
         &open,
     );
 
@@ -60,7 +60,7 @@ fn a_build_that_produced_nothing_leaves_the_previous_list_standing() {
         diagnostics: Vec::new(),
         message: "no".to_owned(),
     };
-    let reopening = state.finished(run, HashSet::new(), &previous);
+    let reopening = state.finished(run, HashMap::new(), &previous);
 
     assert_eq!(reopening, previous, "those paths are still what is open");
     assert_eq!(state.previous, previous);
@@ -93,7 +93,11 @@ fn a_clone_of_the_state_shares_the_build_rather_than_copying_it() {
     };
 
     let mut state = Builds::default();
-    state.finished(run, HashSet::from([PathBuf::from("src/main.rs")]), &[]);
+    state.finished(
+        run,
+        HashMap::from([("src/main.rs".to_owned(), PathBuf::from("src/main.rs"))]),
+        &[],
+    );
     let copy = state.clone();
 
     assert!(
@@ -101,7 +105,8 @@ fn a_clone_of_the_state_shares_the_build_rather_than_copying_it() {
         "the clone copied every diagnostic"
     );
     // Typed, so what is compared is the sets and not the fields holding them.
-    let one_set = |held: &HashSet<PathBuf>, also: &HashSet<PathBuf>| std::ptr::eq(held, also);
+    let one_set =
+        |held: &HashMap<String, PathBuf>, also: &HashMap<String, PathBuf>| std::ptr::eq(held, also);
     assert!(
         one_set(&state.sources, &copy.sources),
         "the clone copied the set of files it may open"
@@ -166,8 +171,60 @@ fn only_the_diagnostic_files_under_the_directory_that_read_are_named() {
 
     assert_eq!(
         named,
-        HashSet::from([directory.join("src/main.rs")]),
+        HashMap::from([("src/main.rs".to_owned(), directory.join("src/main.rs"))]),
         "the set is the files this pane may open, and nothing else"
+    );
+}
+
+/// **A member's diagnostics are spelled from the workspace root.** cargo runs the compiler
+/// there, so a file of the member is `crates/app/src/lib.rs` and not `src/lib.rs`: joined
+/// to the member's own directory it names nothing, and no place of the build can be opened.
+/// A sibling member's file is under the root but not under the project's directory, so it
+/// stays out.
+#[test]
+fn a_members_diagnostics_are_read_from_the_workspace_root() {
+    let root = Temporary::fresh_directory("openable-member");
+    let member = root.join("crates/app");
+    let sibling = root.join("crates/other");
+    for package in [&member, &sibling] {
+        std::fs::create_dir_all(package.join("src")).expect("the directory");
+        std::fs::write(package.join("src/lib.rs"), "\n").expect("the file");
+        std::fs::write(
+            package.join(cargo::MANIFEST),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("the member manifest");
+    }
+    std::fs::write(
+        root.join(cargo::MANIFEST),
+        "[workspace]\nmembers = [\"crates/*\"]\n",
+    )
+    .expect("the root manifest");
+
+    let said = |file: &str| Diagnostic {
+        level: Level::Error,
+        message: "mismatched types".to_owned(),
+        rendered: "error: mismatched types".to_owned(),
+        span: Some(cargo::Span {
+            file: file.to_owned(),
+            line: 1,
+            column: 1,
+        }),
+    };
+    let named = openable(
+        &member,
+        &[
+            said("crates/app/src/lib.rs"),
+            said("crates/other/src/lib.rs"),
+        ],
+    );
+
+    assert_eq!(
+        named,
+        HashMap::from([(
+            "crates/app/src/lib.rs".to_owned(),
+            member.join("src/lib.rs")
+        )]),
     );
 }
 

@@ -232,10 +232,9 @@ impl Component for ArtifactRow {
 /// along the line, which only the text of the line converts between; this pane has no text,
 /// so the caret lands at the start of the line.
 ///
-/// cargo spells the file relative to where it ran, so the place is the project's directory
-/// joined with it, and which of those files may be opened is [`Builds::sources`], picked
-/// out on the worker beside the build. A file it does not name -- a dependency's, out of
-/// the registry, or one the source cache would refuse -- gets no press, which
+/// Which of these files may be opened, and the path each opens, is [`Builds::sources`],
+/// picked out on the worker beside the build. A file it does not name -- a dependency's,
+/// out of the registry, or one the source cache would refuse -- gets no press, which
 /// [`PlaceTarget`] draws as the plain line it would have been: a target that did nothing
 /// when pressed would be worse than never offering one.
 ///
@@ -249,22 +248,17 @@ fn source_place(
     doors: Doors,
     ctrl: State<bool>,
     build: &Builds,
-    directory: Option<&Path>,
     diagnostic: &Diagnostic,
 ) -> Option<Element> {
     let span = diagnostic.span.as_ref()?;
-    let under = directory.and_then(|directory| {
-        let file = directory.join(&span.file);
-        file.starts_with(directory).then_some(file)
-    });
-    // How the place is spelled is the *other* question: a file under the directory is a
-    // short path as cargo named it and is drawn whole, whether or not the source cache
-    // would read it, and a path from outside is cut to its name.
-    let text = match under.is_some() {
+    // How the place is spelled is the *other* question: cargo spells a file of the
+    // workspace relative to its root, a short path drawn whole whether or not the source
+    // cache would read it, and anything else absolute, a path cut to its name.
+    let text = match Path::new(&span.file).is_relative() {
         true => diagnostic_place(span),
         false => diagnostic_place_by_name(span),
     };
-    let target = under.filter(|file| build.shows(file));
+    let target = build.target(span).cloned();
     let line = span.line as u32;
 
     Some(
@@ -483,7 +477,7 @@ impl Component for CargoSection {
             .diagnostics()
             .iter()
             .map(|diagnostic| {
-                let place = source_place(doors, ctrl, &held, directory.as_deref(), diagnostic);
+                let place = source_place(doors, ctrl, &held, diagnostic);
                 diagnostic_block(diagnostic, place)
             })
             .collect();
