@@ -24467,6 +24467,41 @@ fn a_bookmark_row_opens_its_place() {
         .any(|entry| *entry == document));
 }
 
+/// **A bookmark row marks the filter's hit in the name it draws.** A symbol's row draws the
+/// short name, and marks worked out on the whole label landed on other characters of it,
+/// or past its end.
+#[test]
+fn a_filtered_bookmark_marks_the_name_it_draws() {
+    let symbols = fixture_symbols();
+    let document = Document::Symbol(symbols[0].clone());
+    let bookmark = Bookmark::new(
+        SavedDocument::from_document(&document),
+        "my_crate::parser::lexer::next_token",
+    );
+
+    let (mut test, states) = TestingRunner::new(
+        bookmarks_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let mut bookmarks = states.bookmarks;
+    bookmarks.set(Bookmarks::from_entries(vec![bookmark]));
+    settle(&mut test);
+
+    let box_at = centre_of(&test, "Filter");
+    press_at(&mut test, box_at);
+    settle(&mut test);
+    test.write_text("next");
+    settle(&mut test);
+
+    let marked = marked_runs(&test);
+    assert!(
+        marked.contains(&("lexer::next_token".to_owned(), vec![(7, 11)])),
+        "the row did not mark what the filter matched: {marked:?}"
+    );
+}
+
 /// **A bookmarked file opens in the tab it is already in.** A bookmark keeps the spelling
 /// the tab it was made on had, and it is saved: a project directory respelled between
 /// sessions -- or a file since reopened another way -- leaves the saved spelling beside

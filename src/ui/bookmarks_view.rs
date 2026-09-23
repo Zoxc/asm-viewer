@@ -15,7 +15,7 @@ struct BookmarkRow {
     live: Option<Document>,
     /// Where this row is in the list as it is drawn, which under a filter is not `index`.
     at: usize,
-    /// Where the filter matched in the label, for the row to mark.
+    /// Where the filter matched in the name the row draws, for the row to mark.
     marks: Vec<Range<usize>>,
     /// What this row's press and its menu reach for, told to it by the list: see
     /// [`ListStates`]. Compares equal always, so it costs the row no render.
@@ -133,28 +133,29 @@ impl Component for BookmarksPanel {
             // What the rows are of, kept beside them: each row's bookmark, which is what
             // the arrows pick out, and the place it resolved to, which is what Enter
             // opens. A dead one keeps its row and opens nothing, as pressing it does.
-            let listed: Vec<Listed> = entries
+            // With the name each row draws, the History list's rule: the filter reads the
+            // whole name and the row marks the short one it draws.
+            let kept: Vec<(Listed, String)> = entries
                 .iter()
                 .enumerate()
-                .filter(|(_, bookmark)| matcher.matches(&bookmark.label()))
-                .map(|(index, bookmark)| {
-                    (
-                        index,
-                        bookmark.clone(),
-                        bookmark.document.resolve_by_name(&objects),
-                    )
+                .filter_map(|(index, bookmark)| {
+                    let names = Names::of_saved(bookmark);
+                    matcher.matches(&names.whole).then(|| {
+                        let live = bookmark.document.resolve_by_name(&objects);
+                        ((index, bookmark.clone(), live), names.text)
+                    })
                 })
                 .collect();
-            let rows = listed
+            let rows = kept
                 .iter()
                 .enumerate()
-                .map(|(at, (index, bookmark, live))| {
+                .map(|(at, ((index, bookmark, live), text))| {
                     BookmarkRow {
                         index: *index,
                         bookmark: bookmark.clone(),
                         live: live.clone(),
                         at,
-                        marks: matcher.marks(&bookmark.label()),
+                        marks: matcher.marks(text),
                         states: pane.states,
                         key: DiffKey::None,
                     }
@@ -162,6 +163,7 @@ impl Component for BookmarksPanel {
                     .into()
                 })
                 .collect();
+            let listed = kept.into_iter().map(|(listed, _)| listed).collect();
             (rows, listed, !entries.is_empty())
         };
         let keys = ListKeys::over(

@@ -24,9 +24,10 @@ memo and not the `Marking` in it: a narrowing memo reading a plain value capture
 render would never see the pattern change. The toggles call `prevent_default` on their press, or an
 `Input` gives up its keyboard focus mid-word. Only the Symbols list needs a memo (`Filtered`,
 holding indices, and `None` for the unfiltered case so it costs what it did before there was a
-filter); Objects, History and Bookmarks filter where their rows are built. A History row draws the
-shortened name (`Names::text`) and is filtered on the whole one (`Names::whole`), so a generic
-argument the row has no room for can still be searched for. The two short lists, History and Bookmarks, draw
+filter); Objects, History and Bookmarks filter where their rows are built. A History or Bookmarks
+row draws the shortened name (`Names::text`) and is filtered on the whole one (`Names::whole`), so a
+generic argument the row has no room for can still be searched for; the marks are found in the
+shortened name, since that is the text they are drawn over. The two short lists, History and Bookmarks, draw
 what the filter left through one `ListPane::short_list` (`src/ui/filter_bar.rs`): a plain
 `ScrollView` of the rows on the pane's own scroll, or the word for why there are none. An empty list means two things -- nothing has been added
 to it, or the filter left nothing of it -- and they are worth different words, so which of the two
