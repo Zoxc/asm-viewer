@@ -124,7 +124,10 @@ atomic against a crash of the process and not against a power loss: the director
 the disk ahead of the data, and the file the next launch reads is then zero bytes or a truncated
 tail -- one that will not parse, so the rescue moves the reader's project or session aside and
 hands back a default, which is the very loss the dance exists to prevent. The directory entry is
-left unsynced: losing the rename costs the last save, where losing the data costs the file. One
+left unsynced: losing the rename costs the last save, where losing the data costs the file. **A
+symlink is written through**: the rename lands on the file the link names, with that file's
+permissions, since a rename over the link made it a plain file and a project file the reader linked
+in from a repository of theirs never saw another save. One
 fsync per save: the session's at most one every 30 s, and a box typed in -- the Project page's
 three, the font family -- writes once the typing stops and not per keystroke.
 

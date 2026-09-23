@@ -276,3 +276,34 @@ fn a_write_that_fails_leaves_no_temporary() {
     assert!(write_atomically(&path, b"name = \"a\"\n").is_err());
     assert_eq!(temporaries(&base), Vec::<PathBuf>::new());
 }
+
+/// A write through a symlink lands in the file it names and leaves the link a link: a
+/// rename over it made it a plain file, and the file it named never saw the save. The file
+/// replaced keeps its permissions.
+#[cfg(unix)]
+#[test]
+fn a_write_through_a_symlink_lands_in_its_target() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let base = Temporary::fresh_directory("store-test");
+    let target = base.join("elsewhere").join("viewer.avproj");
+    written(&target, b"old");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).expect("the mode is set");
+    let link = base.join("viewer.avproj");
+    symlink(Path::new("elsewhere").join("viewer.avproj"), &link).expect("the link is made");
+
+    write_atomically(&link, b"new").expect("the write lands");
+
+    assert!(fs::symlink_metadata(&link)
+        .expect("the link is there")
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read(&target).expect("the target reads"), b"new");
+    let mode = fs::metadata(&target)
+        .expect("the target is there")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o640);
+    assert_eq!(temporaries(&base), Vec::<PathBuf>::new());
+    assert_eq!(temporaries(&base.join("elsewhere")), Vec::<PathBuf>::new());
+}

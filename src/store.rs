@@ -351,18 +351,28 @@ fn desktop_base() -> Option<PathBuf> {
 /// every 30 s. The directory entry itself is left unsynced: losing the rename costs the
 /// last save, where losing the data costs the file.
 ///
+/// **A symlink is written through, not over** ([`through_links`]): a rename replaces the
+/// entry it lands on, so a project file the reader linked in from elsewhere became a plain
+/// file and the one it named never saw another save. The file replaced keeps its
+/// permissions for the same reason: the new one is otherwise made with the defaults.
+///
 /// The one atomic writer, and free rather than a method because one file it writes is not
 /// the app's at all: `cargo.rs` edits the manifest of the workspace being read, which is
 /// nowhere near a [`Store`]. Everything the app owns goes through [`Store::write`].
 pub fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let path = &through_links(path);
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)?;
     }
 
     let temporary = temporary_beside(path);
     let mut file = File::create_new(&temporary)?;
-    let written = file
-        .write_all(contents)
+    let kept = match fs::metadata(path) {
+        Ok(old) => file.set_permissions(old.permissions()),
+        Err(_) => Ok(()),
+    };
+    let written = kept
+        .and_then(|()| file.write_all(contents))
         .and_then(|()| file.sync_all())
         .and_then(|()| {
             drop(file);
@@ -372,6 +382,25 @@ pub fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     written
+}
+
+/// The file `path` names once every symlink at its last component is followed, which is
+/// where a write lands. A link may name a file not there yet, which the write makes. A
+/// chain longer than the system's own limit, a loop, is `path` itself.
+fn through_links(path: &Path) -> PathBuf {
+    let mut at = path.to_path_buf();
+    for _ in 0..40 {
+        let Ok(target) = fs::read_link(&at) else {
+            return at;
+        };
+        // A relative target is relative to the link's directory; `join` takes an absolute
+        // one as it is.
+        at = match at.parent() {
+            Some(directory) => directory.join(target),
+            None => target,
+        };
+    }
+    path.to_path_buf()
 }
 
 /// A name beside `path` that no other write is given: `<file>.<pid>.<n>.tmp`, the process
