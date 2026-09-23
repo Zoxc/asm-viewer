@@ -460,6 +460,16 @@ the arrow -- and after the name for the same reason it is, since a child that as
 row takes the window instead (above). One spelling for both places, the row and the Shortcuts
 page, is the app's own (`src/shortcuts.rs`).
 
+**A focus scope that remembers where it was left.** What freya has of focus is one node at
+a time: `AccessibilityId::request_focus`, the next or previous focusable node
+(`AccessibilityFocusStrategy`, `focus_strategy.rs`), and `use_focus` to ask about one id
+(`focus.rs:161`). Nothing groups nodes into a region that keeps its last focused node, so
+coming back to a region cannot put the keyboard back where it was. What the app does
+instead: an effect notes which pane of the tab on screen the keyboard moves into, under that
+tab, and the ask a chip makes reads it back (`use_keyboard_left`, `src/ui/keyboard.rs`). It
+covers the two code panes only, not a find bar under one. A focus group with a "focus it
+again" call would do it.
+
 **A menu the keyboard can walk.** `Menu` answers one key, the Escape that closes it
 (`menu.rs:154`), and neither it nor `MenuItem` takes a focusable box, so the arrows move
 nothing in a menu and Enter presses nothing. Everything a menu offers is a pointer's alone.
