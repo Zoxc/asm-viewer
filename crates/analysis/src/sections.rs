@@ -5,7 +5,8 @@
 
 use crate::Bias;
 use object::{
-    CompressionFormat, Object as _, ObjectKind, ObjectSection, SectionIndex, SectionKind,
+    CompressedData, CompressionFormat, Object as _, ObjectKind, ObjectSection, SectionIndex,
+    SectionKind,
 };
 use std::collections::HashMap;
 
@@ -68,15 +69,18 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, B
 
         // Somewhere for the next section to go, past the bytes `section_data` keeps: for a
         // compressed section the size its header says it decompresses to, not the `size()` it
-        // takes in the file. A zero-length section still takes an address of its own, so that
-        // two of them are two places. An object whose sections do not fit in the address space
-        // simply stops being biased past that point.
+        // takes in the file. A section `section_data` drops takes no more room than an empty
+        // one, and a zero-length section still takes an address of its own, so that two of
+        // them are two places. Each slot is then at most `MAX_SECTION_DATA`, so the layout
+        // runs out of address space only for a file stating an address near the top of it,
+        // and past that point sections are left where the file put them.
         // FIXME: warn the reader where the two sizes disagree -- a compressed loadable section,
         // which the ELF spec forbids.
-        let length = match section.compressed_file_range() {
-            Ok(range) if range.format != CompressionFormat::None => range.uncompressed_size,
-            _ => section.size(),
-        };
+        let length = section
+            .compressed_data()
+            .ok()
+            .and_then(|compressed| kept_size(&compressed))
+            .unwrap_or(0);
         let Some(end) = next.checked_add(length.max(1)) else {
             break;
         };
@@ -120,10 +124,22 @@ const MAX_SECTION_DATA: u64 = 1 << 30;
 /// a vector it never grows; what zstd produces is bounded by [`zstd_data`] instead.
 pub(crate) fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Option<Vec<u8>> {
     let compressed = section.compressed_data().ok()?;
+    let size = kept_size(&compressed)?;
 
+    match compressed.format {
+        CompressionFormat::None => Some(compressed.data.to_vec()),
+        CompressionFormat::Zstandard => zstd_data(compressed.data, size),
+        _ => Some(compressed.decompress().ok()?.into_owned()),
+    }
+}
+
+/// How many bytes [`section_data`] keeps of a section, worked out without reading them, or
+/// `None` for a section it drops. [`section_biases`] sizes each section's slot by this, so
+/// the two cannot disagree.
+fn kept_size(compressed: &CompressedData<'_>) -> Option<u64> {
     let max_ratio: u64 = match compressed.format {
         // Not compressed at all: the bytes are already there, nothing to bound.
-        CompressionFormat::None => return Some(compressed.data.to_vec()),
+        CompressionFormat::None => return Some(compressed.data.len() as u64),
         CompressionFormat::Zlib => 1032,
         CompressionFormat::Zstandard => 32768,
         // Any other format is one `decompress()` does not implement; it would fail.
@@ -131,15 +147,8 @@ pub(crate) fn section_data<'data, S: ObjectSection<'data>>(section: &S) -> Optio
     };
 
     let ratio_bound = (compressed.data.len() as u64).saturating_mul(max_ratio);
-    if compressed.uncompressed_size > ratio_bound.min(MAX_SECTION_DATA) {
-        return None;
-    }
-
-    if compressed.format == CompressionFormat::Zstandard {
-        return zstd_data(compressed.data, compressed.uncompressed_size);
-    }
-
-    Some(compressed.decompress().ok()?.into_owned())
+    (compressed.uncompressed_size <= ratio_bound.min(MAX_SECTION_DATA))
+        .then_some(compressed.uncompressed_size)
 }
 
 /// A zstd section inflated here rather than by `decompress()`, which takes the declared size

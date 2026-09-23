@@ -255,6 +255,51 @@ fn a_compressed_code_section_is_placed_by_the_size_it_decompresses_to() {
     assert_eq!(ranges, [0..200, 208..210]);
 }
 
+/// Defect: a compressed code section declaring nearly `u64::MAX` bytes ran the layout out of
+/// address space, and every code section after it was left where the file put it: at 0, on top
+/// of the first. The listing dropped both as overlapping. `section_data` drops the liar, and
+/// it now takes the slot of an empty section.
+#[test]
+fn a_compressed_code_section_declaring_too_much_leaves_the_rest_placed() {
+    let mut obj = object_with_compression(
+        CODE,
+        object::elf::ELFCOMPRESS_ZLIB,
+        &zlib_stored(b"x"),
+        u64::MAX - 8,
+    );
+    for name in ["first", "second"] {
+        let section = obj.add_section(
+            Vec::new(),
+            format!(".text.{name}").into_bytes(),
+            SectionKind::Text,
+        );
+        let offset = obj.append_section_data(section, &[0x90, 0xC3], 1);
+        obj.add_symbol(object::write::Symbol {
+            name: name.as_bytes().to_vec(),
+            value: offset,
+            size: 2,
+            kind: object::SymbolKind::Text,
+            scope: object::SymbolScope::Linkage,
+            weak: false,
+            section: object::write::SymbolSection::Section(section),
+            flags: object::SymbolFlags::None,
+        });
+    }
+    let object = parse(&obj.write().expect("writing the fixture object"));
+
+    let code = CodeListing::new(&object);
+    let ranges: Vec<_> = code
+        .sections()
+        .iter()
+        .map(|placed| placed.range().start.get()..placed.range().end.get())
+        .collect();
+    assert_eq!(ranges.len(), 2, "both sections are listed: {ranges:?}");
+    assert!(ranges[0].end <= ranges[1].start, "{ranges:?} overlap");
+    for name in ["first", "second"] {
+        assert!(named(&object, name).data_in(&object).is_some());
+    }
+}
+
 /// `byte` repeated `len` times as a valid zstd frame: RLE blocks, so no compressor is needed
 /// to build the fixture. The frame declares no content size and asks for the smallest window
 /// there is, so nothing in it says how much it will produce.

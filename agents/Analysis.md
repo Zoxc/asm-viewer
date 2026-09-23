@@ -412,7 +412,10 @@ or debug info that says nothing about the range asked about. Four design points 
   than having to find it in `dwarf.rs`. Loading the DWARF asks `section_biases` again rather than
   reading the biases back off the sections the parse kept: the rule is the layout, and a text
   section whose bytes would not read is dropped from the parse but still has to be placed, or the
-  rows relocated against it land on 0 where the first section already sits. The layout starts above the highest address the file
+  rows relocated against it land on 0 where the first section already sits. Each slot is as long as
+  what `section_data` keeps of its section, found by the same check (`kept_size`), so one it drops takes a
+  grain and no more: sized by a compressed header's declared size instead, one lying section ran
+  the layout out of address space and left every section after it on 0. The layout starts above the highest address the file
   states — a Mach-O `.o` states one per section — so nothing is moved *down* and a bias is never a
   wrapped value: `relocate`'s wrapping add and a query's checked one mean the same thing. It lives
   in `sections.rs`, in neither the parse nor `line.rs`, because both read it and the listing of an
