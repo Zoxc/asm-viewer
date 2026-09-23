@@ -1216,7 +1216,8 @@ impl Component for DiagnosticsPane {
 
 /// The Scratchpad pane: the pads there are down one side, and beside it the shown one --
 /// a source file the reader edits, the crates it asks for, a build, and what the compiler
-/// said about it. What it *builds* goes through `open_files` like any other binary.
+/// said about it. What it *builds* is read into the pad's own [`Program`], never onto the
+/// Objects list.
 ///
 /// The skeleton and no more. Each piece of it reads the slice of [`Pads`] it draws, so
 /// nothing here copies a pad's state out whole for the pieces below to pick over.

@@ -2,8 +2,8 @@
 //! are drained in, and which load each answer belongs to.
 //!
 //! [`open_binaries`] is **the one path by which anything is ever added to `objects`**. The
-//! toolbar's Open, a session restore and a scratchpad's rebuild all go through it, so they
-//! cannot differ about what opening a file means. Nothing here opens or closes a tab: the
+//! toolbar's Open, a session restore and a build's reopening all go through it or its two
+//! halves, so they cannot differ about what opening a file means. Nothing here opens or closes a tab: the
 //! opposite number is `close_binary` (`documents.rs`), which cancels the load as its last
 //! act.
 //!

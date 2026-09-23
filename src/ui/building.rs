@@ -346,8 +346,7 @@ pub(crate) fn use_building_with(
 /// Which binaries those are is [`Builds::finished`]'s to say; what is left here is the
 /// reopening. The close is unconditional for the ones that are replaced -- whether or not
 /// the new bytes parse, the objects in hand describe bytes that are gone -- and takes
-/// those files' tabs, positions and visits with it, exactly as a scratchpad's rebuild
-/// does.
+/// those files' tabs, positions and visits with it.
 fn finished(
     mut build: State<Builds>,
     states: ProjectStates,
