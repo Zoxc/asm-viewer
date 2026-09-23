@@ -194,6 +194,9 @@ pub(crate) enum BuildAnswer {
     Done {
         run: cargo::Run,
         sources: HashMap<String, PathBuf>,
+        /// The directory the build ran in. The Directory box can change while cargo runs,
+        /// so the box is not where the taker learns which files the build rewrote.
+        directory: PathBuf,
     },
 }
 
@@ -216,6 +219,7 @@ pub(crate) fn build_work(job: BuildJob) -> BuildAnswer {
             BuildAnswer::Done {
                 sources: openable(&directory, run.diagnostics()),
                 run,
+                directory,
             }
         }
         BuildWhat::AddDebugLines => {
@@ -333,9 +337,11 @@ pub(crate) fn use_building_with(
                 BuildAnswer::Read(said) => {
                     write_if(build, |next| next.read(said));
                 }
-                BuildAnswer::Done { run, sources } => {
-                    finished(build, states, opened, sourced, run, sources)
-                }
+                BuildAnswer::Done {
+                    run,
+                    sources,
+                    directory,
+                } => finished(build, states, opened, sourced, run, sources, &directory),
             }
         },
     );
@@ -363,18 +369,16 @@ fn finished(
     mut sourced: State<Sourced>,
     run: cargo::Run,
     sources: HashMap<String, PathBuf>,
+    directory: &Path,
 ) {
     // What the panes have read of the workspace is from before the reader edited it and
     // pressed Build. Dropped whatever the build came to: a build that failed says the
     // files have changed just as one that did not.
-    let directory = states.proj.peek().workspace();
-    if let Some(directory) = directory {
-        sourced.write().forget_under(&directory);
-        // And the language server is holding the text from before it, for every file of
-        // the reader's the build rewrote: it answers about what it was given until it is
-        // told otherwise (`src/ui/opened.rs`).
-        write_if(opened, |waiting| waiting.reread(&directory));
-    }
+    sourced.write().forget_under(directory);
+    // And the language server is holding the text from before it, for every file of the
+    // reader's the build rewrote: it answers about what it was given until it is told
+    // otherwise (`src/ui/opened.rs`).
+    write_if(opened, |waiting| waiting.reread(directory));
 
     // Bound before the write, as ever.
     let open = project::binaries(&states.objects.peek());

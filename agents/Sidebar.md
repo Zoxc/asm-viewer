@@ -609,8 +609,9 @@ is what makes the rule survive a restart (`agents/Persistence.md`). The load is 
 binaries as they were listed before the closes, and a file's first object goes back before the
 first file listed after it (`tree::slot`): appended, every rebuild would reorder the project file.
 A finished build also forgets everything read of
-the sources under the project's directory, which nothing else in the app ever re-reads
-(`forget_source_under`, `agents/Panes.md`).
+the sources under the directory it ran in, which nothing else in the app ever re-reads
+(`forget_source_under`, `agents/Panes.md`). The worker hands that directory back with the answer,
+since the reader can change the Directory box while cargo runs.
 
 **Which of a build's places can be opened is worked out beside the build.** cargo runs the
 compiler in the workspace root and spells a file of the workspace relative to it, so a diagnostic's

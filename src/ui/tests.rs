@@ -31643,13 +31643,14 @@ fn mount_project_over<E: IntoElement + 'static>(
     (test, roots, asking, asks)
 }
 
-/// A finished build as the worker answers with one, naming no diagnostic file: what a
-/// build's places may open is worked out there (`building::openable`), and these builds
+/// A finished build as the worker answers `job` with one, naming no diagnostic file: what
+/// a build's places may open is worked out there (`building::openable`), and these builds
 /// say nothing.
-fn done(run: cargo::Run) -> BuildAnswer {
+fn done(job: &BuildJob, run: cargo::Run) -> BuildAnswer {
     BuildAnswer::Done {
         run,
         sources: HashMap::new(),
+        directory: job.directory.clone(),
     }
 }
 
@@ -31677,7 +31678,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
-            BuildWhat::Build => done(built(&[artifact.clone()])),
+            BuildWhat::Build => done(&job, built(&[artifact.clone()])),
             _ => BuildAnswer::Read(Manifest {
                 path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
@@ -31843,7 +31844,7 @@ fn an_artifact_load_survives_the_view_being_left() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
-            BuildWhat::Build => done(built(&[artifact.clone()])),
+            BuildWhat::Build => done(&job, built(&[artifact.clone()])),
             _ => BuildAnswer::Read(Manifest {
                 path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
@@ -31913,7 +31914,7 @@ fn a_build_answer_for_a_project_left_is_dropped() {
         move |job: BuildJob| match job.what {
             BuildWhat::Build => {
                 let _ = gate.recv_blocking();
-                done(built(&[artifact.clone()]))
+                done(&job, built(&[artifact.clone()]))
             }
             _ => BuildAnswer::Read(Manifest {
                 path: Some(job.directory.join("Cargo.toml")),
@@ -32003,7 +32004,7 @@ fn a_finished_build_forgets_the_workspace_sources() {
 
     // Nothing is opened: what a build produced is another rule, tested above.
     let (mut test, roots, asking, _asks) = mount_project(|job: BuildJob| match job.what {
-        BuildWhat::Build => done(built(&[])),
+        BuildWhat::Build => done(&job, built(&[])),
         _ => BuildAnswer::Read(Manifest {
             path: None,
             profiles: None,
@@ -32039,6 +32040,62 @@ fn a_finished_build_forgets_the_workspace_sources() {
     forget_source_under(&directory);
 }
 
+/// **A build forgets the sources under the directory it ran in**, not the one in the box
+/// when it finishes. The box writes the project on every keystroke, so the reader can
+/// change it while cargo runs; forgetting under the new one left the files the build
+/// rewrote drawn as they were before it.
+#[test]
+fn a_build_forgets_the_directory_it_ran_in_when_the_box_has_changed() {
+    let directory = Temporary::fresh_directory("run-test");
+    let elsewhere = Temporary::fresh_directory("run-test");
+    let path = directory.join("main.rs");
+    std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
+
+    let (release, gate) = async_channel::bounded::<()>(1);
+    let (mut test, roots, asking, _asks) = mount_project(move |job: BuildJob| match job.what {
+        BuildWhat::Build => {
+            let _ = gate.recv_blocking();
+            done(&job, built(&[]))
+        }
+        _ => BuildAnswer::Read(Manifest {
+            path: None,
+            profiles: None,
+            debug_lines: true,
+            edit_refused: None,
+        }),
+    });
+    let states = roots.states;
+
+    let mut proj = states.proj;
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
+    test.sync_and_update();
+
+    let drawn = || source_text(&path).expect("the file").0.rope.to_string();
+    assert_eq!(drawn(), "fn one() {}\n");
+    std::fs::write(&path, b"fn two() {}\n").expect("writing the source file");
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    start_build(
+        states.build,
+        &jobs,
+        directory.to_path_buf(),
+        Profile::Release,
+    );
+    // The reader points the box somewhere else while cargo runs.
+    proj.write().workspace_text = elsewhere.to_string_lossy().into_owned();
+    test.sync_and_update();
+    release.send_blocking(()).expect("the build is waiting");
+    pump(&mut test, |_| !states.build.peek().building);
+
+    assert_eq!(
+        drawn(),
+        "fn two() {}\n",
+        "the build forgot the directory in the box, not the one it rewrote"
+    );
+
+    forget_source_under(&directory);
+}
+
 /// The same, with the directory typed relative and the file named absolute, as the debug
 /// info names it. A build forgets what is under the directory by its path, so the two have
 /// to be spelled from the same root: the typed spelling covered nothing the debug info
@@ -32065,7 +32122,7 @@ fn a_build_under_a_relative_directory_forgets_the_files_named_absolutely() {
     assert!(typed.is_relative());
 
     let (mut test, roots, asking, _asks) = mount_project(|job: BuildJob| match job.what {
-        BuildWhat::Build => done(built(&[])),
+        BuildWhat::Build => done(&job, built(&[])),
         _ => BuildAnswer::Read(Manifest {
             path: None,
             profiles: None,
@@ -32083,8 +32140,10 @@ fn a_build_under_a_relative_directory_forgets_the_files_named_absolutely() {
     assert_eq!(drawn(), "fn one() {}\n");
     std::fs::write(&path, b"fn two() {}\n").expect("writing the source file");
 
+    // What the button sends: the box's text as a path.
+    let workspace = proj.peek().workspace().expect("a directory");
     let jobs = asking.peek().clone().expect("the wiring handed one back");
-    start_build(states.build, &jobs, typed, Profile::Release);
+    start_build(states.build, &jobs, workspace, Profile::Release);
     pump(&mut test, |_| !states.build.peek().building);
 
     assert_eq!(
@@ -32122,7 +32181,7 @@ fn a_source_pane_reads_its_file_again_after_a_build() {
                 runner.provide_root_context(move || {
                     provide(SubjectFile(file.clone()));
                     provide(BuildWorking(Arc::new(|job: BuildJob| match job.what {
-                        BuildWhat::Build => done(built(&[])),
+                        BuildWhat::Build => done(&job, built(&[])),
                         _ => BuildAnswer::Read(Manifest {
                             path: None,
                             profiles: None,
@@ -32182,7 +32241,7 @@ fn a_build_replaces_what_the_build_before_it_produced() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
-            BuildWhat::Build => done(built(&[artifact.clone()])),
+            BuildWhat::Build => done(&job, built(&[artifact.clone()])),
             _ => BuildAnswer::Read(Manifest {
                 path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
@@ -32274,7 +32333,7 @@ fn a_build_registers_its_reopen_before_a_record_can_run() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
-            BuildWhat::Build => done(built(&[artifact.clone()])),
+            BuildWhat::Build => done(&job, built(&[artifact.clone()])),
             _ => BuildAnswer::Read(Manifest {
                 path: None,
                 profiles: None,
