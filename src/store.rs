@@ -312,12 +312,16 @@ impl Store {
 /// **Unset and empty are one answer.** A variable set to nothing is what a script that
 /// meant to set it and did not looks like, and taking that as a path would put the reader's
 /// projects in whatever directory the app was started from.
+///
+/// A relative one is made absolute, lexically: a path under the store is handed back
+/// through [`Store::path`], which would join the base on a second time.
 fn given_base(given: Option<std::ffi::OsString>) -> Option<PathBuf> {
     let given = given?;
-    match given.is_empty() {
-        true => None,
-        false => Some(PathBuf::from(given)),
+    if given.is_empty() {
+        return None;
     }
+    let given = PathBuf::from(given);
+    Some(std::path::absolute(&given).unwrap_or(given))
 }
 
 /// Where the desktop says an application's state goes, which is where this app keeps it

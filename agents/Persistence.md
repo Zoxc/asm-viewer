@@ -94,7 +94,12 @@ set it and did not cannot put a reader's projects in the working directory.
 **One store is opened per run**, in `app()` where the settings are loaded, and handed down: no
 module looks the place up for itself, and a path given to the store is relative to it unless it is
 absolute, which is what lets a project file the reader gave a place go through the same writer as
-the app's own. `Store::relative` is the same rule the other way -- where an absolute path sits
+the app's own. That rule is why **every path a project is named by is absolute in memory**: a
+relative one would be read where the app was started and written under the store. The two ways
+one can come in relative are made absolute where they enter, lexically (`std::path::absolute`):
+the project named on the command line, in `main`, and a relative `ASSEMBLY_VIEWER_STATE`, whose
+paths would otherwise come back through `Store::path` with the base joined on twice.
+`Store::relative` is the same rule the other way -- where an absolute path sits
 under the store, or `None` for one outside it -- so the directory stays a private field and
 nobody strips a prefix by hand. `Saves` keeps the one it was pointed at when the project was
 opened, so the periodic flush and the close hook -- neither of them in the component tree -- have

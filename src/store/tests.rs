@@ -162,6 +162,16 @@ fn a_state_directory_can_be_given_and_an_empty_one_is_not_given() {
     // in whatever directory the app was started from.
     assert_eq!(given_base(Some("".into())), None);
     assert_eq!(given_base(None), None);
+
+    // A relative one is taken against the directory the app was started from, once: a path
+    // the store hands out has to come back through `Store::path` unchanged.
+    let relative = given_base(Some("state".into())).expect("a relative directory is given");
+    assert_eq!(
+        relative,
+        std::env::current_dir().expect("a directory").join("state")
+    );
+    let store = Store::at(&relative);
+    assert_eq!(store.path(store.projects()), store.projects());
 }
 
 /// The join and its inverse are one rule: what [`Store::path`] made absolute comes back as

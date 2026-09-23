@@ -98,8 +98,18 @@ fn main() {
     // here rather than in the app so that a path that is not a project can be answered on
     // the command line it came from and the window never opens -- a windowed program that
     // starts and says nothing has said nothing.
+    //
+    // Made absolute here, lexically: a relative path is taken against the store by every
+    // save and by the recent list, so `app.avproj` would be read from here and written
+    // under the store.
     let opening = match std::env::args_os().nth(1).map(std::path::PathBuf::from) {
-        Some(path) if project::is_project_file(&path) => Some(path),
+        Some(path) if project::is_project_file(&path) => match std::path::absolute(&path) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                eprintln!("{}: {error}", path.display());
+                return;
+            }
+        },
         Some(path) => {
             eprintln!("{}: not a project file", path.display());
             return;
