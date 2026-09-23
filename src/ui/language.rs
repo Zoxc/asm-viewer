@@ -593,8 +593,8 @@ pub(crate) struct Talking(pub(crate) State<Language>);
 /// Whether an answer naming `run` is about the server the app still has. One whose run
 /// has moved on answers a question nobody has any more, and is dropped.
 ///
-/// Only for the answers that carry no [`Ticket`]: one that does is matched against the
-/// ticket whoever is waiting holds, and that carries the run.
+/// An answer carrying a [`Ticket`] is taken as naming nothing instead, so whoever still
+/// holds its question gives up on it.
 ///
 /// A function so the read ends with it: every caller writes the state this was read from,
 /// and a guard held across that write panics.
@@ -736,12 +736,16 @@ pub(crate) fn use_language_with(
                 write_if(language, |held| held.failed(run, why.to_string()));
             }
             LspAnswer::Hovered { ticket, said } => {
-                // No run check of its own: the ticket carries the run, so an answer to a
-                // question nobody holds lands on nobody -- and so does a failure named
-                // for a server that has moved on (`Language::failed`).
+                // An answer from a server that has been stopped is taken as nothing: its
+                // question can still be held, and a server can write its answer before
+                // the stop reaches it.
                 //
                 // A name the server had nothing to say about draws no box, and is no
                 // question to put again.
+                let said = match is_run(language, ticket.run) {
+                    true => said,
+                    false => Ok(None),
+                };
                 let why = match said {
                     Ok(said) => {
                         write_if(hover, |waiting| {
@@ -763,11 +767,13 @@ pub(crate) fn use_language_with(
                 write_if(language, |held| held.failed(ticket.run, why.to_string()));
             }
             LspAnswer::Answered { ticket, reply } => {
-                // An answer from a server that has been stopped is an answer to nobody,
-                // and the ticket says so: it carries the run, and no question of a run
-                // that has moved on is still held. Nor is a failure named for that server
-                // (`Language::failed`), which is why there is no run check here.
-                //
+                // An answer from a server that has been stopped is taken as nothing, as a
+                // hover's is: whoever still holds its question gives up on it. The project
+                // may have been left since, and the answer is about that one.
+                let reply = match is_run(language, ticket.run) {
+                    true => reply,
+                    false => reply.emptied(),
+                };
                 // Whoever asked takes the answer, and gives up on it where there is none.
                 // The reply's own shape says which of them, so neither can be handed the
                 // other's. An answer naming nowhere is an answer: the click was a
@@ -829,29 +835,25 @@ pub(crate) fn use_language_with(
         let open = proj.read();
         (open.file.clone(), open.workspace(), *stay.read())
     });
-    // **The directory is what a change is judged by**: both paths are watched and only one
-    // of them is what a server reads. A directory it is no longer over ends it, and the
-    // settings go with it, having been that directory's. The file moving on its own is
-    // Save and nothing else -- the same tree, the same settings -- so the server stays.
-    // Stopping there threw away a server that had read a whole project for a gesture about
-    // where a `project.toml` is kept.
+    // **The server is the project's.** Leaving the project, which only the `Stay` says,
+    // stops it even where the next project is over the same directory: that project may
+    // name another program, and a question asked in the one left must not be answered in
+    // it. The next project starts nothing of its own, as opening it fresh would not.
     //
-    // The file is watched for the two things only it can say. A directory typed into the
-    // box with the file where it was is the reader pointing *this* project somewhere else,
-    // and the agreement was to the old place, so it goes; a project arriving brings its own
-    // answer with it, out of its own session, and that answer is its own to give. And a
-    // project arriving over the directory the last one's server is still reading stops it
-    // where it has not agreed: the agreement is one project's, and a server running for a
-    // project that never gave one is what the prompt is there to prevent.
+    // Within one project, **the directory is what a change is judged by**. A directory it
+    // is no longer over ends the server, and the settings go with it, having been that
+    // directory's. The file moving on its own is Save and nothing else -- the same tree,
+    // the same settings -- so the server stays. Stopping there threw away a server that
+    // had read a whole project for a gesture about where a `project.toml` is kept.
     //
-    // The mount is neither: what it mounts with is the reopened project, the restore being
-    // an earlier hook of the same render, so an agreement read out of `project.toml`
-    // survives the launch that read it.
+    // The agreement is judged by both paths. A directory typed into the box with the file
+    // where it was is the reader pointing *this* project somewhere else, and the agreement
+    // was to the old place, so it goes; a project arriving brings its own answer with it,
+    // out of its own session, and that answer is its own to give.
     //
-    // An unanswered question goes whenever the project is left, which only the `Stay`
-    // says: a stop takes it with it, but a project arriving over the same directory with
-    // an agreement of its own stops nothing, and "Start it" would then run the program
-    // the last project named.
+    // The mount is no change at all: what it mounts with is the reopened project, the
+    // restore being an earlier hook of the same render, so an agreement read out of
+    // `project.toml` survives the launch that read it.
     //
     // The memo is read **in the deps and not in the render**, which is what subscribes the
     // effect to the two paths and leaves the root subscribed to neither: the box the
@@ -859,9 +861,7 @@ pub(crate) fn use_language_with(
     use_on_change(move || places.read().clone(), {
         let jobs = jobs.clone();
         move |before, (file, directory, stay): &(Option<PathBuf>, Option<PathBuf>, Stay)| {
-            if before.is_some_and(|(_, _, was)| was != stay) {
-                decline_start(language);
-            }
+            let left = before.is_some_and(|(_, _, was)| was != stay);
             let elsewhere = !before.is_some_and(|(_, was_directory, _)| was_directory == directory);
             if elsewhere {
                 // Read again here, where a directory arrives, so the answer is in hand
@@ -872,10 +872,8 @@ pub(crate) fn use_language_with(
                     jobs.send(LspJob::ReadSettings { directory });
                 }
             }
-            // Bound to a `let` of its own: the write at the foot is to the state this was
-            // read from.
-            let agreed = proj.peek().trusted;
-            if elsewhere || !agreed {
+            // A stop takes an unanswered question about starting one with it.
+            if left || elsewhere {
                 stop_server(language, &jobs);
             }
             let moved = before.is_some_and(|(was_file, was_directory, _)| {

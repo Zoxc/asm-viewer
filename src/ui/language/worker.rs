@@ -124,6 +124,17 @@ pub(crate) enum Reply {
     Listed(Result<references::References, lsp::Failure>),
 }
 
+impl Reply {
+    /// The same kind of reply, naming nothing: what an answer from a server that has been
+    /// stopped is taken as.
+    pub(crate) fn emptied(self) -> Reply {
+        match self {
+            Reply::Followed(_) => Reply::Followed(Ok(Vec::new())),
+            Reply::Listed(_) => Reply::Listed(Ok(references::References::default())),
+        }
+    }
+}
+
 /// The answer to `want`, out of what the server said. The one place the shape of an
 /// answer is decided, and it is decided by the question.
 ///

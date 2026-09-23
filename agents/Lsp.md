@@ -59,15 +59,17 @@ earlier hook of the same render. So the effect is handed what it last saw beside
 sees now (`use_on_change`, `agents/UI.md`), and clears only where the file stayed and the
 directory moved.
 
-**The server stops by the directory and not by the project.** The directory is what it
-reads and what the settings are read from, so one it is no longer over ends it and the
-settings go with it; a file that moved on its own is neither. That file is Save
-(`ask_where_to_save`, the only thing that puts a project somewhere else while the tree
-stays), and stopping there threw away a server that had read a whole project for a gesture
-about where a `project.toml` is kept. What the file alone does still stop is a project
-arriving over the directory the last one's server is reading **without having agreed** to
-one itself: the agreement is one project's, and a server running for a project that never
-gave one is what the prompt is there to prevent.
+**The server belongs to the project.** Leaving the project stops it, even for a project
+over the same directory, and the next project starts nothing of its own, as opening it fresh
+would not. Another project may name another program, and it has its own agreement to give;
+and a question asked in the project left must not be answered in the next one. Only the
+`Stay` says a project was left: the two paths cannot, since the next project can have the
+same directory. Within one project the directory is what counts. One the server is no longer
+over ends it, and the settings go with it, both being read from that directory; a file that
+moved on its own is neither. That file is Save (`ask_where_to_save`, the only thing that
+puts a project somewhere else while the tree stays, and it does not move the `Stay`), and
+stopping there threw away a server that had read a whole project for a gesture about where
+a `project.toml` is kept.
 
 It sees those two paths through a **memo** rather than reading the project at the root, and
 the `Stay` beside them (`agents/Sidebar.md`).
@@ -82,10 +84,9 @@ that actually starts one; so neither the top bar's control nor the Project view'
 grow a path around it. The question holds the directory and program it named rather than
 working them out again when it is answered: what was agreed to is what was asked about, not
 whatever the directory box says by then. Declining remembers nothing -- the answer was to
-that press -- and a stop clears an unanswered question along with the server. So does
-**leaving the project**, which only the `Stay` says: a project arriving over the same
-directory with an agreement of its own stops nothing, and the question it left up ran the
-program the last project named on "Start it".
+that press -- and a stop clears an unanswered question along with the server. **Leaving the
+project** is a stop, so it clears one too; left up, "Start it" ran the program the last
+project named.
 
 `TrustPrompt` draws it **at the root, under the top bar**, and not in the Project view's own
 section beside the other Start button. The control is pressed from wherever the reader is,
@@ -577,11 +578,15 @@ and `Hover` jobs carry and their answers copy back. `Follow`, `Located` and `Hov
 keep the ticket of the question they are waiting for, so "is this mine" is `== ticket` in
 all three and neither half can be compared without the other. `worth_doing` drops the
 duplicates still queued; the ticket is what makes an answer to a question the worker had
-already taken, or to a server that has been restarted since, land on nobody.
+already taken land on nobody.
 
-Which is also why those two answers are **not** run-checked at the root: the check would
-be the ticket's run compared twice. The answers that carry no ticket still are, through
-`is_run` -- a file's names, and a file the server has just been told about.
+A ticket does not say the server is still the one the app has, so those two answers are
+**run-checked at the root** as well. A question asked before a stop is held until an
+answer comes, and a server can write its answer before the stop reaches it; unchecked,
+that answer landed in the project the reader had switched to. One from a server that has
+been stopped is taken as naming nothing, so the asker gives up on its question. The
+answers that carry no ticket are checked through the same `is_run` and dropped -- a file's
+names, and a file the server has just been told about.
 
 Both asks take the run from `current`: one `peek` says whether there is a server and
 which, and a `u64` comes back. A function and not a line in each, because the state holds

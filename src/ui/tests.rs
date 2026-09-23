@@ -11405,6 +11405,65 @@ fn a_references_question_a_broken_server_never_answers_says_there_are_none() {
     );
 }
 
+/// **An answer the last project's server gives after the switch lands on nobody.** Its
+/// question was asked in the project left, and the server is stopped with it; but a
+/// server can have written its answer before the stop reached it, and that answer still
+/// carries the ticket the panel holds. The panel says there are none rather than list the
+/// last project's places in this one.
+#[test]
+fn an_answer_from_the_project_left_lists_nothing() {
+    let (file, _directory) = calling_file("switched");
+    let (release, released) = async_channel::unbounded::<()>();
+    let place = lsp::Place {
+        file: file.to_path_buf(),
+        line: 2,
+        columns: 12..18,
+    };
+    let (mut test, roots, asks) = mount_linking(
+        move |job: LspJob| match job {
+            LspJob::Ask { ticket, want, .. } => {
+                // Held until the project has been left.
+                let _ = released.recv_blocking();
+                Some(LspAnswer::Answered {
+                    ticket,
+                    reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
+                })
+            }
+            _ => None,
+        },
+        file.clone(),
+    );
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+
+    let call = word_point(&test, "helper");
+    right_click(&mut test, call);
+    let entry = centre_of(&test, "Find references to helper");
+    press_at(&mut test, entry);
+    assert!(next_ask(&mut test, &asks).is_some(), "nothing was asked");
+
+    clear_project(states);
+    settle(&mut test);
+    let _ = release.send_blocking(());
+    pump(&mut test, |_| roots.located.peek().pending().is_none());
+
+    let count = roots
+        .located
+        .peek()
+        .found
+        .as_ref()
+        .and_then(Found::places)
+        .map(references::References::count);
+    assert_eq!(count, Some(0), "the last project's answer was listed");
+}
+
 /// With no server there are no links, so there is no name to ask about and the menu
 /// offers nothing: a question is not what starts a server.
 #[test]
@@ -33394,10 +33453,12 @@ fn saving_the_project_leaves_its_server_running() {
     );
 }
 
-/// The other half of that: a project arriving over the directory the last one's server is
-/// reading stops it unless it has agreed to one itself. The agreement is a project's own.
+/// **Leaving a project stops its server, even for a project over the same directory.**
+/// The server is the project's: another project may name another program, and a question
+/// asked in the one left must not be answered in the next. The project arriving starts
+/// nothing of its own, as opening it fresh would not.
 #[test]
-fn a_project_that_has_not_agreed_stops_the_server_it_arrives_over() {
+fn switching_project_stops_the_server_over_the_same_directory() {
     let handle = process::Handle::to_nothing();
     let (mut test, roots, _asking, asks) = mount_server({
         let handle = handle.clone();
@@ -33416,25 +33477,35 @@ fn a_project_that_has_not_agreed_stops_the_server_it_arrives_over() {
     press_at(&mut test, the_control());
     until_server(&mut test, language, running);
 
-    // A project arriving is one write, `enter_project`'s: its file and the answer out of
-    // its own session together.
-    {
-        let mut open = proj.write();
-        open.file = Some(PathBuf::from("/store/two.avproj"));
-        open.trusted = false;
-    }
+    // The second project, over the same directory, agreed to and naming a program of its
+    // own, arrives the way a switch brings it.
+    clear_project(states);
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/store/two.avproj")),
+        workspace_text: "/p".to_owned(),
+        trusted: true,
+        language_server: "other-server".to_owned(),
+        ..OpenProject::default()
+    });
     settle(&mut test);
 
     assert_eq!(language.read().state, Lsp::Off);
     assert!(
         handle.finished(),
-        "a project that has not agreed is being read all the same"
+        "the last project's server is still running"
     );
     assert_eq!(
         next_job(&asks),
         Some(AskedOfServer::Start(PathBuf::from("/p")))
     );
     assert_eq!(next_job(&asks), Some(AskedOfServer::Stop));
+    assert_eq!(next_job(&asks), None, "the next project started a server");
+    assert!(
+        proj.read().trusted,
+        "the switch took the new project's agreement"
+    );
+    let words = language.read().words(&proj.read().server(), a_directory());
+    assert_eq!(words, "Start other-server");
 }
 
 /// A question is only asked while a server is running: nothing about a question starts
@@ -34145,9 +34216,8 @@ fn agreeing_starts_the_server_and_the_project_keeps_the_answer() {
     assert!(proj.read().trusted);
 }
 
-/// **A question about starting a server goes with the project it was asked in.** A project
-/// arriving over the same directory with an agreement of its own stops nothing, so the
-/// question stayed up, and "Start it" ran the program the last project named.
+/// **A question about starting a server goes with the project it was asked in.** Left up,
+/// "Start it" ran the program the last project named.
 #[test]
 fn the_trust_prompt_goes_with_its_project() {
     let (mut test, roots, _asking, _asks) = mount_server(|_: LspJob| None);
