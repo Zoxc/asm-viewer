@@ -32687,15 +32687,23 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
 /// put there.
 #[test]
 fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
-    let (mut test, roots, _asking, _asks) = mount_project(|_job: BuildJob| {
+    let (mut test, roots, _asking, _asks) = mount_project(|job: BuildJob| {
         BuildAnswer::Read(Manifest {
-            path: None,
+            path: Some(job.directory.join("Cargo.toml")),
             profiles: None,
             debug_lines: true,
             edit_refused: None,
         })
     });
     let states = roots.states;
+    // A directory with a manifest in it, which is what puts the artifact rows on screen.
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/store/a.avproj")),
+        workspace_text: "/work/app".to_owned(),
+        ..OpenProject::default()
+    });
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
 
     // A target of its own per artifact, because the row draws its target beside the path
     // and the path is also the tooltip's text: the target is the one label that names a
@@ -32716,14 +32724,9 @@ fn an_artifact_rows_hover_goes_with_its_key_and_not_its_slot() {
     // What a row draws to the right of the path, and what one is found by below.
     let about = |path: &Path| format!("{} bin", path.display());
 
-    // No directory, so nothing is read and the build state is what is written here: a
-    // manifest, which is what puts the artifact rows on screen, and the two targets.
+    // The two targets, written as a finished build would leave them.
     let mut build = states.build;
-    {
-        let mut held = build.write();
-        held.manifest.path = Some(PathBuf::from("/work/app/Cargo.toml"));
-        held.built = Some(Arc::new(run([&one, &two])));
-    }
+    build.write().built = Some(Arc::new(run([&one, &two])));
     settle(&mut test);
 
     let second = centre_of(&test, &about(&two));
@@ -32918,6 +32921,37 @@ fn the_manifest_is_read_again_for_a_project_over_the_same_directory() {
     clear_project(states);
     proj.set(over("/store/b.avproj"));
     pump(&mut test, |_| states.build.peek().manifest.path.is_some());
+}
+
+/// **Emptying the Directory box takes the manifest it read with it.** An empty box asks the
+/// worker nothing, so the Cargo section went on naming the last directory's `Cargo.toml`,
+/// its profile and its offer to turn the debug lines on, under a project with no directory.
+#[test]
+fn an_emptied_directory_forgets_its_manifest() {
+    let (mut test, roots, _asking, _asks) = mount_project(|job: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: Some(job.directory.join("Cargo.toml")),
+            profiles: None,
+            debug_lines: false,
+            edit_refused: None,
+        })
+    });
+    let states = roots.states;
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/store/a.avproj")),
+        workspace_text: "/work/app".to_owned(),
+        ..OpenProject::default()
+    });
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
+
+    proj.write().workspace_text = String::new();
+    settle(&mut test);
+    assert!(
+        states.build.peek().manifest.path.is_none(),
+        "the manifest of a directory the project no longer has is still named"
+    );
+    assert!(label_area(&test, "No directory").is_some());
 }
 
 /// A build is the app's one word that the files under the project's directory have

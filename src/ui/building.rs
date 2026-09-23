@@ -91,9 +91,10 @@ impl Builds {
         self.built.as_deref().and_then(cargo::Run::refusal)
     }
 
-    /// Take what the worker read of the manifest. Whether anything changed, so the hook
-    /// writes only then ([`write_if`]).
-    fn read(&mut self, said: Manifest) -> bool {
+    /// Take what the worker read of the manifest, or [`Manifest::default`] where there is
+    /// no directory to read one in. Whether anything changed, so the caller writes only
+    /// then ([`write_if`]).
+    pub(crate) fn read(&mut self, said: Manifest) -> bool {
         if self.manifest == said {
             return false;
         }

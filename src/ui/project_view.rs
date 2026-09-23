@@ -466,10 +466,19 @@ impl Component for CargoSection {
         // cheaply, `files_view`'s own bargain. And again in every project: a switch
         // empties `Builds` and drops a read still on its way, and the page can stay up
         // across one to a project over the same directory.
+        // A box emptied asks nothing, and what the last directory's manifest said goes: it
+        // is no longer about this project.
         use_side_effect_with_deps(&(directory.clone(), profile, stay), {
             let jobs = jobs.clone();
             move |(directory, profile, _): &(Option<PathBuf>, Profile, Stay)| {
                 let Some(directory) = directory.clone() else {
+                    // Asked before it is written: a write notifies whether or not it
+                    // changes anything.
+                    let held = build.peek().manifest != Manifest::default();
+                    if held {
+                        let mut build = build;
+                        build.write().read(Manifest::default());
+                    }
                     return;
                 };
                 jobs.send(BuildJob {
