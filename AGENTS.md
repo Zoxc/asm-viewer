@@ -116,7 +116,7 @@ command.
   object was parsed from. Also `covering`, the one search an address is looked up in a list
   of ranges with.
 - `crates/analysis/src/extent.rs` — how many bytes of code a symbol is: the end its unwind
-  entry states, an ELF's declared size, or the smaller of the debug info's and the estimate.
+  entry states, an ELF's declared size, the debug info's, or the estimate.
 - `crates/analysis/src/parse.rs` — one object file read into an `Object`: its sections and
   where each is placed, its symbols, and the code it declares outside its symbol table.
 - `crates/analysis/src/sections.rs` — the two rules the parse and the DWARF loader both follow:

@@ -259,6 +259,48 @@ fn a_derivation_reaching_a_megabyte_is_cut_off() {
     assert_eq!(huge.data_in(&object).map(<[u8]>::len), Some(1 << 20));
 }
 
+/// The cap is the estimate's, and the debug info's extent is not measured against it.
+/// `huge` is a megabyte and a half by DWARF, and the next symbol is two megabytes on.
+#[test]
+fn a_subprogram_longer_than_the_cap_is_not_capped() {
+    let huge = vec![0x90u8; 2 << 20];
+    let object = parse(&elf_x86_64_with_dwarf(DwarfFixture {
+        comp_dir: "/src",
+        files: &["main.c"],
+        sections: &[DwarfSection {
+            name: None,
+            symbols: &[
+                TextSymbol {
+                    name: "huge",
+                    bytes: &huge,
+                },
+                TextSymbol {
+                    name: "next",
+                    bytes: SECOND,
+                },
+            ],
+            rows: &[DwarfRow {
+                address: 0,
+                file: 0,
+                line: 1,
+                column: 0,
+            }],
+            length: huge.len() as u64 + 2,
+            subprograms: &[(0, 3 << 19)],
+            base_symbol: Some(0),
+        }],
+        unit_ranges: UnitRanges::Relocated,
+    }));
+
+    let huge = named(&object, "huge");
+    assert_eq!(huge.debug_extent(&object), Some(3 << 19));
+    assert_eq!(
+        huge.extent(&object)
+            .map(|extent| (extent.bytes, extent.capped)),
+        Some((3 << 19, false))
+    );
+}
+
 /// The symbol table's own answer, taken before the debug info is opened. `first` declares
 /// six bytes where DWARF says twelve and the next symbol is ten away: the declaration wins,
 /// and the walk that would have said twelve is what it spares.

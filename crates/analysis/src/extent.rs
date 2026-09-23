@@ -1,14 +1,14 @@
 //! How many bytes of code a symbol is ([`SymbolData::extent`]), and the estimate it falls
-//! back on. Three answers, in order:
+//! back on. Four answers, in order:
 //!
 //! 1. **The end the file's own unwind table states**, where an entry covers the address
 //!    ([`CodeSection::unwind`](crate::CodeSection::unwind)). Neither the estimate nor its
 //!    cap bounds it, and the debug info is not asked.
 //! 2. **Then the size the file declares**, where the format makes that a function's length:
 //!    an ELF `st_size`, and no other format's.
-//! 3. **Else the smaller** of the extent the debug info declares for the function and
-//!    [`SymbolData::estimate_size`], the bytes to the next symbol or the section's end. Each
-//!    bounds the other in a case the other gets wrong.
+//! 3. **Then the extent the debug info declares** for the function.
+//! 4. **Else [`SymbolData::estimate_size`]**, the bytes to the next symbol or the section's
+//!    end.
 //!
 //! A length the file states is clamped to the next symbol, since a listing decodes one
 //! stretch per symbol. Only the estimate is capped, at [`MAX_DERIVED_SIZE`], and it says so
@@ -128,7 +128,7 @@ impl SymbolData {
         self.size.filter(|_| format == BinaryFormat::Elf)
     }
 
-    /// How many bytes of code this symbol is. Three answers, in order.
+    /// How many bytes of code this symbol is. Four answers, in order.
     ///
     /// **The end the file's own unwind table states**, where an entry covers the address
     /// ([`unwind_extent`](Self::unwind_extent)): the image's statement, to its loader, of
@@ -141,12 +141,13 @@ impl SymbolData {
     /// spares the debug info a walk that would only agree with it. On an ELF built without
     /// unwind tables that is every function its symbol table sizes.
     ///
-    /// **Else the smaller** of the extent the debug info declares for the function (DWARF's
-    /// `DW_AT_low_pc`/`DW_AT_high_pc`, a PDB procedure's length) and
-    /// [`estimate_size`](Self::estimate_size), because each bounds the other in a case the
-    /// other gets wrong. The estimate over-reaches into padding and over a function with no
-    /// symbol; the declared extent over-reaches when two symbols share one function (an
-    /// alias, an assembler label, a split cold part), since it describes the *function*.
+    /// **Then the extent the debug info declares** for the function (DWARF's
+    /// `DW_AT_low_pc`/`DW_AT_high_pc`, a PDB procedure's length), clamped to the next symbol
+    /// like the two above. The clamp matters most here: the extent describes the *function*,
+    /// and two symbols can share one (an alias, an assembler label, a split cold part).
+    ///
+    /// **Else [`estimate_size`](Self::estimate_size)**, which over-reaches into padding and
+    /// over a function with no symbol, and is the only answer that is capped.
     ///
     /// Whichever answers, an extent running off the end of the address space is no extent:
     /// a table stating one describes a range that does not exist, and every caller here
@@ -165,7 +166,7 @@ impl SymbolData {
         })
     }
 
-    /// The three answers [`extent`](Self::extent) chooses among, before it bounds them.
+    /// The four answers [`extent`](Self::extent) chooses among, before it bounds them.
     ///
     /// A length the file states is clamped to the next symbol. A listing is one stretch per
     /// symbol and decodes each as its symbol's extent, so a length reaching past the next
@@ -182,15 +183,10 @@ impl SymbolData {
         if let Some(bytes) = self.declared_extent(object.format) {
             return Some(clamp(bytes));
         }
-        let estimate = derived.map(cap);
-        let stated = |bytes| Extent {
-            bytes,
-            capped: false,
-        };
-        match (self.debug_extent(object).map(stated), estimate) {
-            (Some(declared), Some(estimate)) if estimate.bytes < declared.bytes => Some(estimate),
-            (declared, estimate) => declared.or(estimate),
+        if let Some(bytes) = self.debug_extent(object) {
+            return Some(clamp(bytes));
         }
+        derived.map(cap)
     }
 }
 

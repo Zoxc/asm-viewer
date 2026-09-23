@@ -226,7 +226,7 @@ symbol so the subtraction could meet `st_value`, which put five addresses in two
 lines. Only the count of bytes leaves, and that is the same number either way. Declared sizes are
 frequently absent in ELF/COFF, which is why the derivation exists at all. It is never 0: the symbol
 is inside the section's bytes, and the next symbol and the section's end are both past it.
-`SymbolData::extent` is the answer that is actually used, and has three
+`SymbolData::extent` is the answer that is actually used, and has four
 answers in order. First, **the end the unwind table states**, where an entry covers the address,
 whatever named the symbol. That is the image's own statement, to its loader, of the very bytes the
 unwinder covers, so neither the estimate nor its cap bounds it and the debug info is not asked. Only
@@ -244,11 +244,13 @@ allowlist of one and a format joins it on evidence. The clamp catches an over-re
 hand-written assembly with a `.size` past the next label — while one that is too small stands, as an
 unwind entry's stated end and a `DW_AT_high_pc` already do. What this is for is the ELF with a
 symbol table and no `.eh_frame`, built `-fno-asynchronous-unwind-tables`: every function of it used
-to cost a DIE walk for an answer its symbol table had already stated. **Else the smaller** of the
-extent the debug info declares (a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc`, or a PDB
-procedure's length) and the estimate. The estimate over-reaches into padding, but the debug info's
-extent describes the *function*, so a second symbol inside one function (an alias, an assembler
-label, a split cold part) would otherwise swallow the next function. Whichever of the three
+to cost a DIE walk for an answer its symbol table had already stated. Then **the extent the debug
+info declares** (a `DW_TAG_subprogram`'s `DW_AT_low_pc`/`DW_AT_high_pc`, or a PDB procedure's
+length), clamped the same way. The clamp matters most here: the extent describes the *function*,
+so a second symbol inside one function (an alias, an assembler label, a split cold part) would
+otherwise swallow the next function. It is not measured against the capped estimate: it once was,
+and a function the debug info put at 1.5 MiB, with the next symbol 2 MiB on, came back as 1 MiB
+and capped. **Else the estimate**, which over-reaches into padding. Whichever of the four
 answered, an extent whose end runs off the top of the address space is dropped: `addr2line` hands a
 subprogram's declared length back as it was written, and every caller here reads
 `address..address + extent`. The answer is an `Extent`: the number, and whether the number is the
