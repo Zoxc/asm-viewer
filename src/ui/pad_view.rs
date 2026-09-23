@@ -1047,11 +1047,12 @@ impl Component for PadDetails {
         let pad = use_consume::<Pad>().0;
         let store = use_consume::<Storage>().0;
 
-        let (shown, package, verdict) = {
+        let (shown, opened, package, verdict) = {
             let pads = pad.read();
             let state = pads.state();
             (
                 pads.shown().clone(),
+                state.opened(),
                 package_path(&store.peek(), pads.shown()),
                 state.verdict(),
             )
@@ -1071,6 +1072,9 @@ impl Component for PadDetails {
                     |pads: &mut Pads| &mut pads.state_mut().scratchpad.name,
                 ))
                 .compact()
+                // Dead until the disk has been read: its answer replaces the whole pad, so
+                // a name typed before it lands would be dropped without a word.
+                .enabled(opened)
                 // The label the list is drawing, so an empty box says what the pad is
                 // called elsewhere rather than a word that is true of any of them -- and
                 // typing replaces it, where a seeded name would have to be cleared first.
@@ -1104,7 +1108,7 @@ impl Component for DependencyList {
         drew_piece();
         let mut pad = use_consume::<Pad>().0;
 
-        let (rows, unsaved, refusal) = {
+        let (opened, rows, unsaved, refusal) = {
             let pads = pad.read();
             let state = pads.state();
             // The problems are the list's -- `Repeated` is about two rows -- so they are
@@ -1126,7 +1130,12 @@ impl Component for DependencyList {
                     .into()
                 })
                 .collect();
-            (rows, state.unsaved.clone(), state.refusal().map(text_block))
+            (
+                state.opened(),
+                rows,
+                state.unsaved.clone(),
+                state.refusal().map(text_block),
+            )
         };
 
         section(
@@ -1135,7 +1144,9 @@ impl Component for DependencyList {
                 HeadingButton {
                     icon: ("plus", lucide::plus()),
                     text: "Add",
-                    live: true,
+                    // Dead until the disk has been read, as the Name box is. Nor can a row
+                    // be there before then to type in: the pad is held with none.
+                    live: opened,
                     press: EventHandler::new(move |_| {
                         pad.write().state_mut().scratchpad.add_dependency("", "");
                     }),

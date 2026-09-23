@@ -433,7 +433,10 @@ in a second place, and now per pad: the app boots holding `Scratchpad::default` 
 own source arrives a thread later, so a save in between would put the default over a scratchpad
 someone was keeping. There is nothing to compare against until that answer seeds the baseline,
 which is the whole of what an absent one means, so a run in which nothing is typed writes nothing
-and a scratchpad nobody opened leaves no directory behind. Startup is one question above that,
+and a scratchpad nobody opened leaves no directory behind. **Nor is anything typed before then**:
+the answer replaces the whole pad with the disk's, so a name or a row typed while the read waited
+behind another pad's build was dropped without a word. The Name box and Add are dead until the pad
+is open, as Build is, and a pad is held with no rows, so there is no row box to type in. Startup is one question above that,
 `PadJob::List`, asked on mount, whose answer says which pad to open: the front of the order, or,
 when there is no order at all, the pad the app booted holding, opened like any other so that
 `opened_in` seeds its baseline without writing anything. `Scratchpad::write` refuses outright

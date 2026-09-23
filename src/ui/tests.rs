@@ -17233,6 +17233,53 @@ fn a_pad_that_will_not_load_is_not_built_over_either() {
     assert!(asks.is_empty(), "a pad that would not load was built over");
 }
 
+/// **Nor is anything typed into a pad before its disk has been read.** The Name box and Add
+/// write into the pad's model, and the answer, when it lands, replaces that model with what
+/// the disk holds: an edit made in between would be thrown away without a word. So both
+/// are dead until the pad is open, as Build is. A pad that will not load stands in for one
+/// whose read has not landed yet: neither is open.
+#[test]
+fn a_pad_not_read_yet_takes_no_edits() {
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(Vec::new()),
+            PadJob::New => unreachable!("this test has one pad"),
+            PadJob::Delete(_) => unreachable!("this test deletes nothing"),
+            PadJob::Open {
+                scratchpad,
+                holding,
+            } => PadAnswer::Unopened {
+                holding,
+                pad: scratchpad.id().clone(),
+                failure: Failure::Unreadable,
+            },
+            PadJob::Save(_) => unreachable!("a pad that is not open is not written"),
+            PadJob::Build(_) => unreachable!("this test never builds"),
+            PadJob::Run { .. } => unreachable!("this test never runs"),
+        });
+    let pad = roots.pad;
+
+    pump(&mut test, |_| pad.peek().state().unsaved.is_some());
+    assert!(!pad.peek().state().opened());
+
+    // Into the Name box, which sits to the right of its label.
+    let name = label_area(&test, "Name").expect("the Name row is drawn");
+    press_at(&mut test, (f64::from(name.max_x()) + 30., middle(name).1));
+    settle(&mut test);
+    test.write_text("typed");
+    settle(&mut test);
+
+    let add = centre_of(&test, "Add");
+    press_at(&mut test, add);
+    settle(&mut test);
+
+    assert_eq!(pad.peek().state().scratchpad.name, "");
+    assert!(
+        crate_names(pad).is_empty(),
+        "a row was added to a pad not read yet"
+    );
+}
+
 /// **A bare cursor move copies nothing.** The editor writes through its `Writable` for a
 /// cursor move as much as for an edit -- which is what `use_driving_cursor` relies on -- so
 /// the mirror runs either way, and what keeps a move free is the comparison. It compares the
