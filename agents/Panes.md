@@ -1447,7 +1447,9 @@ through matches would otherwise yank the pane beside it to each one in turn. Whi
 is `find::step`: the index the bar is on wins while the pane's run is still that hit, and the caret
 wins otherwise -- before a first step, and once a click or a key has moved the run -- so a find
 starts from where the reader is looking rather than from the top or the last match. The bar's index
-alone went on from the last match after a click, nothing clearing it but a new pattern. **Which way it goes is
+alone went on from the last match after a click, nothing clearing it but a new pattern. A step asked
+before the worker has answered waits for the answer, whose write wakes the step's effect again:
+typing a pattern and pressing Enter is one motion, and a step spent on no hits went nowhere. **Which way it goes is
 `find::Direction`**, not a `bool`: the ask the bar holds is an `Option<Direction>`, `None` for no step
 asked, and the two buttons, the `F3` pair and the walk through an object's code carry the same name.
 As an `Option<bool>` it left a reader at `Some(true)` to go and find out what true was.

@@ -29240,6 +29240,73 @@ fn f3_steps_the_find_bar_with_the_keyboard_still_in_the_pane() {
     assert_ne!(moved, landed, "the pane did not answer its own arrow key");
 }
 
+/// A find worker held on a gate until the test lets each question through.
+#[derive(Clone)]
+struct FindGate(Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>);
+
+/// The Assembly pane with a find worker that answers only once its gate opens.
+fn gated_find_harness() -> impl IntoElement {
+    let gate = use_consume::<FindGate>().0;
+    use_find_with(use_consume::<Looking>().0, move |ask| {
+        let _ = gate.lock().expect("the gate").recv();
+        find_work(ask)
+    });
+    listing_harness()
+}
+
+/// **A step asked before the answer comes is made when it comes.** Typing a pattern and
+/// pressing Enter at once is one motion, and the find worker has not answered by then.
+/// Fails on a step spent with no hits to step through: the pane stays where it was and
+/// the reader has to press Enter again.
+#[test]
+fn a_step_asked_before_the_answer_is_made_when_it_comes() {
+    let shown = shown_sum_to();
+    let document = asked_of(&shown.ask);
+    let (open, gate) = std::sync::mpsc::channel::<()>();
+    let gate = FindGate(Arc::new(std::sync::Mutex::new(gate)));
+    let (mut test, roots) = TestingRunner::new(
+        gated_find_harness,
+        (600., 600.).into(),
+        move |runner: &mut _| {
+            runner.provide_root_context(move || gate);
+            runner.provide_root_context(move || listing_states(shown))
+        },
+        1.,
+    );
+    let states = roots.states;
+    let marked = roots.doors.marked;
+    settle(&mut test);
+    let mnemonic = drawn_twice(&test);
+
+    open_find_bar(&mut test);
+    let at = find_at(&states, &document);
+    let finds = states.places.finds;
+    // The pattern in one write, so the worker is asked one question.
+    edit_find(finds, at, |bar| bar.filter.pattern = mnemonic.clone());
+    settle(&mut test);
+    test.press_key(Key::Named(NamedKey::Enter));
+    settle(&mut test);
+    assert!(
+        finds.peek().get(&at).hits().is_none(),
+        "the worker answered through its gate"
+    );
+
+    open.send(()).expect("the worker is waiting");
+    find_answered(&mut test, finds, at, &mnemonic);
+    settle(&mut test);
+    assert!(
+        finds.peek().get(&at).at.is_some(),
+        "the step asked before the answer was dropped"
+    );
+    let picked = marked.peek().assembly.clone().expect("the step's run");
+    let (from, to) = picked.chars.ends();
+    assert_eq!(
+        to.col - from.col,
+        mnemonic.len(),
+        "the run is not the match"
+    );
+}
+
 /// **A click since the last step is where the next one starts.** The bar remembers which
 /// hit the pane is on, and a step goes on from that only while the pane's run is still
 /// that hit; once the reader has clicked elsewhere, the step starts from the click, as the
@@ -29991,8 +30058,10 @@ fn a_step_on_a_bar_with_no_listing_is_left_where_it_is() {
         "the step the walk was to spend was spent here"
     );
 
-    // One over a listing, which this hook does spend -- hits or, as here, none.
+    // One over a listing, which this hook does spend -- hits or, as here with nothing
+    // typed, none, there being no answer to wait for.
     open_find(finds, at, None, Some(other_listing()));
+    edit_find(finds, at, |bar| bar.filter.pattern.clear());
     assert_eq!(step(&mut test), None, "a listing's own step was not spent");
 }
 

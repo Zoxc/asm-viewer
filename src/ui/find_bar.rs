@@ -156,7 +156,8 @@ pub(crate) struct Find {
     /// and a step reads it only while the pane's run is still that hit ([`find::step`]).
     pub(crate) at: Option<usize>,
     /// A step the bar has asked for and the pane has not made yet, and which way. Spent
-    /// by the list, which is what knows where its rows are and can scroll to one.
+    /// by the list, which is what knows where its rows are and can scroll to one, once
+    /// the answer it steps through has come.
     pub(crate) step: Option<Direction>,
     /// The caret the opening asked for, spent by the box once it is mounted.
     pub(crate) focus: bool,
@@ -190,18 +191,24 @@ impl Find {
         self.hunt = None;
     }
 
+    /// Whether an answer is owed about the listing and pattern asked about now: asked for
+    /// or still to be. A step asked meanwhile waits for it rather than finding no hits.
+    ///
+    /// Nothing typed marks nothing, so nothing is owed: an empty pattern is not a search
+    /// that finds everything (`Matcher::Everything`).
+    fn owed(&self) -> bool {
+        self.filter.asks() && self.listing.is_some() && self.hits().is_none()
+    }
+
     /// What a question is owed for, or `None` where the answer is already about it or one
     /// is in flight. No `pending` flag of its own: a listing is being searched exactly
     /// while it is wanted and neither the answer nor the ask is about it ([`Coded`]).
     fn pending(&self) -> Option<(Searchable, Filter)> {
-        // Nothing typed marks nothing, so there is nothing to ask: an empty pattern is
-        // not a search that finds everything (`Matcher::Everything`).
-        if self.filter.pattern.is_empty() {
+        if !self.owed() {
             return None;
         }
         let listed = self.listing.clone()?;
-        let about = About::of(&listed, &self.filter);
-        if self.asked.as_ref() == Some(&about) || self.hits().is_some() {
+        if self.asked.as_ref() == Some(&About::of(&listed, &self.filter)) {
             return None;
         }
         Some((listed, self.filter.clone()))
@@ -865,6 +872,11 @@ pub(crate) fn use_find_steps<R: FnMut(usize) + 'static>(
             let Some(direction) = bar.step.filter(|_| bar.listing.is_some()) else {
                 return;
             };
+            // A step asked before the answer came is left for the answer's write to wake
+            // this again, or the reader's Enter straight after typing would go nowhere.
+            if bar.owed() {
+                return;
+            }
             // Where the pane is: its run, or a caret at the top of the listing where there
             // is no run at all.
             let run = marked
