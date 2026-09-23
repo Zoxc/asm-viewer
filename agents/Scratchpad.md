@@ -397,8 +397,10 @@ what makes the reader's own switch draw the right text.
 jobs are one ordered queue, so a save queued ahead of the arriving pad's read lands ahead of it. A
 save left to the effect would not: the effect is woken by the change it writes out, so a click
 landing between the two would leave that change unwritten. `Pads::unsaved_change` is the one
-comparison behind every caller: the save effect, `show_pad` for the pad being left, and the mirror
-of the editor into the model, which saves an edit under the guard it writes it with. Every piece
+comparison behind every caller: the save effect, `show_pad` for the pad being left, the mirror
+of the editor into the model, which saves an edit under the guard it writes it with, and a build's
+answer, which saves the artifact it names -- the reader may be in another pad by then, and the
+effect saves only the pad on screen. Every piece
 of the page reads `Pads`, so each write draws all of them again, and a keystroke used to be three:
 the mirror's, the save's and the save's answer. It is one now, the answer writing only where it
 changes `PadState::unsaved`. A pad already read is shown

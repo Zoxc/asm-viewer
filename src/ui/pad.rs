@@ -343,11 +343,11 @@ impl Pads {
     /// What `name` owes the disk, with its baseline moved to it, or `None` where the disk
     /// already has what is on screen.
     ///
-    /// The one comparison, with three callers: the mirror, for an edit to the source; the
-    /// save effect, for any other change to the pad on screen; and a switch, for the pad
-    /// being left. The baseline moves to what is handed
-    /// back, so a reader who changes a row and changes it back writes again. Nothing is
-    /// owed by a pad whose disk copy has not been read yet ([`PadState::opened`]).
+    /// The one comparison, with four callers: the mirror, for an edit to the source; the
+    /// save effect, for any other change to the pad on screen; a switch, for the pad
+    /// being left; and a build's answer, for the artifact it made. The baseline moves to
+    /// what is handed back, so a reader who changes a row and changes it back writes again.
+    /// Nothing is owed by a pad whose disk copy has not been read yet ([`PadState::opened`]).
     ///
     /// **Ask [`PadState::unsaved`] first, under `peek`.** This takes `&mut Pads` and the
     /// save effect reads `Pads` to subscribe, so a guard taken for a keystroke that
@@ -1084,7 +1084,17 @@ pub(crate) fn use_scratchpad_with(
                 program,
                 directory,
             } => {
-                let taken = pad.write().built(&name, build, program);
+                // What the build made is a change to the pad, and it is saved here: the
+                // save effect saves only the pad on screen, and the reader may have moved
+                // to another while cargo ran. Under the same guard, so it is one write.
+                let (taken, saving) = {
+                    let mut pads = pad.write();
+                    let taken = pads.built(&name, build, program);
+                    (taken, taken.then(|| pads.unsaved_change(&name)).flatten())
+                };
+                if let Some(scratchpad) = saving {
+                    requests.send(PadJob::Save(scratchpad));
+                }
                 // The build wrote the package on its way, to the same `src/main.rs` as
                 // last time, so what a pane has read of this pad is the version before
                 // it. The directory is the one the build ran in.

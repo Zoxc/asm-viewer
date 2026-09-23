@@ -17918,6 +17918,72 @@ fn a_build_answering_for_a_deleted_pad_opens_nothing() {
     );
 }
 
+/// A build that lands while another pad is shown writes what it made into its own pad's
+/// package. The build wrote the package with the job's copy, which names the build before;
+/// the save effect saves only the pad on screen, and a switch only the pad being left. So
+/// the answer has to send the save, or a quit before going back opens the pad on an older
+/// program.
+#[test]
+fn a_build_landing_offscreen_saves_what_it_made() {
+    let artifact = fixture_artifact();
+    let (finish, waiting) = async_channel::bounded::<()>(1);
+    // Every save as the worker was handed it: the pad and the build its package names.
+    let (saving, saves) = async_channel::unbounded::<(String, Option<PathBuf>)>();
+    let (mut test, roots, asking, asks) =
+        mount_scratchpad(scratchpad_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing("two")]),
+            PadJob::Open {
+                scratchpad,
+                holding,
+            } => PadAnswer::Opened {
+                holding,
+                scratchpad: pad_on_disk(scratchpad),
+                program: None,
+            },
+            PadJob::Save(scratchpad) => {
+                let built = scratchpad.built.as_ref().map(|built| built.path.clone());
+                let _ = saving.send_blocking((scratchpad.id().as_str().to_owned(), built));
+                PadAnswer::Saved {
+                    pad: scratchpad.id().clone(),
+                    failure: None,
+                }
+            }
+            PadJob::Build(scratchpad) => {
+                let _ = waiting.recv_blocking();
+                PadAnswer::Built {
+                    pad: scratchpad.id().clone(),
+                    build: pad_built(fixture_artifact(), Vec::new()),
+                    program: read_program(&fixture_artifact(), scratchpad.digest()),
+                    directory: None,
+                }
+            }
+            _ => unreachable!("this test only lists, opens, saves and builds"),
+        });
+    let pad = roots.pad;
+
+    pump(&mut test, |_| pad.peek().state().opened());
+    let one = pad.peek().shown().clone();
+
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    request_build(pad, &jobs);
+    asked_until(&mut test, &asks, |job| matches!(job, Asked::Build(_)));
+
+    show_pad(pad, &jobs, pad_id("two"));
+    finish.send_blocking(()).expect("the build is waiting");
+    pump(&mut test, |_| {
+        pad.peek()
+            .get(&one)
+            .is_some_and(|state| !state.building && state.program.is_some())
+    });
+    settle(&mut test);
+
+    let saved: Vec<_> = std::iter::from_fn(|| saves.try_recv().ok()).collect();
+    assert!(
+        saved.contains(&(one.as_str().to_owned(), Some(artifact))),
+        "the build's artifact was never written into its pad's package: {saved:?}"
+    );
+}
+
 /// A pad's package is written to the same `src/main.rs` on every build, so a build that
 /// forgot nothing would leave every pane on the artifact drawing the pad as it was two
 /// builds ago. The root a build forgets is **the one the worker says it built in**: the
