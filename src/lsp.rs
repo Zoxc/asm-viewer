@@ -36,7 +36,6 @@
 //! offers, and a server that is indexing may take seconds to answer it; a stop must be
 //! over when it returns, and rust-analyzer has nothing to lose by being killed.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -50,6 +49,7 @@ use serde_json::{json, Value};
 
 use crate::chars;
 use crate::process::{self, Ended, Handle};
+use crate::uri::{path_of, uri_of};
 
 mod settings;
 
@@ -1544,76 +1544,6 @@ fn read_message(from: &mut impl BufRead) -> Result<Value, Failure> {
 /// `current_dir`, which the spawn resolves against the same working directory this does.
 fn rooted(directory: &Path) -> PathBuf {
     std::path::absolute(directory).unwrap_or_else(|_| directory.to_path_buf())
-}
-
-/// A path as the `file:` URI the protocol names files by.
-///
-/// Percent-encoded by hand rather than by a crate: what has to be escaped is every byte
-/// that is not unreserved, and a path is the only thing this app ever puts in a URI.
-fn uri_of(path: &Path) -> String {
-    let path = path.to_string_lossy();
-    let mut uri = String::from("file://");
-    // A Windows path starts with a drive letter and not with a separator, and the
-    // authority-less form needs the third slash either way.
-    if !path.starts_with('/') {
-        uri.push('/');
-    }
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
-                uri.push(byte as char)
-            }
-            b'\\' => uri.push('/'),
-            _ => uri.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    uri
-}
-
-/// The path a `file:` URI names, or nothing if it names something else.
-fn path_of(uri: &str) -> Option<PathBuf> {
-    let rest = uri.strip_prefix("file://")?;
-    // The path begins at the third slash. Anything between the second and the third is an
-    // authority, and that names a file on somebody else's machine.
-    if !rest.starts_with('/') {
-        return None;
-    }
-
-    let mut bytes = Vec::with_capacity(rest.len());
-    let mut characters = rest.bytes();
-    while let Some(byte) = characters.next() {
-        match byte {
-            b'%' => {
-                let (high, low) = (characters.next()?, characters.next()?);
-                let digits = [high, low];
-                let text = std::str::from_utf8(&digits).ok()?;
-                bytes.push(u8::from_str_radix(text, 16).ok()?);
-            }
-            byte => bytes.push(byte),
-        }
-    }
-
-    let path = String::from_utf8(bytes).ok()?;
-    Some(PathBuf::from(spelled(&path).as_ref()))
-}
-
-/// A decoded URI path as the platform it names spells one.
-///
-/// `/C:/x/y.rs` is how a Windows path comes back: both the leading slash and the
-/// separators are the URI's, where the app spells that file `C:\x\y.rs`. A
-/// [`Document::Source`](crate::document::Document) is compared as text and never
-/// canonicalised, so the two spellings are two tabs of one file.
-///
-/// The drive letter is what says a path is Windows', not a `cfg`, so the rule is the same
-/// everywhere and can be tested from either platform -- no Unix path begins with one, and
-/// one keeps its leading slash and every character after it.
-fn spelled(path: &str) -> Cow<'_, str> {
-    match path.as_bytes() {
-        [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => {
-            Cow::Owned(path[1..].replace('/', "\\"))
-        }
-        _ => Cow::Borrowed(path),
-    }
 }
 
 #[cfg(test)]

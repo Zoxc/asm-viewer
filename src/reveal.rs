@@ -174,7 +174,7 @@ fn attempts(path: &Path, folder: bool) -> Vec<Attempt> {
         false => "org.freedesktop.FileManager1.ShowItems",
     };
 
-    let uri = file_uri(path);
+    let uri = crate::uri::uri_of(path);
     // What the last resort opens. It can pick nothing out, so it opens the window each
     // call above ends at: a file's own folder, and a folder itself. `/` has no parent and
     // is its own.
@@ -280,30 +280,6 @@ fn attempts(path: &Path, folder: bool) -> Vec<Attempt> {
 #[cfg(not(any(unix, windows)))]
 fn attempts(_path: &Path, _folder: bool) -> Vec<Attempt> {
     Vec::new()
-}
-
-/// `path` as a `file://` URI.
-///
-/// A path here is bytes and not text, so it is encoded a byte at a time: everything
-/// outside RFC 3986's unreserved set, the separator apart, becomes `%XX`. What is left is
-/// letters, digits and `-._~/%`, which is why neither caller has to quote what it is
-/// given.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn file_uri(path: &Path) -> String {
-    use std::{fmt::Write, os::unix::ffi::OsStrExt};
-
-    let mut uri = String::from("file://");
-    for &byte in path.as_os_str().as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
-                uri.push(byte as char);
-            }
-            _ => {
-                let _ = write!(uri, "%{byte:02X}");
-            }
-        }
-    }
-    uri
 }
 
 #[cfg(test)]

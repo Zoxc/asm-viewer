@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     store::write_atomically,
+    uri,
     verdict::{counted, Verdict},
 };
 
@@ -310,17 +311,9 @@ fn simplified(path: &Path) -> Cow<'_, Path> {
     }
 
     match text.strip_prefix(r"\\?\") {
-        Some(rest) if drive(rest) => Cow::Borrowed(Path::new(rest)),
+        Some(rest) if uri::drive(rest.as_bytes()) => Cow::Borrowed(Path::new(rest)),
         _ => Cow::Borrowed(path),
     }
-}
-
-/// Whether `text` starts with a drive letter and a colon, ending there or at a separator.
-fn drive(text: &str) -> bool {
-    let text = text.as_bytes();
-    text.first().is_some_and(u8::is_ascii_alphabetic)
-        && text.get(1) == Some(&b':')
-        && matches!(text.get(2), None | Some(b'\\'))
 }
 
 /// The manifest in `directory`, or `None` when there is none to build.

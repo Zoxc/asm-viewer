@@ -226,6 +226,9 @@ command.
 - `src/lsp/settings.rs` — what a server is told about the project: what this app asks of
   every one, and the project's own `.vscode/settings.json` read and laid over it. The only
   part of the conversation that reads a file.
+- `src/uri.rs` — a path as a `file:` URI and back: the one encoder the language server and
+  the file manager call both use, the decoder, and `drive`, the rule saying a path is
+  Windows' by its drive letter, which `src/cargo.rs` follows too.
 - `src/references.rs` — the places a language server answered a question with, grouped
   under the file each is in and with the text of the line each is on: what the Locations
   panel draws.

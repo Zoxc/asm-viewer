@@ -23,37 +23,6 @@ fn args_for(path: &str, folder: bool, program: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
-#[test]
-fn a_file_uri_is_the_path_with_everything_reserved_encoded() {
-    assert_eq!(file_uri(Path::new("/tmp/a.rs")), "file:///tmp/a.rs");
-    assert_eq!(file_uri(Path::new("/a b/c.rs")), "file:///a%20b/c.rs");
-    assert_eq!(file_uri(Path::new("/-._~/x")), "file:///-._~/x");
-    // Not text: one byte in, three out, whatever the byte was.
-    assert_eq!(file_uri(Path::new("/é")), "file:///%C3%A9");
-}
-
-/// The URI goes inside a GVariant literal and beside a `dbus-send` type, and neither
-/// caller quotes it. It may not carry a character that would end either one.
-#[cfg(all(unix, not(target_os = "macos")))]
-#[test]
-fn a_file_uri_carries_nothing_that_would_need_quoting() {
-    let hostile = "/a '\"\\ ;$(x)\n/b%c";
-    let uri = file_uri(Path::new(hostile));
-    let plain = |c: char| c.is_ascii_alphanumeric() || "-._~/%:".contains(c);
-    assert!(uri.chars().all(plain), "{uri}");
-}
-
-/// A path that is not UTF-8 is still a path, and the encoder never sees text.
-#[cfg(all(unix, not(target_os = "macos")))]
-#[test]
-fn a_file_uri_encodes_a_path_that_is_not_text() {
-    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
-
-    let path = PathBuf::from(OsStr::from_bytes(b"/tmp/\xff.o"));
-    assert_eq!(file_uri(&path), "file:///tmp/%FF.o");
-}
-
 /// The D-Bus call names the file itself, since selecting it is the whole point; the
 /// fallback can only name the folder.
 #[cfg(all(unix, not(target_os = "macos")))]

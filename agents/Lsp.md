@@ -304,14 +304,23 @@ An answer that names no column at all is column 0 and not no place at all, the l
 what opens the file.
 
 **A path comes back spelled the way it went out.** The `file:` URI is written and read
-here by hand, and a round trip does not give back what it took: a URI's separator is `/`
-and its path carries a leading slash no drive letter has, so `C:\x\y.rs` goes out as
+by hand (`src/uri.rs`), and a round trip does not give back what it took: a URI's
+separator is `/` and its path carries a leading slash no drive letter has, so `C:\x\y.rs` goes out as
 `file:///C:/x/y.rs` and came back `C:/x/y.rs`. A `Document::Source` is compared as text and
 never canonicalised (`src/project.rs`), so on Windows every place followed through the
 server was a second tab of a file already open, with the trail, the positions and the
 bookmarks' `matching` split across the two. `path_of` puts the separators back. The drive
 letter is what says a path is Windows', not a `cfg`, so the rule is the same everywhere and
-is tested from either platform.
+is tested from either platform. It is `cargo.rs`'s rule too: a letter, a colon, then the end
+or a separator. A looser one, any `/X:`, read a Unix `/a:b/x.rs` back as `a:b\x.rs`.
+
+**One encoder, and it works on bytes.** The file manager call (`src/reveal.rs`) had its own,
+which read a Unix path's bytes. The server's read text, so a name that is not UTF-8 went out
+as `%EF%BF%BD`, and it wrote every `\` as `/`, so a Unix `a\b.rs` went out as `a/b.rs`. Now a Unix
+path is its bytes, a Windows path its text, and `\` is a separator only on a path with a
+drive. A UNC path (`\\srv\share`) has none, so it goes out as `file:///%5C%5Csrv…` where it
+once went out as `file://///srv/…`; `path_of` reads neither back. A path that is not UTF-8 is
+not read back either: `path_of` decodes to text.
 
 **The root goes out absolute.** The directory box is free text, and `.` is what a reader
 who launched the app from their project types; a `rootUri` built from that names a place

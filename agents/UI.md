@@ -710,7 +710,8 @@ freya's executor is the UI thread. On the freedesktop desktops the call is on
 by linking a D-Bus library; macOS is `open`, and Windows `explorer`, whose exit status is 1 either way and so is judged by
 whether it started. The path is made absolute and its trailing separator
 dropped before the URI is built, a relative one there naming a host rather than a file, and encoded
-a byte at a time, which is what lets both D-Bus calls take it unquoted. `explorer` is the one that
+a byte at a time (`src/uri.rs`, the language server's encoder too), which is what lets both D-Bus
+calls take it unquoted. `explorer` is the one that
 does need quoting, its path going inside the switch it parses itself, and the backslashes ending a
 path are doubled there, `CommandLineToArgvW` halving a run of them before a quote.
 

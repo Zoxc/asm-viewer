@@ -173,58 +173,6 @@ fn a_closed_connection_is_a_broken_conversation() {
     ));
 }
 
-// Files, both ways.
-
-#[test]
-fn a_path_becomes_a_uri_and_comes_back() {
-    for path in [
-        "/home/reader/a project/src/main.rs",
-        "/home/reader/hør/lib.rs",
-        "/home/reader/plain.rs",
-    ] {
-        let uri = uri_of(Path::new(path));
-        assert!(uri.starts_with("file:///"), "{uri}");
-        assert_eq!(path_of(&uri), Some(PathBuf::from(path)), "{uri}");
-    }
-}
-
-#[test]
-fn a_space_in_a_path_is_escaped() {
-    assert_eq!(uri_of(Path::new("/a b")), "file:///a%20b");
-}
-
-/// A Windows path comes back spelled the way it went out. `uri_of` writes every separator
-/// as `/` and the URI carries a leading slash the path has not got, so a path that came
-/// back as the URI spelled it named a file the app already had open under another
-/// spelling -- and a `Document::Source` is compared as text.
-///
-/// The drive letter is what says the path is Windows', so the rule holds on either
-/// platform and this test runs on both.
-#[test]
-fn a_windows_path_comes_back_with_its_own_separators() {
-    let uri = uri_of(Path::new(r"C:\Users\reader\src\main.rs"));
-    assert_eq!(uri, "file:///C:/Users/reader/src/main.rs");
-    assert_eq!(
-        path_of(&uri),
-        Some(PathBuf::from(r"C:\Users\reader\src\main.rs"))
-    );
-
-    // A drive with nothing after it, and a share, which has no drive letter and keeps the
-    // separators it came with.
-    assert_eq!(path_of("file:///C:/"), Some(PathBuf::from(r"C:\")));
-    assert_eq!(
-        path_of("file:///a/b"),
-        Some(PathBuf::from("/a/b")),
-        "a unix path was respelled"
-    );
-}
-
-#[test]
-fn a_uri_of_something_that_is_not_a_local_file_names_no_path() {
-    assert_eq!(path_of("https://example.invalid/x.rs"), None);
-    assert_eq!(path_of("file://elsewhere/x.rs"), None);
-}
-
 // What an answer says.
 
 #[test]
