@@ -213,9 +213,10 @@ pub(crate) struct ListPane {
     /// The scroll the arrows move. Private: every list of this pane's is drawn through
     /// [`ListPane::virtual_rows`] or [`ListPane::short_list`], which are what hand it over.
     controller: ScrollController,
-    /// How tall the rows' box is, which is what says whether the row an arrow moved to is
-    /// on screen at all. A `VirtualScrollView` measures itself but keeps the answer, so
-    /// the box around it is what is measured -- [`ListBox`]'s own reason.
+    /// How tall the scroll view is, which is what says whether the row an arrow moved to
+    /// is on screen at all. A `VirtualScrollView` measures itself but keeps the answer, so
+    /// the box around it is what is measured -- [`ListBox`]'s own reason
+    /// ([`ListPane::measured`]).
     viewport: State<f32>,
     /// What this pane's rows reach for, gathered here because this is the one hook every
     /// panel calls and the rows may call none ([`ListStates`]). Public: a list built row
@@ -325,9 +326,10 @@ impl ListPane {
         match (any, rows.is_empty()) {
             (false, _) => placeholder(empty),
             (true, true) => placeholder("No matches"),
-            (true, false) => ScrollView::new_controlled(self.controller)
-                .child(rect().width(Size::fill()).children(rows).into_element())
-                .into_element(),
+            (true, false) => self.measured(
+                ScrollView::new_controlled(self.controller)
+                    .child(rect().width(Size::fill()).children(rows).into_element()),
+            ),
         }
     }
 
@@ -349,13 +351,28 @@ impl ListPane {
         data: D,
         row: impl Fn(usize, &D, ListStates) -> Element + 'static,
     ) -> Element {
-        VirtualScrollView::new_with_data((data, self.states), move |index, (data, states)| {
-            row(index, data, *states)
-        })
-        .length(length)
-        .item_size(list_row_height())
-        .scroll_controller(self.controller)
-        .into_element()
+        self.measured(
+            VirtualScrollView::new_with_data((data, self.states), move |index, (data, states)| {
+                row(index, data, *states)
+            })
+            .length(length)
+            .item_size(list_row_height())
+            .scroll_controller(self.controller),
+        )
+    }
+
+    /// The scroll view the controller drives, in a box measured for the keys: a panel may
+    /// put a heading over its rows (`headed`, `ui/parts.rs`), and a height taken over the
+    /// two would count rows under the panel's foot as shown.
+    fn measured(&self, list: impl IntoElement) -> Element {
+        let mut viewport = self.viewport;
+        rect()
+            .expanded()
+            .on_sized(move |e: Event<SizedEventData>| {
+                viewport.set_if_modified(e.area.height());
+            })
+            .child(list)
+            .into()
     }
 
     /// All three: the pane on the one ground every panel is drawn on, the bar where there
@@ -416,7 +433,6 @@ impl ListPane {
     fn rows(&self, keys: Rc<ListKeys>, list: impl IntoElement) -> Rect {
         let pane = *self;
         let (rows, picking) = (self.rows, self.states.picking);
-        let mut measured = self.viewport;
         rect()
             .width(Size::fill())
             .height(Size::flex(1.0))
@@ -425,9 +441,6 @@ impl ListPane {
             .on_pointer_down(move |_| {
                 rows.request_focus();
                 picking.unasked();
-            })
-            .on_sized(move |e: Event<SizedEventData>| {
-                measured.set_if_modified(e.area.height());
             })
             .on_key_down(move |e: Event<KeyboardEventData>| {
                 pane.answer(&keys, &e);

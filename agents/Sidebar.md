@@ -808,8 +808,11 @@ Down move it, Home and End take it to the ends and the two page keys move it a s
 scrolling to keep it in view, Left and Right fold the row it is on, Enter opens it the way
 pressing its row would -- Ctrl+Enter in a tab that stays, which is nothing of its own: the row reads
 the Ctrl as it opens, exactly as it does under a Ctrl+click -- and Escape hands the keyboard back to
-the tab on screen. A screen is the **measured** rows box
-over `list_row_height`, as a code pane works its page out, and each key answers under its own
+the tab on screen. A screen is the **measured** scroll view
+over `list_row_height`, as a code pane works its page out. It is measured round the scroll view
+itself and not round the rows box, because the Search and Locations panels draw a heading over
+their rows inside that box, and a height that took the heading in left the pick a row under the
+panel's foot. Each key answers under its own
 modifiers and no others, `on_listing_key`'s rule: Alt+Left is the window's step back along the trail
 and must not fold a row. What each list answers with is a `ListKeys` -- how many rows, which row is
 at a place, what pressing the row at a place does, and which way it folds -- built by the panel,

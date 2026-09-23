@@ -6918,6 +6918,73 @@ fn drawing_the_references_copies_none_of_them() {
     );
 }
 
+/// **The arrows keep the pick on screen under a heading.** The panel draws its question
+/// over the rows, so the box the rows scroll in is shorter than the body. Measured on the
+/// body, a row a heading's height under the panel's foot counted as shown, and End left
+/// the last row out of view.
+#[test]
+fn the_keys_scroll_the_pick_into_view_under_the_panels_heading() {
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let mut located = roots.located;
+    let at = LinePos {
+        file: Arc::from(Path::new("/p/src/main.rs")),
+        line: 2,
+    };
+    settle(&mut test);
+    let places: Vec<(&str, u32, Range<usize>)> = (1..=40)
+        .map(|line| ("/p/src/other.rs", line, 0..1))
+        .collect();
+    located.set(found_references(at, "helper", &places));
+    settle(&mut test);
+
+    // A press on the heading puts the keyboard on the rows, opening nothing.
+    let heading = label_area(&test, "40 references to helper").expect("the heading is drawn");
+    press_at(
+        &mut test,
+        (
+            (heading.origin.x + 5.0) as f64,
+            (heading.origin.y + 5.0) as f64,
+        ),
+    );
+    settle(&mut test);
+
+    for key in [NamedKey::End, NamedKey::ArrowDown] {
+        key_with(&mut test, Key::Named(key), Modifiers::empty());
+        settle(&mut test);
+        let picked = picked_rows(&test);
+        assert!(
+            picked
+                .iter()
+                .any(|top| top + list_row_height() <= 300.0 + 0.5),
+            "{key:?} left the pick below the panel's foot: {picked:?}"
+        );
+    }
+    for _ in 0..30 {
+        key_with(&mut test, Key::Named(NamedKey::ArrowUp), Modifiers::empty());
+    }
+    settle(&mut test);
+    for _ in 0..12 {
+        key_with(
+            &mut test,
+            Key::Named(NamedKey::ArrowDown),
+            Modifiers::empty(),
+        );
+        settle(&mut test);
+        let picked = picked_rows(&test);
+        assert!(
+            picked
+                .iter()
+                .any(|top| top + list_row_height() <= 300.0 + 0.5),
+            "Down left the pick below the panel's foot: {picked:?}"
+        );
+    }
+}
+
 /// The panel says which of the uses states it is in, groups what it found under the file
 /// each use is in, and folds a file away when its row is pressed.
 #[test]
