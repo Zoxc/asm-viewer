@@ -8340,6 +8340,11 @@ fn use_source_reading_now(sourced: State<Sourced>, showing: State<Option<Arc<Pat
 #[derive(Clone)]
 struct SubjectFile(Arc<Path>);
 
+/// The object whose code [`linking_harness`]'s pane is beside, where it is not over a
+/// source-driven tab.
+#[derive(Clone)]
+struct SubjectCode(Arc<Object>);
+
 /// The Source pane over a source-driven tab, with the viewer a context menu needs in an
 /// ancestor scope -- which `app()` mounts on the root and no other harness here does.
 fn source_menu_harness() -> impl IntoElement {
@@ -8394,8 +8399,11 @@ fn linking_harness() -> impl IntoElement {
     use_land(doors, active, use_sectioned(), use_consume::<Keyboard>());
     use_follow(follow, doors);
 
-    let file = use_consume::<SubjectFile>().0;
-    let document = Document::Source(file);
+    // An object's code where a test gives one, and the file's own tab otherwise.
+    let document = match use_try_consume::<SubjectCode>() {
+        Some(SubjectCode(object)) => Document::Code(object),
+        None => Document::Source(use_consume::<SubjectFile>().0),
+    };
     // The viewer a context menu is drawn into, which `app()` mounts at its root: what a
     // right-click on a link offers is one of the things asked of this harness.
     rect()
@@ -8473,6 +8481,22 @@ fn mount_linking_classifying(
     State<Option<LspJobs>>,
     async_channel::Receiver<AskedOfServer>,
 ) {
+    mount_linking_beside(None, classify, answer, file)
+}
+
+/// The same with the pane beside `code`'s listing where it is given, rather than over a
+/// source-driven tab of `file`.
+fn mount_linking_beside(
+    code: Option<Arc<Object>>,
+    classify: impl Fn() -> Result<links::Links, lsp::Failure> + Send + Sync + 'static,
+    answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
+    file: Arc<Path>,
+) -> (
+    TestingRunner,
+    Roots,
+    State<Option<LspJobs>>,
+    async_channel::Receiver<AskedOfServer>,
+) {
     let (asked, asks) = async_channel::unbounded::<AskedOfServer>();
     let work = move |job: LspJob| {
         let recorded = match &job {
@@ -8502,6 +8526,9 @@ fn mount_linking_classifying(
             runner.provide_root_context(move || {
                 provide(ServerWorking(Arc::new(work)));
                 provide(SubjectFile(file.clone()));
+                if let Some(object) = code.clone() {
+                    provide(SubjectCode(object));
+                }
                 (test_roots(), provide(ServerAsking(State::create(None))).0)
             })
         },
@@ -10136,6 +10163,38 @@ fn the_panes_file_has_links_with_no_source_tab_of_it() {
     let (file, _directory) = calling_file("untabbed");
     let (mut test, roots, _asks) = mount_linking(|_job: LspJob| None, file.clone());
     settle(&mut test);
+    serving(&mut test, &roots);
+
+    let run = roots.language.peek().run;
+    assert!(
+        roots.opened.peek().holds(run, &file),
+        "the server was never told about the pane's file"
+    );
+    assert!(
+        roots.linked.peek().links_in(&file).is_some(),
+        "the pane's file has no links"
+    );
+}
+
+/// The same beside an object's code: its Source pane draws the file of the row picked
+/// out in the listing, which no tab is a source tab of either.
+#[test]
+fn the_file_beside_an_objects_code_has_links() {
+    let (file, _directory) = calling_file("beside-code");
+    let (_path, objects) = fixture_objects(1);
+    let (mut test, roots, _asking, _asks) = mount_linking_beside(
+        Some(objects[0].clone()),
+        || Ok(calling_links()),
+        |_job: LspJob| None,
+        file.clone(),
+    );
+    let mut marked = roots.doors.marked;
+    marked.write().assembly = Some(picked_row(0, &file, Owed::NEITHER));
+    settle(&mut test);
+    assert!(
+        roots.showing.peek().as_deref() == Some(&*file),
+        "the pane is not showing the picked row's file"
+    );
     serving(&mut test, &roots);
 
     let run = roots.language.peek().run;
