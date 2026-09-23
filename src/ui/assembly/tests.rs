@@ -301,7 +301,8 @@ fn the_row_a_reveal_goes_to_is_the_runs_own_or_the_paired_instructions() {
     // A listing of six instructions with a branch landing on the fourth, which is the
     // one separator: instruction 3 is drawn at row 4.
     let lanes = Lanes::new(&[BranchEdge { from: 0, to: 3 }], 6);
-    let pick = line_pick(Arc::from("now.c"), 7, None, Owed::default()).expect("line 7 is a row");
+    let pick = line_pick(Arc::from(Path::new("now.c")), 7, None, Owed::default())
+        .expect("line 7 is a row");
 
     assert_eq!(
         owed_listing_row(&Owing::Own(4..=6), &lanes, |_| panic!(
@@ -364,7 +365,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
     let row = Door::Row {
         to: 12,
         at: Some(LinePos {
-            file: Arc::from("now.c"),
+            file: Arc::from(Path::new("now.c")),
             line: 3,
         }),
     };
@@ -419,7 +420,7 @@ fn what_a_press_on_a_link_opens_turns_on_ctrl_and_the_listing() {
     let to_the_row = Some(Opens::Row {
         to: 12,
         at: Some(LinePos {
-            file: Arc::from("now.c"),
+            file: Arc::from(Path::new("now.c")),
             line: 3,
         }),
     });
@@ -467,7 +468,7 @@ fn every_field_of_a_listing_prop_is_compared() {
                 listing: In::Alone {
                     subject: Some(Subject {
                         tab: DocId::unfiled(),
-                        file: Arc::from("main.rs"),
+                        file: Arc::from(Path::new("main.rs")),
                     }),
                 },
                 ..data.clone()

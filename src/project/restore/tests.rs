@@ -238,7 +238,7 @@ fn tab(object: &Arc<Object>) -> Document {
 }
 
 fn file_tab(path: &str) -> Document {
-    Document::Source(Arc::from(path))
+    Document::Source(Arc::from(Path::new(path)))
 }
 
 /// A saved record built by hand: entries no live `Visits` could have produced.
@@ -272,9 +272,7 @@ fn saved_file_tab(path: &str, asm_row: usize, src_row: usize) -> SavedTab {
         asm_address: None,
         code_address: None,
         src_line: None,
-        document: SavedDocument::Source {
-            path: path.to_owned(),
-        },
+        document: SavedDocument::Source { path: path.into() },
     })
 }
 
@@ -1421,7 +1419,7 @@ fn a_source_places_line_is_written_before_its_document_and_comes_back() {
     let file = file_tab("/src/main.rs");
     let mut trail = History::default();
     trail.push(Stop::whole(file.clone()));
-    trail.push(Stop::on("/src/main.rs".into(), 42));
+    trail.push(Stop::on(Arc::from(Path::new("/src/main.rs")), 42));
     assert_eq!(
         trail.entries().len(),
         2,
@@ -1827,7 +1825,9 @@ fn resolving_by_name_agrees_with_the_strict_rule_and_survives_a_rebuild() {
     let file = SavedDocument::Source {
         path: "/src/main.rs".into(),
     };
-    assert!(file.resolve_by_name(&[]) == Some(Document::Source(Arc::from("/src/main.rs"))));
+    assert!(
+        file.resolve_by_name(&[]) == Some(Document::Source(Arc::from(Path::new("/src/main.rs"))))
+    );
 }
 
 /// What the last build produced is the app's own record and belongs to the session, so

@@ -363,7 +363,7 @@ impl SavedDocument {
                 symbol_name: SavedName::of(&symbol.data),
             },
             Document::Source(file) => SavedDocument::Source {
-                path: file.to_string(),
+                path: file.to_path_buf(),
             },
         }
     }
@@ -377,7 +377,7 @@ impl SavedDocument {
     /// comes back as a tab over the pane's own "Source file not found".
     fn resolve(&self, loaded: &Loaded) -> Option<Document> {
         match self {
-            SavedDocument::Source { path } => Some(Document::Source(Arc::from(path.as_str()))),
+            SavedDocument::Source { path } => Some(Document::Source(Arc::from(path.as_path()))),
             SavedDocument::Object { shown, .. } => {
                 let object = loaded.object(self)?;
                 Some(match shown {

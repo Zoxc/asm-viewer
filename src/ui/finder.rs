@@ -481,7 +481,7 @@ fn recent(asking: &Asking, visits: &Visits) -> Listed {
         .entries()
         .iter()
         .filter_map(|document| match document {
-            Document::Source(path) => found_under(&root, Path::new(&**path)),
+            Document::Source(path) => found_under(&root, path),
             _ => None,
         })
         .map(|file| Row {

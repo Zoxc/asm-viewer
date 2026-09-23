@@ -146,7 +146,7 @@ pub(crate) enum Pressed {
 /// A **source** document goes through [`open_source_tab`], which names it by the spelling
 /// an open tab already has for the file. A bookmark is saved to disk, so the spelling it
 /// kept is a tab's from a session that may have spelled the project directory another way;
-/// a [`Document::Source`] is compared as text, so without the rule it would open a second
+/// a [`Document::Source`] is never canonicalised, so without the rule it would open a second
 /// tab of a file already open.
 ///
 /// Not a hook, and it consumes nothing: the row's render has already taken [`Doors`] and
@@ -156,7 +156,7 @@ pub(crate) fn opened(doors: Doors, ctrl: State<bool>, document: Document) -> Pre
     let (open, visits, reach) = (doors.open, doors.visits, Reach::outside(ctrl));
     match &document {
         Document::Source(file) => {
-            open_source_tab(open, visits, Path::new(&**file), reach);
+            open_source_tab(open, visits, file, reach);
         }
         _ => {
             open_document(open, visits, document, reach);

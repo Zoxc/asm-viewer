@@ -29,7 +29,7 @@ pub(crate) struct Coding(pub(crate) State<Coded>);
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Coded {
     /// The file the lines below are of, and the lines. An empty set is an answer.
-    pub(crate) found: Option<(Arc<str>, Arc<HashSet<u32>>)>,
+    pub(crate) found: Option<(Arc<Path>, Arc<HashSet<u32>>)>,
     /// The objects the answer was worked out over, by pointer, which is what identity is
     /// here. Held as addresses and not as `Arc`s: a set of line numbers has nothing in it
     /// to sweep for a binary that has since closed, so the way this stays true is to be
@@ -48,7 +48,7 @@ pub(crate) fn object_ids(open: &[Arc<Object>]) -> Vec<usize> {
 impl Coded {
     /// Whether a question is owed for `showing`: the answer is about another file, or was
     /// worked out over other objects than `open`.
-    pub(crate) fn pending(&self, showing: &Arc<str>, open: &[Arc<Object>]) -> bool {
+    pub(crate) fn pending(&self, showing: &Arc<Path>, open: &[Arc<Object>]) -> bool {
         !matches!(&self.found, Some((file, _)) if file == showing && self.over == object_ids(open))
     }
 
@@ -61,8 +61,8 @@ impl Coded {
     /// binaries come and go is `over` and the effect that reads it.
     pub(crate) fn take(
         &mut self,
-        showing: Option<&Arc<str>>,
-        file: Arc<str>,
+        showing: Option<&Arc<Path>>,
+        file: Arc<Path>,
         lines: Arc<HashSet<u32>>,
         over: Vec<usize>,
     ) -> bool {
@@ -76,7 +76,7 @@ impl Coded {
 
     /// The lines of `file` that have code, and nothing where the answer is about another
     /// file -- which is what a pane draws in the beat between moving and being answered.
-    pub(crate) fn lines_in(&self, file: &str) -> Option<&Arc<HashSet<u32>>> {
+    pub(crate) fn lines_in(&self, file: &Path) -> Option<&Arc<HashSet<u32>>> {
         match &self.found {
             Some((of, lines)) if &**of == file => Some(lines),
             _ => None,
@@ -97,7 +97,7 @@ impl Coded {
 /// `requests`, the way to ask it.
 pub(crate) fn use_mark_asks(
     coded: State<Coded>,
-    showing: State<Option<Arc<str>>>,
+    showing: State<Option<Arc<Path>>>,
     objects: State<Vec<Arc<Object>>>,
     requests: Requests<Question>,
 ) {

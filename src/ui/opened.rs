@@ -18,16 +18,16 @@ use super::*;
 pub(crate) struct Opened {
     /// Which server holds them. A new one holds nothing, whatever this last said.
     run: u64,
-    files: Vec<Arc<str>>,
+    files: Vec<Arc<Path>>,
     /// The ones the app has read afresh since it told the server about them, so what the
     /// server holds of those is the text from before.
-    stale: Vec<Arc<str>>,
+    stale: Vec<Arc<Path>>,
 }
 
 impl Opened {
     /// Whether the server has been told about `file`, and so whether it is a file this
     /// app asks it anything about.
-    pub(crate) fn holds(&self, run: u64, file: &str) -> bool {
+    pub(crate) fn holds(&self, run: u64, file: &Path) -> bool {
         self.run == run && self.files.iter().any(|held| &**held == file)
     }
 
@@ -40,10 +40,10 @@ impl Opened {
     /// file the server goes on answering about as it was. The app re-reads such files in
     /// one place (`Sourced::forget_under`), and this is that place told.
     pub(crate) fn reread(&mut self, root: &Path) -> bool {
-        let stale: Vec<Arc<str>> = self
+        let stale: Vec<Arc<Path>> = self
             .files
             .iter()
-            .filter(|file| Path::new(&***file).starts_with(root))
+            .filter(|file| file.starts_with(root))
             .filter(|file| !self.stale.contains(file))
             .cloned()
             .collect();
@@ -75,9 +75,9 @@ impl Opened {
     fn against(
         &self,
         run: u64,
-        open: &[(Arc<str>, String)],
-    ) -> (Vec<(Arc<str>, String)>, Vec<Arc<str>>) {
-        let held: &[Arc<str>] = match self.run == run {
+        open: &[(Arc<Path>, String)],
+    ) -> (Vec<(Arc<Path>, String)>, Vec<Arc<Path>>) {
+        let held: &[Arc<Path>] = match self.run == run {
             true => &self.files,
             false => &[],
         };
@@ -140,7 +140,7 @@ fn spoken_as(serving: &Serving, path: &Path) -> Option<String> {
 
 /// Every open tab's source file the project's server is for, in the reader's own order,
 /// each with what the server is told it is.
-fn shown(open: Open, serving: &Serving) -> Vec<(Arc<str>, String)> {
+fn shown(open: Open, serving: &Serving) -> Vec<(Arc<Path>, String)> {
     let strip = open.strip.read();
     let docs = open.docs.read();
     strip
@@ -153,7 +153,7 @@ fn shown(open: Open, serving: &Serving) -> Vec<(Arc<str>, String)> {
             Document::Object(..) | Document::Symbol(..) | Document::Code(..) => None,
         })
         .filter_map(|file| {
-            let spoken = spoken_as(serving, Path::new(&*file))?;
+            let spoken = spoken_as(serving, &file)?;
             Some((file, spoken))
         })
         .collect()
@@ -194,7 +194,7 @@ pub(crate) fn use_opened(
         let told = opened.read().clone();
         // A file read afresh is closed and opened again, which is how the server is given
         // the new text: it holds one version of a file, this app having one to give.
-        let stale: Vec<(Arc<str>, String)> = shown
+        let stale: Vec<(Arc<Path>, String)> = shown
             .iter()
             .filter(|(file, _)| told.stale.contains(file))
             .cloned()

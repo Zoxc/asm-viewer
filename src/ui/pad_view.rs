@@ -759,7 +759,7 @@ pub(crate) struct PadAssembly {
     /// The pad's own source as this program spells it, which is what the run the cursor
     /// writes is a run *of*. `None` leaves the listing undriven: there is no name to
     /// compare a row's own against.
-    pub(crate) file: Option<Arc<str>>,
+    pub(crate) file: Option<Arc<Path>>,
     /// Which pad's buffer the cursor is read from.
     pub(crate) pad: PadId,
     /// Whether what is on screen has moved on from the program under it.
@@ -798,13 +798,13 @@ fn use_driving_cursor(
     text: State<PadBuffers>,
     marked: State<Marks>,
     pad: PadId,
-    file: Option<Arc<str>>,
+    file: Option<Arc<Path>>,
 ) {
     // With deps, and not a bare effect: its closure is built once, so one built over the
     // pad and the file it first mounted with would go on driving those.
     use_side_effect_with_deps(
         &(pad, file),
-        move |(pad, file): &(PadId, Option<Arc<str>>)| {
+        move |(pad, file): &(PadId, Option<Arc<Path>>)| {
             // A program whose debug info names the pad's file nowhere is a listing nothing can
             // drive: there is no name to compare a row's own against.
             let Some(file) = file else {

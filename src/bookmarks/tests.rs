@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use analysis::{
     Architecture, Bias, BinaryFormat, ObjectData, Section, SectionAddress, SectionIndex, Symbol,
@@ -70,7 +70,7 @@ fn toggling_adds_at_the_end_and_removes_in_place() {
 
     assert!(bookmarks.toggle(&symbol(&object, 2), "third", &objects));
     assert!(bookmarks.toggle(&symbol(&object, 0), "first", &objects));
-    let file = Document::Source(Arc::from("/src/main.rs"));
+    let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
     assert!(bookmarks.toggle(&file, "main.rs", &objects));
     assert_eq!(names(&bookmarks), ["third", "first", "main.rs"]);
 

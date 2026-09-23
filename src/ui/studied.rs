@@ -519,14 +519,21 @@ impl Studied {
     /// the debug info gives it none: no line info at all, an address no row covers, or a
     /// row naming no file or sitting on DWARF's line 0.
     pub(crate) fn position(&self, index: usize) -> Option<LinePos> {
+        let (file, line) = self.named_at(index)?;
+        Some(LinePos {
+            file: Arc::from(Path::new(file)),
+            line,
+        })
+    }
+
+    /// [`position`](Self::position) as the debug info names it, which costs no copy of
+    /// the path: what a question asked of every row wants.
+    fn named_at(&self, index: usize) -> Option<(&str, u32)> {
         let lines = self.lines.info.as_ref()?;
         // `get` and not an index: a row's neighbour below can be past the listing.
         let address = self.assembly.as_ref()?.instructions.get(index)?.address;
         let row = lines.row_at(address)?;
-        Some(LinePos {
-            file: lines.file(row.file?)?.clone(),
-            line: row.line?,
-        })
+        Some((lines.file(row.file?)?, row.line?))
     }
 
     /// Whether the instruction at `index` is the same place as a line of the source pane's
@@ -537,11 +544,11 @@ impl Studied {
     /// row's own position rather than looking for the first match. An instruction the debug
     /// info places nowhere is never paired.
     pub(crate) fn paired(&self, index: usize, pair: &Picked) -> bool {
-        let Some(at) = self.position(index) else {
+        let Some((file, line)) = self.named_at(index) else {
             return false;
         };
-        pair.file.as_ref() == Some(&at.file)
-            && (at.line as usize)
+        pair.file.as_deref() == Some(Path::new(file))
+            && (line as usize)
                 .checked_sub(1)
                 .is_some_and(|row| pair.chars.contains_row(row))
     }
@@ -603,7 +610,7 @@ pub(crate) struct SymbolLines {
     pub(crate) info: Option<Arc<LineInfo>>,
     /// The file the symbol's first instruction was compiled from, falling back to the
     /// first file its rows name.
-    pub(crate) file: Option<Arc<str>>,
+    pub(crate) file: Option<Arc<Path>>,
     /// The line of that file the symbol opens at -- where the Source pane lands a tab it
     /// is showing for the first time, a symbol's own lines being what selecting it asked
     /// for. `None` where the opening row names no line at all, and the pane then opens at
@@ -613,8 +620,8 @@ pub(crate) struct SymbolLines {
 
 impl PartialEq for SymbolLines {
     fn eq(&self, other: &Self) -> bool {
-        // The file compares by its text, not by pointer, for the reason `LinePos` does:
-        // two `LineInfo`s naming one file hold two `Arc<str>`s of it.
+        // The file compares by its path, not by pointer, for the reason `LinePos` does:
+        // two `LineInfo`s naming one file hold two `Arc`s of it.
         same_arc(&self.info, &other.info) && self.file == other.file && self.line == other.line
     }
 }
@@ -630,7 +637,7 @@ impl SymbolLines {
             .as_ref()
             .and_then(|info| info.opening(symbol.data.address));
         let (file, line) = match opening {
-            Some((file, line)) => (Some(file.clone()), line),
+            Some((file, line)) => (Some(Arc::from(Path::new(&**file))), line),
             None => (None, None),
         };
 
@@ -639,22 +646,22 @@ impl SymbolLines {
 
     /// Whether the symbol these are of has code from `file`: the file it opens at, or
     /// any of the files its rows name -- code inlined into it from a header is the
-    /// symbol's own as much as the body is. Compared by text, as every file the UI
+    /// symbol's own as much as the body is. Compared as paths, as every file the UI
     /// passes around is.
-    pub(crate) fn names(&self, file: &str) -> bool {
+    pub(crate) fn names(&self, file: &Path) -> bool {
         self.file.as_deref() == Some(file)
             || self
                 .info
                 .as_ref()
-                .is_some_and(|info| info.files().any(|named| **named == *file))
+                .is_some_and(|info| info.files().any(|named| Path::new(&**named) == file))
     }
 
     /// The checksum the debug info recorded for `file`, one of the files these rows name, or
     /// [`None`] when it names no such file or recorded none for it. Looked up by the name
     /// the pane is showing rather than carried per file, so a landed run's file and the
     /// symbol's own are answered the same way.
-    pub(crate) fn hash_for(&self, file: &str) -> Option<analysis::SourceHash> {
-        self.info.as_ref()?.hash_for(file)
+    pub(crate) fn hash_for(&self, file: &Path) -> Option<analysis::SourceHash> {
+        self.info.as_ref()?.hash_for(file.to_str()?)
     }
 }
 

@@ -51,7 +51,7 @@ pub(crate) enum Question {
     /// Every line of `file` the open objects have code from, for the Source pane's
     /// gutter marks.
     Marks {
-        file: Arc<str>,
+        file: Arc<Path>,
         objects: Vec<Arc<Object>>,
     },
 }
@@ -105,7 +105,7 @@ pub(crate) enum Answer {
     /// The lines of `file` the objects the question carried have code from, and which
     /// objects those were.
     Marked {
-        file: Arc<str>,
+        file: Arc<Path>,
         lines: Arc<HashSet<u32>>,
         over: Vec<usize>,
     },
@@ -162,9 +162,14 @@ pub(crate) fn answer(question: Question) -> Answer {
         },
         Question::Marks { file, objects } => Answer::Marked {
             lines: Arc::new(
-                objects
-                    .iter()
-                    .flat_map(|object| object.lines_from_source(&file))
+                // A path that is not UTF-8 is no name the debug info says.
+                file.to_str()
+                    .into_iter()
+                    .flat_map(|named| {
+                        objects
+                            .iter()
+                            .flat_map(|object| object.lines_from_source(named))
+                    })
                     .collect(),
             ),
             over: object_ids(&objects),
@@ -230,7 +235,7 @@ pub(crate) fn use_analysis_with(
     analysis: State<Analyzed>,
     located: State<Located>,
     coded: State<Coded>,
-    showing: State<Option<Arc<str>>>,
+    showing: State<Option<Arc<Path>>>,
     work: impl Fn(Question) -> Answer + Send + 'static,
 ) -> Requests<Question> {
     let (beside, reading) = (sectioned.beside, sectioned.reading);

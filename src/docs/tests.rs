@@ -1,8 +1,8 @@
 use super::*;
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 fn file(name: &str) -> Document {
-    Document::Source(Arc::from(name))
+    Document::Source(Arc::from(Path::new(name)))
 }
 
 #[test]

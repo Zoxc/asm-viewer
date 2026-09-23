@@ -3,7 +3,7 @@
 use super::*;
 
 /// A landing on `line` of `file`, for the tab showing `file` as its own document.
-fn landing(file: &Arc<str>, line: u32) -> Landing {
+fn landing(file: &Arc<Path>, line: u32) -> Landing {
     Landing {
         tab: Document::Source(file.clone()),
         at: Some(Landed::line(LinePos {
@@ -16,7 +16,7 @@ fn landing(file: &Arc<str>, line: u32) -> Landing {
 
 #[test]
 fn a_pane_reveals_the_first_row_of_its_own_run() {
-    let file: Arc<str> = Arc::from("now.c");
+    let file: Arc<Path> = Arc::from(Path::new("now.c"));
     let owing = Owing::Own(3..=7);
     assert_eq!(
         owed_file_row(&owing, &file, 10, |_| panic!(
@@ -33,11 +33,11 @@ fn a_pane_reveals_the_first_row_of_its_own_run() {
 
 #[test]
 fn a_pane_reveals_the_line_the_other_panes_run_was_compiled_from() {
-    let file: Arc<str> = Arc::from("now.c");
+    let file: Arc<Path> = Arc::from(Path::new("now.c"));
     let pair =
         Owing::Pair(line_pick(file.clone(), 4, None, Owed::default()).expect("line 4 is a row"));
     let at = |file: &str, line| LinePos {
-        file: Arc::from(file),
+        file: Arc::from(Path::new(file)),
         line,
     };
     assert_eq!(
@@ -72,14 +72,14 @@ fn a_pane_reveals_the_line_the_other_panes_run_was_compiled_from() {
 
 #[test]
 fn a_landing_is_taken_only_by_the_pane_drawing_the_place_and_the_file_it_names() {
-    let file: Arc<str> = Arc::from("now.c");
+    let file: Arc<Path> = Arc::from(Path::new("now.c"));
     let document = Document::Source(file.clone());
     assert_eq!(
         landing_row(&landing(&file, 3), &document, &file, 10),
         Some(2)
     );
 
-    let other: Arc<str> = Arc::from("before.h");
+    let other: Arc<Path> = Arc::from(Path::new("before.h"));
     assert_eq!(
         landing_row(
             &landing(&file, 3),

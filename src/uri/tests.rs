@@ -21,7 +21,7 @@ fn a_space_in_a_path_is_escaped() {
 /// A Windows path comes back spelled the way it went out. `uri_of` writes every separator
 /// as `/` and the URI carries a leading slash the path has not got, so a path that came
 /// back as the URI spelled it named a file the app already had open under another
-/// spelling -- and a `Document::Source` is compared as text.
+/// spelling -- and a `Document::Source` is never canonicalised.
 ///
 /// The drive letter is what says the path is Windows', so the rule holds on either
 /// platform and this test runs on both.

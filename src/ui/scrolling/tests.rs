@@ -7,8 +7,8 @@ use super::*;
 fn tabs() -> (Entry, Entry) {
     let mut docs = Docs::default();
     let (first, second) = (
-        Stop::whole(Document::Source(Arc::from("a.rs"))),
-        Stop::whole(Document::Source(Arc::from("b.rs"))),
+        Stop::whole(Document::Source(Arc::from(Path::new("a.rs")))),
+        Stop::whole(Document::Source(Arc::from(Path::new("b.rs")))),
     );
     let a = (docs.open(first.clone()), first);
     let b = (docs.open(second.clone()), second);

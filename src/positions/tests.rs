@@ -142,11 +142,11 @@ fn a_value_that_is_not_copy_comes_back_whole() {
 }
 
 /// An entry of a source-driven tab's trail, which is the only kind [`Driven`] ever
-/// holds, on the tab `nth` ids from the first. The document is compared by its text, so
+/// holds, on the tab `nth` ids from the first. The document is compared by its path, so
 /// two of these naming one file on one tab are one entry.
 fn source_on(nth: u32, file: &str) -> Entry {
     let mut docs = Docs::default();
-    let document = Document::Source(file.into());
+    let document = Document::Source(Arc::from(Path::new(file)));
     let mut id = docs.open(document.clone());
     for _ in 0..nth {
         id = docs.open(document.clone());
@@ -206,7 +206,8 @@ fn a_closing_binary_forgets_the_lines_of_the_entries_it_takes() {
     let mut driven = Driven::default();
     driven.remember(source("main.rs"), 42);
     driven.remember(source_on(1, "lib.rs"), 7);
-    driven.forgetting(|(_, stop)| stop.document != Document::Source("main.rs".into()));
+    driven
+        .forgetting(|(_, stop)| stop.document != Document::Source(Arc::from(Path::new("main.rs"))));
     assert_eq!(driven.line(&source("main.rs")), None);
     assert_eq!(driven.line(&source_on(1, "lib.rs")), Some(7));
 }

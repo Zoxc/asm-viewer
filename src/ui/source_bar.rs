@@ -58,7 +58,7 @@ pub(crate) fn source_bar(
                 // past the bar would otherwise arm its tooltip, and light it.
                 .interactive(!sweeping)
                 .child(extra_tooltip(
-                    file.to_string(),
+                    file.display().to_string(),
                     rect()
                         .horizontal()
                         .cross_align(Alignment::Center)
@@ -68,14 +68,13 @@ pub(crate) fn source_bar(
                         .maybe(opens, |el| {
                             let file = file.clone();
                             el.on_press(move |_| {
-                                let path = Path::new(&*file);
-                                open_source_tab(open, visits, path, Reach::inside(ctrl));
+                                open_source_tab(open, visits, &file, Reach::inside(ctrl));
                             })
                         })
                         .child(entry_icon(&document))
                         .child(
                             label()
-                                .text(source::name_of(Path::new(&*file)))
+                                .text(source::name_of(&file))
                                 .width(Size::fill())
                                 .max_lines(1)
                                 .text_overflow(TextOverflow::Ellipsis),

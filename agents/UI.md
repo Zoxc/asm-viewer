@@ -386,10 +386,15 @@ the strip's tabs are written into the session, and there is no session to put a 
 `Document::Object(Arc<Object>)` is an object and `Document::Symbol(Symbol)` a function. One flat
 enum: the two used to sit in a `Selection` that a `Document::Assembly` wrapped, and every match over
 a document paid a nesting level for a type that carried nothing else and that nothing else held.
-`Document::Source(Arc<str>)` is a file
-as a string and not a `PathBuf`: the spelling the debug info said, or the project directory joined
-with a Files row's entries, which is deliberately the same spelling and is never canonicalised
-(`agents/Sidebar.md`). `Document::Code(Arc<Object>)` is **all of one object's code** as one listing
+`Document::Source(Arc<Path>)` is a file
+as a path, so a name that is not UTF-8 opens the file it names: the spelling the debug info said,
+or the project directory joined with a Files row's entries, which is deliberately the same spelling
+and is never canonicalised (`agents/Sidebar.md`). It was a string once, and a path the server
+named by bytes that are not UTF-8 then opened a tab on a file with U+FFFD in its name. The debug
+info names files as text, so where a path meets it (`compiled_from`, the line marks, the recorded
+checksum) it is turned to text there, and a path that is not UTF-8 finds nothing. Two paths
+compare by their components, so `a/./b.rs` and `a/b.rs` are one tab where as text they were two.
+`Document::Code(Arc<Object>)` is **all of one object's code** as one listing
 with the symbols drawn as labels inside it (`agents/Panes.md`). A tab has two sides, assembly and
 source, and the variant says which side the tab is *about* and therefore which drives the other; an
 object's code is assembly-driven like a function's tab. It is one document per object, compared by

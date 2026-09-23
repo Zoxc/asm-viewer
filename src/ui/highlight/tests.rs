@@ -22,7 +22,7 @@ fn indentation_keeps_the_files_own_characters() {
 fn a_missing_file_is_asked_about_until_it_is_forgotten() {
     let seeded = Seeded::directory("missing");
     let path = seeded.join("gone.rs");
-    let showing: Arc<str> = Arc::from(path.to_str().expect("a utf-8 path"));
+    let showing: Arc<Path> = Arc::from(Path::new(&path));
     let sourced = Sourced::default();
 
     assert!(read(&SourceAsk {

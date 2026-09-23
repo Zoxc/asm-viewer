@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use super::*;
 use crate::docs::Docs;
@@ -10,7 +10,7 @@ fn strip(count: u32) -> (Strip, Vec<Tab>, Docs) {
     let mut docs = Docs::default();
     let tabs: Vec<Tab> = (0..count)
         .map(|nth| {
-            let file: Arc<str> = Arc::from(format!("{nth}.rs").as_str());
+            let file: Arc<Path> = Arc::from(Path::new(&format!("{nth}.rs")));
             Tab::Document(docs.open(Document::Source(file)))
         })
         .collect();
@@ -56,7 +56,7 @@ fn a_tab_opened_over_a_page_lands_beside_it() {
     let (mut strip, tabs, mut docs) = strip(2);
     let page = Tab::Page(Page::Project);
     strip.show(page);
-    let opened = Tab::Document(docs.open(Document::Source(Arc::from("opened.rs"))));
+    let opened = Tab::Document(docs.open(Document::Source(Arc::from(Path::new("opened.rs")))));
     strip.show(opened);
     assert_eq!(strip.tabs(), [tabs[0], tabs[1], page, opened]);
 }
@@ -209,7 +209,7 @@ fn a_surviving_shown_tab_is_its_own_landing() {
 fn landing_from_nothing_shown_is_the_last_survivor() {
     let (_, tabs, mut docs) = strip(3);
     assert_eq!(landing(&tabs, None, |tab| *tab == tabs[1]), Some(tabs[2]));
-    let missing = Tab::Document(docs.open(Document::Source(Arc::from("z.rs"))));
+    let missing = Tab::Document(docs.open(Document::Source(Arc::from(Path::new("z.rs")))));
     assert_eq!(
         landing(&tabs, Some(missing), |tab| *tab == tabs[1]),
         Some(tabs[2])

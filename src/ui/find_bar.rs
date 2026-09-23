@@ -843,7 +843,7 @@ fn seed_of(marks: &Marks, pane: Pane, text: impl Fn(usize) -> Line) -> Option<St
 pub(crate) fn use_find_steps<R: FnMut(usize) + 'static>(
     at: Where,
     marked: State<Marks>,
-    file: Option<Arc<str>>,
+    file: Option<Arc<Path>>,
     reveal: R,
 ) {
     let finds = use_try_consume::<Looking>().map(|looking| looking.0);
@@ -854,7 +854,7 @@ pub(crate) fn use_find_steps<R: FnMut(usize) + 'static>(
     *latest.borrow_mut() = Some(reveal);
     use_side_effect_with_deps(
         &(at, file),
-        move |(at, file): &(Where, Option<Arc<str>>)| {
+        move |(at, file): &(Where, Option<Arc<Path>>)| {
             let at = *at;
             let Some(mut finds) = finds else {
                 return;

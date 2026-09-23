@@ -1477,7 +1477,7 @@ fn row_compiled_from(built: &Built, pair: &Picked) -> Option<usize> {
 /// The file row `row` was compiled from, where it is an instruction of a stretch that has
 /// decoded. [`None`] for every other row -- a label, a header, the bytes no symbol claims,
 /// and any row of a stretch still guessed, none of which is anybody's line yet.
-fn file_at(built: &Built, row: usize) -> Option<Arc<str>> {
+fn file_at(built: &Built, row: usize) -> Option<Arc<Path>> {
     match built.row(row) {
         Some(Row {
             stretch,

@@ -451,7 +451,7 @@ pub(crate) struct Roots {
     pub(crate) coded: State<Coded>,
     pub(crate) sectioned: Sectioned,
     pub(crate) sourced: State<Sourced>,
-    pub(crate) showing: State<Option<Arc<str>>>,
+    pub(crate) showing: State<Option<Arc<Path>>>,
     pub(crate) finds: State<Finds>,
     pub(crate) pad: State<Pads>,
     pub(crate) pad_text: State<PadBuffers>,

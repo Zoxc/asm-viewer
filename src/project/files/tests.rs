@@ -276,6 +276,25 @@ fn a_non_utf8_path_is_not_written_rather_than_mangled() {
     }
 }
 
+/// A source file's path is the one path that is written whatever it is: a tab or a
+/// bookmark on a file whose name is not UTF-8 would otherwise stop the whole file being
+/// saved. Its bytes go in, and the same path comes back.
+#[cfg(unix)]
+#[test]
+fn a_source_path_that_is_not_utf8_is_written_as_its_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/src/\xff.rs"));
+    let project = Project {
+        bookmarks: vec![Bookmark {
+            name: None,
+            document: SavedDocument::Source { path },
+        }],
+        ..Project::default()
+    };
+    round_trip(&project);
+}
+
 /// The project half through a real serializer. [`Details`] is **flattened**, so what the
 /// reader said is keys of the file rather than a `[details]` table of their own, and the
 /// file reads back as what was written.
@@ -569,7 +588,7 @@ fn a_cargo_section_is_written_where_toml_can_read_it_back() {
         bookmarks: vec![Bookmark {
             name: Some("start".to_owned()),
             document: SavedDocument::Source {
-                path: "/src/kernel/main.rs".to_owned(),
+                path: "/src/kernel/main.rs".into(),
             },
         }],
     };

@@ -65,7 +65,7 @@ fn a_code_document_closes_with_its_file() {
 /// closing that binary leaves it open — even where the two paths are spelt the same.
 #[test]
 fn a_source_document_closes_with_nothing() {
-    let source = Document::Source(Arc::from("/tmp/lib.a"));
+    let source = Document::Source(Arc::from(Path::new("/tmp/lib.a")));
     assert!(!source.in_file(Path::new("/tmp/lib.a")));
     assert_eq!(source.file(), Path::new("/tmp/lib.a"));
 }
@@ -95,7 +95,7 @@ fn a_loose_number_takes_the_space_of_the_document_it_came_with() {
     // A file's assembly side is whichever symbol its line was compiled into, and an
     // object's symbol list is no place in any code: neither states a space of its own.
     assert_eq!(
-        Address::in_document(&Document::Source("main.rs".into()), 0x40),
+        Address::in_document(&Document::Source(Arc::from(Path::new("main.rs"))), 0x40),
         None
     );
     assert_eq!(Address::in_document(&Document::Object(object), 0x40), None);

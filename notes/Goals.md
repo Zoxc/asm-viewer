@@ -533,7 +533,7 @@ leaves this list when it is. That is a move made on request, like everything els
   assembly is the instruction's address, an object's whole code is the `Spot` the section view
   already keeps -- and `Kept::spots_of` and `Kept::carry` (`src/ui/focus.rs`) are that conversion,
   written for a re-decode. Three things stand in the way. `Positions<Entry, Kept>` cannot be
-  written as it stands -- an `Arc<str>`, an `Owed`, a generation -- so it wants a saved
+  written as it stands -- an `Arc<Path>`, an `Owed`, a generation -- so it wants a saved
   counterpart the way a `Spot` reduces to `asm_address`. `keep_leaving` only writes `marks_at` on
   leaving, so a save has to take the live `Marks` for the place on screen as well. And a code
   tab's rows arrive after its document, so a run restored there has to be planted the way a

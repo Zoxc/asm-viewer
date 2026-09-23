@@ -306,7 +306,7 @@ what opens the file.
 **A path comes back spelled the way it went out.** The `file:` URI is written and read
 by hand (`src/uri.rs`), and a round trip does not give back what it took: a URI's
 separator is `/` and its path carries a leading slash no drive letter has, so `C:\x\y.rs` goes out as
-`file:///C:/x/y.rs` and came back `C:/x/y.rs`. A `Document::Source` is compared as text and
+`file:///C:/x/y.rs` and came back `C:/x/y.rs`. A `Document::Source` was compared as text and is
 never canonicalised (`src/project.rs`), so on Windows every place followed through the
 server was a second tab of a file already open, with the trail, the positions and the
 bookmarks' `matching` split across the two. `path_of` puts the separators back. The drive
@@ -322,8 +322,9 @@ drive. A UNC path (`\\srv\share`) has none, so it goes out as `file:///%5C%5Csrv
 once went out as `file://///srv/…`; `path_of` reads neither back. `path_of` decodes to
 bytes too, and spells a drive's path on those, so on Unix a name that is not UTF-8 comes
 back as it went out. Elsewhere a path is text, and bytes that are not UTF-8 name no file.
-The app goes no further with such a name: a `Document::Source` is text, so opening one
-names the file lossily (`spelling`, `src/ui/documents.rs`).
+A `Document::Source` is an `Arc<Path>`, so such a name opens the file it names, and every
+question to the server about it goes out as those bytes. Only the debug info cannot match
+it: its file names are text, so such a file has no code (`compiled_from`).
 
 **The root goes out absolute.** The directory box is free text, and `.` is what a reader
 who launched the app from their project types; a `rootUri` built from that names a place

@@ -540,10 +540,9 @@ pub struct SavedHistory {
 ///
 /// `object_name` is [`analysis::Object::name`] — the archive member name, or the file name for a
 /// plain object — and is needed because one path can contribute many `Object`s, so `path`
-/// alone is ambiguous. [`SavedDocument::Source`]'s `path` is a `String` rather than a
-/// `PathBuf` because it is what the debug info said and not something this filesystem was
-/// asked about; writing it as a path would invite [`Store::write_toml`]'s non-UTF-8
-/// refusal on a value that was UTF-8 all along.
+/// alone is ambiguous. [`SavedDocument::Source`]'s `path` is written by [`any_path`] and
+/// not as serde writes a `PathBuf`, which refuses one that is not UTF-8 and so would stop
+/// the whole file being written for one tab.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SavedDocument {
     /// The whole of an object, shown one of the two ways it can be.
@@ -561,8 +560,52 @@ pub enum SavedDocument {
         symbol_name: SavedName,
     },
     Source {
-        path: String,
+        #[serde(with = "any_path")]
+        path: PathBuf,
     },
+}
+
+/// A path as a project file spells it: its text where it is UTF-8, and otherwise, on Unix,
+/// its bytes, which TOML writes as an array of numbers. Elsewhere such a path is written
+/// lossily, and names no file when it is read back.
+mod any_path {
+    use std::path::{Path, PathBuf};
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(path: &Path, serializer: S) -> Result<S::Ok, S::Error> {
+        match path.to_str() {
+            Some(text) => serializer.serialize_str(text),
+            #[cfg(unix)]
+            None => {
+                use std::os::unix::ffi::OsStrExt;
+                serializer.collect_seq(path.as_os_str().as_bytes())
+            }
+            #[cfg(not(unix))]
+            None => serializer.serialize_str(&path.to_string_lossy()),
+        }
+    }
+
+    /// The two ways a path is written.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Spelled {
+        Text(String),
+        Bytes(Vec<u8>),
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<PathBuf, D::Error> {
+        Ok(match Spelled::deserialize(deserializer)? {
+            Spelled::Text(text) => PathBuf::from(text),
+            #[cfg(unix)]
+            Spelled::Bytes(bytes) => {
+                use std::os::unix::ffi::OsStringExt;
+                PathBuf::from(std::ffi::OsString::from_vec(bytes))
+            }
+            #[cfg(not(unix))]
+            Spelled::Bytes(bytes) => PathBuf::from(String::from_utf8_lossy(&bytes).into_owned()),
+        })
+    }
 }
 
 /// Which of the two ways the whole of an object is shown.

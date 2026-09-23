@@ -7,8 +7,8 @@ use super::*;
 fn tabs() -> (Entry, Entry) {
     let mut docs = Docs::default();
     let (first, second) = (
-        Stop::whole(Document::Source(Arc::from("a.rs"))),
-        Stop::whole(Document::Source(Arc::from("b.rs"))),
+        Stop::whole(Document::Source(Arc::from(Path::new("a.rs")))),
+        Stop::whole(Document::Source(Arc::from(Path::new("b.rs")))),
     );
     let a = (docs.open(first.clone()), first);
     let b = (docs.open(second.clone()), second);
@@ -18,7 +18,10 @@ fn tabs() -> (Entry, Entry) {
 #[test]
 fn a_source_run_is_dropped_only_where_the_pane_moved_off_the_file_it_is_in() {
     let (a, b) = tabs();
-    let (now, before) = (Arc::<str>::from("now.c"), Arc::<str>::from("before.h"));
+    let (now, before) = (
+        Arc::<Path>::from(Path::new("now.c")),
+        Arc::<Path>::from(Path::new("before.h")),
+    );
 
     assert!(
         moved_off(Some(&a), Some(&a), Some(&now), Some(&before), Some(&now)),
@@ -52,7 +55,7 @@ fn a_source_run_is_dropped_only_where_the_pane_moved_off_the_file_it_is_in() {
 /// pick out the first line of the file, which is somewhere the reader was never sent.
 #[test]
 fn line_0_is_no_row_of_any_file() {
-    let file: Arc<str> = Arc::from("now.c");
+    let file: Arc<Path> = Arc::from(Path::new("now.c"));
 
     assert_eq!(LinePos::of_row(file.clone(), 0).line, 1);
     assert_eq!(LinePos::of_row(file.clone(), 39).row(), Some(39));

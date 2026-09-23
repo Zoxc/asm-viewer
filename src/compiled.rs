@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::ops::RangeInclusive;
+use std::path::Path;
 use std::sync::Arc;
 
 use analysis::{Object, PlacedAddress, Symbol, SymbolData};
@@ -24,12 +25,15 @@ use analysis::{Object, PlacedAddress, Symbol, SymbolData};
 ///
 /// `file` is matched exactly, on the string the debug info said: two objects whose
 /// `DW_AT_comp_dir` disagree do not join, and nothing here asks the filesystem about a
-/// path.
+/// path. A path that is not UTF-8 is no string the debug info says, so it finds nothing.
 pub fn compiled_from(
     objects: &[Arc<Object>],
-    file: &str,
+    file: &Path,
     lines: RangeInclusive<u32>,
 ) -> Vec<Symbol> {
+    let Some(file) = file.to_str() else {
+        return Vec::new();
+    };
     objects
         .iter()
         .flat_map(|object| {

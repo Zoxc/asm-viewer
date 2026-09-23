@@ -97,8 +97,8 @@ pub fn path_of(uri: &str) -> Option<PathBuf> {
 ///
 /// `/C:/x/y.rs` is how a Windows path comes back: both the leading slash and the
 /// separators are the URI's, where the app spells that file `C:\x\y.rs`. A
-/// [`Document::Source`](crate::document::Document) is compared as text and never
-/// canonicalised, so the two spellings are two tabs of one file.
+/// [`Document::Source`](crate::document::Document) is never canonicalised, so the
+/// leading slash made the two spellings two tabs of one file.
 ///
 /// Whether the path is Windows' is [`drive`]'s rule, so a Unix `/a:b/x.rs` keeps its leading
 /// slash and every byte after it. The rule reads bytes, and a `/` byte is never part of a

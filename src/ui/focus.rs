@@ -12,11 +12,11 @@ use super::*;
 /// A source position the two panes point at together. The file is half the identity: an
 /// inlined header's line 42 is not line 42 of the open file.
 ///
-/// **Compared by its text and not by pointer**, unlike every other `Arc` the UI passes
-/// around: two `LineInfo`s naming one file hold two `Arc<str>`s of its path.
+/// **Compared by its path and not by pointer**, unlike every other `Arc` the UI passes
+/// around: two `LineInfo`s naming one file make two `Arc<Path>`s of it.
 #[derive(Clone, PartialEq)]
 pub(crate) struct LinePos {
-    pub(crate) file: Arc<str>,
+    pub(crate) file: Arc<Path>,
     pub(crate) line: u32,
 }
 
@@ -24,11 +24,11 @@ impl LinePos {
     /// How a line is named wherever one is said out loud: the file's own name and the
     /// line, the full path being a tooltip's.
     pub(crate) fn spell(&self) -> String {
-        format!("{}:{}", source::name_of(Path::new(&*self.file)), self.line)
+        format!("{}:{}", source::name_of(&self.file), self.line)
     }
 
     /// The position row `row` of `file` is.
-    pub(crate) fn of_row(file: Arc<str>, row: usize) -> LinePos {
+    pub(crate) fn of_row(file: Arc<Path>, row: usize) -> LinePos {
         LinePos {
             file,
             line: LinePos::line_of(row),
@@ -250,9 +250,9 @@ pub(crate) fn use_doors() -> Doors {
 fn moved_off(
     was: Option<&Entry>,
     active: Option<&Entry>,
-    was_file: Option<&Arc<str>>,
-    file: Option<&Arc<str>>,
-    picked: Option<&Arc<str>>,
+    was_file: Option<&Arc<Path>>,
+    file: Option<&Arc<Path>>,
+    picked: Option<&Arc<Path>>,
 ) -> bool {
     if was != active || was_file == file {
         return false;

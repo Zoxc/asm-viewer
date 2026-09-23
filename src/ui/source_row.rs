@@ -24,7 +24,7 @@ use super::*;
 /// menu, the press that follows a link, the pointer moving onto a name.
 pub(crate) struct Common {
     pub(crate) source: SourceText,
-    pub(crate) file: Arc<str>,
+    pub(crate) file: Arc<Path>,
     /// The tab these rows *drive*, for a source-driven tab, where a click also says which
     /// assembly the other side shows -- and `None` for the companion file beside a
     /// symbol, where the click picks the line out and no more.
@@ -407,11 +407,9 @@ fn source_menu(named: Named) -> RowMenu {
         // arrival every other door into a source file makes, so the assembly side follows
         // this line as it follows a clicked one.
         let menu = menu.maybe_child(opens.clone().map(|file| {
-            let (line, name) = (at.line, source::name_of(Path::new(&*file)));
+            let (line, name) = (at.line, source::name_of(&file));
             MenuButton::new()
-                .on_press(move |_| {
-                    open_source_place(doors, Path::new(&*file), line, None, Reach::NewTab)
-                })
+                .on_press(move |_| open_source_place(doors, &file, line, None, Reach::NewTab))
                 .child(format!("Open {name}"))
         }));
         ContextMenu::open_from_event(&e, menu);

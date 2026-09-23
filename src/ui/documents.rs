@@ -122,7 +122,7 @@ pub(crate) fn open_source_file(states: ProjectStates, path: &Path, reach: Reach)
 ///
 /// **Where a path with no line to land on is named**, by [`spelling`]: the spelling an
 /// open tab already has for that file, and `path`'s own where no tab has one. A
-/// [`Document::Source`] is compared as text, so a file spelled a second way is a second
+/// [`Document::Source`] is never canonicalised, so a file spelled a second way is a second
 /// tab of it, splitting its trail and its positions -- and the doors here are handed
 /// exactly the spellings that disagree. A Files row and a finder row carry the project
 /// directory as the reader typed it, which a `..` or a symlink puts beside the reader's
@@ -636,14 +636,14 @@ pub(crate) fn open_source_place(
 /// What to name the document opening `path`: the spelling an open source tab already has
 /// for that file, and `path`'s own where no tab has one.
 ///
-/// A [`Document::Source`] is compared as text and never canonicalised, so one file reached
+/// A [`Document::Source`] is compared as a path and never canonicalised, so one file reached
 /// two ways is one tab only where both ways spell it alike (`src/project.rs`). The server
 /// answers with canonical absolute paths; the app's own spelling is a project directory as
 /// the reader typed it joined with a Files row, or whatever the debug info said. So a
-/// directory typed with a `..`, a `./` or through a symlink -- and on Windows every answer,
-/// whose separators are the URI's -- would open a second tab of the file the reader is
-/// already reading, splitting its trail, its positions and its driven line across the two.
-fn spelling(open: Open, path: &Path) -> Arc<str> {
+/// directory typed with a `..` or through a symlink would open a second tab of the file
+/// the reader is already reading, splitting its trail, its positions and its driven line
+/// across the two.
+fn spelling(open: Open, path: &Path) -> Arc<Path> {
     // `path` is the same path every time round, so it is reduced once for the whole walk
     // and not once per tab. What is left is one reduction per open source tab, on the UI
     // thread and a filesystem call on Unix. There are a handful of them and this is a
@@ -658,9 +658,9 @@ fn spelling(open: Open, path: &Path) -> Arc<str> {
                 Some(Document::Source(file)) => Some(file.clone()),
                 _ => None,
             })
-            .find(|file| same_file(Path::new(&**file), real.as_deref(), path))
+            .find(|file| same_file(file, real.as_deref(), path))
     };
-    held.unwrap_or_else(|| Arc::from(path.to_string_lossy().as_ref()))
+    held.unwrap_or_else(|| Arc::from(path))
 }
 
 /// Whether `one` names the file `path` does, `real` being `path` reduced or [`None`] where

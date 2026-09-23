@@ -451,8 +451,8 @@ impl Sourced {
     /// It reads no field, and is a method for what reading the state does: an answer or
     /// a forget bumps [`Sourced::changes`], which is what has the effect below look in
     /// the cache again.
-    fn pending(&self, showing: &Arc<str>, appearance: Appearance) -> Option<SourceAsk> {
-        let file = PathBuf::from(&**showing);
+    fn pending(&self, showing: &Arc<Path>, appearance: Appearance) -> Option<SourceAsk> {
+        let file = showing.to_path_buf();
         let owed = match highlighted().files.get(&file) {
             Some(Some(text)) => text.appearance != appearance,
             Some(None) => false,
@@ -523,7 +523,7 @@ const TRIES: usize = 4;
 
 /// Read the files the Source pane asks for on a thread of the app's own. Called once, at
 /// the root.
-pub(crate) fn use_source_reading(sourced: State<Sourced>, showing: State<Option<Arc<str>>>) {
+pub(crate) fn use_source_reading(sourced: State<Sourced>, showing: State<Option<Arc<Path>>>) {
     use_source_reading_with(sourced, showing, |ask| {
         read(ask);
     });
@@ -543,7 +543,7 @@ pub(crate) fn use_source_reading(sourced: State<Sourced>, showing: State<Option<
 /// asked.
 pub(crate) fn use_source_reading_with(
     sourced: State<Sourced>,
-    showing: State<Option<Arc<str>>>,
+    showing: State<Option<Arc<Path>>>,
     work: impl Fn(&SourceAsk) + Send + 'static,
 ) {
     let requests = use_worker(
@@ -579,7 +579,7 @@ pub(crate) fn use_source_reading_with(
 /// state is the same thing said at the method.
 pub(crate) fn use_source_asking(
     sourced: State<Sourced>,
-    showing: State<Option<Arc<str>>>,
+    showing: State<Option<Arc<Path>>>,
     ask: impl Fn(SourceAsk) + 'static,
 ) {
     use_side_effect(move || {

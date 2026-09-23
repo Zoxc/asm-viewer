@@ -310,8 +310,12 @@ save and the file's own has no `MadeUp` to render, so nothing has to answer for 
 neither. Those are rendered again on the way back, by whatever `MadeUp` spells them now, which is
 what lets the app rename them without dropping the places saved on them; a saved string would
 quietly stop matching. That mapping lives in exactly two places, `SavedDocument::from_document`
-and `::resolve`. A source file's path is a `String`, since it is what the debug info said rather
-than something this filesystem was asked about.
+and `::resolve`. A source file's path is written as its text where it is UTF-8 and as its bytes
+where it is not (`any_path`), which TOML writes as an array of numbers. serde's own `PathBuf`
+refuses such a path, and that refusal stops the whole file being written, so one tab or bookmark
+on a file with such a name would have ended every save until it fell off the record. On Windows
+the bytes are not the platform's, so such a path is written lossily and names no file on the
+way back.
 
 **One `tabs` list of every kind, not a `tabs` and a `sources` beside it**, because there is one
 bar. An object's whole code is saved by its object's path and name exactly as the object's own tab

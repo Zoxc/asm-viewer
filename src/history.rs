@@ -6,7 +6,7 @@
 //! compared by `Arc` pointer, so entries made before a re-parse never compare equal to
 //! ones made after it. Persisted as [`crate::project::SavedTab`].
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use analysis::{Object, PlacedAddress, SectionAddress, Symbol};
 
@@ -106,7 +106,7 @@ impl Stop {
     }
 
     /// A place in the source file `file`, on a line. 1-based, as DWARF's are.
-    pub fn on(file: Arc<str>, line: u32) -> Stop {
+    pub fn on(file: Arc<Path>, line: u32) -> Stop {
         Stop {
             document: Document::Source(file),
             place: Some(Inside::Line(line)),

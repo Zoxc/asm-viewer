@@ -436,7 +436,7 @@ pub(crate) struct Program {
     /// app is matched exactly, on the name the debug info said. `None` for a program whose
     /// debug info names no `src/main.rs` -- one built without debug info, or with its paths
     /// remapped -- which is a listing nothing can drive.
-    pub(crate) file: Option<Arc<str>>,
+    pub(crate) file: Option<Arc<Path>>,
     /// What this build was of, as the digest the package keeps beside the artifact
     /// ([`PadState::out_of_date`]). Taken from the scratchpad the **job** carried and never
     /// from what is on screen when the answer lands, so a build the reader typed during
@@ -807,10 +807,10 @@ pub(crate) fn read_program(executable: &Path, built_from: String) -> Option<Prog
     // anything may compare against: a name in debug info is the file as the compiler was
     // handed it, joined onto the directory the compiler ran in.
     let files = object.source_files();
-    let file: Option<Arc<str>> = own_source(files.iter().map(|file| &**file)).map(Arc::from);
-    let opening = file
-        .as_ref()
+    let named = own_source(files.iter().map(|file| &**file));
+    let opening = named
         .and_then(|file| compiled::lowest_placed(&object.symbols_from_lines(file, 0..=u32::MAX)));
+    let file: Option<Arc<Path>> = named.map(|file| Arc::from(Path::new(file)));
     Some(Program {
         object,
         built_from,

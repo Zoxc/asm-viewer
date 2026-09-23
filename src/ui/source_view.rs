@@ -17,7 +17,7 @@ use crate::counter;
 #[derive(Clone)]
 struct SourceList {
     source: SourceText,
-    file: Arc<str>,
+    file: Arc<Path>,
     /// The tab these rows are in.
     tab: DocId,
     /// The place on that tab's trail these rows belong to, which with the tab is what the
@@ -55,7 +55,7 @@ impl PartialEq for SourceList {
 /// since it was compiled.
 fn owed_file_row(
     owing: &Owing,
-    file: &Arc<str>,
+    file: &Arc<Path>,
     length: usize,
     places: impl FnOnce(&Picked) -> Vec<LinePos>,
 ) -> Option<usize> {
@@ -69,7 +69,7 @@ fn owed_file_row(
 fn landing_row(
     asked: &Landing,
     document: &Document,
-    file: &Arc<str>,
+    file: &Arc<Path>,
     length: usize,
 ) -> Option<usize> {
     if asked.tab != *document {
@@ -300,9 +300,9 @@ impl Component for SourceList {
 /// is actually drawn. A subject opens at the top of its file and is keyed under the file
 /// itself, so it says the file and no more.
 pub(crate) enum SourceSide {
-    Subject(Arc<str>),
+    Subject(Arc<Path>),
     Companion {
-        file: Arc<str>,
+        file: Arc<Path>,
         /// The place the rows are kept under: the drawn symbol's tab, or the object's
         /// code. **Not the file**: two functions compiled from one file are two places,
         /// and keying by the file would have them share a viewing position.
@@ -320,7 +320,7 @@ pub(crate) enum SourceSide {
 }
 
 impl SourceSide {
-    pub(crate) fn file(&self) -> &Arc<str> {
+    pub(crate) fn file(&self) -> &Arc<Path> {
         match self {
             SourceSide::Subject(file) | SourceSide::Companion { file, .. } => file,
         }
@@ -409,10 +409,9 @@ pub(crate) fn source_side(
                 .as_ref()
                 .and_then(|picked| picked.file.as_ref())
                 .filter(|file| {
-                    lines
-                        .info
-                        .as_ref()
-                        .is_some_and(|info| info.files().any(|named| named == *file))
+                    lines.info.as_ref().is_some_and(|info| {
+                        info.files().any(|named| Path::new(&**named) == &***file)
+                    })
                 });
             let file = picked.cloned().or_else(|| lines.file.clone())?;
             // The symbol's line only where the file it is a line of is the one drawn.
@@ -431,7 +430,7 @@ pub(crate) fn source_side(
 
 /// What of `marks` [`source_side`] reads: the file of each run and the row the assembly
 /// pane's run started on. A sweep moves none of them.
-fn side_marks(marks: &Marks) -> (Option<Arc<str>>, Option<usize>, Option<Arc<str>>) {
+fn side_marks(marks: &Marks) -> (Option<Arc<Path>>, Option<usize>, Option<Arc<Path>>) {
     let assembly = marks.assembly.as_ref();
     (
         assembly.and_then(|picked| picked.file.clone()),
@@ -463,7 +462,7 @@ fn places_of(
 /// rows light as its pair. Bounded by the run and not by the file.
 fn paired_lines(
     document: &Document,
-    file: &Arc<str>,
+    file: &Arc<Path>,
     pair: Option<&Picked>,
     analysis: &Analyzed,
     built: Option<&Built>,
@@ -497,7 +496,7 @@ counter!(
 /// one writer keeps them in step, and each write woke everything reading the state it
 /// went into -- the pane itself among them, which reads [`Sourced`] for what to draw.
 #[derive(Clone, Copy)]
-pub(crate) struct ShowingFile(pub(crate) State<Option<Arc<str>>>);
+pub(crate) struct ShowingFile(pub(crate) State<Option<Arc<Path>>>);
 
 /// The Source pane: the tab's source side, whichever of the two sides that is.
 #[derive(Clone, PartialEq)]
@@ -565,10 +564,10 @@ impl Component for SourcePane {
         let sourced = use_consume::<Sourcing>().0;
         let file = side.as_ref().map(|side| side.file().clone());
         // What this pane last wrote, for the drop below to take back.
-        let claimed = use_hook(|| Rc::new(RefCell::new(None::<Arc<str>>)));
+        let claimed = use_hook(|| Rc::new(RefCell::new(None::<Arc<Path>>)));
         use_side_effect_with_deps(&file, {
             let claimed = claimed.clone();
-            move |file: &Option<Arc<str>>| {
+            move |file: &Option<Arc<Path>>| {
                 // Written only where it moved: a pane redrawn for any of the dozen other
                 // reasons must not wake a worker.
                 let mut showing = showing;
@@ -612,7 +611,7 @@ impl Component for SourcePane {
 
         // The file itself, out of what the reader has answered -- and nothing until it
         // has, which is what keeps the read off this thread.
-        let drawing = sourced.read().drawing(Path::new(&*file));
+        let drawing = sourced.read().drawing(&file);
         let text = match &drawing {
             Drawing::Text(text) => Some(text.0.clone()),
             Drawing::Missing | Drawing::Waiting => None,
@@ -655,7 +654,9 @@ impl Component for SourcePane {
                             opening,
                         }
                         .into_element(),
-                        Drawing::Missing => placeholder(format!("Source file not found: {file}")),
+                        Drawing::Missing => {
+                            placeholder(format!("Source file not found: {}", file.display()))
+                        }
                         Drawing::Waiting => rect().expanded().into(),
                     }),
             )

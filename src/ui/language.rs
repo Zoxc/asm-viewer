@@ -521,7 +521,7 @@ impl Lookup {
     /// a column is everywhere.
     pub(crate) fn at(at: &LinePos, column: usize) -> Lookup {
         Lookup {
-            file: PathBuf::from(&*at.file),
+            file: at.file.to_path_buf(),
             line: at.line,
             column,
         }

@@ -26,7 +26,7 @@ pub(crate) struct Picked {
     /// The file the run is read in: the source pane's own file for its run, and for the
     /// assembly pane's the file the pressed row was compiled from -- which is what the
     /// source pane shows beside an object's code. `None` where the row has no line.
-    pub(crate) file: Option<Arc<str>>,
+    pub(crate) file: Option<Arc<Path>>,
     /// Which panes still owe a scroll to this run: the other pane, for a click made in
     /// this one, and both for a run picked from outside them (a [`Landing`]). Each is
     /// cleared as it is paid, so a repeat click is a second request.
@@ -38,7 +38,7 @@ impl Picked {
     /// sweeping it, and it goes by characters rather than by rows. Every run a door makes
     /// is one -- the button is back up by the time the answer is known, so a sweep from
     /// here would be a sweep nobody began.
-    fn settled(chars: CharSelection, file: Option<Arc<str>>, owed: Owed) -> Picked {
+    fn settled(chars: CharSelection, file: Option<Arc<Path>>, owed: Owed) -> Picked {
         Picked {
             chars,
             dragging: false,
@@ -51,7 +51,7 @@ impl Picked {
     /// Whether this is a run of the one row `line` of `file`, which is what every door
     /// onto a line makes ([`line_pick`]). The caret it holds on that row is its own: it
     /// may be at a column, where a line alone says only the row.
-    pub(crate) fn is_line(&self, file: &Arc<str>, line: u32) -> bool {
+    pub(crate) fn is_line(&self, file: &Arc<Path>, line: u32) -> bool {
         let Some(row) = LinePos::row_of(line) else {
             return false;
         };
@@ -241,7 +241,7 @@ pub(crate) fn mark_press(
     marked: State<Marks>,
     shift: bool,
     pane: Pane,
-    file: Option<Arc<str>>,
+    file: Option<Arc<Path>>,
     row: usize,
     press: Option<Press>,
 ) {
@@ -295,7 +295,7 @@ pub(crate) fn mark_press(
 /// the reader on a row they never pressed -- following a jump -- where the button is back
 /// up by the time the answer is known and a sweep from here would be a sweep nobody began.
 /// The source pane owes the scroll; the assembly pane has just been given one.
-pub(crate) fn mark_row(marked: State<Marks>, file: Option<Arc<str>>, row: usize) {
+pub(crate) fn mark_row(marked: State<Marks>, file: Option<Arc<Path>>, row: usize) {
     update(marked, |marks| {
         marks.assembly = Some(row_pick(file, row, Owed::by(Pane::Source)));
     });
@@ -311,7 +311,7 @@ pub(crate) fn mark_row(marked: State<Marks>, file: Option<Arc<str>>, row: usize)
 /// The source pane's run, where the same door left one, stops owing this pane a scroll
 /// to its pair: the caret **is** that pair, and one scroll to it is this pane's own or
 /// its place's.
-pub(crate) fn land_row(marked: State<Marks>, file: Option<Arc<str>>, row: usize, owed: Owed) {
+pub(crate) fn land_row(marked: State<Marks>, file: Option<Arc<Path>>, row: usize, owed: Owed) {
     update(marked, |marks| {
         marks.assembly = Some(row_pick(file, row, owed));
         if let Some(source) = marks.source.as_mut() {
@@ -322,7 +322,7 @@ pub(crate) fn land_row(marked: State<Marks>, file: Option<Arc<str>>, row: usize,
 
 /// The one-row run [`mark_row`] and [`land_row`] make of `row`: the row, and a caret at
 /// its start.
-fn row_pick(file: Option<Arc<str>>, row: usize, owed: Owed) -> Picked {
+fn row_pick(file: Option<Arc<Path>>, row: usize, owed: Owed) -> Picked {
     Picked::settled(row_run(row, None), file, owed)
 }
 
@@ -366,7 +366,7 @@ pub(crate) fn mark_top(marked: State<Marks>, pane: Pane) {
 /// at all does: it is no line of any file ([`LinePos::row_of`]).
 pub(crate) fn mark_line(
     marked: State<Marks>,
-    file: Arc<str>,
+    file: Arc<Path>,
     line: u32,
     columns: Option<Range<usize>>,
     owed: Owed,
@@ -387,7 +387,7 @@ pub(crate) fn mark_line(
 ///
 /// [`None`] for line 0, which is no row of the file ([`LinePos::row_of`]).
 pub(crate) fn line_pick(
-    file: Arc<str>,
+    file: Arc<Path>,
     line: u32,
     columns: Option<Range<usize>>,
     owed: Owed,
@@ -406,7 +406,7 @@ pub(crate) fn line_pick(
 pub(crate) fn mark_columns(
     marked: State<Marks>,
     pane: Pane,
-    file: Option<Arc<str>>,
+    file: Option<Arc<Path>>,
     row: usize,
     columns: Range<usize>,
 ) {
@@ -574,7 +574,7 @@ pub(crate) struct ListingText {
 pub(crate) fn use_listing_keys(
     at: Where,
     marked: State<Marks>,
-    file: Option<Arc<str>>,
+    file: Option<Arc<Path>>,
     list: &ListBox,
     length: usize,
     searchable: Option<Searchable>,
@@ -615,7 +615,7 @@ pub(crate) fn use_listing_keys(
 fn on_listing_key(
     marked: State<Marks>,
     pane: Pane,
-    file: Option<Arc<str>>,
+    file: Option<Arc<Path>>,
     length: usize,
     viewport: State<f32>,
     rows: ListingText,

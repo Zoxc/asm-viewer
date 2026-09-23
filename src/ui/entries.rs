@@ -63,7 +63,7 @@ impl Names {
                 Names::whole_of(object.name.clone(), object.path.display().to_string())
             }
             Document::Source(file) => {
-                Names::whole_of(source::name_of(Path::new(&**file)), file.to_string())
+                Names::whole_of(source::name_of(file), file.display().to_string())
             }
         }
     }
@@ -82,7 +82,7 @@ impl Names {
                 tooltip: label.clone(),
                 whole: label,
             },
-            SavedDocument::Source { path } => Names::whole_of(label, path.clone()),
+            SavedDocument::Source { path } => Names::whole_of(label, path.display().to_string()),
             SavedDocument::Object {
                 path,
                 shown: SavedShown::Code,
@@ -131,7 +131,7 @@ pub(crate) fn kind_icon(kind: Kind) -> Element {
 pub(crate) enum EntryKey<'a> {
     Object(usize),
     Symbol(usize),
-    Source(&'a str),
+    Source(&'a Path),
     Code(usize),
 }
 

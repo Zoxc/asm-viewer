@@ -503,7 +503,7 @@ pub(crate) struct Chrome {
     /// The listing row, which the runs speak.
     pub(crate) row: usize,
     /// What the row is a row of, for the run it starts (see `Picked::file`).
-    pub(crate) file: Option<Arc<str>>,
+    pub(crate) file: Option<Arc<Path>>,
     pub(crate) paired: Option<Edges>,
     pub(crate) wash: Wash,
     /// Whether the row reports its width to the listing's [`Widest`]. A separator does

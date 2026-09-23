@@ -478,7 +478,7 @@ fn retaining_nothing_is_the_empty_history() {
 #[test]
 fn a_half_that_does_not_belong_to_its_document_is_no_place_at_all() {
     let code = Document::Code(object("code"));
-    let file: Arc<str> = Arc::from("main.rs");
+    let file: Arc<Path> = Arc::from(Path::new("main.rs"));
     let source = Document::Source(file.clone());
 
     let there = Address::Placed(placed_at(64));

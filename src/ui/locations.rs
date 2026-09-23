@@ -159,12 +159,17 @@ impl Query {
     /// the lines of it that were asked about.
     fn tooltip(&self) -> String {
         match &self.scope {
-            Scope::Line => self.at.file.to_string(),
+            Scope::Line => self.at.file.display().to_string(),
             Scope::Function { lines, .. } => {
-                format!("{}:{}\u{2013}{}", self.at.file, lines.start(), lines.end())
+                format!(
+                    "{}:{}\u{2013}{}",
+                    self.at.file.display(),
+                    lines.start(),
+                    lines.end()
+                )
             }
             // Where it was asked about, which is the one thing a name alone does not say.
-            Scope::Listed { .. } => format!("{}:{}", self.at.file, self.at.line),
+            Scope::Listed { .. } => format!("{}:{}", self.at.file.display(), self.at.line),
         }
     }
 
@@ -184,7 +189,7 @@ impl Query {
 #[derive(Clone, PartialEq)]
 pub(crate) struct Subject {
     pub(crate) tab: DocId,
-    pub(crate) file: Arc<str>,
+    pub(crate) file: Arc<Path>,
 }
 
 impl Subject {

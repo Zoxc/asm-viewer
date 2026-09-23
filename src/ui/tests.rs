@@ -94,8 +94,8 @@ struct KeptViewport(State<f32>);
 fn kept_tabs() -> (Docs, Entry, Entry) {
     let mut docs = Docs::default();
     let (first, second) = (
-        Stop::whole(Document::Source(Arc::from("a.rs"))),
-        Stop::whole(Document::Source(Arc::from("b.rs"))),
+        Stop::whole(Document::Source(Arc::from(Path::new("a.rs")))),
+        Stop::whole(Document::Source(Arc::from(Path::new("b.rs")))),
     );
     let a = (docs.open(first.clone()), first);
     let b = (docs.open(second.clone()), second);
@@ -450,9 +450,9 @@ fn a_landing_an_unmeasured_pane_could_not_go_to_is_not_counted_as_gone_to() {
 
     // The door: a landing on the 41st line, which is row 40 of what the pane draws.
     land.set(Some(Landing {
-        tab: Document::Source(Arc::from("a.rs")),
+        tab: Document::Source(Arc::from(Path::new("a.rs"))),
         at: Some(Landed::line(LinePos {
-            file: Arc::from("a.rs"),
+            file: Arc::from(Path::new("a.rs")),
             line: 41,
         })),
         address: None,
@@ -1254,7 +1254,7 @@ fn object_of(document: &Document) -> Arc<Object> {
 }
 
 /// The file `document` is, for the same reason.
-fn file_of(document: &Document) -> Arc<str> {
+fn file_of(document: &Document) -> Arc<Path> {
     match document {
         Document::Source(file) => file.clone(),
         _ => panic!("not a source file"),
@@ -1312,7 +1312,7 @@ fn leaving_a_project_leaves_nothing_of_it_behind() {
     let symbols = fixture_symbols();
     let (first, second) = (symbols[0].clone(), symbols[1].clone());
     let object = first.object.clone();
-    let source = Document::Source(Arc::from("/src/main.rs"));
+    let source = Document::Source(Arc::from(Path::new("/src/main.rs")));
 
     let (mut test, states) = TestingRunner::new(
         project_harness,
@@ -1492,9 +1492,9 @@ fn a_menu_open_while_the_list_grows_stays_on_the_edge() {
     open_document(
         states.open,
         states.visits,
-        Document::Source(Arc::from(
+        Document::Source(Arc::from(Path::new(
             "/x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.rs",
-        )),
+        ))),
         Reach::NewTab,
     );
     for _ in 0..6 {
@@ -1923,7 +1923,7 @@ fn a_push_onto_a_tab_not_on_screen_draws_no_history_button() {
         |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
-    let file = |name: &str| Document::Source(Arc::from(format!("/src/{name}.rs").as_str()));
+    let file = |name: &str| Document::Source(Arc::from(Path::new(&format!("/src/{name}.rs"))));
     open_document(states.open, states.visits, file("behind"), Reach::NewTab);
     let behind = states.open.ids()[0];
     open_document(states.open, states.visits, file("left"), Reach::NewTab);
@@ -1967,7 +1967,7 @@ fn pressing_a_chip_takes_the_keyboard_into_the_tab() {
         1.,
     );
     for name in ["/src/one.rs", "/src/two.rs"] {
-        let document = Document::Source(Arc::from(name));
+        let document = Document::Source(Arc::from(Path::new(name)));
         open_document(states.open, states.visits, document, Reach::NewTab);
     }
     test.sync_and_update();
@@ -1991,7 +1991,7 @@ fn pressing_a_chip_takes_the_keyboard_into_the_tab() {
     let chip = centre_of(&test, "one.rs");
     press_at(&mut test, chip);
     settle(&mut test);
-    assert!(states.open.active() == Some(Document::Source(Arc::from("/src/one.rs"))));
+    assert!(states.open.active() == Some(Document::Source(Arc::from(Path::new("/src/one.rs")))));
     assert_eq!(
         marks(&test),
         [palette().compiled_fg],
@@ -2011,7 +2011,7 @@ fn the_tab_list_closes_a_tab_from_its_own_row() {
     );
     let documents: Vec<Document> = ["/src/one.rs", "/src/two.rs"]
         .into_iter()
-        .map(|name| Document::Source(Arc::from(name)))
+        .map(|name| Document::Source(Arc::from(Path::new(name))))
         .collect();
     for document in &documents {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
@@ -2072,7 +2072,7 @@ fn the_bar_scrolls_and_the_tab_on_screen_is_brought_into_view() {
         1.,
     );
     let documents: Vec<Document> = (0..8)
-        .map(|nth| Document::Source(Arc::from(format!("/src/file{nth}.rs").as_str())))
+        .map(|nth| Document::Source(Arc::from(Path::new(&format!("/src/file{nth}.rs")))))
         .collect();
     for document in &documents {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
@@ -2132,7 +2132,7 @@ fn a_close_or_a_move_brings_the_tab_on_screen_back_into_view() {
         1.,
     );
     let documents: Vec<Document> = (0..8)
-        .map(|nth| Document::Source(Arc::from(format!("/src/file{nth}.rs").as_str())))
+        .map(|nth| Document::Source(Arc::from(Path::new(&format!("/src/file{nth}.rs")))))
         .collect();
     for document in &documents {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
@@ -2207,7 +2207,7 @@ fn the_bar_forgets_the_place_of_a_chip_whose_tab_has_closed() {
         1.,
     );
     let documents: Vec<Document> = (0..6)
-        .map(|nth| Document::Source(Arc::from(format!("/src/file{nth}.rs").as_str())))
+        .map(|nth| Document::Source(Arc::from(Path::new(&format!("/src/file{nth}.rs")))))
         .collect();
     for document in &documents {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
@@ -2504,7 +2504,7 @@ fn a_tab_is_dragged_along_the_bar_to_move_it() {
     );
     let documents: Vec<Document> = ["/src/one.rs", "/src/two.rs", "/src/three.rs"]
         .into_iter()
-        .map(|name| Document::Source(Arc::from(name)))
+        .map(|name| Document::Source(Arc::from(Path::new(name))))
         .collect();
     for document in &documents {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
@@ -2596,7 +2596,7 @@ fn the_tab_on_screen_is_marked_and_the_mark_says_where_the_keyboard_is() {
         1.,
     );
     for name in ["/src/one.rs", "/src/two.rs"] {
-        let document = Document::Source(Arc::from(name));
+        let document = Document::Source(Arc::from(Path::new(name)));
         open_document(states.open, states.visits, document, Reach::NewTab);
     }
     test.sync_and_update();
@@ -2768,7 +2768,7 @@ fn the_menu_at_the_top_left_opens_a_page_and_marks_the_open_ones() {
         file: Some(PathBuf::from("/src/kernel/kernel.avproj")),
         ..OpenProject::default()
     });
-    let document = Document::Source(Arc::from("/src/one.rs"));
+    let document = Document::Source(Arc::from(Path::new("/src/one.rs")));
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     {
         let mut strip = states.open.strip;
@@ -2959,7 +2959,7 @@ fn a_tab_opened_leaves_the_pages_button_alone_while_its_menu_is_down() {
     };
 
     let (area, before) = button(&test);
-    let document = Document::Source(Arc::from("/src/one.rs"));
+    let document = Document::Source(Arc::from(Path::new("/src/one.rs")));
     open_document(states.open, states.visits, document, Reach::NewTab);
     settle(&mut test);
     let (_, after) = button(&test);
@@ -3152,7 +3152,7 @@ fn a_saved_source_tab_comes_back_with_no_binaries() {
     restore_project(states, Project::default(), session);
     test.sync_and_update();
 
-    let file = Document::Source(Arc::from("/src/main.rs"));
+    let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
     assert!(
         open_documents(states.open) == [file.clone()],
         "the source tab did not come back"
@@ -3594,8 +3594,8 @@ fn pressing_a_chip_shows_its_tab() {
         1.,
     );
     let documents = [
-        Document::Source(Arc::from("/src/one.rs")),
-        Document::Source(Arc::from("/src/two.rs")),
+        Document::Source(Arc::from(Path::new("/src/one.rs"))),
+        Document::Source(Arc::from(Path::new("/src/two.rs"))),
     ];
     for document in &documents {
         open_document(states.open, states.visits, document.clone(), Reach::NewTab);
@@ -3797,7 +3797,7 @@ fn the_panel_and_the_table_hold_the_same_documents() {
         .iter()
         .take(2)
         .map(|symbol| Document::Symbol(symbol.clone()))
-        .chain([Document::Source(Arc::from("/src/main.rs"))])
+        .chain([Document::Source(Arc::from(Path::new("/src/main.rs")))])
         .collect();
 
     let (mut test, states) = TestingRunner::new(
@@ -3862,7 +3862,7 @@ fn a_bulk_close_takes_the_trails_with_the_chips() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
     let path = object.path.clone();
-    let source = Document::Source(Arc::from("/src/main.rs"));
+    let source = Document::Source(Arc::from(Path::new("/src/main.rs")));
     let documents = [
         Document::Symbol(symbols[0].clone()),
         Document::Symbol(symbols[1].clone()),
@@ -3940,8 +3940,8 @@ fn a_bulk_close_forgets_the_tabs_it_closed_and_no_others() {
     let documents = [
         Document::Symbol(symbols[0].clone()),
         Document::Symbol(symbols[1].clone()),
-        Document::Source(Arc::from("/src/main.rs")),
-        Document::Source(Arc::from("/src/lib.rs")),
+        Document::Source(Arc::from(Path::new("/src/main.rs"))),
+        Document::Source(Arc::from(Path::new("/src/lib.rs"))),
     ];
 
     let (mut test, states) = TestingRunner::new(
@@ -4204,7 +4204,7 @@ fn closing_a_binary_keeps_the_source_tabs() {
     let symbol = symbols[0].clone();
     let object = symbol.object.clone();
     let path = object.path.clone();
-    let source = Document::Source(Arc::from("/src/main.rs"));
+    let source = Document::Source(Arc::from(Path::new("/src/main.rs")));
     let function = Document::Symbol(symbol);
 
     let (mut test, states) = TestingRunner::new(
@@ -5061,22 +5061,28 @@ fn a_line_of(symbol: &Symbol) -> LinePos {
         .expect("sum_to's rows name a place");
 
     LinePos {
-        file: info
-            .file(row.file.expect("filtered"))
-            .expect("a row names a file of its own")
-            .clone(),
+        file: Arc::from(Path::new(
+            &**info
+                .file(row.file.expect("filtered"))
+                .expect("a row names a file of its own"),
+        )),
         line: row.line.expect("filtered"),
     }
 }
 
+/// `file` as the debug info names one, for a `LineInfo` built by hand.
+fn named(file: &Path) -> Arc<str> {
+    Arc::from(file.to_str().expect("a utf-8 fixture path"))
+}
+
 /// A run of the one row `row` of `file`, picked out in the source pane with `owed` yet to
 /// scroll to it.
-fn picked_row(row: usize, file: &str, owed: Owed) -> Picked {
+fn picked_row(row: usize, file: impl AsRef<Path>, owed: Owed) -> Picked {
     Picked {
         chars: CharSelection::at(Caret { row, col: 0 }),
         dragging: false,
         by_rows: false,
-        file: Some(file.into()),
+        file: Some(Arc::from(file.as_ref())),
         owed,
     }
 }
@@ -5161,7 +5167,7 @@ fn two_lines_of(symbol: &Symbol) -> (LinePos, LinePos) {
         .expect("the fixture has DWARF");
     let mut named = info.rows().iter().filter_map(|row| {
         Some(LinePos {
-            file: info.file(row.file?)?.clone(),
+            file: Arc::from(Path::new(&**info.file(row.file?)?)),
             line: row.line?,
         })
     });
@@ -5342,7 +5348,7 @@ fn a_line_holding_no_code_leaves_this_tabs_listing_and_no_others() {
     // A line of another file altogether takes it down: this function is nothing that
     // tab is reading, and leaving it up would put it on screen for good.
     let elsewhere = LinePos {
-        file: Arc::from("elsewhere.c"),
+        file: Arc::from(Path::new("elsewhere.c")),
         line: 1,
     };
     asking.set(Some(ask_for(&elsewhere)));
@@ -5432,7 +5438,7 @@ fn a_wait_says_so_only_where_it_may_take_the_listing_down() {
     // A question about another file under the same wait: this listing is nothing that
     // tab is reading, so the reader is owed the word instead.
     let other = LinePos {
-        file: Arc::from("elsewhere.c"),
+        file: Arc::from(Path::new("elsewhere.c")),
         line: 1,
     };
     let waiting = held_inside(sum_to.object.clone(), source(&first), source(&other));
@@ -5513,7 +5519,7 @@ fn the_fixed_sentences_a_pane_draws_are_borrowed() {
     let fresh = Analyzed::default();
     for document in [
         Document::Symbol(symbol.clone()),
-        Document::Source(Arc::from("one.rs")),
+        Document::Source(Arc::from(Path::new("one.rs"))),
         Document::Code(symbol.object.clone()),
     ] {
         assert!(
@@ -5628,7 +5634,7 @@ fn the_queue_keeps_the_newest_question_of_each_kind() {
     // The gutter's marks are a fourth kind, worked last and cancelling none of the rest:
     // a file the reader has left is the one answer nothing is waiting on.
     let marks = |file: &str| Question::Marks {
-        file: Arc::from(file),
+        file: Arc::from(Path::new(file)),
         objects: Vec::new(),
     };
     let drained = newest(
@@ -6246,7 +6252,7 @@ fn the_marks_question_is_asked_per_file_and_again_when_a_binary_arrives() {
 
     // Every marks question the worker was handed: the file, and how many objects it was
     // asked over.
-    let (started, starts) = async_channel::unbounded::<(Arc<str>, usize)>();
+    let (started, starts) = async_channel::unbounded::<(Arc<Path>, usize)>();
     let work = move |question: Question| {
         let Question::Marks { file, objects } = question else {
             panic!("this test asks only about marks");
@@ -6338,7 +6344,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
     settle(&mut test);
 
     let at = LinePos {
-        file: Arc::from("/p/src/main.rs"),
+        file: Arc::from(Path::new("/p/src/main.rs")),
         line: 2,
     };
     located.set(found_references(at, "helper", &[(&used, 2, 12..18)]));
@@ -6365,7 +6371,7 @@ fn a_reference_row_opens_its_file_on_the_line_with_the_name_selected() {
     press_at(&mut test, press);
     settle(&mut test);
 
-    let opened: Arc<str> = Arc::from(&*used);
+    let opened: Arc<Path> = Arc::from(Path::new(&*used));
     let document = Document::Source(opened.clone());
     assert!(
         states.open.active() == Some(document.clone()),
@@ -6450,7 +6456,7 @@ fn drawing_the_references_copies_none_of_them() {
     );
     let mut located = roots.located;
     let at = LinePos {
-        file: Arc::from("/p/src/main.rs"),
+        file: Arc::from(Path::new("/p/src/main.rs")),
         line: 2,
     };
     settle(&mut test);
@@ -6488,7 +6494,7 @@ fn the_panel_groups_a_names_references_under_their_files_and_folds_one_away() {
     );
     let mut located = roots.located;
     let at = LinePos {
-        file: Arc::from("/p/src/main.rs"),
+        file: Arc::from(Path::new("/p/src/main.rs")),
         line: 2,
     };
     settle(&mut test);
@@ -6590,7 +6596,7 @@ fn a_place_rows_hover_goes_with_it_across_a_fold() {
     );
     let mut located = roots.located;
     let at = LinePos {
-        file: Arc::from("/p/src/main.rs"),
+        file: Arc::from(Path::new("/p/src/main.rs")),
         line: 2,
     };
     settle(&mut test);
@@ -6636,7 +6642,7 @@ fn a_references_question_that_answers_nothing_says_there_are_none() {
     );
     let mut located = roots.located;
     let at = LinePos {
-        file: Arc::from("/p/src/main.rs"),
+        file: Arc::from(Path::new("/p/src/main.rs")),
         line: 2,
     };
     settle(&mut test);
@@ -6678,7 +6684,7 @@ fn a_references_question_that_answers_nothing_says_there_are_none() {
 #[test]
 fn a_locations_answer_lands_on_the_question_it_was_asked_of() {
     let at = |line: u32| LinePos {
-        file: Arc::from("/p/src/main.rs"),
+        file: Arc::from(Path::new("/p/src/main.rs")),
         line,
     };
     let places = |file: &str, line: u32| {
@@ -6960,7 +6966,7 @@ fn links_out_of_order_leave_a_span_uncut_rather_than_losing_it() {
 /// to come back to.
 #[test]
 fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
-    let file: Arc<str> = Arc::from("/src/main.rs");
+    let file: Arc<Path> = Arc::from(Path::new("/src/main.rs"));
     let document = Document::Source(file.clone());
     let (mut test, roots) = TestingRunner::new(
         locations_harness,
@@ -7048,7 +7054,7 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
 /// that named no line at all sent the reader to the first line of the file.
 #[test]
 fn a_door_onto_line_0_picks_out_no_row() {
-    let file: Arc<str> = Arc::from("/src/main.rs");
+    let file: Arc<Path> = Arc::from(Path::new("/src/main.rs"));
     let document = Document::Source(file.clone());
     let (mut test, roots) = TestingRunner::new(
         locations_harness,
@@ -7088,7 +7094,7 @@ fn a_door_onto_line_0_picks_out_no_row() {
 /// place's own line.
 #[test]
 fn a_landing_into_the_document_on_top_keeps_its_columns_and_its_scroll() {
-    let file: Arc<str> = Arc::from("/src/main.rs");
+    let file: Arc<Path> = Arc::from(Path::new("/src/main.rs"));
     let document = Document::Source(file.clone());
     let (mut test, roots) = TestingRunner::new(
         locations_harness,
@@ -7396,7 +7402,7 @@ fn a_run_in_a_file_the_listing_names_is_the_companion() {
         .collect::<Vec<_>>();
     // The symbol's own file made distinct from every file the info names, so that the
     // switch is observable whether or not the fixture's one function inlines anything.
-    let own: Arc<str> = "own.c".into();
+    let own: Arc<Path> = Arc::from(Path::new("own.c"));
     studied.lines.file = Some(own.clone());
     let analysis = Analyzed {
         shown: Some(Shown {
@@ -7424,7 +7430,7 @@ fn a_run_in_a_file_the_listing_names_is_the_companion() {
     // A run in a file the symbol knows nothing of: nothing to switch to.
     assert!(file_of(Some("nowhere.rs")) == own);
     // And a source-driven tab's subject is its own file whatever is picked out.
-    let subject = Document::Source("subject.rs".into());
+    let subject = Document::Source(Arc::from(Path::new("subject.rs")));
     assert!(
         source_side(Some(&subject), &analysis, &marks(Some(&elsewhere)), None)
             .expect("a subject")
@@ -7949,7 +7955,7 @@ fn the_row_lit_is_the_symbol_drawn_and_not_the_active_document() {
 /// answer that is a millisecond's work. So this settles rather than pumps. The tests that
 /// *are* about the reading mount the app's [`use_source_reading_with`] with the read
 /// gated, and pump.
-fn use_source_reading_now(sourced: State<Sourced>, showing: State<Option<Arc<str>>>) {
+fn use_source_reading_now(sourced: State<Sourced>, showing: State<Option<Arc<Path>>>) {
     use_source_asking(sourced, showing, move |ask| {
         read(&ask);
         let mut sourced = sourced;
@@ -7959,7 +7965,7 @@ fn use_source_reading_now(sourced: State<Sourced>, showing: State<Option<Arc<str
 
 /// The file a source-driven tab is about, for [`source_menu_harness`].
 #[derive(Clone)]
-struct SubjectFile(Arc<str>);
+struct SubjectFile(Arc<Path>);
 
 /// The Source pane over a source-driven tab, with the viewer a context menu needs in an
 /// ancestor scope -- which `app()` mounts on the root and no other harness here does.
@@ -8070,7 +8076,7 @@ fn calling_links() -> links::Links {
 /// test here is over the one file, and none of them is about what a server calls a name.
 fn mount_linking(
     answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
-    file: Arc<str>,
+    file: Arc<Path>,
 ) -> (TestingRunner, Roots, async_channel::Receiver<AskedOfServer>) {
     mount_linking_calling(answer, file, calling_links())
 }
@@ -8078,7 +8084,7 @@ fn mount_linking(
 /// The same over a file whose names are `links` rather than [`calling_links`]'s.
 fn mount_linking_calling(
     answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
-    file: Arc<str>,
+    file: Arc<Path>,
     links: links::Links,
 ) -> (TestingRunner, Roots, async_channel::Receiver<AskedOfServer>) {
     let (test, roots, _asking, asks) =
@@ -8091,7 +8097,7 @@ fn mount_linking_calling(
 fn mount_linking_classifying(
     classify: impl Fn() -> Result<links::Links, lsp::Failure> + Send + Sync + 'static,
     answer: impl Fn(LspJob) -> Option<LspAnswer> + Send + Sync + 'static,
-    file: Arc<str>,
+    file: Arc<Path>,
 ) -> (
     TestingRunner,
     Roots,
@@ -8182,7 +8188,7 @@ fn unread() -> lsp::Lines {
 }
 
 /// The file a call-following test reads, written where a test can put one.
-fn calling_file(name: &str) -> (Arc<str>, Seeded) {
+fn calling_file(name: &str) -> (Arc<Path>, Seeded) {
     let directory = Seeded::directory(name);
     let file = directory.named("calls.rs", "fn main() {\n    let n = helper(1);\n}\n");
     (file, directory)
@@ -8221,7 +8227,7 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
     press_at(&mut test, call);
     pump(&mut test, |_| states.open.active() != Some(calling.clone()));
 
-    let opened: Arc<str> = Arc::from(defined.to_str().expect("a utf-8 temporary path"));
+    let opened: Arc<Path> = Arc::from(Path::new(&defined));
     let document = Document::Source(opened.clone());
     assert!(
         states.open.active() == Some(document.clone()),
@@ -8258,6 +8264,49 @@ fn a_definition_answer_opens_the_file_and_line_it_names() {
     assert!(
         states.open.active() == Some(calling),
         "Back did not return to the call"
+    );
+}
+
+/// **A definition in a file whose name is not UTF-8 opens that file.** The server names
+/// it by its bytes, which `uri::path_of` hands back intact; a tab named by the lossy
+/// text of the path names a file with U+FFFD in it, which does not exist.
+#[cfg(unix)]
+#[test]
+fn a_definition_in_a_file_named_by_bytes_opens_that_file() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let (file, directory) = calling_file("bytes");
+    let defined = directory.join(std::ffi::OsStr::from_bytes(b"helper\xff.rs"));
+    let place = lsp::Place {
+        file: defined.clone(),
+        line: 1,
+        columns: 3..9,
+    };
+    let (mut test, roots, _asks) = mount_linking(
+        move |job: LspJob| match job {
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
+                reply: replied(want, Ok(vec![place.clone()]), &mut unread()),
+            }),
+            _ => None,
+        },
+        file.clone(),
+    );
+    let states = roots.states;
+    let calling = Document::Source(file);
+    open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
+    settle(&mut test);
+    serving(&mut test, &roots);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    pump(&mut test, |_| states.open.active() != Some(calling.clone()));
+
+    let opened = states.open.active().map(|document| file_of(&document));
+    assert_eq!(
+        opened.as_deref().map(|path| path.as_os_str().as_bytes()),
+        Some(defined.as_os_str().as_bytes()),
+        "the tab names another file than the one the answer named"
     );
 }
 
@@ -8334,7 +8383,7 @@ fn a_definition_answer_from_another_run_opens_nothing() {
     let second = word_point(&test, "two");
     press_at(&mut test, second);
     pump(&mut test, |_| states.open.active() != Some(calling.clone()));
-    let opened = |path: &Path| Document::Source(Arc::from(path.to_str().expect("a utf-8 path")));
+    let opened = |path: &Path| Document::Source(Arc::from(Path::new(&path)));
     assert!(
         states.open.active() == Some(opened(&directory.join("two.rs"))),
         "the second click opened nothing either"
@@ -8523,7 +8572,7 @@ fn a_definition_in_the_file_on_top_puts_the_caret_on_the_name_too() {
 
 /// A file calling two names on one line, written where a test can put one:
 /// `    let n = one(1) + two(2);`, whose calls begin at columns 12 and 21.
-fn two_calling_file(name: &str) -> (Arc<str>, Seeded) {
+fn two_calling_file(name: &str) -> (Arc<Path>, Seeded) {
     let (file, directory) = calling_file(name);
     directory.file("calls.rs", "fn main() {\n    let n = one(1) + two(2);\n}\n");
     (file, directory)
@@ -8607,7 +8656,7 @@ fn a_second_click_gets_its_own_answer_and_not_the_first_clicks() {
     let _ = release.send_blocking(());
     pump(&mut test, |_| states.open.active() != Some(calling.clone()));
 
-    let opened = |path: &Path| Document::Source(Arc::from(path.to_str().expect("a utf-8 path")));
+    let opened = |path: &Path| Document::Source(Arc::from(Path::new(&path)));
     assert!(
         states.open.active() == Some(opened(&directory.join("two.rs"))),
         "the tab is not on the second click's definition"
@@ -8655,7 +8704,7 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
     );
     let states = roots.states;
     let calling = Document::Source(file.clone());
-    let elsewhere = Document::Source(Arc::from("/p/src/elsewhere.rs"));
+    let elsewhere = Document::Source(Arc::from(Path::new("/p/src/elsewhere.rs")));
     open_document(states.open, states.visits, calling.clone(), Reach::NewTab);
     open_document(states.open, states.visits, elsewhere.clone(), Reach::NewTab);
     settle(&mut test);
@@ -8681,7 +8730,7 @@ fn a_definition_lands_in_the_tab_it_was_asked_in() {
         states.open.active() != Some(elsewhere.clone())
     });
 
-    let opened = Document::Source(Arc::from(defined.to_str().expect("a utf-8 path")));
+    let opened = Document::Source(Arc::from(Path::new(&defined)));
     assert!(
         states.open.now().map(|(id, _)| id) == Some(asking),
         "the answer landed in a tab the press was not made in"
@@ -9441,7 +9490,7 @@ fn a_link() -> links::Links {
 /// the question that is on its way, as `Follow` and `Located` both do.
 #[test]
 fn an_answer_to_a_question_nobody_asked_is_not_taken() {
-    let file: Arc<str> = Arc::from("/p/src/main.rs");
+    let file: Arc<Path> = Arc::from(Path::new("/p/src/main.rs"));
     let mut linked = Linked::default();
 
     assert!(linked.asking(1, file.clone()), "the question went out");
@@ -9467,7 +9516,7 @@ fn an_answer_to_a_question_nobody_asked_is_not_taken() {
 /// answer to take.
 #[test]
 fn a_question_on_its_way_is_not_asked_again() {
-    let file: Arc<str> = Arc::from("/p/src/main.rs");
+    let file: Arc<Path> = Arc::from(Path::new("/p/src/main.rs"));
     let mut linked = Linked::default();
 
     assert!(linked.pending(&file, 1), "nothing asked, nothing held");
@@ -9485,14 +9534,14 @@ fn a_question_on_its_way_is_not_asked_again() {
     );
 
     // And the pane moving to another file is a question of its own.
-    assert!(linked.pending(&Arc::from("/p/src/other.rs"), 1));
+    assert!(linked.pending(&Arc::from(Path::new("/p/src/other.rs")), 1));
 }
 
 /// **A definition in a file already open moves inside its tab.** The server answers with
 /// canonical absolute paths, where the app's own spelling is a project directory as the
-/// reader typed it joined with a Files row -- and a `Document::Source` is compared as
-/// text, so the two spell one file two ways. The tab the reader is in is the tab the
-/// definition opens in, whichever way the answer spells the file.
+/// reader typed it joined with a Files row -- and a `Document::Source` is never
+/// canonicalised, so the two spell one file two ways. The tab the reader is in is the tab
+/// the definition opens in, whichever way the answer spells the file.
 ///
 /// A `./` in the path here, which `Path` drops as it compares -- the cheap half of the
 /// walk, and the half `same_file` answers without asking the filesystem. On Windows the
@@ -9501,14 +9550,12 @@ fn a_question_on_its_way_is_not_asked_again() {
 #[test]
 fn a_definition_in_a_file_open_under_another_spelling_stays_in_its_tab() {
     let (canonical, directory) = calling_file("spelling");
-    let dotted: Arc<str> = Arc::from(
-        directory
-            .join(".")
-            .join("calls.rs")
-            .to_str()
-            .expect("a utf-8 temporary path"),
+    let dotted: Arc<Path> = Arc::from(directory.join(".").join("calls.rs"));
+    assert_ne!(
+        dotted.as_os_str(),
+        canonical.as_os_str(),
+        "the two spellings are one string"
     );
-    assert_ne!(dotted, canonical, "the two spellings are one string");
     let place = lsp::Place {
         file: PathBuf::from(&*canonical),
         line: 1,
@@ -9570,15 +9617,8 @@ fn a_definition_in_a_file_spelled_through_a_parent_directory_stays_in_its_tab() 
     let path = directory.join("calls.rs");
     std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
         .expect("writing the source file");
-    let canonical: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
-    let stepped: Arc<str> = Arc::from(
-        directory
-            .join("sub")
-            .join("..")
-            .join("calls.rs")
-            .to_str()
-            .expect("a utf-8 temporary path"),
-    );
+    let canonical: Arc<Path> = Arc::from(Path::new(&path));
+    let stepped: Arc<Path> = Arc::from(directory.join("sub").join("..").join("calls.rs"));
     assert_ne!(
         Path::new(&*stepped),
         Path::new(&*canonical),
@@ -9681,7 +9721,7 @@ fn a_stopped_server_leaves_no_links_behind() {
 fn until_tokens(
     test: &mut TestingRunner,
     asks: &async_channel::Receiver<AskedOfServer>,
-) -> Option<Arc<str>> {
+) -> Option<Arc<Path>> {
     for _ in 0..500 {
         settle(test);
         while let Ok(job) = asks.try_recv() {
@@ -11039,7 +11079,7 @@ fn companion_menu_harness() -> impl IntoElement {
         .shown
         .as_ref()
         .map(|shown| asked_of(&shown.ask))
-        .unwrap_or_else(|| Document::Source(Arc::from("")));
+        .unwrap_or_else(|| Document::Source(Arc::from(Path::new(""))));
 
     rect()
         .expanded()
@@ -11061,7 +11101,7 @@ fn a_companions_line_opens_the_file_it_is_in() {
     let path = directory.join("door.c");
     std::fs::write(&path, "int add(int a, int b)\n{\n    return a + b;\n}\n")
         .expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let file: Arc<Path> = Arc::from(Path::new(&path));
 
     let sum_to = fixture_symbols()
         .into_iter()
@@ -11146,7 +11186,7 @@ fn a_companions_line_opens_the_file_it_is_in() {
 /// **The companion's name in the bar opens in the tab the file is already in.** That name
 /// is the file the *debug info* named -- `DW_AT_comp_dir` joined with the file entry --
 /// and those are exactly the paths that disagree with the reader's own spelling of one
-/// file. A `Document::Source` is compared as text, so the debug info's spelling would be a
+/// file. A `Document::Source` is never canonicalised, so the debug info's spelling would be a
 /// second tab of a file already open, splitting its trail and its positions.
 ///
 /// The same pane's row menu opens the same file through `open_source_place`, which names
@@ -11158,17 +11198,10 @@ fn a_companions_name_opens_in_the_tab_the_file_is_already_in() {
     let path = directory.join("door.c");
     std::fs::write(&path, "int add(int a, int b)\n{\n    return a + b;\n}\n")
         .expect("writing the source file");
-    let open_as: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let open_as: Arc<Path> = Arc::from(Path::new(&path));
     // What the debug info says, spelled through a child and back out: one path with the
     // one above, which only `canonicalize` reduces.
-    let named: Arc<str> = Arc::from(
-        directory
-            .join("sub")
-            .join("..")
-            .join("door.c")
-            .to_str()
-            .expect("a utf-8 temporary path"),
-    );
+    let named: Arc<Path> = Arc::from(directory.join("sub").join("..").join("door.c"));
     assert_ne!(
         Path::new(&*named),
         Path::new(&*open_as),
@@ -11394,7 +11427,7 @@ fn finding_a_line_asks_the_worker_and_brings_the_panel_to_the_front() {
 /// An answer for a line the reader has clicked past must never reach the panes.
 /// Supersession across the *new* kind of question is a different claim from supersession
 /// across symbols: it is the `Ask` comparison being right for a `LinePos`, which is the
-/// one `Arc` in the UI compared by its text.
+/// one `Arc` in the UI compared by its path.
 #[test]
 fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
     let symbols = fixture_symbols();
@@ -11405,9 +11438,9 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
         .clone();
     let at = a_line_of(&wanted);
     let later = LinePos {
-        // A distinct `Arc<str>` of the same path, which is exactly what the app hands
-        // about: a tab's file and a `LineInfo`'s are two allocations of one string.
-        file: at.file.to_string().into(),
+        // A distinct `Arc<Path>` of the same path, which is exactly what the app hands
+        // about: a tab's file and a `LineInfo`'s are two allocations of one path.
+        file: Arc::from(at.file.to_path_buf()),
         line: at.line,
     };
 
@@ -11469,7 +11502,7 @@ fn an_answer_for_a_line_no_longer_asked_about_is_dropped() {
     pump(&mut test, |_| analysis.peek().shown.is_some());
     assert!(seen.peek().len() == 1);
     assert!(seen.peek()[0] == wanted);
-    // Two `Arc<str>`s of one path are one question, or every tab switch would re-resolve.
+    // Two `Arc<Path>`s of one path are one question, or every tab switch would re-resolve.
     assert!(analysis.peek().answered == Some(Ask::Source { at, chosen: None }));
 }
 
@@ -11480,7 +11513,7 @@ fn what_a_tab_asks_follows_its_kind_and_its_driven_line() {
     let symbols = fixture_symbols();
     let symbol = symbols[0].clone();
     let object = symbol.object.clone();
-    let file: Arc<str> = "src/main.rs".into();
+    let file: Arc<Path> = Arc::from(Path::new("src/main.rs"));
     let tab = Document::Source(file.clone());
     let mut driven = Driven::default();
     // Two tabs, so a line can be seen to belong to one entry and not to a file.
@@ -11509,7 +11542,10 @@ fn what_a_tab_asks_follows_its_kind_and_its_driven_line() {
     // And the line belongs to that tab's entry: not to source-driven tabs at large, and
     // not to another tab on the same file.
     assert!(ask(
-        Some(&on(first, Document::Source("other.rs".into()))),
+        Some(&on(
+            first,
+            Document::Source(Arc::from(Path::new("other.rs")))
+        )),
         &driven
     )
     .is_none());
@@ -11591,7 +11627,7 @@ fn closing_a_binary_lets_go_of_the_listing_it_answered() {
 #[test]
 fn a_reveal_the_listing_cannot_answer_is_left_owed() {
     let at = LinePos {
-        file: "main.rs".into(),
+        file: Arc::from(Path::new("main.rs")),
         line: 42,
     };
 
@@ -11650,7 +11686,7 @@ fn listing_harness() -> impl IntoElement {
         .shown
         .as_ref()
         .map(|shown| asked_of(&shown.ask))
-        .unwrap_or_else(|| Document::Source(Arc::from("")));
+        .unwrap_or_else(|| Document::Source(Arc::from(Path::new(""))));
 
     rect().expanded().child(AssemblyPane {
         tab: pane_tab(&document),
@@ -11968,7 +12004,7 @@ fn a_picked_rows_wash_runs_as_wide_as_the_widest_row() {
 
 /// The file the Source pane shows, as a state the test moves.
 #[derive(Clone)]
-struct Showing(State<Arc<str>>);
+struct Showing(State<Arc<Path>>);
 
 /// The Source pane over whatever file [`Showing`] names.
 fn showing_harness() -> impl IntoElement {
@@ -11988,9 +12024,9 @@ fn showing_harness() -> impl IntoElement {
 /// The Source pane over `file`, with the contexts its rows read, in a window `size`,
 /// the file's document activated so the tab's place-keeping sees it open.
 fn source_file_harness(
-    file: &Arc<str>,
+    file: &Arc<Path>,
     size: (f32, f32),
-) -> (TestingRunner, ProjectStates, State<Arc<str>>, State<Marks>) {
+) -> (TestingRunner, ProjectStates, State<Arc<Path>>, State<Marks>) {
     let (mut test, (states, showing, marked)) = TestingRunner::new(
         showing_harness,
         size.into(),
@@ -12047,7 +12083,7 @@ fn reading_harness() -> impl IntoElement {
 
 /// [`source_file_harness`]'s contexts under [`reading_harness`], with the read gated: the
 /// returned sender lets one read through per `send`.
-fn reading_file_harness(file: &Arc<str>) -> (TestingRunner, async_channel::Sender<()>) {
+fn reading_file_harness(file: &Arc<Path>) -> (TestingRunner, async_channel::Sender<()>) {
     let (gate, letting) = async_channel::unbounded::<()>();
     let (mut test, states) = TestingRunner::new(
         reading_harness,
@@ -12097,7 +12133,7 @@ fn the_source_pane_waits_for_the_file_to_be_read() {
         labels(&test)
     );
     assert!(
-        !labels(&test).contains(&format!("Source file not found: {file}")),
+        !labels(&test).contains(&format!("Source file not found: {}", file.display())),
         "a file that has not been read yet was drawn as one that is not there"
     );
 
@@ -12211,7 +12247,7 @@ fn a_move_between_files_does_not_wake_what_reads_the_reader() {
         },
         1.,
     );
-    let open = |file: &Arc<str>| {
+    let open = |file: &Arc<Path>| {
         open_document(
             states.open,
             states.visits,
@@ -12253,7 +12289,7 @@ struct PaneMount(State<Option<u32>>);
 
 fn claiming_pane_harness() -> impl IntoElement {
     let mount = *use_consume::<PaneMount>().0.read();
-    let document = Document::Source(Arc::from("claimed.rs"));
+    let document = Document::Source(Arc::from(Path::new("claimed.rs")));
     let tab = pane_tab(&document);
     let pane = mount.map(|key| {
         rect()
@@ -12282,13 +12318,13 @@ fn a_source_pane_that_goes_stops_naming_its_file() {
         1.,
     );
     settle(&mut test);
-    assert_eq!(showing.read().as_deref(), Some("claimed.rs"));
+    assert_eq!(showing.read().as_deref(), Some(Path::new("claimed.rs")));
 
     mount.set(Some(1));
     settle(&mut test);
     assert_eq!(
         showing.read().as_deref(),
-        Some("claimed.rs"),
+        Some(Path::new("claimed.rs")),
         "the pane that went undid the claim of the one in its place"
     );
 
@@ -12512,8 +12548,9 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     );
     assert!(
         picked.file.as_ref() == Some(&target_file),
-        "the run is of {:?} where the jump lands in {target_file}",
-        picked.file
+        "the run is of {:?} where the jump lands in {}",
+        picked.file,
+        target_file.display()
     );
     assert!(
         picked.owed.source,
@@ -12935,7 +12972,7 @@ fn nothing_compiled(at: LinePos) -> TestingRunner {
 #[test]
 fn nothing_compiled_from_a_line_says_which_line() {
     let test = nothing_compiled(LinePos {
-        file: Arc::from("/src/parser/lexer.rs"),
+        file: Arc::from(Path::new("/src/parser/lexer.rs")),
         line: 42,
     });
 
@@ -12953,7 +12990,7 @@ fn nothing_compiled_from_a_line_says_which_line() {
 #[test]
 fn a_message_is_drawn_on_the_assembly_ground() {
     let test = nothing_compiled(LinePos {
-        file: Arc::from("/src/parser/lexer.rs"),
+        file: Arc::from(Path::new("/src/parser/lexer.rs")),
         line: 42,
     });
 
@@ -13309,7 +13346,7 @@ fn source_pane_harness() -> impl IntoElement {
         .shown
         .as_ref()
         .map(|shown| asked_of(&shown.ask))
-        .unwrap_or_else(|| Document::Source(Arc::from("")));
+        .unwrap_or_else(|| Document::Source(Arc::from(Path::new(""))));
 
     let tab = pane_tab(&document);
     rect()
@@ -13346,7 +13383,7 @@ fn a_landing_is_gone_to_once_and_does_not_drag_the_pane_back() {
     let path = directory.join("long.c");
     let text: String = (1..=60).map(|line| format!("int x{line};\n")).collect();
     std::fs::write(&path, text).expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_str().expect("a utf-8 temporary path"));
+    let file: Arc<Path> = Arc::from(Path::new(&path));
 
     let sum_to = fixture_symbols()
         .into_iter()
@@ -13700,7 +13737,7 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
     let mut studied = Studied::new(sum_to.clone());
     // A companion file no filesystem has, so the source side of the assembly-driven tab is
     // one findable label rather than a listing of somebody else's build directory.
-    studied.lines.file = Some("own.c".into());
+    studied.lines.file = Some(Arc::from(Path::new("own.c")));
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
@@ -13762,7 +13799,7 @@ fn the_side_a_tab_is_driven_from_is_the_left_hand_pane() {
     );
 
     let file = "/nowhere/main.rs";
-    went(Document::Source(Arc::from(file)));
+    went(Document::Source(Arc::from(Path::new(file))));
     settle(&mut test);
     let (asm, src) = (assembly_at(&test), source_at(&test, file));
     assert!(
@@ -13813,7 +13850,7 @@ fn a_file_in_no_compiled_language_opens_without_an_assembly_side() {
         open_document(
             states.open,
             states.visits,
-            Document::Source(Arc::from(file)),
+            Document::Source(Arc::from(Path::new(file))),
             Reach::NewTab,
         )
     };
@@ -13899,7 +13936,7 @@ fn the_leading_bar_puts_the_following_pane_away() {
         open_document(
             states.open,
             states.visits,
-            Document::Source(Arc::from(file)),
+            Document::Source(Arc::from(Path::new(file))),
             Reach::NewTab,
         )
     };
@@ -14015,7 +14052,7 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
             line: Some(1),
             column: None,
         }];
-        studied.lines.info = LineInfo::new(rows, vec![(file.clone(), recorded)]).map(Arc::new);
+        studied.lines.info = LineInfo::new(rows, vec![(named(&file), recorded)]).map(Arc::new);
         studied.lines.file = Some(file.clone());
         studied.lines.line = Some(1);
         let shown = Shown {
@@ -14041,7 +14078,7 @@ fn a_source_file_that_differs_from_the_one_compiled_is_flagged() {
 
         // The file itself is up either way: the notice is over it, not instead of it.
         assert!(
-            label_area(&test, &format!("Source file not found: {file}")).is_none(),
+            label_area(&test, &format!("Source file not found: {}", file.display())).is_none(),
             "{recorded:?}: the file was not opened"
         );
         assert_eq!(
@@ -17435,7 +17472,7 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
     {
         let mut pads = pad.write();
         let program = pads.state_mut().program.as_mut().expect("a program");
-        program.file = Some(file);
+        program.file = Some(Arc::from(Path::new(&*file)));
         program.opening = Some(opening);
     }
     // A buffer with room for that line in it, the cursor being bounded by the rope.
@@ -19117,7 +19154,14 @@ fn a_press_in_one_pane_leaves_the_others_run_alone() {
     );
     test.sync_and_update();
 
-    mark_press(marked, false, Pane::Source, Some("a.c".into()), 3, None);
+    mark_press(
+        marked,
+        false,
+        Pane::Source,
+        Some(Arc::from(Path::new("a.c"))),
+        3,
+        None,
+    );
     mark_press(marked, false, Pane::Assembly, None, 7, None);
     let marks = marked.peek().clone();
     let source = marks.source.as_ref().expect("the source run was dropped");
@@ -19127,7 +19171,7 @@ fn a_press_in_one_pane_leaves_the_others_run_alone() {
         .expect("the assembly run was not started");
     assert_eq!(source.chars.rows(), 3..=3);
     assert_eq!(assembly.chars.rows(), 7..=7);
-    assert!(source.file.as_deref() == Some("a.c"));
+    assert!(source.file.as_deref() == Some(Path::new("a.c")));
     // Each asks the other pane for the scroll, and neither its own.
     assert!(source.owed == Owed::by(Pane::Assembly));
     assert!(assembly.owed == Owed::by(Pane::Source));
@@ -19296,7 +19340,7 @@ fn a_picked_out_instruction_lights_its_line() {
             line: Some(5),
             column: None,
         }],
-        vec![(file.clone(), None)],
+        vec![(named(&file), None)],
     )
     .map(Arc::new);
     studied.lines.file = Some(file.clone());
@@ -19402,7 +19446,7 @@ fn a_sweep_in_the_source_pane_does_not_work_its_pair_out_again() {
             line: Some(5),
             column: None,
         }],
-        vec![(file.clone(), None)],
+        vec![(named(&file), None)],
     )
     .map(Arc::new);
     studied.lines.file = Some(file.clone());
@@ -19746,7 +19790,7 @@ fn the_gutter_marks_the_lines_that_have_code() {
     settle(&mut test);
     settle(&mut test);
 
-    let answer = |lines: [u32; 2], of: &Arc<str>| Coded {
+    let answer = |lines: [u32; 2], of: &Arc<Path>| Coded {
         found: Some((of.clone(), Arc::new(HashSet::from(lines)))),
         over: Vec::new(),
     };
@@ -19774,7 +19818,7 @@ fn the_gutter_marks_the_lines_that_have_code() {
 
     // An answer about another file is not this file's: the pane draws no marks rather
     // than another file's, which is what it shows in the beat after moving.
-    coded.set(answer([5, 6], &Arc::from("elsewhere.c")));
+    coded.set(answer([5, 6], &Arc::from(Path::new("elsewhere.c"))));
     settle(&mut test);
     assert!(
         marked_lines(&test).is_empty(),
@@ -19975,7 +20019,7 @@ fn labels_with_areas(test: &TestingRunner) -> Vec<(String, Area)> {
 #[test]
 fn a_source_driven_tab_comes_back_with_its_line_picked_out() {
     let symbols = fixture_symbols();
-    let file: Arc<str> = "driven.c".into();
+    let file: Arc<Path> = Arc::from(Path::new("driven.c"));
     let tab = Document::Source(file.clone());
 
     let (mut test, roots) = TestingRunner::new(
@@ -21064,7 +21108,7 @@ fn menu_listing_harness() -> impl IntoElement {
         .shown
         .as_ref()
         .map(|shown| asked_of(&shown.ask))
-        .unwrap_or_else(|| Document::Source(Arc::from("")));
+        .unwrap_or_else(|| Document::Source(Arc::from(Path::new(""))));
 
     rect()
         .expanded()
@@ -22714,7 +22758,9 @@ fn show_in_unified_view_opens_the_instructions_file_beside_it() {
     );
     let drawn = labels(&test);
     assert!(
-        drawn.iter().any(|text| text.contains(&*at.file)),
+        drawn
+            .iter()
+            .any(|text| text.contains(&*at.file.to_string_lossy())),
         "the file the instruction was compiled from is not drawn beside it: {drawn:?}"
     );
 }
@@ -23555,7 +23601,7 @@ fn a_bookmark_row_opens_its_place() {
 /// **A bookmarked file opens in the tab it is already in.** A bookmark keeps the spelling
 /// the tab it was made on had, and it is saved: a project directory respelled between
 /// sessions -- or a file since reopened another way -- leaves the saved spelling beside
-/// the reader's current one. A `Document::Source` is compared as text, so pressing the row
+/// the reader's current one. A `Document::Source` is never canonicalised, so pressing the row
 /// would be a second tab of one file, splitting its trail and its positions.
 ///
 /// The press goes through `open_source_tab` for this, as the Files row and the Source
@@ -23566,16 +23612,10 @@ fn a_bookmarked_file_opens_in_the_tab_it_is_already_in() {
     std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
     let path = directory.join("calls.rs");
     std::fs::write(&path, "fn main() {}\n").expect("writing the source file");
-    let open_as = Document::Source(Arc::from(&*path.to_string_lossy()));
+    let open_as = Document::Source(Arc::from(Path::new(&path)));
     // What the bookmark was saved under, spelled through a child and back out: one path
     // with the one above, which only `canonicalize` reduces.
-    let saved = Document::Source(Arc::from(
-        &*directory
-            .join("sub")
-            .join("..")
-            .join("calls.rs")
-            .to_string_lossy(),
-    ));
+    let saved = Document::Source(Arc::from(directory.join("sub").join("..").join("calls.rs")));
     assert!(
         saved != open_as,
         "the two spellings are one path without asking anybody"
@@ -23652,7 +23692,7 @@ fn a_bookmark_is_kept_when_its_binary_closes() {
 fn a_bookmark_row_is_removed_from_its_menu() {
     let symbols = fixture_symbols();
     let document = Document::Symbol(symbols[0].clone());
-    let file = Document::Source(Arc::from("/src/main.rs"));
+    let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
 
     let (mut test, states) = TestingRunner::new(
         bookmarks_harness,
@@ -23708,7 +23748,7 @@ fn removing_a_bookmark_leaves_the_pick_on_the_row_it_was_put_on() {
     bookmarks.set(Bookmarks::from_entries(
         files
             .iter()
-            .map(|path| bookmark_of(&Document::Source(Arc::from(*path))))
+            .map(|path| bookmark_of(&Document::Source(Arc::from(Path::new(*path)))))
             .collect(),
     ));
     settle(&mut test);
@@ -23763,7 +23803,7 @@ fn removing_a_bookmark_leaves_the_pick_on_the_row_it_was_put_on() {
     );
     key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
     assert!(
-        states.open.active() == Some(Document::Source(Arc::from("/src/a.rs"))),
+        states.open.active() == Some(Document::Source(Arc::from(Path::new("/src/a.rs")))),
         "the keyboard is no longer in the list"
     );
 }
@@ -23966,7 +24006,7 @@ fn a_symbol_row_names_its_object_in_the_locations_list_and_not_in_the_symbols_li
 /// bookmark of the file.
 #[test]
 fn a_history_row_bookmarks_its_place_from_its_menu() {
-    let file = Document::Source(Arc::from("/src/main.rs"));
+    let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
     let (mut test, states) = TestingRunner::new(
         history_menu_harness,
         (300., 300.).into(),
@@ -24299,7 +24339,7 @@ fn a_source_row_opens_a_source_driven_tab() {
 
     press(&mut test, "x.c");
 
-    let document = Document::Source(Arc::from(&*path.to_string_lossy()));
+    let document = Document::Source(Arc::from(Path::new(&path)));
     assert!(states.open.active() == Some(document.clone()));
     assert!(states
         .visits
@@ -24312,7 +24352,7 @@ fn a_source_row_opens_a_source_driven_tab() {
 /// **A Files row opens in the tab the file is already in.** A row's path is the project
 /// directory as the reader typed it joined with each entry's own name, so a directory
 /// typed with a `..` -- or reached through a symlink -- spells a file the reader may
-/// already have open a second way. A `Document::Source` is compared as text, so that
+/// already have open a second way. A `Document::Source` is never canonicalised, so that
 /// second spelling is a second tab of one file, splitting its trail and its positions.
 ///
 /// `spelling` is where one file reached two ways is made one tab, and it is no more this
@@ -24323,7 +24363,7 @@ fn a_source_row_opens_in_the_tab_the_file_is_already_in() {
     std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
     let path = directory.join("x.c");
     std::fs::write(&path, "int x;\n").expect("writing the source");
-    let open_as = Document::Source(Arc::from(&*path.to_string_lossy()));
+    let open_as = Document::Source(Arc::from(Path::new(&path)));
     // The project directory spelled through a child and back out, which only
     // `canonicalize` reduces: the row under it is the file the reader has open.
     let stepped = directory.join("sub").join("..");
@@ -25178,7 +25218,7 @@ fn offset_listing_harness() -> impl IntoElement {
         .shown
         .as_ref()
         .map(|shown| asked_of(&shown.ask))
-        .unwrap_or_else(|| Document::Source(Arc::from("")));
+        .unwrap_or_else(|| Document::Source(Arc::from(Path::new(""))));
 
     rect()
         .expanded()
@@ -26579,7 +26619,7 @@ fn the_peeked_active_tab_is_ahead_of_the_memo() {
     );
     let states = roots.states;
     let active = roots.active;
-    let document = |name: &str| Document::Source(Arc::from(name));
+    let document = |name: &str| Document::Source(Arc::from(Path::new(name)));
 
     let first = document("/src/one.rs");
     open_document(states.open, states.visits, first.clone(), Reach::NewTab);
@@ -26839,7 +26879,7 @@ fn a_new_tab_opens_beside_the_one_on_screen() {
         let mut strip = states.open.strip;
         strip.write().show(Tab::Page(Page::Settings));
     }
-    let source = Document::Source(Arc::from("/src/main.rs"));
+    let source = Document::Source(Arc::from(Path::new("/src/main.rs")));
     open_document(states.open, states.visits, source.clone(), Reach::Preview);
     test.sync_and_update();
     assert!(
@@ -26866,7 +26906,7 @@ fn a_temporal_tab_is_promoted_by_ctrl_and_by_a_link_followed_in_it_and_not_by_ba
         .take(3)
         .map(|symbol| Document::Symbol(symbol.clone()))
         .collect();
-    let source = Document::Source(Arc::from("/src/main.rs"));
+    let source = Document::Source(Arc::from(Path::new("/src/main.rs")));
 
     let (mut test, states) = TestingRunner::new(
         project_harness,
@@ -26939,7 +26979,7 @@ fn closing_a_binary_thins_the_trails_of_the_tabs_it_leaves() {
     let path = object.path.clone();
     let symbol = Document::Symbol(symbols[0].clone());
     let other = Document::Symbol(symbols[1].clone());
-    let source = Document::Source(Arc::from("/src/main.rs"));
+    let source = Document::Source(Arc::from(Path::new("/src/main.rs")));
 
     let (mut test, states) = TestingRunner::new(
         project_harness,
@@ -27023,7 +27063,7 @@ fn navigating_panes() -> (
     State<Option<Landing>>,
     Doors,
     Document,
-    Arc<str>,
+    Arc<Path>,
     Seeded,
 ) {
     let sum_to = fixture_symbols()
@@ -27291,7 +27331,7 @@ fn land_harness() -> impl IntoElement {
 #[test]
 fn a_standing_run_of_another_line_is_not_kept_over_the_driven_one() {
     let symbols = fixture_symbols();
-    let file: Arc<str> = Arc::from("/p/src/main.rs");
+    let file: Arc<Path> = Arc::from(Path::new("/p/src/main.rs"));
     let (mut test, roots) = TestingRunner::new(
         land_harness,
         (200., 200.).into(),
@@ -27347,7 +27387,7 @@ fn closing_a_tab_and_a_binary_forget_the_kept_runs() {
     let path = object.path.clone();
     let symbol = Document::Symbol(symbols[0].clone());
     let other = Document::Symbol(symbols[1].clone());
-    let source = Document::Source(Arc::from("/src/main.rs"));
+    let source = Document::Source(Arc::from(Path::new("/src/main.rs")));
 
     let (mut test, states) = TestingRunner::new(
         project_harness,
@@ -27615,7 +27655,7 @@ fn a_kept_run_is_carried_when_the_rows_on_screen_are_of_another_generation() {
     let code = Document::Code(object.clone());
     open_document(states.open, states.visits, code.clone(), Reach::NewTab);
     settle(&mut test);
-    let elsewhere = Document::Source(Arc::from("/p/src/main.rs"));
+    let elsewhere = Document::Source(Arc::from(Path::new("/p/src/main.rs")));
     open_document(states.open, states.visits, elsewhere, Reach::NewTab);
     settle(&mut test);
 
@@ -29741,7 +29781,7 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
     press_at(&mut test, at);
     settle(&mut test);
     assert!(
-        states.open.active() == Some(Document::Source(Arc::from(&*missing.to_string_lossy()))),
+        states.open.active() == Some(Document::Source(Arc::from(Path::new(&missing)))),
         "a hit whose file has gone since the walk opened nothing"
     );
 
@@ -29749,7 +29789,7 @@ fn pressing_a_hit_opens_its_file_on_the_line() {
     press_at(&mut test, at);
     settle(&mut test);
 
-    let document = Document::Source(Arc::from(&*path.to_string_lossy()));
+    let document = Document::Source(Arc::from(Path::new(&path)));
     assert!(states.open.active() == Some(document));
 
     // And the match itself is selected, not merely its line: the columns the hit came
@@ -29796,7 +29836,7 @@ fn pressing_a_hit_drives_the_assembly_side_from_its_line() {
     press_at(&mut test, at);
     settle(&mut test);
 
-    let document = Document::Source(Arc::from(&*path.to_string_lossy()));
+    let document = Document::Source(Arc::from(Path::new(&path)));
     let id = states
         .open
         .now()
@@ -29851,7 +29891,7 @@ fn pressing_a_hit_asks_the_filesystem_nothing() {
     );
 
     // Not vacuous: the row opened its file, which is the press that did the asking.
-    let document = Document::Source(Arc::from(&*path.to_string_lossy()));
+    let document = Document::Source(Arc::from(Path::new(&path)));
     assert!(
         open_documents(states.open) == [document],
         "the hit did not open the file it names"
@@ -30434,7 +30474,7 @@ fn a_source_pane_reads_its_file_again_after_a_build() {
     let directory = Temporary::fresh_directory("run-test");
     let path = directory.join("main.rs");
     std::fs::write(&path, b"fn one() {}\n").expect("writing the source file");
-    let file: Arc<str> = Arc::from(path.to_string_lossy());
+    let file: Arc<Path> = Arc::from(path.as_path());
 
     let (mut test, (states, asking)) = TestingRunner::new(
         built_source_harness,
@@ -30852,7 +30892,7 @@ fn a_diagnostics_place_opens_the_file_it_names() {
     press_at(&mut test, own_place);
     settle(&mut test);
 
-    let file = Arc::<str>::from(&*directory.join("src/main.rs").to_string_lossy());
+    let file: Arc<Path> = Arc::from(directory.join("src/main.rs"));
     assert!(
         open_documents(states.open) == [Document::Source(file)],
         "the place did not open the file it names"
@@ -30862,7 +30902,7 @@ fn a_diagnostics_place_opens_the_file_it_names() {
 /// **A diagnostic's place opens in the tab the file is already in.** The place is the
 /// project's directory as the reader typed it joined with what cargo said, so a directory
 /// typed with a `..` -- or reached through a symlink -- spells a file the reader already
-/// has open a second way. `Document::Source` is compared as text, so that second spelling
+/// has open a second way. `Document::Source` is never canonicalised, so that second spelling
 /// would be a second tab of one file, splitting its trail and its positions.
 ///
 /// The press goes through `open_source_place` for this: `spelling` is where one file
@@ -30875,7 +30915,7 @@ fn a_diagnostics_place_opens_in_the_tab_the_file_is_already_in() {
     // reduces: the file cargo names under it is the file the reader has open.
     let stepped = root.join("src").join("..");
     let file = stepped.join("src/main.rs");
-    let open_as = Arc::<str>::from(&*root.join("src/main.rs").to_string_lossy());
+    let open_as: Arc<Path> = Arc::from(root.join("src/main.rs"));
     assert_ne!(
         Path::new(&*open_as),
         file,
@@ -31249,10 +31289,10 @@ struct ServerAsking(State<Option<LspJobs>>);
 enum AskedOfServer {
     Start(PathBuf),
     Ask(Lookup, lsp::Question),
-    Tokens(Arc<str>),
+    Tokens(Arc<Path>),
     Hover(Lookup),
-    Opened(Arc<str>),
-    Closed(Arc<str>),
+    Opened(Arc<Path>),
+    Closed(Arc<Path>),
     Read(PathBuf),
     Stop,
 }
@@ -32442,10 +32482,10 @@ fn the_queue_keeps_the_last_question_and_every_press() {
             .map(|job| match job {
                 LspJob::Start { .. } => "start".to_owned(),
                 LspJob::Ask { at, .. } => format!("ask {}", at.line),
-                LspJob::Tokens { file, .. } => format!("tokens {file}"),
+                LspJob::Tokens { file, .. } => format!("tokens {}", file.display()),
                 LspJob::Hover { at, .. } => format!("hover {}", at.line),
-                LspJob::Opened { file, .. } => format!("opened {file}"),
-                LspJob::Closed { file, .. } => format!("closed {file}"),
+                LspJob::Opened { file, .. } => format!("opened {}", file.display()),
+                LspJob::Closed { file, .. } => format!("closed {}", file.display()),
                 LspJob::ReadSettings { directory } => format!("read {}", directory.display()),
                 LspJob::Stop => "stop".to_owned(),
             })
@@ -33143,7 +33183,7 @@ fn a_door_moves_the_pane_once_and_not_by_way_of_the_top() {
 
     // The same `land` a followed name and a search hit both make, in place, so the tab on
     // screen is handed the document rather than mounting a pane for it.
-    let door = |test: &mut TestingRunner, file: &Arc<str>, line: u32| {
+    let door = |test: &mut TestingRunner, file: &Arc<Path>, line: u32| {
         land(
             roots.doors,
             Landing {
@@ -33236,7 +33276,7 @@ fn a_door_lands_as_the_pane_draws_the_document_it_opened() {
     }
 
     // A door, and the pass on which the row it landed on first shows.
-    let door = |test: &mut TestingRunner, file: &Arc<str>, line: u32| -> Option<usize> {
+    let door = |test: &mut TestingRunner, file: &Arc<Path>, line: u32| -> Option<usize> {
         land(
             roots.doors,
             Landing {
@@ -33470,7 +33510,7 @@ fn bars_open(test: &TestingRunner) -> usize {
 fn a_pick_made_in_one_list_draws_no_row_of_another() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
-    let file = Document::Source(Arc::from("/src/main.rs"));
+    let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
     let (mut test, (states, picks)) = TestingRunner::new(
         two_lists_harness,
         (600., 300.).into(),
@@ -33535,7 +33575,7 @@ fn a_push_onto_one_trail_draws_no_other_chip() {
         |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
-    let file = |name: &str| Document::Source(Arc::from(format!("/src/{name}.rs").as_str()));
+    let file = |name: &str| Document::Source(Arc::from(Path::new(&format!("/src/{name}.rs"))));
     open_document(states.open, states.visits, file("kept0"), Reach::NewTab);
     open_document(states.open, states.visits, file("kept1"), Reach::NewTab);
     open_document(states.open, states.visits, file("preview0"), Reach::Preview);
@@ -33574,7 +33614,7 @@ fn an_ask_for_the_keyboard_draws_no_chip() {
         1.,
     );
     let states = roots.states;
-    let file = Document::Source(Arc::from("/src/main.rs"));
+    let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
     open_document(states.open, states.visits, file, Reach::NewTab);
     settle(&mut test);
     assert!(label_area(&test, "main.rs").is_some(), "the chip is drawn");
@@ -33605,7 +33645,7 @@ fn a_tab_moved_along_the_bar_does_not_draw_the_tab_list_button() {
         |runner: &mut _| runner.provide_root_context(test_roots).states,
         1.,
     );
-    let file = |name: &str| Document::Source(Arc::from(format!("/src/{name}.rs").as_str()));
+    let file = |name: &str| Document::Source(Arc::from(Path::new(&format!("/src/{name}.rs"))));
     open_document(states.open, states.visits, file("first"), Reach::NewTab);
     open_document(states.open, states.visits, file("second"), Reach::NewTab);
     settle(&mut test);
@@ -33867,7 +33907,7 @@ fn a_lists_pick_is_its_own_and_the_tab_is_only_the_fallback() {
 fn the_list_with_the_keyboard_draws_its_pick_live_and_the_other_grey() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
-    let file = Document::Source(Arc::from("/src/main.rs"));
+    let file = Document::Source(Arc::from(Path::new("/src/main.rs")));
 
     let (mut test, (states, alt)) = TestingRunner::new(
         two_lists_harness,
@@ -34225,7 +34265,7 @@ fn the_ask_goes_to_the_pane_that_leads_the_tab() {
     open_document(
         states.open,
         states.visits,
-        Document::Source(Arc::from("/src/main.rs")),
+        Document::Source(Arc::from(Path::new("/src/main.rs"))),
         Reach::NewTab,
     );
     // Asked for as a press on the tab's chip asks for it.
@@ -35197,7 +35237,7 @@ fn an_empty_box_lists_the_files_opened_most_recently() {
         open_document(
             states.open,
             states.visits,
-            Document::Source(Arc::from(&*path.to_string_lossy())),
+            Document::Source(Arc::from(Path::new(&path))),
             Reach::Preview,
         );
     }
@@ -35268,7 +35308,7 @@ fn a_pick_and_a_press_open_the_row_and_close_the_finder() {
     for name in ["first.rs", "second.rs"] {
         std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
     }
-    let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
+    let opened = |name: &str| Document::Source(Arc::from(Path::new(&directory.join(name))));
     let centre_of_row = |at: Area| middle(at);
 
     press_finder_chord(&states, finder, keys, dock);
@@ -35378,7 +35418,7 @@ fn enter_opens_the_selected_file_in_the_preview_tab() {
     for name in ["first.rs", "second.rs"] {
         std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
     }
-    let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
+    let opened = |name: &str| Document::Source(Arc::from(Path::new(&directory.join(name))));
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35441,7 +35481,7 @@ fn ctrl_enter_opens_a_file_in_a_tab_the_next_row_does_not_take_back() {
     for name in ["first.rs", "second.rs"] {
         std::fs::write(directory.join(name), "fn one() {}\n").expect("writing the file");
     }
-    let opened = |name: &str| Document::Source(Arc::from(&*directory.join(name).to_string_lossy()));
+    let opened = |name: &str| Document::Source(Arc::from(Path::new(&directory.join(name))));
 
     press_finder_chord(&states, finder, keys, dock);
     pump(&mut test, |_| !finder.peek().walking);
@@ -35869,7 +35909,7 @@ fn a_file_outside_the_project_is_not_listed() {
         open_document(
             states.open,
             states.visits,
-            Document::Source(Arc::from(&*path.to_string_lossy())),
+            Document::Source(Arc::from(Path::new(&path))),
             Reach::Preview,
         );
     }
@@ -35903,7 +35943,7 @@ fn pressing_a_row_opens_its_file() {
     press_at(&mut test, row);
     settle(&mut test);
 
-    let file = Document::Source(Arc::from(&*directory.join("kept.rs").to_string_lossy()));
+    let file = Document::Source(Arc::from(directory.join("kept.rs")));
     let opened = tab_showing(&states, &file).expect("the pressed file opened");
     assert!(!finder.peek().open, "the finder closes behind the file");
     assert_eq!(
@@ -36455,7 +36495,7 @@ fn chord(test: &mut TestingRunner, chord: Chord) {
 fn opened_tabs(test: &mut TestingRunner, states: &ProjectStates, count: usize) -> Vec<String> {
     let files: Vec<String> = (0..count).map(|nth| format!("/src/{nth}.rs")).collect();
     for file in &files {
-        let document = Document::Source(Arc::from(file.as_str()));
+        let document = Document::Source(Arc::from(Path::new(&file)));
         open_document(states.open, states.visits, document, Reach::NewTab);
     }
     settle(test);
@@ -36472,7 +36512,7 @@ fn bar(states: &ProjectStates) -> (Vec<Tab>, Option<Tab>) {
 /// a name is what an `assert_eq!` can say went wrong.
 fn showing(states: &ProjectStates) -> Option<String> {
     match states.open.active()? {
-        Document::Source(file) => Some(file.to_string()),
+        Document::Source(file) => Some(file.display().to_string()),
         _ => None,
     }
 }
@@ -36587,7 +36627,7 @@ fn the_number_keys_show_the_nth_tab_and_the_ninth_the_last() {
 fn the_trail_keys_step_back_and_forward_and_a_tab_with_nowhere_to_go_does_nothing() {
     let (mut test, states) = mount_chords();
     let (first, second) = ("/src/first.rs", "/src/second.rs");
-    let document = |file: &str| Document::Source(Arc::from(file));
+    let document = |file: &str| Document::Source(Arc::from(Path::new(file)));
     open_document(states.open, states.visits, document(first), Reach::NewTab);
     // In place, so both places are on the one tab's trail.
     open_document(states.open, states.visits, document(second), Reach::InPlace);
@@ -36737,7 +36777,7 @@ fn mount_bookmark_chords() -> (TestingRunner, ProjectStates) {
 fn the_bookmark_key_adds_the_place_on_screen_and_the_second_press_takes_it_off() {
     let (mut test, states) = mount_bookmark_chords();
     let file = "/src/first.rs";
-    let document = Document::Source(Arc::from(file));
+    let document = Document::Source(Arc::from(Path::new(file)));
     open_document(states.open, states.visits, document.clone(), Reach::NewTab);
     settle(&mut test);
     assert!(states.bookmarks.peek().entries().is_empty());
@@ -36766,7 +36806,7 @@ fn the_bookmark_key_adds_the_place_on_screen_and_the_second_press_takes_it_off()
 #[test]
 fn the_bookmark_key_on_a_page_has_no_place_to_add() {
     let (mut test, states) = mount_bookmark_chords();
-    let document = Document::Source(Arc::from("/src/first.rs"));
+    let document = Document::Source(Arc::from(Path::new("/src/first.rs")));
     open_document(states.open, states.visits, document, Reach::NewTab);
     let mut strip = states.open.strip;
     strip.write().show(Tab::Page(Page::Settings));
@@ -36812,7 +36852,7 @@ fn the_other_pane_key_puts_the_following_pane_away_and_brings_it_back() {
     let mut studied = Studied::new(sum_to.clone());
     // A companion file no filesystem has, so the source side is one findable label rather
     // than a listing of somebody else's build directory.
-    studied.lines.file = Some("own.c".into());
+    studied.lines.file = Some(Arc::from(Path::new("own.c")));
     let shown = Shown {
         ask: Ask::Symbol(sum_to.clone()),
         studied,
@@ -37482,8 +37522,8 @@ struct Followed {
     roots: Roots,
     sum_to: Symbol,
     add: Symbol,
-    long: Arc<str>,
-    short: Arc<str>,
+    long: Arc<Path>,
+    short: Arc<Path>,
     _files: Seeded,
 }
 
@@ -37524,7 +37564,7 @@ impl Followed {
     }
 
     /// `symbol`'s listing as the worker answers `ask` with it, drawn beside `file`.
-    fn answer(&mut self, ask: Ask, symbol: &Symbol, file: &Arc<str>) {
+    fn answer(&mut self, ask: Ask, symbol: &Symbol, file: &Arc<Path>) {
         let mut studied = Studied::new(symbol.clone());
         studied.lines.file = Some(file.clone());
         studied.lines.line = None;

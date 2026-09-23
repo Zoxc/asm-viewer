@@ -32,7 +32,7 @@ pub(crate) struct Linked {
     /// project it has got over and over, each word of it a reason for the effect below to
     /// look again; without this, every one of them sent the same question afresh, and the
     /// one that came back refused wrote over the one that had not.
-    asked: Option<(Arc<str>, u64)>,
+    asked: Option<(Arc<Path>, u64)>,
     /// The file the links below are of, the server run they came back under, and them --
     /// `None` where the server refused to answer.
     ///
@@ -41,14 +41,14 @@ pub(crate) struct Linked {
     /// asked; filed as an empty answer, that beat cost the file its links for the whole
     /// life of the server. Held as a refusal instead, it is what [`Linked::forget_refusal`]
     /// drops when the server has read more of the project.
-    found: Option<(Arc<str>, u64, Option<links::Links>)>,
+    found: Option<(Arc<Path>, u64, Option<links::Links>)>,
 }
 
 impl Linked {
     /// Whether a question is owed for `showing`: nothing held answers it, and none is
     /// already on its way.
-    pub(crate) fn pending(&self, showing: &Arc<str>, run: u64) -> bool {
-        let about = |held: &Option<(Arc<str>, u64)>| {
+    pub(crate) fn pending(&self, showing: &Arc<Path>, run: u64) -> bool {
+        let about = |held: &Option<(Arc<Path>, u64)>| {
             held.as_ref()
                 .is_some_and(|(file, at)| file == showing && *at == run)
         };
@@ -60,7 +60,7 @@ impl Linked {
 
     /// The question has gone out. Whether anything changed, so the caller writes only
     /// then.
-    pub(crate) fn asking(&mut self, run: u64, file: Arc<str>) -> bool {
+    pub(crate) fn asking(&mut self, run: u64, file: Arc<Path>) -> bool {
         let going = Some((file, run));
         if self.asked == going {
             return false;
@@ -72,7 +72,7 @@ impl Linked {
     /// The links in `file`, and nothing where what is held is about another or is a
     /// refusal -- which is what a pane draws in the beat between moving and being
     /// answered.
-    pub(crate) fn links_in(&self, file: &str) -> Option<&links::Links> {
+    pub(crate) fn links_in(&self, file: &Path) -> Option<&links::Links> {
         match &self.found {
             Some((of, _, Some(links))) if &**of == file => Some(links),
             _ => None,
@@ -81,18 +81,18 @@ impl Linked {
 
     /// Take `links` as the answer about `file` in run `run`. Whether anything changed, so
     /// the caller writes only then.
-    pub(crate) fn answer(&mut self, run: u64, file: Arc<str>, links: links::Links) -> bool {
+    pub(crate) fn answer(&mut self, run: u64, file: Arc<Path>, links: links::Links) -> bool {
         self.take(run, file, Some(links))
     }
 
     /// The server refused to answer about `file` in run `run`. Nothing is drawn for it,
     /// and it is asked again once the server has read more of the project.
-    pub(crate) fn answer_refused(&mut self, run: u64, file: Arc<str>) -> bool {
+    pub(crate) fn answer_refused(&mut self, run: u64, file: Arc<Path>) -> bool {
         self.take(run, file, None)
     }
 
     /// Both answers, the guard being the same one.
-    fn take(&mut self, run: u64, file: Arc<str>, links: Option<links::Links>) -> bool {
+    fn take(&mut self, run: u64, file: Arc<Path>, links: Option<links::Links>) -> bool {
         // An answer to a question nobody is waiting for: one already answered, one about
         // a file the pane has since left, or one from a server that has been restarted
         // since. Taking it would let a second question's refusal land on top of the names
@@ -135,7 +135,7 @@ impl Linked {
     /// (`serving`, `src/ui/tests.rs`). The app asks the other way round, which is
     /// [`Linked::pending`].
     #[cfg(test)]
-    pub(crate) fn answered(&self, file: &str, run: u64) -> bool {
+    pub(crate) fn answered(&self, file: &Path, run: u64) -> bool {
         self.asked.is_none()
             && matches!(&self.found, Some((of, at, _)) if &**of == file && *at == run)
     }
@@ -146,7 +146,7 @@ impl Linked {
     /// Called where the server has just been told about the file: what it said before
     /// that is what it could work out of the disk on its own, which is nothing at all
     /// until its own scan of the directory has reached the file.
-    pub(crate) fn forget_file(&mut self, file: &str) -> bool {
+    pub(crate) fn forget_file(&mut self, file: &Path) -> bool {
         let held = matches!(&self.found, Some((of, _, _)) if &**of == file);
         if held {
             self.found = None;
@@ -177,7 +177,7 @@ pub(crate) struct Linking(pub(crate) State<Linked>);
 pub(crate) fn use_linking(
     language: State<Language>,
     linked: State<Linked>,
-    showing: State<Option<Arc<str>>>,
+    showing: State<Option<Arc<Path>>>,
     opened: State<Opened>,
     jobs: LspJobs,
 ) {

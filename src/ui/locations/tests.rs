@@ -44,7 +44,7 @@ fn symbols_of(object: &Arc<Object>) -> Vec<Symbol> {
 
 fn query(file: &str, line: u32) -> Query {
     Query::line(LinePos {
-        file: Arc::from(file),
+        file: Arc::from(Path::new(file)),
         line,
     })
 }
@@ -104,7 +104,7 @@ fn a_close_drops_the_symbols_it_takes_with_it_and_a_load_writes_nothing() {
 /// not under the file, a stop the trail does not hold being a drive nothing reads.
 #[test]
 fn which_door_a_location_row_presses_through() {
-    let file: Arc<str> = Arc::from("now.c");
+    let file: Arc<Path> = Arc::from(Path::new("now.c"));
     let at = LinePos {
         file: file.clone(),
         line: 9,
@@ -144,7 +144,7 @@ fn which_door_a_location_row_presses_through() {
     );
 
     let mut docs = Docs::default();
-    let elsewhere = docs.open(Document::Source(Arc::from("before.h")));
+    let elsewhere = docs.open(Document::Source(Arc::from(Path::new("before.h"))));
     assert!(
         matches!(
             chosen(

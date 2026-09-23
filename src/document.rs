@@ -2,7 +2,7 @@
 //!
 //! [`Document`] is what every tab, trail, visit and bookmark is keyed by. The three
 //! assembly-driven kinds compare by `Arc` pointer identity, the app's rule everywhere;
-//! a source file compares as text, so the same file reached two ways is one tab.
+//! a source file compares as a path, so the same file reached two ways is one tab.
 //!
 //! [`Pane`] is the two sides every tab has, and [`Document::driven_from`] which of them
 //! the reader came for.
@@ -119,9 +119,10 @@ impl fmt::UpperHex for Address {
 ///
 /// A tab holds one of these and has two sides — assembly and source — and the variant
 /// says which side the tab is *about* and therefore which one drives the other. A file is
-/// a string and not a `PathBuf`: the spelling the debug info said, or the project directory
-/// joined with a Files row's entries, which is deliberately the same spelling and is never
-/// canonicalised, since the two are compared as text and a file reached both ways is one tab.
+/// a path, so a name that is not UTF-8 opens the file it names: the spelling the debug
+/// info said, or the project directory joined with a Files row's entries, which is
+/// deliberately the same spelling and is never canonicalised, since the two are compared
+/// as paths and a file reached both ways is one tab.
 ///
 /// [`Code`](Document::Code) is a third kind: **all of one object's code** as one listing,
 /// the symbols drawn as labels inside it where they start. It is assembly-driven like a
@@ -134,7 +135,7 @@ pub enum Document {
     /// One symbol's code.
     Symbol(Symbol),
     /// A source file.
-    Source(Arc<str>),
+    Source(Arc<Path>),
     /// The whole of an object's code, as one listing.
     Code(Arc<Object>),
 }
@@ -154,7 +155,7 @@ impl Document {
         match self {
             Document::Object(object) | Document::Code(object) => &object.path,
             Document::Symbol(symbol) => &symbol.object.path,
-            Document::Source(file) => Path::new(&**file),
+            Document::Source(file) => file,
         }
     }
 
@@ -199,7 +200,7 @@ impl Document {
 
 impl PartialEq for Document {
     /// Each variant by its own rule — `Arc` pointer identity for an object and for an
-    /// object's code, text for a file — and never across the kinds: an object's code and
+    /// object's code, the path for a file — and never across the kinds: an object's code and
     /// the object itself are two documents.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {

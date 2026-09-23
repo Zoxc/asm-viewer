@@ -28,7 +28,7 @@ fn symbol_of(object: &Arc<Object>) -> Symbol {
 fn source(file: &str, line: u32) -> Ask {
     Ask::Source {
         at: LinePos {
-            file: Arc::from(file),
+            file: Arc::from(Path::new(file)),
             line,
         },
         chosen: None,

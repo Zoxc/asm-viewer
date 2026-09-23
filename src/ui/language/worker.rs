@@ -39,9 +39,9 @@ pub(crate) enum LspJob {
         want: lsp::Question,
     },
     /// What every name in one file is, which is a question about the file and not about
-    /// a place in it. The file travels as the `Arc<str>` a document is named by, since
+    /// a place in it. The file travels as the `Arc<Path>` a document is named by, since
     /// that is what the answer has to be matched against.
-    Tokens { run: u64, file: Arc<str> },
+    Tokens { run: u64, file: Arc<Path> },
     /// What the name under the pointer is. A question about a place like [`LspJob::Ask`]'s
     /// four, and **not** a fifth `lsp::Question`: those are bucketed by consumer, of which
     /// this is a third, and a pointer crossing a name must neither take back a definition
@@ -56,12 +56,12 @@ pub(crate) enum LspJob {
     /// since what a file is told to be is the project's to say (`src/ui/opened.rs`).
     Opened {
         run: u64,
-        file: Arc<str>,
+        file: Arc<Path>,
         language: String,
     },
     /// The other half, and the one job that names **no run**: a job's run is what stamps
     /// the answer it comes back as, and a close is answered with nothing.
-    Closed { file: Arc<str> },
+    Closed { file: Arc<Path> },
     /// Let go of the server: it has been stopped already, and this is what reaps it.
     Stop,
 }
@@ -87,13 +87,13 @@ pub(crate) enum LspAnswer {
     /// since it is the one question about a file rather than about a place in one.
     Linked {
         run: u64,
-        file: Arc<str>,
+        file: Arc<Path>,
         links: Result<links::Links, lsp::Failure>,
     },
     /// The server has been told about a file, so what it said about that file before is
     /// what it could work out without it. Not an answer to a question -- an opening is
     /// not one -- but the same shape, since what it does is put the question again.
-    Reopened { run: u64, file: Arc<str> },
+    Reopened { run: u64, file: Arc<Path> },
     /// What the server says the name at one place is. Its own answer and not a `Reply`,
     /// for the reason the links are: it is contents and a range where the four are places.
     Hovered {
@@ -221,7 +221,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 // name in the file, and this is the thread that may take its time. Done
                 // while the conversation is still in hand, the legend being its.
                 let links = asked(&mut talking, |talk| {
-                    talk.semantic_tokens(Path::new(&*file))
+                    talk.semantic_tokens(&file)
                         .map(|tokens| links::Links::of(talk.legend(), &tokens))
                 })?;
                 Some(LspAnswer::Linked { run, file, links })
@@ -235,7 +235,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 file,
                 language,
             } => {
-                let path = PathBuf::from(&*file);
+                let path = file.to_path_buf();
                 let told = asked(&mut talking, |talk| {
                     // Asked before the file is read: a server that takes no documents is
                     // one this reads nothing for.
@@ -252,7 +252,7 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 matches!(told, Ok(true)).then_some(LspAnswer::Reopened { run, file })
             }
             LspJob::Closed { file } => {
-                asked(&mut talking, |talk| talk.closed(Path::new(&*file)));
+                asked(&mut talking, |talk| talk.closed(&file));
                 None
             }
             LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {

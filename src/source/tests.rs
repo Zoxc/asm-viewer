@@ -45,13 +45,9 @@ impl Seeded {
         path
     }
 
-    /// The same, as the string a `Document::Source` names a file by.
-    pub fn named(&self, name: &str, text: &str) -> Arc<str> {
-        Arc::from(
-            self.file(name, text)
-                .to_str()
-                .expect("the temporary directory is utf-8"),
-        )
+    /// The same, as the path a `Document::Source` names a file by.
+    pub fn named(&self, name: &str, text: &str) -> Arc<Path> {
+        Arc::from(self.file(name, text))
     }
 }
 
