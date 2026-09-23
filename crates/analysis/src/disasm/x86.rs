@@ -67,6 +67,13 @@ impl Disassembler for X86 {
 
             let relocation = code.relocation(ip, instruction.len());
 
+            // Which field the relocation is in, so the name goes to the operand that field
+            // encodes and not to whichever the formatter asks about first.
+            let field = relocation.as_ref().and_then(|relocation| {
+                let offset = ip.bytes_to(relocation.address)?;
+                field_at(&decoder.get_constant_offsets(&instruction), offset)
+            });
+
             // Whether *any* relocation covers these bytes, which is not whether one
             // resolved to something navigable: a branch relocated against a section
             // resolves to `None` and its displacement is a placeholder all the same. Only
@@ -82,17 +89,22 @@ impl Disassembler for X86 {
             // The resolver takes the name, so at most one operand is substituted however
             // many the formatter asks about, and anything left over is cleared here before
             // the next instruction.
-            *pending.borrow_mut() = symbol.as_ref().map(|symbol| symbol.display().to_owned());
+            *pending.borrow_mut() = symbol.as_ref().map(|symbol| Pending {
+                name: symbol.display().to_owned(),
+                field,
+            });
 
             // `rip_relative_addresses` is global to the formatter (`format_memory` reads
             // it), so it is flipped per instruction: the `rip+` is kept wherever a
             // relocation covers the operand, since without it `format_memory` folds the
             // displacement into an absolute address the encoding does not have — and a
             // relocated displacement is a placeholder, whether a name is going into it or
-            // not. `EIP` counts too — 64-bit code can address relative to it with a `67h`
-            // override.
+            // not. A relocation in the immediate leaves the displacement real, so that one
+            // is folded as though nothing were relocated. `EIP` counts too — 64-bit code can
+            // address relative to it with a `67h` override.
             formatter.options_mut().set_rip_relative_addresses(
                 relocated
+                    && field != Some(Field::Immediate)
                     && matches!(
                         instruction.memory_base(),
                         iced_x86::Register::RIP | iced_x86::Register::EIP
@@ -210,7 +222,7 @@ impl iced_x86::FormatterOutput for Formatted {
     /// Only a name that is a single span can be pointed at; anything else falls back to
     /// being named beside the instruction, which is `Operand::SymbolName`'s `span: None`.
     /// Either way the answer replaces whatever a number left, the resolver being armed only
-    /// for an instruction that names a symbol and taken by the first operand asked about.
+    /// for an instruction that names a symbol and taken by one operand at most.
     fn write_symbol(
         &mut self,
         _instruction: &iced_x86::Instruction,
@@ -253,22 +265,81 @@ impl iced_x86::FormatterOutput for Formatted {
 /// whatever syntax surrounds it (`[name]` rather than the `[]` dropping the number left).
 ///
 /// A relocation records a byte range and never an operand number, so `pending` is armed
-/// once per instruction and *taken* by the first operand asked about; a second numeric
-/// operand keeps its real value.
+/// once per instruction with the field the relocation is in, and *taken* by the first
+/// operand asked about that the field encodes: a memory operand for a displacement, an
+/// immediate or a branch for an immediate. A relocation in neither field goes to the first
+/// operand asked about. Any other numeric operand keeps its real value.
 struct RelocationResolver {
-    pending: Rc<RefCell<Option<String>>>,
+    pending: Rc<RefCell<Option<Pending>>>,
+}
+
+/// The name the resolver is armed with, and the field of the instruction the relocation is in.
+struct Pending {
+    name: String,
+
+    /// [`None`] where the relocation is in neither field.
+    field: Option<Field>,
+}
+
+/// The two fields of an x86 encoding a relocation can be in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Field {
+    /// A memory operand's displacement.
+    Displacement,
+
+    /// An immediate, or a branch's own displacement, which iced counts as one.
+    Immediate,
+}
+
+/// The field `offset` bytes into the instruction is in, by where the decoder found each.
+fn field_at(offsets: &iced_x86::ConstantOffsets, offset: u64) -> Option<Field> {
+    let offset = usize::try_from(offset).ok()?;
+    let within = |start: usize, size: usize| (start..start.saturating_add(size)).contains(&offset);
+    if offsets.has_displacement()
+        && within(offsets.displacement_offset(), offsets.displacement_size())
+    {
+        Some(Field::Displacement)
+    } else if (offsets.has_immediate()
+        && within(offsets.immediate_offset(), offsets.immediate_size()))
+        || (offsets.has_immediate2()
+            && within(offsets.immediate_offset2(), offsets.immediate_size2()))
+    {
+        Some(Field::Immediate)
+    } else {
+        None
+    }
+}
+
+/// The field an operand of kind `kind` is encoded in, where it is one a relocation can be in.
+fn field_of(kind: iced_x86::OpKind) -> Option<Field> {
+    use iced_x86::OpKind::*;
+    match kind {
+        Memory => Some(Field::Displacement),
+        Immediate8 | Immediate8_2nd | Immediate16 | Immediate32 | Immediate64 | Immediate8to16
+        | Immediate8to32 | Immediate8to64 | Immediate32to64 | NearBranch16 | NearBranch32
+        | NearBranch64 | FarBranch16 | FarBranch32 => Some(Field::Immediate),
+        _ => None,
+    }
 }
 
 impl iced_x86::SymbolResolver for RelocationResolver {
     fn symbol(
         &mut self,
-        _instruction: &iced_x86::Instruction,
+        instruction: &iced_x86::Instruction,
         _operand: u32,
-        _instruction_operand: Option<u32>,
+        instruction_operand: Option<u32>,
         address: u64,
         _address_size: u32,
     ) -> Option<iced_x86::SymbolResult<'_>> {
-        let name = self.pending.borrow_mut().take()?;
+        let mut pending = self.pending.borrow_mut();
+        if let Some(field) = pending.as_ref()?.field {
+            let asked =
+                instruction_operand.and_then(|operand| field_of(instruction.op_kind(operand)));
+            if asked != Some(field) {
+                return None;
+            }
+        }
+        let name = pending.take()?.name;
         // The symbol's address has to be the one asked about: the formatter prints the
         // difference between the two after the name.
         Some(iced_x86::SymbolResult::with_string_kind(

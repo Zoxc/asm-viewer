@@ -92,7 +92,7 @@ impl<'a> Code<'a> {
         let end = u64::try_from(len)
             .ok()
             .and_then(|len| address.checked_add(len));
-        let (_, found) = match end {
+        let (&address, found) = match end {
             Some(end) => code.relocations.range(address..end).next_back(),
             None => code.relocations.range(address..).next_back(),
         }?;
@@ -101,7 +101,7 @@ impl<'a> Code<'a> {
             RelocationTarget::Symbol(index) => self.object.symbols.get(&index).cloned(),
             _ => None,
         };
-        Some(Relocated { target })
+        Some(Relocated { address, target })
     }
 
     /// The text symbol starting at `address`, an address in this code's own section — the
@@ -125,6 +125,10 @@ impl<'a> Code<'a> {
 
 /// A relocation covering an instruction's bytes. See [`Code::relocation`].
 pub(crate) struct Relocated {
+    /// Where the relocation starts, which is what says the field of the instruction it is
+    /// in: it names no operand.
+    pub address: SectionAddress,
+
     /// The text symbol the relocation names, where it names one this object kept.
     pub target: Option<Arc<SymbolData>>,
 }

@@ -678,27 +678,33 @@ indexing past the symbol.
 whose address falls anywhere in the instruction's byte range is resolved to an `Arc<SymbolData>`,
 and the target's name is printed *in place of* the placeholder operand through iced-x86's
 `SymbolResolver` hook, not by suppressing the number, which left the brackets the formatter had
-already opened empty (`call qword ptr []`). Nothing maps a relocation back to an operand number, so
-the resolver is armed once per instruction and the **first** operand asked takes it; a second
+already opened empty (`call qword ptr []`). A relocation names no operand, so the loop works out
+which of the instruction's fields it is in from where the decoder found each
+(`get_constant_offsets`): the displacement or the immediate, a branch's rel32 counting as an
+immediate. The resolver is armed once per instruction with the name and that field, and the first
+operand asked about that the field encodes takes it: a memory operand for a displacement, an
+immediate or a branch for an immediate. The field matters because iced asks about every memory
+operand, so without it `mov dword ptr [esp+4], imm32` relocated at its immediate put the name inside
+the brackets. A relocation in neither field still goes to the first operand asked about. Any other
 numeric operand keeps its real value. A rip-relative operand keeps its `rip+` wherever a relocation
 covers it: `assembly` flips `rip_relative_addresses` **per instruction**, on exactly those with both
-a relocation -- resolved to a name or not -- and a rip-relative memory operand, because
-`format_memory` would otherwise fold the displacement into an absolute address the encoding does not
-have. The displacement a relocation covers is a placeholder either way, so a resolved one would
-print `[target]` and an unresolved one a number that names nothing. The option cannot be set per
-operand, since `format_memory` reads the global one. The placeholder itself is still printed when
-it is not zero -- `[rip-4]`, `[rip+8]`, as `objdump` prints it -- because those bytes are in the
-encoding whatever they stand for; a zero one iced leaves out. A name, though, replaces the whole
-number, whichever operand takes it -- a displacement, an immediate, a branch's own rel32 -- so an
-addend a format stores in the operand rather than in the relocation entry (COFF, Mach-O) is not
-printed beside the name. A near branch has no rip-like form to fall back on either: iced prints its
-target as the address the displacement works out to, so a relocated one reads as an address it does
-not go to. Where the name landed is the span `write_symbol` records, which becomes
+a relocation -- resolved to a name or not, and anywhere but the immediate -- and a rip-relative
+memory operand, because `format_memory` would otherwise fold the displacement into an absolute
+address the encoding does not have. The displacement a relocation covers is a placeholder either
+way, so a resolved one would print `[target]` and an unresolved one a number that names nothing. The
+option cannot be set per operand, since `format_memory` reads the global one. The placeholder itself
+is still printed when it is not zero -- `[rip-4]`, `[rip+8]`, as `objdump` prints it -- because
+those bytes are in the encoding whatever they stand for; a zero one iced leaves out. A name, though,
+replaces the whole number, whichever operand takes it -- a displacement, an immediate, a branch's
+own rel32 -- so an addend a format stores in the operand rather than in the relocation entry (COFF,
+Mach-O) is not printed beside the name. A near branch has no rip-like form to fall back on either:
+iced prints its target as the address the displacement works out to, so a relocated one reads as an
+address it does not go to. Where the name landed is the span `write_symbol` records, which becomes
 `Operand::SymbolName`'s own. That is what lets `InstructionRow` draw the name in the operand's own
-place as a link, a run of the row's text between the spans before and after it. The other
-override, `write_number`, is how a branch target reaches the output: the span an instruction's
-*own* displacement was printed into. One field holds either, because the two never both matter --
-the resolver is armed exactly when the instruction names a symbol, and an operand a name went into
+place as a link, a run of the row's text between the spans before and after it. The other override,
+`write_number`, is how a branch target reaches the output: the span an instruction's *own*
+displacement was printed into. One field holds either, because the two never both matter -- the
+resolver is armed exactly when the instruction names a symbol, and an operand a name went into
 printed no address of its own -- and the loop decides which operand it belongs to afterwards.
 
 **A linked image's calls resolve by address**, since the linker consumed the relocations that named

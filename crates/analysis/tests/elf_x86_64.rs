@@ -414,6 +414,67 @@ fn the_relocation_span_is_the_only_one_replaced() {
 }
 
 #[test]
+fn the_name_goes_to_the_operand_the_relocation_is_in() {
+    // `mov dword ptr [rax+10h], imm32`, relocated at the immediate. The formatter asks
+    // about the memory operand first, and the name is not its.
+    let data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "storer",
+                bytes: &[
+                    0xC7, 0x80, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3,
+                ],
+            },
+            TextSymbol {
+                name: "g",
+                bytes: &[0xC3],
+            },
+        ],
+        &[TextRelocation {
+            in_symbol: 0,
+            offset: 6,
+            target: 1,
+        }],
+    );
+    let object = parse(&data);
+    let mov = &assemble(&object, "storer").instructions[0];
+
+    assert_eq!(text(mov).trim_end(), "mov       dword ptr [rax+10h], g");
+    assert_eq!(symbol_span(mov), Some(("g", SpanKind::Address)));
+}
+
+#[test]
+fn a_relocated_immediate_leaves_a_rip_relative_displacement_real() {
+    // `mov dword ptr [rip+10h], imm32`, relocated at the immediate: the displacement is
+    // not a placeholder, so it is folded into the address it works out to, as an
+    // unrelocated one is.
+    let data = elf_x86_64(
+        &[
+            TextSymbol {
+                name: "storer",
+                bytes: &[
+                    0xC7, 0x05, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC3,
+                ],
+            },
+            TextSymbol {
+                name: "g",
+                bytes: &[0xC3],
+            },
+        ],
+        &[TextRelocation {
+            in_symbol: 0,
+            offset: 6,
+            target: 1,
+        }],
+    );
+    let object = parse(&data);
+    let mov = &assemble(&object, "storer").instructions[0];
+
+    assert_eq!(text(mov).trim_end(), "mov       dword ptr [1Ah], g");
+    assert_eq!(symbol_span(mov), Some(("g", SpanKind::Address)));
+}
+
+#[test]
 fn an_unresolvable_relocation_keeps_the_rip_form() {
     // The same store relocated against a *data* symbol, which parsing drops: a relocation
     // on the instruction with nothing to navigate to, so no link. The displacement is
