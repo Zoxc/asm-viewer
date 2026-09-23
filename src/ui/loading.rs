@@ -22,6 +22,10 @@ pub(crate) struct Loading(pub(crate) State<Loads>);
 /// Read and parse `paths` on a worker thread, putting each object into the list as it is
 /// parsed.
 ///
+/// **A file the app holds already is left out** ([`crate::tree::holds`]): opening a path a
+/// second time would put a second copy of each of its objects in the list. Checked here,
+/// on the one path in, so no caller can forget it -- the Add dialog did.
+///
 /// The channel is unbounded -- the worker should run flat out -- and drained in batches, a
 /// write per member being a re-render per member.
 pub(crate) async fn open_binaries(
@@ -29,6 +33,19 @@ pub(crate) async fn open_binaries(
     loading: State<Loads>,
     paths: Vec<PathBuf>,
 ) {
+    let paths: Vec<PathBuf> = {
+        let (held, loads) = (objects.peek(), loading.peek());
+        let mut wanted: Vec<PathBuf> = Vec::new();
+        for path in paths {
+            if !crate::tree::holds(&held, &loads, &path) && !wanted.contains(&path) {
+                wanted.push(path);
+            }
+        }
+        wanted
+    };
+    if paths.is_empty() {
+        return;
+    }
     // Registered before a byte is read, so the rows are on screen for the whole wait.
     let id = begin_load(loading, &paths);
     read_binaries(objects, loading, id, paths, Vec::new()).await;

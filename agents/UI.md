@@ -1041,7 +1041,10 @@ the reader's own scroll and written over the place they asked for.
 **Opening a binary is the one path in, and it streams.** `open_binaries` (`src/ui/loading.rs`) is
 `close_binary`'s opposite number and the only thing that ever adds to `Objects`. The toolbar's
 Open, a session restore and a build's reopening all go through it or its two halves (`begin_load`,
-`read_binaries`), so they cannot differ about what opening a file means. A scratchpad's program is
+`read_binaries`), so they cannot differ about what opening a file means. It leaves out a path the
+app already holds, loaded or loading (`tree::holds`): a second load of one file puts a second copy
+of each of its objects in the list, and the Add dialog, unlike the Files menu, asked nothing first.
+The two halves are not guarded, a restore and a reopen reading paths nothing holds. A scratchpad's program is
 not one of them: it is the pad's own and never in `Objects` (`agents/Scratchpad.md`). It is a `stream` (`agents/Worker.md`), but the answers come back one at a time: `Loads::begin` registers the paths **before a byte is read**, so the
 sidebar has a row for the whole of the wait rather than from whenever the first answer lands, and
 `take_load` writes each batch of objects in as it arrives. The channel is **unbounded and drained in

@@ -3517,6 +3517,32 @@ fn binaries_added_to_a_project_left_are_dropped() {
     );
 }
 
+/// **A binary added again while it is open is not read a second time.** The Add dialog
+/// can pick a file the project already holds, and loading it again put a second copy of
+/// each of its objects in the list.
+#[test]
+fn a_binary_added_again_is_not_read_twice() {
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    settle(&mut test);
+
+    let path = PathBuf::from("/no/such/binary.o");
+    begin_load(states.loading, std::slice::from_ref(&path));
+    let answer = std::pin::pin!(added_binaries(states, states.stay(), vec![path.clone()]));
+    let polled = std::future::Future::poll(
+        answer,
+        &mut std::task::Context::from_waker(std::task::Waker::noop()),
+    );
+    assert!(
+        polled.is_ready(),
+        "a file already loading was read a second time"
+    );
+}
+
 /// **Asking for a new project that could not be made leaves the open one alone.** With no
 /// store, or no file to be had in it, the directory went into the project still open, and
 /// the binaries were added to it.
