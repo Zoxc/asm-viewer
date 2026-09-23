@@ -799,8 +799,9 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
         interface.set(interface_theme(*appearance, *size));
     });
 
-    // The ask an opened row or a pressed chip leaves, spent on the leading pane of the tab
-    // on screen -- which is why it is handed `open` -- and on the caret that pane wants.
+    // The ask an opened row or a pressed chip leaves, spent on a pane of the tab on screen
+    // -- the one a chip's tab last had the keyboard in, or the leading one, which is why it
+    // is handed `open` -- and on the caret that pane wants.
     use_keyboard_asked(keyboard, open, marked);
     use_let_go_on_blur(keys);
     use_save_on_change(states);

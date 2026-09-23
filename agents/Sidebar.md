@@ -468,7 +468,8 @@ that reaches a panel cancels the ask a row left rather than racing it. The Searc
 
 **Escape is the way out, a step at a time**: in a filter box it puts the keyboard on the rows under
 it with what was typed still in the box, and on the rows it asks for the tab on screen -- the ask a
-pressed chip makes, so the pane also gets the caret a pane handed the keyboard needs. The pick stays
+pressed chip makes (`return_keyboard`), so it goes back to the pane it was last in there, and the
+pane also gets the caret a pane handed the keyboard needs. The pick stays
 where it was and goes grey.
 
 **A click opens a file as source; opening it as a binary is its menu, and the parser's call.** What

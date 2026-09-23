@@ -35746,6 +35746,7 @@ impl Component for SideBox {
             .height(Size::px(40.0))
             .a11y_id(a11y)
             .a11y_focusable(true)
+            .on_pointer_down(move |_| a11y.request_focus())
             .child(label().text(said.to_owned()))
     }
 }
@@ -35834,6 +35835,62 @@ fn the_ask_goes_to_the_pane_that_leads_the_tab() {
     settle(&mut test);
     let drawn = labels(&test);
     assert!(drawn.contains(&"source has it".to_owned()), "{drawn:?}");
+}
+
+/// **A chip puts the keyboard back where the tab had it**, and not in the pane that
+/// leads it: a reader who was in a symbol's source side, went to another tab and came
+/// back is in the source side again.
+#[test]
+fn a_chip_puts_the_keyboard_back_in_the_pane_it_was_left_in() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, keyboard)) = TestingRunner::new(
+        two_panes_harness,
+        (300., 400.).into(),
+        |runner: &mut _| {
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.keyboard)
+        },
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    // A symbol's tab, whose assembly side leads, with the keyboard put in its source side.
+    let row = centre_of(&test, "sum_to");
+    press_at(&mut test, row);
+    settle(&mut test);
+    let symbol = states.open.strip.peek().active().expect("no tab opened");
+    let source = centre_of(&test, "source has not");
+    press_at(&mut test, source);
+    settle(&mut test);
+    assert!(labels(&test).contains(&"source has it".to_owned()));
+
+    // Away to a file's tab and into its assembly side, so the boxes are not left as the
+    // symbol's tab had them.
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(Arc::from(Path::new("/src/main.rs"))),
+        Reach::NewTab,
+    );
+    ask_for_keyboard(keyboard);
+    settle(&mut test);
+    let assembly = centre_of(&test, "assembly has not");
+    press_at(&mut test, assembly);
+    settle(&mut test);
+    assert!(labels(&test).contains(&"assembly has it".to_owned()));
+
+    // Back, as a press on the symbol's chip goes back.
+    raise_tab(states.open, symbol);
+    return_keyboard(keyboard);
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.contains(&"source has it".to_owned()),
+        "the keyboard did not go back to the pane it was left in: {drawn:?}"
+    );
 }
 
 /// The same two, over a pane that mounts late: what the app does, a tab opening before the

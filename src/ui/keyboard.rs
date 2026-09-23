@@ -38,23 +38,33 @@ pub(crate) struct Keys {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Wanted {
     /// The tab on screen: what a press on a chip, and a row that opened a tab, ask for.
-    Tab,
+    /// `back` for an ask that returns the reader to the tab -- a chip, Escape out of a
+    /// list -- which goes to the pane the tab last had the keyboard in rather than the
+    /// one that leads it.
+    Tab { back: bool },
     /// One of the sidebar's panels: what that panel's chord asks for ([`reach_panel`]).
     Panel(Panel),
 }
 
 impl Keys {
-    /// The box an ask should be spent on: the **leading pane's**, where the tab on screen
-    /// has one drawn, and otherwise whatever box there is.
+    /// The box an ask should be spent on: `left`'s where it has one drawn, then the
+    /// **leading pane's**, and otherwise whatever box there is.
     ///
     /// By the pane and not by the order they registered in: a pane keeps its box for as
     /// long as it is mounted and the temporal tab's panes outlive the documents they draw,
     /// so the first box registered is the pane whose side led whichever tab opened first --
     /// which is how a reader who opened a file and then a symbol had the keyboard put in
     /// the file beside the listing they had just asked for.
-    fn wanted_box(&self, leads: Option<Pane>) -> Option<(Option<Pane>, AccessibilityId)> {
-        leads
-            .and_then(|pane| self.pane_box(pane).map(|a11y| (Some(pane), a11y)))
+    fn wanted_box(
+        &self,
+        left: Option<Pane>,
+        leads: Option<Pane>,
+    ) -> Option<(Option<Pane>, AccessibilityId)> {
+        let drawn = |pane: Option<Pane>| {
+            pane.and_then(|pane| self.pane_box(pane).map(|a11y| (Some(pane), a11y)))
+        };
+        drawn(left)
+            .or_else(|| drawn(leads))
             .or_else(|| self.boxes.first().copied())
     }
 
@@ -90,6 +100,9 @@ pub(crate) struct Keyboard {
     /// [`use_keyboard_asked`] once there is a box to spend it on -- which may be several
     /// renders later, a pane with nothing to draw yet registering none.
     asked: State<Option<Wanted>>,
+    /// The pane each document tab last had the keyboard in: where a press on its chip,
+    /// or Escape out of a list, puts it back. Written by [`use_keyboard_left`].
+    left: State<HashMap<DocId, Pane>>,
 }
 
 impl Keyboard {
@@ -97,6 +110,7 @@ impl Keyboard {
         Keyboard {
             keys: State::create(Keys::default()),
             asked: State::create(None),
+            left: State::create(HashMap::new()),
         }
     }
 }
@@ -133,10 +147,20 @@ pub(crate) fn keyboard_in_tab(keyboard: Keyboard) -> bool {
         .any(|(_, a11y)| a11y.is_focused())
 }
 
-/// Ask for the keyboard to go into the tab on screen: what pressing a chip does, so that
-/// reading follows the tab the reader just chose, and what Escape on a list does.
+/// Ask for the keyboard to go into the tab on screen, in the pane that leads it: what a
+/// row that opened a tab asks, so that reading follows what the reader just chose.
 pub(crate) fn ask_for_keyboard(mut keyboard: Keyboard) {
-    keyboard.asked.set_if_modified(Some(Wanted::Tab));
+    keyboard
+        .asked
+        .set_if_modified(Some(Wanted::Tab { back: false }));
+}
+
+/// Ask for the keyboard to go back into the tab on screen, in the pane it was last in
+/// there: what pressing a chip does, and what Escape on a list does.
+pub(crate) fn return_keyboard(mut keyboard: Keyboard) {
+    keyboard
+        .asked
+        .set_if_modified(Some(Wanted::Tab { back: true }));
 }
 
 /// Ask for it to go into `panel` instead: what a panel's chord does, once it has raised
@@ -149,7 +173,11 @@ pub(crate) fn ask_for_panel(mut keyboard: Keyboard, panel: Panel) {
 /// in the press or the chord, because the press is what mounts the panes and the chord is
 /// what raises the panel: the box to focus does not exist until the render it caused has
 /// run.
+///
+/// Also where the pane each tab last had the keyboard in is written down
+/// ([`use_keyboard_left`]), which is what a `back` ask reads.
 pub(crate) fn use_keyboard_asked(keyboard: Keyboard, open: Open, marked: State<Marks>) {
+    use_keyboard_left(keyboard, open);
     use_side_effect(move || {
         // **An ask is kept until there is somewhere to spend it.** A tab opened from a
         // list has nothing to focus in the pass that opened it: its assembly side draws a
@@ -163,14 +191,22 @@ pub(crate) fn use_keyboard_asked(keyboard: Keyboard, open: Open, marked: State<M
         let wanted = *keyboard.asked.read();
         let waiting = match wanted {
             None => return,
-            Some(Wanted::Tab) => {
+            Some(Wanted::Tab { back }) => {
                 // Which side leads the tab on screen, which is the pane the ask is for:
                 // the one the reader asked to see, and the one `DocumentBody` draws first.
-                let leads = {
+                // A reader coming back to the tab goes to where they left it instead.
+                let (left, leads) = {
                     let (strip, docs) = (open.strip.read(), open.docs.read());
-                    active_tab(&strip, &docs).map(|(_, at)| at.document.driven_from())
+                    match active_tab(&strip, &docs) {
+                        Some((id, at)) => (
+                            back.then(|| keyboard.left.peek().get(&id).copied())
+                                .flatten(),
+                            Some(at.document.driven_from()),
+                        ),
+                        None => (None, None),
+                    }
                 };
-                keyboard.keys.read().wanted_box(leads)
+                keyboard.keys.read().wanted_box(left, leads)
             }
             // No pane, so no caret: a list's own pick is its cursor, and a panel handed
             // the keyboard has one already or takes it from the first arrow.
@@ -198,6 +234,41 @@ pub(crate) fn use_keyboard_asked(keyboard: Keyboard, open: Open, marked: State<M
                 mark_top(marked, pane);
             }
         }
+    });
+}
+
+/// Write down which pane of the tab on screen the keyboard is in, whenever it moves into
+/// one.
+///
+/// **Only a move is written**, and only into a pane: the keyboard going into the sidebar
+/// leaves the tab's pane as it was, and a switch of tab that keeps the same pane focused --
+/// the panes are not mounted again for every tab -- writes nothing over the new tab's. The
+/// move a switch does make, the ask spending itself, happens after the strip has changed,
+/// so it is written under the tab it was made for.
+fn use_keyboard_left(keyboard: Keyboard, open: Open) {
+    let focused = use_memo(move || {
+        keyboard
+            .keys
+            .read()
+            .boxes
+            .iter()
+            .find(|(_, a11y)| a11y.is_focused())
+            .and_then(|(pane, _)| *pane)
+    });
+    use_side_effect(move || {
+        let Some(pane) = *focused.read() else {
+            return;
+        };
+        let Some(Tab::Document(id)) = open.strip.peek().active() else {
+            return;
+        };
+        let docs = open.docs.peek();
+        let mut left = keyboard.left;
+        let mut left = left.write();
+        // A closed tab's is dropped here: ids are never given out twice, so it would
+        // only sit there.
+        left.retain(|id, _| docs.get(*id).is_some());
+        left.insert(id, pane);
     });
 }
 

@@ -489,13 +489,13 @@ impl Picking {
         unask_keyboard(self.keyboard);
     }
 
-    /// Escape: the keyboard back in the tab on screen. The same ask a pressed chip makes
-    /// ([`ask_for_keyboard`]) and not a focus taken here, a list knowing nothing about
-    /// which box the tab has -- and it is the ask that puts a caret in a pane that has
-    /// none, which a reader arriving from a list needs as much as one arriving from a
-    /// chip.
+    /// Escape: the keyboard back in the tab on screen, in the pane it was last in there.
+    /// The same ask a pressed chip makes ([`return_keyboard`]) and not a focus taken
+    /// here, a list knowing nothing about which box the tab has -- and it is the ask that
+    /// puts a caret in a pane that has none, which a reader arriving from a list needs as
+    /// much as one arriving from a chip.
     pub(crate) fn to_the_tab(self) {
-        ask_for_keyboard(self.keyboard);
+        return_keyboard(self.keyboard);
     }
 
     /// Where the keyboard goes once a row has been acted on: into the tab a row opened,

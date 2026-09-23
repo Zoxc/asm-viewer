@@ -439,9 +439,10 @@ impl Component for TabHeader {
             })
             .on_press(move |e: Event<PressEventData>| {
                 raise_tab(open, tab);
-                // The reader is going to read in it, so the keyboard goes there too: what
-                // it lands on is the pane the tab is driven from (`use_keyboard_asked`).
-                ask_for_keyboard(keyboard);
+                // The reader is going to read in it, so the keyboard goes there too: back
+                // into the pane it was last in there, and otherwise the pane the tab is
+                // driven from (`use_keyboard_asked`).
+                return_keyboard(keyboard);
                 // A double press on a temporal tab's chip makes it a tab that stays.
                 // freya counts the presses (500 ms, 5 px), and nothing else on the chip
                 // asks it, so the count is this handler's own.

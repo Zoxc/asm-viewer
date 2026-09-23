@@ -607,15 +607,21 @@ asks whether it was a **double press**
 The × still has to `stop_propagation`, now so the press does not reach the chip under it and switch
 to the tab being closed -- and the same `TabClose` ends every row of the tab list, where the press
 it must not reach is the row's own. A press on a chip also **takes the keyboard into the tab**
-(`ask_for_keyboard`), as opening a row of any list does (`agents/Sidebar.md`), so what the reader
-chose is what the arrow keys and Ctrl+C are about. The ask is spent by an effect at the root rather
+(`return_keyboard`), as opening a row of any list does (`ask_for_keyboard`, `agents/Sidebar.md`), so
+what the reader chose is what the arrow keys and Ctrl+C are about. The chip's ask **goes back to the
+pane the tab last had the keyboard in**, where a row's goes to the leading pane: a row names a place
+to read, and a chip names a tab to come back to. Where each tab had it is written down by an effect
+on the focus moving (`use_keyboard_left`), and not at the press that leaves a tab, because a tab is
+left by a dozen doors. It writes only a move, and only into a pane: the panes are not mounted again
+for each tab, so a switch that keeps one focused would otherwise write the old tab's pane under the
+new one. The move a switch does make, the ask being spent, comes after the strip has changed. The ask is spent by an effect at the root rather
 than by the press, because the box to focus is a pane the press has only just mounted -- and it is
 **kept** until there is one: a tab opened from a list draws a sentence until the worker answers, and
 a pane with nothing to show registers no box at all, so an ask spent on the `None` it found in that
 pass was every ask a row ever made. The effect reads the boxes as well as the ask, which is what
 wakes it when the pane arrives. What keeps a kept ask from being spent on somebody else's pane later
 is that putting the keyboard in a list by hand drops it (`unask_keyboard`). It is spent on **the
-pane that leads the tab on screen** (`leading`, shared with `DocumentBody` so the two cannot drift)
+pane that leads the tab on screen**, where the ask is not a way back (`leading`, shared with `DocumentBody` so the two cannot drift)
 and not on whichever box registered first: a pane holds its box for as long as it is mounted and the
 temporal tab's panes outlive the documents they draw, so the first box registered is the pane that
 led whichever tab opened first -- which is how a reader who opened a file and then a symbol had the
