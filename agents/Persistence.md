@@ -242,7 +242,11 @@ against the baseline, so the stamp cannot read as a change, and builds the `Proj
 writes take both halves as it handed them back. They used to stamp each again, for a project whose
 file was claimed by the first write and given its id then; ids are minted in `start_new` and
 `Saves::to_put` now, and `saves` is held under one lock from the decision to the write, so a second stamp
-could only put back what the first one wrote. Nothing in the UI knows the id, which is why nothing
+could only put back what the first one wrote. The third place is `open_at`, for a file that has
+none -- written by hand, or claimed by `start_new` and killed before its first write. Without one,
+every session was stamped with none and dropped by every load. The file is not written for it,
+since the project file changes only when the reader changes something; the first write that happens
+anyway carries it, so a project the reader only ever reads keeps losing its session. Nothing in the UI knows the id, which is why nothing
 in the UI can get it wrong.
 
 **Building puts a `[cargo]` section in each file, and which file each half goes in is that same

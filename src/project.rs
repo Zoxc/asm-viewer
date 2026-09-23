@@ -147,8 +147,16 @@ pub fn switch(store: &Store, path: &Path) -> Result<(Project, Session), Failure>
 ///
 /// The path is used as it was given: nothing here canonicalises or reduces it, so the
 /// caller's own path stays the project's name.
+///
+/// A file with no id -- written by hand, or claimed by [`start_new`] and never written --
+/// is given one here. Not written at once, the project file changing only when the reader
+/// changes something; the first write carries it. Without it every session would be
+/// written without an id too, and so dropped by every load.
 pub fn open_at(store: &Store, path: &Path) -> Result<(Project, Session), Failure> {
-    let (project, session) = load_project(store, path)?;
+    let (mut project, session) = load_project(store, path)?;
+    if project.id.is_none() {
+        project.id = ProjectId::new();
+    }
     remember(store, path);
     saves().opened(store, path.to_path_buf(), &project, &session);
     Ok((project, session))

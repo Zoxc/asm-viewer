@@ -217,12 +217,19 @@ fn a_project_missing_a_half_still_reopens() {
     let path = unsaved_project(&store).expect("a project");
     remember(&store, &path);
 
-    // The file claimed and nothing written into it yet.
+    // The file claimed and nothing written into it yet: the empty project, under an id
+    // given as it opens.
     let (reopened, project, session) = reopen(&store)
         .expect("a project to reopen")
         .expect("it opens");
     assert_eq!(reopened, path);
-    assert_eq!(project, Project::default());
+    assert_eq!(
+        project,
+        Project {
+            id: project.id,
+            ..Project::default()
+        }
+    );
     assert_eq!(session, Session::default());
 
     // The user's half good, the app's half corrupt.
@@ -338,6 +345,41 @@ fn a_project_that_does_not_open_says_which_way() {
             .reason,
         Reason::NotText
     );
+}
+
+/// A project file with no id, as one written by hand has, is given one on opening. The file
+/// is not written for it, but the first write the reader causes carries it, and from then on
+/// the session beside it is believed.
+#[test]
+fn a_project_file_with_no_id_is_given_one() {
+    let _saves = using_saves();
+    let base = directory();
+    let store = Store::at(&base);
+    let path = base.join(format!("app.{PROJECT_EXTENSION}"));
+    fs::create_dir_all(&base).expect("creating the test directory");
+    fs::write(&path, b"").expect("writing the project");
+
+    let (project, _) = open_at(&store, &path).expect("the project opens");
+    assert!(project.id.is_some(), "no id was given");
+    assert_eq!(fs::read(&path).expect("the project file"), b"");
+
+    // A bookmark, which is written at once, and a session, which the flush writes.
+    let bookmarks = [Bookmark {
+        name: None,
+        document: saved_object("a.o"),
+    }];
+    record(
+        &Details::default(),
+        &[],
+        false,
+        &bookmarks,
+        session_with(Some("a.o")),
+    );
+    flush();
+
+    let (reread, session) = load_project(&store, &path).expect("the project reads back");
+    assert_eq!(reread.id, project.id);
+    assert_eq!(session.active, Some(saved_object("a.o")));
 }
 
 /// The session is found by the project file's name, which says nothing about whether that
