@@ -334,7 +334,8 @@ the batch adds only the few that just arrived. `clear_project` **bumps** the id 
 the project being left is parked in its receiver and learns nothing until its next batch, so a
 counter that restarted at zero would hand the new project the very numbers that walk still answers
 to, and its hits -- files outside the new directory -- would land under the new question. `Loads`
-keeps its `next` across a `clear` for the same reason. The work is an argument to the hook for the reason the analysis worker's is: a
+keeps its `next` across a `clear` for the same reason. `clear_project` empties the Locations
+panel too: its places are in the directory being left and its symbols in the binaries closed. The work is an argument to the hook for the reason the analysis worker's is: a
 walk that answers as fast as it is asked can say nothing about superseding.
 
 **The references panel is the Locations panel, and one model holds both answers**

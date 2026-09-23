@@ -496,6 +496,9 @@ pub(crate) struct ProjectStates {
     pub(crate) picks: State<HashMap<Panel, PickedRow>>,
     /// What the project's directory was last searched for, and what was found in it.
     pub(crate) searched: State<Searched>,
+    /// What the Locations panel was last asked, and what it found: symbols of the
+    /// project's binaries, or places in its files.
+    pub(crate) located: State<Located>,
     /// What the project's own workspace built, and what a build replaces.
     pub(crate) build: State<Builds>,
     /// How the window itself is arranged. Not a project's state, and here all the same:

@@ -612,6 +612,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         spawn(name_moved(stored, rescued));
     }
     let searched = context(Searching, Searched::default());
+    let located = context(Locations, Located::default());
     // At the root, not in the overlay: the list of a project's files is kept between
     // opens, and the walk that fills it outlives the overlay being closed.
     let finder = context(Finding, Finder::default());
@@ -632,13 +633,13 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         bookmarks,
         picks,
         searched,
+        located,
         build,
         arranged,
         stay: State::create(Stay::default()),
     });
 
     let analysis = context(Analysis, Analyzed::default());
-    let located = context(Locations, Located::default());
     let coded = context(Coding, Coded::default());
     // The reading of one object's code, whole: what is decoded, what is wanted next,
     // whose listing it is when no tab's, and the rows the view built of it.

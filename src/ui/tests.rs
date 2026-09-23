@@ -7080,6 +7080,42 @@ fn two_references_on_one_line_are_picked_out_one_at_a_time() {
     );
 }
 
+/// Leaving a project takes the Locations panel's answer with it, as it takes the search's:
+/// the places are in the directory being left. Kept, the next project's panel lists them,
+/// and a press on one opens another project's file in this one.
+#[test]
+fn leaving_a_project_empties_the_locations_panel() {
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let mut located = roots.located;
+    let at = LinePos {
+        file: Arc::from(Path::new("/p/src/main.rs")),
+        line: 2,
+    };
+    settle(&mut test);
+    located.set(found_references(
+        at,
+        "helper",
+        &[("/p/src/other.rs", 9, 4..10)],
+    ));
+    settle(&mut test);
+    assert!(labels(&test).contains(&"1 reference to helper".to_owned()));
+
+    clear_project(roots.states);
+    settle(&mut test);
+
+    let shown = labels(&test);
+    assert!(
+        !shown.contains(&"1 reference to helper".to_owned()),
+        "the project left still has its references listed: {shown:?}"
+    );
+    assert!(located.peek().asked.is_none());
+}
+
 /// The panel says which of the uses states it is in, groups what it found under the file
 /// each use is in, and folds a file away when its row is pressed.
 #[test]
@@ -11790,8 +11826,8 @@ fn a_references_question_a_broken_server_never_answers_says_there_are_none() {
 /// **An answer the last project's server gives after the switch lands on nobody.** Its
 /// question was asked in the project left, and the server is stopped with it; but a
 /// server can have written its answer before the stop reached it, and that answer still
-/// carries the ticket the panel holds. The panel says there are none rather than list the
-/// last project's places in this one.
+/// carries the ticket the question went out under. The switch empties the panel, so no
+/// question is waiting for it and the last project's places are not listed in this one.
 #[test]
 fn an_answer_from_the_project_left_lists_nothing() {
     let (file, _directory) = calling_file("switched");
@@ -11833,17 +11869,17 @@ fn an_answer_from_the_project_left_lists_nothing() {
 
     clear_project(states);
     settle(&mut test);
+    assert!(roots.located.peek().pending().is_none());
     let _ = release.send_blocking(());
-    pump(&mut test, |_| roots.located.peek().pending().is_none());
+    for _ in 0..40 {
+        test.sync_and_update();
+        std::thread::sleep(Duration::from_millis(2));
+    }
 
-    let count = roots
-        .located
-        .peek()
-        .found
-        .as_ref()
-        .and_then(Found::places)
-        .map(references::References::count);
-    assert_eq!(count, Some(0), "the last project's answer was listed");
+    assert!(
+        roots.located.peek().found.is_none(),
+        "the last project's answer was listed"
+    );
 }
 
 /// With no server there are no links, so there is no name to ask about and the menu

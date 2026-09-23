@@ -156,6 +156,7 @@ fn record_now(states: ProjectStates) {
         // Not saved.
         picks: _,
         searched: _,
+        located: _,
         build,
         arranged,
         // Which stay this is, which no file holds.
@@ -573,6 +574,12 @@ pub(crate) fn clear_project(states: ProjectStates) {
         id,
         ..Searched::default()
     });
+
+    // The Locations panel likewise: its places are in the directory being left, and its
+    // symbols are the binaries closed above. A question still out is dropped with it, an
+    // answer taking only the question the panel is asking now.
+    let mut located = states.located;
+    located.set(Located::default());
 
     // What one project built says nothing about the next, and a list left standing would
     // have the first build over there replace binaries opened over here. A build still
