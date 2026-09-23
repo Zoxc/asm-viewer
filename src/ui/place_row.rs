@@ -98,7 +98,7 @@ pub(crate) struct PlaceRow<T> {
 }
 
 /// What a row is picked out as: a file row is its path, and a place is what it opens --
-/// the file and the line together. What both grouped panels hand [`ListKeys::over`] to
+/// the file, the line and where on the line, so two references on one line are two picks. What both grouped panels hand [`ListKeys::over`] to
 /// answer the arrows with.
 ///
 /// The path is copied here and not shared on, though the row holds it under an `Arc`
@@ -109,7 +109,11 @@ pub(crate) struct PlaceRow<T> {
 pub(crate) fn place_pick<T: Place>(row: &Row<T>) -> Pick {
     match row {
         Row::File { path, .. } => Pick::Path(path.to_path_buf()),
-        Row::Item { path, item } => Pick::Place(path.to_path_buf(), item.line()),
+        Row::Item { path, item } => Pick::Place(
+            path.to_path_buf(),
+            item.line(),
+            item.columns().map(|columns| columns.start),
+        ),
     }
 }
 

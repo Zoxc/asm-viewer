@@ -65,8 +65,10 @@ pub(crate) enum Pick {
     /// A path: a row of the Files tree, a file the Objects tree read, and the file a run
     /// of hits or of references is grouped under.
     Path(PathBuf),
-    /// A place in a file: a search hit, or a reference.
-    Place(PathBuf, u32),
+    /// A place in a file: a search hit, or a reference. The line, and the column the
+    /// place starts at where it names one: two references on one line are two rows, and
+    /// each is its own pick.
+    Place(PathBuf, u32, Option<usize>),
 }
 
 impl PartialEq for Pick {
@@ -79,8 +81,8 @@ impl PartialEq for Pick {
             (Pick::Visit(ours), Pick::Visit(theirs)) => ours == theirs,
             (Pick::Bookmark(ours), Pick::Bookmark(theirs)) => ours == theirs,
             (Pick::Path(ours), Pick::Path(theirs)) => ours == theirs,
-            (Pick::Place(ours, line), Pick::Place(theirs, other)) => {
-                ours == theirs && line == other
+            (Pick::Place(ours, line, column), Pick::Place(theirs, other, at)) => {
+                ours == theirs && line == other && column == at
             }
             _ => false,
         }

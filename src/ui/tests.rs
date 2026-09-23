@@ -7030,6 +7030,56 @@ fn the_keys_scroll_the_pick_into_view_under_the_panels_heading() {
     }
 }
 
+/// **Two references on one line are two picks.** The pick was the file and the line, so
+/// both rows of a name used twice on a line drew themselves picked out, and the list no
+/// longer said which of the two Enter would open.
+#[test]
+fn two_references_on_one_line_are_picked_out_one_at_a_time() {
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let (mut located, mut alt) = (roots.located, roots.keys.alt);
+    let at = LinePos {
+        file: Arc::from(Path::new("/p/src/main.rs")),
+        line: 2,
+    };
+    settle(&mut test);
+    located.set(found_references(
+        at,
+        "x",
+        &[("/p/src/other.rs", 3, 2..3), ("/p/src/other.rs", 3, 5..6)],
+    ));
+    settle(&mut test);
+
+    // The two rows, top down, by the line number each draws.
+    let mut rows: Vec<Area> = labels_with_areas(&test)
+        .into_iter()
+        .filter_map(|(text, area)| (text == "3").then_some(area))
+        .collect();
+    rows.sort_by(|ours, theirs| ours.origin.y.total_cmp(&theirs.origin.y));
+    assert_eq!(rows.len(), 2, "{rows:?}");
+
+    alt.set(true);
+    settle(&mut test);
+    press_at(
+        &mut test,
+        (
+            (rows[1].origin.x + 5.0) as f64,
+            (rows[1].origin.y + 5.0) as f64,
+        ),
+    );
+    settle(&mut test);
+    assert_eq!(drawn_at(&test, rows[1].origin.y), Chosen::Live);
+    assert_eq!(
+        drawn_at(&test, rows[0].origin.y),
+        Chosen::No,
+        "the other reference on the line is picked out too"
+    );
+}
+
 /// The panel says which of the uses states it is in, groups what it found under the file
 /// each use is in, and folds a file away when its row is pressed.
 #[test]
