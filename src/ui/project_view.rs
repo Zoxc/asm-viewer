@@ -450,14 +450,17 @@ impl Component for CargoSection {
         // the boxes above and below ([`ProjFile`]).
         let directory = use_consume::<Workspace>().0.read().clone();
         let profile = use_memo(move || proj.read().profile)();
+        let stay = *use_project_states().stay.read();
 
         // The manifest is read on mount and whenever the directory or the profile
         // changes -- the two things that decide what the answer is. A keystroke in the
         // directory box costs one `read_to_string` of a half-typed path, which fails
-        // cheaply, `files_view`'s own bargain.
-        use_side_effect_with_deps(&(directory.clone(), profile), {
+        // cheaply, `files_view`'s own bargain. And again in every project: a switch
+        // empties `Builds` and drops a read still on its way, and the page can stay up
+        // across one to a project over the same directory.
+        use_side_effect_with_deps(&(directory.clone(), profile, stay), {
             let jobs = jobs.clone();
-            move |(directory, profile): &(Option<PathBuf>, Profile)| {
+            move |(directory, profile, _): &(Option<PathBuf>, Profile, Stay)| {
                 let Some(directory) = directory.clone() else {
                     return;
                 };

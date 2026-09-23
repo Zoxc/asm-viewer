@@ -31597,6 +31597,35 @@ fn a_build_answer_for_a_project_left_is_dropped() {
     assert!(build.previous.is_empty());
 }
 
+/// **The manifest is read again for the next project, whatever its directory.** A switch
+/// empties `Builds`, and the Project page can stay up across one; the section asked only
+/// when the directory or the profile changed, so a project over the same directory was
+/// left saying it had no `Cargo.toml`, its Build button dimmed.
+#[test]
+fn the_manifest_is_read_again_for_a_project_over_the_same_directory() {
+    let (mut test, roots, _asking, _asks) = mount_project(|job: BuildJob| {
+        BuildAnswer::Read(Manifest {
+            path: Some(job.directory.join("Cargo.toml")),
+            profiles: None,
+            debug_lines: true,
+            edit_refused: None,
+        })
+    });
+    let states = roots.states;
+    let mut proj = states.proj;
+    let over = |file: &str| OpenProject {
+        file: Some(PathBuf::from(file)),
+        workspace_text: "/work/app".to_owned(),
+        ..OpenProject::default()
+    };
+    proj.set(over("/store/a.avproj"));
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
+
+    clear_project(states);
+    proj.set(over("/store/b.avproj"));
+    pump(&mut test, |_| states.build.peek().manifest.path.is_some());
+}
+
 /// A build is the app's one word that the files under the project's directory have
 /// changed, so a finished one drops what the panes read of them. Without it the pane draws
 /// the text from before the build under the new build's line numbers, and the checksum row
