@@ -661,6 +661,15 @@ fn the_digest_says_what_a_build_was_of() {
     let mut other = pad.clone();
     dependencies(&mut other, [("a", "bc"), ("1", "2")]);
     assert_ne!(one.digest(), other.digest());
+
+    // Space around a row's text is not in the manifest, so it is not a different program.
+    let mut spaced = pad.clone();
+    spaced.add_dependency(" rand", "0.8 ");
+    assert_eq!(
+        spaced.manifest().expect("a manifest"),
+        crated.manifest().expect("a manifest")
+    );
+    assert_eq!(spaced.digest(), crated.digest(), "a space is not an edit");
 }
 
 /// **A row that has gone is still somewhere to write.** The boxes of a deleted row go on

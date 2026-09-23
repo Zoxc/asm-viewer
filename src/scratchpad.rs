@@ -519,17 +519,17 @@ impl Scratchpad {
     ///
     /// A digest of what is there and not a counter of changes, so a reader who types a
     /// character and takes it back is building the same program and is told so. The bytes
-    /// hashed are the source and then each row's two halves, every one of them ended by a
-    /// byte that cannot appear in what it follows, so no two different lists hash the same
-    /// by running together.
+    /// hashed are the source and then each row's two halves, trimmed as the manifest writes
+    /// them, every one of them ended by a byte that cannot appear in what it follows, so no
+    /// two different lists hash the same by running together.
     pub fn digest(&self) -> String {
         let mut bytes = Vec::with_capacity(self.source.len() + 1);
         bytes.extend_from_slice(self.source.as_bytes());
         bytes.push(0);
         for dependency in &self.dependencies {
-            bytes.extend_from_slice(dependency.name.as_bytes());
+            bytes.extend_from_slice(dependency.name().as_bytes());
             bytes.push(0);
-            bytes.extend_from_slice(dependency.version.as_bytes());
+            bytes.extend_from_slice(dependency.version().as_bytes());
             bytes.push(0);
         }
         analysis::FileDigest::of(&bytes).to_string()

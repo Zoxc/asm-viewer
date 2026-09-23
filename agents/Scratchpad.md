@@ -260,7 +260,8 @@ place -- and exact where that one is a guess, since the app wrote the source thi
 built from and kept it beside the program. What a build was *of* is the source and the dependency
 rows (`Scratchpad::digest`, which hashes them where they sit rather than gathering them into a
 value of its own first), and deliberately **not** the name: it lives in `[package.metadata]`, which
-cargo compiles nothing from, so a rename must not make a listing out of date. A digest of what is
+cargo compiles nothing from, so a rename must not make a listing out of date. Nor is the space
+around a row's text, which the manifest trims away: the rows are hashed as it writes them. A digest of what is
 there and not a counter of changes, so a reader who types a character and takes it back is building
 the same program and is told so.
 `built_from` is taken from the scratchpad the **job** carried, never from what is on screen when
