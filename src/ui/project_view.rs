@@ -764,7 +764,9 @@ impl Component for RecentsSection {
                     icon: ("plus", lucide::plus()),
                     text: "New project",
                     live: true,
-                    press: EventHandler::new(move |_| new_project(states)),
+                    press: EventHandler::new(move |_| {
+                        new_project(states);
+                    }),
                 }
                 .into_element(),
             ),

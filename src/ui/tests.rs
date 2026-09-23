@@ -3408,6 +3408,50 @@ fn binaries_added_to_a_project_left_are_dropped() {
     );
 }
 
+/// **Asking for a new project that could not be made leaves the open one alone.** With no
+/// store, or no file to be had in it, the directory went into the project still open, and
+/// the binaries were added to it.
+#[test]
+fn a_new_project_that_could_not_be_made_changes_nothing() {
+    let (mut test, states) = TestingRunner::new(
+        project_harness,
+        (200., 200.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    // No store is the one failure a test can have without breaking a directory.
+    let mut store = states.store;
+    store.set(None);
+    let mut proj = states.proj;
+    proj.set(OpenProject {
+        file: Some(PathBuf::from("/store/a.avproj")),
+        workspace_text: "/a".to_owned(),
+        ..OpenProject::default()
+    });
+    settle(&mut test);
+
+    directory_as_project(states, Path::new("/chosen"));
+    assert_eq!(
+        proj.peek().workspace_text,
+        "/a",
+        "the directory went into the project already open"
+    );
+
+    let answer = std::pin::pin!(binaries_as_project(
+        states,
+        vec![PathBuf::from("/no/such/binary.o")]
+    ));
+    let polled = std::future::Future::poll(
+        answer,
+        &mut std::task::Context::from_waker(std::task::Waker::noop()),
+    );
+    assert!(polled.is_ready(), "the answer went on to load");
+    assert!(
+        states.loading.peek().paths().is_empty(),
+        "the files were loaded into the project already open"
+    );
+}
+
 /// Whether a load was registered each time the effect in [`boot_harness`] ran.
 #[derive(Clone)]
 struct Registered(Rc<RefCell<Vec<bool>>>);

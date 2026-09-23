@@ -685,7 +685,9 @@ baselines *before* the app is emptied, and freya wakes an effect by a notify rat
 write, so the save observer runs once after the whole handler and sees a settled state that matches
 the baseline exactly. `new_project` goes the same way, with a default project and an empty session:
 there is nothing saved to put back, so the restore does nothing, and the way in is still the one way
-in.
+in. It answers whether it got in: with no store, or no file to claim in it, the project open stays,
+and "Open a directory as a project..." and "Open a file as a project..." stop there rather than put
+what they were given into that one.
 
 **What the Project view starts, it starts with `spawn_forever`.** A task belongs to the scope that
 spawned it, and this view is drawn only while its tab is the one on screen, so a `spawn` here is

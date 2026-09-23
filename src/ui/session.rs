@@ -679,26 +679,38 @@ pub(crate) fn ask_for_a_project(states: ProjectStates) {
 
 /// Ask for a directory and start a project about it.
 pub(crate) fn ask_for_a_directory(states: ProjectStates) {
-    let mut proj = states.proj;
     ask_file(
         AsyncFileDialog::new().set_title("Open a directory as a project..."),
         AskFor::Folder,
-        move |path| {
-            new_project(states);
-            proj.write().workspace_text = path.to_string_lossy().into_owned();
-        },
+        move |path| directory_as_project(states, &path),
     );
+}
+
+/// Start a project over `path`. Nothing where no project could be started: the directory
+/// is the new project's, and the one still open never asked for it.
+pub(crate) fn directory_as_project(states: ProjectStates, path: &Path) {
+    if !new_project(states) {
+        return;
+    }
+    let mut proj = states.proj;
+    proj.write().workspace_text = path.to_string_lossy().into_owned();
 }
 
 /// Ask for binaries and start a project holding them.
 pub(crate) fn ask_for_a_binary(states: ProjectStates) {
     ask_files(
         binaries_dialog("Open a file as a project..."),
-        move |paths| async move {
-            new_project(states);
-            open_binaries(states.objects, states.loading, paths).await;
-        },
+        move |paths| binaries_as_project(states, paths),
     );
+}
+
+/// Start a project holding `paths`, and nothing where none could be started, for
+/// [`directory_as_project`]'s reason.
+pub(crate) async fn binaries_as_project(states: ProjectStates, paths: Vec<PathBuf>) {
+    if !new_project(states) {
+        return;
+    }
+    open_binaries(states.objects, states.loading, paths).await;
 }
 
 /// Put the window back the way the session left it: the sidebar's arrangement, and the two
@@ -793,15 +805,17 @@ fn empty_the_app(states: ProjectStates) {
     bookmarks.set(Bookmarks::default());
 }
 
-/// Start a project the reader has not given a place and go to it.
-pub(crate) fn new_project(states: ProjectStates) {
+/// Start a project the reader has not given a place and go to it. Answers whether it did:
+/// with no store, or no file to be had in it, the project open stays open.
+pub(crate) fn new_project(states: ProjectStates) -> bool {
     let store = states.store.peek().clone();
     let Some(path) = store.and_then(|store| project::start_new(&store)) else {
-        return;
+        return false;
     };
 
     clear_project(states);
     // The same way in as the other two. A default project and an empty session have
     // nothing to put back, so the restore does nothing.
     enter_project(states, path, Project::default(), Session::default());
+    true
 }
