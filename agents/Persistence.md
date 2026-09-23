@@ -207,7 +207,9 @@ stays, and the two files it came from go -- unless they are the two it just wrot
 dialog pointed at the project's own file makes them. That is asked of the canonical paths as well
 as the spellings, so `projects/../projects/3.avproj` is the same file too. `Saves::moved_to` then moves the id and nothing
 else -- only *where* the project is has changed, so every other baseline still describes what
-the app is holding.
+the app is holding. A session write that fails does not fail the put, the project being already
+where the reader asked; the session is then owed, as a failed flush's is, and a move keeps the old
+session file rather than take away the only copy on disk.
 
 **What travels comes out of one accessor**, `Saves::to_put`: the file the project is in now,
 and the two files as they stand under the id the put gives them. `put_in` stayed in

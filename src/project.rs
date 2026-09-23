@@ -217,14 +217,18 @@ pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
     if !write_or_warn(path, |path| project.save_to(store, path)) {
         return false;
     }
-    // The session is the app's own and regenerable, so a failure here is worth a line in
-    // the log and nothing more: the project itself is already where the reader asked.
-    write_or_warn(&session_beside(path), |path| session.save_to(store, path));
+    // A failed session write does not fail the put: the project is already where the
+    // reader asked. The session is owed instead, and a move keeps the old copy of it.
+    let session_written = write_or_warn(&session_beside(path), |path| session.save_to(store, path));
 
     // A move onto the file the project is already in has nothing to leave behind, and the
     // two files it would remove are the two just written.
     if put == Put::Move && !same_file(&from, path) {
-        for leaving in [from.clone(), session_beside(&from)] {
+        let mut leaving = vec![from.clone()];
+        if session_written {
+            leaving.push(session_beside(&from));
+        }
+        for leaving in leaving {
             if let Err(error) = fs::remove_file(&leaving) {
                 // The copy is made and the app has moved on; a file left behind is untidy
                 // and not lost work.
@@ -235,6 +239,9 @@ pub fn put_in(store: &Store, path: &Path, put: Put) -> bool {
     }
     remember(store, path);
     saves.moved_to(path.to_path_buf(), id);
+    if !session_written {
+        saves.owes_session(session);
+    }
     log::debug!("the project is now {}", path.display());
     true
 }

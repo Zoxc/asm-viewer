@@ -29,7 +29,7 @@ fn a_project_file_is_known_by_its_extension() {
 /// **opened** has the other half of it: the baseline every change is measured against is the
 /// stub `opened` seeded, and only `stored` says what the session file holds.
 ///
-/// One of four tests here that go through the `SAVES` static, each holding
+/// One of the tests here that go through the `SAVES` static, each holding
 /// [`using_saves`] while it does. Every other test here builds a `Saves` of its own. The
 /// headless UI tests reach the static too, through `record` and `flush`.
 #[test]
@@ -76,6 +76,42 @@ fn putting_a_project_somewhere_carries_the_id_and_the_session() {
         carried.active,
         Some(saved_object("a.o")),
         "and it has the session the file held"
+    );
+}
+
+/// **A put whose session write fails still owes the session**, and a move keeps the old
+/// copy of it. The put went on as if the write had worked: a move removed the old session
+/// file, and nothing was left for the next flush to write.
+#[test]
+fn a_put_whose_session_write_failed_owes_it_and_keeps_the_old_one() {
+    let _saves = using_saves();
+    let base = directory();
+    let store = Store::at(&base);
+    let from = start_new(&store).expect("a project is started");
+    record(
+        &Details::default(),
+        &["/tmp/a.o".into()],
+        false,
+        &[],
+        session_with(Some("a.o")),
+    );
+
+    // A directory where the session goes, which no file can be renamed over.
+    let to = base.join(format!("kernel.{PROJECT_EXTENSION}"));
+    fs::create_dir(session_beside(&to)).expect("the directory in the way");
+    assert!(put_in(&store, &to, Put::Move), "the project was written");
+    assert!(
+        session_beside(&from).exists(),
+        "the move took away the only session on disk"
+    );
+
+    fs::remove_dir(session_beside(&to)).expect("the directory taken away");
+    flush();
+    let (_, session) = load_project(&store, &to).expect("the project reads back");
+    assert_eq!(
+        session.active,
+        Some(saved_object("a.o")),
+        "the flush did not write the session it owed"
     );
 }
 
