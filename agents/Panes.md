@@ -1388,6 +1388,12 @@ same reason: both bars of a tab can be open, and typing in one drew the other
 pane is what makes the memo's closure safe to write `at` into: a key change resets a scope's hooks,
 and the panes themselves are handed a new tab rather than mounted again.
 
+**The box holds its own copy of the pattern, taken when the bar mounts**, and writes it back to the
+bar; nothing copies the other way. So a Ctrl+F that seeds a bar already open mounts the bar again:
+`open_find` counts the seeds (`Find::seeds`) and the slot keys the bar by the count. Kept mounted,
+the box went on showing the old pattern while the pane searched for the seed, and the next
+keystroke wrote the old pattern back (`a_re_seeded_find_bar_shows_the_seed_in_its_box`).
+
 **The bar is the last child of the pane's own flex column.** Both panes were already
 `Content::Flex` with a fixed-height bar and one `height(Size::flex(1.0))` body, so a third child
 takes its own height and the listing is given what is left -- which is also what keeps a page of

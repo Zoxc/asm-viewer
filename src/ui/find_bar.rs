@@ -161,6 +161,10 @@ pub(crate) struct Find {
     pub(crate) step: Option<Direction>,
     /// The caret the opening asked for, spent by the box once it is mounted.
     pub(crate) focus: bool,
+    /// How many times a Ctrl+F has changed the pattern of this bar while it was open:
+    /// what the box is keyed by. The box holds its own copy of the pattern, taken when it
+    /// mounts, so a seed has to mount it again to be shown in it.
+    seeds: u64,
 }
 
 impl Find {
@@ -328,6 +332,7 @@ pub(crate) fn open_find(
     if let Some(seed) = seed.filter(|seed| !seed.is_empty()) {
         if bar.filter.pattern != seed {
             bar.filter.pattern = seed;
+            bar.seeds = bar.seeds.wrapping_add(1);
             bar.reset();
         }
     }
@@ -413,7 +418,8 @@ pub(crate) fn use_searching(at: Where, searchable: Option<Searchable>) {
 ///
 /// Keyed by the pane, so a tab switch remounts it -- and the [`FindBar`] under it, whose
 /// box is then seeded again from that pane's own bar rather than going on with the last
-/// tab's.
+/// tab's. The bar is keyed by [`Find::seeds`] for the same reason: a Ctrl+F that seeds a
+/// bar already open remounts it, so the box shows the seed.
 #[derive(Clone, PartialEq)]
 pub(crate) struct FindSlot {
     pub(crate) at: Where,
@@ -425,16 +431,20 @@ keyed!(FindSlot);
 impl Component for FindSlot {
     fn render(&self) -> impl IntoElement {
         let finds = use_try_consume::<Looking>().map(|looking| looking.0);
-        let open = finds.is_some_and(|finds| finds.read().open(&self.at));
-        match open {
-            true => FindBar {
+        let seeds = finds.and_then(|finds| {
+            let finds = finds.read();
+            finds.open(&self.at).then(|| finds.get(&self.at).seeds)
+        });
+        match seeds {
+            Some(seeds) => FindBar {
                 at: self.at,
                 key: DiffKey::None,
             }
+            .key(seeds)
             .into_element(),
             // A box of no size rather than no child: the pane's column is built once and
             // the slot is what comes and goes inside it.
-            false => rect().into_element(),
+            None => rect().into_element(),
         }
     }
 
@@ -545,7 +555,8 @@ pub(crate) fn use_find_with(
 /// page of rows and every reveal are measured in.
 ///
 /// Keyed by the pane it is over, so moving to another tab remounts it and the box is
-/// seeded again from that pane's own bar.
+/// seeded again from that pane's own bar; and by [`Find::seeds`] under that, so a seed
+/// written into a bar already open reaches the box too.
 #[derive(Clone, PartialEq)]
 pub(crate) struct FindBar {
     pub(crate) at: Where,

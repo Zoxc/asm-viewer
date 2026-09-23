@@ -29024,6 +29024,46 @@ fn a_find_bars_box_follows_the_pane_it_is_over() {
     );
 }
 
+/// **A Ctrl+F that seeds a bar already open puts the seed in the box**, and the box is
+/// where the reader's next keystroke goes on from. `open_find` writes the bar and not the
+/// box, which is the bar's own state, seeded only when it mounts: kept mounted, the box
+/// went on reading the old pattern while the pane searched the seed, and the next
+/// keystroke wrote the old pattern back over it. Fails on a bar a seed does not remount.
+#[test]
+fn a_re_seeded_find_bar_shows_the_seed_in_its_box() {
+    let (_docs, one, _) = kept_tabs();
+    let at = (Placing::Tab(one.0), Pane::Assembly);
+    let (mut test, roots) = TestingRunner::new(
+        moving_bar_harness,
+        (600., 200.).into(),
+        move |runner: &mut _| {
+            let roots = runner.provide_root_context(test_roots);
+            runner.provide_root_context(move || BarOver(State::create(at)));
+            roots
+        },
+        1.,
+    );
+    let finds = roots.finds;
+    open_find(finds, at, Some("alpha".to_owned()), None);
+    settle(&mut test);
+
+    open_find(finds, at, Some("beta".to_owned()), None);
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(
+        drawn.iter().any(|text| text == "beta") && !drawn.iter().any(|text| text == "alpha"),
+        "the box does not show the seed: {drawn:?}"
+    );
+
+    test.write_text("x");
+    settle(&mut test);
+    let pattern = finds.peek().get(&at).filter.pattern.clone();
+    assert!(
+        pattern.contains("beta"),
+        "a keystroke wrote the old pattern back: {pattern:?}"
+    );
+}
+
 /// **One press in the code takes the keyboard back from a text box.** freya's `Input`
 /// gives its focus up from `on_global_pointer_press`, which is emitted after the press
 /// the row itself answered, so the focus the box asked for was undone the instant it was
