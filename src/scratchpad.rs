@@ -522,14 +522,25 @@ impl Scratchpad {
     /// hashed are the source and then each row's two halves, trimmed as the manifest writes
     /// them, every one of them ended by a byte that cannot appear in what it follows, so no
     /// two different lists hash the same by running together.
+    ///
+    /// **The rows go in sorted by name**, as the manifest writes them. The order the reader
+    /// added them in compiles nothing, and the package reads them back sorted, so hashed in
+    /// the list's order a pad whose rows were not already sorted said its program was out
+    /// of date after every restart.
     pub fn digest(&self) -> String {
+        let mut rows: Vec<(&str, &str)> = self
+            .dependencies
+            .iter()
+            .map(|dependency| (dependency.name(), dependency.version()))
+            .collect();
+        rows.sort_unstable();
         let mut bytes = Vec::with_capacity(self.source.len() + 1);
         bytes.extend_from_slice(self.source.as_bytes());
         bytes.push(0);
-        for dependency in &self.dependencies {
-            bytes.extend_from_slice(dependency.name().as_bytes());
+        for (name, version) in rows {
+            bytes.extend_from_slice(name.as_bytes());
             bytes.push(0);
-            bytes.extend_from_slice(dependency.version().as_bytes());
+            bytes.extend_from_slice(version.as_bytes());
             bytes.push(0);
         }
         analysis::FileDigest::of(&bytes).to_string()

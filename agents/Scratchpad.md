@@ -263,10 +263,11 @@ a lone CR also ends (`notes/upstream/freya.md`).
 **An edit since the build says so over the listing**, the Source pane's checksum row in a second
 place -- and exact where that one is a guess, since the app wrote the source this program was
 built from and kept it beside the program. What a build was *of* is the source and the dependency
-rows (`Scratchpad::digest`, which hashes them where they sit rather than gathering them into a
-value of its own first), and deliberately **not** the name: it lives in `[package.metadata]`, which
-cargo compiles nothing from, so a rename must not make a listing out of date. Nor is the space
-around a row's text, which the manifest trims away: the rows are hashed as it writes them. A digest of what is
+rows (`Scratchpad::digest`), and deliberately **not** the name: it lives in `[package.metadata]`,
+which cargo compiles nothing from, so a rename must not make a listing out of date. Nor is the space
+around a row's text, which the manifest trims away, nor the order of the rows, which the manifest
+sorts by name: the rows are hashed as it writes them. Hashed in the order they were added, a pad
+whose rows were not sorted read back sorted in the next run and said it was out of date. A digest of what is
 there and not a counter of changes, so a reader who types a character and takes it back is building
 the same program and is told so.
 `built_from` is taken from the scratchpad the **job** carried, never from what is on screen when

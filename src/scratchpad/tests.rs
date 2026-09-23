@@ -675,6 +675,21 @@ fn the_digest_says_what_a_build_was_of() {
     assert_eq!(spaced.digest(), crated.digest(), "a space is not an edit");
 }
 
+/// **The package reads its rows back sorted, and the digest does not change for it.** A
+/// build writes down the digest of the pad as it was, rows in the order they were added;
+/// hashed in that order, the same pad read back in a later run named another program, and
+/// the pane said it was out of date when nothing had changed.
+#[test]
+fn a_pad_read_back_has_the_digest_it_was_built_with() {
+    let directory = Temporary::fresh("scratchpad-test");
+    let mut pad = Scratchpad::new("pad-1").expect("a valid id");
+    dependencies(&mut pad, [("rand", "0.8"), ("anyhow", "1.0.86")]);
+    pad.write_to(&directory).expect("the package is written");
+
+    let read = Scratchpad::load_from(&directory).expect("the package loads");
+    assert_eq!(read.digest(), pad.digest());
+}
+
 /// **A row that has gone is still somewhere to write.** The boxes of a deleted row go on
 /// taking events out of the press that deleted it, so the lookup answers with the spare
 /// rather than not answering, and what lands there is out of the list's reach. Ids are
