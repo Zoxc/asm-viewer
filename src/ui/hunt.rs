@@ -41,6 +41,10 @@ pub(crate) struct Hunt {
     pub(crate) from: Option<(CodeLine, usize)>,
     /// Where it has got to.
     pub(crate) walked: Walked,
+    /// Whether its match has been landed in the pane. The bar says so and not the
+    /// listing: the bar outlives a listing that a switch to another tab unmounts, and a
+    /// listing mounted again would land the match again, taking the caret back to it.
+    pub(crate) landed: bool,
 }
 
 impl Hunt {
@@ -265,6 +269,7 @@ pub(crate) fn use_code_hunt(
                     direction,
                     from,
                     walked: Walked::Walking(0.0),
+                    landed: false,
                 });
             });
         },
@@ -320,6 +325,7 @@ pub(crate) fn use_code_hunt(
                             object,
                             from,
                             walked: Walked::Walking(0.0),
+                            landed: false,
                             ..hunt.clone()
                         };
                     }
@@ -348,16 +354,15 @@ pub(crate) fn use_code_hunt(
         },
     );
 
-    // The match, landed once. The walk that found it is remembered, so an effect woken
-    // again -- by the rows changing, say -- does not land it a second time.
-    let mut landed = use_state(|| None::<u64>);
+    // The match, landed once: the bar says it was, so an effect woken again -- by the rows
+    // changing, or by a listing mounted again -- does not land it a second time.
     use_side_effect_with_deps(
         &(at, ByPtr(object)),
         move |(at, ByPtr(object)): &(Where, ByPtr<Object>)| {
-            let Some(finds) = finds else {
+            let (at, Some(finds)) = (*at, finds) else {
                 return;
             };
-            let hunt = finds.read().get(at).hunt.clone();
+            let hunt = finds.read().get(&at).hunt.clone();
             // A match in another object's code names no row of this one.
             let Some(hunt) = hunt.filter(|hunt| hunt.object.is(object)) else {
                 return;
@@ -365,13 +370,17 @@ pub(crate) fn use_code_hunt(
             let Walked::Found(line, columns) = hunt.walked else {
                 return;
             };
-            if *landed.peek() == Some(hunt.id) {
+            if hunt.landed {
                 return;
             }
             // Marked as landed only where it was: a walk that answers before the pane has
             // rows to land in is landed when they come, `land` having read them.
             if land(object, line, columns) {
-                landed.set(Some(hunt.id));
+                edit_find(finds, at, |bar| {
+                    if let Some(landed) = bar.hunt.as_mut().filter(|held| held.id == hunt.id) {
+                        landed.landed = true;
+                    }
+                });
             }
         },
     );

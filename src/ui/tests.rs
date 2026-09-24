@@ -31415,6 +31415,7 @@ fn a_walk_asked_as_its_tab_is_left_walks_its_own_object() {
             direction: crate::find::Direction::Forward,
             from: None,
             walked: Walked::Walking(0.0),
+            landed: false,
         })
     });
     test.sync_and_update();
@@ -31559,6 +31560,7 @@ fn a_walks_match_lands_only_in_the_object_it_walked() {
     // The first walk's match, said again under an id the pane has not landed.
     let stale = Hunt {
         id: u64::MAX,
+        landed: false,
         ..found.clone()
     };
     edit_find(finds, at, move |bar| bar.hunt = Some(stale));
@@ -31572,6 +31574,7 @@ fn a_walks_match_lands_only_in_the_object_it_walked() {
     let walking = Hunt {
         id: u64::MAX - 1,
         walked: Walked::Walking(0.0),
+        landed: false,
         ..found
     };
     edit_find(finds, at, move |bar| bar.hunt = Some(walking));
@@ -31639,6 +31642,48 @@ fn a_walks_match_found_before_the_rows_is_landed_when_they_come() {
         caret_line(marked, sectioned, &object).as_deref(),
         Some("sum_to:"),
         "the match was not landed once the rows came"
+    );
+}
+
+/// **A match is landed once**, however often the listing is mounted. Which match has been
+/// landed is the bar's to say: the bar outlives the listing, which a switch to another tab
+/// unmounts, and a listing mounted again that kept its own record would land the old match
+/// again and take the caret back to it. Fails on a record kept by the listing's scope.
+#[test]
+fn a_walks_match_is_not_landed_again_when_the_listing_mounts_again() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, roots) = TestingRunner::new(
+        code_find_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let (states, sectioned) = (roots.states, roots.sectioned);
+    let mut marked = roots.doors.marked;
+    settle(&mut test);
+    let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let finds = states.places.finds;
+
+    walk_for(&mut test, finds, at, "sum_to");
+    assert_eq!(
+        caret_line(marked, sectioned, &object).as_deref(),
+        Some("sum_to:")
+    );
+
+    // The reader moves on, and the listing goes and comes back.
+    marked.write().assembly = None;
+    let mut reading = sectioned.reading;
+    reading.set(Reading::default());
+    settle(&mut test);
+    reading.set(reading_of(&object, &[]));
+    pump(&mut test, |_| sectioned.peek_rows_of(&object).is_some());
+    edit_find(finds, at, |bar| bar.focus = true);
+    settle(&mut test);
+    assert!(
+        marked.peek().assembly.is_none(),
+        "the match was landed again"
     );
 }
 

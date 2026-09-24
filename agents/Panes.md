@@ -1552,7 +1552,9 @@ its own row where its stretch has it (`row_of_kind`), else the row holding its a
 closure says whether it landed. It **reads** the rows, so a walk that answers before the pane has
 any is landed when they come. The walk builds its own listing where the view has no skeleton yet,
 so it can well answer first; peeked, the rows arriving woke nothing, and the match was never
-landed. A run carried across a recount is `Kept::spots`'s
+landed. **That it landed is the bar's to say** (`Hunt::landed`), not the listing's: a switch to a
+page or a symbol tab unmounts the listing and not the bar, and a listing that kept its own record
+landed the old match again when it was mounted again. A run carried across a recount is `Kept::spots`'s
 business, as it is for every other run here.
 
 **A bar is keyed by the tab and not by a place on its trail.** The five maps in `Places` are keyed by
