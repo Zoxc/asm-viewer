@@ -919,11 +919,7 @@ fn marks(
         let left = cells.row_x.get();
         bring_caret_into_view(listing, Caret { row, col }, left, left + ROW_PAD + x);
     }
-    let caret = at.map(|x| {
-        // From the column rightward, so a caret on column 0 starts where the text does.
-        let stroke = grid.span(x, x + CARET_WIDTH);
-        box_over(stroke, 0.0, code_row_height()).background(palette().caret_fg)
-    });
+    let caret = at.map(|x| caret(grid, x));
 
     (
         selected.unwrap_or_else(nothing),
@@ -932,10 +928,30 @@ fn marks(
 }
 
 /// What an empty row inside the run draws of it, from `left` in the row: a quarter of a
-/// row wide, or the run would read as broken there. A separator row draws it too.
-pub(crate) fn stub(grid: Grid, left: f32) -> Rect {
+/// row wide, or the run would read as broken there.
+fn stub(grid: Grid, left: f32) -> Rect {
     let span = grid.span(left, left + code_row_height() / 4.0);
     box_over(span, 0.0, code_row_height()).background(palette().text_select_bg)
+}
+
+/// The caret at `x` in the row: from the column rightward, so a caret on column 0 starts
+/// where the text does.
+fn caret(grid: Grid, x: f32) -> Rect {
+    let stroke = grid.span(x, x + CARET_WIDTH);
+    box_over(stroke, 0.0, code_row_height()).background(palette().caret_fg)
+}
+
+/// The two marks a row with no text of its own draws -- a separator, or a row of the
+/// section view with nothing on it -- at `left`, where the text rows' text starts: the
+/// selection's stub and the caret, as an empty text row draws them. Both slots always,
+/// as [`marks`] gives them.
+pub(crate) fn blank_marks(chars: RowChars, left: f32) -> [Element; 2] {
+    let grid = pixel_grid();
+    [
+        chars.highlight.map_or_else(nothing, |_| stub(grid, left)),
+        chars.cursor.map_or_else(nothing, |_| caret(grid, left)),
+    ]
+    .map(IntoElement::into_element)
 }
 
 /// A caret at window x `at`, on a row whose own left edge is `row_left`, brought into the

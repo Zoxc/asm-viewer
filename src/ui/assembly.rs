@@ -784,7 +784,7 @@ fn gutter_width(width: usize) -> f32 {
 }
 
 /// Where a row's text starts in a listing whose gutter is `width` lanes wide: after the
-/// mark's column, the gutter and the address. An empty row draws a selection's stub there.
+/// mark's column, the gutter and the address. An empty row draws its marks there.
 pub(crate) fn text_left(width: usize) -> f32 {
     MARK_COLUMN + gutter_width(width) + ADDRESS_WIDTH
 }
@@ -871,9 +871,9 @@ pub(crate) struct SeparatorRow {
     pub(crate) row: usize,
     /// The wash of its pane's selection, if it is in it.
     pub(crate) wash: Wash,
-    /// Whether it is inside the pane's character selection, which it shows with the
-    /// stub an empty row draws.
-    pub(crate) selected: bool,
+    /// What it draws of the pane's character selection: the stub inside one, and the
+    /// caret where the run's lead is on it.
+    pub(crate) chars: RowChars,
     /// The gutter's width for the whole symbol, and the lanes crossing this boundary.
     pub(crate) width: usize,
     pub(crate) arrows: RowArrows,
@@ -901,7 +901,7 @@ impl SeparatorRow {
         SeparatorRow {
             row,
             wash: wash_of(chars, row),
-            selected: RowChars::of(chars, row).highlight.is_some(),
+            chars: RowChars::of(chars, row),
             width: data.width(),
             arrows: RowArrows {
                 lanes: data.lanes().boundary(below),
@@ -939,9 +939,8 @@ impl Component for SeparatorRow {
             None,
         )
         .child(block_rule())
-        // Where an instruction row's text starts. Last, so no sibling moves when it comes
-        // and goes.
-        .maybe_child(self.selected.then(|| stub(pixel_grid(), text_left(width))))
+        // Where an instruction row's text starts.
+        .children(blank_marks(self.chars, text_left(width)))
     }
 
     fn render_key(&self) -> DiffKey {

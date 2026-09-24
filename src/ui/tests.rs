@@ -23370,6 +23370,56 @@ fn the_empty_rows_of_the_section_view_show_a_selections_stub() {
     }
 }
 
+/// A caret on an empty row of an object's code -- the blank under a header, the rule over
+/// a stretch, a row guessed for one not yet decoded -- is drawn where the text rows' text
+/// starts, as it is on an empty text row. A place opened in an undecoded stretch lands on one.
+#[test]
+fn a_caret_on_an_empty_row_of_the_section_view_is_drawn() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    // `add` decoded and `twice` not, so the rows under its label are guesses.
+    let reading = reading_of(&object, &[0]);
+    let rows = rows_of(&reading);
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 60.0 * code_row_height()).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let mut marked = roots.doors.marked;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(object.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    // Row 0 is the header, whose text starts where every caret must.
+    let header = paragraphs(&test)[0].0;
+    let h = code_row_height();
+    for kind in [Kind::Space { under: true }, Kind::Rule, Kind::Empty(0)] {
+        let row = (0..rows.len())
+            .find(|&row| kind_at(&rows, row) == Some(kind))
+            .expect("the listing has the row");
+        marked.write().assembly = Some(Picked {
+            chars: CharSelection::at(Caret { row, col: 0 }),
+            dragging: false,
+            by_rows: false,
+            file: None,
+            owed: Owed::default(),
+        });
+        settle(&mut test);
+        let top = header.min_y() + row as f32 * h;
+        let caret = carets(&test)
+            .into_iter()
+            .find(|caret| (caret.min_y() - top).abs() < 1.0)
+            .unwrap_or_else(|| panic!("{kind:?} draws no caret"));
+        assert!((caret.min_x() - header.min_x()).abs() <= 1.0, "{caret:?}");
+        assert_eq!(caret.height(), h);
+    }
+}
+
 /// A click on a source row beside an object's code owes the listing a scroll to the
 /// instruction compiled from that line, paid out of whichever held stretch has one -- and
 /// left owed, for the answer that decodes the stretch to pay, while none does.
@@ -27559,6 +27609,38 @@ fn a_separator_inside_a_selection_shows_a_stub() {
         .expect("the separator draws nothing of the selection");
     assert!((stub.min_x() - above.min_x()).abs() <= 1.0, "{stub:?}");
     assert_eq!(stub.height(), code_row_height());
+}
+
+/// A caret on a separator is drawn where the text of the rows around it starts, as it is
+/// on an empty text row.
+#[test]
+fn a_caret_on_a_separator_is_drawn() {
+    let shown = shown_sum_to();
+    let (mut test, roots) = TestingRunner::new(
+        listing_harness,
+        (600., 900.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+        1.,
+    );
+    let mut marked = roots.doors.marked;
+    settle(&mut test);
+    // `sum_to`'s first separator is listing row 7, between instructions 6 and 7.
+    marked.write().assembly = Some(Picked {
+        chars: CharSelection::at(Caret { row: 7, col: 0 }),
+        dragging: false,
+        by_rows: false,
+        file: None,
+        owed: Owed::default(),
+    });
+    settle(&mut test);
+
+    let above = paragraphs(&test)[6].0;
+    let caret = carets(&test)
+        .into_iter()
+        .find(|caret| (caret.min_y() - above.max_y()).abs() < 1.0)
+        .expect("the separator draws no caret");
+    assert!((caret.min_x() - above.min_x()).abs() <= 1.0, "{caret:?}");
+    assert_eq!(caret.height(), code_row_height());
 }
 
 /// Ctrl+C takes the characters where any are selected, and the caret's row whole
