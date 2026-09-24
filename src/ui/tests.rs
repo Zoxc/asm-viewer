@@ -21220,6 +21220,48 @@ fn the_output_pane_follows_the_newest_line_until_the_reader_scrolls_away() {
     );
 }
 
+/// Output allocated where the output the pane last saw was is still new output, and the
+/// pane follows it.
+///
+/// Two batches with one pass between them. The pass renders the first and holds the effect
+/// back, so the effect next runs on the second and never sees the first. The output it last
+/// saw was freed when the first replaced it, and the allocator hands its address to the
+/// second: kept as an address, the lines read as a scroll, and the follow is let go.
+#[test]
+fn the_output_pane_follows_lines_landing_at_a_freed_outputs_address() {
+    let (mut test, lines) = TestingRunner::new(
+        output_harness,
+        (200., 200.).into(),
+        |runner| {
+            runner
+                .provide_root_context(|| RunLines(State::create(Arc::new(RunOutput::default()))))
+                .0
+        },
+        1.,
+    );
+    let settle = |test: &mut TestingRunner| {
+        for _ in 0..4 {
+            test.sync_and_update();
+        }
+    };
+    settle(&mut test);
+    for index in 0..12 {
+        wrote(lines, &format!("line {index}"));
+        settle(&mut test);
+    }
+
+    wrote(lines, "line 12");
+    test.sync_and_update();
+    wrote(lines, "line 13");
+    settle(&mut test);
+
+    let drawn = drawn_lines(&test);
+    assert!(
+        drawn.contains(&"line 13".to_owned()),
+        "the pane stopped following: {drawn:?}"
+    );
+}
+
 /// The laid-out box of every `label()` whose text starts with `prefix`, in document order.
 /// A wrap is a fact about the layout and about nothing else -- the same string is drawn
 /// either way -- so a test about one has to read the areas rather than the texts.

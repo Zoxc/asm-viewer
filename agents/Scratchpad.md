@@ -632,10 +632,12 @@ below the viewport by definition, so a run that asked would find the pane scroll
 line of every run and follow nothing, ever. So arriving lines only *spend* the answer, and a scroll,
 a resize, and the scroll the effect itself makes, are what write it. The two are told apart by the
 output's identity, which is `OutputRows`' `PartialEq` again rather than its length: at the cap the
-count stops changing while the rows go on being replaced. The one judgement it makes is that the
-newest row is drawn *at all* rather than drawn entire, because a scroll offset is a whole number of
-pixels where a list of rows is not, and a view clamped hard against its end stands a fraction of a
-pixel short.
+count stops changing while the rows go on being replaced. The last output a run saw is kept as a
+`Weak`, never an address: the effect runs after the render, so it can miss an output that came and
+went between two runs, and the next one could be allocated where that one was. The one judgement it
+makes is that the newest row is drawn *at all* rather than drawn entire, because a scroll offset is
+a whole number of pixels where a list of rows is not, and a view clamped hard against its end stands
+a fraction of a pixel short.
 
 The pane is a component of its own, **keyed on the pad**, so that the scroll and the follow belong
 to that pad's output instead of being one position dragged between pads by a switch. What the key

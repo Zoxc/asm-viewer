@@ -22,7 +22,7 @@
 
 use super::*;
 use crate::counter;
-use std::cell::Cell;
+use std::{cell::Cell, sync::Weak};
 
 /// How much of a dependency row the crate name takes against the version beside it.
 const NAME_FLEX: f32 = 2.0;
@@ -382,22 +382,30 @@ fn tail_move(
 /// the front as a new one lands, so the count stops changing while the rows go on being
 /// replaced. For the same reason the bottom is worked out from the rows there are *now*
 /// and is never a row index written down on an earlier run -- every index shifts by one
-/// each time the cap drops a line. `output` is that identity, and `viewport` is the height
-/// of the rows' own box rather than the pane's -- the heading over them is no part of what
-/// scrolls.
-fn use_follow_tail(mut controller: ScrollController, viewport: f32, output: usize, length: usize) {
+/// each time the cap drops a line. `output` is that identity, held rather than taken as an
+/// address: the effect can miss an output that came and went between two runs, and a later
+/// one could be allocated at its address. `viewport` is the height of the rows' own box
+/// rather than the pane's -- the heading over them is no part of what scrolls.
+fn use_follow_tail(
+    mut controller: ScrollController,
+    viewport: f32,
+    output: &Arc<RunOutput>,
+    length: usize,
+) {
     // Whether the pane is following. A `Cell` and not a `State`, `use_kept_position`'s
     // `held` for the same reason: nothing renders from it, and a state would cost the
     // pane a render on every wheel event.
     let following = use_hook(|| Rc::new(Cell::new(true)));
     // The list the last run saw, which is what tells lines arriving from the reader moving.
-    let seen = use_hook(|| Rc::new(Cell::new(None::<usize>)));
+    // A `Weak`, which keeps its address from being reused without keeping its lines.
+    let seen = use_hook(|| Rc::new(Cell::new(Weak::<RunOutput>::new())));
 
     // With deps and not a bare `use_side_effect`, whose callback is built in a `use_hook`
     // and would go on reading the first list this pane was ever handed.
     use_side_effect_with_deps(
-        &(output, length, viewport),
-        move |&(output, length, viewport): &(usize, usize, f32)| {
+        &(ByPtr(output.clone()), length, viewport),
+        move |(ByPtr(output), length, viewport): &(ByPtr<RunOutput>, usize, f32)| {
+            let (length, viewport) = (*length, *viewport);
             // Subscribes this effect to the pane's own scroll, so it comes before any
             // return: a run that did not read it is a run no wheel event wakes.
             let (_, offset) = <(i32, i32)>::from(controller);
@@ -410,7 +418,8 @@ fn use_follow_tail(mut controller: ScrollController, viewport: f32, output: usiz
             }
 
             // Which of the two woke this run: lines landing, or a scroll or a resize.
-            let arrived = seen.replace(Some(output)) != Some(output);
+            let output = Arc::downgrade(output);
+            let arrived = !Weak::ptr_eq(&seen.replace(output.clone()), &output);
             match tail_move(
                 offset,
                 code_row_height(),
@@ -473,7 +482,7 @@ impl Component for OutputPane {
         // it is measured here instead -- the rect around *the rows*, the heading above
         // them being no part of what scrolls.
         let mut viewport = use_state(|| 0.0f32);
-        use_follow_tail(controller, viewport(), Arc::as_ptr(&lines).addr(), length);
+        use_follow_tail(controller, viewport(), &lines, length);
 
         rect()
             .width(Size::fill())
