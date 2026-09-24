@@ -259,10 +259,13 @@ stranger's tree without asking. It is kept in the store instead, as an order of 
 agreed to (`agreed.toml`, `src/project/trust.rs`). It still rides in `Session::trusted`, skipped
 by serde, because that is the path between the app and the policy: `load_project` fills it from
 the store, `Session::from_state` takes it back, and `Saves::agreement` writes the store at once
-when it changes, taking the agreement off the old directory where the project moved. `Saves::opened`
-seeds it into the session baseline beside the id: like the directory and the bookmarks, it is
-restored *synchronously*, so a baseline without it would read the state the app boots into as a
-change.
+when it changes, taking the agreement off the old directory where the project moved. It grants
+only a `trusted` over the pair it already held. The UI clears `trusted` when the directory or the
+program is typed in, but after the record that sees the change; granting there put the new pair
+in the store until the next record took it back, and an app ending between the two left the
+reader agreed to a directory they were never asked about. `Saves::opened` seeds it into the
+session baseline beside the id: like the directory and the bookmarks, it is restored
+*synchronously*, so a baseline without it would read the state the app boots into as a change.
 
 **Each project is two files, and the line between them is the one the save policy already drew.**
 `<project>.avproj` is what the user *said* (`name`, `directory`, `binaries`, `bookmarks`) and is

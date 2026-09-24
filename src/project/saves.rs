@@ -110,6 +110,8 @@ pub(super) struct Saves {
     /// The agreement `agreed.toml` holds for the open project, or `None` where it holds
     /// none.
     agreed: Option<Agreement>,
+    /// The program and directory the details named at the last record, agreed to or not.
+    pair: Option<Agreement>,
     /// A `project.toml` owed to the next flush: for a change to the details alone, which
     /// waits because a box being typed in changes them on every keystroke, or for a write
     /// made at once that did not land. A write for the binaries or the bookmarks takes it
@@ -168,14 +170,22 @@ impl Saves {
         };
         self.pending = None;
         self.owed_project = self.owed_for(&project.details);
-        self.agreed = agreed_for(&project.details, session.trusted);
+        self.pair = Agreement::of(&project.details);
+        self.agreed = self.pair.clone().filter(|_| session.trusted);
     }
 
     /// Keep `agreed.toml` in step with the agreement the app holds: the program and the
     /// directory it was given for, taken back where either changed or it went. Written at
     /// once and not with the session, since the session no longer carries it.
+    ///
+    /// Only a `trusted` over the pair already held is granted. The UI clears `trusted` when
+    /// the details change, but after the record that sees the change, and a pair arriving
+    /// with it still set would be agreed to without the reader being asked.
     pub(super) fn agreement(&mut self, details: &Details, trusted: bool) {
-        let now = agreed_for(details, trusted);
+        let pair = Agreement::of(details);
+        let same_pair = pair == self.pair;
+        self.pair = pair.clone();
+        let now = pair.filter(|_| trusted && same_pair);
         if now == self.agreed {
             return;
         }
@@ -416,12 +426,6 @@ impl Saves {
     pub(super) fn owes_session(&mut self, session: Session) {
         self.pending = Some(session);
     }
-}
-
-/// The agreement the project holds: its program over its directory, where it names a
-/// directory and it is agreed to.
-fn agreed_for(details: &Details, trusted: bool) -> Option<Agreement> {
-    Agreement::of(details).filter(|_| trusted)
 }
 
 /// What a [`Saves::record`] decided to write, and what it takes to note that it landed.

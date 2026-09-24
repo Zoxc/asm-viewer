@@ -619,3 +619,48 @@ fn an_agreement_is_not_given_to_another_program_over_the_directory() {
     close();
     assert!(session.trusted, "the agreement was lost");
 }
+
+/// **A directory typed in is not agreed to.** `trusted` is about the pair already held, and
+/// the UI clears it only after the record that sees the new directory. That record used to
+/// agree to the new pair, and an app ending before the next one left it in the store.
+#[test]
+fn a_changed_directory_does_not_inherit_the_agreement() {
+    let _saves = using_saves();
+    let base = directory();
+    let store = Store::at(base.join("state"));
+    let tree = base.join("tree");
+    let other = base.join("other");
+    fs::create_dir_all(&tree).expect("creating the tree");
+    let path = tree.join(format!("app.{PROJECT_EXTENSION}"));
+    fs::write(&path, "directory = \".\"\n").expect("writing the project");
+
+    let (project, _) = open_at(&store, &path).expect("the project opens");
+    let trusted = Session {
+        trusted: true,
+        ..Session::default()
+    };
+    let details = Details {
+        directory: Some(tree.clone()),
+        ..project.details
+    };
+    record(&details, &[], false, &[], trusted.clone());
+    assert!(
+        trust::agreed(&store, &details),
+        "the agreement was not given"
+    );
+    let moved = Details {
+        directory: Some(other),
+        ..details.clone()
+    };
+    record(&moved, &[], false, &[], trusted);
+    close();
+
+    assert!(
+        !trust::agreed(&store, &moved),
+        "the typed directory was agreed to"
+    );
+    assert!(
+        !trust::agreed(&store, &details),
+        "the old agreement outlived its directory"
+    );
+}
