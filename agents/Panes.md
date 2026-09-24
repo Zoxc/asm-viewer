@@ -668,8 +668,8 @@ already, so a plain press on a name or on a bare address is `show_in_code` at th
 address, which `documents::land` turns into a plant in the tab already showing that document: a
 scroll and a caret, and no tab opened. It **is** pushed onto that tab's trail, as a `Stop` naming
 the address, so Back comes back to the instruction that was followed -- the place left keeps its own rows and
-runs, being an entry of its own (`agents/UI.md`) -- and it is not recorded as a *visit*, the History
-panel listing documents and a move inside one being no new document to have been at. Ctrl keeps its
+runs, being an entry of its own (`agents/UI.md`) -- and it is no *visit* of its own, the History
+panel listing documents: the visit recorded is the object's code, brought to the top. Ctrl keeps its
 own meaning over a name: the symbol alone, in a tab of its own. Following a link in a symbol's own
 listing is unchanged: there is nowhere to move to, so it replaces what the tab shows and the
 function left is one Back away. Both doors into the object's code, this one and the menu's, take a

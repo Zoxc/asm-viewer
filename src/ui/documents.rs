@@ -470,6 +470,10 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         // it a moment ago. Which is why an instruction of the symbol on top is a place
         // here and nowhere else: a call it makes to itself moves nothing, and without a
         // stop of its own Back could not come back to the call.
+        //
+        // `open_stop`'s visit too: a door into the document on screen brings it to the top
+        // of History, even when a chip press raised it and recorded nothing.
+        write_if(visits, |visits| visits.record(landing.tab.clone()));
         let stop = match (&landing.tab, landing.address.and_then(Address::local)) {
             (Document::Symbol(symbol), Some(address)) => Stop::in_symbol(symbol.clone(), address),
             _ => stop,

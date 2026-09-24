@@ -8045,6 +8045,50 @@ fn a_door_into_the_temporal_tabs_own_document_promotes_it() {
     );
 }
 
+/// A door into the document on screen brings it to the top of History, as a door into
+/// any other document does. A chip press raises a tab and records nothing, so the
+/// document on screen need not be at the top; `land` handles a door into it without
+/// `open_stop`, and used to skip its visit.
+#[test]
+fn a_door_into_the_document_on_screen_records_the_visit() {
+    let file: Arc<Path> = Arc::from(Path::new("/src/main.rs"));
+    let document = Document::Source(file.clone());
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    let id = open_document(states.open, states.visits, document.clone(), Reach::NewTab)
+        .expect("the file opens");
+    let other = Document::Source(Arc::from(Path::new("/src/lib.rs")));
+    open_document(states.open, states.visits, other, Reach::NewTab).expect("the file opens");
+    raise(states.open, id);
+    settle(&mut test);
+    let newest = || states.visits.peek().entries().first().cloned();
+    assert!(
+        newest() != Some(document.clone()),
+        "the raise recorded a visit"
+    );
+
+    land(
+        roots.doors,
+        Landing {
+            tab: document.clone(),
+            at: Some(Landed::line(LinePos { file, line: 10 })),
+            address: None,
+        },
+        Reach::InPlace,
+    );
+    settle(&mut test);
+    assert!(
+        newest() == Some(document),
+        "a door into the document on screen left it off the top of History"
+    );
+}
+
 /// **A door onto line 0 picks nothing out.** Line 0 is no line of any file
 /// ([`LinePos::row_of`]): debug info writes it for instructions belonging to no source
 /// line, and a stored place can state it. Read as a row it used to be row 0, so a door

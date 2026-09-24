@@ -507,7 +507,8 @@ promotes** the temporal tab: `NewTab` on the place it shows, a link followed in 
 reader is reading in it), or a double press on its header. `navigate` never does, walking a trail
 not being going somewhere new in it. `land` (a door into the document on top) and `land_on` (a
 Locations row chosen for the tab it was asked from) skip `open_stop`, so each applies the rule
-itself. `raise` is the move between places already open (the strip's
+itself; `land` records the visit too, since a chip press may have raised that tab and recorded
+nothing. `raise` is the move between places already open (the strip's
 menu, the neighbour a close lands on, a restored session) and records nothing. Pressing a tab needs
 none of them: freya's own header wrapper sets the panel's active tab, which *is* the change.
 A place in a binary has **no "nothing" variant**: nothing open is an absent document, which is the
