@@ -250,3 +250,20 @@ fn only_a_build_that_wrote_the_package_clears_the_unsaved_marker() {
     pads.built(&id("pad-a"), Ok(refused_by_cargo), None);
     assert_eq!(pads.state().unsaved, None);
 }
+
+/// A pad whose open failed is asked for again the next time it is shown. When that
+/// open works, the reason the first one failed no longer holds.
+#[test]
+fn an_open_that_works_clears_the_reason_the_last_one_failed() {
+    let mut pads = Pads::default();
+    pads.show(id("pad-a"));
+    pads.unopened(&id("pad-a"), holding(&pads, "pad-a"), Failure::Unreadable);
+    assert!(pads.state().unsaved.is_some());
+
+    let read = Scratchpad::new("pad-a").expect("a valid id");
+    assert!(pads.opened(holding(&pads, "pad-a"), &read, None));
+    assert!(
+        pads.state().unsaved.is_none(),
+        "the panel still says the package could not be read"
+    );
+}

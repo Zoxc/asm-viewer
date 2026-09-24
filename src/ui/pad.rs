@@ -324,6 +324,9 @@ impl Pads {
         // what the worker just read off it.
         state.disk = Some(scratchpad.clone());
         state.program = program;
+        // An earlier try that could not read the pad said so here; the disk and the
+        // screen now match.
+        state.unsaved = None;
         true
     }
 
