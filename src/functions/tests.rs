@@ -460,3 +460,19 @@ fn the_rust_scanner_ends_with_the_text() {
     assert_eq!(named(&rust::functions("fn a() {")), [("a", 1, 1)]);
     assert_eq!(named(&rust::functions("fn a() -> T")), []);
 }
+
+/// Defect: a raw C string was not known as raw. `cr` was read as a word and the `"`
+/// after it as a plain string, which ended at the first quote inside the raw one, so
+/// the rest of the file was scanned from the wrong side of every quote.
+#[test]
+fn a_raw_c_string_is_skipped_whole() {
+    let text = "\
+fn a() {
+    let s = cr#\"a\"b\"#;
+    let t = cr\"x\\\";
+}
+fn c() {
+}
+";
+    assert_eq!(named(&rust::functions(text)), [("a", 1, 4), ("c", 5, 6)]);
+}

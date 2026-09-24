@@ -237,11 +237,11 @@ impl<'a> Scanner<'a> {
                 b'/' if next == Some(b'/') => self.skip_line(),
                 b'/' if next == Some(b'*') => self.skip_block_comment(),
                 b'"' => self.skip_string(),
-                b'b' if next == Some(b'"') => {
+                b'b' | b'c' if next == Some(b'"') => {
                     self.position += 1;
                     self.skip_string();
                 }
-                b'r' | b'b' if self.raw_string_hashes().is_some() => self.skip_raw_string(),
+                b'r' | b'b' | b'c' if self.raw_string_hashes().is_some() => self.skip_raw_string(),
                 b'\'' => self.skip_char_or_lifetime(),
                 b'(' | b'[' | b'{' => {
                     let bracket = Bracket::of(byte);
@@ -370,11 +370,11 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    /// How many `#` a raw string at the position opens with -- `r"`, `r#"`, `br##"` --
-    /// or `None` when there is no raw string here.
+    /// How many `#` a raw string at the position opens with -- `r"`, `r#"`, `br##"`,
+    /// `cr#"` -- or `None` when there is no raw string here.
     fn raw_string_hashes(&self) -> Option<usize> {
         let mut at = self.position + 1;
-        if self.text.get(self.position) == Some(&b'b') {
+        if matches!(self.text.get(self.position), Some(&(b'b' | b'c'))) {
             if self.text.get(at) != Some(&b'r') {
                 return None;
             }
