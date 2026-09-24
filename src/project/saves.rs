@@ -253,7 +253,9 @@ impl Saves {
     /// state and stays; a restore registers its load before any record runs, so the boot
     /// state is never one. Both baselines are left where they were for the record that
     /// follows the load, which is the one that sees the change. A binaries change the
-    /// reader makes in that window waits for the same record.
+    /// reader makes in that window waits for the same record. A binaries write that
+    /// failed is tried again in that window, and not replaced by one for the details alone:
+    /// the pending session may name tabs in those binaries.
     ///
     /// **No baseline moves here**, since a baseline is what the *file* holds and the file
     /// has not been written yet. The caller moves them with [`Saves::wrote_project`] and
@@ -294,7 +296,18 @@ impl Saves {
             }
         };
 
-        if !binaries_changed && !bookmarks_changed {
+        // The binaries this write is about: a change to them, or, while a load holds back
+        // the record that would see that change again, an owed write of them that failed.
+        let new_binaries = match binaries_changed {
+            true => Some(self.with_unheld(binaries)),
+            false => self
+                .owed_project
+                .as_ref()
+                .filter(|owed| loading && owed.binaries_changed)
+                .map(|owed| owed.project.binaries.clone()),
+        };
+
+        if new_binaries.is_none() && !bookmarks_changed {
             // The details alone, or nothing: owed, or no longer owed where they have been
             // changed back to what the file holds.
             self.owed_project = self.owed_for(details);
@@ -304,18 +317,15 @@ impl Saves {
         self.owed_project = None;
 
         Some(Recorded {
+            binaries_changed: new_binaries.is_some(),
             project: Project {
                 id: self.id,
                 details: details.clone(),
                 // A write that is not about the binaries keeps the ones already in the
                 // file; see [`Saves::binaries`].
-                binaries: match binaries_changed {
-                    true => self.with_unheld(binaries),
-                    false => self.written.binaries.clone(),
-                },
+                binaries: new_binaries.unwrap_or_else(|| self.written.binaries.clone()),
                 bookmarks: bookmarks.to_vec(),
             },
-            binaries_changed,
             session: carried,
         })
     }

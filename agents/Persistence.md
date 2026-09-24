@@ -576,6 +576,9 @@ the same for the same reason (`agents/Sidebar.md`). Both baselines stay behind t
 so the record that follows the load is the one that sees the change and writes both files -- the
 save observer reads `Loads` as well, which is what re-runs it when the load ends. The cost is that a binary opened or closed
 while another is being read waits for that same record instead of reaching the disk at once.
+A binaries write that failed before the load does not wait: every record in the window tries it
+again. Left to that record, a details-only record in between replaced it with a write naming none
+of them, and the next flush let the session out ahead of the project file.
 
 **Which project is open is `Saves`' too**, and changing it at runtime is `switch(id)` or
 `start_new()`. Both `flush` the project being left while the policy still points at it, `remember`

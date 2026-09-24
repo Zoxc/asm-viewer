@@ -661,6 +661,40 @@ fn a_write_that_failed_is_recorded_again() {
     assert_eq!(flushed(&mut saves), None);
 }
 
+/// A binaries write that failed is still a binaries write during a later load. A record
+/// there used to replace it with the details' owed write, which named none of them, and
+/// the next flush wrote the session ahead of the project file.
+#[test]
+fn a_failed_binaries_write_survives_a_load() {
+    let mut saves = Saves::default();
+    let decided = saves.record(
+        &saves.written.details.clone(),
+        &paths(&["/tmp/lib.a"]),
+        false,
+        &[],
+        session_with(Some("a.o")),
+    );
+    let failed = decided.expect("a write");
+    saves.owes_project(OwedProject {
+        project: failed.project,
+        binaries_changed: failed.binaries_changed,
+    });
+    saves.owes_session(failed.session.expect("the session went with it"));
+
+    let again = saves
+        .record(
+            &saves.written.details.clone(),
+            &paths(&["/tmp/lib.a"]),
+            true,
+            &[],
+            session_with(Some("a.o")),
+        )
+        .expect("the owed write tried again");
+    assert!(again.binaries_changed);
+    assert_eq!(again.project.binaries, paths(&["/tmp/lib.a"]));
+    assert_eq!(again.session, None, "a session mid-load is not the app's");
+}
+
 /// **The id is stamped once**, and by the policy: every half `Saves::record` hands back
 /// already carries the open project's id, and so does the session a flush takes out. The
 /// writes used to stamp both again for a project whose file was claimed by the first
