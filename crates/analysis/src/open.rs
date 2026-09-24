@@ -1,7 +1,8 @@
 //! The crate's entry point: each file read, tried as an archive and as an object, and every
 //! object in it handed over as it is parsed.
 
-use crate::{open_regular, parse_object, Links, Object, ObjectData, Regular};
+use crate::parse::parse_unshared;
+use crate::{open_regular, parse_object, Links, LoadMessage, Object, ObjectData, Regular};
 use object::read::archive::ArchiveFile;
 use std::{
     ops::ControlFlow,
@@ -21,7 +22,9 @@ pub enum Progress {
 
 /// Parse each path as an archive (contributing one [`Object`] per member) *and* as a plain
 /// object file, handing each object to `emit` **as it is parsed** rather than collecting
-/// them. Anything that fails to read or parse is silently skipped.
+/// them. Anything that fails to read or parse is silently skipped. An archive's members
+/// come one member late, so the last can say the archive stopped early
+/// ([`LoadMessage::ArchiveCutShort`]).
 ///
 /// A callback rather than a channel or an iterator: a channel would make this crate pick a
 /// backpressure policy belonging to whoever draws the result, and an iterator would mean
@@ -84,9 +87,18 @@ fn open_one_file(
     let file = ObjectData::whole_file(bytes);
 
     if let Ok(archive) = ArchiveFile::parse(file.bytes()) {
-        for member in archive.members() {
+        // Each object is handed over one member late, so the last one can still be told
+        // that the members stopped early.
+        let mut held: Option<Object> = None;
+        for (at, member) in archive.members().enumerate() {
+            // `object` ends the walk at the first member it cannot read, though the size
+            // in its header may be good and the members after it fine.
             let Ok(member) = member else {
-                continue;
+                if let Some(last) = &mut held {
+                    let member = at.saturating_add(1);
+                    last.messages.push(LoadMessage::ArchiveCutShort { member });
+                }
+                break;
             };
             let name = String::from_utf8_lossy(member.name()).into_owned();
             // The same bytes `member.data(..)` would return, addressed as a range into the
@@ -95,9 +107,14 @@ fn open_one_file(
             let Some(data) = ObjectData::member(&file, offset, size) else {
                 continue;
             };
-            if let Some(object) = parse_object(data, name, path.to_path_buf()) {
-                emit(Progress::Parsed(object))?;
+            if let Some(object) = parse_unshared(data, name, path.to_path_buf()) {
+                if let Some(previous) = held.replace(object) {
+                    emit(Progress::Parsed(Arc::new(previous)))?;
+                }
             }
+        }
+        if let Some(last) = held {
+            emit(Progress::Parsed(Arc::new(last)))?;
         }
     }
 

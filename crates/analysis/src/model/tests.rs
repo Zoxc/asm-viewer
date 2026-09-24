@@ -143,4 +143,11 @@ fn a_load_message_says_what_went_wrong_and_names_what_it_carries() {
         unnamed.to_string(),
         "Sections named by their index because their names could not be read: 1."
     );
+
+    let cut = LoadMessage::ArchiveCutShort { member: 2 };
+    assert_eq!(cut.severity(), Severity::Warning);
+    assert_eq!(
+        cut.to_string(),
+        "The archive's member 2 would not read, so it and every member after it are not shown."
+    );
 }

@@ -7,8 +7,12 @@ knows freya.
 **Parse pipeline** (`open_files_streaming` -> `parse_object`): each selected file is first tried as
 an `ArchiveFile`, with every member parsed as a separate `Object`, and then the file itself is
 *also* parsed as a plain object. So a non-archive contributes one `Object` and an archive one per
-member. Failures are swallowed (`.ok()`), so a file that will not parse just never appears. Every path is
-read through `open_regular` (`src/regular.rs`), since a project file, which a stranger may write,
+member. Failures are swallowed (`.ok()`), so a file that will not parse just never appears. The one
+exception is an archive whose members stop early: `object`'s walk ends at the first member header
+it cannot read (`notes/upstream/object.md`), so the last object shown before it carries
+`LoadMessage::ArchiveCutShort`. For that, each member's object is handed over one member late. An
+archive that stops before any object is shown still says nothing, having no row to say it on.
+Every path is read through `open_regular` (`src/regular.rs`), since a project file, which a stranger may write,
 lists them: the open does not wait on a fifo, anything the handle it opened says is not a regular
 file (a fifo, `/dev/zero`) is refused, and so is a file that reads more than it stated. A symlink is
 followed, since a binary the reader chose may be one. There is no cap beyond the stated length: a
@@ -45,9 +49,10 @@ parse at all is still dropped, having nothing to show; a message is for an objec
 that cannot be trusted in part. The parse collects them. A rule the parse follows hands back what
 went wrong beside its answer rather than reporting it itself, as `section_biases` does, so the DWARF
 loader, which asks the same rule again, drops the second copy. The Objects list marks the row
-(`agents/Sidebar.md`). Three cases are reported so far: the layout running out of address space,
-functions left out because the descriptor naming their code could not be read (below), and
-sections named `<section N>` because their own names would not read (below).
+(`agents/Sidebar.md`). Four cases are reported so far: the layout running out of address space,
+functions left out because the descriptor naming their code could not be read (below), sections
+named `<section N>` because their own names would not read (below), and an archive's members
+stopping early (above).
 
 **Data model**, built once at open time and shared via `Arc`. Only *defined* `SymbolKind::Text`
 symbols are kept. `object` calls an undefined ELF `STT_FUNC` or COFF function text too, but it has

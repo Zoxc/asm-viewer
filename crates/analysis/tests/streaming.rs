@@ -216,3 +216,55 @@ fn a_fifo_is_finished_without_waiting_for_a_writer() {
         ]
     );
 }
+
+/// Three objects after a `//` names table, the middle one's name field replaced by `name`.
+fn archive_with_bad_middle_name(name: &[u8; 16]) -> Vec<u8> {
+    let mut bytes = archive(&[
+        // The helper adds the slash: this is the `//` names table.
+        ("/", b"unused_long_name.o/\n"),
+        ("first.o", &caller_and_target()),
+        ("middle.o", &caller_and_target()),
+        ("third.o", &caller_and_target()),
+    ]);
+    let at = bytes
+        .windows(9)
+        .position(|window| window == b"middle.o/")
+        .expect("the middle member's header");
+    bytes[at..at + 16].copy_from_slice(name);
+    bytes
+}
+
+fn objects_of(bytes: Vec<u8>) -> Vec<Arc<analysis::Object>> {
+    let mut objects = Vec::new();
+    open_data_streaming(named(vec![("lib.a", bytes)]), |progress| {
+        if let Progress::Parsed(object) = progress {
+            objects.push(object);
+        }
+        ControlFlow::Continue(())
+    });
+    objects
+}
+
+/// `object` ends its walk of an archive at the first member whose name will not read. The
+/// last object shown before it says so, and which member it was.
+#[test]
+fn an_archive_whose_members_stop_early_says_so_on_the_last_object_shown() {
+    // A GNU name past the end of the `//` table, and a BSD name longer than its member.
+    for name in [b"/999            ", b"#1/9999         "] {
+        let objects = objects_of(archive_with_bad_middle_name(name));
+        let names: Vec<&str> = objects.iter().map(|object| object.name.as_str()).collect();
+        assert_eq!(names, ["first.o"]);
+        assert_eq!(
+            objects[0].messages,
+            [analysis::LoadMessage::ArchiveCutShort { member: 2 }]
+        );
+    }
+}
+
+/// A clean archive says nothing about its members.
+#[test]
+fn an_archive_read_to_its_end_says_nothing() {
+    let objects = objects_of(archive_with_bad_middle_name(b"middle.o/       "));
+    assert_eq!(objects.len(), 3);
+    assert!(objects.iter().all(|object| object.messages.is_empty()));
+}

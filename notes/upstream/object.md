@@ -89,6 +89,20 @@ of an unknown architecture rather than 32-bit ARM, which nothing here decodes ei
 
 Not reported.
 
+**An archive's member walk ends at the first member it cannot read.** `ArchiveMemberIterator`
+(`read/archive.rs`) hands back the error and then jumps to the end, even where the header's size
+field is good and the next member could be reached. A header fails when its extended name will
+not read: a GNU `/nnn` past the end of the `//` table or with no `/\n` after it, or a BSD
+`#1/nnn` longer than the member.
+
+**What it cost**: that member and every member after it were dropped without a word. The walk
+still stops there; `open_one_file` in `crates/analysis/src/open.rs` now puts
+`LoadMessage::ArchiveCutShort` on the last object shown before it, saying which member it
+stopped at. An archive that stops before its first object still says nothing. Pinned by
+`streaming.rs`' `an_archive_whose_members_stop_early_says_so_on_the_last_object_shown`.
+
+Not reported.
+
 ## Wanted
 
 **An XCOFF image writer.** `write::Object` writes an XCOFF relocatable object and nothing

@@ -76,6 +76,9 @@ pub enum LoadMessage {
     /// `count` sections are called `<section N>` by their index, because their names could
     /// not be read. They are kept, code and all.
     UnreadableSectionNames { count: usize },
+    /// An archive's members stopped at the `member`th (from 1), whose header would not
+    /// read. Said on the last object shown before it.
+    ArchiveCutShort { member: usize },
 }
 
 /// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
@@ -95,6 +98,8 @@ impl LoadMessage {
             LoadMessage::UnreadableDescriptors { .. } => Severity::Warning,
             // Only the name is wrong, and it says so.
             LoadMessage::UnreadableSectionNames { .. } => Severity::Warning,
+            // What is shown is right; only some of it is missing.
+            LoadMessage::ArchiveCutShort { .. } => Severity::Warning,
         }
     }
 }
@@ -116,6 +121,11 @@ impl fmt::Display for LoadMessage {
             LoadMessage::UnreadableSectionNames { count } => write!(
                 f,
                 "Sections named by their index because their names could not be read: {count}."
+            ),
+            LoadMessage::ArchiveCutShort { member } => write!(
+                f,
+                "The archive's member {member} would not read, so it and every member after it \
+                 are not shown."
             ),
         }
     }
