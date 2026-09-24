@@ -49,3 +49,20 @@ fn a_bars_hits_keep_the_listing_they_are_about() {
     assert!(bar.hits().is_none());
     assert!(bar.pending().is_some());
 }
+
+/// A seed is text to find, in either mode: with Regex on, `[rip+0x2f]` finds itself and
+/// not any one of its characters.
+#[test]
+fn a_seed_in_regex_mode_finds_the_text_it_is() {
+    let mut bar = Find {
+        filter: Filter {
+            regex: true,
+            ..Filter::default()
+        },
+        ..Find::default()
+    };
+    bar.seed("[rip+0x2f]");
+    let matcher = bar.filter.matcher();
+    assert_eq!(matcher.marks("lea rax, [rip+0x2f]"), vec![9..19]);
+    assert!(!matcher.matches("mov rax, rcx"));
+}

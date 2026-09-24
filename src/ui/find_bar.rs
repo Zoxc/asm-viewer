@@ -199,6 +199,21 @@ impl Find {
         self.hunt = None;
     }
 
+    /// Put `seed` in the box as text to find. Escaped where the bar is in regex mode, so
+    /// `[rip+0x2f]` finds itself and not any one of its characters.
+    fn seed(&mut self, seed: &str) {
+        let seed = if self.filter.regex {
+            regex::escape(seed)
+        } else {
+            seed.to_owned()
+        };
+        if self.filter.pattern != seed {
+            self.filter.pattern = seed;
+            self.seeds = self.seeds.wrapping_add(1);
+            self.reset();
+        }
+    }
+
     /// Whether an answer is owed about the listing and pattern asked about now: asked for
     /// or still to be. A step asked meanwhile waits for it rather than finding no hits.
     ///
@@ -334,11 +349,7 @@ pub(crate) fn open_find(
     let bar = next.bars.entry(at).or_default();
     bar.listing = listing;
     if let Some(seed) = seed.filter(|seed| !seed.is_empty()) {
-        if bar.filter.pattern != seed {
-            bar.filter.pattern = seed;
-            bar.seeds = bar.seeds.wrapping_add(1);
-            bar.reset();
-        }
+        bar.seed(&seed);
     }
     bar.focus = true;
     finds.set_if_modified(next);

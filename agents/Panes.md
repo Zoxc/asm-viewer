@@ -1397,7 +1397,8 @@ folded into it, so a listing's keys stay the whole of what `marks.rs` says they 
 line**, taken through `ListingText::text`, which is the closure a copy of characters is taken
 through: not the same rule written twice but the same closure, so the two cannot drift. A run of
 rows is a page of disassembly and not a search term, so a run crossing rows leaves the box as it
-was.
+was. A seed is text to find, so a bar in regex mode takes it escaped: assembly is full of
+metacharacters, and `[rip+0x2f]` would otherwise match any one of its characters.
 
 **`F3` and `Shift+F3` step that bar from inside the code**, where `Enter` and `Shift+Enter` step it
 from inside the box. They are answered in the same wrap and for the same reason: a key reaches the
