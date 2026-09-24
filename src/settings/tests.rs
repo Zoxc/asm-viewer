@@ -142,8 +142,8 @@ fn a_size_the_app_cannot_draw_at_is_no_size() {
     assert_eq!(points(MAX_POINTS), Some(MAX_POINTS));
 }
 
-/// What is owed is written by the next flush, the newest of it only, and once. The one
-/// test that goes through the `OWED` static.
+/// What is owed is written by the next flush, the newest of it only, and once; a write
+/// that fails stays owed. The one test that goes through the `OWED` static.
 #[test]
 fn a_flush_writes_the_settings_last_owed_once() {
     let directory = Temporary::fresh("settings-test");
@@ -160,4 +160,17 @@ fn a_flush_writes_the_settings_last_owed_once() {
     fs::remove_file(directory.join(FILE_NAME)).expect("the file written");
     flush();
     assert!(!directory.join(FILE_NAME).exists(), "written twice");
+
+    // A file where the store's directory should be fails the write.
+    fs::remove_dir(&*directory).expect("the test directory, empty");
+    fs::write(&*directory, "").expect("a file in the directory's place");
+    settings().owe(&store);
+    flush();
+    fs::remove_file(&*directory).expect("the file in the directory's place");
+    flush();
+    assert_eq!(
+        Settings::load(&store),
+        settings(),
+        "dropped when the write failed"
+    );
 }

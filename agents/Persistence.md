@@ -330,9 +330,8 @@ moving the state directory does not lose every unsaved project at once; in memor
 absolute, the relative spelling belonging to the file and nowhere else (`write_recents`).
 The **cap is the store's own**: `Store::save_order` is the one writer of an order file and cuts to
 `MAX_ORDER` on the way out, so a module that keeps an order hands over what it holds and no caller
-has to remember the number. Under it is `Store::save`, the log-and-swallow an order and
-`settings.toml` share: these are the files the app carries on without, where a project's own write
-hands its error back.
+has to remember the number. Under it is `Store::save`, the log-and-swallow for an order: a file the
+app carries on without, where a project's own write hands its error back.
 `Order::touch` answers whether anything moved, so reopening the project already at the front
 writes nothing. The order itself is `order::Order<T>`, the newest-first list every list of places
 in the app is: the projects', the scratchpads', a tab's trail and the record of visits. The
@@ -649,7 +648,8 @@ are stored in **points**, the unit the desktops answer in, so an override and th
 are comparable; `fonts.rs` converts once at the end. There is **no `Saves`-shaped policy and
 no autosave timer**, only the font family box's reason for waiting: a change is **owed**
 (`Settings::owe`, a static holding the newest settings and their store) and `settings::flush`
-writes it, once the changes settle (`Settle`) and from the close hook. **Resolving
+writes it, once the changes settle (`Settle`) and from the close hook. A write that fails is logged
+and stays owed, so the close hook tries it again. **Resolving
 `Theme::Desktop` is deliberately not this module's job**: "which theme does the desktop prefer" is a
 question for whatever owns the window, so `settings.rs` holds only the choice and stays
 framework-free, and `ui/palette.rs` puts the two together (`resolve_appearance`). It once spawned a

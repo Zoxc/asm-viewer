@@ -25,11 +25,16 @@ fn owed() -> MutexGuard<'static, Option<(Store, Settings)>> {
 
 /// Write out the settings last owed, if any. Called once the reader has stopped changing
 /// them, and before the process ends. The lock is held across the write, so an older
-/// answer cannot land after a newer one.
+/// answer cannot land after a newer one. A failed write is logged and stays owed, for the
+/// next flush to try again.
 pub fn flush() {
     let mut owed = owed();
-    if let Some((store, settings)) = owed.take() {
-        settings.save(&store);
+    let Some((store, settings)) = owed.take() else {
+        return;
+    };
+    if let Err(error) = store.write_toml(FILE_NAME, &settings) {
+        log::warn!("could not save {FILE_NAME}: {error}");
+        *owed = Some((store, settings));
     }
 }
 
@@ -124,11 +129,6 @@ impl Settings {
     /// before. A box typed in changes them once per keystroke, and each write is an fsync.
     pub fn owe(&self, store: &Store) {
         *owed() = Some((store.clone(), self.clone()));
-    }
-
-    /// Write the settings out. Any IO failure is logged and swallowed.
-    fn save(&self, store: &Store) {
-        store.save(FILE_NAME, self);
     }
 }
 

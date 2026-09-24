@@ -195,8 +195,7 @@ impl Store {
     ///
     /// One spelling of that line, rather than one per module that keeps such a file. What
     /// it leaves behind is the previous good file, which is why these are the files it is
-    /// for: a settings file or an order that is one save out of date is a file the app
-    /// carries on from.
+    /// for: an order that is one save out of date is a file the app carries on from.
     pub fn save(&self, path: impl AsRef<Path>, value: &impl Serialize) {
         let path = path.as_ref();
         if let Err(error) = self.write_toml(path, value) {
