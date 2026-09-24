@@ -1026,7 +1026,9 @@ rows are rebuilt under the view, the place put back is the map's own where the v
 well as the old rows could tell, and the derived one otherwise: a place written from outside is
 exact, a row's share of an undecoded stretch is a guess, and re-applying the guess landed a target
 in a stretch the worker had not reached on the row nearest its guess rather than on its own
-instruction. The same hook plants the caret a door left for the listing (`Planting`,
+instruction. A place with nothing kept for it opens at the top, as `use_kept_position`'s does: a
+switch re-renders the pane rather than mounting it, and a switch that moved nothing drew the
+arriving code at the offset of the code just left. The same hook plants the caret a door left for the listing (`Planting`,
 `agents/Panes.md`), owing it no scroll: the place is what moves the view there, and is authoritative
 in this pane. A place written from outside is answered **once, as a change of the map's value**, and
 never as "the map disagrees with the view". A listing of a large binary is millions of rows and tens

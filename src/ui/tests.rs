@@ -22181,6 +22181,52 @@ fn a_code_tab_comes_back_to_the_address_it_was_left_at() {
     assert!(labels(&test).contains(&"twice:".to_string()));
 }
 
+/// A code tab with no place of its own opens at the top, and not at the offset of the
+/// code tab the pane showed before: a switch re-renders the pane and keeps its scroll.
+#[test]
+fn a_code_tab_with_no_place_opens_at_the_top() {
+    let (_path, objects) = fixture_objects(2);
+    let (first, second) = (objects[0].clone(), objects[1].clone());
+    let reading = reading_of(&first, &[]);
+    let rows = rows_of(&reading);
+    let (mut test, roots) = TestingRunner::new(
+        code_harness,
+        (600., 300.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let states = roots.states;
+    let mut sections = roots.sectioned.reading;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Code(first.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    let label = (0..rows.len())
+        .find(|&row| {
+            rows.address_of(row) == Some(PlacedAddress::new(0x30))
+                && matches!(kind_at(&rows, row), Some(Kind::Label(_)))
+        })
+        .expect("sum_to has a label row");
+    test.scroll(
+        (300., 150.),
+        (0., -(label as f64) * code_row_height() as f64),
+    );
+    settle(&mut test);
+    assert_eq!(address_labels(&test)[0], "0000000000000030 ");
+
+    // The other object's code, opened as the Objects list opens it: with no address.
+    let document = Document::Code(second.clone());
+    open_document(states.open, states.visits, document, Reach::NewTab);
+    sections.set(reading_of(&second, &[]));
+    settle(&mut test);
+    settle(&mut test);
+
+    assert_eq!(address_labels(&test)[0], "0000000000000000 ");
+}
+
 /// What the view asks for is the stretches within a buffer of screens of the viewport
 /// that are not held, nearest the reader first -- and at the top of a listing that fits
 /// in the buffer, that is every stretch from the first.

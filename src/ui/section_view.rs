@@ -1211,7 +1211,7 @@ fn use_kept_place(
                 }
             }
 
-            let target = target_of(&state, &step, &at, code_at, &is_open);
+            let target = target_of(&state, &step, &built, &at, code_at, &is_open);
 
             if step.switching {
                 state.tab = *tab;
@@ -1448,18 +1448,22 @@ fn keep_spots(
 }
 
 /// Where this run has to move the view to, if anywhere. Four answers in order: a switch
-/// goes to the map's place; a recount goes back to where the rows were; a scroll is the
+/// goes to the map's place, or to the top where there is none; a recount goes back to where the rows were; a scroll is the
 /// reader's own, written down here and moving nothing; and a place written from outside
 /// while the tab is on top is gone to.
 fn target_of(
     held: &Held,
     step: &Step,
+    built: &Built,
     at: &At,
     mut places: State<Positions<Entry, Spot>>,
     is_open: &dyn Fn(&Entry) -> bool,
 ) -> Option<Spot> {
     if step.switching {
-        return at.known;
+        // A place with none kept opens at the top. Moving nothing would leave it at the
+        // offset of the listing being left: the pane is re-rendered and not mounted
+        // again, so the controller still holds that offset.
+        return at.known.or_else(|| spot_at(built, 0));
     }
     if step.rebuilt {
         // The rows changed under the reader: back to the place they were at -- the map's
