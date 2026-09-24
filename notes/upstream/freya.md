@@ -617,8 +617,8 @@ thing that could not be done without the engine, and which works.
 
 **A tooltip that does not arm under a held button.** `TooltipContainer` arms its timer on
 `pointer_over` and disarms on `pointer_out` and on nothing else (`tooltip.rs:204-216`), so
-a pointer dragging a selection past either pane's bar, its find bar or the sidebar arms and
-shows the tooltips of what it passed. The app makes them `interactive(false)` while a sweep
+a pointer dragging a selection past either pane's bar, its find bar, the sidebar, the two bars
+at the top or the pad list arms and shows the tooltips of what it passed. The app makes them `interactive(false)` while a sweep
 is under way (`use_sweeping`, `ui/marks.rs`), so they are not hit at all.
 
 **A key event is emitted only for a focused node that listens for it.** A keyboard event

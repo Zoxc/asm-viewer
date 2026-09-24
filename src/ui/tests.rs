@@ -42166,8 +42166,14 @@ fn a_sweep_held_over_the_sidebar_arms_no_tooltip() {
 
     test.move_cursor((1., 299.));
     test.poll_n(Duration::from_millis(20), 4);
-    // A run being swept out in the Assembly pane, the button still down.
-    let mut marked = roots.doors.marked;
+    start_sweep(roots.doors.marked);
+    settle(&mut test);
+    assert_eq!(hover(&mut test), 1, "a sweep armed the row's tooltip");
+}
+
+/// A run being swept out in the Assembly pane, the button still down.
+fn start_sweep(marked: State<Marks>) {
+    let mut marked = marked;
     marked.set(Marks {
         assembly: Some(Picked {
             chars: CharSelection::between(Caret { row: 0, col: 0 }, Caret { row: 1, col: 0 }),
@@ -42178,8 +42184,120 @@ fn a_sweep_held_over_the_sidebar_arms_no_tooltip() {
         }),
         source: None,
     });
+}
+
+/// The two bars across the top of the window, as `app()` stacks them, over a server
+/// worker that answers nothing.
+fn top_bars_harness() -> impl IntoElement {
+    use_root_key_states();
+    rect()
+        .expanded()
+        .content(Content::Flex)
+        .child(Toolbar)
+        .child(TabBar)
+}
+
+/// How many labels read `text` once the pointer has rested on `at` longer than a tooltip
+/// waits; the pointer is then taken off, so the next hover starts from nothing.
+fn labels_under_rest(test: &mut TestingRunner, at: (f64, f64), text: &str) -> usize {
+    test.move_cursor(at);
+    test.poll_n(Duration::from_millis(20), 40);
+    let count = labels(test).iter().filter(|drawn| *drawn == text).count();
+    test.move_cursor((1., 1.));
+    test.poll_n(Duration::from_millis(20), 4);
+    count
+}
+
+/// **A sweep held up past a pane's top arms no tooltip in the toolbar or the tab bar**, as
+/// it arms none in the sidebar: freya sends a held button's moves to whatever is under the
+/// pointer.
+///
+/// Fails on either bar answering the pointer during a sweep.
+#[test]
+fn a_sweep_held_over_the_top_bars_arms_no_tooltip() {
+    let (width, height) = (400., 200.);
+    let (mut test, roots) = TestingRunner::new(
+        top_bars_harness,
+        (width, height).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let path = "/far/away/file.rs";
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(Arc::from(Path::new(path))),
+        Reach::NewTab,
+    );
     settle(&mut test);
-    assert_eq!(hover(&mut test), 1, "a sweep armed the row's tooltip");
+
+    // The toolbar's last button, at the window's right edge: Forward, with nowhere to go.
+    let side = toggle_size() as f64;
+    let forward = (width as f64 - 4. - side / 2., 4. + side / 2.);
+    let chip = middle(label_area(&test, "file.rs").expect("the chip is drawn"));
+    assert_eq!(labels_under_rest(&mut test, forward, "Forward"), 1);
+    assert_eq!(labels_under_rest(&mut test, chip, path), 1);
+
+    start_sweep(roots.doors.marked);
+    settle(&mut test);
+    assert_eq!(
+        labels_under_rest(&mut test, forward, "Forward"),
+        0,
+        "a sweep armed the toolbar's tooltip"
+    );
+    assert_eq!(
+        labels_under_rest(&mut test, chip, path),
+        0,
+        "a sweep armed the chip's tooltip"
+    );
+}
+
+/// **A sweep held past the pad's listing arms no tooltip in the pad list**, which the
+/// sweep crosses on its way out to the left.
+///
+/// Fails on the list answering the pointer during a sweep.
+#[test]
+fn a_sweep_held_over_the_pad_list_arms_no_tooltip() {
+    // Cut by the list's width, so its row shows the tooltip at once. Not the shown pad,
+    // whose name is in the Name box too.
+    let long = "a-pad-whose-name-is-far-too-long-for-the-list";
+    let (mut test, roots, _asking, _asks) =
+        mount_scratchpad(scratchpad_view_harness, move |job: PadJob| match job {
+            PadJob::List => PadAnswer::Listed(vec![pad_listing("one"), pad_listing(long)]),
+            PadJob::Open {
+                scratchpad,
+                holding,
+            } => PadAnswer::Opened {
+                holding,
+                scratchpad: pad_on_disk(scratchpad),
+                program: None,
+            },
+            PadJob::Save(scratchpad) => PadAnswer::Saved {
+                pad: scratchpad.id().clone(),
+                failure: None,
+            },
+            _ => unreachable!("this test only opens a pad"),
+        });
+    let pad = roots.pad;
+    pump(&mut test, |_| pad.peek().state().opened());
+
+    let name = format!("<{long}>");
+    let row = label_area(&test, &name).expect("the row is drawn");
+    let at = ((row.min_x() + 5.) as f64, row.center().y as f64);
+    assert_eq!(
+        labels_under_rest(&mut test, at, &name),
+        2,
+        "the row and its tooltip"
+    );
+
+    start_sweep(roots.doors.marked);
+    settle(&mut test);
+    assert_eq!(
+        labels_under_rest(&mut test, at, &name),
+        1,
+        "a sweep armed the row's tooltip"
+    );
 }
 
 /// The state a [`use_asking`] harness is asked out of: a question, and a count of the

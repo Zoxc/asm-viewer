@@ -932,6 +932,10 @@ impl Component for PadList {
         drew_piece();
         let pad = use_consume::<Pad>().0;
         let jobs = use_consume::<PadJobs>();
+        // Not hit while a sweep of the pad's listing is under way, which crosses this list
+        // on its way out of the pane: freya's tooltip arms on the hover alone. Here and not
+        // on each row, so a sweep starting and ending draws no row again.
+        let sweeping = use_sweeping();
 
         let (rows, refused) = {
             let pads = pad.read();
@@ -962,6 +966,7 @@ impl Component for PadList {
             .width(Size::px(PAD_LIST_WIDTH))
             .height(Size::fill())
             .border(right_hairline())
+            .interactive(!sweeping)
             .child(section_heading(
                 "Scratchpads",
                 Some(
@@ -1072,6 +1077,9 @@ impl Component for PadDetails {
         let packaged = use_fitted();
         let pad = use_consume::<Pad>().0;
         let store = use_consume::<Storage>().0;
+        // Not hit while a sweep is under way, as the pad list is not: the package's
+        // tooltip would arm.
+        let sweeping = use_sweeping();
 
         let (shown, opened, package, verdict) = {
             let pads = pad.read();
@@ -1087,6 +1095,7 @@ impl Component for PadDetails {
         rect()
             .width(Size::fill())
             .spacing(SECTION_GAP)
+            .interactive(!sweeping)
             // An ordinary bound box, exactly the project view's: the name is a value in the
             // pad's own package and nothing is filed under it, so a keystroke is a state
             // change the save effect writes out and there is nothing to refuse, nothing to

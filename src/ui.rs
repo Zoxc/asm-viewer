@@ -279,41 +279,53 @@ impl Component for NavButton {
     }
 }
 
-fn toolbar() -> impl IntoElement {
-    rect()
-        .horizontal()
-        .width(Size::fill())
-        // `Content::Flex` so the gap below is measured last, out of what the two controls
-        // left over, rather than claiming the bar and pushing them off its right edge.
-        .content(Content::Flex)
-        .cross_align(Alignment::Center)
-        .border(bottom_hairline())
-        .child(
-            rect()
-                .horizontal()
-                .cross_align(Alignment::Center)
-                .margin(4.0)
-                .spacing(4.0)
-                // At the very left of the window: the ways in and out of a project, and
-                // the way back to a page that has been closed.
-                .child(PagesButton)
-                // What those items are about, said where the reader can see it without
-                // opening a menu.
-                .child(ProjectChip),
-        )
-        // The bar's controls sit at its two ends, so the pair the reader reaches for
-        // without looking stays under the same corner however many controls Open grows
-        // neighbours.
-        .child(rect().width(Size::flex(1.0)))
-        .child(
-            rect()
-                .horizontal()
-                .margin(4.0)
-                .spacing(2.0)
-                .child(ServerButton)
-                .child(NavButton { back: true })
-                .child(NavButton { back: false }),
-        )
+/// The bar across the top of the window, **not hit while a sweep is under way**: freya
+/// sends a held button's moves to whatever is under the pointer, so a sweep dragged up out
+/// of a pane lit the buttons it crossed and armed their tooltips (`notes/upstream/freya.md`).
+/// One gate over the bar, so a sweep starting and ending draws this box again and none of
+/// the controls in it, each comparing equal.
+#[derive(PartialEq)]
+struct Toolbar;
+
+impl Component for Toolbar {
+    fn render(&self) -> impl IntoElement {
+        let sweeping = use_sweeping();
+        rect()
+            .horizontal()
+            .width(Size::fill())
+            .interactive(!sweeping)
+            // `Content::Flex` so the gap below is measured last, out of what the two controls
+            // left over, rather than claiming the bar and pushing them off its right edge.
+            .content(Content::Flex)
+            .cross_align(Alignment::Center)
+            .border(bottom_hairline())
+            .child(
+                rect()
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .margin(4.0)
+                    .spacing(4.0)
+                    // At the very left of the window: the ways in and out of a project, and
+                    // the way back to a page that has been closed.
+                    .child(PagesButton)
+                    // What those items are about, said where the reader can see it without
+                    // opening a menu.
+                    .child(ProjectChip),
+            )
+            // The bar's controls sit at its two ends, so the pair the reader reaches for
+            // without looking stays under the same corner however many controls Open grows
+            // neighbours.
+            .child(rect().width(Size::flex(1.0)))
+            .child(
+                rect()
+                    .horizontal()
+                    .margin(4.0)
+                    .spacing(2.0)
+                    .child(ServerButton)
+                    .child(NavButton { back: true })
+                    .child(NavButton { back: false }),
+            )
+    }
 }
 
 /// Every key the window answers to whatever holds the keyboard: the modifiers each
@@ -940,7 +952,7 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
         // Over the panes and drawn as nothing until the server has said something about
         // the name under the pointer.
         .child(HoverBox)
-        .child(toolbar())
+        .child(Toolbar)
         // Under the bar rather than in the view that has the other Start button: the
         // control above is pressed from wherever the reader is, and a question drawn
         // where they are not looking is a press that did nothing. Lays out as nothing

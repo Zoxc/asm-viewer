@@ -512,6 +512,10 @@ impl Component for TabBar {
 
         let bar = use_bar();
         use_reveal(strip, bar);
+        // Not hit while a sweep is under way: a sweep dragged up out of a pane crosses the
+        // chips, and freya's tooltip arms on the hover alone. Here and not on each chip, so
+        // a sweep starting and ending draws no chip again.
+        let sweeping = use_sweeping();
 
         let (tabs, active) = {
             let strip = strip.read();
@@ -567,6 +571,7 @@ impl Component for TabBar {
             .content(Content::Flex)
             .background(palette().header_bg)
             .border(bottom_hairline())
+            .interactive(!sweeping)
             // On the global move because the pointer is over a chip, not over the strip's
             // own box, for the whole of the gesture.
             .on_global_pointer_move(move |e: Event<PointerEventData>| {
