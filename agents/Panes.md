@@ -1123,7 +1123,9 @@ An instruction is the one row read out of the reading instead, and its own tab's
 line (`instruction_line`). So: `section .text` for a header and `<name>:` for a label, each after
 its address, the instruction's own line for an instruction, and for a gap row a data directive
 (`dq` for a row that divides into quadwords, down to `db` for one that does not, the values
-little-endian as x86 reads them) followed by the same bytes as characters between bars. That is a
+read in the object's byte order, `Listing::endianness`: with no disassembler for anything but
+x86, a big-endian object's whole code is these rows, and read as x86 reads them no word in it
+matched the file) followed by the same bytes as characters between bars. That is a
 hex dump's shape, which is how a row of data is told from a row of assembly, in its shape and not
 in a colour. A cut row says `; listing cut at the decode cap: the function very likely goes on`
 after the address of the gap's first byte, which it shares with the row of bytes under it; as with

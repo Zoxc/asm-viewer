@@ -8,7 +8,7 @@ use crate::disasm::Code;
 use crate::extent::ExtentCache;
 use crate::line::{DebugInfo, DebugInfoCache};
 use crate::{Assembly, Bias, MadeUp, PlacedAddress, SectionAddress};
-use object::{Architecture, BinaryFormat, Relocation, SectionIndex, SymbolIndex};
+use object::{Architecture, BinaryFormat, Endianness, Relocation, SectionIndex, SymbolIndex};
 use std::{
     collections::{BTreeMap, HashMap},
     fmt,
@@ -27,6 +27,11 @@ pub struct Object {
     /// what picks a disassembler ([`SymbolData::assembly`]) and the only thing that can: a
     /// symbol's bytes say nothing about how to read themselves.
     pub architecture: Architecture,
+    /// The byte order the file stores its values in, as its header declares it: what a
+    /// run of bytes no instruction claims is read as words in. `Architecture` does not
+    /// say it, since MIPS, PowerPC and ARM each come in both. Little for an object made
+    /// by [`Object::new`].
+    pub endianness: Endianness,
     pub symbols: HashMap<SymbolIndex, Arc<SymbolData>>,
     /// The same symbols **sorted by name**, byte order, and one name's by index, the file's
     /// order. The Symbols list draws them in this order and a saved place is found in it by
@@ -206,6 +211,7 @@ impl Object {
             name,
             format,
             architecture,
+            endianness: Endianness::Little,
             symbols,
             symbols_sorted,
             imports,

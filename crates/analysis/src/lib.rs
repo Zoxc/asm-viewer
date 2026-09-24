@@ -25,7 +25,7 @@ pub use model::{
 pub use open::{open_data_streaming, open_files, open_files_streaming, Progress};
 pub use parse::parse_object;
 // Re-exported so the viewer needs no `object` dependency of its own.
-pub use object::{Architecture, BinaryFormat, SectionIndex, SymbolIndex};
+pub use object::{Architecture, BinaryFormat, Endianness, SectionIndex, SymbolIndex};
 
 /// [`Object`] is shared as an `Arc` and read from worker threads; the others are what a
 /// worker is handed and hands back. Asserted here so a field that stops being shared-safe

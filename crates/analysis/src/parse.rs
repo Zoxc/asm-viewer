@@ -720,6 +720,11 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
     let format = file.format();
     let architecture = file.architecture();
+    let endianness = if file.is_little_endian() {
+        Endianness::Little
+    } else {
+        Endianness::Big
+    };
     let mut object = Object::preloaded(
         path,
         name,
@@ -732,6 +737,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         preloaded,
     );
     object.messages = messages;
+    object.endianness = endianness;
     Some(Arc::new(object))
 }
 

@@ -17,7 +17,7 @@ use crate::counter;
 use crate::find::Direction;
 use crate::positions::Spot;
 use crate::section::{Body, Kind, Row, Rows, StretchRows, GAP_BYTES_PER_ROW};
-use analysis::Stretch;
+use analysis::{Endianness, Stretch};
 use std::sync::Weak;
 
 /// How many screens above and below the viewport are decoded ahead, so that a page up or
@@ -219,7 +219,7 @@ fn text_at(
         }),
         Kind::Gap(index) => {
             let (address, bytes) = gap_row_bytes(placed, &body?.gap.as_ref()?.range, index)?;
-            let (mark, values) = dump_line(&bytes);
+            let (mark, values) = dump_line(&bytes, placed.listing.endianness());
             Some(TextOf {
                 address: Some(address),
                 mark: Some(mark),
@@ -397,9 +397,10 @@ impl PartialEq for TextRow {
 
 /// A gap row as data: the directive for the largest unit that divides the row's bytes --
 /// `dq` for quadwords down to `db` for bytes -- and the row's text: the values in that
-/// unit, little-endian as x86 reads them, padded to the width a row of bytes would take,
-/// then the same bytes as characters between bars, a dot for anything unprintable.
-fn dump_line(bytes: &[u8]) -> (&'static str, String) {
+/// unit, read in the object's byte order `endian`, padded to the width a row of bytes
+/// would take, then the same bytes as characters between bars, a dot for anything
+/// unprintable.
+fn dump_line(bytes: &[u8], endian: Endianness) -> (&'static str, String) {
     let (mark, unit) = [("dq", 8), ("dd", 4), ("dw", 2), ("db", 1)]
         .into_iter()
         .find(|&(_, unit)| !bytes.is_empty() && bytes.len().is_multiple_of(unit))
@@ -407,10 +408,11 @@ fn dump_line(bytes: &[u8]) -> (&'static str, String) {
     let values: Vec<String> = bytes
         .chunks(unit)
         .map(|chunk| {
-            let value = chunk
-                .iter()
-                .rev()
-                .fold(0u64, |value, &byte| (value << 8) | u64::from(byte));
+            let fold = |value: u64, &byte: &u8| (value << 8) | u64::from(byte);
+            let value = match endian {
+                Endianness::Little => chunk.iter().rev().fold(0, fold),
+                Endianness::Big => chunk.iter().fold(0, fold),
+            };
             format!("{value:0width$X}", width = unit * 2)
         })
         .collect();
@@ -1631,3 +1633,6 @@ fn use_window(
         },
     );
 }
+
+#[cfg(test)]
+mod tests;

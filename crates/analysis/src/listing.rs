@@ -21,6 +21,7 @@
 
 use crate::model::{covering, PlacedSymbol};
 use crate::{Assembly, Bias, Object, PlacedAddress, Section, SectionAddress, SymbolData};
+use object::Endianness;
 use std::{ops::Range, sync::Arc};
 
 /// One section's listing: its stretches, contiguous and in address order, partitioning the
@@ -28,6 +29,8 @@ use std::{ops::Range, sync::Arc};
 pub struct Listing {
     section: Arc<Section>,
     stretches: Vec<Stretch>,
+    /// The object's byte order ([`Object::endianness`]).
+    endianness: Endianness,
 }
 
 /// One label's worth of a section: the bytes from a symbol's address up to the next
@@ -122,11 +125,20 @@ impl Listing {
             });
         }
 
-        Self { section, stretches }
+        Self {
+            section,
+            stretches,
+            endianness: object.endianness,
+        }
     }
 
     pub fn section(&self) -> &Arc<Section> {
         &self.section
+    }
+
+    /// The byte order the section's values are stored in: the object's.
+    pub fn endianness(&self) -> Endianness {
+        self.endianness
     }
 
     /// The stretches, in address order, partitioning the section's bytes.

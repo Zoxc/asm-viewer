@@ -1009,3 +1009,35 @@ fn a_section_near_the_top_of_the_address_space_is_a_load_error() {
         }]
     );
 }
+
+/// A listing says the byte order its object stores values in, which is what a row of bytes
+/// no instruction claims is read as words in: the file's own, and not x86's.
+#[test]
+fn a_listing_reads_its_bytes_in_the_objects_byte_order() {
+    use object::write;
+    use object::{BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope};
+
+    let object_of = |endian: Endianness| {
+        let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::Mips, endian);
+        let text = obj.section_id(write::StandardSection::Text);
+        let value = obj.append_section_data(text, &[0x27, 0xBD, 0xFF, 0xE0], 4);
+        obj.add_symbol(write::Symbol {
+            name: b"f".to_vec(),
+            value,
+            size: 4,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(text),
+            flags: SymbolFlags::None,
+        });
+        parse(&obj.write().expect("writing the fixture object"))
+    };
+    for endian in [Endianness::Big, Endianness::Little] {
+        let object = object_of(endian);
+        assert_eq!(object.endianness, endian);
+        let code = CodeListing::new(&object);
+        let (placed, _) = code.stretch(0).expect("the object has code");
+        assert_eq!(placed.listing.endianness(), endian);
+    }
+}
