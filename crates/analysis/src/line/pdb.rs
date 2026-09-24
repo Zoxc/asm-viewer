@@ -63,7 +63,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// One image's `.pdb`, opened and matched once and kept for the object's lifetime.
 pub(super) struct Pdb {
@@ -93,6 +93,10 @@ pub(super) struct Pdb {
     /// The modules decoded so far, by index. [`None`] remembers a module with no stream, no
     /// rows and no procedures, so it is not re-read for every symbol in it.
     modules: Mutex<HashMap<usize, Option<Arc<ModuleLines>>>>,
+
+    /// How many modules the list holds, once one walk has decoded them all. Past that no
+    /// question walks the list again, not even for a module the list does not hold.
+    every: OnceLock<usize>,
 
     /// How many walks of the DBI module list this PDB has started, so a test can pin that a
     /// question over every module costs one walk and not one per module. Test builds only.
@@ -147,6 +151,7 @@ impl Pdb {
             image_base,
             contributions,
             modules: Mutex::default(),
+            every: OnceLock::new(),
             #[cfg(test)]
             walks: std::sync::atomic::AtomicUsize::new(0),
         })
@@ -256,11 +261,13 @@ impl Pdb {
     }
 
     /// The modules `wanted` names (ascending, each once), in that order, skipping any with
-    /// nothing to say. Those not yet decoded are decoded in one walk between them, so no
-    /// caller can start a walk per module. The `modules` lock is taken per module and
+    /// nothing to say. Those not yet decoded are decoded in one walk between them. That is
+    /// one walk per call, so a pass asking an address at a time decodes every module first
+    /// ([`LineBackend::prepare_extents`]). The `modules` lock is taken per module and
     /// released before it is handed over.
     fn decoded<'a>(&'a self, wanted: &'a [usize]) -> impl Iterator<Item = Arc<ModuleLines>> + 'a {
-        if wanted.iter().any(|&index| self.remembered(index).is_none()) {
+        let missing = wanted.iter().any(|&index| self.remembered(index).is_none());
+        if missing && self.every.get().is_none() {
             self.walk(Some(wanted));
         }
         wanted
@@ -312,6 +319,12 @@ impl Pdb {
             }
         }
         count
+    }
+
+    /// Every module decoded, in the one walk this PDB ever makes of the whole list, and how
+    /// many there are.
+    fn every_module(&self) -> usize {
+        *self.every.get_or_init(|| self.walk(None))
     }
 
     /// The DBI module list from the front, numbered: the one place it is walked from. A
@@ -427,12 +440,18 @@ impl LineBackend for Pdb {
         extent
     }
 
+    /// Every module, in one walk. The extent pass asks one address at a time, and a walk
+    /// per module it finds undecoded would cost the square of the module count.
+    fn prepare_extents(&self) {
+        self.every_module();
+    }
+
     /// Every row of every module that names a file and a line. Every module is decoded in
     /// one walk of the module list and visited from the table after. Each is loaded under
     /// the PDB's lock and visited once it is released; the `modules` lock is held for no
     /// longer than a lookup.
     fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32)) {
-        let count = self.walk(None);
+        let count = self.every_module();
         // That walk remembered every module, so each is only looked up here.
         for module in (0..count).filter_map(|index| self.remembered(index).flatten()) {
             let Some(lines) = &module.lines else {

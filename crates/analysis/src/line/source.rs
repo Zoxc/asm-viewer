@@ -302,10 +302,9 @@ impl Object {
     /// object, or [`None`] when it has no debug info this reads.
     fn source_index(&self) -> Option<&SourceIndex> {
         let debug = self.debug_info()?;
-        Some(
-            debug
-                .index
-                .get_or_init(|| SourceIndex::build(&symbol_ranges(self), debug)),
-        )
+        Some(debug.index.get_or_init(|| {
+            debug.prepare_extents();
+            SourceIndex::build(&symbol_ranges(self), debug)
+        }))
     }
 }

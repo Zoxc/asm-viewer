@@ -112,6 +112,10 @@ trait LineBackend {
     /// debug info does not say.
     fn extent(&self, address: PlacedAddress) -> Option<u64>;
 
+    /// Decode at once what asking every function's [`extent`](Self::extent) in turn would
+    /// decode piece by piece, for a backend where that costs more. Nothing by default.
+    fn prepare_extents(&self) {}
+
     /// Every row that names a file and a line, handed to `visit` as `(range, file, line)`.
     /// A backend may hold its own lock for the whole walk; see [`DebugInfo::each_row`].
     fn each_row(&self, visit: &mut dyn FnMut(Range<PlacedAddress>, &str, u32));
@@ -207,6 +211,12 @@ impl DebugInfo {
     fn extent(&self, section: &Section, address: SectionAddress) -> Option<u64> {
         let probe = section.place_checked(address)?;
         without_panicking(|| self.backend().extent(probe)).flatten()
+    }
+
+    /// Ready the backend for an extent asked of every function
+    /// ([`LineBackend::prepare_extents`]).
+    fn prepare_extents(&self) {
+        let _ = without_panicking(|| self.backend().prepare_extents());
     }
 
     /// Every row that names a file and a line, whatever the object, handed to `visit` as

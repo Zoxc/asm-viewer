@@ -553,9 +553,14 @@ assemblers emit, is dropped rather than given an end. Line 0 and column 0 are `N
 parses every line program. The DBI module list is a chain of variable-length records with no index,
 so an index is reached only by parsing every record before it and **one walk serves every module a
 question wants** (`Pdb::walk`, stopped after the last one asked for). Every question gets its
-modules through `Pdb::decoded`, which starts that walk itself, so no caller can walk once per
-module. A walk per module would cost the square of a count the file states, and a module list of
-a few hundred honest megabytes declares millions: the first source question would then hang the analysis worker, which no guard can catch.
+modules through `Pdb::decoded`, which starts that walk itself, so no one question walks once per
+module. The source index is the caller that asks one address at a time, an extent for every
+symbol no unwind entry covers (every function of a 32-bit PE, every leaf of an x86-64 one), and
+that would still be a walk per module. So before it takes the extents it decodes every module in
+one walk (`LineBackend::prepare_extents`, a no-op for DWARF), and once that walk has run no
+question walks the list again, `each_row` included. A walk per module would cost the square of a
+count the file states, and a module list of a few hundred honest megabytes declares millions: the
+first source question would then hang the analysis worker, which no guard can catch.
 **Two things a PDB has that DWARF-as-read does not**: a checksum per source file (`SourceHash`: MD5
 from clang-cl and rustc, SHA-256 from MSVC since 2022, as the samples' CRT objects show), carried on
 `LineInfo` beside the file name so a reader can tell the file they have from the one the compiler

@@ -1,4 +1,6 @@
+use super::super::{Backend, DebugInfo};
 use super::*;
+use crate::SymbolData;
 use std::sync::atomic::Ordering::Relaxed;
 
 /// The committed pair `tests/pdb.rs` reads, as the image's bytes and the path it was read
@@ -44,6 +46,66 @@ fn the_modules_at_an_address_are_decoded_in_one_walk() {
     let before = pdb.walks.load(Relaxed);
     assert_eq!(pdb.extent(PlacedAddress::new(1)), None);
     assert_eq!(pdb.walks.load(Relaxed) - before, 1);
+}
+
+/// Building the source index asks an extent per function, one address at a time, and then
+/// every row. Functions in eight modules not yet decoded cost one walk of the module list
+/// for all of it, and not a walk each.
+#[test]
+fn the_source_index_walks_the_module_list_once() {
+    let (bytes, path) = fixture();
+    let file = object::File::parse(&*bytes).expect("a PE");
+    let mut pdb = Pdb::load(&file, &path).expect("the .pdb beside it");
+
+    // Eight one-byte functions, each in a module of its own, some past the end of the list.
+    // No procedure begins at any of them, so each asks the PDB.
+    let base = 0x1000;
+    let functions = 0..8u64;
+    pdb.contributions = Intervals::new(functions.clone().map(|i| {
+        let start = SectionAddress::new(base + i);
+        (start..SectionAddress::new(base + i + 1), i as usize)
+    }));
+    let section = Arc::new(crate::Section::text(
+        object::SectionIndex(1),
+        ".text".to_string(),
+        vec![0xc3; functions.end as usize],
+        SectionAddress::new(base),
+        Default::default(),
+        Bias::NONE,
+    ));
+    let symbols = functions
+        .map(|i| {
+            let address = SectionAddress::new(base + i);
+            let symbol =
+                SymbolData::new(format!("f{i}"), None, address, Some(section.clone()), None);
+            (object::SymbolIndex(i as usize), Arc::new(symbol))
+        })
+        .collect();
+    let object = crate::Object::preloaded(
+        path,
+        "line_fixture_public.dll".to_string(),
+        object::BinaryFormat::Pe,
+        object::Architecture::X86_64,
+        symbols,
+        Vec::new(),
+        vec![section],
+        crate::ObjectData::from(Vec::new()),
+        Some(DebugInfo::of(Backend::Pdb(pdb))),
+    );
+    let walks = || {
+        let Some(DebugInfo {
+            backend: Backend::Pdb(pdb),
+            ..
+        }) = object.debug_info()
+        else {
+            panic!("the PDB it was given");
+        };
+        pdb.walks.load(Relaxed)
+    };
+
+    let before = walks();
+    object.source_files();
+    assert_eq!(walks() - before, 1);
 }
 
 /// The path a binary records is a name, not a place to reach. On Windows a UNC path is
