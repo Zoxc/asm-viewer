@@ -157,7 +157,11 @@ pub fn settings_in(directory: &Path) -> Result<Settings, Unreadable> {
 /// `rust-analyzer.` prefix, and ignores one whose dots were not split into a tree. Both
 /// were watched happening against a real server. The rest of the file is the editor's own
 /// keys, and they are skipped without a word.
+///
+/// A leading byte order mark is dropped, as VS Code drops it; the parser would call it an
+/// unexpected token.
 pub fn settings_from(text: &str, directory: &Path) -> Result<Settings, Unreadable> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let read: Value = jsonc_parser::parse_to_serde_value(text, &JSONC)
         .map_err(|error| Unreadable::NotJson(error.to_string()))?;
     let Value::Object(read) = read else {

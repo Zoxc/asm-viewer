@@ -240,6 +240,15 @@ fn a_header_of_comments_over_the_object_is_read() {
     assert_eq!(settings.options()["linkedProjects"], json!(["Cargo.toml"]));
 }
 
+/// A file saved with a UTF-8 byte order mark is read, as VS Code reads it.
+#[test]
+fn a_byte_order_mark_is_not_part_of_the_file() {
+    let settings = read("\u{feff}{ \"rust-analyzer.checkOnSave\": true }")
+        .expect("a file an editor would take");
+
+    assert_eq!(settings.options()["checkOnSave"], json!(true));
+}
+
 /// A mistake is reported on the line the reader wrote it on, comments above it and all:
 /// what the Project view shows is the only place they will be told where to look.
 #[test]
