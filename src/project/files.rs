@@ -161,7 +161,8 @@ pub struct Project {
 
 impl Project {
     /// Turn every path in this project the way `spelling` says, against the directory the
-    /// project file is in.
+    /// project file is in. For a symlink that is the directory of the file it names, where
+    /// the bytes are and where a save lands ([`crate::store::through_links`]).
     ///
     /// The **project file alone** does this, and it is what makes one worth checking in:
     /// a `binaries` naming `target/debug/viewer` is a claim about the tree the file sits
@@ -214,7 +215,7 @@ impl Project {
         let text = std::str::from_utf8(&data).map_err(|_| Reason::NotText)?;
         let mut project: Project =
             toml::from_str(text).map_err(|error| Reason::of(&error, text))?;
-        if let Some(directory) = path.parent() {
+        if let Some(directory) = crate::store::through_links(path).parent() {
             project.against(directory, Spelling::Working);
         }
         Ok(project)
@@ -224,7 +225,7 @@ impl Project {
     /// spells them. A copy, since what the app goes on holding is the absolute form.
     pub(super) fn save_to(&self, store: &Store, path: &Path) -> std::io::Result<()> {
         let mut stored = self.clone();
-        if let Some(directory) = path.parent() {
+        if let Some(directory) = crate::store::through_links(path).parent() {
             stored.against(directory, Spelling::Stored);
         }
         store.write_toml(path, &stored)

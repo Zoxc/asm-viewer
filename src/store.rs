@@ -428,7 +428,7 @@ pub fn write_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 /// The file `path` names once every symlink at its last component is followed, which is
 /// where a write lands. A link may name a file not there yet, which the write makes. A
 /// chain longer than the system's own limit, a loop, is `path` itself.
-fn through_links(path: &Path) -> PathBuf {
+pub(crate) fn through_links(path: &Path) -> PathBuf {
     let mut at = path.to_path_buf();
     for _ in 0..40 {
         let Ok(target) = fs::read_link(&at) else {

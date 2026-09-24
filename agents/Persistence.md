@@ -238,7 +238,9 @@ place is their own file, and this app has no business deleting one whatever aske
 **A path in the project file is relative where it can be** (`Project::against`, turned one way
 by `load_from` and the other by `save_to`). It is what makes a project worth checking in: a
 `binaries` naming `target/debug/viewer` is a claim about the tree the file sits in, where the
-absolute spelling is a claim about one machine. Only paths **under the project file's own
+absolute spelling is a claim about one machine. For a symlinked project file that directory is
+the target's (`store::through_links`): the bytes are there and a save lands there, so a read of
+the link and of the target mean the same tree. Only paths **under the project file's own
 directory** are turned, everything else having nothing to be relative to; and it is the project
 file alone -- the session beside it never travels and its digests are keyed by the paths the app
 is holding. In memory a project is always absolute, so `Saves`' baselines and the app's binaries

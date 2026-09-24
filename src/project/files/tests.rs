@@ -431,6 +431,34 @@ fn a_project_file_moved_with_its_tree_points_at_the_new_one() {
     assert_eq!(moved.binaries, vec![there.join("target/debug/vmlinux")]);
 }
 
+/// A project file linked in from elsewhere is about the tree its target sits in, not the
+/// link's: a save through the link and a read of the target agree on every path.
+#[test]
+fn a_linked_project_file_is_relative_to_its_target() {
+    let repo = directory();
+    let elsewhere = directory();
+    fs::create_dir_all(&repo).expect("creating the test directory");
+    fs::create_dir_all(&elsewhere).expect("creating the second test directory");
+    let target = repo.join("kernel.avproj");
+    let link = elsewhere.join("kernel.avproj");
+    std::os::unix::fs::symlink(&target, &link).expect("a symlink");
+
+    let project = Project {
+        details: Details {
+            directory: Some(repo.to_path_buf()),
+            ..Details::default()
+        },
+        binaries: vec![repo.join("target/debug/vmlinux")],
+        ..Project::default()
+    };
+    project.save_to(&anywhere(), &link).expect("saving");
+
+    let text = fs::read_to_string(&target).expect("reading");
+    assert!(text.contains(r#""target/debug/vmlinux""#), "{text}");
+    assert_eq!(Project::load_from(&target), Ok(project.clone()));
+    assert_eq!(Project::load_from(&link), Ok(project));
+}
+
 /// The split seen from the disk: each half in its own file, neither holding a word of the
 /// other's.
 #[test]
