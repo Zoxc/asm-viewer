@@ -782,7 +782,9 @@ at the root, the box in `HoverBox` beside the file finder's overlay.
 scrolls.** Which took measuring the answer, freya's scroll view being able neither to fill a
 box sized from its content nor to size itself from its own (`notes/upstream/freya.md`): the
 answer is drawn once at the full height the box may have, a rect around it reports what that
-came to, and the view is given that height or the limit, whichever is less. Two passes, and
+came to, and the view is given that height or the limit, whichever is less. The limit, and
+the room beside the name, are the whole box's, so the padding comes off them first: given to
+the view whole, they made a box that ran past the window's edge by its padding. Two passes, and
 the second settles -- the first drawn at nothing, since a short answer would otherwise be a
 box that flashed tall and shrank. **Every answer**, and not only the first: the measured box is
 `HoverCard`, keyed by the answer's `Arc`, so each answer starts unmeasured rather than drawn at

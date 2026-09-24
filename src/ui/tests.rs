@@ -9975,6 +9975,41 @@ fn each_answer_is_measured_before_the_box_shows_it() {
     );
 }
 
+/// **A long answer's box fits the room it was placed in**, its padding with it. The room
+/// was once the scroll view's height alone, so a box filling it ran past the window's edge
+/// by its own padding.
+#[test]
+fn a_long_answer_keeps_the_box_inside_the_window() {
+    // Too short a window for the whole box on either side of the name.
+    let window = Size2D::new(600.0, 200.0);
+    let (mut test, hover) = TestingRunner::new(
+        hover_box_harness,
+        window,
+        |runner: &mut _| {
+            runner.provide_root_context(|| {
+                test_roots();
+                use_consume::<Hovering>().0
+            })
+        },
+        1.,
+    );
+    let name = hovered_name(3);
+    let at = name.at.clone();
+    let said = "a line\n\n".repeat(40);
+    write_if(hover, move |held| {
+        held.enter(name);
+        held.asking(ticket(1, 3), at);
+        held.answer(ticket(1, 3), Some(said))
+    });
+    settle(&mut test);
+
+    let drawn = hover_box(&test).expect("the box is drawn");
+    assert!(
+        drawn.min_y() >= HOVER_MARGIN && drawn.max_y() <= window.height - HOVER_MARGIN,
+        "the box runs out of the window: {drawn:?}"
+    );
+}
+
 /// A short answer makes a short box: it is as tall as what it holds, and only an answer
 /// with more in it than the box may be tall reaches that limit.
 #[test]
@@ -10003,7 +10038,7 @@ fn a_long_answer_is_capped_and_scrolls_inside_the_box() {
     let (mut test, _at, _asks, _directory) = hovering_over(pages, "helper");
     let drawn = hover_box(&test).expect("the box is drawn");
     assert!(
-        drawn.height() <= hover_height() + 2.0 * HOVER_PAD + 2.0,
+        drawn.height() <= hover_height(),
         "a long answer grew the box past its limit: {}",
         drawn.height()
     );

@@ -23,8 +23,9 @@ pub(crate) struct HoverPlace {
     /// Its left edge, and how wide it is.
     pub(crate) left: f32,
     pub(crate) width: f32,
-    /// How tall it may be: what is left between the name's row and the window's edge, and
-    /// never more than the box's own limit. What does not fit scrolls.
+    /// How tall it may be, its padding included: what is left between the name's row and
+    /// the window's edge, and never more than the box's own limit. What does not fit
+    /// scrolls.
     pub(crate) room: f32,
 }
 
@@ -185,10 +186,12 @@ impl Component for HoverCard {
                     // As tall as the answer, up to the room there is: below that it is
                     // the box's own height, above it the answer scrolls inside it. The
                     // first pass is drawn at the full height, which is what measures the
-                    // answer, and the second settles.
-                    .height(Size::px(
-                        measured().map_or(place.room, |height| height.min(place.room)),
-                    ))
+                    // answer, and the second settles. The room is the whole box's, so
+                    // the padding comes off it first.
+                    .height(Size::px({
+                        let room = (place.room - 2.0 * HOVER_PAD).max(0.0);
+                        measured().map_or(room, |height| height.min(room))
+                    }))
                     .child(
                         // The server writes its answer in markdown and this draws it as
                         // markdown: the path and the signature as code, the doc comment with
