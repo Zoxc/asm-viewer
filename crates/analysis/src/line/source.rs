@@ -90,7 +90,11 @@ impl SourceIndex {
         let mut over = false;
 
         // The whole address space in one pass; every row the backend hands over names a file
-        // and a line, and covers at least one byte.
+        // and a line, and covers at least one byte. DWARF's rows are not clipped as the
+        // forward direction clips them, so where two rows cover the same bytes, the index names
+        // a symbol for both lines and the symbol's own line info shows only one. Only debug
+        // info that contradicts itself does that, and clipping here would cost a sort of every
+        // row, so it is left.
         let finished = debug.each_row(&mut |range, file, line| {
             rows += 1;
             over |= pairs > budget(rows);
