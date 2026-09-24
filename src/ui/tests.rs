@@ -23677,6 +23677,79 @@ fn a_source_driven_tabs_assembly_side_opens_its_symbol() {
     assert!(!drawn.contains(&entry), "{drawn:?}");
 }
 
+/// The Assembly pane for the tab on screen, as `app()` mounts it: the pane's document is
+/// the tab's, whatever listing the analysis holds.
+fn active_assembly_harness() -> impl IntoElement {
+    let open = use_open();
+    let active = active_tab(&open.strip.read(), &open.docs.read());
+    rect()
+        .expanded()
+        .child(ContextMenuViewer::new())
+        .maybe_child(active.map(|(tab, stop)| {
+            AssemblyPane {
+                tab,
+                document: stop.document,
+            }
+            .into_element()
+        }))
+}
+
+/// Whether the listing is a source tab's assembly side is the tab's to say, not the
+/// listing's tag: until the worker answers, a tab draws the listing it still holds. A
+/// symbol tab over a source line's listing offers no door to itself, and a source tab
+/// over a symbol's listing keeps its door to the symbol.
+#[test]
+fn a_tab_over_another_kinds_listing_judges_open_as_symbol_by_the_tab() {
+    let sum_to = fixture_symbols()
+        .into_iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to");
+    let at = a_line_of(&sum_to);
+    let studied = Studied::new(sum_to.clone());
+    let first = studied.assembly.as_ref().unwrap().instructions[0].address;
+    let entry = "Open as symbol".to_string();
+
+    let offered = |ask: Ask, document: Document| {
+        let shown = Shown {
+            ask,
+            studied: studied.clone(),
+        };
+        let (mut test, roots) = TestingRunner::new(
+            active_assembly_harness,
+            (600., 400.).into(),
+            move |runner: &mut _| runner.provide_root_context(move || listing_states(shown)),
+            1.,
+        );
+        let states = roots.states;
+        open_document(states.open, states.visits, document, Reach::NewTab);
+        settle(&mut test);
+        let row = centre_of(&test, &format!("{first:016X} "));
+        right_click(&mut test, row);
+        let drawn = labels(&test);
+        assert!(
+            drawn.contains(&"Show in unified view".to_owned()),
+            "the menu never opened: {drawn:?}"
+        );
+        drawn.contains(&entry)
+    };
+
+    let line = Ask::Source {
+        at: at.clone(),
+        chosen: Some(sum_to.clone()),
+    };
+    assert!(
+        !offered(line, Document::Symbol(sum_to.clone())),
+        "a symbol tab offered a door to itself"
+    );
+    assert!(
+        offered(
+            Ask::Symbol(sum_to.clone()),
+            Document::Source(at.file.clone())
+        ),
+        "a source tab lost its door to the symbol"
+    );
+}
+
 /// An instruction's menu offers to show it among its neighbours: the object's code tab
 /// opens with its place set on that instruction's address -- written before the tab is
 /// opened, the order a restore uses -- and the line it was compiled from left as a

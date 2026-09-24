@@ -1273,11 +1273,10 @@ struct InstructionList {
     /// link navigates to a symbol in the same object.
     data: AsmData,
     /// The question this listing answers, and **not** the one being asked: while the
-    /// worker catches up the pane is still drawing the listing being left. Two things
-    /// come out of it -- [`asked_of`], the place on the tab's trail whose viewing
-    /// position this is (the file for a source-driven one, never the resolved symbol,
-    /// which is very likely on no trail at all), and the file a source-driven tab is
-    /// about, which its rows' menus choose a location for.
+    /// worker catches up the pane is still drawing the listing being left. What comes
+    /// out of it is [`asked_of`], the place on the tab's trail whose viewing position
+    /// this is (the file for a source-driven one, never the resolved symbol, which is
+    /// very likely on no trail at all).
     asked: Ask,
     /// The last question the worker answered, which says whether `asked` is the tab's
     /// question yet ([`use_drawn_place`]).
@@ -1525,9 +1524,10 @@ fn asm_row(i: usize, rows: &AsmRows) -> Element {
 ///
 /// It reads the analysis and not the active document for everything it draws, which keeps
 /// the listing and the rows in step: while the worker is catching up the two disagree, and
-/// it is the analysis that says which symbol is actually in hand. The one thing it asks
-/// the document is the word for having been asked nothing, which differs by the kind of
-/// tab -- a source-driven one is waiting for a line to be clicked in it.
+/// it is the analysis that says which symbol is actually in hand. What it asks the
+/// document is what differs by the kind of tab: the word for having been asked nothing
+/// -- a source-driven one is waiting for a line to be clicked in it -- and whether the
+/// listing is a source tab's assembly side.
 #[derive(Clone, PartialEq)]
 pub(crate) struct AssemblyPane {
     /// The tab this pane is in: what its bar's open-or-shut and its rows' positions are
@@ -1581,16 +1581,18 @@ impl AssemblyPane {
         };
         // A listing that is one symbol: its rows start at the top, its addresses are the
         // file's own, its gutter is as wide as it needs, and it is not the code. None at
-        // all for a symbol with nothing to decode.
+        // all for a symbol with nothing to decode. Whose side it is, is the tab's to say
+        // and not the listing's tag: until the worker answers, a tab draws the listing it
+        // still holds, which may be another kind of tab's.
         let data = AsmData::of(
             shown.studied.clone(),
             In::Alone {
-                subject: match &shown.ask {
-                    Ask::Source { at, .. } => Some(Subject {
+                subject: match &self.document {
+                    Document::Source(file) => Some(Subject {
                         tab: self.tab,
-                        file: at.file.clone(),
+                        file: file.clone(),
                     }),
-                    Ask::Symbol(_) => None,
+                    _ => None,
                 },
             },
         );
