@@ -433,6 +433,8 @@ pub(crate) fn use_land(
                 ask_for_keyboard(keyboard);
             }
             marked.set_if_modified(marks);
+            let mut arrived = keyboard.arrived;
+            arrived.set_if_modified(step.active);
         },
     );
 }

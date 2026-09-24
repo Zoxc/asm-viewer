@@ -2648,6 +2648,15 @@ fn a_tab_is_dragged_along_the_bar_to_move_it() {
     assert_eq!(marked(&test), 0, "the mark outlived the drag");
 }
 
+/// What `app()` wires at the root for the keyboard: the ask spent, and the arrival of a
+/// place, which an ask for the tab waits for.
+fn use_keyboard_and_land() {
+    let keyboard = use_consume::<Keyboard>();
+    use_keyboard_asked(keyboard, use_open(), use_consume::<Marked>().0);
+    let active = use_consume::<Active>().0;
+    use_land(use_doors(), active, use_sectioned(), keyboard);
+}
+
 /// The chips over a box the keyboard can be in, which is what a code pane is: pressing it
 /// puts the keyboard inside the tab, and nothing else here can take it.
 fn marker_harness() -> impl IntoElement {
@@ -2655,11 +2664,7 @@ fn marker_harness() -> impl IntoElement {
     use_tab_keyboard(Some(Pane::Assembly), a11y);
     // What `app()` calls at the root: the press on a chip asks for the keyboard, and this
     // is what spends the ask once the tab has mounted what it has.
-    use_keyboard_asked(
-        use_consume::<Keyboard>(),
-        use_open(),
-        use_consume::<Marked>().0,
-    );
+    use_keyboard_and_land();
 
     rect()
         .expanded()
@@ -26561,11 +26566,7 @@ fn a_source_row_opens_a_source_driven_tab() {
 fn files_and_pane_harness() -> impl IntoElement {
     let a11y = use_a11y();
     use_tab_keyboard(Some(Pane::Source), a11y);
-    use_keyboard_asked(
-        use_consume::<Keyboard>(),
-        use_open(),
-        use_consume::<Marked>().0,
-    );
+    use_keyboard_and_land();
 
     rect()
         .expanded()
@@ -37651,11 +37652,7 @@ fn a_filtered_row_marks_what_the_filter_matched() {
 fn list_and_pane_harness() -> impl IntoElement {
     let a11y = use_a11y();
     use_tab_keyboard(Some(Pane::Assembly), a11y);
-    use_keyboard_asked(
-        use_consume::<Keyboard>(),
-        use_open(),
-        use_consume::<Marked>().0,
-    );
+    use_keyboard_and_land();
 
     rect()
         .expanded()
@@ -37680,11 +37677,7 @@ fn list_and_pane_harness() -> impl IntoElement {
 /// source-driven tab register in, and the order they keep for as long as they are mounted.
 fn two_panes_harness() -> impl IntoElement {
     let (source, assembly) = (use_a11y(), use_a11y());
-    use_keyboard_asked(
-        use_consume::<Keyboard>(),
-        use_open(),
-        use_consume::<Marked>().0,
-    );
+    use_keyboard_and_land();
 
     rect()
         .expanded()
@@ -37874,18 +37867,6 @@ fn a_chip_puts_the_keyboard_back_in_the_pane_it_was_left_in() {
     );
 }
 
-/// [`two_panes_harness`] with the arrival of a place wired in, as `app()` wires it.
-fn arriving_harness() -> impl IntoElement {
-    let keyboard = use_consume::<Keyboard>();
-    use_land(
-        use_doors(),
-        use_consume::<Active>().0,
-        use_sectioned(),
-        keyboard,
-    );
-    two_panes_harness()
-}
-
 /// **A file, a symbol or an object's code opened afresh takes the keyboard**, with a caret
 /// on the first line of the side it is driven from -- whatever door opened it, and in the
 /// temporal tab too, whose panes are the ones the last document had.
@@ -37894,7 +37875,7 @@ fn opening_a_place_puts_the_keyboard_on_its_first_line() {
     let symbols = fixture_symbols();
     let object = symbols[0].object.clone();
     let (mut test, (states, marked)) = TestingRunner::new(
-        arriving_harness,
+        two_panes_harness,
         (300., 400.).into(),
         |runner: &mut _| {
             let roots = runner.provide_root_context(test_roots);
@@ -37946,16 +37927,79 @@ fn opening_a_place_puts_the_keyboard_on_its_first_line() {
     }
 }
 
+/// **A chip judges the caret against the runs of the place it raises**, not those of the
+/// place being left. The ask is woken by the press itself, and the runs on screen change
+/// only once `use_land` has caught up with the switch. Judged too early, a place left with
+/// no assembly run came back with the keyboard in that pane and no caret, and the place
+/// being left was kept with a caret the reader never put there.
+#[test]
+fn a_chip_judges_the_caret_by_the_place_it_raises() {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, keyboard, marked, marks_at)) = TestingRunner::new(
+        two_panes_harness,
+        (300., 400.).into(),
+        |runner: &mut _| {
+            let roots = runner.provide_root_context(test_roots);
+            (
+                roots.states,
+                roots.keyboard,
+                roots.doors.marked,
+                roots.doors.places.marks_at,
+            )
+        },
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    // A symbol whose assembly run is gone and whose source side has a line picked out.
+    let reach = Reach::NewTab;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Symbol(symbols[0].clone()),
+        reach,
+    );
+    settle(&mut test);
+    let first = states.open.strip.peek().active().expect("no tab opened");
+    unmark(marked, Pane::Assembly);
+    let file = Arc::from(Path::new("/src/main.rs"));
+    mark_line(marked, file, 1, None, Owed::NEITHER);
+    settle(&mut test);
+
+    // Another symbol, left with no assembly run either.
+    let second = Document::Symbol(symbols[1].clone());
+    open_document(states.open, states.visits, second, reach);
+    settle(&mut test);
+    let left = states.open.now().expect("no second tab");
+    unmark(marked, Pane::Assembly);
+    settle(&mut test);
+
+    // Back to the first, as a press on its chip goes back.
+    raise_tab(states.open, first);
+    return_keyboard(keyboard);
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.contains(&"assembly has it".to_owned()), "{drawn:?}");
+    assert!(
+        marked.peek().of(Pane::Assembly).is_some(),
+        "the pane the keyboard went back to has no caret in it"
+    );
+    let kept = marks_at.peek().at(&left).map(|kept| kept.marks.assembly);
+    assert!(
+        kept.flatten().is_none(),
+        "the place left was kept with a caret put there for the other"
+    );
+}
+
 /// The same two, over a pane that mounts late: what the app does, a tab opening before the
 /// worker has anything for its assembly side, so the pane draws a sentence and registers no
 /// box until it has a listing.
 fn late_pane_harness() -> impl IntoElement {
     let a11y = use_a11y();
-    use_keyboard_asked(
-        use_consume::<Keyboard>(),
-        use_open(),
-        use_consume::<Marked>().0,
-    );
+    use_keyboard_and_land();
     let mounted = use_consume::<PaneMounted>().0;
 
     rect()
@@ -40831,11 +40875,7 @@ fn reaching_harness() -> impl IntoElement {
     let keys = use_consume::<ModifierKeys>();
     // What `app()` calls at the root: a chord leaves an ask behind it, and this is what
     // spends it once the panel it named has drawn a box.
-    use_keyboard_asked(
-        use_consume::<Keyboard>(),
-        use_open(),
-        use_consume::<Marked>().0,
-    );
+    use_keyboard_and_land();
     // The tab's own box, as a pane registers one.
     let pane = use_a11y();
     use_tab_keyboard(Some(Pane::Assembly), pane);

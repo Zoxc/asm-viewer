@@ -103,6 +103,10 @@ pub(crate) struct Keyboard {
     /// The pane each document tab last had the keyboard in: where a press on its chip,
     /// or Escape out of a list, puts it back. Written by [`use_keyboard_left`].
     left: State<HashMap<DocId, Pane>>,
+    /// The place whose runs the panes hold: the arrival `use_land` last gave its runs to.
+    /// An ask for the tab waits until this is the tab on screen, so the caret it puts in is
+    /// judged against the arriving place's runs and not the ones about to be kept.
+    pub(crate) arrived: State<Option<Entry>>,
 }
 
 impl Keyboard {
@@ -111,6 +115,7 @@ impl Keyboard {
             keys: State::create(Keys::default()),
             asked: State::create(None),
             left: State::create(HashMap::new()),
+            arrived: State::create(None),
         }
     }
 }
@@ -195,16 +200,24 @@ pub(crate) fn use_keyboard_asked(keyboard: Keyboard, open: Open, marked: State<M
                 // Which side leads the tab on screen, which is the pane the ask is for:
                 // the one the reader asked to see, and the one `DocumentBody` draws first.
                 // A reader coming back to the tab goes to where they left it instead.
-                let (left, leads) = {
+                let now = {
                     let (strip, docs) = (open.strip.read(), open.docs.read());
-                    match active_tab(&strip, &docs) {
-                        Some((id, at)) => (
-                            back.then(|| keyboard.left.peek().get(&id).copied())
-                                .flatten(),
-                            Some(at.document.driven_from()),
-                        ),
-                        None => (None, None),
-                    }
+                    active_tab(&strip, &docs)
+                };
+                // **The arrival first.** The press that asked also switched the tab, and
+                // the runs on screen are still the outgoing place's until `use_land` has
+                // caught up; a caret judged against those would be written into the wrong
+                // place. Read, so its catching up is what wakes this.
+                if *keyboard.arrived.read() != now {
+                    return;
+                }
+                let (left, leads) = match now {
+                    Some((id, at)) => (
+                        back.then(|| keyboard.left.peek().get(&id).copied())
+                            .flatten(),
+                        Some(at.document.driven_from()),
+                    ),
+                    None => (None, None),
                 };
                 keyboard.keys.read().wanted_box(left, leads)
             }
