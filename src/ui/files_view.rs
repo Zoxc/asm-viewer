@@ -34,7 +34,7 @@ fn toggle_directory(tree: State<Option<FileTree>>, path: &Path) {
 ///
 /// Anything the pane could show opens; what the file *is* is not judged. A file past the
 /// source cache's bound is left alone rather than opened into a tab that would only say
-/// so, which is `open_source_file`'s own guard.
+/// so, which is `open_source_file`'s own guard, and the keyboard stays in the list.
 fn press_entry(
     states: ProjectStates,
     tree: State<Option<FileTree>>,
@@ -47,10 +47,10 @@ fn press_entry(
             toggle_directory(tree, path);
             Pressed::Folded
         }
-        None => {
-            open_source_file(states, path, Reach::outside(ctrl));
-            Pressed::Opened
-        }
+        None => match open_source_file(states, path, Reach::outside(ctrl)) {
+            true => Pressed::Opened,
+            false => Pressed::Folded,
+        },
     }
 }
 

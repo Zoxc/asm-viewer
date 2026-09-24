@@ -145,8 +145,8 @@ pub(crate) fn chosen(selected: bool, focused: bool) -> Chosen {
 }
 
 /// What acting on a row did, which is what says where the keyboard goes: a row that opened
-/// a tab hands it over when it was Enter that opened it, and one that folded a group keeps
-/// it, there being nothing new to read and nowhere for it to go.
+/// a tab hands it over when it was Enter that opened it, and one that folded a group or
+/// opened nothing keeps it, there being nothing new to read and nowhere for it to go.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Pressed {
     Opened,

@@ -26298,6 +26298,69 @@ fn a_source_row_opens_a_source_driven_tab() {
     assert!(states.visits.peek().entries().contains(&document));
 }
 
+/// The Files panel over a stand-in for the tab's pane, the ask spent as `app()` spends it.
+fn files_and_pane_harness() -> impl IntoElement {
+    let a11y = use_a11y();
+    use_tab_keyboard(Some(Pane::Source), a11y);
+    use_keyboard_asked(
+        use_consume::<Keyboard>(),
+        use_open(),
+        use_consume::<Marked>().0,
+    );
+
+    rect()
+        .expanded()
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::flex(1.0))
+                .child(FilesPanel),
+        )
+        .child(
+            rect()
+                .width(Size::fill())
+                .height(Size::px(40.0))
+                .a11y_id(a11y)
+                .a11y_focusable(true)
+                .child(label().text("the pane")),
+        )
+}
+
+/// **A Files row that opens nothing keeps the keyboard.** A file past the source cache's
+/// bound opens no tab, so there is nothing new to read: the keyboard stays in the list
+/// for the arrows, as it does for a row that only folded.
+#[test]
+fn a_files_row_that_opens_nothing_keeps_the_keyboard() {
+    let directory = Temporary::fresh_under("run-test", "project");
+    std::fs::File::create(directory.join("big.bin"))
+        .and_then(|file| file.set_len(crate::source::MAX_SIZE + 1))
+        .expect("writing a file past the bound");
+    let (mut test, states) = TestingRunner::new(
+        files_and_pane_harness,
+        (300., 400.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let mut proj = states.proj;
+    proj.write().workspace_text = directory.to_string_lossy().into_owned();
+    settle(&mut test);
+    press(&mut test, "project");
+    press(&mut test, "project");
+
+    let top = label_area(&test, "big.bin")
+        .expect("the row is drawn")
+        .origin
+        .y;
+    press(&mut test, "big.bin");
+    settle(&mut test);
+    assert!(states.open.active().is_none(), "the press opened a tab");
+    assert_eq!(
+        drawn_at(&test, top),
+        Chosen::Live,
+        "the keyboard left the list for a tab that did not open"
+    );
+}
+
 /// **A Files row opens in the tab the file is already in.** A row's path is the project
 /// directory as the reader typed it joined with each entry's own name, so a directory
 /// typed with a `..` -- or reached through a symlink -- spells a file the reader may

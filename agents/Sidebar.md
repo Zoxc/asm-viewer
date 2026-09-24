@@ -850,7 +850,7 @@ typed after End. The keys notice and start again from the end the arrow came fro
 on screen is reading it, so the next key is answered there and not in the list behind it, and the
 pick left behind goes grey saying so. Which is why acting on a row answers with a `Pressed`: a row
 that only folded a group opened nothing and keeps the keyboard, as does a press with Alt held, which
-opens nothing at all -- and those are what leave a list holding the keyboard for its arrows and its
+opens nothing at all, and a Files row whose file the source pane would refuse -- and those are what leave a list holding the keyboard for its arrows and its
 Enter to be used in. The two halves of that are written together in `picks::opened`, which every
 row and every `ListKeys::open` that opens a document calls: the door every row outside the panes
 takes (`Reach::outside`), the `Pressed::Opened` that hands the tab the keyboard, and, for a source
