@@ -35872,80 +35872,46 @@ fn a_question_asked_while_it_is_starting_waits_for_it() {
     );
 }
 
-/// A start carries what the project's own settings file said, laid over what this app asks
-/// of every server. Both halves are silent when they are wrong -- a server ignores a key
-/// that kept its prefix and one whose dots were not split -- so what the worker is handed
-/// is the assertion.
-#[test]
-fn a_start_carries_the_projects_own_settings() {
-    let read = lsp::settings_from(
-        r#"{ "rust-analyzer.cargo.features": ["one"] }"#,
-        Path::new("/p"),
-    )
-    .expect("a file that reads");
-    let (sent, options) = async_channel::unbounded::<String>();
-    let (mut test, roots, _asking, _asks) = mount_server({
-        move |job: LspJob| match job {
-            LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
-                settings: Ok(read.clone()),
-                directory,
-            }),
-            LspJob::Start {
-                run,
-                settings,
-                spawned,
-                ..
-            } => {
-                let _ = sent.send_blocking(settings.options().to_string());
-                server_started(run, &spawned, process::Handle::to_nothing())
-            }
-            _ => None,
-        }
-    });
-    let states = roots.states;
-    let language = roots.language;
-    with_a_directory(&mut test, &states, "/p");
-    pump(&mut test, |_| !language.peek().overrides().is_empty());
-
-    press_at(&mut test, the_control());
-    until_server(&mut test, language, running);
-
-    let options = options.try_recv().expect("the start carried options");
-    assert_eq!(
-        options,
-        r#"{"cargo":{"features":["one"]},"checkOnSave":false,"diagnostics":{"enable":false}}"#
-    );
-}
-
 /// A settings file that could not be used starts nothing, and the reason is where a
 /// failure to start is said. What would otherwise reach the server is a path that silently
 /// is not there, which is worse than not starting.
+///
+/// And each press reads the file again, so one the reader has fixed is honoured on the
+/// next press. The real worker, over a program that is not there: a start that reads the
+/// file fails for that reason instead.
 #[test]
-fn a_settings_file_that_could_not_be_read_starts_nothing() {
-    let (mut test, roots, _asking, asks) = mount_server(|job: LspJob| match job {
-        LspJob::ReadSettings { directory } => Some(LspAnswer::Settings {
-            settings: Err(lsp::Unreadable::NotAnObject),
-            directory,
-        }),
-        LspJob::Start { run, spawned, .. } => {
-            server_started(run, &spawned, process::Handle::to_nothing())
-        }
-        _ => None,
-    });
+fn a_settings_file_that_could_not_be_read_starts_nothing_until_it_is_fixed() {
+    let directory = a_project_with_settings(r#"{ "rust-analyzer.x": "${userHome}" }"#);
+    let (mut test, roots, _asking, _asks) = mount_server(language_work());
     let states = roots.states;
     let language = roots.language;
-    with_a_directory(&mut test, &states, "/p");
+    states.proj.clone().write().language_server = "no-such-language-server".to_owned();
+    with_a_directory(&mut test, &states, &directory.to_string_lossy());
     pump(&mut test, |_| language.peek().unreadable().is_some());
 
     press_at(&mut test, the_control());
-    settle(&mut test);
+    until_server(&mut test, language, |state| matches!(state, Lsp::Failed(_)));
+    let Lsp::Failed(why) = language.read().state.clone() else {
+        panic!("the start was not refused");
+    };
+    assert!(why.contains("userHome"), "{why}");
 
-    let held = language.read().clone();
-    assert_eq!(
-        held.state,
-        Lsp::Failed(lsp::Unreadable::NotAnObject.to_string())
+    std::fs::write(directory.join(".vscode").join("settings.json"), "{}")
+        .expect("fixing the settings file");
+    press_at(&mut test, the_control());
+    until_server(
+        &mut test,
+        language,
+        |state| matches!(state, Lsp::Failed(why) if !why.contains("userHome")),
     );
-    assert!(nothing_pressed(&asks), "a server was started all the same");
+    let Lsp::Failed(why) = language.read().state.clone() else {
+        panic!("a program that is not there started");
+    };
+    assert!(
+        why.contains("could not start"),
+        "the fixed file was not read again: {why}"
+    );
+    assert_eq!(language.read().unreadable(), None, "the view still says so");
 }
 
 /// The queue is drained to the last question, and to every start and stop: a reader
@@ -35992,7 +35958,6 @@ fn the_queue_keeps_the_last_question_and_every_press() {
                 run: 2,
                 directory: PathBuf::from("/p"),
                 program: "rust-analyzer".to_owned(),
-                settings: lsp::Settings::none(),
                 notes: async_channel::unbounded().0,
                 spawned: async_channel::unbounded().0,
             },

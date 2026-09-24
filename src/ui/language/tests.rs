@@ -96,31 +96,15 @@ fn each_remark_is_written_on_the_field_it_is_about_and_no_other() {
 }
 
 #[test]
-fn a_start_counts_the_run_up_and_says_what_to_start_it_with() {
+fn a_start_counts_the_run_up() {
     let mut state = Language {
-        settings: Some(Ok(lsp::Settings::none())),
         run: 2,
         ..Language::default()
     };
-    let started = state
-        .starting(asking().serving)
-        .expect("there is a server to start");
-    assert_eq!(started.0, 3, "the run an answer will be matched by");
+    let run = state.starting(asking().serving);
+    assert_eq!(run, 3, "the run an answer will be matched by");
     assert_eq!(state.run, 3);
     assert!(matches!(state.state, Lsp::Starting { .. }));
-}
-
-#[test]
-fn a_settings_file_that_could_not_be_read_starts_nothing() {
-    let mut state = Language {
-        settings: Some(Err(lsp::Unreadable::NotAnObject)),
-        ..Language::default()
-    };
-    assert!(state.starting(asking().serving).is_none());
-    assert!(
-        matches!(state.state, Lsp::Failed(_)),
-        "and the control says why"
-    );
 }
 
 #[test]

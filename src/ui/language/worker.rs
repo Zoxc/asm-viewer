@@ -11,24 +11,26 @@ use super::*;
 
 /// What the worker is asked to do.
 pub(crate) enum LspJob {
-    /// Start a server over `directory` and shake hands with it. The channel is what the
-    /// server's own remarks come back on, since they arrive long after this is answered.
+    /// Read the project's own settings, then start a server over `directory` and shake
+    /// hands with it. The channel is what the server's own remarks come back on, since
+    /// they arrive long after this is answered.
+    ///
+    /// The settings are read here and not carried, so each start reads the file as it is
+    /// now: one the reader has fixed since the last read is honoured on the next press.
     Start {
         run: u64,
         directory: PathBuf,
         /// The program to run, which is the project's when it named one.
         program: String,
-        /// What to tell it about the project. Carried in the job because the worker
-        /// thread may read no UI state, exactly as `program` and `directory` are.
-        settings: lsp::Settings,
         notes: async_channel::Sender<(u64, lsp::Note)>,
-        /// Where [`LspAnswer::Spawned`] goes, which is the app's own answer channel. A
-        /// start is the one job with something to say before it is done.
+        /// Where [`LspAnswer::Settings`] and [`LspAnswer::Spawned`] go, which is the app's
+        /// own answer channel. A start is the one job with something to say before it is
+        /// done.
         spawned: async_channel::Sender<LspAnswer>,
     },
     /// Read the project's own `.vscode/settings.json`. A file read blocks, so it happens
     /// here rather than on the UI thread; it is this worker's and not the build worker's
-    /// because what it answers is what a start has to carry.
+    /// because a start reads the same file and answers the same way.
     ReadSettings { directory: PathBuf },
     /// What is at a place: which of the four questions is in `want` (`lsp::Question`).
     /// The [`Ticket`] is minted by [`ask_where`] and copied into the answer, which is what
@@ -111,6 +113,8 @@ pub(crate) enum LspAnswer {
         directory: PathBuf,
         settings: Result<lsp::Settings, lsp::Unreadable>,
     },
+    /// Run `run` was not started: the settings file could not be used, for `why`.
+    Refused { run: u64, why: lsp::Unreadable },
 }
 
 /// What an answer holds, which is what was asked for: one variant per consumer, each
@@ -195,13 +199,23 @@ pub(crate) fn language_work() -> impl Fn(LspJob) -> Option<LspAnswer> + Send + '
                 run,
                 directory,
                 program,
-                settings,
                 notes,
                 spawned,
             } => {
                 // Whatever was there is dropped first, which kills it: two servers over
                 // one project would be twice the memory for one answer.
                 *talking = None;
+                // Sent on whether it reads or not, so the Project view lists what this
+                // start was given.
+                let read = lsp::settings_in(&directory);
+                let _ = spawned.send_blocking(LspAnswer::Settings {
+                    directory: directory.clone(),
+                    settings: read.clone(),
+                });
+                let settings = match read {
+                    Ok(settings) => settings,
+                    Err(why) => return Some(LspAnswer::Refused { run, why }),
+                };
                 // `send_blocking` and not `try_send`: the channel is bounded, and a note
                 // dropped because the app was busy is a control that never stops saying
                 // the server is working.

@@ -512,24 +512,25 @@ so a name of ten thousand dots cannot overflow the stack, `DEEPEST` refuses a na
 parts than the walk back out is written to recurse over, and the parse itself stops at 512
 levels of nesting, which is the crate's own.
 
-**An error starts nothing.** The check is in `Language::starting`, the transition a start
-goes through, so neither press nor the agreement can grow a path around it -- the same
-reason the trust gate is in `start_server`. A start that is refused is a state that
-changed, so the transition says it by answering with no settings to start under rather
-than by a flag beside them. It is reported as `Lsp::Failed`, which is where a
+**An error starts nothing.** The check is in the `Start` job, which every start goes
+through, so neither press nor the agreement can grow a path around it -- the same reason
+the trust gate is in `start_server`. It is reported as `Lsp::Failed`, which is where a
 failure to start is already said.
 
-The read is the LSP worker's (`LspJob::ReadSettings`, the shape of the build worker's own
-read): reading a file blocks and nothing is read on the UI thread, and what it answers is
-what a start has to carry. It happens in the effect that follows the project, at the **root**, and not in
-the Project tab: that tab is unmounted while it is not the one on screen, where the
-control in the top bar is pressed from wherever the reader is. One read answers both, and
-it happens whether or not a server is ever started, since the view lists what it found
-either way. The settings travel in the `Start` job the way `program` and `directory` do --
-the worker thread may read no UI state. An answer is matched to the project by the
+**Every start reads the file again.** A copy read earlier would refuse a file the reader
+has since fixed, with a reason that is no longer true, or give a restarted server settings
+that have changed. So the `Start` job reads it first on the worker, sends what it read
+back as `LspAnswer::Settings`, and answers `LspAnswer::Refused` without spawning when it
+could not be used. Reading a file blocks and nothing is read on the UI thread.
+
+The Project view lists what the file said whether or not a server is ever started, so the
+file is also read where a directory or a project arrives (`LspJob::ReadSettings`, the shape
+of the build worker's own read). That read is in the effect that follows the project, at
+the **root**, and not in the Project tab: that tab is unmounted while it is not the one on
+screen. Both reads answer the same way, and an answer is matched to the project by the
 **directory** it was read in and not by a run: it is about a project and not about a
-process. `worth_doing` keeps only the last read, since a directory typed a letter at a time
-asks for one a keystroke.
+process. `worth_doing` keeps only the last `ReadSettings`, since a directory typed a letter
+at a time asks for one a keystroke.
 
 ## The process
 

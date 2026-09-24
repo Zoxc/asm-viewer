@@ -56,9 +56,9 @@ mod settings;
 pub use settings::{settings_in, Settings, Unreadable, SETTINGS};
 
 /// Reached from outside the module only by a test: the options this app asks of every
-/// server, and the text half of [`settings_in`].
+/// server.
 #[cfg(test)]
-pub use settings::{settings_from, wanted};
+pub use settings::wanted;
 
 /// The largest message that will be read, so a server that says it is about to send a
 /// gigabyte is a broken conversation and not an allocation.

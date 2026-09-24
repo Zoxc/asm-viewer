@@ -213,12 +213,13 @@ pub(crate) struct Language {
     /// The start that has been asked about and not answered yet. `None` unless the
     /// prompt is up.
     pub(crate) asking: Option<Asking>,
-    /// What the project's own `.vscode/settings.json` said, or why it could not be used.
-    /// `None` until the read that follows the project has answered.
+    /// What the project's own `.vscode/settings.json` said, or why it could not be used,
+    /// as the Project view lists it. `None` until the read that follows the project has
+    /// answered. A start reads the file again and writes its answer here.
     ///
     /// Read through the worker and held here rather than in the Project view: the view is
-    /// a tab, unmounted while it is not the one on screen, where the control in the top bar
-    /// starts a server from wherever the reader is. One read, at the root, answers both.
+    /// a tab, unmounted while it is not the one on screen, and the file is read whether or
+    /// not it is.
     settings: Option<Result<lsp::Settings, lsp::Unreadable>>,
     /// Which server the answers arriving are about, counted up by every start and every
     /// stop.
@@ -291,8 +292,8 @@ impl Language {
         }
     }
 
-    /// Why the project's own settings could not be used, when they could not. A start is
-    /// refused while this is here.
+    /// Why the project's own settings could not be used, when they could not. A start that
+    /// still finds the file so is refused.
     pub(crate) fn unreadable(&self) -> Option<String> {
         match &self.settings {
             Some(Err(why)) => Some(why.to_string()),
@@ -430,41 +431,24 @@ impl Language {
     }
 
     /// Start over: whatever is running is stopped, the run is counted up, and the control
-    /// says it is starting `serving`. Answers with the run to start under and the settings
-    /// to start it with.
+    /// says it is starting `serving`. Answers with the run to start under.
     ///
-    /// **A settings file that could not be read starts nothing** ([`None`]): what it would
-    /// otherwise reach the server as is a name it ignores or a path that is not there, and
-    /// a server reading the wrong project is worse than one that says why it did not
-    /// start. Not read yet is nothing to lay over the defaults: the read follows the
-    /// project, and answers long before a press can reach here.
-    fn starting(&mut self, serving: Serving) -> Option<(u64, lsp::Settings)> {
-        let ready = match &self.settings {
-            Some(Err(why)) => Err(why.to_string()),
-            Some(Ok(settings)) => Ok(settings.clone()),
-            None => Ok(lsp::Settings::none()),
-        };
+    /// The settings file is not checked here: the worker reads it at the start, and a
+    /// file that could not be used comes back as [`LspAnswer::Refused`].
+    fn starting(&mut self, serving: Serving) -> u64 {
         if let Some(handle) = self.state.handle() {
             handle.stop();
         }
         self.asking = None;
         self.run += 1;
-        match ready {
-            Ok(settings) => {
-                // A new server has said nothing about itself yet, and what the last one
-                // said went with the state it was written on.
-                self.state = Lsp::Starting {
-                    server: None,
-                    said: Remarks::default(),
-                    serving,
-                };
-                Some((self.run, settings))
-            }
-            Err(why) => {
-                self.state = Lsp::Failed(why);
-                None
-            }
-        }
+        // A new server has said nothing about itself yet, and what the last one said went
+        // with the state it was written on.
+        self.state = Lsp::Starting {
+            server: None,
+            said: Remarks::default(),
+            serving,
+        };
+        self.run
     }
 
     /// Stop the server, if there is one, and put the control back where it started --
@@ -701,6 +685,9 @@ pub(crate) fn use_language_with(
                 }
                 write_if(language, |held| held.read_settings(settings));
             }
+            LspAnswer::Refused { run, why } => {
+                write_if(language, |held| held.failed(run, why.to_string()));
+            }
             LspAnswer::Linked {
                 ticket,
                 file,
@@ -877,10 +864,10 @@ pub(crate) fn use_language_with(
             let left = before.is_some_and(|(_, _, _, was)| was != stay);
             let elsewhere =
                 !before.is_some_and(|(_, was_directory, _, _)| was_directory == directory);
-            if elsewhere {
-                // Read again here, where a directory arrives, so the answer is in hand
-                // before either press can ask for a server and whether or not one is ever
-                // started -- the Project view lists them either way.
+            if left || elsewhere {
+                // Read again here, where a directory or a project arrives, so the Project
+                // view lists them whether or not a server is ever started. A start reads
+                // the file again.
                 write_if(language, |held| held.forget_settings());
                 if let Some(directory) = directory.clone() {
                     jobs.send(LspJob::ReadSettings { directory });
@@ -950,20 +937,16 @@ pub(crate) fn toggle_server(language: State<Language>, proj: State<OpenProject>,
 /// **A settings file that could not be read starts nothing.** What it would otherwise
 /// reach the server as is a name it ignores or a path that is not there, and a server
 /// reading the wrong project is worse than one that says why it did not start. The check
-/// is here because this is where a start happens, so neither press nor the agreement can
-/// grow a path around it -- the same reason the trust gate is in `start_server`.
+/// is in the `Start` job, which reads the file as it is at the press, so neither press
+/// nor the agreement can grow a path around it -- the same reason the trust gate is in
+/// `start_server`.
 fn run_server(mut language: State<Language>, jobs: &LspJobs, asking: Asking) {
-    // Written whatever it answers, `starting` always counting the run up. The guard ends
-    // with the statement, before the send.
-    let starting = language.write().starting(asking.serving.clone());
-    let Some((run, settings)) = starting else {
-        return;
-    };
+    // The guard ends with the statement, before the send.
+    let run = language.write().starting(asking.serving.clone());
     jobs.send(LspJob::Start {
         run,
         directory: asking.directory,
         program: asking.serving.program,
-        settings,
         notes: jobs.notes.clone(),
         spawned: jobs.spawned.clone(),
     });
