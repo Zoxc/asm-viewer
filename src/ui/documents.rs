@@ -455,6 +455,7 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         marked,
         land: mut land_at,
         mut plant,
+        arrived,
         ..
     } = doors;
     let stop = stop_of(&landing);
@@ -464,6 +465,8 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
     let on_top = open
         .now()
         .filter(|(_, current)| current.document == landing.tab);
+    // Bound apart: the guard is gone before the writes.
+    let settled = *arrived.peek() == on_top;
     if let Some((id, current)) = on_top {
         // The document is already on top, so nothing is opened and `open_stop` never
         // runs: the push here is the only record that the reader was somewhere else in
@@ -490,8 +493,9 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         // a document is. Picked out here instead, the run would be on screen when the
         // entry changes -- saved there under the place being left, and then wiped by the
         // arrival, which finds no landing and falls back to the place's own line, without
-        // the columns the door named or the scroll it owed.
-        if moved {
+        // the columns the door named or the scroll it owed. The same goes for a tab raised
+        // in this batch that `use_land` has not caught up with (`Doors::arrived`).
+        if moved || !settled {
             land_at.set(Some(landing));
             return Some(id);
         }
@@ -578,12 +582,17 @@ pub(crate) fn land_on(doors: Doors, id: DocId, at: LinePos, reach: Reach) {
         open,
         marked,
         land: mut landing,
+        arrived,
         ..
     } = doors;
     if reach == Reach::NewTab {
         write_if(open.docs, |docs| docs.promote(id));
     }
-    if open.now().is_some_and(|(active, _)| active == id) {
+    // Marked here only on a tab `use_land` has caught up with. One raised earlier in this
+    // batch is still arriving, and its line is left as a landing, as for a tab not on top.
+    let now = open.now();
+    let on_top = now.as_ref().is_some_and(|(active, _)| *active == id);
+    if on_top && *arrived.peek() == now {
         mark_line(marked, at.file, at.line, None, Owed::BOTH);
         return;
     }

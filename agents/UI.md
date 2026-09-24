@@ -638,7 +638,7 @@ and a pane that had just been handed the keyboard would read as though it had no
 on screen are the outgoing place's until `use_land` has caught up. Judged against those, a chip back
 to a place with no run in that pane put no caret in it, and the place being left kept a caret the
 reader never put there. So `use_land` writes down the place it last gave runs to
-(`Keyboard::arrived`), and a tab's ask is spent only once that is the tab on screen. Only the ask does
+(`Doors::arrived`), and a tab's ask is spent only once that is the tab on screen. Only the ask does
 this, never a press -- a press in a pane says where the caret goes, including the press under the
 last row that deliberately picks nothing out. **A place shown for the first time with nothing to
 land on takes the keyboard too**, with that caret on the first line of its driven side, whatever

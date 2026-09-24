@@ -580,6 +580,7 @@ pub(crate) fn roots(store: Option<Store>, settings: &Settings) -> Roots {
         marked,
         land: State::create(None),
         plant: State::create(None),
+        arrived: State::create(None),
     });
     // The keyboard: the five states the root's key handlers keep, three of them the
     // contexts every door reads.
@@ -801,9 +802,9 @@ fn app(opening: Option<&Path>) -> impl IntoElement {
     });
 
     // The ask an opened row or a pressed chip leaves, spent on a pane of the tab on screen
-    // -- the one a chip's tab last had the keyboard in, or the leading one, which is why it
-    // is handed `open` -- and on the caret that pane wants.
-    use_keyboard_asked(keyboard, open, marked);
+    // -- the one a chip's tab last had the keyboard in, or the leading one -- and on the
+    // caret that pane wants, once `use_land` has given that tab its runs.
+    use_keyboard_asked(keyboard, doors);
     use_let_go_on_blur(keys);
     use_save_on_change(states);
     use_land(doors, active, sectioned, keyboard);

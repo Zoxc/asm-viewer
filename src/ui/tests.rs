@@ -475,6 +475,7 @@ fn a_landing_an_unmeasured_pane_could_not_go_to_is_not_counted_as_gone_to() {
                         marked: State::create(Marks::default()),
                         land: State::create(None),
                         plant: State::create(None),
+                        arrived: State::create(None),
                     })
                     .land,
                 // Not laid out yet, as a pane is on the pass a door reaches it.
@@ -2800,9 +2801,10 @@ fn a_tab_dragged_off_the_bar_marks_no_chip() {
 /// place, which an ask for the tab waits for.
 fn use_keyboard_and_land() {
     let keyboard = use_consume::<Keyboard>();
-    use_keyboard_asked(keyboard, use_open(), use_consume::<Marked>().0);
+    let doors = use_doors();
+    use_keyboard_asked(keyboard, doors);
     let active = use_consume::<Active>().0;
-    use_land(use_doors(), active, use_sectioned(), keyboard);
+    use_land(doors, active, use_sectioned(), keyboard);
 }
 
 /// The chips over a box the keyboard can be in, which is what a code pane is: pressing it
@@ -33183,11 +33185,7 @@ fn search_harness() -> impl IntoElement {
     use_root_key_states();
     // And what `app()` calls at the root: the chord that reaches this panel leaves an ask
     // behind it, and this is what spends it on the box the panel registers.
-    use_keyboard_asked(
-        use_consume::<Keyboard>(),
-        use_open(),
-        use_consume::<Marked>().0,
-    );
+    use_keyboard_asked(use_consume::<Keyboard>(), use_doors());
 
     // What spends the landing a hit's press leaves, as `app()` does: without it a row
     // opens its tab and picks nothing out.
@@ -38687,6 +38685,79 @@ fn a_chip_judges_the_caret_by_the_place_it_raises() {
     assert!(
         kept.flatten().is_none(),
         "the place left was kept with a caret put there for the other"
+    );
+}
+
+/// **A door into the tab a press has just raised picks its line out in that tab**, and
+/// not in the one being left. The raise and the door come in one batch -- an answer to a
+/// tab the reader has since left raises it first -- and `use_land` has not yet caught up
+/// with the switch, so the runs on screen are still the outgoing place's. A line marked
+/// straight into them was kept under the place being left and lost to the place raised.
+/// Both doors that mark a line on the tab on top: `land`, and `land_on`.
+#[test]
+fn a_door_into_a_tab_just_raised_marks_that_tab() {
+    door_into_a_tab_just_raised(|doors, _, landing| {
+        land(doors, landing, Reach::InPlace);
+    });
+    door_into_a_tab_just_raised(|doors, id, landing| {
+        let at = landing.at.expect("no line").pos;
+        land_on(doors, id, at, Reach::InPlace);
+    });
+}
+
+/// Two symbol tabs, the second on screen; then the first raised and `door` pressed into
+/// it with a line of `/src/main.rs`, in one batch.
+fn door_into_a_tab_just_raised(door: impl FnOnce(Doors, DocId, Landing)) {
+    let symbols = fixture_symbols();
+    let object = symbols[0].object.clone();
+    let (mut test, (states, doors)) = TestingRunner::new(
+        two_panes_harness,
+        (300., 400.).into(),
+        |runner: &mut _| {
+            let roots = runner.provide_root_context(test_roots);
+            (roots.states, roots.doors)
+        },
+        1.,
+    );
+    let mut objects = states.objects;
+    objects.set(vec![object]);
+    settle(&mut test);
+
+    let first = Document::Symbol(symbols[0].clone());
+    open_document(states.open, states.visits, first.clone(), Reach::NewTab);
+    settle(&mut test);
+    let (id, _) = states.open.now().expect("no tab opened");
+    let second = Document::Symbol(symbols[1].clone());
+    open_document(states.open, states.visits, second, Reach::NewTab);
+    settle(&mut test);
+    let left = states.open.now().expect("no second tab");
+
+    let file: Arc<Path> = Arc::from(Path::new("/src/main.rs"));
+    raise_tab(states.open, Tab::Document(id));
+    door(
+        doors,
+        id,
+        Landing {
+            tab: first,
+            at: Some(Landed::line(LinePos {
+                file: file.clone(),
+                line: 3,
+            })),
+            address: None,
+        },
+    );
+    settle(&mut test);
+
+    let source = doors.marked.peek().source.clone();
+    assert!(
+        source.is_some_and(|picked| picked.is_line(&file, 3)),
+        "the tab raised has no line picked out"
+    );
+    let kept = doors.places.marks_at.peek().at(&left);
+    let kept = kept.and_then(|kept| kept.marks.source);
+    assert!(
+        !kept.is_some_and(|picked| picked.is_line(&file, 3)),
+        "the place left was kept with the line put there for the other"
     );
 }
 

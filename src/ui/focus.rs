@@ -226,6 +226,11 @@ pub(crate) struct Doors {
     pub(crate) land: State<Option<Landing>>,
     /// The caret still to be planted, `None` almost always.
     pub(crate) plant: State<Option<Planting>>,
+    /// The place whose runs the panes hold: the arrival [`use_land`] last gave its runs
+    /// to. Behind the tab on screen while a switch waits for it, so a line marked then
+    /// would go into the runs about to be kept for the place being left. A door into the
+    /// tab on screen, and an ask for the keyboard, wait for this to catch up.
+    pub(crate) arrived: State<Option<Entry>>,
 }
 
 /// What a door needs, as a component sees it.
@@ -395,6 +400,7 @@ pub(crate) fn use_land(
         mut marked,
         land: landing,
         plant,
+        mut arrived,
         ..
     } = doors;
     let (driven, marks_at) = (places.driven, places.marks_at);
@@ -433,7 +439,6 @@ pub(crate) fn use_land(
                 ask_for_keyboard(keyboard);
             }
             marked.set_if_modified(marks);
-            let mut arrived = keyboard.arrived;
             arrived.set_if_modified(step.active);
         },
     );

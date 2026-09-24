@@ -614,9 +614,12 @@ place, so the move it makes changes the active entry and `use_land` runs on it. 
 there instead left the arriving run on screen while the entry changed, which saved it under the
 place being left and had the arrival wipe it back to the place's bare line, without the columns the
 door named or the scroll it owed. A door that moves nothing -- the same place again, or one naming
-only the document -- selects the line itself, no effect being woken to do it. A row answering a
-question asked from a source-driven tab chooses for that tab instead: `Located::subject` is a
-`Subject`, the tab's id beside its file, and `Subject::entry` is the rule -- the choice is written
+only the document -- selects the line itself, no effect being woken to do it. Unless the tab was
+raised earlier in the same batch: `use_land` has not caught up (`Doors::arrived` is behind the tab
+on screen), the runs on screen are still the place being left's, and a line selected into them was
+kept under that place and lost to the one raised. So that door, and `land_on`, leave a landing
+too. A row answering a question asked from a source-driven tab chooses for that tab instead:
+`Located::subject` is a `Subject`, the tab's id beside its file, and `Subject::entry` is the rule -- the choice is written
 under that entry while the tab is still open on that file -- with `land_on` raising the tab and the
 line left as a landing, a move and not a visit, the tab being open already. **Two doors join the
 two views** and both go through the same functions. A

@@ -103,10 +103,6 @@ pub(crate) struct Keyboard {
     /// The pane each document tab last had the keyboard in: where a press on its chip,
     /// or Escape out of a list, puts it back. Written by [`use_keyboard_left`].
     left: State<HashMap<DocId, Pane>>,
-    /// The place whose runs the panes hold: the arrival `use_land` last gave its runs to.
-    /// An ask for the tab waits until this is the tab on screen, so the caret it puts in is
-    /// judged against the arriving place's runs and not the ones about to be kept.
-    pub(crate) arrived: State<Option<Entry>>,
 }
 
 impl Keyboard {
@@ -115,7 +111,6 @@ impl Keyboard {
             keys: State::create(Keys::default()),
             asked: State::create(None),
             left: State::create(HashMap::new()),
-            arrived: State::create(None),
         }
     }
 }
@@ -181,7 +176,13 @@ pub(crate) fn ask_for_panel(mut keyboard: Keyboard, panel: Panel) {
 ///
 /// Also where the pane each tab last had the keyboard in is written down
 /// ([`use_keyboard_left`]), which is what a `back` ask reads.
-pub(crate) fn use_keyboard_asked(keyboard: Keyboard, open: Open, marked: State<Marks>) {
+pub(crate) fn use_keyboard_asked(keyboard: Keyboard, doors: Doors) {
+    let Doors {
+        open,
+        marked,
+        arrived,
+        ..
+    } = doors;
     use_keyboard_left(keyboard, open);
     use_side_effect(move || {
         // **An ask is kept until there is somewhere to spend it.** A tab opened from a
@@ -208,7 +209,7 @@ pub(crate) fn use_keyboard_asked(keyboard: Keyboard, open: Open, marked: State<M
                 // the runs on screen are still the outgoing place's until `use_land` has
                 // caught up; a caret judged against those would be written into the wrong
                 // place. Read, so its catching up is what wakes this.
-                if *keyboard.arrived.read() != now {
+                if *arrived.read() != now {
                     return;
                 }
                 let (left, leads) = match now {
