@@ -353,3 +353,29 @@ fn a_file_that_cannot_be_read_is_not_written_over() {
         .write_toml(&path, &Named { name: "new".into() })
         .expect("a file that reads is written");
 }
+
+/// A file that will not parse and cannot be moved aside is still the only copy, so it is
+/// not written over either: here a file stands where `incompatible/` would be made.
+#[test]
+fn a_file_that_cannot_be_moved_aside_is_not_written_over() {
+    let base = Temporary::fresh_directory("store-test");
+    let path = base.join("settings.toml");
+    written(&path, b"{ not toml");
+    written(&base.join(INCOMPATIBLE_DIR), b"in the way");
+
+    let store = Store::at(&base);
+    assert_eq!(store.read::<Named>(&path), None);
+    assert!(store
+        .write_toml(
+            &path,
+            &Named {
+                name: "default".into()
+            }
+        )
+        .is_err());
+    assert_eq!(
+        fs::read(&path).expect("the file reads"),
+        b"{ not toml",
+        "the file was written over"
+    );
+}

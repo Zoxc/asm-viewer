@@ -85,8 +85,9 @@ pub struct Store {
     /// per store, which its clones share, so a load on any thread is heard by whoever
     /// listens to the store it was handed.
     moved: (Sender<PathBuf>, Receiver<PathBuf>),
-    /// The files a [`Store::read`] could not read, which no [`Store::write`] replaces until
-    /// one can. Shared by the clones for `moved`'s reason.
+    /// The files a [`Store::read`] could not read, or could not move aside when they would
+    /// not parse, which no [`Store::write`] replaces until one can. Shared by the clones
+    /// for `moved`'s reason.
     unread: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
@@ -160,13 +161,14 @@ impl Store {
 
     /// Write `contents` at `path`, atomically. See [`write_atomically`].
     ///
-    /// Refused for a file the last [`Store::read`] of it could not read: that read answered
-    /// the default, and this would put it over whatever the file holds.
+    /// Refused for a file the last [`Store::read`] of it could not read, or could not move
+    /// aside: that read answered the default, and this would put it over whatever the file
+    /// holds.
     pub fn write(&self, path: impl AsRef<Path>, contents: &[u8]) -> std::io::Result<()> {
         let path = self.path(path);
         if self.unread().contains(&path) {
             return Err(std::io::Error::other(
-                "it could not be read, so it is not written over",
+                "it could not be read or moved aside, so it is not written over",
             ));
         }
         write_atomically(&path, contents)
@@ -228,7 +230,8 @@ impl Store {
     /// lost in exactly the same way. A file the system will not hand over at all -- no
     /// permission, a directory in its place, a failing disk -- is left where it is, since
     /// nothing can be salvaged from it, and **no write replaces it** until a read of it
-    /// succeeds: the rename a write ends with needs no permission on the file itself.
+    /// succeeds: the rename a write ends with needs no permission on the file itself. A
+    /// file that will not parse and cannot be moved aside is kept from writes the same way.
     ///
     /// **Only the app's own files are read here**, wherever they are: a session sits
     /// beside its project file, outside the store once the reader gave the project a
@@ -259,14 +262,24 @@ impl Store {
             return parsed;
         }
 
-        if let Some(moved) = self.move_aside(&path, &data) {
-            log::warn!(
-                "{} will not parse; moved to {}",
-                path.display(),
-                moved.display()
-            );
-            // Unbounded, and the store holds the receiver, so this cannot fail.
-            let _ = self.moved.0.try_send(moved);
+        match self.move_aside(&path, &data) {
+            Some(moved) => {
+                log::warn!(
+                    "{} will not parse; moved to {}",
+                    path.display(),
+                    moved.display()
+                );
+                // Unbounded, and the store holds the receiver, so this cannot fail.
+                let _ = self.moved.0.try_send(moved);
+            }
+            // Still the only copy, so it is kept from writes as an unreadable file is.
+            None => {
+                log::warn!(
+                    "{} will not parse and could not be moved aside, so it will not be written over",
+                    path.display()
+                );
+                self.unread().insert(path);
+            }
         }
         None
     }
@@ -324,7 +337,12 @@ impl Store {
                 1 => name.clone(),
                 n => format!("{n}-{name}"),
             },
-            |path| File::create_new(path)?.write_all(data),
+            // A copy cut short is removed, so a failed rescue leaves nothing behind.
+            |path| {
+                File::create_new(path)?
+                    .write_all(data)
+                    .inspect_err(|_| drop(fs::remove_file(path)))
+            },
         )?;
         if let Err(error) = fs::remove_file(path) {
             // The copy is what matters, and it is already made. A file still here is one

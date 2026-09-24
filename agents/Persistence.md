@@ -27,7 +27,9 @@ rule invites. A file the system will not hand over at all is left alone, since n
 salvaged from it, and **`Store::write` refuses it** until a read of it succeeds. It used to be
 answered as absent and nothing more, on the grounds that nothing was about to write over it --
 but `remember` writes `recents.toml` straight after reading it, and a rename needs no permission
-on the file it replaces, so one the reader could not read was replaced by a one-entry list. **Only the app's own files are read through
+on the file it replaces, so one the reader could not read was replaced by a one-entry list. A file
+that will not parse and cannot be moved aside (`incompatible/` cannot be made, the disk is full) is
+refused the same way, since it is still the only copy; a copy cut short is removed. **Only the app's own files are read through
 it, wherever they sit**: the session beside a project the reader gave a place is outside the store
 and is the app's all the same, and the next flush would replace it as surely as any other. It used
 to be read and left where it was, a path outside the store taken for somebody else's, so a session
