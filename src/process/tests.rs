@@ -17,6 +17,7 @@ impl Handle {
         Handle(Arc::new(Process {
             child: Mutex::new(None),
             over: AtomicBool::new(false),
+            list: &STARTED,
         }))
     }
 }
@@ -260,16 +261,41 @@ fn a_stopped_run_says_it_ended_once_and_leaves_the_list() {
     assert_eq!(said, vec![RunEvent::Ended(Ended::Stopped)]);
     let list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
     assert!(
-        !list.contains(&handle),
+        !list.handles.contains(&handle),
         "the reaped run is still on the list a shutdown walks"
     );
+}
+
+/// **A program started after the shutdown walked the list is stopped, not listed.** The
+/// workers run on while the shutdown does, and a run started just after `stop_all` took
+/// the list used to go on a list nothing would walk again, and outlive the app.
+#[cfg(unix)]
+#[test]
+fn a_start_after_the_shutdown_is_stopped_at_once() {
+    let list: &'static Mutex<Started> = Box::leak(Box::new(Mutex::new(Started::new())));
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg("sleep 30").stdin(Stdio::null());
+    let (before, _pipes) = start_in(list, &mut command).expect("/bin/sh started");
+
+    stop_all_in(list);
+    assert!(
+        before.finished(),
+        "the shutdown did not stop what was listed"
+    );
+
+    let error = start_in(list, &mut command)
+        .err()
+        .expect("a start after the shutdown");
+    assert_eq!(error.to_string(), "the app is closing");
+    let listed = list.lock().unwrap_or_else(|held| held.into_inner());
+    assert!(listed.handles.is_empty(), "a program went on a walked list");
 }
 
 /// Whether `handle` is still on the list a shutdown walks.
 #[cfg(unix)]
 fn listed(handle: &Handle) -> bool {
     let list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
-    list.iter().any(|other| other == handle)
+    list.handles.iter().any(|other| other == handle)
 }
 
 /// **A handle leaves the list the moment it is known to be gone**, and by that one rule.

@@ -90,6 +90,12 @@ pruned every finished one -- so a stopped handle sat there until something else 
 language server stopped and never started again was still on the list at the shutdown, where
 `stop_all` signalled a pid the system was free to have handed on.
 
+**`stop_all` closes the list as it takes it**, and a `start` that finds it closed stops what it
+just spawned and fails. The workers go on running while the shutdown does, so a run or a server
+asked for just before the window closed could spawn after the walk, go on a list nothing would
+walk again, and outlive the app in a group of its own. The check is after the spawn and under
+the list's lock, so a program is either walked or stopped by its own start.
+
 `shutdown::before_exit` is the whole of the end of the process: the project, the settings and the
 scratchpads flushed, then `stop_all`. One list, so the sequence cannot be half-copied. The window's close hook
 and the panic hook's shutdown thread are the two ways the app comes down and both call it; the

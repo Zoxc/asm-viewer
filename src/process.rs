@@ -163,6 +163,8 @@ struct Process {
     /// itself. Set under `child`'s lock and read under it, which is the whole of the
     /// guard below.
     over: AtomicBool,
+    /// The list it was put on, which it takes itself off: [`STARTED`] but in a test.
+    list: &'static Mutex<Started>,
 }
 
 /// A started program, as anything holding one holds it: enough to end it, and nothing to
@@ -281,8 +283,8 @@ impl Handle {
     /// it is known to be gone**, stopped or reaped, and by this one rule: a `stop_all`
     /// that signalled it would be signalling a pid the system is free to have handed on.
     fn forget(&self) {
-        let mut list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
-        list.retain(|other| other != self);
+        let mut list = self.0.list.lock().unwrap_or_else(|held| held.into_inner());
+        list.handles.retain(|other| other != self);
     }
 }
 
@@ -296,7 +298,16 @@ pub struct Pipes {
 
 /// Start `command` in a group of its own, register the handle, and hand back the pipes for
 /// the caller to read. The one spawn.
+///
+/// **A start after [`stop_all`] stops what it started and fails.** The workers run on
+/// while the shutdown does, so a run or a server asked for just before the window closed
+/// can spawn after the list was walked; put on it then, it outlived the app.
 pub fn start(command: &mut Command) -> io::Result<(Handle, Pipes)> {
+    start_in(&STARTED, command)
+}
+
+/// [`start`] onto `list`: a test's own, since [`stop_all_in`] closes the one it walks.
+fn start_in(list: &'static Mutex<Started>, command: &mut Command) -> io::Result<(Handle, Pipes)> {
     Group::arrange(command);
     let mut child = command.spawn()?;
     // The group is claimed here and never again: everything the program forks from now on
@@ -315,11 +326,18 @@ pub fn start(command: &mut Command) -> io::Result<(Handle, Pipes)> {
     let handle = Handle(Arc::new(Process {
         child: Mutex::new(Some((child, group))),
         over: AtomicBool::new(false),
+        list,
     }));
-    {
-        let mut list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
-        list.push(handle.clone());
+    // Asked after the spawn and under the lock `stop_all_in` closes the list under, so a
+    // stop_all either finds this handle or this finds the list closed.
+    let mut listed = list.lock().unwrap_or_else(|held| held.into_inner());
+    if listed.closed {
+        drop(listed);
+        handle.stop();
+        return Err(io::Error::other("the app is closing"));
     }
+    listed.handles.push(handle.clone());
+    drop(listed);
 
     Ok((handle, pipes))
 }
@@ -348,7 +366,23 @@ pub fn read_on_thread<P: Read + Send + 'static>(
 
 /// Every program started in this run of the app that has not been stopped or ended. A
 /// `static` because the window's close hook can be handed nothing.
-static STARTED: Mutex<Vec<Handle>> = Mutex::new(Vec::new());
+static STARTED: Mutex<Started> = Mutex::new(Started::new());
+
+/// The programs on a list, and whether it has been walked by a shutdown, after which
+/// nothing more may go on it.
+struct Started {
+    closed: bool,
+    handles: Vec<Handle>,
+}
+
+impl Started {
+    const fn new() -> Started {
+        Started {
+            closed: false,
+            handles: Vec::new(),
+        }
+    }
+}
 
 /// Stop every program the app started and that has not ended by itself.
 ///
@@ -356,9 +390,15 @@ static STARTED: Mutex<Vec<Handle>> = Mutex::new(Vec::new());
 /// `project.rs`'s `flush` is there for the same reason. A child outliving the app holds a
 /// terminal, a port or a file the next run will want, with nothing able to find it again.
 pub fn stop_all() {
+    stop_all_in(&STARTED);
+}
+
+/// [`stop_all`] over `list`, which it closes: a start after it stops its own program.
+fn stop_all_in(list: &Mutex<Started>) {
     let started = {
-        let mut list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
-        std::mem::take(&mut *list)
+        let mut list = list.lock().unwrap_or_else(|held| held.into_inner());
+        list.closed = true;
+        std::mem::take(&mut list.handles)
     };
     for handle in started {
         handle.stop();
