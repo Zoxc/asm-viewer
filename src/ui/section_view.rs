@@ -397,14 +397,11 @@ impl PartialEq for TextRow {
 
 /// A gap row as data: the directive for the largest unit that divides the row's bytes --
 /// `dq` for quadwords down to `db` for bytes -- and the row's text: the values in that
-/// unit, read in the object's byte order `endian`, padded to the width a row of bytes
-/// would take, then the same bytes as characters between bars, a dot for anything
+/// unit, read in the object's byte order `endian`, padded to the widest any row's values
+/// can be, then the same bytes as characters between bars, a dot for anything
 /// unprintable.
 fn dump_line(bytes: &[u8], endian: Endianness) -> (&'static str, String) {
-    let (mark, unit) = [("dq", 8), ("dd", 4), ("dw", 2), ("db", 1)]
-        .into_iter()
-        .find(|&(_, unit)| !bytes.is_empty() && bytes.len().is_multiple_of(unit))
-        .unwrap_or(("db", 1));
+    let (mark, unit) = dump_unit(bytes.len());
     let values: Vec<String> = bytes
         .chunks(unit)
         .map(|chunk| {
@@ -416,7 +413,11 @@ fn dump_line(bytes: &[u8], endian: Endianness) -> (&'static str, String) {
             format!("{value:0width$X}", width = unit * 2)
         })
         .collect();
-    let width = GAP_BYTES_PER_ROW as usize * 3 - 1;
+    // The widest is not a full row, which is quadwords: 15 lone bytes are wider.
+    let width = (1..=GAP_BYTES_PER_ROW as usize)
+        .map(|len| len * 2 + (len / dump_unit(len).1 - 1) * 2)
+        .max()
+        .unwrap_or(0);
     let ascii: String = bytes
         .iter()
         .map(|&byte| {
@@ -428,6 +429,15 @@ fn dump_line(bytes: &[u8], endian: Endianness) -> (&'static str, String) {
         })
         .collect();
     (mark, format!("{:<width$} |{ascii}|", values.join(", ")))
+}
+
+/// The directive and the unit a row of `len` bytes is shown in: the largest unit that
+/// divides it.
+fn dump_unit(len: usize) -> (&'static str, usize) {
+    [("dq", 8), ("dd", 4), ("dw", 2), ("db", 1)]
+        .into_iter()
+        .find(|&(_, unit)| len != 0 && len.is_multiple_of(unit))
+        .unwrap_or(("db", 1))
 }
 
 keyed!(TextRow);

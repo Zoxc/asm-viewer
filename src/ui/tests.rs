@@ -24875,7 +24875,7 @@ fn a_gap_row_is_marked_as_data() {
             "0000000000000000 dq {:016X}, {:016X}{} |{ascii}|",
             value(&text[0..8]),
             value(&text[8..16]),
-            " ".repeat(47 - 34),
+            " ".repeat(58 - 34),
         )
     );
 
