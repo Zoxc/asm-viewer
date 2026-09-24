@@ -241,10 +241,11 @@ its index.
 **A bookmark is made wherever the thing it is about is under the pointer**, through one `bookmark_item` (`src/ui/menus.rs`): a
 right-click on a Symbols row or a History row (`bookmark_menu`, that item alone), on a document's
 tab (`agents/UI.md`), or on an instruction row in either assembly listing (`agents/Panes.md`). It
-says "Add bookmark" or "Remove bookmark" by `Bookmarks::matching` at the press, so a symbol that
-moved under a rebuild still shows as bookmarked. On an instruction row it says "Bookmark symbol",
-since the row is not the symbol and has to say what it would bookmark. The name a new one gets is
-`Names::whole`, what the row's tooltip says. `Ctrl+D` is the same item without a pointer,
+says "Add bookmark" or "Remove bookmark" by `Bookmarks::matching` when the menu opens, so a symbol
+that moved under a rebuild still shows as bookmarked. The press does what the item says, and
+nothing if that is already so: Ctrl+D can change the list while the menu is up. On an instruction
+row it says "Bookmark symbol", since the row is not the symbol and has to say what it would
+bookmark. The name a new one gets is `Names::whole`, what the row's tooltip says. `Ctrl+D` is the same item without a pointer,
 asked of the tab on screen (`root_key_down`), and a page tab is no place and has none to add; the
 write both make is `toggle_bookmark` beside the item, so the key and the menu cannot come to mean
 different things. The rows *consume* `Bookmarked` and `Objects`

@@ -26669,6 +26669,54 @@ fn a_symbol_row_bookmarks_its_symbol_from_its_menu() {
     assert!(bookmarks.peek().entries().is_empty());
 }
 
+/// **A bookmark item does what it says, not the opposite.** Ctrl+D still reaches the
+/// window while the menu is up; after one, "Add bookmark" must not remove the bookmark the
+/// key made, nor "Remove bookmark" put back the one it took.
+#[test]
+fn a_bookmark_item_does_what_it_says_after_the_list_changed() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let made = bookmark_of(&Document::Symbol(wanted.clone()));
+
+    let (mut test, states) = TestingRunner::new(
+        symbols_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    let (mut objects, mut bookmarks) = (states.objects, states.bookmarks);
+    objects.set(vec![wanted.object.clone()]);
+    settle(&mut test);
+    let row = centre_of(&test, "sum_to");
+
+    for (before, key, item, after) in [
+        (
+            vec![],
+            vec![made.clone()],
+            "Add bookmark",
+            vec![made.clone()],
+        ),
+        (vec![made.clone()], vec![], "Remove bookmark", vec![]),
+    ] {
+        bookmarks.set(Bookmarks::from_entries(before));
+        settle(&mut test);
+        right_click(&mut test, row);
+        // What Ctrl+D on a tab showing sum_to does, with the menu still up.
+        bookmarks.set(Bookmarks::from_entries(key));
+        settle(&mut test);
+        let at = centre_of(&test, item);
+        test.move_cursor(at);
+        test.press_cursor(at);
+        test.release_cursor(at);
+        settle(&mut test);
+        assert_eq!(bookmarks.peek().entries(), after, "{item}");
+    }
+}
+
 /// **What a symbol row's press and its menu reach for is the list's to consume**
 /// ([`ListStates`]), and a row carrying it is not re-rendered for it. Each row reached for
 /// eight contexts a render before -- the list's pick, the doors, the places, Ctrl, the

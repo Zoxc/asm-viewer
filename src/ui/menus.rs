@@ -115,12 +115,12 @@ pub(crate) fn file_menu(states: ProjectStates, path: PathBuf) -> Menu {
 }
 
 /// The one menu item every bookmark gesture is: adding a bookmark of `document`, or
-/// removing the one that points at it, whichever is true at the press. Which it is comes
-/// from `Bookmarks::matching` -- by resolution, so a symbol that moved under a rebuild still
-/// reads as bookmarked -- and the name a new one gets is [`Names::whole`], what the row's
-/// tooltip says. `add` is what the item says when there is none yet: a sidebar row
-/// and a tab say "Add bookmark", an instruction row "Bookmark symbol", since the row is not
-/// the symbol and has to say what it would bookmark.
+/// removing the one that points at it, whichever is true when the menu opens. Which it is
+/// comes from `Bookmarks::matching` -- by resolution, so a symbol that moved under a
+/// rebuild still reads as bookmarked -- and the name a new one gets is [`Names::whole`],
+/// what the row's tooltip says. `add` is what the item says when there is none yet: a
+/// sidebar row and a tab say "Add bookmark", an instruction row "Bookmark symbol", since
+/// the row is not the symbol and has to say what it would bookmark.
 ///
 /// `key` is Ctrl+D where this menu was opened somewhere that key means this very
 /// document, which is the tab on screen and nowhere else: the key is asked of that tab
@@ -141,7 +141,18 @@ pub(crate) fn bookmark_item(
         false => add,
     };
     MenuButton::new()
-        .on_press(move |_| toggle_bookmark(bookmarked, objects, &document))
+        .on_press(move |_| {
+            // Ctrl+D still reaches the window while the menu is up, so the list may have
+            // changed since the menu was built. The press does what the item says, which
+            // is nothing if that is already so.
+            let now = bookmarked
+                .peek()
+                .matching(&document, &objects.peek())
+                .is_some();
+            if now == bookmarked_already {
+                toggle_bookmark(bookmarked, objects, &document);
+            }
+        })
         .child(menu_label(text, key))
 }
 
