@@ -5,8 +5,8 @@
 mod common;
 
 use analysis::{
-    parse_object, Architecture, Bias, CodeListing, Extent, GapKind, Listing, Object, Section,
-    SectionAddress, Severity, SymbolData,
+    parse_object, Architecture, Bias, CodeListing, Extent, GapKind, Listing, LoadMessage, Object,
+    Section, SectionAddress, Severity, SymbolData,
 };
 use common::{
     at, caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
@@ -1001,12 +1001,11 @@ fn a_section_near_the_top_of_the_address_space_is_a_load_error() {
     let object = parse(&data);
 
     assert_eq!(object.worst(), Some(Severity::Error));
-    let [message] = &object.messages[..] else {
-        panic!("one message: {:?}", object.messages);
-    };
-    assert!(
-        message.text.contains("`.text.high`"),
-        "the message names the section: {}",
-        message.text
+    assert_eq!(
+        object.messages,
+        [LoadMessage::CodeSectionsOverlap {
+            section: Some(".text.high".to_owned()),
+            address: u64::MAX - 4,
+        }]
     );
 }

@@ -261,11 +261,7 @@ pub(crate) const MEMBERS_TROUBLED: &str = "Something went wrong reading an objec
 
 /// Everything that went wrong reading `object`, as one line; empty where nothing did.
 fn told(object: &Object) -> String {
-    let texts: Vec<&str> = object
-        .messages
-        .iter()
-        .map(|message| message.text.as_str())
-        .collect();
+    let texts: Vec<String> = object.messages.iter().map(ToString::to_string).collect();
     texts.join(" ")
 }
 

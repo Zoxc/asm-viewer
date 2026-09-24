@@ -4,7 +4,7 @@
 
 mod common;
 
-use analysis::Severity;
+use analysis::LoadMessage;
 use common::{
     arm_thumb_image, at, named, parse, ppc64_elfv1_image, ppc64_elfv1_object, xcoff_image,
     ARM_TEXT, PPC64_TEXT, XCOFF_DATA, XCOFF_TEXT,
@@ -67,10 +67,10 @@ fn a_ppc64_elfv1_function_is_at_the_code_its_descriptor_names() {
         );
     }
 
-    let [message] = &object.messages[..] else {
-        panic!("one message: {:?}", object.messages);
-    };
-    assert_eq!(message.severity, Severity::Warning);
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableDescriptors { count: 1 }]
+    );
 }
 
 #[test]
@@ -105,8 +105,8 @@ fn an_xcoff_entry_point_whose_descriptor_no_section_holds_is_left_out() {
     let object = parse(&xcoff_image(false, 0x3000_0000));
 
     assert!(object.symbols_sorted.is_empty());
-    let [message] = &object.messages[..] else {
-        panic!("one message: {:?}", object.messages);
-    };
-    assert_eq!(message.severity, Severity::Warning);
+    assert_eq!(
+        object.messages,
+        [LoadMessage::UnreadableDescriptors { count: 1 }]
+    );
 }

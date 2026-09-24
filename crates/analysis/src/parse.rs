@@ -415,12 +415,8 @@ impl<'data, 'file> CodeAddresses<'data, 'file> {
 
     /// What is said about the functions left out, if any were.
     fn message(&self) -> Option<LoadMessage> {
-        let unread = self.unread.get();
-        (unread > 0).then(|| {
-            LoadMessage::warning(format!(
-                "Functions left out because their descriptors could not be read: {unread}."
-            ))
-        })
+        let count = self.unread.get();
+        (count > 0).then_some(LoadMessage::UnreadableDescriptors { count })
     }
 }
 

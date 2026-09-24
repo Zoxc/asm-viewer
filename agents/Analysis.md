@@ -30,8 +30,12 @@ against archives the `object` writer built, with nothing on a disk. The digest s
 each path and every member is cut from it. That is the thing streaming must not quietly turn into
 196 hashes of the same 20 MB.
 
-**What went wrong reading an object is kept on it** (`Object::messages`): a `LoadMessage` is a
-`Severity`, an error or a warning, and a sentence or two in the reader's terms. A file that will not
+**What went wrong reading an object is kept on it** (`Object::messages`): a `LoadMessage` is an
+enum with a variant per problem, carrying what it names (a section and its address, a count). Its
+`Severity`, an error or a warning, comes from the variant, and so does what the reader is told:
+`Display` says it in a sentence or two, in the crate beside the variants, so a new variant cannot
+be added without its words and every caller, the UI and a test, reads the same ones. Tests match
+the variant and its data; one test in `model/tests.rs` pins the words. A file that will not
 parse at all is still dropped, having nothing to show; a message is for an object that is shown but
 that cannot be trusted in part. The parse collects them. A rule the parse follows hands back what
 went wrong beside its answer rather than reporting it itself, as `section_biases` does, so the DWARF

@@ -114,15 +114,12 @@ pub(crate) struct Placement {
 /// can do that (see [`section_biases`]), so `highest`, the section stating the highest, is
 /// the one named.
 fn out_of_room(highest: Option<&object::Section<'_, '_>>) -> LoadMessage {
-    let name = highest
-        .and_then(|section| section.name_bytes().ok())
-        .map(|name| format!("`{}` ", String::from_utf8_lossy(name)))
-        .unwrap_or_default();
-    let address = highest.map_or(0, |section| section.address());
-    LoadMessage::error(format!(
-        "The code sections could not be placed apart: section {name}states the address \
-         {address:#x}, near the top of the address space, so addresses in this object overlap."
-    ))
+    LoadMessage::CodeSectionsOverlap {
+        section: highest
+            .and_then(|section| section.name_bytes().ok())
+            .map(|name| String::from_utf8_lossy(name).into_owned()),
+        address: highest.map_or(0, |section| section.address()),
+    }
 }
 
 /// The bias of the section `index` names in a map [`section_biases`] made. A section with no

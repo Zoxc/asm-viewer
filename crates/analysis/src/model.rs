@@ -56,13 +56,22 @@ pub struct Object {
     pub(crate) placed: PlacedSymbols,
 }
 
-/// Something that went wrong while an object was read, said in the reader's terms. The
-/// object is still shown; this says what in it cannot be trusted.
+/// Something that went wrong while an object was read, one variant per problem with the
+/// data it names. The object is still shown; this says what in it cannot be trusted. How bad
+/// it is comes from the variant ([`LoadMessage::severity`]), and so does what the reader is
+/// told (its [`Display`](fmt::Display)).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LoadMessage {
-    pub severity: Severity,
-    /// One or two plain sentences.
-    pub text: String,
+pub enum LoadMessage {
+    /// The code sections could not all be placed apart, because `section` states `address`,
+    /// the highest any code section states, near the top of the address space. `section` is
+    /// [`None`] where its name cannot be read.
+    CodeSectionsOverlap {
+        section: Option<String>,
+        address: u64,
+    },
+    /// `count` functions or entry points were left out because the descriptor naming their
+    /// code could not be read.
+    UnreadableDescriptors { count: usize },
 }
 
 /// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
@@ -75,19 +84,35 @@ pub enum Severity {
 }
 
 impl LoadMessage {
-    /// An [`Error`](Severity::Error) saying `text`.
-    pub(crate) fn error(text: String) -> LoadMessage {
-        LoadMessage {
-            severity: Severity::Error,
-            text,
+    /// How bad this is, which only the variant decides.
+    pub fn severity(&self) -> Severity {
+        match self {
+            LoadMessage::CodeSectionsOverlap { .. } => Severity::Error,
+            LoadMessage::UnreadableDescriptors { .. } => Severity::Warning,
         }
     }
+}
 
-    /// A [`Warning`](Severity::Warning) saying `text`.
-    pub(crate) fn warning(text: String) -> LoadMessage {
-        LoadMessage {
-            severity: Severity::Warning,
-            text,
+/// What the reader is told: one or two plain sentences.
+impl fmt::Display for LoadMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoadMessage::CodeSectionsOverlap { section, address } => {
+                let name = match section {
+                    Some(name) => format!("`{name}` "),
+                    None => String::new(),
+                };
+                write!(
+                    f,
+                    "The code sections could not be placed apart: section {name}states the \
+                     address {address:#x}, near the top of the address space, so addresses in \
+                     this object overlap."
+                )
+            }
+            LoadMessage::UnreadableDescriptors { count } => write!(
+                f,
+                "Functions left out because their descriptors could not be read: {count}."
+            ),
         }
     }
 }
@@ -206,7 +231,7 @@ impl Object {
 
     /// The worst of [`messages`](Self::messages), or [`None`] where there are none.
     pub fn worst(&self) -> Option<Severity> {
-        self.messages.iter().map(|message| message.severity).max()
+        self.messages.iter().map(LoadMessage::severity).max()
     }
 
     /// [`placed`](Self::placed).

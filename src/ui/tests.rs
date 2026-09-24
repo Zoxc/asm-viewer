@@ -5001,21 +5001,21 @@ fn two_loads_at_once_keep_a_file_to_one_row() {
 /// is found by its accessibility label, which is what went wrong.
 #[test]
 fn an_object_with_a_load_error_is_marked_on_its_row() {
-    const WRONG: &str = "Something is wrong with this object.";
-    let wrong = |object: &mut Arc<Object>| {
+    let wrong = LoadMessage::CodeSectionsOverlap {
+        section: Some(".text".to_owned()),
+        address: 0x1000,
+    };
+    let mark = |object: &mut Arc<Object>| {
         Arc::get_mut(object)
             .expect("nothing else holds the fixture yet")
             .messages
-            .push(LoadMessage {
-                severity: Severity::Error,
-                text: WRONG.to_owned(),
-            });
+            .push(wrong.clone());
     };
     let (lone, mut lones) = fixture_objects_of("line_fixture.o", 1);
     let (archive, mut members) = fixture_objects_of("line_fixture_split.o", 2);
     let (clean, cleans) = fixture_objects_of("line_fixture_hidden.so", 1);
-    wrong(&mut lones[0]);
-    wrong(&mut members[1]);
+    mark(&mut lones[0]);
+    mark(&mut members[1]);
 
     let (mut test, states, senders) = mount_loads(&[&lone, &archive, &clean]);
     test.sync_and_update();
@@ -5059,7 +5059,7 @@ fn an_object_with_a_load_error_is_marked_on_its_row() {
     assert_eq!(
         marks,
         [
-            ("line_fixture.o".to_owned(), WRONG.to_owned()),
+            ("line_fixture.o".to_owned(), wrong.to_string()),
             (
                 "line_fixture_split.o".to_owned(),
                 MEMBERS_TROUBLED.to_owned()
