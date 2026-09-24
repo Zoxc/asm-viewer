@@ -1,6 +1,7 @@
 # Storage
 
 A missing or unreadable file counts as empty.
+An unreadable one is not written over for the rest of the run.
 
 ## A file that will not parse
 
@@ -11,13 +12,15 @@ a name already taken gets a number in front of it. A window then names every pat
 
 ## A panic
 
-Every panic is written down, in a `panics` directory beside the settings: one file per run, a
+A panic is written down in a `panics` directory beside the settings: one file per run, a
 record per panic, with what panicked, where, the message and the backtrace.
 
 A panic the app is hardened against — a name it cannot demangle, debug information it cannot
-read — is written down and nothing more; the app carries on. Any other panic is shown in a
-window naming what panicked and where it was saved, with the backtrace a button away. The app
-then saves what is open and closes.
+read — is written down and nothing more; the app carries on.
+Only the first twenty in a run are written down; the last says so.
+
+Any other panic is shown in a window naming what panicked and where it was saved, with the
+backtrace a button away. The app then saves what is open and closes.
 
 ## Settings
 
@@ -36,8 +39,7 @@ Project data and session data are saved in separate files.
 - **Project data**, what the user set: the id, directory, binaries, bookmarks, the build
   profile, and the language server to read it with.
 - **Session data**, what the app recorded: tabs and their history, source files, the shown file,
-  the visit history, a hash of each binary, whether the directory has been agreed to, and the
-  UI state.
+  the visit history, a hash of each binary, and the UI state.
 
 Session data, and anything else the app keeps about a project, sits beside the project data and
 carries the project's id: a large random number, never shown. One with another id is ignored.
