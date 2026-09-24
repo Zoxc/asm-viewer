@@ -290,7 +290,11 @@ fn a_macho_thread_state_without_a_pc_leaves_the_entry_point_to_lc_main() {
     // is the entry point, and its offset is placed like any other.
     const TEXT: u64 = 0x1_0000_0000;
     let entry = MACHO_CODE_OFFSET + 0x180;
-    let object = parse(&macho_executable(TEXT, entry, true));
+    let data = macho_executable(TEXT, entry, true);
+    // Every load command the header counts is there, so its exports read.
+    let file = object::File::parse(&*data).expect("the fixture parses");
+    assert!(object::Object::exports(&file).is_ok());
+    let object = parse(&data);
     assert_eq!(named(&object, "<entry point>").address, at(TEXT + entry));
 }
 

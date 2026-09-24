@@ -2675,7 +2675,7 @@ pub fn macho_arm_executable(thread: bool) -> Vec<u8> {
             cputype: macho::CPU_TYPE_ARM,
             cpusubtype: macho::CPU_SUBTYPE_ARM_V7.into(),
             filetype: macho::MH_EXECUTE,
-            ncmds: 5,
+            ncmds: load_commands(&commands),
             sizeofcmds: commands.len() as u32,
             flags: macho::FileFlags(0),
         },
@@ -2697,6 +2697,20 @@ pub fn macho_arm_executable(thread: bool) -> Vec<u8> {
     );
     file.extend_from_slice(NAMES);
     file
+}
+
+/// How many little-endian Mach-O load commands `commands` holds, each as long as its
+/// `cmdsize` says: what a header's `ncmds` is, counted from what was written.
+fn load_commands(commands: &[u8]) -> u32 {
+    let mut count = 0;
+    let mut rest = commands;
+    while !rest.is_empty() {
+        let size = u32::from_le_bytes(rest[4..8].try_into().unwrap()) as usize;
+        assert!(size >= 8, "a load command's size covers its own header");
+        rest = &rest[size..];
+        count += 1;
+    }
+    count
 }
 
 /// Where [`ppc64_elfv1_image`] puts its code and its descriptors.
@@ -2985,7 +2999,7 @@ pub fn macho_executable(text_vmaddr: u64, entryoff: u64, unreadable_thread: bool
             cputype: macho::CPU_TYPE_X86_64,
             cpusubtype: macho::CPU_SUBTYPE_X86_64_ALL.into(),
             filetype: macho::MH_EXECUTE,
-            ncmds: 5 + u32::from(unreadable_thread),
+            ncmds: load_commands(&commands),
             sizeofcmds: commands.len() as u32,
             flags: macho::FileFlags(0),
         },
