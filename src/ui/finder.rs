@@ -207,12 +207,18 @@ impl Held {
                 Change::Files
             }
             Told::Found { id, file } if id == self.id => {
-                if self.streams {
-                    self.files.push(file);
-                } else {
+                if !self.streams {
+                    // Not ranked until the walk ends, so the answer is what it was.
                     self.building.push(file);
+                    return Change::None;
                 }
-                Change::Files
+                self.files.push(file);
+                // An empty box ranks nothing, so another file changes nothing either.
+                if self.query.trim().is_empty() {
+                    Change::None
+                } else {
+                    Change::Files
+                }
             }
             Told::Walked { id } if id == self.id => {
                 if !self.streams {

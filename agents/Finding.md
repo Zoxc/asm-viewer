@@ -62,7 +62,10 @@ polls or a runtime to select on them, where one lets it block. Every message car
 belongs to and the worker drops the rest, `Searched`'s own rule. It drains what is waiting before
 it answers, so a burst of a walk is one ranking and not one per file, and while a walk is still
 streaming it answers at most every `WALK_REFRESH`: a rank of everything found so far is worth no
-more per file than it is per tenth of a second. What stops a walk nobody is waiting for is an
+more per file than it is per tenth of a second. A file found changes the answer only when the
+ranking reads it and the box has something to rank it against: one held back for the end of a
+later walk, or found under an empty box, answers nothing, since each answer is a new list that
+wakes the panel and redraws its rows. What stops a walk nobody is waiting for is an
 `AtomicU64` the next open bumps, not a full channel -- the channel has to be unbounded, because
 the UI sends the box into it and a UI thread parked in a send is the freeze this exists to
 prevent.
