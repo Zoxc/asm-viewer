@@ -75,3 +75,23 @@ the mutations sweep. On a Mach-O the first error now ends the export walk. Pinne
 `declared_code.rs`' `a_macho_export_trie_cut_inside_an_edge_ends_the_export_walk`.
 
 Not reported.
+
+## Wanted
+
+**An XCOFF image writer.** `write::Object` writes an XCOFF relocatable object and nothing
+else: no auxiliary header, so no `o_entry`, and it picks every section's address itself,
+packing them from 0. There is no lower-level XCOFF writer as there is for ELF and PE. What
+the tests do instead: `xcoff_image` (`crates/analysis/tests/common/mod.rs`) writes the file
+header, the auxiliary header and the section headers byte by byte.
+
+**A PE export table.** `write::pe::Writer` lays out the headers, the sections and the data
+directories, and leaves every directory's contents to the caller. What the tests do
+instead: `armnt_dll` and `pe_image` (`crates/analysis/tests/common/mod.rs`) write the export
+directory, its three arrays and its names by hand.
+
+**A Mach-O executable writer.** `write::Object` writes `MH_OBJECT` only, with no segments,
+no `LC_MAIN` and no export trie, and there is no lower-level Mach-O writer, only
+`write::macho::Encoder`. What the tests do instead: `macho_executable` and
+`macho_arm_executable` (`crates/analysis/tests/common/mod.rs`) put the load commands
+together through the encoder, lay out the file by hand, and write the export trie byte by
+byte.

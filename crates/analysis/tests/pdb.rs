@@ -1,5 +1,5 @@
 //! The crate pinned against a PE image and the `.pdb` a real linker wrote for it, where
-//! every other linked image in the suite is hand-assembled in memory and no writer in the
+//! every other linked image in the suite is built in memory and no writer in the
 //! tree can produce a PDB at all.
 //!
 //! Both files are committed, built from `tests/fixtures/line_fixture.c` — the same source the

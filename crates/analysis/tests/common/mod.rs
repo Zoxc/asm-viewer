@@ -2144,8 +2144,7 @@ pub struct ImageSymbol<'a> {
     pub name: &'a str,
     pub value: u64,
     pub size: u64,
-    /// `STT_FUNC`, `STT_OBJECT` and so on.
-    pub kind: u8,
+    pub kind: object::elf::SymbolType,
     pub section: usize,
 }
 
@@ -2154,8 +2153,8 @@ pub struct ImageSymbol<'a> {
 pub struct ElfImage<'a> {
     pub is_64: bool,
     pub big_endian: bool,
-    pub machine: u16,
-    pub flags: u32,
+    pub machine: object::elf::Machine,
+    pub flags: object::elf::FileFlags,
     pub entry: u64,
     pub sections: &'a [ImageSection<'a>],
     /// Written to `.symtab`.
@@ -2164,10 +2163,14 @@ pub struct ElfImage<'a> {
     pub dynamic: &'a [ImageSymbol<'a>],
 }
 
-/// [`ElfImage`] assembled byte by byte: the ELF header, each section's bytes, the two
-/// symbol tables with their strings, the section names, then the section headers. No
-/// program headers, which the parse does not read.
+/// [`ElfImage`] written with `object`'s ELF writer, which lays out an image of any class,
+/// byte order and machine where [`write::Object`] only writes a relocatable object: the
+/// ELF header, each section's bytes, the two symbol tables with their strings, the section
+/// names, then the section headers. No program headers, which the parse does not read.
 pub fn elf_image(image: ElfImage) -> Vec<u8> {
+    use object::elf;
+    use object::write::elf::{FileHeader, SectionHeader, Sym, Writer};
+
     let ElfImage {
         is_64,
         big_endian,
@@ -2178,165 +2181,114 @@ pub fn elf_image(image: ElfImage) -> Vec<u8> {
         symbols,
         dynamic,
     } = image;
-    let put = |out: &mut Vec<u8>, value: u64, width: usize| {
-        let bytes = value.to_be_bytes();
-        let bytes = &bytes[8 - width..];
-        if big_endian {
-            out.extend_from_slice(bytes);
-        } else {
-            out.extend(bytes.iter().rev());
-        }
+    let endian = if big_endian {
+        Endianness::Big
+    } else {
+        Endianness::Little
     };
-    let word = if is_64 { 8 } else { 4 };
-    let (ehdr, shdr, sym) = if is_64 { (64, 64, 24) } else { (52, 40, 16) };
-    // The first section header is the null one, so `sections[i]` is section `i + 1`.
-    let symtab_index = sections.len() as u64 + 1;
-    let dynsym_index = symtab_index + 2;
-    let shstrtab_index = dynsym_index + 2;
+    let mut out = Vec::new();
+    let mut writer = Writer::new(endian, is_64, &mut out);
 
-    let table = |symbols: &[ImageSymbol]| {
-        let mut strings = vec![0u8];
-        let mut entries = vec![0u8; sym];
-        for symbol in symbols {
-            let name = strings.len() as u64;
-            strings.extend_from_slice(symbol.name.as_bytes());
-            strings.push(0);
-            let info = 0x10 | u64::from(symbol.kind); // STB_GLOBAL
-            let shndx = symbol.section as u64 + 1;
-            put(&mut entries, name, 4);
-            if is_64 {
-                put(&mut entries, info, 1);
-                put(&mut entries, 0, 1);
-                put(&mut entries, shndx, 2);
-                put(&mut entries, symbol.value, 8);
-                put(&mut entries, symbol.size, 8);
-            } else {
-                put(&mut entries, symbol.value, 4);
-                put(&mut entries, symbol.size, 4);
-                put(&mut entries, info, 1);
-                put(&mut entries, 0, 1);
-                put(&mut entries, shndx, 2);
-            }
-        }
-        (entries, strings)
-    };
-    let (symtab, strtab) = table(symbols);
-    let (dynsym, dynstr) = table(dynamic);
-
-    let mut shstrtab = vec![0u8];
-    let mut name_of = |name: &str| {
-        let offset = shstrtab.len() as u64;
-        shstrtab.extend_from_slice(name.as_bytes());
-        shstrtab.push(0);
-        offset
-    };
-    struct Header<'a> {
-        name: u64,
-        kind: u64,
-        flags: u64,
-        address: u64,
-        bytes: &'a [u8],
-        link: u64,
-        entsize: u64,
+    // Everything is reserved first, in the order it is then written.
+    writer.reserve_file_header();
+    let headers: Vec<_> = sections
+        .iter()
+        .map(|section| {
+            let name = writer.add_section_name(section.name.as_bytes());
+            (name, writer.reserve_section_index())
+        })
+        .collect();
+    let names: Vec<_> = symbols
+        .iter()
+        .map(|symbol| writer.add_string(symbol.name.as_bytes()))
+        .collect();
+    let dynamic_names: Vec<_> = dynamic
+        .iter()
+        .map(|symbol| writer.add_dynamic_string(symbol.name.as_bytes()))
+        .collect();
+    for symbol in symbols {
+        writer.reserve_symbol_index(Some(headers[symbol.section].1));
     }
-    let header = |name, kind, flags, bytes, link, entsize| Header {
-        name,
-        kind,
-        flags,
-        address: 0,
-        bytes,
-        link,
-        entsize,
-    };
-    let mut headers = Vec::new();
+    for _ in dynamic {
+        writer.reserve_dynamic_symbol_index();
+    }
+    writer.reserve_symtab_section_index();
+    writer.reserve_strtab_section_index();
+    writer.reserve_dynsym_section_index();
+    writer.reserve_dynstr_section_index();
+    writer.reserve_shstrtab_section_index();
+    let offsets: Vec<u64> = sections
+        .iter()
+        .map(|section| writer.reserve(section.bytes.len() as u64, 8))
+        .collect();
+    writer.reserve_symtab();
+    writer.reserve_strtab().expect("reserving .strtab");
+    writer.reserve_dynsym();
+    writer.reserve_dynstr().expect("reserving .dynstr");
+    writer.reserve_shstrtab().expect("reserving .shstrtab");
+    writer.reserve_section_headers();
+
+    writer
+        .write_file_header(&FileHeader {
+            os_abi: elf::ELFOSABI_NONE,
+            abi_version: 0,
+            e_type: elf::ET_EXEC,
+            e_machine: machine,
+            e_entry: entry,
+            e_flags: flags,
+        })
+        .expect("writing the ELF header");
     for section in sections {
-        // SHT_PROGBITS; SHF_ALLOC, and SHF_EXECINSTR or SHF_WRITE.
-        let flags = if section.code { 2 | 4 } else { 2 | 1 };
-        headers.push(Header {
-            address: section.address,
-            ..header(name_of(section.name), 1, flags, section.bytes, 0, 0)
+        writer.write_align(8);
+        writer.write(section.bytes);
+    }
+    let sym = |symbol: &ImageSymbol, name| Sym {
+        section: Some(headers[symbol.section].1 .0),
+        st_name: name,
+        st_info: elf::SymbolInfo::new(elf::STB_GLOBAL, symbol.kind),
+        st_other: elf::SymbolOther(0),
+        st_shndx: elf::SymbolSection(0),
+        st_value: symbol.value,
+        st_size: symbol.size,
+    };
+    writer.write_null_symbol();
+    for (symbol, name) in symbols.iter().zip(names) {
+        writer.write_symbol(&sym(symbol, writer.string_offset(Some(name))));
+    }
+    writer.write_strtab();
+    writer.write_null_dynamic_symbol();
+    for (symbol, name) in dynamic.iter().zip(dynamic_names) {
+        writer.write_dynamic_symbol(&sym(symbol, writer.dynamic_string_offset(Some(name))));
+    }
+    writer.write_dynstr();
+    writer.write_shstrtab();
+
+    writer.write_null_section_header();
+    for ((section, (name, _)), offset) in sections.iter().zip(&headers).zip(offsets) {
+        let flags = if section.code {
+            elf::SHF_ALLOC.0 | elf::SHF_EXECINSTR.0
+        } else {
+            elf::SHF_ALLOC.0 | elf::SHF_WRITE.0
+        };
+        writer.write_section_header(&SectionHeader {
+            sh_name: writer.section_name_offset(Some(*name)),
+            sh_type: elf::SHT_PROGBITS,
+            sh_flags: elf::SectionFlags(flags),
+            sh_addr: section.address,
+            sh_offset: offset,
+            sh_size: section.bytes.len() as u64,
+            sh_addralign: 1,
+            ..SectionHeader::default()
         });
     }
-    // SHT_SYMTAB = 2, SHT_STRTAB = 3, SHT_DYNSYM = 11.
-    let names = [
-        name_of(".symtab"),
-        name_of(".strtab"),
-        name_of(".dynsym"),
-        name_of(".dynstr"),
-        name_of(".shstrtab"),
-    ];
-    headers.push(header(
-        names[0],
-        2,
-        0,
-        &symtab,
-        symtab_index + 1,
-        sym as u64,
-    ));
-    headers.push(header(names[1], 3, 0, &strtab, 0, 0));
-    headers.push(header(
-        names[2],
-        11,
-        2,
-        &dynsym,
-        dynsym_index + 1,
-        sym as u64,
-    ));
-    headers.push(header(names[3], 3, 2, &dynstr, 0, 0));
-    headers.push(header(names[4], 3, 0, &shstrtab, 0, 0));
-
-    let mut out = vec![0u8; ehdr];
-    let mut placed = Vec::new();
-    for header in &headers {
-        out.resize(out.len().next_multiple_of(8), 0);
-        placed.push(out.len() as u64);
-        out.extend_from_slice(header.bytes);
-    }
-    out.resize(out.len().next_multiple_of(8), 0);
-    let shoff = out.len() as u64;
-
-    out.resize(out.len() + shdr, 0);
-    for (header, offset) in headers.iter().zip(placed) {
-        // sh_info is 1 for a symbol table: the null entry is its one local symbol.
-        let info = u64::from(header.entsize != 0);
-        put(&mut out, header.name, 4);
-        put(&mut out, header.kind, 4);
-        put(&mut out, header.flags, word);
-        put(&mut out, header.address, word);
-        put(&mut out, offset, word);
-        put(&mut out, header.bytes.len() as u64, word);
-        put(&mut out, header.link, 4);
-        put(&mut out, info, 4);
-        put(&mut out, 1, word);
-        put(&mut out, header.entsize, word);
-    }
-
-    let mut header = Vec::with_capacity(ehdr);
-    header.extend_from_slice(b"\x7fELF");
-    header.push(if is_64 { 2 } else { 1 });
-    header.push(if big_endian { 2 } else { 1 });
-    header.push(1); // EV_CURRENT
-    header.resize(16, 0);
-    put(&mut header, 2, 2); // ET_EXEC
-    put(&mut header, u64::from(machine), 2);
-    put(&mut header, 1, 4);
-    put(&mut header, entry, word);
-    put(&mut header, 0, word); // e_phoff
-    put(&mut header, shoff, word);
-    put(&mut header, u64::from(flags), 4);
-    put(&mut header, ehdr as u64, 2);
-    put(&mut header, 0, 2); // e_phentsize
-    put(&mut header, 0, 2); // e_phnum
-    put(&mut header, shdr as u64, 2);
-    put(&mut header, headers.len() as u64 + 1, 2);
-    put(&mut header, shstrtab_index, 2);
-    out[..ehdr].copy_from_slice(&header);
+    // One local symbol in each table: the null entry.
+    writer.write_symtab_section_header(1);
+    writer.write_strtab_section_header();
+    writer.write_dynsym_section_header(0, 1);
+    writer.write_dynstr_section_header(0);
+    writer.write_shstrtab_section_header();
     out
 }
-
-/// `STT_OBJECT` and `STT_FUNC`, for an [`ImageSymbol`].
-pub const STT_OBJECT: u8 = 1;
-pub const STT_FUNC: u8 = 2;
 
 /// Where [`arm_thumb_image`] puts its code.
 pub const ARM_TEXT: u64 = 0x8000;
@@ -2352,8 +2304,8 @@ pub fn arm_thumb_image() -> Vec<u8> {
         ElfImage {
             is_64: false,
             big_endian: false,
-            machine: 40,        // EM_ARM
-            flags: 0x0500_0000, // EABI version 5
+            machine: object::elf::EM_ARM,
+            flags: object::elf::EF_ARM_EABI_VER5,
             entry: 0,
             sections: &[],
             symbols: &[],
@@ -2378,9 +2330,12 @@ pub fn mips_compressed_image(is_64: bool) -> Vec<u8> {
         ElfImage {
             is_64,
             big_endian: !is_64,
-            machine: 8, // EM_MIPS
-            // EF_MIPS_ARCH_32 or EF_MIPS_ARCH_64.
-            flags: if is_64 { 0x6000_0000 } else { 0x5000_0000 },
+            machine: object::elf::EM_MIPS,
+            flags: if is_64 {
+                object::elf::EF_MIPS_ARCH_64
+            } else {
+                object::elf::EF_MIPS_ARCH_32
+            },
             entry: 0,
             sections: &[],
             symbols: &[],
@@ -2417,21 +2372,21 @@ fn tagged_elf_image(names: [&str; 3], machine: ElfImage, text: u64) -> Vec<u8> {
                 name: tagged,
                 value: text + 1,
                 size: 4,
-                kind: STT_FUNC,
+                kind: object::elf::STT_FUNC,
                 section: 0,
             },
             ImageSymbol {
                 name: untagged,
                 value: text + 4,
                 size: 4,
-                kind: STT_FUNC,
+                kind: object::elf::STT_FUNC,
                 section: 0,
             },
             ImageSymbol {
                 name: "a_datum",
                 value: text + 0x1001,
                 size: 1,
-                kind: STT_OBJECT,
+                kind: object::elf::STT_OBJECT,
                 section: 1,
             },
         ],
@@ -2440,14 +2395,14 @@ fn tagged_elf_image(names: [&str; 3], machine: ElfImage, text: u64) -> Vec<u8> {
                 name: export,
                 value: text + 9,
                 size: 4,
-                kind: STT_FUNC,
+                kind: object::elf::STT_FUNC,
                 section: 0,
             },
             ImageSymbol {
                 name: "odd_datum",
                 value: text + 0xd,
                 size: 1,
-                kind: STT_OBJECT,
+                kind: object::elf::STT_OBJECT,
                 section: 0,
             },
         ],
@@ -2464,9 +2419,11 @@ pub const ARMNT_TEXT: u64 = ARMNT_BASE + 0x1000;
 /// and the entry point at `.text + 5`. `odd_datum` is exported at an odd address in
 /// `.rdata`. No symbol table, as such a DLL ships.
 pub fn armnt_dll() -> Vec<u8> {
+    use object::pe;
+    use object::write::pe::{NtHeaders, Writer};
+
     const TEXT_RVA: u32 = 0x1000;
     const RDATA_RVA: u32 = 0x2000;
-    const OPTIONAL: usize = 224;
     let put16 = |out: &mut [u8], at: usize, value: u16| {
         out[at..at + 2].copy_from_slice(&value.to_le_bytes());
     };
@@ -2474,15 +2431,21 @@ pub fn armnt_dll() -> Vec<u8> {
         out[at..at + 4].copy_from_slice(&value.to_le_bytes());
     };
 
+    // Thumb `nop`s, then `bx lr`.
+    let mut text = [0x00, 0xbf].repeat(8);
+    text.extend_from_slice(&[0x70, 0x47]);
+    text.resize(0x100, 0);
+
     // The export directory, its three arrays, then the names; each name's ordinal is its
-    // function's index, and the names are in sorted order as a linker writes them.
+    // function's index, and the names are in sorted order as a linker writes them. The
+    // writer has no export table, so this is laid out by hand.
     let mut rdata = vec![0u8; 0x100];
     let functions = 40;
     let names = functions + 8;
     let ordinals = names + 8;
     let strings = ordinals + 4;
-    let text = b"fixture.dll\0odd_datum\0thumb_fn\0";
-    rdata[strings..strings + text.len()].copy_from_slice(text);
+    let text_names = b"fixture.dll\0odd_datum\0thumb_fn\0";
+    rdata[strings..strings + text_names.len()].copy_from_slice(text_names);
     let string = |offset: usize| RDATA_RVA + (strings + offset) as u32;
     put32(&mut rdata, 12, string(0)); // Name
     put32(&mut rdata, 16, 1); // Base
@@ -2498,53 +2461,51 @@ pub fn armnt_dll() -> Vec<u8> {
     put16(&mut rdata, ordinals, 1);
     put16(&mut rdata, ordinals + 2, 0);
 
-    let mut out = vec![0u8; 0x600];
-    out[..2].copy_from_slice(b"MZ");
-    put32(&mut out, 0x3c, 0x40); // e_lfanew
-    out[0x40..0x44].copy_from_slice(b"PE\0\0");
-    // The COFF header: Machine, NumberOfSections, then SizeOfOptionalHeader and
-    // Characteristics (EXECUTABLE_IMAGE | 32BIT_MACHINE | DLL).
-    put16(&mut out, 0x44, 0x1c4);
-    put16(&mut out, 0x46, 2);
-    put16(&mut out, 0x54, OPTIONAL as u16);
-    put16(&mut out, 0x56, 0x2102);
-    // The PE32 optional header.
-    let opt = 0x58;
-    put16(&mut out, opt, 0x10b);
-    put32(&mut out, opt + 16, TEXT_RVA + 5); // AddressOfEntryPoint
-    put32(&mut out, opt + 20, TEXT_RVA); // BaseOfCode
-    put32(&mut out, opt + 24, RDATA_RVA); // BaseOfData
-    put32(&mut out, opt + 28, ARMNT_BASE as u32);
-    put32(&mut out, opt + 32, 0x1000); // SectionAlignment
-    put32(&mut out, opt + 36, 0x200); // FileAlignment
-    put32(&mut out, opt + 56, 0x3000); // SizeOfImage
-    put32(&mut out, opt + 60, 0x200); // SizeOfHeaders
-    put32(&mut out, opt + 92, 16); // NumberOfRvaAndSizes
-    put32(&mut out, opt + 96, RDATA_RVA); // the export directory
-    put32(&mut out, opt + 100, rdata.len() as u32);
-    // Two section headers: name, VirtualSize, VirtualAddress, SizeOfRawData,
-    // PointerToRawData, then Characteristics.
-    for (index, (name, rva, pointer, characteristics)) in [
-        (&b".text"[..], TEXT_RVA, 0x200, 0x6000_0020),
-        (&b".rdata"[..], RDATA_RVA, 0x400, 0x4000_0040),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let header = opt + OPTIONAL + 40 * index;
-        out[header..header + name.len()].copy_from_slice(name);
-        put32(&mut out, header + 8, 0x100);
-        put32(&mut out, header + 12, rva);
-        put32(&mut out, header + 16, 0x200);
-        put32(&mut out, header + 20, pointer);
-        put32(&mut out, header + 36, characteristics);
-    }
-    // Thumb `nop`s, then `bx lr`.
-    for at in (0x200..0x210).step_by(2) {
-        put16(&mut out, at, 0xbf00);
-    }
-    put16(&mut out, 0x210, 0x4770);
-    out[0x400..0x400 + rdata.len()].copy_from_slice(&rdata);
+    let mut out = Vec::new();
+    let mut writer = Writer::new(false, 0x1000, 0x200, &mut out);
+    writer.reserve_dos_header();
+    writer.reserve_nt_headers(16);
+    writer.set_data_directory(
+        pe::IMAGE_DIRECTORY_ENTRY_EXPORT,
+        RDATA_RVA,
+        rdata.len() as u32,
+    );
+    writer.reserve_section_headers(2);
+    let text_at = writer.reserve_text_section(text.len() as u32);
+    let rdata_at = writer.reserve_rdata_section(rdata.len() as u32);
+    // The export table above was written for these.
+    assert_eq!(text_at.virtual_address, TEXT_RVA);
+    assert_eq!(rdata_at.virtual_address, RDATA_RVA);
+
+    writer
+        .write_empty_dos_header()
+        .expect("writing the DOS header");
+    writer.write_nt_headers(NtHeaders {
+        machine: pe::IMAGE_FILE_MACHINE_ARMNT,
+        time_date_stamp: 0,
+        characteristics: pe::IMAGE_FILE_EXECUTABLE_IMAGE
+            | pe::IMAGE_FILE_32BIT_MACHINE
+            | pe::IMAGE_FILE_DLL,
+        major_linker_version: 0,
+        minor_linker_version: 0,
+        address_of_entry_point: TEXT_RVA + 5,
+        image_base: ARMNT_BASE,
+        major_operating_system_version: 0,
+        minor_operating_system_version: 0,
+        major_image_version: 0,
+        minor_image_version: 0,
+        major_subsystem_version: 0,
+        minor_subsystem_version: 0,
+        subsystem: pe::IMAGE_SUBSYSTEM_UNKNOWN,
+        dll_characteristics: pe::DllFlags(0),
+        size_of_stack_reserve: 0,
+        size_of_stack_commit: 0,
+        size_of_heap_reserve: 0,
+        size_of_heap_commit: 0,
+    });
+    writer.write_section_headers();
+    writer.write_section(text_at.file_offset, &text);
+    writer.write_section(rdata_at.file_offset, &rdata);
     out
 }
 
@@ -2709,14 +2670,14 @@ pub fn ppc64_elfv1_image() -> Vec<u8> {
         name: "bar",
         value: PPC64_OPD + 0x18,
         size: 24,
-        kind: STT_FUNC,
+        kind: object::elf::STT_FUNC,
         section: 1,
     };
     elf_image(ElfImage {
         is_64: true,
         big_endian: true,
-        machine: 21, // EM_PPC64
-        flags: 1,    // ELFv1
+        machine: object::elf::EM_PPC64,
+        flags: object::elf::FileFlags(1), // ELFv1
         entry: PPC64_OPD + 0x30,
         sections: &[
             ImageSection {
@@ -2738,14 +2699,14 @@ pub fn ppc64_elfv1_image() -> Vec<u8> {
                 name: "foo",
                 value: PPC64_OPD,
                 size: 24,
-                kind: STT_FUNC,
+                kind: object::elf::STT_FUNC,
                 section: 1,
             },
             ImageSymbol {
                 name: ".foo",
                 value: PPC64_TEXT,
                 size: 8,
-                kind: STT_FUNC,
+                kind: object::elf::STT_FUNC,
                 section: 0,
             },
             ImageSymbol { ..bar },
@@ -2753,7 +2714,7 @@ pub fn ppc64_elfv1_image() -> Vec<u8> {
                 name: "broken",
                 value: PPC64_OPD + 0x48,
                 size: 24,
-                kind: STT_FUNC,
+                kind: object::elf::STT_FUNC,
                 section: 1,
             },
         ],
@@ -2807,7 +2768,8 @@ pub const XCOFF_DATA: u64 = 0x2000_0000;
 
 /// An XCOFF executable, 32- or 64-bit, with no symbol table: `.text`, and `.data` holding
 /// one function descriptor whose first word is `.text + 8`. `entry` is the auxiliary
-/// header's `o_entry`, which a linker points at that descriptor.
+/// header's `o_entry`, which a linker points at that descriptor. Written byte by byte:
+/// `object` writes no XCOFF image (`notes/upstream/object.md`).
 pub fn xcoff_image(is_64: bool, entry: u64) -> Vec<u8> {
     let word = if is_64 { 8 } else { 4 };
     let put = |out: &mut Vec<u8>, value: u64, width: usize| {
