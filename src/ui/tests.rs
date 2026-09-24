@@ -8596,6 +8596,51 @@ fn a_location_chosen_from_a_source_driven_tab_changes_its_assembly_side() {
     assert!(states.open.active() == Some(Document::Symbol(wanted)));
 }
 
+/// Ctrl on a location row chosen for the temporal tab promotes it, as Ctrl on any door
+/// into a tab already showing the place does; a plain press leaves it temporal.
+#[test]
+fn ctrl_on_a_location_chosen_for_the_temporal_tab_promotes_it() {
+    let symbols = fixture_symbols();
+    let wanted = symbols
+        .iter()
+        .find(|symbol| symbol.data.name == "sum_to")
+        .expect("the fixture holds sum_to")
+        .clone();
+    let at = a_line_of(&wanted);
+    let tab = Document::Source(at.file.clone());
+
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let states = roots.states;
+    let (mut located, mut ctrl) = (roots.located, roots.keys.ctrl);
+    let id = open_document(states.open, states.visits, tab.clone(), Reach::Preview)
+        .expect("the file opens");
+    located.write().asked = Some(Query::line(at.clone()));
+    located.write().subject = Some(Subject {
+        tab: id,
+        file: at.file.clone(),
+    });
+    located.write().found = Some(Found::new(Query::line(at.clone()), vec![wanted.clone()]));
+    settle(&mut test);
+    let temporal = || states.open.docs.peek().temporal();
+    let row = centre_of(&test, "sum_to");
+
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert_eq!(temporal(), Some(id), "a plain press promoted the tab");
+
+    ctrl.set(true);
+    settle(&mut test);
+    press_at(&mut test, row);
+    settle(&mut test);
+    assert!(states.open.active() == Some(tab), "the press left the tab");
+    assert_eq!(temporal(), None, "Ctrl on the row left the tab temporal");
+}
+
 /// **A location row's press and Enter on it are one door.** The row and the panel's keys
 /// are handed the same two facts -- the line the question was asked from, and the tab it
 /// was asked in -- so a symbol chosen with the keyboard is chosen for the place a click on

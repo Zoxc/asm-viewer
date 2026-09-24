@@ -782,7 +782,7 @@ pub(crate) fn press_location(
                 driven.remember(entry.clone(), at.line);
                 driven.choose(entry, symbol);
             }
-            land_on(doors, id, at);
+            land_on(doors, id, at, Reach::outside(ctrl));
         }
         Chosen::Landing(at) => {
             land(

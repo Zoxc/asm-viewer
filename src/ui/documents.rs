@@ -567,14 +567,18 @@ fn moved_to(open: Open, id: DocId, stop: &Stop) -> bool {
 /// Raise the open tab `id` on `at`: what a Locations row does for the source-driven tab
 /// its question was asked from, whose assembly side it has just chosen for. The tab is
 /// already open and shows the file, so this is a [`raise`] and not an opening -- nothing
-/// is recorded -- with the line picked out the way [`land`] picks it.
-pub(crate) fn land_on(doors: Doors, id: DocId, at: LinePos) {
+/// is recorded -- with the line picked out the way [`land`] picks it. Ctrl (`NewTab`)
+/// promotes the tab, as it does a tab any other door raises.
+pub(crate) fn land_on(doors: Doors, id: DocId, at: LinePos, reach: Reach) {
     let Doors {
         open,
         marked,
         land: mut landing,
         ..
     } = doors;
+    if reach == Reach::NewTab {
+        write_if(open.docs, |docs| docs.promote(id));
+    }
     if open.now().is_some_and(|(active, _)| active == id) {
         mark_line(marked, at.file, at.line, None, Owed::BOTH);
         return;
