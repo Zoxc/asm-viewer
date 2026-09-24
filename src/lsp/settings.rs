@@ -143,7 +143,7 @@ impl fmt::Display for Unreadable {
 /// `dev/viewer/dev/viewer` that is not there.
 pub fn settings_in(directory: &Path) -> Result<Settings, Unreadable> {
     let file = directory.join(SETTINGS);
-    match std::fs::read_to_string(&file) {
+    match crate::source::read_text_in(&file) {
         Ok(text) => settings_from(&text, &super::rooted(directory)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Settings::none()),
         Err(error) => Err(Unreadable::Unread(error.to_string())),

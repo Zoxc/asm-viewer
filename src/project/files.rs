@@ -9,7 +9,7 @@
 use std::{
     borrow::Cow,
     collections::BTreeMap,
-    fmt, fs,
+    fmt,
     path::{Path, PathBuf},
 };
 
@@ -207,7 +207,10 @@ impl Project {
     /// what the reader is told about a project that will not open is the point of this
     /// answering a reason at all.
     pub(super) fn load_from(path: &Path) -> Result<Project, Reason> {
-        let data = fs::read(path).map_err(Reason::reading)?;
+        // Bounded, and never a wait on a fifo: this runs on the UI thread for every recent
+        // project, and a project file may be a stranger's.
+        let data = analysis::read_regular(path, analysis::Links::Follow, crate::source::MAX_SIZE)
+            .map_err(Reason::reading)?;
         let text = std::str::from_utf8(&data).map_err(|_| Reason::NotText)?;
         let mut project: Project =
             toml::from_str(text).map_err(|error| Reason::of(&error, text))?;

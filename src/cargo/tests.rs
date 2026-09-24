@@ -628,3 +628,18 @@ fn a_refusal_is_cargos_own_words_only_where_the_compiler_said_none() {
         None
     );
 }
+
+/// A manifest is the project tree's, which may be a stranger's: one that is a fifo reads
+/// as none at once, rather than stopping the build's worker until a writer comes.
+#[cfg(unix)]
+#[test]
+fn a_manifest_that_is_a_fifo_is_not_waited_on() {
+    let directory = Temporary::fresh_directory("cargo-fifo");
+    crate::temporary::make_fifo(&directory.join("Cargo.toml"));
+
+    let at = directory.to_path_buf();
+    let found = crate::temporary::promptly(move || profile_manifest(&at));
+    assert_eq!(found, directory.join("Cargo.toml"));
+    let lines = crate::temporary::promptly(move || debug_lines(&found, Profile::Release));
+    assert!(!lines);
+}

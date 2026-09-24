@@ -190,6 +190,7 @@ dependencies = [
  "addr2line",
  "gimli",
  "iced-x86",
+ "libc",
  "md-5",
  "object",
  "pdb2",

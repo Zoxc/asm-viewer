@@ -52,7 +52,7 @@
 use super::intervals::Intervals;
 use super::{recovered, Declared, LineBackend, LineInfo, RowCollector, SourceHash};
 use crate::parse::Name;
-use crate::{Bias, PlacedAddress, SectionAddress};
+use crate::{open_regular, Bias, Links, PlacedAddress, Regular, SectionAddress};
 use object::Object as _;
 use pdb2::{
     AddressMap, DebugInformation, FallibleIterator, PdbInternalRva, PdbInternalSectionOffset,
@@ -591,22 +591,11 @@ struct BoundedFile {
 
 impl BoundedFile {
     fn open(path: &Path) -> Option<BoundedFile> {
-        // Stat before opening, as `source.rs` does: a candidate can name a fifo, which
-        // `File::open` blocks on until a writer appears, and the thread that would block is
-        // the one parsing the object. Asked again of the open file, since a path can name
-        // something else by the time it is opened, and for the length.
-        if !std::fs::metadata(path).ok()?.is_file() {
-            return None;
-        }
-        let file = File::open(path).ok()?;
-        let metadata = file.metadata().ok()?;
-        if !metadata.is_file() {
-            return None;
-        }
-        Some(BoundedFile {
-            file,
-            len: metadata.len(),
-        })
+        // A candidate can name a fifo, and the thread a blocking open would stop is the one
+        // parsing the object. `open_regular` does not wait on one, and asks the file it
+        // opened rather than the path.
+        let Regular { file, len } = open_regular(path, Links::Follow).ok()?;
+        Some(BoundedFile { file, len })
     }
 }
 

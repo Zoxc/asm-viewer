@@ -389,3 +389,17 @@ fn the_file_named_to_the_reader_is_the_file_that_is_read() {
         Path::new("/p/.vscode/settings.json")
     );
 }
+
+/// The settings file is the project tree's, which may be a stranger's: one that is a fifo
+/// is unreadable at once, rather than stopping the server's worker until a writer comes.
+#[cfg(unix)]
+#[test]
+fn a_settings_file_that_is_a_fifo_is_unreadable_at_once() {
+    let project = Temporary::fresh_directory("settings-fifo");
+    std::fs::create_dir_all(project.join(".vscode")).expect("a directory");
+    crate::temporary::make_fifo(&project.join(SETTINGS));
+
+    let directory = project.to_path_buf();
+    let read = crate::temporary::promptly(move || settings_in(&directory));
+    assert!(matches!(read, Err(Unreadable::Unread(_))), "{read:?}");
+}

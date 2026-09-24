@@ -185,3 +185,34 @@ fn a_path_with_no_file_name_still_finishes() {
         [Event::Finished(Path::new("..").to_path_buf())]
     );
 }
+
+/// A path a project file lists can name a fifo, and a plain open of one waits for a writer
+/// that may never come. It is refused at once, as an unreadable path is, and the walk goes
+/// on to the next. The walk runs on a thread of its own so a regression fails here rather
+/// than hanging the suite.
+#[cfg(unix)]
+#[test]
+fn a_fifo_is_finished_without_waiting_for_a_writer() {
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("fifo");
+    let fifo = scratch.0.join("binary.o");
+    let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).expect("no NUL in the path");
+    // SAFETY: `name` is a valid NUL-terminated string that outlives the call.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let after = scratch.write("after.o", &caller_and_target());
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let paths = vec![fifo.clone(), after.clone()];
+    std::thread::spawn(move || sender.send(events(paths)));
+    let seen = receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the walk waited on the fifo");
+    assert_eq!(
+        seen,
+        [
+            Event::Finished(fifo),
+            Event::Parsed("after.o".into()),
+            Event::Finished(after),
+        ]
+    );
+}

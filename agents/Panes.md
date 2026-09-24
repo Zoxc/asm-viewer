@@ -447,8 +447,9 @@ read racing a forget to be caught under two locks.
 **The read is held to `MAX_SIZE` itself, not only the stat in front of it.** `showable`'s `lstat`
 is a gate, and what it saw is not what the read gets: a `/proc` file states 0 bytes and
 `/proc/self/pagemap` then reads as hundreds of gigabytes, a file can grow in between, and the
-path can become a symlink to a fifo. So `source::within` opens with `O_NOFOLLOW | O_NONBLOCK`,
-asks the handle it opened, and reads one byte past the bound at most.
+path can become a symlink to a fifo. So `source::within` opens through `analysis::open_regular`
+with `O_NOFOLLOW | O_NONBLOCK`, asks the handle it opened, and reads one byte past the bound at
+most.
 
 **The two panes point at each other through their selected runs**, and through nothing the pointer
 does. In the Scratchpad they point one way only: the editor's cursor line is written as the source

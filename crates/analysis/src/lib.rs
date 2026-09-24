@@ -9,6 +9,7 @@ mod made_up;
 mod model;
 mod open;
 mod parse;
+mod regular;
 mod sections;
 mod unwind;
 
@@ -24,6 +25,7 @@ pub use model::{
 };
 pub use open::{open_data_streaming, open_files, open_files_streaming, Progress};
 pub use parse::parse_object;
+pub use regular::{open_regular, read_regular, Links, Regular};
 // Re-exported so the viewer needs no `object` dependency of its own.
 pub use object::{Architecture, BinaryFormat, Endianness, SectionIndex, SymbolIndex};
 

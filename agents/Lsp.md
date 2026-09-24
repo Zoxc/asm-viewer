@@ -468,7 +468,10 @@ reads a file.
 
 Some trees cannot be read by a server that was told nothing, and what would fix that is
 already in them: `.vscode/settings.json`, VS Code's own file. So it is read and passed
-through, and **no such file is the ordinary case** rather than anything worth a word.
+through, and **no such file is the ordinary case** rather than anything worth a word. The tree
+may be a stranger's, so it is read by `source::read_text_in`, which refuses a fifo or a device
+rather than waiting on it or reading it for ever; the manifests `profile_manifest` walks are read
+the same way.
 
 What is taken is the keys beginning `rust-analyzer.`, with the prefix off and the rest of
 the name split on its dots into a tree. Both halves matter and **both are silent when they

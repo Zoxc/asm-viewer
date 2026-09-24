@@ -7,7 +7,12 @@ knows freya.
 **Parse pipeline** (`open_files_streaming` -> `parse_object`): each selected file is first tried as
 an `ArchiveFile`, with every member parsed as a separate `Object`, and then the file itself is
 *also* parsed as a plain object. So a non-archive contributes one `Object` and an archive one per
-member. Failures are swallowed (`.ok()`), so a file that will not parse just never appears. Reading
+member. Failures are swallowed (`.ok()`), so a file that will not parse just never appears. Every path is
+read through `open_regular` (`src/regular.rs`), since a project file, which a stranger may write,
+lists them: the open does not wait on a fifo, anything the handle it opened says is not a regular
+file (a fifo, `/dev/zero`) is refused, and so is a file that reads more than it stated. A symlink is
+followed, since a binary the reader chose may be one. There is no cap beyond the stated length: a
+linked debug binary is hundreds of megabytes. Reading
 and parsing run on a `std::thread` and come back over an `async_channel`, so a large binary does not
 freeze the UI.
 
@@ -525,8 +530,8 @@ path is never tried** (`\\host\share\x.pdb`, `\\?\C:\x.pdb`, anything beginning 
 judged as a string since a Windows linker wrote it whatever this is running on): the recorded path
 is bytes the binary chose, read at parse for every PE the reader opens, and opening a UNC path logs
 the machine in to `host` over SMB with the reader's credentials before a byte comes back. Every
-candidate is stat'd before it is opened, as `source.rs` does, so one naming a fifo does not block
-the parse thread until a writer appears. **Matching it**: GUID *and* age both, the GUID naming the
+candidate is opened by `open_regular`, as a binary and a source file are, so one naming a fifo does
+not block the parse thread until a writer appears. **Matching it**: GUID *and* age both, the GUID naming the
 build and the age the relink. An incremental relink keeps the GUID and bumps the age, and its `.pdb`
 then describes code the image no longer has, which is worse than none.
 The age compared is the DBI's, which the linker wrote; the info stream's own age is bumped by tools

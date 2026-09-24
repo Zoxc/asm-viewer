@@ -1,10 +1,9 @@
 //! The crate's entry point: each file read, tried as an archive and as an object, and every
 //! object in it handed over as it is parsed.
 
-use crate::{parse_object, Object, ObjectData};
+use crate::{open_regular, parse_object, Links, Object, ObjectData, Regular};
 use object::read::archive::ArchiveFile;
 use std::{
-    fs,
     ops::ControlFlow,
     path::{Path, PathBuf},
     sync::Arc,
@@ -37,7 +36,9 @@ pub fn open_files_streaming(
     mut emit: impl FnMut(Progress) -> ControlFlow<()>,
 ) {
     for path in paths {
-        let Ok(bytes) = fs::read(&path) else {
+        // The path may be one a project file lists, so it is read as any path a file chose
+        // is: a fifo or a device is refused, and so is a file that reads more than it states.
+        let Ok(bytes) = open_regular(&path, Links::Follow).and_then(Regular::read_stated) else {
             // Unreadable is still an end: whoever asked for this file is drawing it as
             // pending until told otherwise.
             if emit(Progress::Finished(path)).is_break() {

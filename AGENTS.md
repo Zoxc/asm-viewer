@@ -126,6 +126,9 @@ command.
   for the DWARF loader and the unwind reader.
 - `crates/analysis/src/open.rs` — the entry point: each file tried as an archive and as an
   object, and every object handed over as it is parsed.
+- `crates/analysis/src/regular.rs` — a path someone else chose, opened without trusting it:
+  a regular file or nothing, never a wait on a fifo, read with a bound. Every binary, `.pdb`
+  and source file is read through it, and every text file a project's tree holds.
 - `crates/analysis/src/demangle.rs` — an object's symbol names demangled in one batch, on a
   pool of threads with stacks big enough for the deepest name a file can ask for.
 - `crates/analysis/src/made_up.rs` — the names given to code the file names nothing (an entry
@@ -199,12 +202,14 @@ command.
 - `src/source.rs` — source files read off disk, uncached (the parse over one is what is
   cached, `src/ui/highlight.rs`); the one name a path is called by; and whether a path can
   be shown at all, which is the reader's own first step and the gate the UI puts in front
-  of it. `Seeded`, the test-only way to hand the read a file with nothing on the disk
+  of it. Also `read_text_in`, how the other text files a project's tree holds are read.
+  `Seeded`, the test-only way to hand the read a file with nothing on the disk
   behind it, is in `src/source/tests.rs` and re-exported here.
 - `src/scratchpad.rs` — a scratchpad: its id, its name, the cargo package generated around one
   source file, its build, and the pads there are in the order they were last opened.
 - `src/temporary.rs` — test-only: a path under the system temporary directory that a test
-  owns, removed when the test ends.
+  owns, removed when the test ends; and a fifo made there, with the timeout that fails a
+  read that waits on one.
 - `src/shared.rs` — a list built once and passed on by its pointer, equal only to the same
   build: what every list of rows the UI draws is; and the same identity for one `Arc`,
   whether or not a field has it.

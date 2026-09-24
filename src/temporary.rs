@@ -101,5 +101,30 @@ impl Drop for Temporary {
     }
 }
 
+/// A fifo made at `path`, for a test that a read does not wait on one. Removed with the
+/// [`Temporary`] it is made under.
+#[cfg(unix)]
+pub fn make_fifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("no NUL in the path");
+    // SAFETY: `name` is a NUL-terminated string that outlives the call.
+    assert_eq!(
+        unsafe { libc::mkfifo(name.as_ptr(), 0o600) },
+        0,
+        "making a fifo"
+    );
+}
+
+/// What `work` answers, run on a thread of its own and failing the test if that takes more
+/// than ten seconds: a read that waits on a fifo then fails the test rather than hanging
+/// the suite.
+pub fn promptly<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sender.send(work()));
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("it waited")
+}
+
 #[cfg(test)]
 mod tests;

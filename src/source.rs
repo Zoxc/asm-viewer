@@ -7,7 +7,7 @@
 use analysis::{SourceDigests, SourceHash};
 use std::{
     borrow::Cow,
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -17,6 +17,9 @@ use crate::counter;
 /// The largest file this will read into memory. A bound on what a bad path can cost, not a
 /// guess at what source looks like: a debug-info string that happens to name a disk image
 /// must not be loaded to find that out.
+///
+/// Also the cap on the other text files a project's tree holds and the app reads: the
+/// project file, a manifest and `.vscode/settings.json` ([`read_text_in`]).
 pub const MAX_SIZE: u64 = 16 * 1024 * 1024;
 
 /// What a path is called without its directory, and the whole path where it has no name --
@@ -86,6 +89,16 @@ pub fn read_text(path: &Path) -> Option<String> {
     contents(path).map(|(_, text)| text)
 }
 
+/// The text of a file in a project's tree that is not source: a manifest, a server's
+/// settings. The project file is read the same way, as bytes. Such a tree may be a stranger's, so a symlink is followed, as an
+/// editor would, but the read is [`analysis::read_regular`]'s: a fifo or a device is
+/// refused rather than waited on or read for ever, and so is a file past [`MAX_SIZE`]. Not
+/// UTF-8 is [`io::ErrorKind::InvalidData`], as `fs::read_to_string` says it.
+pub fn read_text_in(path: &Path) -> io::Result<String> {
+    let bytes = analysis::read_regular(path, analysis::Links::Follow, MAX_SIZE)?;
+    String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
 /// Whether [`load`] would read `path`: a regular file within [`MAX_SIZE`], and not a
 /// symlink to one. Asked of the metadata and never of the bytes.
 ///
@@ -133,31 +146,11 @@ fn contents(path: &Path) -> Option<(Vec<u8>, String)> {
 ///
 /// **The gate's answer is not trusted for the read.** What `lstat` saw and what the open
 /// finds can differ: the path may have been swapped for a symlink to a fifo in between, and
-/// a file may have grown. And a size is not what a read returns: a `/proc` file states 0
-/// and `/proc/self/pagemap` then reads as hundreds of gigabytes. So the open follows no
-/// link and does not wait on a fifo, the handle it opened is asked again, and the read
+/// a file may have grown. So the open follows no link, and the read is
+/// [`analysis::open_regular`]'s: it does not wait on a fifo, asks the handle it opened, and
 /// stops one byte past the bound.
 fn within(path: &Path, limit: u64) -> Option<Vec<u8>> {
-    use std::io::Read;
-
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path).ok()?;
-    let metadata = file.metadata().ok()?;
-    if !metadata.is_file() || metadata.len() > limit {
-        return None;
-    }
-
-    let mut bytes = Vec::new();
-    file.take(limit.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .ok()?;
-    (bytes.len() as u64 <= limit).then_some(bytes)
+    analysis::read_regular(path, analysis::Links::Refuse, limit).ok()
 }
 
 counter!(

@@ -484,7 +484,7 @@ fn strips(on: Option<bool>, name: Option<&str>) -> bool {
 /// out again becomes `"none"`: stripping symbols takes the debug information with them, so
 /// there is no keeping the one without the other.
 pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> {
-    let text = fs::read_to_string(profiles).map_err(|error| error.to_string())?;
+    let text = crate::source::read_text_in(profiles).map_err(|error| error.to_string())?;
     let mut document = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| error.to_string())?;
@@ -524,7 +524,7 @@ pub fn add_debug_lines(profiles: &Path, profile: Profile) -> Result<(), String> 
 fn read_manifest(path: &Path) -> Option<toml::Table> {
     // A `Table` and not a `Value`: `Value`'s own `FromStr` parses one TOML *value*, where
     // a manifest is a whole document.
-    let text = fs::read_to_string(path).ok()?;
+    let text = crate::source::read_text_in(path).ok()?;
     toml::from_str::<toml::Table>(&text).ok()
 }
 

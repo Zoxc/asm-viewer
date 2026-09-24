@@ -49,7 +49,10 @@ away; so `Project::load_from`, the plain read `recent_projects` has always drawn
 is what `load_project` opens one with too. A project file that will not parse therefore does not
 open at all -- and since nothing opens, nothing writes over what could not be read, which is the
 whole of what the rescue was protecting. The session beside it *is* the app's own and still goes
-through `Store::read`.
+through `Store::read`. The project file is read by `source::read_text_in`'s rule: a symlink is
+followed, but a fifo or a device is refused and the read stops past `source::MAX_SIZE`. The recent
+list reads every project file on the UI thread, and a stranger's tree could otherwise name a fifo
+there and stop the app for good.
 
 **So what is left is saying why.** `load_project` answers a `Failure` -- the path that was asked
 for, and a `Reason` -- rather than a bare `None`: telling the reader is the whole of what happens

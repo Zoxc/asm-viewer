@@ -4,7 +4,7 @@
 //! `pub(in crate::project)` ones below. They are values of the schema in `files.rs`, so
 //! they are made here and `restore`, `recents`, `saves` and the lifecycle build on them.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs};
 
 use super::*;
 use crate::store::{temporaries, write_atomically};
@@ -627,4 +627,17 @@ fn nothing_chosen_and_nothing_built_write_no_section() {
     };
     assert!(!round_trip(&project).contains("[cargo]"));
     assert!(!round_trip(&Session::default()).contains("[cargo]"));
+}
+
+/// The recent list reads every project file on the UI thread, and a project file may be a
+/// stranger's: one that is a fifo is unreadable at once rather than waited on.
+#[cfg(unix)]
+#[test]
+fn a_project_file_that_is_a_fifo_is_unreadable_at_once() {
+    let directory = Temporary::fresh_directory("project-fifo");
+    let path = directory.join("one.avproj");
+    crate::temporary::make_fifo(&path);
+
+    let read = crate::temporary::promptly(move || Project::load_from(&path));
+    assert!(matches!(read, Err(Reason::Unreadable(_))), "{read:?}");
 }
