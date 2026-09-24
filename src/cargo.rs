@@ -107,15 +107,22 @@ impl Run {
     }
 
     /// cargo's own words, for the failures said there and nowhere else: a manifest error
-    /// and a dependency that does not resolve both arrive with no compiler diagnostic
-    /// behind them. Once the compiler has spoken, that same stderr says nothing the
-    /// diagnostics do not.
+    /// and a dependency that does not resolve arrive with no compiler error behind them,
+    /// and so does a build script that failed after rustc warned about it. Once the
+    /// compiler has reported an error, that same stderr says nothing the diagnostics do
+    /// not. Warnings alone are never why a build stopped.
     pub fn refusal(&self) -> Option<&str> {
         match self {
             Run::Rejected {
                 diagnostics,
                 message,
-            } if diagnostics.is_empty() && !message.is_empty() => Some(message),
+            } if !message.is_empty()
+                && !diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.level == Level::Error) =>
+            {
+                Some(message)
+            }
             // A cargo that would not start is `verdict`'s to say, and says nothing about a
             // manifest or a dependency row. Answering it here draws it twice, one line
             // under the other.

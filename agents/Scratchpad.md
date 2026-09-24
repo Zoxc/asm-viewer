@@ -504,12 +504,14 @@ deliberate press away. Such a pad does not move to the front of the order either
 come back to one that will not open.
 
 **A failed build points back at a row structurally, never by looking for a crate name in a
-sentence.** A rejected build with no compiler diagnostics at all is cargo refusing before it
-compiled anything, and `[dependencies]` is the only part of the generated package this pane can get
-wrong. So cargo's own stderr, where `no matching package named ... found` is said and nowhere else,
-is drawn under the rows. Once the compiler has spoken, the same stderr says only what the
-diagnostics list already does and is dropped. A cargo that would not start is dropped too. It is
-the verdict's own line and about no row at all, so drawing it here would only say it twice.
+sentence.** A rejected build with no compiler error is cargo refusing for a reason of its own, and
+`[dependencies]` is the only part of the generated package this pane can get wrong. So cargo's own
+stderr, where `no matching package named ... found` is said and nowhere else, is drawn under the
+rows. Warnings do not count as the compiler having spoken: a failed build script or an exe that
+could not be replaced stops the build after them, and says why only on stderr. Once the compiler
+has reported an error, the same stderr says only what the diagnostics list already does and is
+dropped. A cargo that would not start is dropped too. It is the verdict's own line and about no
+row at all, so drawing it here would only say it twice.
 
 **A diagnostic's span is a target, and the target is the cursor.** rustc says where an error is
 (`src/main.rs:9:17`, under the message) and the editor has a cursor that can be put there, so the

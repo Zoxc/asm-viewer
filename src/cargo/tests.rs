@@ -614,11 +614,11 @@ fn a_verdict_counts_the_level_its_own_answer_is_about() {
     assert!(verdict.text.contains("not found"), "{}", verdict.text);
 }
 
-/// cargo's own stderr is worth drawing only where the compiler said nothing: a manifest
-/// error and a dependency that does not resolve are said there and nowhere else, and once
-/// there are diagnostics that same text says nothing they do not.
+/// cargo's own stderr is worth drawing only where the compiler reported no error: a manifest
+/// error, a dependency that does not resolve and a failed build script are said there and
+/// nowhere else, and once there is an error that same text says nothing it does not.
 #[test]
-fn a_refusal_is_cargos_own_words_only_where_the_compiler_said_none() {
+fn a_refusal_is_cargos_own_words_only_where_the_compiler_reported_no_error() {
     let rejected = |diagnostics, message: &str| Run::Rejected {
         diagnostics,
         message: message.to_owned(),
@@ -633,6 +633,16 @@ fn a_refusal_is_cargos_own_words_only_where_the_compiler_said_none() {
         None
     );
     assert_eq!(rejected(Vec::new(), "").refusal(), None);
+
+    // A build script that panics after rustc warned about it: the warning is not the reason.
+    assert_eq!(
+        rejected(
+            vec![said(Level::Warning), said(Level::Note)],
+            "failed to run custom build command"
+        )
+        .refusal(),
+        Some("failed to run custom build command")
+    );
 
     // The verdict already names what stopped a cargo that would not start, so it is not
     // a refusal as well: a pane drawing both would say it twice, one line under the other.
