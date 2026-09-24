@@ -488,6 +488,16 @@ impl Component for SourceRow {
 
         let mark = code_mark(self.compiled);
 
+        // A press in a source-driven tab's own file also says which listing the other
+        // side shows.
+        let on_picked = common.drives.map(|tab| {
+            let (docs, driven) = (
+                common.asking.doors.open.docs,
+                common.asking.doors.places.driven,
+            );
+            Rc::new(move || drive(docs, driven, tab, &at)) as Rc<dyn Fn()>
+        });
+
         // The same gesture as the assembly pane's, from the same chrome. The run is a
         // run of this file.
         use_code_row(
@@ -498,20 +508,12 @@ impl Component for SourceRow {
                 paired: self.paired,
                 wash: self.wash,
                 measured: true,
+                on_picked,
             },
             vec![mark, number],
             Some(text),
             Some(menu),
         )
-        // A press in a source-driven tab's own file also says which listing the
-        // other side shows; the row is picked out by `pointer_down` either way.
-        .map(common.drives, |el, tab| {
-            let (docs, driven) = (
-                common.asking.doors.open.docs,
-                common.asking.doors.places.driven,
-            );
-            el.on_press(move |_| drive(docs, driven, tab, &at))
-        })
     }
 
     fn render_key(&self) -> DiffKey {

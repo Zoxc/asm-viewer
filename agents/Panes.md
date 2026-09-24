@@ -268,9 +268,11 @@ the tab's trail -- the tab already being where the reader is. A line is kept per
 reached twice along one trail is driven from two lines and two tabs on one file likewise. The
 place's own line is what a drive falls back to (`ask`), so a door that lands on a line drives the
 assembly side with nothing else said and a restored session does too; the click wins over it,
-being what the reader is reading now rather than where they came in. It is a `u32` and holds no
-`Arc<Object>`, so it survives its binary being closed and the next ask simply answers out of what is
-left. A right-click on a source row is neither a selection nor a drive: it opens `locate_menu`, the
+being what the reader is reading now rather than where they came in. The drive rides the down that
+picks the line out (`Chrome::on_picked`), so a press that follows a link, which picks nothing out,
+drives nothing either: the server may never answer, and the panes would be left on two lines. It is
+a `u32` and holds no `Arc<Object>`, so it survives its binary being closed and the next ask simply
+answers out of what is left. A right-click on a source row is neither a selection nor a drive: it opens `locate_menu`, the
 line's locations and, inside a function as the file's parse says, the function's instances, both
 answered in the Locations view (`agents/Worker.md`), whose rows are what choose. Over a name it
 opens `name_menu` above those, the three questions only a language server can answer

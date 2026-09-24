@@ -920,6 +920,7 @@ impl Component for SeparatorRow {
                 paired: None,
                 wash: self.wash,
                 measured: false,
+                on_picked: None,
             },
             std::iter::once(code_mark(false))
                 .chain(gutter_column(width, Some(self.arrows)))
@@ -1228,6 +1229,7 @@ impl Component for InstructionRow {
                 paired: self.paired,
                 wash: self.wash,
                 measured: true,
+                on_picked: None,
             },
             before,
             Some(instruction_text(

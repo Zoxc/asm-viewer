@@ -515,6 +515,10 @@ pub(crate) struct Chrome {
     /// not: its rule fills the row, so it would report the row plus its gutter and the
     /// widest would grow by a gutter's width every layout, without end.
     pub(crate) measured: bool,
+    /// What else a left press that picks the row out does: in a source-driven tab's own
+    /// file, say which listing the other side shows. Run on the down that marks the row,
+    /// so a press that follows a link does nothing more.
+    pub(crate) on_picked: Option<Rc<dyn Fn()>>,
 }
 
 /// The cells and states a row keeps for as long as it is mounted, and the two questions
@@ -1105,6 +1109,7 @@ fn on_down(
 ) -> impl FnMut(Event<PointerEventData>) + 'static {
     let (cells, links) = (cells.clone(), links.clone());
     let (pane, row, file) = (chrome.pane, chrome.row, chrome.file.clone());
+    let on_picked = chrome.on_picked.clone();
     move |e: Event<PointerEventData>| {
         if e.button() == Some(MouseButton::Left) {
             let at = cells.pressed_column(e.element_location());
@@ -1134,6 +1139,9 @@ fn on_down(
             }
             let press = at.map(|col| pressed(presses, col, |col| cells.word(col)));
             mark_press(marked, *shift.peek(), pane, file.clone(), row, press);
+            if let Some(picked) = &on_picked {
+                picked();
+            }
             return;
         }
         // The column before the event is turned into a press: what the menu is asked

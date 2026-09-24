@@ -12123,6 +12123,33 @@ fn a_press_on_a_call_with_no_server_picks_the_line_out() {
     );
 }
 
+/// A press that follows a link asks a question and picks no line out, so it does not say
+/// which listing the tab's assembly side shows either: the server may never answer, and
+/// the two panes would then be on two lines.
+#[test]
+fn a_press_on_a_link_does_not_drive_the_assembly_side() {
+    let (file, _directory) = calling_file("undriven");
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    let document = Document::Source(file.clone());
+    open_document(states.open, states.visits, document.clone(), Reach::NewTab);
+    settle(&mut test);
+    serving(&mut test, &roots);
+
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    assert!(
+        next_ask(&mut test, &asks).is_some(),
+        "the press asked the server"
+    );
+    let entry = entry_of(&states, &document);
+    assert_eq!(
+        states.places.driven.peek().line(&entry),
+        None,
+        "the link's line drove the assembly side"
+    );
+}
+
 /// Where the label reading `text` is, as a point to put the pointer on.
 fn centre_of(test: &TestingRunner, text: &str) -> (f64, f64) {
     let area = label_area(test, text).unwrap_or_else(|| panic!("{text:?} is drawn"));
@@ -27904,6 +27931,7 @@ impl Component for LentRow {
                 paired: None,
                 wash: Wash::None,
                 measured: true,
+                on_picked: None,
             },
             Vec::new(),
             Some(Text {
