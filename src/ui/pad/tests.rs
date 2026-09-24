@@ -267,3 +267,18 @@ fn an_open_that_works_clears_the_reason_the_last_one_failed() {
         "the panel still says the package could not be read"
     );
 }
+
+/// The line under the list says why the *last* New or Delete did not happen, so a New
+/// that works takes away the one an earlier New left.
+#[test]
+fn a_new_that_works_clears_the_last_refusal() {
+    let mut pads = Pads::default();
+    pads.created(Err(Failure::NoDirectory));
+    assert!(pads.refused.is_some());
+
+    pads.created(Ok(Scratchpad::new("pad-b").expect("a valid id")));
+    assert_eq!(
+        pads.refused, None,
+        "the panel still says the pad was not made"
+    );
+}

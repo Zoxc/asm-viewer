@@ -279,6 +279,7 @@ impl Pads {
     fn created(&mut self, made: Result<Scratchpad, Failure>) -> Option<PadJob> {
         match made {
             Ok(scratchpad) => {
+                self.refused = None;
                 let id = scratchpad.id().clone();
                 self.held(&id).scratchpad = scratchpad;
                 self.show(id)
