@@ -392,7 +392,8 @@ pub fn byte_of_utf16(line: &str, unit: usize) -> usize {
 ///
 /// rustc counts a column in *characters*, so a tab is one and an accented letter is one,
 /// and it separates lines by `\n` alone, having normalised `\r\n` before it numbered
-/// anything.
+/// anything. It drops a leading byte order mark first too, so line 1's columns start after
+/// one.
 ///
 /// Two clamps, and they are the same decision twice. `text` is the source **as it is
 /// now**, which is not necessarily the source the build was told about -- the reader has
@@ -406,8 +407,11 @@ pub fn offset_of(text: &str, line: usize, column: usize) -> usize {
     // A character at a time, since the column being counted from is a character count.
     let upto = |row: &str, take: usize| byte_of_char(row, take);
 
-    let mut offset = 0;
-    for (index, row) in text.split_inclusive('\n').enumerate() {
+    let mut offset = match text.starts_with('\u{feff}') {
+        true => '\u{feff}'.len_utf8(),
+        false => 0,
+    };
+    for (index, row) in text[offset..].split_inclusive('\n').enumerate() {
         if index == line {
             // The line break is no part of the line: a column past the end of the text on
             // it stops before the break rather than landing on the line below.

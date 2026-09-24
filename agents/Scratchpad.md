@@ -520,7 +520,8 @@ function of the source text and therefore unit-tested rather than eyeballed. rus
 a column **from one** and counts a column in **characters**; `chars::offset_of` answers a byte
 offset from the start of the text, which the rope turns into the **UTF-16 code units** the editor
 counts its cursor in; and lines are separated by `\n` and nothing else, which is
-rustc's own rule since it normalises `\r\n` before it numbers anything. It is applied to the buffer
+rustc's own rule since it normalises `\r\n` before it numbers anything. It drops a leading byte
+order mark then too, so line 1's columns are counted from after one. It is applied to the buffer
 **as it is now** and not to what was compiled, since the reader has usually typed since, so it
 clamps twice and for one reason: a column past the end of its line lands at the end of that line, a
 line past the end of the text at the end of the text, and nothing here can be out of range or fail.

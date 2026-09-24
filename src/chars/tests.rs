@@ -501,6 +501,18 @@ fn a_column_is_characters_and_an_offset_is_bytes() {
     assert_eq!(offset_of(source, 2, 1), 12);
 }
 
+/// rustc drops a byte order mark before it counts, so column 1 of line 1 is the character
+/// after it, and line 2 is where it always was.
+#[test]
+fn a_byte_order_mark_is_not_a_column() {
+    let source = "\u{feff}fn foo() { x }\nfn main() {}\n";
+
+    // rustc places the `x` at 1:12; the BOM is three bytes.
+    assert_eq!(offset_of(source, 1, 12), 3 + 11);
+    assert_eq!(offset_of(source, 1, 1), 3);
+    assert_eq!(offset_of(source, 2, 1), 3 + 15);
+}
+
 /// The source is edited under a diagnostic — the reader has usually typed since the build —
 /// so a span that no longer fits is clamped rather than dropped. Nowhere near a panic and
 /// never past the end of the text.
