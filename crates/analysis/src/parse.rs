@@ -769,22 +769,27 @@ fn read_sections(
             }
             let data = section_data(&section)?;
 
+            // Only a relocatable object's relocations are collected: there each one marks a
+            // field the linker has yet to fill. A linked ELF built with `--emit-relocs` keeps
+            // its `.rela.text`, but the fields already hold what the linker resolved.
+            //
             // Mach-O states a relocation's place as an offset from the start of its section,
             // and lays its sections out one after another, so that offset is not the address
             // for any section but the first. Every lookup here is by address, so the
             // conversion is done once, where the map is built. ELF and COFF need none: a
-            // relocatable object's sections are all at 0, and a linked ELF's `r_offset` is
-            // already an address. Only a code section's are collected, because the only
-            // reader is the disassembler's operand lookup; the DWARF backend takes a debug
-            // section's from the file.
+            // relocatable object's sections are all at 0. Only a code section's are
+            // collected, because the only reader is the disassembler's operand lookup; the
+            // DWARF backend takes a debug section's from the file.
             let base = match format {
                 BinaryFormat::MachO => section.address(),
                 _ => 0,
             };
             let mut relocations = BTreeMap::<_, Vec<_>>::new();
-            for (offset, relocation) in section.relocations() {
-                if let Some(address) = SectionAddress::new(base).checked_add(offset) {
-                    relocations.entry(address).or_default().push(relocation);
+            if file.kind() == ObjectKind::Relocatable {
+                for (offset, relocation) in section.relocations() {
+                    if let Some(address) = SectionAddress::new(base).checked_add(offset) {
+                        relocations.entry(address).or_default().push(relocation);
+                    }
                 }
             }
             let bias = bias_of(&biases, Some(index));

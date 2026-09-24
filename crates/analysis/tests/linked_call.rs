@@ -10,8 +10,8 @@ use common::{
     SharedObject, TextSymbol, TEXT_ADDRESS,
 };
 use object::{
-    write, Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind,
-    SymbolScope,
+    write, Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags,
+    RelocationKind, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
 };
 use std::sync::Arc;
 
@@ -273,4 +273,76 @@ fn an_unrelocated_call_never_reaches_across_sections() {
     // And the number is still where the call goes, in the section's own addresses:
     // nothing is judged about a target past the section's end.
     assert_eq!(goes_to(call), Some(at(6)));
+}
+
+#[test]
+fn a_linked_elf_that_kept_its_relocations_reads_its_displacements() {
+    // `ld --emit-relocs` keeps `.rela.text` in the image, but every field it covers already
+    // holds what the linker resolved. `f` = `call g; jmp +1; nop; ret`, both displacements
+    // resolved and each relocated against the section, which names no function.
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    let section = obj.section_id(write::StandardSection::Text);
+    #[rustfmt::skip]
+    let code = [
+        0xE8, 0x07, 0x00, 0x00, 0x00, // call g
+        0xE9, 0x01, 0x00, 0x00, 0x00, // jmp to the ret
+        0x90,
+        0xC3,
+        0xC3, // g
+    ];
+    obj.append_section_data(section, &code, 1);
+    for (name, value, size) in [("f", 0, 12), ("g", 12, 1)] {
+        obj.add_symbol(write::Symbol {
+            name: name.as_bytes().to_vec(),
+            value,
+            size,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(section),
+            flags: SymbolFlags::None,
+        });
+    }
+    let section_symbol = obj.section_symbol(section);
+    // `S + A - P` gives back the displacement already in the bytes.
+    for (offset, addend) in [(1, 8), (6, 7)] {
+        obj.add_relocation(
+            section,
+            write::Relocation {
+                offset,
+                symbol: section_symbol,
+                addend,
+                flags: RelocationFlags::Generic {
+                    kind: RelocationKind::Relative,
+                    encoding: RelocationEncoding::Generic,
+                    size: 32,
+                },
+            },
+        )
+        .expect("adding a relocation to .text");
+    }
+    let mut data = obj.write().expect("writing the fixture object");
+    // `write::Object` writes `ET_REL` and nothing else; this file is linked.
+    data[16..18].copy_from_slice(&object::elf::ET_EXEC.0.to_le_bytes());
+    let object = parse(&data);
+
+    let f = symbol(&object, "f");
+    let g = symbol(&object, "g");
+    let assembly = f.assembly(&object).expect("f disassembles");
+    let call = &assembly.instructions[0];
+    let resolved = call.symbol().expect("the call names g");
+    assert!(Arc::ptr_eq(resolved, &g));
+    assert_eq!(text(call).trim_end(), "call      g");
+
+    let jump = &assembly.instructions[1];
+    assert!(matches!(
+        jump.operand,
+        Some(Operand::Branch { address, .. }) if address == at(11)
+    ));
+    let edges: Vec<_> = assembly
+        .edges
+        .iter()
+        .map(|edge| (edge.from, edge.to))
+        .collect();
+    assert_eq!(edges, [(1, 3)]);
 }

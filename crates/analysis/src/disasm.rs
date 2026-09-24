@@ -84,6 +84,9 @@ impl<'a> Code<'a> {
     /// address, in the file's. An x86 instruction can hold two, one per field: `mov dword
     /// ptr [g], f` relocates both its displacement and its immediate.
     ///
+    /// Only a relocatable object has any: a linked image's fields already hold what its
+    /// relocations resolved to, so none are kept for it.
+    ///
     /// Both halves of each answer are different questions: one being there means the
     /// encoded field is a placeholder, while [`target`](Relocated::target) is [`None`]
     /// whenever the relocation points at something this object has no text symbol for (a

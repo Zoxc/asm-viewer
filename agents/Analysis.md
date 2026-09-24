@@ -789,7 +789,11 @@ the span an instruction's *own* displacement was printed into. The loop decides 
 spans belong to afterwards.
 
 **A linked image's calls resolve by address**, since the linker consumed the relocations that named
-their targets and left the displacement as the answer. Where no relocation covers an instruction and
+their targets and left the displacement as the answer. One linked with `--emit-relocs` (`vmlinux`,
+a binary prepared for BOLT) keeps its `.rela.text`, but every field it covers is already resolved,
+so `read_sections` keeps a code section's relocations only in a relocatable object, as the DWARF
+loader and the `.opd` reader do. Kept, each would make its operand a placeholder, and a call
+relocated against a section would lose its target, its link and its edge. Where no relocation covers an instruction and
 it is a direct near `call`, the backend asks `Code::symbol_at_local` for the text symbol that
 **starts exactly** at the address the encoding names, and hands it out as the same
 `Operand::Names` a relocated call gets: the resolver substitutes the name for the operand, `write_symbol` records the
