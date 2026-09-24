@@ -13328,11 +13328,17 @@ fn listing_harness() -> impl IntoElement {
         .as_ref()
         .map(|shown| asked_of(&shown.ask))
         .unwrap_or_else(|| Document::Source(Arc::from(Path::new(""))));
+    let marked = use_consume::<Marked>().0;
 
-    rect().expanded().child(AssemblyPane {
-        tab: pane_tab(&document),
-        document,
-    })
+    // A sweep ends as the button comes up, as the root ends one: a press in the pane left
+    // the controls gated for a sweep that never ended.
+    rect()
+        .expanded()
+        .on_capture_global_pointer_press(move |_| mark_release(marked))
+        .child(AssemblyPane {
+            tab: pane_tab(&document),
+            document,
+        })
 }
 
 /// The root's contexts with `shown` already analysed, which is what a listing's rows are
@@ -42120,6 +42126,60 @@ fn a_raise_redraws_only_the_headers_it_changed() {
         2,
         "a raise redrew headers it did not change"
     );
+}
+
+/// **A sweep held past a pane's edge arms no tooltip in the sidebar.** freya sends a held
+/// button's moves to whatever is under the pointer, and its tooltip arms on the hover
+/// alone, so a sweep dragged out over the panels showed the tooltip of every row it
+/// crossed. A row whose name is cut shows its tooltip at once, which is what is counted.
+///
+/// Fails on the panels answering the pointer during a sweep.
+#[test]
+fn a_sweep_held_over_the_sidebar_arms_no_tooltip() {
+    let symbols = fixture_symbols();
+    let (mut test, roots) = TestingRunner::new(
+        panel_headers_harness,
+        // Narrow enough that every name is cut.
+        (40., 300.).into(),
+        |runner: &mut _| {
+            runner.provide_root_context(|| {
+                let roots = test_roots();
+                let mut dock = roots.states.arranged.dock;
+                dock.set(DockArea::column(vec![vec![Panel::Symbols]]));
+                roots
+            })
+        },
+        1.,
+    );
+    let mut objects = roots.states.objects;
+    objects.set(vec![symbols[0].object.clone()]);
+    settle(&mut test);
+
+    let name = "sum_to".to_owned();
+    let hover = |test: &mut TestingRunner| {
+        let row = label_area(test, &name).expect("the row is drawn");
+        test.move_cursor(((row.min_x() + 5.) as f64, row.center().y as f64));
+        test.poll_n(Duration::from_millis(20), 12);
+        labels(test).iter().filter(|drawn| **drawn == name).count()
+    };
+    assert_eq!(hover(&mut test), 2, "the row and its tooltip");
+
+    test.move_cursor((1., 299.));
+    test.poll_n(Duration::from_millis(20), 4);
+    // A run being swept out in the Assembly pane, the button still down.
+    let mut marked = roots.doors.marked;
+    marked.set(Marks {
+        assembly: Some(Picked {
+            chars: CharSelection::between(Caret { row: 0, col: 0 }, Caret { row: 1, col: 0 }),
+            dragging: true,
+            by_rows: true,
+            file: None,
+            owed: Owed::default(),
+        }),
+        source: None,
+    });
+    settle(&mut test);
+    assert_eq!(hover(&mut test), 1, "a sweep armed the row's tooltip");
 }
 
 /// The state a [`use_asking`] harness is asked out of: a question, and a count of the

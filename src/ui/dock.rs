@@ -576,8 +576,28 @@ fn panel_bar(ctx: TabBarContext<PanelId>) -> Element {
 /// dragged everything out of.
 fn panel_content(ctx: ContentContext<Panel, PanelId>) -> Element {
     match ctx.tab_id {
-        Some(panel) => panel.body(),
+        Some(panel) => PanelBody { panel }.into_element(),
         None => placeholder("Drag a panel here"),
+    }
+}
+
+/// A panel, **not hit while a sweep is under way**: freya sends a held button's moves to
+/// whatever is under the pointer, so a sweep held past a pane's edge crosses the sidebar,
+/// lighting its rows and arming their tooltips (`notes/upstream/freya.md`). One gate over
+/// the panel rather than one per row, so a sweep starting and ending draws this box again
+/// and none of the rows, the panel under it comparing equal.
+#[derive(Clone, PartialEq)]
+struct PanelBody {
+    panel: Panel,
+}
+
+impl Component for PanelBody {
+    fn render(&self) -> impl IntoElement {
+        let sweeping = use_sweeping();
+        rect()
+            .expanded()
+            .interactive(!sweeping)
+            .child(self.panel.body())
     }
 }
 

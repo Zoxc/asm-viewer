@@ -783,21 +783,26 @@ impl Component for StepButton {
         let hovering = use_state(|| false);
         // Consumed in the render, as every context is: the press below runs no hook.
         let finds = use_consume::<Looking>().0;
+        // Not hit while a sweep is under way, as the pane's bar is not.
+        let sweeping = use_sweeping();
         let (at, direction) = (self.at, self.direction);
         let (glyph, says) = match self.direction {
             Direction::Back => ("\u{2039}", "Previous match"),
             Direction::Forward => ("\u{203a}", "Next match"),
         };
 
-        TooltipContainer::new(Tooltip::new(says)).child(
-            bar_button(hovering, true, Glow::No)
-                .on_press(move |e: Event<PressEventData>| {
-                    // As a toggle does: the box beside this gives up its keyboard focus
-                    // from the global press, which is cancellable and sorts last.
-                    e.prevent_default();
-                    edit_find(finds, at, move |bar| bar.step = Some(direction));
-                })
-                .child(label().text(glyph).max_lines(1)),
+        rect().interactive(!sweeping).child(
+            TooltipContainer::new(Tooltip::new(says)).child(
+                bar_button(hovering, true, Glow::No)
+                    .on_press(move |e: Event<PressEventData>| {
+                        // As a toggle does: the box beside this gives up its keyboard
+                        // focus from the global press, which is cancellable and sorts
+                        // last.
+                        e.prevent_default();
+                        edit_find(finds, at, move |bar| bar.step = Some(direction));
+                    })
+                    .child(label().text(glyph).max_lines(1)),
+            ),
         )
     }
 }

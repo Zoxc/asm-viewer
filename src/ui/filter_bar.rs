@@ -87,6 +87,9 @@ pub(crate) struct FilterToggle {
 impl Component for FilterToggle {
     fn render(&self) -> impl IntoElement {
         let hovering = use_state(|| false);
+        // Not hit while a sweep is under way: a find bar's toggles sit under the pane
+        // being swept, and freya's tooltip arms on the hover alone.
+        let sweeping = use_sweeping();
         let mut filter = self.filter;
         let toggle = self.toggle;
 
@@ -95,17 +98,19 @@ impl Component for FilterToggle {
             false => Glow::No,
         };
 
-        TooltipContainer::new(Tooltip::new(toggle.tooltip())).child(
-            bar_button(hovering, true, glow)
-                .on_press(move |e: Event<PressEventData>| {
-                    // **Load-bearing**: the `Input` beside this one gives its keyboard
-                    // focus up from `on_global_pointer_press`, so without this a toggle
-                    // pressed mid-word sends the rest of the name nowhere. The global
-                    // press a press derives is cancellable and sorts last.
-                    e.prevent_default();
-                    toggle.flip(&mut filter.write());
-                })
-                .child(label().text(toggle.glyph()).max_lines(1)),
+        rect().interactive(!sweeping).child(
+            TooltipContainer::new(Tooltip::new(toggle.tooltip())).child(
+                bar_button(hovering, true, glow)
+                    .on_press(move |e: Event<PressEventData>| {
+                        // **Load-bearing**: the `Input` beside this one gives its keyboard
+                        // focus up from `on_global_pointer_press`, so without this a toggle
+                        // pressed mid-word sends the rest of the name nowhere. The global
+                        // press a press derives is cancellable and sorts last.
+                        e.prevent_default();
+                        toggle.flip(&mut filter.write());
+                    })
+                    .child(label().text(toggle.glyph()).max_lines(1)),
+            ),
         )
     }
 }

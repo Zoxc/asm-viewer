@@ -1311,13 +1311,15 @@ past the end of the listing and a sweep anywhere in it ran to the last row. `scr
 to it, and what reads one back clamps to it too -- `Listing::scrolled` here, `reveal_row` and
 `reveal_caret` for the keyboard. The release is the root's
 `on_capture_global_pointer_press` and not the plain global press, which freya's scrollbar thumb
-cancels. **A control the sweep passes over does not answer the pointer**: the companion header
-and the symbol bar's names are `interactive(false)` while a sweep is under way (`use_sweeping`),
-since freya's tooltip arms on the hover alone and a pointer dragging a selection up past them armed
-and showed theirs (`notes/upstream/freya.md`). The answer is a **memo** over the two `dragging`
-flags (`Sweeping`, made in `roots` beside the marks): `Marks` is written on every pointer move that
-grows a run, and the four controls that ask this want two bools out of it, so read off the state
-they were all drawn again for every one of those moves
+cancels. **A control the sweep passes over does not answer the pointer**: the companion header,
+the symbol bar's names, the find bar's buttons and the sidebar's panels are `interactive(false)`
+while a sweep is under way (`use_sweeping`), since freya's tooltip arms on the hover alone and a
+pointer dragging a selection past them armed and showed theirs (`notes/upstream/freya.md`,
+`a_sweep_held_over_the_sidebar_arms_no_tooltip`). The sidebar is gated once per panel
+(`PanelBody`, `src/ui/dock.rs`) and not per row, so a sweep starting draws no row again. The
+answer is a **memo** over the two `dragging` flags (`Sweeping`, made in `roots` beside the marks):
+`Marks` is written on every pointer move that grows a run, and the controls that ask this want two
+bools out of it, so read off the state they were all drawn again for every one of those moves
 (`a_sweep_growing_draws_no_name_in_the_bar_again`). **Nor do the rows**: while either pane is swept, no row lights
 a link or asks about a name. freya sends a held button's moves to whatever is under the pointer,
 so a sweep out of one pane crosses the other's rows. A row asks `sweeping_in` in its move handler,
