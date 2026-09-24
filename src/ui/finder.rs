@@ -594,7 +594,7 @@ impl Component for FinderPanel {
                                 box_id: *box_id,
                                 key: DiffKey::None,
                             }
-                            .key(&index)
+                            .key(index)
                             .into()
                         },
                         list,

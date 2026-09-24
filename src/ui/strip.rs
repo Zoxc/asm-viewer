@@ -506,6 +506,8 @@ impl Component for TabBar {
         // never having been told the drag ended (`DragZone` clears the payload itself).
         let landing = use_state(|| None);
         let drag = use_drag::<Tab>();
+        // A call is a read of the state, which `&*landing` would hide.
+        #[allow(clippy::redundant_closure)]
         let over = drag.read().is_some().then(|| landing()).flatten();
 
         let bar = use_bar();

@@ -62,6 +62,8 @@ pub fn compiled_from(
 pub fn pick(candidates: &[Symbol], recent: &[Symbol]) -> Option<Symbol> {
     // Indexed rather than scanned: one line can answer with thousands of symbols and the
     // record of visits holds two hundred, so the nested walk is a million pointer compares.
+    // A symbol hashes and compares by its two pointers, never by what they point at.
+    #[allow(clippy::mutable_key_type)]
     let offered: HashSet<&Symbol> = candidates.iter().collect();
 
     recent

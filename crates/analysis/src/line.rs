@@ -78,7 +78,8 @@ pub(crate) struct DebugInfo {
 /// The formats read: a closed set, so adding one is a variant here, an impl of
 /// [`LineBackend`] and an arm of [`Backend::pick`]. An enum and not a boxed trait object
 /// because the set is closed and because what crosses threads is asserted on the concrete
-/// types (`lib.rs`).
+/// types (`lib.rs`). Not boxed: an object holds at most one.
+#[allow(clippy::large_enum_variant)]
 enum Backend {
     Dwarf(dwarf::Dwarf),
     Pdb(pdb::Pdb),
@@ -441,7 +442,7 @@ impl RowCollector {
             same
         });
 
-        (!rows.is_empty()).then(|| LineInfo { rows, files })
+        (!rows.is_empty()).then_some(LineInfo { rows, files })
     }
 }
 

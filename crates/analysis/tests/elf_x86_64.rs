@@ -1156,11 +1156,7 @@ fn a_branch_marks_the_span_its_displacement_landed_in() {
         marked(&assembly),
         [1, 4],
         "unexpected branch spans: {:?}",
-        assembly
-            .instructions
-            .iter()
-            .map(|instruction| text(instruction))
-            .collect::<Vec<_>>()
+        assembly.instructions.iter().map(text).collect::<Vec<_>>()
     );
 
     // The span says where the number is; the edge says where it goes. `edge_from` is the

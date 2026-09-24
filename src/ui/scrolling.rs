@@ -335,6 +335,7 @@ fn kept_move(
 /// down would put it straight back. **Asked of [`Docs`] itself, never of a [`Memo`] over
 /// it**, which can still be reporting a just-closed tab as open during exactly that run.
 /// The state and not a closure over it, so that rule is stated once.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn use_kept_position(
     mut positions: State<Positions<Entry, TopRow>>,
     docs: State<Docs>,

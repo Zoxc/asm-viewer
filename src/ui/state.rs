@@ -330,11 +330,11 @@ impl Places {
                 Placing::Pad => true,
             })
         });
-        write_if(asm_at, |at| at.forgetting(&keep));
-        write_if(src_at, |at| at.forgetting(&keep));
-        write_if(code_at, |at| at.forgetting(&keep));
-        write_if(marks_at, |at| at.forgetting(&keep));
-        write_if(driven, |driven| driven.forgetting(&keep));
+        write_if(asm_at, |at| at.forgetting(keep));
+        write_if(src_at, |at| at.forgetting(keep));
+        write_if(code_at, |at| at.forgetting(keep));
+        write_if(marks_at, |at| at.forgetting(keep));
+        write_if(driven, |driven| driven.forgetting(keep));
     }
 }
 

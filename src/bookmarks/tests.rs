@@ -88,7 +88,7 @@ fn toggling_adds_at_the_end_and_removes_in_place() {
 fn a_moved_symbol_still_matches_its_bookmark() {
     let before = object("a.o", &[("caller", 0), ("target", 6)]);
     let mut bookmarks = Bookmarks::default();
-    assert!(bookmarks.toggle(&symbol(&before, 1), "target", &[before.clone()]));
+    assert!(bookmarks.toggle(&symbol(&before, 1), "target", std::slice::from_ref(&before)));
 
     let after = object("a.o", &[("caller", 0), ("target", 96)]);
     let moved = symbol(&after, 1);
@@ -97,9 +97,12 @@ fn a_moved_symbol_still_matches_its_bookmark() {
         bookmarks.entries()[0].document,
         "the saved forms disagree about the address"
     );
-    assert_eq!(bookmarks.matching(&moved, &[after.clone()]), Some(0));
+    assert_eq!(
+        bookmarks.matching(&moved, std::slice::from_ref(&after)),
+        Some(0)
+    );
     // And so toggling from the moved symbol removes rather than duplicates.
-    assert!(!bookmarks.toggle(&moved, "target", &[after.clone()]));
+    assert!(!bookmarks.toggle(&moved, "target", std::slice::from_ref(&after)));
     assert!(bookmarks.entries().is_empty());
 }
 
@@ -109,7 +112,7 @@ fn a_moved_symbol_still_matches_its_bookmark() {
 fn a_dead_bookmark_is_kept_until_removed_by_index() {
     let object = object("a.o", &[("target", 6)]);
     let mut bookmarks = Bookmarks::default();
-    bookmarks.toggle(&symbol(&object, 0), "target", &[object.clone()]);
+    bookmarks.toggle(&symbol(&object, 0), "target", std::slice::from_ref(&object));
 
     assert_eq!(bookmarks.matching(&symbol(&object, 0), &[]), None);
     assert_eq!(bookmarks.entries().len(), 1);

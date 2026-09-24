@@ -652,6 +652,8 @@ impl LinkStates {
         let asked = links.clone();
         Some(TextLinks {
             columns: links.iter().map(|(columns, _)| columns.clone()).collect(),
+            // A call is a read of the state, which `&*ctrl` would hide.
+            #[allow(clippy::redundant_closure)]
             is_link: Rc::new(move || asked.iter().all(|(_, door)| door.open_now(|| ctrl()))),
             follow: Rc::new(move |pressed| {
                 let Some((_, door)) = links.iter().find(|(columns, _)| *columns == pressed) else {

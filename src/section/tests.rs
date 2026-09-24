@@ -203,7 +203,7 @@ fn an_address_finds_the_row_that_draws_it_and_the_row_names_it_back() {
             let expected = if rows.start_of(stretch) == Some(address) {
                 // The header, the labels and the first instruction all sit at the
                 // stretch's start, which finds the stretch's first row.
-                rows_of(&rows, stretch).start
+                rows_of(rows, stretch).start
             } else if matches!(drawn.kind, Kind::Separator { .. }) {
                 // A separator shares its address with the instruction below it, which is
                 // the row an address finds.
@@ -261,8 +261,7 @@ fn an_address_inside_a_row_finds_the_row_at_or_below_it() {
                     // shares its address with the row below it, which is the one found.
                     range
                         .clone()
-                        .filter(|&row| rows.address_of(row).is_some_and(|own| own <= address))
-                        .last()
+                        .rfind(|&row| rows.address_of(row).is_some_and(|own| own <= address))
                         .unwrap()
                 };
                 let found = rows.row_for(address);
@@ -434,7 +433,7 @@ fn decoding_a_stretch_settles_its_rows_and_moves_none_above_it() {
         "the stretch starts where it did"
     );
     let listing = body.lanes.listing_rows();
-    let gap = body.gap.as_ref().map_or(0, |gap| gap_rows(gap));
+    let gap = body.gap.as_ref().map_or(0, gap_rows);
     // The rule over the stretch and its blank, its header, the blank under that, and
     // its label.
     assert_eq!(settled.end - settled.start, 5 + listing + gap);

@@ -54,8 +54,7 @@ fn line_at(object: &Object, code: &Arc<CodeListing>, address: PlacedAddress) -> 
     let flat = code.at(address).expect("the address is in the code");
     let (_, kind, _) = section_view::stretch_texts(object, code, flat)
         .into_iter()
-        .filter(|(at, _, _)| *at == address)
-        .last()
+        .rfind(|(at, _, _)| *at == address)
         .expect("a line is drawn at the address");
     CodeLine { address, kind }
 }

@@ -76,8 +76,10 @@ fn the_writers_pdata_reads_back_through_object() {
         .data(pe.data(), &pe.section_table())
         .expect("the directory's bytes");
     let words: Vec<u32> = data
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&word| u32::from_le_bytes(word))
         .collect();
     assert_eq!(words.len(), 6, "two entries of three words");
     assert_eq!(words[0..2], [text_rva, text_rva + 4]);

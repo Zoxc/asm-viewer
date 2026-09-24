@@ -177,7 +177,7 @@ fn a_symbol_with_no_section_is_nowhere_to_open() {
         None,
         None,
     ));
-    assert_eq!(lowest_placed(&[loose.clone()]), None);
+    assert_eq!(lowest_placed(std::slice::from_ref(&loose)), None);
     // And it is stepped over rather than taken as the lowest.
     assert_eq!(
         lowest_placed(&[loose, placed("a", 0x40, Bias::NONE)]),

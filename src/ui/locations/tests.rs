@@ -88,10 +88,10 @@ fn a_close_drops_the_symbols_it_takes_with_it_and_a_load_writes_nothing() {
         asked: Some(asked.clone()),
         ..Located::default()
     };
-    assert!(state.take(asked, symbols_of(&object), &[object.clone()]));
+    assert!(state.take(asked, symbols_of(&object), std::slice::from_ref(&object)));
 
     assert!(
-        !state.retain_open(&[object.clone()]),
+        !state.retain_open(std::slice::from_ref(&object)),
         "nothing went, so nothing is written"
     );
     assert!(state.retain_open(&[]), "the closed file's symbols went");

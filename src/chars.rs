@@ -459,6 +459,8 @@ pub fn beyond(
     y: f32,
 ) -> Option<Reach> {
     let last = length.checked_sub(1)?;
+    // Negated so a NaN fails too.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     if !(row_height > 0.0) || !(bounds.left <= bounds.right) {
         return None;
     }

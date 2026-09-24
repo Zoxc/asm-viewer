@@ -34,7 +34,11 @@ fn a_run_s_panics_are_appended_to_one_file() {
         .expect("the directory was made")
         .filter_map(|entry| Some(entry.ok()?.path()))
         .collect();
-    assert_eq!(directory, [first.clone()], "a second file was written");
+    assert_eq!(
+        directory,
+        std::slice::from_ref(&first),
+        "a second file was written"
+    );
 
     let written = fs::read_to_string(&first).expect("the file reads");
     assert!(

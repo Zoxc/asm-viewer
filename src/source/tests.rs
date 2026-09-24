@@ -177,8 +177,8 @@ fn a_symlink_is_not_shown_whatever_it_points_at() {
         Temporary::fresh("source-loop-a.rs"),
         Temporary::fresh("source-loop-b.rs"),
     );
-    symlink(second.to_path_buf(), &*first).expect("the temp directory is writable");
-    symlink(first.to_path_buf(), &*second).expect("the temp directory is writable");
+    symlink(&second, &*first).expect("the temp directory is writable");
+    symlink(&first, &*second).expect("the temp directory is writable");
     assert!(!showable(&first));
 }
 

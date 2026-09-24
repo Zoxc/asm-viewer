@@ -30,6 +30,8 @@ fn an_empty_query_takes_the_ranges_on_both_sides_of_it() {
 
 #[test]
 fn an_empty_range_is_dropped() {
+    // Empty and backwards on purpose, so the lint against one written by mistake is off.
+    #[allow(clippy::reversed_empty_ranges)]
     let intervals = Intervals::new([(10..10, 'a'), (12..11, 'b'), (5..6, 'c')]);
     assert_eq!(over(&intervals, 0..100), ['c']);
 }

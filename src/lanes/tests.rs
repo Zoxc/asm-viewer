@@ -297,7 +297,7 @@ fn the_listings_length_is_the_lanes_own_instruction_count() {
 #[test]
 fn the_first_row_never_gets_a_separator() {
     let lanes = Lanes::new(&edges(&[(3, 0)]), 5);
-    assert_eq!(lanes.row(0).arrow, true, "the branch still lands there");
+    assert!(lanes.row(0).arrow, "the branch still lands there");
     assert_eq!(lanes.listing_rows(), 5);
     assert_eq!(lanes.row_of(0), 0);
     assert_eq!(

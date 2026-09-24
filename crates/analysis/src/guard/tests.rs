@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn a_thread_is_guarded_only_inside_a_guarded_call() {
     assert!(!guarded());
-    assert_eq!(guard(|| guarded()), Some(true));
+    assert_eq!(guard(guarded), Some(true));
     assert!(!guarded());
 
     // The panic a guard is for: caught, and the count put back.
@@ -22,7 +22,7 @@ fn a_thread_is_guarded_only_inside_a_guarded_call() {
 #[test]
 fn a_guard_inside_a_guard_stays_guarded_until_the_outer_one_leaves() {
     let inside = guard(|| {
-        assert_eq!(guard(|| guarded()), Some(true));
+        assert_eq!(guard(guarded), Some(true));
         guarded()
     });
     assert_eq!(inside, Some(true));

@@ -95,10 +95,7 @@ fn from_state(objects: &[Arc<Object>], document: Option<&Document>, visits: &Vis
     let document = document.cloned();
     session_of(
         objects,
-        document
-            .as_ref()
-            .map(std::slice::from_ref)
-            .unwrap_or_default(),
+        document.as_slice(),
         &[],
         &[],
         &[],
@@ -1478,7 +1475,7 @@ fn a_code_tabs_address_is_written_before_its_document() {
 
     let session = session_of(
         &objects,
-        &[code.clone()],
+        std::slice::from_ref(&code),
         &[],
         &[],
         &[(&code, spot)],
@@ -1631,7 +1628,7 @@ fn a_rebuilt_binary_takes_the_saved_address_with_it() {
     let spot = Spot::at(placed_at(0x30));
     let session = session_of(
         &objects,
-        &[code.clone()],
+        std::slice::from_ref(&code),
         &[],
         &[],
         &[(&code, spot)],
@@ -1661,7 +1658,7 @@ fn a_symbol_tab_saves_no_address() {
     });
     let session = session_of(
         &objects,
-        &[symbol.clone()],
+        std::slice::from_ref(&symbol),
         &[(&symbol, 4)],
         &[],
         &[],

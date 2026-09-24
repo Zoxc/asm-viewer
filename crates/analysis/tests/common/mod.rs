@@ -262,7 +262,7 @@ pub fn parse_and_walk_at(data: &[u8], path: PathBuf) -> Option<Arc<Object>> {
             flat += 1;
         }
         assert_eq!(listing.stretch_at(end), None);
-        assert_eq!(listing.decode(&object, stretches.len()).is_some(), false);
+        assert!(listing.decode(&object, stretches.len()).is_none());
         // The air past the section's last byte is in no stretch of it.
         assert!(code.at(range.end).is_none_or(|at| at >= flat));
     }

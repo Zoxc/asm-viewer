@@ -73,6 +73,7 @@ impl Opened {
     ///
     /// A server that has been restarted holds nothing, so everything open is new and
     /// nothing is worth closing -- the process those files were open in is gone.
+    #[allow(clippy::type_complexity)]
     fn against(
         &self,
         run: u64,

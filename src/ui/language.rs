@@ -626,6 +626,7 @@ pub(crate) fn use_language(
 
 /// The same, with the work an argument: the seam a test drives the whole mechanism
 /// through, there being no server on the machine to talk to.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn use_language_with(
     language: State<Language>,
     follow: State<Follow>,

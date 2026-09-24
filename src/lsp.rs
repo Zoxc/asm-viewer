@@ -1351,7 +1351,7 @@ fn tokens(answer: &Value) -> Vec<Token<Wire>> {
     };
     let mut tokens = Vec::with_capacity(data.len() / 5);
     let (mut line, mut column) = (0u32, 0u32);
-    for five in data.chunks_exact(5) {
+    for five in data.as_chunks::<5>().0 {
         let read = |at: usize| -> Option<u32> { u32::try_from(five.get(at)?.as_u64()?).ok() };
         let (Some(down), Some(along), Some(length), Some(kind), Some(modifiers)) =
             (read(0), read(1), read(2), read(3), read(4))

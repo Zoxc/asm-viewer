@@ -948,7 +948,8 @@ fn writing() -> MutexGuard<'static, ()> {
     WRITING.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-/// Where one directory's package stands.
+/// Where one directory's package stands. Not boxed: few are ever held at once.
+#[allow(clippy::large_enum_variant)]
 enum Owed {
     /// Asked for and not written yet.
     Due(Scratchpad),

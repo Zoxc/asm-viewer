@@ -699,6 +699,7 @@ struct Watched(State<u32>);
 struct Unrelated(State<u32>);
 /// Every `(before, now)` the callback was handed, in order.
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 struct Changes(Rc<RefCell<Vec<(Option<u32>, u32)>>>);
 
 /// One [`use_on_change`] over a state, whose callback also reads a state that is no dep of
@@ -2723,7 +2724,6 @@ fn the_tab_on_screen_is_marked_and_the_mark_says_where_the_keyboard_is() {
 /// whether or not they are open, marks the ones that are, and opens a closed one
 /// beside the tab on screen. It is mounted alone: where it sits in the toolbar is not what
 /// this is about.
-
 fn pages_harness() -> impl IntoElement {
     rect()
         .expanded()
@@ -2799,7 +2799,7 @@ fn alt_held_as_the_menu_opens_is_what_offers_the_debug_page() {
 #[test]
 fn a_guarded_panics_file_is_listed_on_the_debug_page_at_once() {
     let directory = Temporary::fresh_directory("debug-page");
-    let store = Store::at(directory.to_path_buf());
+    let store = Store::at(&directory);
     let panics = store.panics();
     let (mut test, ()) = TestingRunner::new(
         || page_body(Page::Debug),
@@ -3002,7 +3002,7 @@ fn row_background(test: &TestingRunner, name: &str) -> Fill {
         let background = element.style().background.clone();
         let painted = background != Fill::Color(Color::TRANSPARENT);
         (painted && area.contains_rect(&label))
-            .then(|| (area.size.width * area.size.height, background))
+            .then_some((area.size.width * area.size.height, background))
     })
     .into_iter()
     .min_by(|one, two| one.0.total_cmp(&two.0))
@@ -3650,7 +3650,7 @@ fn a_restore_that_arranges_the_window_leaves_the_hook_order_alone() {
         || Restorer.into_element(),
         (200., 200.).into(),
         |runner: &mut _| {
-            runner.provide_root_context(test_roots).states;
+            runner.provide_root_context(test_roots);
             runner.provide_root_context(|| Gone(State::create(false))).0
         },
         1.,
@@ -4237,7 +4237,7 @@ fn the_panel_and_the_table_hold_the_same_documents() {
     assert!(agree(&states) == documents);
 
     for document in &documents {
-        close_document(&states, &document);
+        close_document(&states, document);
     }
     test.sync_and_update();
     assert!(agree(&states).is_empty());
@@ -4733,6 +4733,7 @@ fn closing_a_binary_keeps_the_source_tabs() {
 /// for ever, and the test could never see `take_load` returning and dropping the last
 /// receiver.
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 struct Feed(Arc<Mutex<Vec<(async_channel::Receiver<Progress>, Vec<PathBuf>)>>>);
 
 /// The real `take_load` over the real Objects tree, one per load, with the workers
@@ -4872,7 +4873,10 @@ fn objects_reach_the_sidebar_as_they_are_parsed() {
         );
         // The save side: the path joins the binaries with its first object, so a session
         // written half way through a parse names the file.
-        assert_eq!(project::binaries(&states.objects.peek()), [path.clone()]);
+        assert_eq!(
+            project::binaries(&states.objects.peek()),
+            std::slice::from_ref(&path)
+        );
     }
 
     sender
@@ -7589,6 +7593,8 @@ fn spans_of(pieces: &[&str]) -> Vec<Span<'static>> {
 /// spans come back as they went in. This is every link the app drew before a language
 /// server said which names are links.
 #[test]
+// Lists of one range, on purpose.
+#[allow(clippy::single_range_in_vec_init)]
 fn a_link_that_is_a_whole_span_leaves_the_spans_alone() {
     let head = spans_of(&["let n = ", "helper", "(1);"]);
     let cut = cut_at(head, &[8..14]);
@@ -7600,6 +7606,8 @@ fn a_link_that_is_a_whole_span_leaves_the_spans_alone() {
 /// the link and what was around it -- so the link is a span of its own to light, and the
 /// cut is the same whether or not the pointer is anywhere near it.
 #[test]
+// Lists of one range, on purpose.
+#[allow(clippy::single_range_in_vec_init)]
 fn a_link_inside_a_span_cuts_it_into_the_link_and_the_rest() {
     let head = spans_of(&["w.count + 1"]);
     let cut = cut_at(head, &[2..7]);
@@ -7620,6 +7628,8 @@ fn two_links_in_one_span_are_both_cut_out() {
 /// covers rather than one: the cut leaves the pieces whole and adds no boundary of its
 /// own inside the link.
 #[test]
+// Lists of one range, on purpose.
+#[allow(clippy::single_range_in_vec_init)]
 fn a_link_across_two_spans_cuts_only_at_its_own_edges() {
     let head = spans_of(&["x = Vec", "::new()"]);
     let cut = cut_at(head, &[4..12]);
@@ -7631,6 +7641,8 @@ fn a_link_across_two_spans_cuts_only_at_its_own_edges() {
 /// boundaries inside a span are not every number. A cut that would fall inside one is not
 /// made -- a `char` is never sliced down the middle -- and the cuts around it still are.
 #[test]
+// Lists of one range, on purpose.
+#[allow(clippy::single_range_in_vec_init)]
 fn a_cut_inside_a_character_is_not_made() {
     // `\u{1f600}` is four bytes, so this span is 1 + 4 + 1 = 6 bytes wide and the only
     // boundaries in it are 1 and 5.
@@ -7990,12 +8002,7 @@ fn a_location_row_opens_its_symbol() {
 
     let document = Document::Symbol(wanted.clone());
     assert!(states.open.active() == Some(document.clone()));
-    assert!(states
-        .visits
-        .peek()
-        .entries()
-        .iter()
-        .any(|entry| *entry == document));
+    assert!(states.visits.peek().entries().contains(&document));
 }
 
 /// A row's press lands on the line as well as opening the symbol: the pin is the line,
@@ -13675,8 +13682,8 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
 
     let operand = link_area(&test, "61h").expect("the operand is laid out");
     let at = (
-        (operand.origin.x + operand.width() as f32 / 2.0) as f64,
-        (operand.origin.y + operand.height() as f32 / 2.0) as f64,
+        (operand.origin.x + operand.width() / 2.0) as f64,
+        (operand.origin.y + operand.height() / 2.0) as f64,
     );
     test.move_cursor(at);
     test.press_cursor(at);
@@ -13721,8 +13728,8 @@ fn following_a_jump_scrolls_to_the_row_it_lands_on() {
     // afterwards is 4Bh's row -- the row jumped *to*, not the row the pointer was over.
     let operand = link_area(&test, "4Bh").expect("the backward jump is on screen now");
     let at = (
-        (operand.origin.x + operand.width() as f32 / 2.0) as f64,
-        (operand.origin.y + operand.height() as f32 / 2.0) as f64,
+        (operand.origin.x + operand.width() / 2.0) as f64,
+        (operand.origin.y + operand.height() / 2.0) as f64,
     );
     test.move_cursor(at);
     test.press_cursor(at);
@@ -17389,7 +17396,7 @@ fn the_panel_draws_names_and_never_ids() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -18408,7 +18415,7 @@ fn an_edit_is_written_and_a_bad_row_is_counted() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             // The real refusal, without a disk: `write` fails on exactly what
@@ -18534,7 +18541,7 @@ fn a_build_runs_once_and_opens_nothing_in_the_project() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -18620,7 +18627,7 @@ fn the_scratchpad_says_there_is_nothing_built_yet() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -18653,7 +18660,7 @@ fn the_scratchpad_asks_for_the_skeleton_of_what_it_built() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -18777,7 +18784,7 @@ fn the_scratchpads_listing_can_be_put_away() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -18855,7 +18862,7 @@ fn the_editors_cursor_line_lights_the_instructions_it_compiled_into() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -18973,7 +18980,7 @@ fn the_cursor_drives_the_line_the_compiler_counts() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -19039,7 +19046,7 @@ fn an_edit_since_the_build_says_the_listing_is_out_of_date() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -19605,7 +19612,7 @@ fn pressing_a_span_puts_the_cursor_where_the_compiler_pointed() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -19696,7 +19703,7 @@ fn a_span_in_a_dependency_is_drawn_and_is_not_a_target() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -19779,7 +19786,7 @@ fn a_span_spelt_the_windows_way_is_still_the_pads_own_source() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -19890,7 +19897,7 @@ fn a_run_that_cannot_start_says_why() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -20013,6 +20020,7 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
     // What each run was handed to write its lines with. There is no `Running` a test can
     // answer a run with -- it is a real process -- so nothing here answers for the handle
     // and the pad stays `Starting`; the lines are the other channel and are the point.
+    #[allow(clippy::type_complexity)]
     let emitters: Arc<Mutex<Vec<Box<dyn FnMut(RunEvent) + Send>>>> =
         Arc::new(Mutex::new(Vec::new()));
     let handed = emitters.clone();
@@ -20108,6 +20116,7 @@ fn a_runs_lines_land_in_its_pad_and_the_run_before_it_writes_nowhere() {
 /// diagnostics and the delete question again for nothing they draw.
 #[test]
 fn a_runs_lines_draw_no_other_piece_of_the_page() {
+    #[allow(clippy::type_complexity)]
     let emitters: Arc<Mutex<Vec<Box<dyn FnMut(RunEvent) + Send>>>> =
         Arc::new(Mutex::new(Vec::new()));
     let handed = emitters.clone();
@@ -20636,7 +20645,7 @@ fn a_diagnostic_too_wide_for_the_pane_wraps_rather_than_being_cut() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {
@@ -21864,12 +21873,7 @@ fn pressing_an_object_row_opens_its_code() {
 
     let document = Document::Code(object.clone());
     assert!(states.open.active() == Some(document.clone()));
-    assert!(states
-        .visits
-        .peek()
-        .entries()
-        .iter()
-        .any(|entry| *entry == document));
+    assert!(states.visits.peek().entries().contains(&document));
     assert!(
         states.open.active() != Some(Document::Object(object)),
         "the object tab is not what opened"
@@ -22894,12 +22898,7 @@ fn pressing_a_label_opens_the_symbols_own_tab() {
     };
     let symbol = Document::Symbol(twice);
     assert!(states.open.active() == Some(symbol.clone()));
-    assert!(states
-        .visits
-        .peek()
-        .entries()
-        .iter()
-        .any(|entry| *entry == symbol));
+    assert!(states.visits.peek().entries().contains(&symbol));
 }
 
 /// The Assembly pane over a symbol's listing, with a menu viewer above it so a row's
@@ -23978,8 +23977,7 @@ fn the_code_opened_at_a_target_lands_on_the_row_at_or_below_it() {
         // The image's one section is unbiased, so an instruction's own address is where
         // the listing draws it.
         .map(|instruction| instruction.address.placed(Bias::NONE))
-        .filter(|&address| address <= target)
-        .last()
+        .rfind(|&address| address <= target)
         .expect("an instruction holds the target");
     assert!(holding < target, "the target is an instruction's own start");
 
@@ -25396,12 +25394,7 @@ fn a_bookmark_row_opens_its_place() {
     settle(&mut test);
 
     assert!(states.open.active() == Some(document.clone()));
-    assert!(states
-        .visits
-        .peek()
-        .entries()
-        .iter()
-        .any(|entry| *entry == document));
+    assert!(states.visits.peek().entries().contains(&document));
 }
 
 /// **A bookmark row marks the filter's hit in the name it draws.** A symbol's row draws the
@@ -26229,12 +26222,7 @@ fn a_source_row_opens_a_source_driven_tab() {
 
     let document = Document::Source(Arc::from(Path::new(&path)));
     assert!(states.open.active() == Some(document.clone()));
-    assert!(states
-        .visits
-        .peek()
-        .entries()
-        .iter()
-        .any(|entry| *entry == document));
+    assert!(states.visits.peek().entries().contains(&document));
 }
 
 /// **A Files row opens in the tab the file is already in.** A row's path is the project
@@ -29256,6 +29244,7 @@ fn navigating_harness() -> impl IntoElement {
 /// An assembly-driven tab on `sum_to` with a companion file of twenty lines the pane can
 /// open, so both panes have rows to press: the runner, the states, the symbol's document,
 /// the file, and the guard holding it, which the caller keeps for as long as it reads it.
+#[allow(clippy::type_complexity)]
 fn navigating_panes() -> (
     TestingRunner,
     ProjectStates,
@@ -31897,6 +31886,7 @@ fn the_symbols_list_says_when_its_filter_left_nothing() {
 /// still: a real walk answers faster than the runner settles, and superseding is a race
 /// by construction.
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 struct Walk(
     Arc<dyn Fn(&SearchQuery, &mut dyn FnMut(SearchEvent) -> ControlFlow<()>) + Send + Sync>,
 );
@@ -32683,7 +32673,7 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
-            BuildWhat::Build => done(&job, built(&[artifact.clone()])),
+            BuildWhat::Build => done(&job, built(std::slice::from_ref(&artifact))),
             _ => BuildAnswer::Read(Manifest {
                 path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
@@ -32852,7 +32842,7 @@ fn an_artifact_load_survives_the_view_being_left() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
-            BuildWhat::Build => done(&job, built(&[artifact.clone()])),
+            BuildWhat::Build => done(&job, built(std::slice::from_ref(&artifact))),
             _ => BuildAnswer::Read(Manifest {
                 path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
@@ -32922,7 +32912,7 @@ fn a_build_answer_for_a_project_left_is_dropped() {
         move |job: BuildJob| match job.what {
             BuildWhat::Build => {
                 let _ = gate.recv_blocking();
-                done(&job, built(&[artifact.clone()]))
+                done(&job, built(std::slice::from_ref(&artifact)))
             }
             _ => BuildAnswer::Read(Manifest {
                 path: Some(job.directory.join("Cargo.toml")),
@@ -33280,7 +33270,7 @@ fn a_build_replaces_what_the_build_before_it_produced() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
-            BuildWhat::Build => done(&job, built(&[artifact.clone()])),
+            BuildWhat::Build => done(&job, built(std::slice::from_ref(&artifact))),
             _ => BuildAnswer::Read(Manifest {
                 path: Some(PathBuf::from("/work/app/Cargo.toml")),
                 profiles: None,
@@ -33372,7 +33362,7 @@ fn a_build_registers_its_reopen_before_a_record_can_run() {
     let answer = {
         let artifact = artifact.clone();
         move |job: BuildJob| match job.what {
-            BuildWhat::Build => done(&job, built(&[artifact.clone()])),
+            BuildWhat::Build => done(&job, built(std::slice::from_ref(&artifact))),
             _ => BuildAnswer::Read(Manifest {
                 path: None,
                 profiles: None,
@@ -33921,7 +33911,7 @@ fn the_recent_projects_are_read_once_for_the_project_on_screen() {
     let entry = other.to_string_lossy().into_owned();
     std::fs::write(&listing, format!("order = [{entry:?}]\n")).expect("writing the recent list");
 
-    let store = Store::at(base.to_path_buf());
+    let store = Store::at(&base);
     let (mut test, states) = TestingRunner::new(
         pages_harness,
         (300., 300.).into(),
@@ -34034,7 +34024,7 @@ fn a_file_moved_aside_on_another_thread_is_named_at_once() {
     }
 
     let directory = Temporary::fresh_directory("rescued");
-    let store = Store::at(directory.to_path_buf());
+    let store = Store::at(&directory);
     let (mut test, rescued) = TestingRunner::new(
         rescued_harness,
         (600., 400.).into(),
@@ -37999,6 +37989,7 @@ fn the_toggle_chords_flip_the_find_bars_toggles_too() {
 /// answers faster than the runner settles, and the list that is kept is a race by
 /// construction.
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 struct Walking(Arc<dyn Fn(&Path, &mut dyn FnMut(WalkEvent) -> ControlFlow<()>) + Send + Sync>);
 
 fn finder_harness() -> impl IntoElement {
@@ -38780,7 +38771,7 @@ fn the_windows_chords_are_declined_by_the_scratchpad_editor() {
                 holding,
             } => PadAnswer::Opened {
                 holding,
-                scratchpad: scratchpad,
+                scratchpad,
                 program: None,
             },
             PadJob::Save(scratchpad) => PadAnswer::Saved {

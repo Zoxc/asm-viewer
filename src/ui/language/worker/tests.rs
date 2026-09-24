@@ -29,7 +29,11 @@ fn an_answer_comes_back_in_the_shape_the_question_was_asked_in() {
         let Reply::Followed(Ok(places)) = reply else {
             panic!("a followed question is answered with places");
         };
-        assert_eq!(places, [place.clone()], "one place in, one place out");
+        assert_eq!(
+            places,
+            std::slice::from_ref(&place),
+            "one place in, one place out"
+        );
     }
 
     for want in [lsp::Listed::Implementations, lsp::Listed::References] {

@@ -116,7 +116,7 @@ impl OpenProject {
             // Absent while it says nothing the defaults do not: a reader who has never
             // touched the profile leaves no `[cargo]` behind, and choosing the default
             // back takes the section out again.
-            cargo: (self.profile != Profile::default()).then(|| Cargo {
+            cargo: (self.profile != Profile::default()).then_some(Cargo {
                 profile: self.profile,
             }),
         }

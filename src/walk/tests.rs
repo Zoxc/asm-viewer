@@ -187,7 +187,7 @@ fn a_project_reached_through_a_symlink_is_walked() {
     write(&real.join("main.rs"), "");
     let outer = Temporary::fresh_directory("walk-linked-root-through");
     let through = outer.join("project");
-    symlink(real.to_path_buf(), &through).expect("the temp directory is writable");
+    symlink(&real, &through).expect("the temp directory is writable");
 
     assert_eq!(walked(&through), ["main.rs"]);
 }

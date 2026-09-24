@@ -1554,8 +1554,7 @@ fn what_a_program_said_on_its_way_out_is_waited_for() {
 
     let failure = server
         .initialize(Path::new("."), &wanted())
-        .err()
-        .expect("no server");
+        .expect_err("no server");
     server.handle().stop();
 
     assert_eq!(failure, Failure::NoServer(said.to_owned()));

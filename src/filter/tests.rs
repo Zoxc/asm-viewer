@@ -255,6 +255,8 @@ fn case_folding_does_not_change_the_rank() {
 /// through, which is what an empty box is; and nothing for a pattern that will not
 /// compile, which matches nothing to begin with.
 #[test]
+// Lists of one range, on purpose.
+#[allow(clippy::single_range_in_vec_init)]
 fn the_marks_are_every_occurrence_and_nothing_where_nothing_was_typed() {
     let marks = |filter: &Filter, text: &str| filter.matcher().marks(text);
 

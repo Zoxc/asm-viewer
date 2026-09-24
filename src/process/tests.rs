@@ -260,7 +260,7 @@ fn a_stopped_run_says_it_ended_once_and_leaves_the_list() {
     assert_eq!(said, vec![RunEvent::Ended(Ended::Stopped)]);
     let list = STARTED.lock().unwrap_or_else(|held| held.into_inner());
     assert!(
-        !list.iter().any(|other| *other == handle),
+        !list.contains(&handle),
         "the reaped run is still on the list a shutdown walks"
     );
 }

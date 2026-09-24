@@ -386,7 +386,7 @@ fn object_with_compression(
     obj.append_section_data(id, &contents, 1);
     obj.section_mut(id).flags = SectionFlags::Elf {
         sh_type: elf::SHT_PROGBITS,
-        sh_flags: sh_flags.into(),
+        sh_flags,
     };
     obj
 }

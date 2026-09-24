@@ -402,7 +402,7 @@ impl PartialEq for TextRow {
 fn dump_line(bytes: &[u8]) -> (&'static str, String) {
     let (mark, unit) = [("dq", 8), ("dd", 4), ("dw", 2), ("db", 1)]
         .into_iter()
-        .find(|&(_, unit)| !bytes.is_empty() && bytes.len() % unit == 0)
+        .find(|&(_, unit)| !bytes.is_empty() && bytes.len().is_multiple_of(unit))
         .unwrap_or(("db", 1));
     let values: Vec<String> = bytes
         .chunks(unit)

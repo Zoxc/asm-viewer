@@ -95,9 +95,9 @@ fn a_line_that_named_no_symbol_leaves_this_tabs_listing_up_and_takes_another_tab
     assert!(state.take(
         nothing.clone(),
         None,
-        object_ids(&[object.clone()]),
+        object_ids(std::slice::from_ref(&object)),
         Some(&nothing),
-        &[object.clone()]
+        std::slice::from_ref(&object)
     ));
     assert!(
         state.shown.is_some(),
@@ -108,7 +108,7 @@ fn a_line_that_named_no_symbol_leaves_this_tabs_listing_up_and_takes_another_tab
     assert!(state.take(
         elsewhere.clone(),
         None,
-        object_ids(&[object.clone()]),
+        object_ids(std::slice::from_ref(&object)),
         Some(&elsewhere),
         &[object]
     ));
@@ -241,7 +241,7 @@ fn a_line_that_came_to_nothing_is_asked_again_once_other_objects_are_open() {
     assert!(state.take(line.clone(), None, Vec::new(), Some(&line), &[]));
 
     let visits = Visits::default();
-    let (question, _) = state.asked(Some(&line), &[rebuilt.clone()], &visits);
+    let (question, _) = state.asked(Some(&line), std::slice::from_ref(&rebuilt), &visits);
     assert!(
         matches!(question, Some(Question::Resolve { .. })),
         "the line is asked again of the new build"

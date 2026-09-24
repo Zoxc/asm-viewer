@@ -258,6 +258,8 @@ fn an_end_anchored_pattern_finds_a_crlf_line() {
 /// it that is drawn. The matches are found over the whole line -- a pattern that needs the
 /// indentation finds it -- and are moved to the drawn text afterwards.
 #[test]
+// Lists of one range, on purpose.
+#[allow(clippy::single_range_in_vec_init)]
 fn a_match_reaching_into_the_indentation_is_marked_for_what_is_drawn() {
     let root = Temporary::fresh_directory("search-indent");
     write(&root.join("x.rs"), "    needle;\n");
@@ -311,6 +313,8 @@ fn a_hit_knows_where_its_match_is_in_the_files_line() {
 /// A line longer than the bound is cut on a character boundary, and a match past the cut
 /// is dropped rather than pointing off the end of the text.
 #[test]
+// Lists of one range, on purpose.
+#[allow(clippy::single_range_in_vec_init)]
 fn a_long_line_is_cut_on_a_character_boundary() {
     let root = Temporary::fresh_directory("search-cut");
     let long = format!("needle{}needle\n", "\u{e9}".repeat(grouped::MAX_LINE));

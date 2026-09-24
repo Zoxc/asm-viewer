@@ -235,6 +235,7 @@ impl Asked {
 /// `studied.rs` -- but because it is not [`use_asking`]'s shape, for the reasons the
 /// effect below gives. Every answer is taken here all the same, there being one worker
 /// and one [`Answer`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn use_analysis_with(
     asked: Asked,
     objects: State<Vec<Arc<Object>>>,
