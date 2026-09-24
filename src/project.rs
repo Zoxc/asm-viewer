@@ -10,7 +10,7 @@
 //! - [`restore`] — live state into a session, and a session back into live state.
 //! - [`recents`] — the order the projects were last open in.
 //! - [`saves`] — what the two files last held, and when the next write happens.
-//! - [`trust`] — the directories the reader agreed to a language server reading, kept in
+//! - [`trust`] — the language servers the reader agreed to, each over a directory, kept in
 //!   the store and in neither of the project's files.
 //!
 //! **A project is its project file's path.** The file is what the user said (directory,
@@ -126,8 +126,7 @@ fn load_project(store: &Store, path: &Path) -> Result<(Project, Session), Failur
             Session::default()
         }
     };
-    session.trusted = (project.details.directory.as_deref())
-        .is_some_and(|directory| trust::agreed(store, directory));
+    session.trusted = trust::agreed(store, &project.details);
     Ok((project, session))
 }
 

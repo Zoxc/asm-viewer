@@ -832,15 +832,20 @@ pub(crate) fn use_language_with(
         asked: Arc::new(AtomicU64::new(0)),
     });
 
-    // The two paths that say which project is open, and which stay in it this is. **A
-    // memo and not a read**: this hook is called at the root, and `Proj` is written by
-    // every keystroke in the Project view's boxes, so reading it here would re-render the
-    // whole window for each -- the cost `WindowBody` is a component of its own to avoid
-    // (`src/ui/no_project.rs`). The memo is subscribed to `Proj` and the effect below to
-    // the memo, so neither the root nor the effect wakes until one of the three changes.
+    // The two paths that say which project is open, the program it runs, and which stay
+    // in it this is. **A memo and not a read**: this hook is called at the root, and
+    // `Proj` is written by every keystroke in the Project view's boxes, so reading it here
+    // would re-render the whole window for each -- the cost `WindowBody` is a component of
+    // its own to avoid (`src/ui/no_project.rs`). The memo is subscribed to `Proj` and the effect below to
+    // the memo, so neither the root nor the effect wakes until one of the four changes.
     let places = use_memo(move || {
         let open = proj.read();
-        (open.file.clone(), open.workspace(), *stay.read())
+        (
+            open.file.clone(),
+            open.workspace(),
+            open.server(),
+            *stay.read(),
+        )
     });
     // **The server is the project's.** Leaving the project, which only the `Stay` says,
     // stops it even where the next project is over the same directory: that project may
@@ -853,23 +858,25 @@ pub(crate) fn use_language_with(
     // the same settings -- so the server stays. Stopping there threw away a server that
     // had read a whole project for a gesture about where a `project.toml` is kept.
     //
-    // The agreement is judged by both paths. A directory typed into the box with the file
-    // where it was is the reader pointing *this* project somewhere else, and the agreement
-    // was to the old place, so it goes; a project arriving brings its own answer with it,
-    // out of the store, and that answer is its own to give.
+    // The agreement is judged by both paths and the program. A directory or a program
+    // typed into its box with the file where it was is the reader changing what *this*
+    // project runs, and the agreement was to the old pair, so it goes, and the server it
+    // was given for with it; a project arriving brings its own answer with it, out of the
+    // store, and that answer is its own to give.
     //
     // The mount is no change at all: what it mounts with is the reopened project, the
     // restore being an earlier hook of the same render, so an agreement read out of
     // `project.toml` survives the launch that read it.
     //
     // The memo is read **in the deps and not in the render**, which is what subscribes the
-    // effect to the two paths and leaves the root subscribed to neither: the box the
-    // directory is typed into writes `Proj` on every keystroke.
+    // effect to the four and leaves the root subscribed to none: the box the directory is
+    // typed into writes `Proj` on every keystroke.
     use_on_change(move || places.read().clone(), {
         let jobs = jobs.clone();
-        move |before, (file, directory, stay): &(Option<PathBuf>, Option<PathBuf>, Stay)| {
-            let left = before.is_some_and(|(_, _, was)| was != stay);
-            let elsewhere = !before.is_some_and(|(_, was_directory, _)| was_directory == directory);
+        move |before, (file, directory, program, stay): &(_, Option<PathBuf>, String, Stay)| {
+            let left = before.is_some_and(|(_, _, _, was)| was != stay);
+            let elsewhere =
+                !before.is_some_and(|(_, was_directory, _, _)| was_directory == directory);
             if elsewhere {
                 // Read again here, where a directory arrives, so the answer is in hand
                 // before either press can ask for a server and whether or not one is ever
@@ -879,13 +886,13 @@ pub(crate) fn use_language_with(
                     jobs.send(LspJob::ReadSettings { directory });
                 }
             }
+            let moved = before.is_some_and(|(was_file, was_directory, was_program, _)| {
+                was_file == file && (was_directory != directory || was_program != program)
+            });
             // A stop takes an unanswered question about starting one with it.
-            if left || elsewhere {
+            if left || elsewhere || moved {
                 stop_server(language, &jobs);
             }
-            let moved = before.is_some_and(|(was_file, was_directory, _)| {
-                was_file == file && was_directory != directory
-            });
             if moved {
                 proj.write().trusted = false;
             }

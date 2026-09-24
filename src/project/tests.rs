@@ -581,3 +581,41 @@ fn an_agreement_is_kept_across_a_reopen() {
     assert!(reopened(true), "the agreement was lost");
     assert!(!reopened(false), "the agreement outlived being taken back");
 }
+
+/// **An agreement is to a program over a directory**, which is what the question names.
+/// Keyed by the directory alone, a project file dropped into a tree the reader agreed to,
+/// naming a program of its own, opened agreed to and ran that program on the first press.
+#[test]
+fn an_agreement_is_not_given_to_another_program_over_the_directory() {
+    let _saves = using_saves();
+    let base = directory();
+    let store = Store::at(base.join("state"));
+    let tree = base.join("tree");
+    fs::create_dir_all(tree.join("sub")).expect("creating the tree");
+    let mine = tree.join(format!("mine.{PROJECT_EXTENSION}"));
+    fs::write(&mine, "directory = \".\"\nlanguage_server = \"clangd\"\n")
+        .expect("writing the project");
+    let evil = tree.join(format!("sub/evil.{PROJECT_EXTENSION}"));
+    fs::write(&evil, "directory = \"..\"\nlanguage_server = \"./evil\"\n")
+        .expect("writing the other project");
+
+    let (project, _) = open_at(&store, &mine).expect("the project opens");
+    let details = Details {
+        directory: Some(tree.clone()),
+        ..project.details
+    };
+    let session = Session {
+        trusted: true,
+        ..Session::default()
+    };
+    record(&details, &[], false, &[], session);
+    flush();
+    close();
+
+    let (_, session) = open_at(&store, &evil).expect("the other project opens");
+    close();
+    assert!(!session.trusted, "the other program was agreed to");
+    let (_, session) = open_at(&store, &mine).expect("the project opens again");
+    close();
+    assert!(session.trusted, "the agreement was lost");
+}

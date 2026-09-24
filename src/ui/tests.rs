@@ -36236,6 +36236,37 @@ fn changing_the_directory_asks_about_the_new_one() {
     assert!(drawn.iter().any(|text| text == "/elsewhere"), "{drawn:?}");
 }
 
+/// The agreement is to a program too, so editing the program takes it back as well: the
+/// server it was given for stops and the next press asks about the new one.
+#[test]
+fn changing_the_program_asks_about_the_new_one() {
+    let handle = process::Handle::to_nothing();
+    let (mut test, roots, _asking, _asks) = mount_server({
+        let handle = handle.clone();
+        move |job: LspJob| match job {
+            LspJob::Start { run, spawned, .. } => server_started(run, &spawned, handle.clone()),
+            _ => None,
+        }
+    });
+    let states = roots.states;
+    let language = roots.language;
+    with_a_directory(&mut test, &states, "/p");
+    press_at(&mut test, the_control());
+    until_server(&mut test, language, running);
+
+    let mut proj = states.proj;
+    proj.write().language_server = "./other".to_owned();
+    settle(&mut test);
+
+    assert!(!proj.read().trusted, "the agreement outlived its program");
+    assert_eq!(language.read().state, Lsp::Off);
+
+    press_at(&mut test, the_control());
+    settle(&mut test);
+    let drawn = labels(&test);
+    assert!(drawn.iter().any(|text| text == "Start it"), "{drawn:?}");
+}
+
 /// How many times the scope that called [`use_language_with`] has rendered. An
 /// `Arc<AtomicUsize>` and not a state: nothing draws from it, and a state read in a render
 /// body would be one more thing the scope under test was subscribed to.
@@ -36267,8 +36298,8 @@ fn root_language_harness() -> Element {
     rect().expanded().into_element()
 }
 
-/// **The root is not subscribed to `Proj`.** The hook that follows the project's file and
-/// directory is called at the root, and the Project view's boxes write `Proj` on every
+/// **The root is not subscribed to `Proj`.** The hook that follows the project's file,
+/// directory and program is called at the root, and the Project view's boxes write `Proj` on every
 /// keystroke: reading it there rebuilds the toolbar, the tab strip, the dock and the panes
 /// for every character typed into any of the three. It reads through a memo instead, which
 /// is what `WindowBody` is a component of its own for.
@@ -36303,31 +36334,28 @@ fn typing_in_the_project_view_does_not_re_render_the_root() {
     let before = renders();
     let mut proj = roots.states.proj;
 
-    // The Program box, a character at a time, and then the Files box.
+    // The Files box, and then the Program box, a character at a time.
+    proj.write().language_files = "c h cpp".to_owned();
+    settle(&mut test);
+    assert!(
+        proj.read().trusted,
+        "the agreement was dropped by a box it is not about"
+    );
     for typed in ["c", "cl", "cla", "clan", "clangd"] {
         proj.write().language_server = typed.to_owned();
         settle(&mut test);
     }
-    proj.write().language_files = "c h cpp".to_owned();
-    settle(&mut test);
 
     assert_eq!(
         renders(),
         before,
         "a keystroke in the Project view's boxes re-rendered the root"
     );
-    assert!(
-        proj.read().trusted,
-        "the agreement was dropped by a box the directory is not in"
-    );
-
-    // Not vacuous: the directory is one of the two paths the hook is about, and a change
-    // to it still reaches the effect.
-    proj.write().workspace_text = "/elsewhere".to_owned();
-    settle(&mut test);
+    // Not vacuous: the program is one of the things the hook is about, and a change to it
+    // still reaches the effect.
     assert!(
         !proj.read().trusted,
-        "the effect no longer follows the project's directory"
+        "the effect no longer follows the project's program"
     );
 }
 
