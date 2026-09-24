@@ -218,25 +218,34 @@ impl Component for SearchPanel {
             (state.asked.clone(), state.summary())
         };
 
-        // The rows the arrows step and Enter presses: the rows are behind an
-        // `Arc`, so handing them over is a pointer.
-        let keys = ListKeys::over(rows.clone(), place_pick, move |row| {
-            press_place(doors, ctrl, Folding::Hits(searched), row)
-        });
-        let body: Element = match (&directory, &asked) {
-            (None, _) => placeholder("No project directory. Set one in the Project view."),
-            (Some(_), None) => placeholder("Nothing searched for yet."),
-            (Some(_), Some(query)) if summary.running && summary.hits == 0 => {
-                placeholder(format!("Searching for {}\u{2026}", query.filter.pattern))
-            }
-            (Some(_), Some(query)) if summary.hits == 0 => {
-                placeholder(format!("No matches for {}", query.filter.pattern))
-            }
-            (Some(_), Some(_)) => headed(
-                section_heading(&heading(summary), None).into_element(),
-                place_rows(&pane, rows, Folding::Hits(searched)),
-            )
-            .into_element(),
+        // The keys and the body out of one arm, as `LocationsPanel`'s, so the keys cannot
+        // step over hits the panel is not drawing: a directory cleared leaves the last
+        // search's hits held under the placeholder. The rows are behind an `Arc`, so
+        // handing them over is a pointer.
+        let (keys, body): (ListKeys, Element) = match (&directory, &asked) {
+            (None, _) => (
+                ListKeys::none(),
+                placeholder("No project directory. Set one in the Project view."),
+            ),
+            (Some(_), None) => (ListKeys::none(), placeholder("Nothing searched for yet.")),
+            (Some(_), Some(query)) if summary.running && summary.hits == 0 => (
+                ListKeys::none(),
+                placeholder(format!("Searching for {}\u{2026}", query.filter.pattern)),
+            ),
+            (Some(_), Some(query)) if summary.hits == 0 => (
+                ListKeys::none(),
+                placeholder(format!("No matches for {}", query.filter.pattern)),
+            ),
+            (Some(_), Some(_)) => (
+                ListKeys::over(rows.clone(), place_pick, move |row| {
+                    press_place(doors, ctrl, Folding::Hits(searched), row)
+                }),
+                headed(
+                    section_heading(&heading(summary), None).into_element(),
+                    place_rows(&pane, rows, Folding::Hits(searched)),
+                )
+                .into_element(),
+            ),
         };
 
         // What Enter in the box calls: peeked, being run by a press and not a render.

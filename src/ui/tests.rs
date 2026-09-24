@@ -32434,6 +32434,60 @@ fn hits_arrive_under_their_file_and_fold() {
     assert!(folded.iter().any(|label| label == "third hit"));
 }
 
+/// **The keys over the Search panel are the rows it draws.** With the project's directory
+/// cleared the panel says there is none, and the hits of the last search are still held:
+/// Down stepped the pick over them and Enter opened one nobody could see.
+#[test]
+fn the_search_keys_step_no_hit_the_panel_is_not_drawing() {
+    let file: Arc<Path> = Arc::from(Path::new("/project/one.rs"));
+    let (mut test, states, directory, mut keys, _, _, dock) =
+        search_and_modifiers(move |_query, emit| {
+            let _ = emit(SearchEvent::Hit(file.clone(), hit_at(3, "first hit")));
+            let _ = emit(SearchEvent::Hit(file.clone(), hit_at(9, "second hit")));
+            let _ = emit(SearchEvent::Finished);
+        });
+    ask_for(&states, dock, &directory, "hit");
+    let searched = states.searched;
+    pump(&mut test, |_| !searched.peek().running);
+
+    // The keyboard on the list and the pick on the first hit, opening nothing.
+    keys.alt.set(true);
+    settle(&mut test);
+    let at = centre_of(&test, "first hit");
+    press_at(&mut test, at);
+    settle(&mut test);
+    keys.alt.set(false);
+    settle(&mut test);
+    let picked = picked_place(states.picks, Panel::Search);
+    assert!(picked.is_some(), "the press picked nothing");
+
+    let mut proj = states.proj;
+    proj.write().workspace_text.clear();
+    settle(&mut test);
+    assert!(
+        labels(&test)
+            .iter()
+            .any(|label| label.starts_with("No project directory")),
+        "the panel still draws the hits"
+    );
+
+    key_with(
+        &mut test,
+        Key::Named(NamedKey::ArrowDown),
+        Modifiers::empty(),
+    );
+    key_with(&mut test, Key::Named(NamedKey::Enter), Modifiers::empty());
+    assert_eq!(
+        picked_place(states.picks, Panel::Search),
+        picked,
+        "Down stepped over hits the panel is not drawing"
+    );
+    assert!(
+        open_documents(states.open).is_empty(),
+        "Enter opened a hit the panel is not drawing"
+    );
+}
+
 /// A walk that goes without saying it finished -- its thread would not start, or died --
 /// ends the search all the same, rather than leave the panel saying it is searching.
 #[test]
