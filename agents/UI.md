@@ -505,7 +505,8 @@ place that stays; `Preview` promotes nothing; `InPlace` with no tab on screen ha
 replace and is `NewTab`, promotion included. Every opening is recorded in `Doors::visits`. **What
 promotes** the temporal tab: `NewTab` on the place it shows, a link followed in place inside it (the
 reader is reading in it), or a double press on its header. `navigate` never does, walking a trail
-not being going somewhere new in it. `raise` is the move between places already open (the strip's
+not being going somewhere new in it. `land` handles a door into the document on top without
+`open_stop`, so it applies the same rule itself. `raise` is the move between places already open (the strip's
 menu, the neighbour a close lands on, a restored session) and records nothing. Pressing a tab needs
 none of them: freya's own header wrapper sets the panel's active tab, which *is* the change.
 A place in a binary has **no "nothing" variant**: nothing open is an absent document, which is the

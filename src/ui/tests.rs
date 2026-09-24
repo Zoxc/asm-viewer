@@ -7816,6 +7816,82 @@ fn two_lines_of_one_file_are_two_places_and_back_returns_to_the_first() {
     assert!(states.open.now().map(|(_, stop)| stop) == Some(Stop::whole(document)));
 }
 
+/// A door into the document the temporal tab already shows promotes it as a door into
+/// another document would: a link followed to another line of it, or Ctrl on the place it
+/// shows. A preview promotes nothing. `land` handles that tab without `open_stop`, and
+/// used to skip its promotion rule.
+#[test]
+fn a_door_into_the_temporal_tabs_own_document_promotes_it() {
+    let file: Arc<Path> = Arc::from(Path::new("/src/main.rs"));
+    let document = Document::Source(file.clone());
+    let (mut test, roots) = TestingRunner::new(
+        locations_harness,
+        (300., 300.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots),
+        1.,
+    );
+    let states = roots.states;
+    settle(&mut test);
+    let id = open_document(states.open, states.visits, document.clone(), Reach::Preview)
+        .expect("the file opens");
+    settle(&mut test);
+    let at = |line: u32| Landing {
+        tab: document.clone(),
+        at: Some(Landed::line(LinePos {
+            file: file.clone(),
+            line,
+        })),
+        address: None,
+    };
+    let temporal = || states.open.docs.peek().temporal();
+
+    land(roots.doors, at(10), Reach::Preview);
+    settle(&mut test);
+    assert_eq!(temporal(), Some(id), "a preview promoted the tab");
+    land(roots.doors, at(10), Reach::InPlace);
+    settle(&mut test);
+    assert_eq!(
+        temporal(),
+        Some(id),
+        "a link that moved nothing promoted the tab"
+    );
+
+    land(roots.doors, at(20), Reach::InPlace);
+    settle(&mut test);
+    assert_eq!(
+        temporal(),
+        None,
+        "a link followed inside the tab left it temporal"
+    );
+
+    // Ctrl on the place the temporal tab shows, which moves nothing.
+    let other: Arc<Path> = Arc::from(Path::new("/src/lib.rs"));
+    let preview = open_document(
+        states.open,
+        states.visits,
+        Document::Source(other.clone()),
+        Reach::Preview,
+    )
+    .expect("the file opens");
+    settle(&mut test);
+    assert_eq!(temporal(), Some(preview));
+    land(
+        roots.doors,
+        Landing {
+            tab: Document::Source(other),
+            at: None,
+            address: None,
+        },
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    assert_eq!(
+        temporal(),
+        None,
+        "Ctrl on the place it shows left the tab temporal"
+    );
+}
+
 /// **A door onto line 0 picks nothing out.** Line 0 is no line of any file
 /// ([`LinePos::row_of`]): debug info writes it for instructions belonging to no source
 /// line, and a stored place can state it. Read as a row it used to be row 0, so a door

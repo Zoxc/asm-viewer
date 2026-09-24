@@ -475,6 +475,11 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
             _ => stop,
         };
         let moved = moved_to(open, id, &stop);
+        // `open_stop`'s promotion rule, which this path skips: `NewTab` asks for a tab
+        // that stays, and a link followed in place is the reader reading in it.
+        if reach == Reach::NewTab || (reach == Reach::InPlace && moved) {
+            write_if(open.docs, |docs| docs.promote(id));
+        }
         // A move inside the document is a change of place, and every change of place is
         // `use_land`'s: it keeps the runs of the place being left and gives the arriving
         // place its own. So a landing that moves the tab is left for it, as one that opens
