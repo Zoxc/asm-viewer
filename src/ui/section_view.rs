@@ -769,13 +769,10 @@ impl Component for SectionList {
                     };
                     Some((line, at.col))
                 },
-                move |object: &Arc<Object>, line: CodeLine, columns| {
+                move |object: &Arc<Object>, line: CodeLine, columns, landed: HuntLanding| {
                     // The row the line is in **now**: the rows are counted afresh as
                     // stretches decode, so the walk answers a line and the row is worked
-                    // out here, where there are rows to work it out against. Its own row
-                    // where its stretch has it, else the row holding its address, which
-                    // is where an instruction in a stretch not decoded yet is guessed to
-                    // be.
+                    // out here, where there are rows to work it out against.
                     //
                     // The rows are **read**, not peeked: a walk can answer before there
                     // are rows, and the read is what wakes the landing when they come.
@@ -783,24 +780,36 @@ impl Component for SectionList {
                     // listing's.
                     let rows = held.read().clone();
                     let Some(built) = rows.filter(|built| built.reading.is_about(object)) else {
-                        return false;
+                        return landed;
+                    };
+                    let mut reveal = |row| {
+                        reveal_caret(
+                            &mut controller,
+                            *viewport.peek(),
+                            code_row_height(),
+                            built.len(),
+                            row,
+                        )
                     };
                     let own = built
                         .code()
                         .at(line.address)
                         .and_then(|flat| built.row_of_kind(flat, line.kind));
-                    let Some(row) = own.or_else(|| built.body_row_for(line.address)) else {
-                        return false;
-                    };
-                    mark_columns(caret, Pane::Assembly, file_at(&built, row), row, columns);
-                    reveal_caret(
-                        &mut controller,
-                        *viewport.peek(),
-                        code_row_height(),
-                        built.len(),
-                        row,
-                    );
-                    true
+                    if let Some(row) = own {
+                        mark_columns(caret, Pane::Assembly, file_at(&built, row), row, columns);
+                        reveal(row);
+                        return HuntLanding::Yes;
+                    }
+                    // In a stretch not decoded yet: the view goes, once, to the row holding
+                    // the address, which is where the instruction is guessed to be, and the
+                    // window it asks for decodes the stretch. The caret waits for that.
+                    match (landed, built.body_row_for(line.address)) {
+                        (HuntLanding::No, Some(row)) => {
+                            reveal(row);
+                            HuntLanding::Guessed
+                        }
+                        _ => landed,
+                    }
                 },
             );
         }

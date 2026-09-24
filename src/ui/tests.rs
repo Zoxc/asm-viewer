@@ -31415,7 +31415,7 @@ fn a_walk_asked_as_its_tab_is_left_walks_its_own_object() {
             direction: crate::find::Direction::Forward,
             from: None,
             walked: Walked::Walking(0.0),
-            landed: false,
+            landed: HuntLanding::No,
         })
     });
     test.sync_and_update();
@@ -31560,7 +31560,7 @@ fn a_walks_match_lands_only_in_the_object_it_walked() {
     // The first walk's match, said again under an id the pane has not landed.
     let stale = Hunt {
         id: u64::MAX,
-        landed: false,
+        landed: HuntLanding::No,
         ..found.clone()
     };
     edit_find(finds, at, move |bar| bar.hunt = Some(stale));
@@ -31574,7 +31574,7 @@ fn a_walks_match_lands_only_in_the_object_it_walked() {
     let walking = Hunt {
         id: u64::MAX - 1,
         walked: Walked::Walking(0.0),
-        landed: false,
+        landed: HuntLanding::No,
         ..found
     };
     edit_find(finds, at, move |bar| bar.hunt = Some(walking));
@@ -31684,6 +31684,60 @@ fn a_walks_match_is_not_landed_again_when_the_listing_mounts_again() {
     assert!(
         marked.peek().assembly.is_none(),
         "the match was landed again"
+    );
+}
+
+/// **A match in a stretch not decoded yet is picked out on its own instruction** once the
+/// stretch decodes. Until then its row is a guess: the row's share of the stretch's
+/// bytes, which is a cell of the stretch and not an instruction. A caret put there is
+/// carried by that cell's address, and lands on the instruction before the match
+/// wherever the match does not start its cell, as `cmp` here does not. Fails on a caret
+/// put on the guessed row.
+#[test]
+fn a_walks_match_in_an_undecoded_stretch_lands_on_its_own_instruction() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = reading_of(&object, &[]);
+    let (mut test, roots) = TestingRunner::new(
+        code_find_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let (states, sectioned) = (roots.states, roots.sectioned);
+    let marked = roots.doors.marked;
+    settle(&mut test);
+    let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let finds = states.places.finds;
+
+    walk_for(&mut test, finds, at, "cmp");
+    let hunt = finds.peek().get(&at).hunt.clone().expect("a walk");
+    let Walked::Found(line, _) = hunt.walked else {
+        panic!("the walk did not find cmp: {:?}", hunt.walked);
+    };
+
+    // The worker decodes the stretch the match is in.
+    let mut sections = sectioned.reading;
+    let code = sections.peek().code.clone().expect("a skeleton");
+    let flat = code
+        .code()
+        .at(line.address)
+        .expect("the match is in a stretch");
+    let ask = CodeAsk {
+        object: object.clone(),
+        code: Some(code),
+        window: vec![flat],
+    };
+    let Answer::Code { decoded, code, .. } = answer(Question::Code(ask.clone())) else {
+        panic!("a window is answered with code");
+    };
+    assert!(sections.write().take(&ask, Some(&ask), code, decoded));
+    settle(&mut test);
+
+    let text = caret_line(marked, sectioned, &object).expect("the match was picked out");
+    assert!(
+        text.contains("cmp"),
+        "the match was picked out on another instruction: {text:?}"
     );
 }
 

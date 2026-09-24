@@ -41,10 +41,10 @@ pub(crate) struct Hunt {
     pub(crate) from: Option<(CodeLine, usize)>,
     /// Where it has got to.
     pub(crate) walked: Walked,
-    /// Whether its match has been landed in the pane. The bar says so and not the
+    /// How far its match has been landed in the pane. The bar says so and not the
     /// listing: the bar outlives a listing that a switch to another tab unmounts, and a
     /// listing mounted again would land the match again, taking the caret back to it.
-    pub(crate) landed: bool,
+    pub(crate) landed: HuntLanding,
 }
 
 impl Hunt {
@@ -97,6 +97,20 @@ pub(crate) enum Walked {
     Found(CodeLine, Range<usize>),
     /// All the way round, and nothing.
     Nothing,
+}
+
+/// How far a walk's match has been landed in the pane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum HuntLanding {
+    /// Not at all.
+    No,
+    /// The view has been brought to the row it is guessed to be on, in a stretch not
+    /// decoded yet, and the caret waits for the stretch. Put on the guess, the caret would
+    /// be carried by that row's place, a share of the stretch's bytes and not an
+    /// instruction, and come down on the instruction before the match.
+    Guessed,
+    /// Picked out on its own row.
+    Yes,
 }
 
 /// What a walk says as it goes.
@@ -217,11 +231,11 @@ pub(crate) fn hunt(
 /// two divide the step between them by whether the bar has a listing.
 ///
 /// `from` is where the pane is, as a line and a column, for a walk the way it is given,
-/// and [`None`] where there is no caret in it yet. `land` is given the object and the
-/// match, and is the section view's own: only it can put a caret on the row a line is
-/// drawn in, the rows being counted afresh as stretches decode. It says whether it
-/// landed, and it reads the rows, so a match found before there are any is landed when
-/// they come.
+/// and [`None`] where there is no caret in it yet. `land` is given the object, the match
+/// and how far it has been landed, and is the section view's own: only it can put a caret
+/// on the row a line is drawn in, the rows being counted afresh as stretches decode. It
+/// says how far it has landed now, and it reads the rows, so a match found before there
+/// are any, or in a stretch not decoded yet, is landed when they come.
 ///
 /// **`at` and `object` reach every effect through its deps**, never as a capture: an
 /// effect's callback is built once, and a switch of tab re-renders this list with another
@@ -232,7 +246,7 @@ pub(crate) fn use_code_hunt(
     object: Arc<Object>,
     reading: State<Reading>,
     from: impl Fn(Direction) -> Option<(CodeLine, usize)> + 'static,
-    mut land: impl FnMut(&Arc<Object>, CodeLine, Range<usize>) -> bool + 'static,
+    mut land: impl FnMut(&Arc<Object>, CodeLine, Range<usize>, HuntLanding) -> HuntLanding + 'static,
 ) {
     let finds = use_try_consume::<Looking>().map(|looking| looking.0);
     let from = Rc::new(from);
@@ -269,7 +283,7 @@ pub(crate) fn use_code_hunt(
                     direction,
                     from,
                     walked: Walked::Walking(0.0),
-                    landed: false,
+                    landed: HuntLanding::No,
                 });
             });
         },
@@ -325,7 +339,7 @@ pub(crate) fn use_code_hunt(
                             object,
                             from,
                             walked: Walked::Walking(0.0),
-                            landed: false,
+                            landed: HuntLanding::No,
                             ..hunt.clone()
                         };
                     }
@@ -370,15 +384,16 @@ pub(crate) fn use_code_hunt(
             let Walked::Found(line, columns) = hunt.walked else {
                 return;
             };
-            if hunt.landed {
+            if hunt.landed == HuntLanding::Yes {
                 return;
             }
-            // Marked as landed only where it was: a walk that answers before the pane has
-            // rows to land in is landed when they come, `land` having read them.
-            if land(object, line, columns) {
+            // Marked as far as it got: a match with no row of its own yet is landed when
+            // the rows have one, `land` having read them.
+            let landed = land(object, line, columns, hunt.landed);
+            if landed != hunt.landed {
                 edit_find(finds, at, |bar| {
-                    if let Some(landed) = bar.hunt.as_mut().filter(|held| held.id == hunt.id) {
-                        landed.landed = true;
+                    if let Some(held) = bar.hunt.as_mut().filter(|held| held.id == hunt.id) {
+                        held.landed = landed;
                     }
                 });
             }

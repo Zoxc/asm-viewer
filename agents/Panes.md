@@ -1546,16 +1546,20 @@ closed binary's bytes.
 `use_kept_place`, whose effect wakes on the document changing or the reading's generation moving --
 which is exactly what a door does and exactly what a find does not: the tab is already on top and
 nothing else about it has changed, so a planting written there would sit unspent. The walk's answer
-is landed where there are rows to land it in, the row worked out from the line at that moment --
-its own row where its stretch has it (`row_of_kind`), else the row holding its address
-(`body_row_for`), which is where a stretch not decoded yet guesses an instruction to be -- and the
-closure says whether it landed. It **reads** the rows, so a walk that answers before the pane has
-any is landed when they come. The walk builds its own listing where the view has no skeleton yet,
-so it can well answer first; peeked, the rows arriving woke nothing, and the match was never
-landed. **That it landed is the bar's to say** (`Hunt::landed`), not the listing's: a switch to a
-page or a symbol tab unmounts the listing and not the bar, and a listing that kept its own record
-landed the old match again when it was mounted again. A run carried across a recount is `Kept::spots`'s
-business, as it is for every other run here.
+is landed where there are rows to land it in, on the row the line is drawn in at that moment
+(`row_of_kind`), and the closure says how far it got (`HuntLanding`). **A match in a stretch not
+decoded yet has no row of its own**, only the row holding its address (`body_row_for`), a guess.
+The view is brought there once, the window it then asks for decodes the stretch, and the caret
+waits for that. A caret put on the guess was carried across the recount by the guessed row's place,
+which is its share of the stretch's bytes and not an instruction, so it came down on the
+instruction before the match wherever the match did not start that share. The closure **reads** the
+rows, so a match found before the pane has any, or in a stretch not decoded yet, is landed when
+they come. The walk builds its own listing where the view has no skeleton yet, so it can well answer
+first; peeked, the rows arriving woke nothing, and the match was never landed. **How far it landed
+is the bar's to say** (`Hunt::landed`), not the listing's: a switch to a page or a symbol tab
+unmounts the listing and not the bar, and a listing that kept its own record landed the old match
+again when it was mounted again. A run carried across a recount is `Kept::spots`'s business, as it
+is for every other run here.
 
 **A bar is keyed by the tab and not by a place on its trail.** The five maps in `Places` are keyed by
 an `Entry` because they are facts about a place; what was typed in a find bar is a fact about the
