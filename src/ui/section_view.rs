@@ -769,15 +769,20 @@ impl Component for SectionList {
                     };
                     Some((line, at.col))
                 },
-                move |line: CodeLine, columns| {
+                move |object: &Arc<Object>, line: CodeLine, columns| {
                     // The row the line is in **now**: the rows are counted afresh as
                     // stretches decode, so the walk answers a line and the row is worked
                     // out here, where there are rows to work it out against. Its own row
                     // where its stretch has it, else the row holding its address, which
                     // is where an instruction in a stretch not decoded yet is guessed to
-                    // be. A walk that answers before there are rows is landed by the wake
-                    // the rows bring, which is why this says whether it landed.
-                    let Some(built) = held.peek().clone() else {
+                    // be.
+                    //
+                    // The rows are **read**, not peeked: a walk can answer before there
+                    // are rows, and the read is what wakes the landing when they come.
+                    // Only `object`'s: for a pass after a switch the slot holds the last
+                    // listing's.
+                    let rows = held.read().clone();
+                    let Some(built) = rows.filter(|built| built.reading.is_about(object)) else {
                         return false;
                     };
                     let own = built

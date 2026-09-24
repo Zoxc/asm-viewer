@@ -213,9 +213,11 @@ pub(crate) fn hunt(
 /// two divide the step between them by whether the bar has a listing.
 ///
 /// `from` is where the pane is, as a line and a column, for a walk the way it is given,
-/// and [`None`] where there is no caret in it yet. `land` is given the match, and is the
-/// section view's own: only it can put a caret on the row a line is drawn in, the rows
-/// being counted afresh as stretches decode.
+/// and [`None`] where there is no caret in it yet. `land` is given the object and the
+/// match, and is the section view's own: only it can put a caret on the row a line is
+/// drawn in, the rows being counted afresh as stretches decode. It says whether it
+/// landed, and it reads the rows, so a match found before there are any is landed when
+/// they come.
 ///
 /// **`at` and `object` reach every effect through its deps**, never as a capture: an
 /// effect's callback is built once, and a switch of tab re-renders this list with another
@@ -226,7 +228,7 @@ pub(crate) fn use_code_hunt(
     object: Arc<Object>,
     reading: State<Reading>,
     from: impl Fn(Direction) -> Option<(CodeLine, usize)> + 'static,
-    mut land: impl FnMut(CodeLine, Range<usize>) -> bool + 'static,
+    mut land: impl FnMut(&Arc<Object>, CodeLine, Range<usize>) -> bool + 'static,
 ) {
     let finds = use_try_consume::<Looking>().map(|looking| looking.0);
     let from = Rc::new(from);
@@ -347,7 +349,7 @@ pub(crate) fn use_code_hunt(
     );
 
     // The match, landed once. The walk that found it is remembered, so an effect woken
-    // again -- by the pane's own rows arriving, say -- does not land it a second time.
+    // again -- by the rows changing, say -- does not land it a second time.
     let mut landed = use_state(|| None::<u64>);
     use_side_effect_with_deps(
         &(at, ByPtr(object)),
@@ -367,8 +369,8 @@ pub(crate) fn use_code_hunt(
                 return;
             }
             // Marked as landed only where it was: a walk that answers before the pane has
-            // rows to land in is landed by the wake the rows bring.
-            if land(line, columns) {
+            // rows to land in is landed when they come, `land` having read them.
+            if land(object, line, columns) {
                 landed.set(Some(hunt.id));
             }
         },

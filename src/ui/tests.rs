@@ -31583,6 +31583,65 @@ fn a_walks_match_lands_only_in_the_object_it_walked() {
     );
 }
 
+/// Step `at`'s bar over an object's code for `pattern`, and wait for the walk to stop.
+fn walk_for(test: &mut TestingRunner, finds: State<Finds>, at: Where, pattern: &str) {
+    open_find(finds, at, Some(pattern.to_owned()), None);
+    edit_find(finds, at, |bar| {
+        bar.step = Some(crate::find::Direction::Forward)
+    });
+    pump(test, |_| {
+        finds
+            .peek()
+            .get(&at)
+            .hunt
+            .as_ref()
+            .is_some_and(|hunt| !hunt.walking())
+    });
+}
+
+/// The text of the row the assembly pane's caret is on, where there is one.
+fn caret_line(marked: State<Marks>, sectioned: Sectioned, object: &Arc<Object>) -> Option<String> {
+    let row = marked.peek().assembly.as_ref()?.chars.anchor().row;
+    let rows = sectioned.peek_rows_of(object)?;
+    Some(code_line(&rows, row).to_string())
+}
+
+/// **A match found before the pane has rows is landed once they come.** The walk builds
+/// its own listing where the view has no skeleton yet, so it can answer first, and
+/// nothing about the rows arriving wakes a landing that never read them. Fails on a land
+/// effect that peeks the rows.
+#[test]
+fn a_walks_match_found_before_the_rows_is_landed_when_they_come() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let reading = Reading::of(Some(object.clone()));
+    let (mut test, roots) = TestingRunner::new(
+        code_find_harness,
+        (600., 400.).into(),
+        move |runner: &mut _| runner.provide_root_context(move || code_states(reading)),
+        1.,
+    );
+    let (states, sectioned) = (roots.states, roots.sectioned);
+    let marked = roots.doors.marked;
+    settle(&mut test);
+    let at = (Placing::Tab(DocId::unfiled()), Pane::Assembly);
+    let finds = states.places.finds;
+
+    walk_for(&mut test, finds, at, "sum_to");
+    assert!(sectioned.peek_rows_of(&object).is_none());
+    assert!(marked.peek().assembly.is_none());
+
+    // The skeleton lands.
+    let mut reading = sectioned.reading;
+    reading.set(reading_of(&object, &[]));
+    pump(&mut test, |_| sectioned.peek_rows_of(&object).is_some());
+    assert_eq!(
+        caret_line(marked, sectioned, &object).as_deref(),
+        Some("sum_to:"),
+        "the match was not landed once the rows came"
+    );
+}
+
 /// A walk that goes all the way round without finding anything says so, and stops: the
 /// bar has no count to fall back on over an object's code.
 #[test]

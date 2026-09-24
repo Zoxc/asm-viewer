@@ -1549,8 +1549,10 @@ nothing else about it has changed, so a planting written there would sit unspent
 is landed where there are rows to land it in, the row worked out from the line at that moment --
 its own row where its stretch has it (`row_of_kind`), else the row holding its address
 (`body_row_for`), which is where a stretch not decoded yet guesses an instruction to be -- and the
-closure says whether it landed, so a walk that answers before the pane has
-rows is landed by the wake the rows bring. A run carried across a recount is `Kept::spots`'s
+closure says whether it landed. It **reads** the rows, so a walk that answers before the pane has
+any is landed when they come. The walk builds its own listing where the view has no skeleton yet,
+so it can well answer first; peeked, the rows arriving woke nothing, and the match was never
+landed. A run carried across a recount is `Kept::spots`'s
 business, as it is for every other run here.
 
 **A bar is keyed by the tab and not by a place on its trail.** The five maps in `Places` are keyed by
