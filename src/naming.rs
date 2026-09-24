@@ -23,7 +23,8 @@
 ///
 /// A trailing `{{closure}}` or `{closure#0}` is kept as a third component -- it is the
 /// difference between a function and the closure inside it, and a tab that dropped it
-/// would name a symbol that is not the one it shows. Only the innermost is kept.
+/// would name a symbol that is not the one it shows. Only the innermost is kept. So is a
+/// shim's marker, which the legacy mangling glues to the name: `call_once{{vtable.shim}}`.
 ///
 /// A name the app made up rather than read from a file comes back whole. Those are one
 /// angle-bracket group and nothing else -- `<entry point>`, `<function 0x140001000>` --
@@ -69,6 +70,11 @@ pub fn short_name(name: &str) -> String {
             if let Some(scope) = quoted_function(segment).or_else(|| declarator(segment)) {
                 opened += 1;
                 pending.extend(split_path(scope).into_iter().rev());
+                continue;
+            }
+            if let Some((name, marker)) = glued_marker(segment) {
+                opened += 1;
+                pending.extend([marker, name]);
                 continue;
             }
         }
@@ -143,6 +149,17 @@ fn declarator(segment: &str) -> Option<&str> {
         .last()?;
     let name = &inner[star + 1..];
     (!name.trim().is_empty()).then_some(name)
+}
+
+/// A segment with rustc's `{{...}}` marker written onto its end, split into the two: the
+/// legacy mangling puts a shim's there, as in `call_once{{vtable.shim}}`. Only the doubled
+/// brace, since MSVC ends a thunk's name in a group of its own: `` `vcall'{0, {flat}} ``.
+fn glued_marker(segment: &str) -> Option<(&str, &str)> {
+    let segment = segment.trim();
+    let (at, top) = top_level(segment).last()?;
+    let ends = matches!(top, Top::Group { end } if end == segment.len());
+    let glued = ends && at > 0 && segment.as_bytes()[at..].starts_with(b"{{");
+    glued.then(|| segment.split_at(at))
 }
 
 /// Whether a name is one of the app's own: a single angle-bracket group, closed, with

@@ -93,6 +93,20 @@ fn the_closure_a_symbol_is_survives_and_the_ones_around_it_do_not() {
     );
 }
 
+/// The legacy mangling writes a shim's marker into the function's own segment, which is
+/// how a backtrace shows one. It is kept as if it were a segment of its own.
+#[test]
+fn a_shim_marker_glued_to_the_name_survives() {
+    assert_eq!(
+        short_name("core::ops::function::FnOnce::call_once{{vtable.shim}}"),
+        "FnOnce::call_once::{{vtable.shim}}"
+    );
+    assert_eq!(
+        short_name("std::sys::thread_local::KEY{{tls.shim}}::h0123456789abcdef"),
+        "thread_local::KEY::{{tls.shim}}"
+    );
+}
+
 /// An item written inside a closure is that item and not the closure, so a marker with a
 /// name after it is not the marker the symbol ends in.
 #[test]
