@@ -310,6 +310,30 @@ fn a_hit_knows_where_its_match_is_in_the_files_line() {
     assert!(hits[0].1.columns == Some(9..15), "{:?}", hits[0].1.columns);
 }
 
+/// A BOM is part of the line, as the Source pane reads it: the columns count its three
+/// bytes. Fails with the searcher's default, which strips it.
+#[test]
+fn a_utf8_boms_bytes_are_counted_in_the_columns() {
+    let root = Temporary::fresh_directory("search-bom");
+    write(&root.join("x.rs"), "\u{feff}needle\n");
+
+    let hits = found(&root, "needle");
+
+    assert!(hits.len() == 1);
+    assert!(hits[0].1.columns == Some(3..9), "{:?}", hits[0].1.columns);
+}
+
+/// A UTF-16 file is not decoded: its NULs make it the binary the pane would draw it as.
+#[test]
+fn a_utf16_file_is_skipped_as_binary() {
+    let root = Temporary::fresh_directory("search-utf16");
+    let mut bytes = vec![0xff, 0xfe];
+    bytes.extend("abc needle\n".encode_utf16().flat_map(u16::to_le_bytes));
+    fs::write(root.join("x.rc"), bytes).expect("writable");
+
+    assert!(found(&root, "needle").is_empty());
+}
+
 /// A line longer than the bound is cut on a character boundary, and a match past the cut
 /// is dropped rather than pointing off the end of the text.
 #[test]

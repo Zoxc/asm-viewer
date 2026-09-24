@@ -95,6 +95,10 @@ pub fn search(query: &SearchQuery, emit: &mut dyn FnMut(SearchEvent) -> ControlF
         // Its default is to search a binary file like any other, which would put a row of
         // an object file's bytes in the list. `quit` abandons the file at the first NUL.
         .binary_detection(BinaryDetection::quit(0))
+        // Its default strips a UTF-8 BOM and decodes a UTF-16 file before searching it.
+        // The Source pane reads the raw bytes, so a hit's columns would be off by the BOM,
+        // and a UTF-16 file, which the pane draws full of NULs, would pass for text.
+        .bom_sniffing(false)
         .build();
 
     let mut progress = Progress {
