@@ -206,7 +206,7 @@ pub(crate) struct Analyzed {
     /// The objects `answered` was worked out over, by pointer ([`object_ids`]). A line
     /// that compiled to nothing is answered only for those: a binary loaded since, or
     /// rebuilt, may hold its code.
-    pub(crate) over: Vec<usize>,
+    pub(crate) over: Vec<Over>,
     /// What the worker is working on, or `None` when it is idle -- which is what tells
     /// the two ways `shown` can be `None` apart: nothing asked, and nothing yet.
     pub(crate) pending: Option<Pending>,
@@ -239,7 +239,7 @@ counter!(
 pub(crate) struct Pending {
     pub(crate) ask: Ask,
     /// The objects it was asked over, by pointer ([`object_ids`]).
-    over: Vec<usize>,
+    over: Vec<Over>,
     /// Whether it has been outstanding for [`SLOW_ANALYSIS`] -- long enough to say so,
     /// which is what displaces the listing that is up. A property of the wait and so a
     /// field of it: there is nothing to be slow about while nothing is being waited for.
@@ -248,7 +248,7 @@ pub(crate) struct Pending {
 
 impl Pending {
     /// A question just sent over `over`: waited for, and not yet long enough to say so.
-    fn asked(ask: Ask, over: Vec<usize>) -> Pending {
+    fn asked(ask: Ask, over: Vec<Over>) -> Pending {
         Pending {
             ask,
             over,
@@ -262,7 +262,7 @@ impl Pending {
 /// holds whatever else is open. A source line is answered out of every object open, so a
 /// set that has changed since -- a binary loaded, closed or rebuilt -- is a question
 /// asked again.
-fn holds_over(ask: &Ask, over: &[usize], open: &[usize]) -> bool {
+fn holds_over(ask: &Ask, over: &[Over], open: &[Over]) -> bool {
     matches!(ask, Ask::Symbol(_)) || over == open
 }
 
@@ -344,7 +344,7 @@ impl Analyzed {
         &mut self,
         ask: Ask,
         studied: Option<Studied>,
-        over: Vec<usize>,
+        over: Vec<Over>,
         wanted: Option<&Ask>,
         open: &[Arc<Object>],
     ) -> bool {

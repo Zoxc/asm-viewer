@@ -104,7 +104,7 @@ pub(crate) enum Answer {
     Listing {
         ask: Ask,
         studied: Option<Studied>,
-        over: Vec<usize>,
+        over: Vec<Over>,
     },
     /// The symbols `query` was compiled into, over the objects the question carried.
     Located { query: Query, symbols: Vec<Symbol> },
@@ -113,7 +113,7 @@ pub(crate) enum Answer {
     Marked {
         file: Arc<Path>,
         lines: Arc<HashSet<u32>>,
-        over: Vec<usize>,
+        over: Vec<Over>,
     },
     /// The skeleton -- the ask's own, or built for it -- and the stretches decoded, by
     /// flat index: the first [`CHUNK`] the ask named that the listing has.

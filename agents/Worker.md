@@ -276,7 +276,9 @@ rule once more. What keeps it true is different from the locate's, though: a set
 has nothing in it to sweep for a binary that has closed, and a state holding the objects to notice
 would be the state stopping them from closing — so `Coded` records which objects the answer was
 worked out over, by pointer (`object_ids`), and those ids are part of the question, so it is asked
-again whenever they differ from what is open. A load finishing
+again whenever they differ from what is open. An id is a `Weak` and not an address (`Over`): it
+holds none of the object's bytes, but keeps its allocation, so the next object loaded cannot land
+at a closed one's address and pass for it. A load finishing
 is such a difference, which is what puts marks in a gutter drawn before its binary had been read.
 
 **The source reader is a second worker, and deliberately not this one** (`ui/highlight.rs`). The

@@ -64,7 +64,8 @@ pub(crate) struct CodeLine {
 }
 
 /// The object a walk is over: by pointer, and without holding it. A bar outlives the
-/// object its pane showed, and a closed binary's bytes must not stay behind in one.
+/// object its pane showed, and a closed binary's bytes must not stay behind in one. Also
+/// how an answer names the objects it was worked out over ([`object_ids`]).
 ///
 /// A `Weak` keeps the allocation, so no other object can come to sit at the same address
 /// while a bar holds this.

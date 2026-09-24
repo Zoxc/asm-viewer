@@ -31,18 +31,18 @@ pub(crate) struct Coded {
     /// The file the lines below are of, and the lines. An empty set is an answer.
     pub(crate) found: Option<(Arc<Path>, Arc<HashSet<u32>>)>,
     /// The objects the answer was worked out over, by pointer, which is what identity is
-    /// here. Held as addresses and not as `Arc`s: a set of line numbers has nothing in it
+    /// here. Held as [`Over`]s and not as `Arc`s: a set of line numbers has nothing in it
     /// to sweep for a binary that has since closed, so the way this stays true is to be
     /// asked again when what is open changes -- and a state keeping the objects alive to
-    /// notice that would be the state stopping them from closing.
-    pub(crate) over: Vec<usize>,
+    /// notice that would be the state stopping them from closing. Nor as bare addresses:
+    /// a closed object's address can go to the next one loaded, which would then pass
+    /// for the object the answer is about.
+    pub(crate) over: Vec<Over>,
 }
 
 /// The objects `open` are, by pointer, in their own order.
-pub(crate) fn object_ids(open: &[Arc<Object>]) -> Vec<usize> {
-    open.iter()
-        .map(|object| Arc::as_ptr(object).addr())
-        .collect()
+pub(crate) fn object_ids(open: &[Arc<Object>]) -> Vec<Over> {
+    open.iter().map(Over::of).collect()
 }
 
 impl Coded {
@@ -64,7 +64,7 @@ impl Coded {
         showing: Option<&Arc<Path>>,
         file: Arc<Path>,
         lines: Arc<HashSet<u32>>,
-        over: Vec<usize>,
+        over: Vec<Over>,
     ) -> bool {
         if showing != Some(&file) {
             return false;
