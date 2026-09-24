@@ -583,7 +583,9 @@ saved artifacts became the other's. The manifest is therefore read again in ever
 directory or the profile changes: the Project page can stay up across a switch to a project over
 the same directory, and was left saying there was no `Cargo.toml`. A box emptied asks the worker
 nothing, so the section sets the manifest back to the default itself: it went on naming the last
-directory's `Cargo.toml` under a project with none.
+directory's `Cargo.toml` under a project with none. For the same reason a read is taken only while
+the directory it read is still the project's: one queued behind a build lands long after the box
+was emptied or changed, and put the old manifest back.
 
 **One worker thread, for the scratchpad's reason.** The work blocks, and it is one thread rather
 than several so the project's directory has a single writer -- the debug-lines edit cannot land

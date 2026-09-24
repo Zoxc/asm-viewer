@@ -33196,6 +33196,52 @@ fn a_build_lists_what_cargo_named_and_a_row_opens_it() {
         .any(|object| object.path == artifact));
 }
 
+/// A manifest read that waited behind a build lands after the Directory box was emptied,
+/// and is dropped: the box asks nothing when emptied, and what it had read is gone. Taken
+/// as it came, the old directory's manifest was drawn under a project with none.
+#[test]
+fn a_read_of_a_directory_since_emptied_is_dropped() {
+    let (gate, held) = std::sync::mpsc::channel::<()>();
+    let held = Arc::new(Mutex::new(held));
+    let answer = move |job: BuildJob| match job.what {
+        BuildWhat::Build => done(&job, built(&[])),
+        _ => {
+            // Held until the test has emptied the box.
+            let _ = held.lock().expect("the gate").recv();
+            BuildAnswer::Read(Manifest {
+                path: Some(job.directory.join("Cargo.toml")),
+                profiles: None,
+                debug_lines: true,
+                edit_refused: None,
+            })
+        }
+    };
+    let (mut test, roots, asking, asks) = mount_project(answer);
+    let states = roots.states;
+
+    let mut proj = states.proj;
+    proj.write().workspace_text = "/work/app".to_owned();
+    pump(&mut test, |_| asks.try_recv() == Ok(AskedToBuild::Read));
+    proj.write().workspace_text.clear();
+    settle(&mut test);
+
+    gate.send(()).expect("the read is waiting");
+    // A build behind the read, so the read has been taken once the build has.
+    let jobs = asking.peek().clone().expect("the wiring handed one back");
+    start_build(
+        states.build,
+        &jobs,
+        PathBuf::from("/work/app"),
+        Profile::Debug,
+    );
+    pump(&mut test, |_| !states.build.peek().building);
+
+    assert!(
+        states.build.peek().manifest == Manifest::default(),
+        "the emptied box took the old directory's manifest"
+    );
+}
+
 /// **A keyed row's own state goes with its key, not with the slot it was drawn in.** The
 /// Project view's artifact rows are keyed by the file each names, so a build that reorders
 /// or drops a target leaves each row's hover with the file it belongs to.

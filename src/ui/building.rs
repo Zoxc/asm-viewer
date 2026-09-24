@@ -327,8 +327,11 @@ pub(crate) fn use_building_with(
         // Nothing supersedes: a build takes seconds and is asked for by a press, and the
         // two manifest jobs are cheap and each of them is the answer to the one after it.
         |job, _| vec![job],
-        move |(stay, job)| Some((stay, work(job))),
-        move |(stay, answer), _| {
+        move |(stay, job): (Stay, BuildJob)| {
+            let directory = job.directory.clone();
+            Some((stay, directory, work(job)))
+        },
+        move |(stay, asked, answer), _| {
             // An answer for a project the reader has left: its build would land in the
             // one open now, replacing binaries that project opened.
             if states.left(stay) {
@@ -336,6 +339,13 @@ pub(crate) fn use_building_with(
             }
             match answer {
                 BuildAnswer::Read(said) => {
+                    // What another directory's manifest said: the box was changed or
+                    // emptied while this read waited behind a build, and an emptied box
+                    // sends no read to land after it.
+                    let open = states.proj.peek().workspace();
+                    if open.as_deref() != Some(asked.as_path()) {
+                        return;
+                    }
                     write_if(build, |next| next.read(said));
                 }
                 BuildAnswer::Done {
