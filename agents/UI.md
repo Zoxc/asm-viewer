@@ -679,9 +679,11 @@ chip was being dragged. Where a drop would land is a two-pixel rule down the chi
 the same purple; the position is a state the bar holds and each zone writes **from
 `on_pointer_move`** and not from `on_drag_over`, which is an *enter*: the crossing that matters is
 measured in the same breath as the render that arms the drag, a zone entered before the payload
-existed declines it, and nothing fires again until the pointer leaves and comes back. The mark is
-read **only while `use_drag` holds a payload**, because an abandoned drag clears that payload
-without telling any zone it left. A drag released anywhere else changes nothing.
+existed declines it, and nothing fires again until the pointer leaves and comes back. A zone
+**takes its own mark off on `on_pointer_out`**, so a tab carried off the bar marks no chip; only its
+own, since the next zone's move may have come first. The mark is also read **only while `use_drag`
+holds a payload**, because an abandoned drag clears that payload without telling any zone. A drag
+released anywhere else changes nothing.
 One limit, upstream's: a `ScrollView` stops answering the wheel while a drag is under way
 (`notes/upstream/freya.md`), so a bar wider than the window is scrolled before the drag and not
 during it.

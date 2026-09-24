@@ -2676,6 +2676,19 @@ fn a_drag_held_near_either_end_scrolls_the_strip_towards_it() {
     );
 }
 
+/// How many chips draw the rule saying a drop would land there.
+fn marked(test: &TestingRunner) -> usize {
+    test.find_many(|_node, element| {
+        element
+            .style()
+            .borders
+            .iter()
+            .find(|border| border.width.left == TAB_MARKER)
+            .map(|_| ())
+    })
+    .len()
+}
+
 /// A tab is dragged along the bar to move it, and the chip a drop would land on says so
 /// while the pointer is over it. The recipe is `agents/Headless.md`'s: the passes between
 /// the moves are what let the drop zones be measured after the drag has begun.
@@ -2697,17 +2710,6 @@ fn a_tab_is_dragged_along_the_bar_to_move_it() {
     settle(&mut test);
     assert!(open_documents(states.open) == documents);
 
-    let marked = |test: &TestingRunner| -> usize {
-        test.find_many(|_node, element| {
-            element
-                .style()
-                .borders
-                .iter()
-                .find(|border| border.width.left == TAB_MARKER)
-                .map(|_| ())
-        })
-        .len()
-    };
     assert_eq!(marked(&test), 0, "a mark with no drag under way");
 
     let (from, onto) = (centre_of(&test, "three.rs"), centre_of(&test, "one.rs"));
@@ -2740,6 +2742,58 @@ fn a_tab_is_dragged_along_the_bar_to_move_it() {
         "the tab did not move to where it was dropped"
     );
     assert_eq!(marked(&test), 0, "the mark outlived the drag");
+}
+
+/// A dragged tab carried off the bar marks no chip, since a release there moves nothing;
+/// carried back, the chip under it is marked again.
+#[test]
+fn a_tab_dragged_off_the_bar_marks_no_chip() {
+    let (mut test, states) = TestingRunner::new(
+        bar_harness,
+        (600., 100.).into(),
+        |runner: &mut _| runner.provide_root_context(test_roots).states,
+        1.,
+    );
+    for name in ["/src/one.rs", "/src/two.rs"] {
+        let document = Document::Source(Arc::from(Path::new(name)));
+        open_document(states.open, states.visits, document, Reach::NewTab);
+    }
+    settle(&mut test);
+
+    let (from, onto) = (centre_of(&test, "two.rs"), centre_of(&test, "one.rs"));
+    test.move_cursor(from);
+    test.sync_and_update();
+    test.press_cursor(from);
+    test.move_cursor((from.0 - 10.0, from.1));
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    test.move_cursor(onto);
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    assert_eq!(marked(&test), 1, "no mark where the drop would land");
+
+    // Down into the ground under the bar, where a release changes nothing.
+    test.move_cursor((onto.0, 90.0));
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        marked(&test),
+        0,
+        "the mark stayed on a chip the pointer left"
+    );
+
+    test.move_cursor(onto);
+    for _ in 0..3 {
+        test.sync_and_update();
+    }
+    assert_eq!(
+        marked(&test),
+        1,
+        "no mark on the chip the pointer came back to"
+    );
 }
 
 /// What `app()` wires at the root for the keyboard: the ask spent, and the arrival of a

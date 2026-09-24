@@ -502,8 +502,8 @@ impl Component for TabBar {
         let open = use_open();
         let strip = open.strip;
         // Where a drop would land, and whether anything is being dragged at all: the
-        // second is what makes the first mean something, a zone the pointer left last time
-        // never having been told the drag ended (`DragZone` clears the payload itself).
+        // second is what makes the first mean something, a drag that ends off the bar
+        // telling no zone (`DragZone` clears the payload itself).
         let landing = use_state(|| None);
         let drag = use_drag::<Tab>();
         // A call is a read of the state, which `&*landing` would hide.
@@ -639,7 +639,15 @@ fn drop_zone(
                 landing.set_if_modified(Some(position));
             }
         })
+        // Off the zones a release moves nothing, so nothing is marked. Only this zone's own
+        // mark is taken off, in case the next zone's move came first.
+        .on_pointer_out(move |_| {
+            if *landing.peek() == Some(position) {
+                landing.set(None);
+            }
+        })
         .child(DropZone::new(children, move |tab: Tab| {
+            landing.set_if_modified(None);
             strip.write().move_to(tab, position);
         }))
         .into_element()
