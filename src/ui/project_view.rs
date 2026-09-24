@@ -106,8 +106,8 @@ impl OpenProject {
     }
 
     /// What of this reaches the project file. Trimmed, so a box holding nothing but spaces
-    /// is a box holding nothing. `trusted` is not here: the agreement is the session's, so
-    /// it reaches the disk through [`Session::from_state`] instead.
+    /// is a box holding nothing. `trusted` is not here: the agreement is kept in the store,
+    /// and reaches it through [`Session::from_state`] instead.
     pub(crate) fn details(&self) -> Details {
         Details {
             directory: self.workspace(),

@@ -518,3 +518,66 @@ fn a_failed_write_at_once_is_owed_and_holds_its_session_back() {
     );
     assert_eq!(session.active, Some(saved_object("a.o")));
 }
+
+/// **The agreement to run a language server is kept in the store**, not in the session
+/// beside the project file. Everything beside that file can arrive with it: a checked-in
+/// session saying `trusted = true` under the project's own id used to be believed, and the
+/// first press ran the program the project file names over the stranger's tree.
+#[test]
+fn a_session_shipped_with_a_project_does_not_agree_for_the_reader() {
+    let _saves = using_saves();
+    let base = directory();
+    let store = Store::at(base.join("state"));
+    let tree = base.join("tree");
+    fs::create_dir_all(&tree).expect("creating the tree");
+    let path = tree.join(format!("evil.{PROJECT_EXTENSION}"));
+    fs::write(
+        &path,
+        "id = \"0123456789abcdef\"\ndirectory = \".\"\nlanguage_server = \"./ra\"\n",
+    )
+    .expect("writing the project");
+    fs::write(
+        session_beside(&path),
+        "id = \"0123456789abcdef\"\ntrusted = true\n",
+    )
+    .expect("writing the session");
+
+    let (_, session) = open_at(&store, &path).expect("the project opens");
+    assert!(
+        !session.trusted,
+        "the shipped session agreed for the reader"
+    );
+}
+
+/// The reader's own agreement, given in one run, is there in the next, and taking it back
+/// is too.
+#[test]
+fn an_agreement_is_kept_across_a_reopen() {
+    let _saves = using_saves();
+    let base = directory();
+    let store = Store::at(base.join("state"));
+    let tree = base.join("tree");
+    fs::create_dir_all(&tree).expect("creating the tree");
+    let path = tree.join(format!("app.{PROJECT_EXTENSION}"));
+    fs::write(&path, "directory = \".\"\n").expect("writing the project");
+
+    let reopened = |trusted: bool| {
+        let (project, _) = open_at(&store, &path).expect("the project opens");
+        let details = Details {
+            directory: Some(tree.clone()),
+            ..project.details
+        };
+        let session = Session {
+            trusted,
+            ..Session::default()
+        };
+        record(&details, &[], false, &[], session);
+        flush();
+        close();
+        let (_, session) = open_at(&store, &path).expect("the project opens again");
+        close();
+        session.trusted
+    };
+    assert!(reopened(true), "the agreement was lost");
+    assert!(!reopened(false), "the agreement outlived being taken back");
+}

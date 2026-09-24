@@ -3,9 +3,10 @@
 //! is claimed.
 //!
 //! [`Store`] is that directory. Every module that keeps a file — the projects and their
-//! sessions, the recent order, the settings, the scratchpads, the panic records — is
-//! handed one rather than looking the place up for itself, which is what keeps the
-//! lookup, the variable that overrides it, and the four rules below in one module.
+//! sessions, the recent order, the language-server agreements, the settings, the
+//! scratchpads, the panic records — is handed one rather than looking the place up for
+//! itself, which is what keeps the lookup, the variable that overrides it, and the four
+//! rules below in one module.
 //!
 //! Framework-free, like every module that calls it: no freya types appear here.
 

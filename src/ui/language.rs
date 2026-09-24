@@ -856,7 +856,7 @@ pub(crate) fn use_language_with(
     // The agreement is judged by both paths. A directory typed into the box with the file
     // where it was is the reader pointing *this* project somewhere else, and the agreement
     // was to the old place, so it goes; a project arriving brings its own answer with it,
-    // out of its own session, and that answer is its own to give.
+    // out of the store, and that answer is its own to give.
     //
     // The mount is no change at all: what it mounts with is the reopened project, the
     // restore being an earlier hook of the same render, so an agreement read out of

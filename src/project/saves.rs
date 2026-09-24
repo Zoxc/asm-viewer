@@ -15,6 +15,7 @@ use crate::bookmarks::Bookmark;
 use crate::store::Store;
 
 use super::files::{Details, Project, ProjectId, Session, PROJECT_EXTENSION};
+use super::trust;
 use super::Put;
 
 /// Whether the project at `path` is one the app is keeping for want of anywhere else: an
@@ -106,6 +107,9 @@ pub(super) struct Saves {
     stored: Session,
     /// A newer session that has not been written yet.
     pending: Option<Session>,
+    /// The directory `agreed.toml` holds the open project's agreement for, as
+    /// [`trust::kept`] spells it, or `None` where it holds none.
+    agreed: Option<PathBuf>,
     /// A `project.toml` owed to the next flush: for a change to the details alone, which
     /// waits because a box being typed in changes them on every keystroke, or for a write
     /// made at once that did not land. A write for the binaries or the bookmarks takes it
@@ -164,6 +168,27 @@ impl Saves {
         };
         self.pending = None;
         self.owed_project = self.owed_for(&project.details);
+        self.agreed = agreed_for(&project.details, session.trusted);
+    }
+
+    /// Keep `agreed.toml` in step with the agreement the app holds: the directory it was
+    /// given for, taken back where it moved or went. Written at once and not with the
+    /// session, since the session no longer carries it.
+    pub(super) fn agreement(&mut self, details: &Details, trusted: bool) {
+        let now = agreed_for(details, trusted);
+        if now == self.agreed {
+            return;
+        }
+        let Some(store) = &self.store else {
+            return;
+        };
+        if let Some(was) = &self.agreed {
+            trust::agree(store, was, false);
+        }
+        if let Some(now) = &now {
+            trust::agree(store, now, true);
+        }
+        self.agreed = now;
     }
 
     /// What a [`super::put_in`] writes into the place it is putting the project: the file
@@ -391,6 +416,12 @@ impl Saves {
     pub(super) fn owes_session(&mut self, session: Session) {
         self.pending = Some(session);
     }
+}
+
+/// The directory an agreement is for: the project's, where it has one and it is agreed to.
+fn agreed_for(details: &Details, trusted: bool) -> Option<PathBuf> {
+    let directory = details.directory.as_deref().filter(|_| trusted)?;
+    Some(trust::kept(directory))
 }
 
 /// What a [`Saves::record`] decided to write, and what it takes to note that it landed.

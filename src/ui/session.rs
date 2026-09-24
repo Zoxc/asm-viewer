@@ -166,7 +166,7 @@ fn record_now(states: ProjectStates) {
     let objects = objects.peek();
     let loading = !loading.peek().is_empty();
     // One peek, for the two halves it feeds: what the user said goes in the project file
-    // and the agreement goes in the session.
+    // and the agreement goes in the session, which carries it to the store.
     let about = proj.peek().clone();
     project::record(
         &about.details(),

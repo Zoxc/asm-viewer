@@ -4,12 +4,14 @@
 //!
 //! Framework-free: no freya types appear here.
 //!
-//! Four parts, and over them the lifecycle — all that is left in this file:
+//! Five parts, and over them the lifecycle — all that is left in this file:
 //!
 //! - [`files`] — the two file schemas, and the identity that ties them together.
 //! - [`restore`] — live state into a session, and a session back into live state.
 //! - [`recents`] — the order the projects were last open in.
 //! - [`saves`] — what the two files last held, and when the next write happens.
+//! - [`trust`] — the directories the reader agreed to a language server reading, kept in
+//!   the store and in neither of the project's files.
 //!
 //! **A project is its project file's path.** The file is what the user said (directory,
 //! binaries, bookmarks) and is written at once, or once the reader stops typing in a box;
@@ -32,6 +34,7 @@ mod files;
 mod recents;
 mod restore;
 mod saves;
+mod trust;
 
 use std::{
     fs,
@@ -102,7 +105,8 @@ pub fn reopen(store: &Store) -> Option<Result<(PathBuf, Project, Session), Failu
 /// The session beside it *is* the app's own, and goes through [`Store::read`] like everything
 /// else the app stores. One written for another project is dropped rather than believed:
 /// the file is found by the project file's name, which says nothing about whether that file
-/// still holds the project it did.
+/// still holds the project it did. Its agreement to a language server is not in that file
+/// but in the store ([`trust`]), where nothing that arrived with the project can put one.
 fn load_project(store: &Store, path: &Path) -> Result<(Project, Session), Failure> {
     let project = Project::load_from(path).map_err(|reason| {
         log::warn!("the project {} will not open: {reason}", path.display());
@@ -113,7 +117,7 @@ fn load_project(store: &Store, path: &Path) -> Result<(Project, Session), Failur
     })?;
 
     let session: Session = store.read(session_beside(path)).unwrap_or_default();
-    let session = match session.id == project.id && project.id.is_some() {
+    let mut session = match session.id == project.id && project.id.is_some() {
         true => session,
         false => {
             if session != Session::default() {
@@ -122,6 +126,8 @@ fn load_project(store: &Store, path: &Path) -> Result<(Project, Session), Failur
             Session::default()
         }
     };
+    session.trusted = (project.details.directory.as_deref())
+        .is_some_and(|directory| trust::agreed(store, directory));
     Ok((project, session))
 }
 
@@ -305,6 +311,7 @@ pub fn record(
     // the order they were decided in, and nothing can slip between a write and the
     // baseline it moves.
     let mut saves = saves();
+    saves.agreement(details, session.trusted);
     let Some(recorded) = saves.record(details, binaries, loading, bookmarks, session) else {
         return;
     };

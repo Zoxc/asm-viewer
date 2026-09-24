@@ -159,11 +159,6 @@ pub struct Project {
     pub bookmarks: Vec<Bookmark>,
 }
 
-/// `skip_serializing_if` for a plain `bool`, so a false one writes no key at all.
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 impl Project {
     /// Turn every path in this project the way `spelling` says, against the directory the
     /// project file is in.
@@ -404,12 +399,12 @@ pub struct Session {
     /// directory. One reads the whole project and runs its build scripts and proc macros,
     /// so it is asked about once and the answer kept.
     ///
-    /// **Here and not in the project file**, which is the one thing about it that is not
-    /// obvious: a project file is something a reader may check in, and a `trusted = true`
-    /// travelling with it would run a language server over a stranger's tree without ever
-    /// asking. The agreement is this machine's. **Absent** is no, which is what a directory
-    /// nobody has been asked about has to be.
-    #[serde(default, skip_serializing_if = "is_false")]
+    /// **Never in either file**, since both can arrive with the project -- checked in, or
+    /// in an archive -- and a `trusted = true` travelling with them would run a language
+    /// server over a stranger's tree without ever asking. The agreement is this machine's:
+    /// it is kept in the store ([`super::trust`]) and carried here only on its way in and
+    /// out.
+    #[serde(skip)]
     pub trusted: bool,
     /// How the window was arranged. Absent until something in it is dragged.
     #[serde(default, skip_serializing_if = "Option::is_none")]

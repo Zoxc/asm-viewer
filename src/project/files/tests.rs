@@ -350,14 +350,13 @@ fn what_was_never_said_writes_no_key() {
     // must not travel with a project that is shared.
     assert!(!text.contains("trusted"), "{text}");
 
-    // It is the session's, and absent there is the "no" a directory nobody has been asked
-    // about has to have.
-    assert!(!round_trip(&Session::default()).contains("trusted"));
+    // Nor in the session, which can travel with it just the same: it is the store's.
     let agreed = Session {
         trusted: true,
         ..Session::default()
     };
-    assert!(round_trip(&agreed).contains("trusted = true"));
+    let text = toml::to_string_pretty(&agreed).expect("serializing");
+    assert!(!text.contains("trusted"), "{text}");
 }
 
 /// A path under the project file's own directory is written **relative to it**, so a

@@ -6,8 +6,9 @@ recents order and the user's own settings. Scratchpads have their own storage an
 
 The code is `src/project/`, split the way this note reads: `files.rs` is the two schemas and the
 id, `restore.rs` is live state into a session and back, `recents.rs` is the order, `saves.rs` is
-when a write happens. `project.rs` over them is the lifecycle -- entering a project, leaving it,
-putting it somewhere else, taking it away -- since each of those touches more than one.
+when a write happens, `trust.rs` is the agreement to run a language server. `project.rs` over
+them is the lifecycle -- entering a project, leaving it, putting it somewhere else, taking it
+away -- since each of those touches more than one.
 
 There is **no published version of this app yet**, so persisted formats need no backward
 compatibility: a schema change is just a schema change, a stale file is ignored rather than
@@ -239,14 +240,17 @@ compare as they always did; the relative spelling exists for the length of one `
 is turned is `directory`, `binaries`, and each bookmark's *binary* path -- a `SavedDocument::Source`
 is what the debug information said rather than something this filesystem was asked about.
 
-**The agreement to run a language server is the session's** (`Session::trusted`,
-`agents/Lsp.md`), and it is the one field placed by something other than "what the user said
-against what the app noticed" -- the reader chose it, so by that rule it would be the project
-file's. It is here because a project file is a thing a reader may check in, and an agreement
-travelling with it would run a language server over a stranger's tree without asking. `Proj`
-still holds it, `Session::from_state` takes it, and `Saves::opened` seeds it into the baseline
-beside the id: like the directory and the bookmarks, it is restored *synchronously*, so a
-baseline without it would read the state the app boots into as a change.
+**The agreement to run a language server is in neither file** (`agents/Lsp.md`). The reader
+chose it, so by the line above it would be the project file's, but both files can be checked in
+together, id and all, and an agreement travelling with them would run a language server over a
+stranger's tree without asking. It is kept in the store instead, as an order of the directories
+agreed to (`agreed.toml`, `src/project/trust.rs`). It still rides in `Session::trusted`, skipped
+by serde, because that is the path between the app and the policy: `load_project` fills it from
+the store, `Session::from_state` takes it back, and `Saves::agreement` writes the store at once
+when it changes, taking the agreement off the old directory where the project moved. `Saves::opened`
+seeds it into the session baseline beside the id: like the directory and the bookmarks, it is
+restored *synchronously*, so a baseline without it would read the state the app boots into as a
+change.
 
 **Each project is two files, and the line between them is the one the save policy already drew.**
 `<project>.avproj` is what the user *said* (`name`, `directory`, `binaries`, `bookmarks`) and is

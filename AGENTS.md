@@ -162,7 +162,7 @@ command.
   every build, run and server reports itself as, and the count with the word for it.
 - `src/project.rs` — projects: entering one, leaving it, putting it somewhere else, taking
   it away, and the two calls that save: the lifecycle, which is what touches more than one
-  of the four below.
+  of the five below.
 - `src/project/files.rs` — the two files a project is stored in, as serde reads and writes
   them: the project file the reader may check in, the session the app keeps beside it, and
   the id that ties the two together. The schema and nothing else.
@@ -173,6 +173,8 @@ command.
   the rows the recent list is drawn from.
 - `src/project/saves.rs` — when the two files are written: what each last held, what has
   changed since, and which changes go to disk at once rather than waiting for a flush.
+- `src/project/trust.rs` — the directories the reader agreed to a language server reading:
+  kept in the store, since both of a project's files can arrive with it.
 - `src/store.rs` — everything the app stores: the directory it goes in and the variable that
   names it, the atomic write, the read that moves a file aside rather than let the next write
   replace it, the claim of a free name, and how much of a recent order a file is written with.
