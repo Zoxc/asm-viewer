@@ -112,16 +112,17 @@ command.
   one of a section's own, and `PlacedAddress`, one in the space every section of an object
   shares; `Bias`, the only thing that crosses between them; and the one conversion itself.
 - `crates/analysis/src/model.rs` — the data model: `Object`, `Section` with the `CodeSection`
-  only a section holding code has, `SymbolData`, `Symbol`, and `ObjectData`, the bytes an
-  object was parsed from. Also `covering`, the one search an address is looked up in a list
-  of ranges with.
+  only a section holding code has, `SymbolData`, `Symbol`, `ObjectData`, the bytes an
+  object was parsed from, and `LoadMessage`, what went wrong while it was read. Also
+  `covering`, the one search an address is looked up in a list of ranges with.
 - `crates/analysis/src/extent.rs` — how many bytes of code a symbol is: the end its unwind
   entry states, an ELF's declared size, the debug info's, or the estimate.
 - `crates/analysis/src/parse.rs` — one object file read into an `Object`: its sections and
   where each is placed, its symbols, and the code it declares outside its symbol table.
 - `crates/analysis/src/sections.rs` — the two rules the parse and the DWARF loader both follow:
-  where each code section is placed, and a section's bytes read with a believable size. Also
-  the byte order `gimli` reads a file in, for the DWARF loader and the unwind reader.
+  where each code section is placed, with the error when they cannot be placed apart, and a
+  section's bytes read with a believable size. Also the byte order `gimli` reads a file in,
+  for the DWARF loader and the unwind reader.
 - `crates/analysis/src/open.rs` — the entry point: each file tried as an archive and as an
   object, and every object handed over as it is parsed.
 - `crates/analysis/src/demangle.rs` — an object's symbol names demangled in one batch, on a

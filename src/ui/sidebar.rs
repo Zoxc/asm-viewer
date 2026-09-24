@@ -61,6 +61,9 @@ struct ArchiveRow {
     /// the name is dimmed with it, rather than a spinner: a sidebar row is one of hundreds
     /// and none of the others move.
     loading: bool,
+    /// The worst of what went wrong reading the objects under this row, which the row
+    /// marks whether or not it is folded.
+    worst: Option<Severity>,
     /// Where this row is in the list as it is drawn, which is what the arrows step and
     /// what a press writes down with the pick (`ui/picks.rs`).
     at: usize,
@@ -106,8 +109,14 @@ impl Component for ArchiveRow {
             members => Some(members),
         };
 
+        let path_text = self.path.display().to_string();
+        let tooltip = match self.worst {
+            Some(_) => format!("{path_text} \u{2014} {MEMBERS_TROUBLED}"),
+            None => path_text,
+        };
+
         extra_tooltip(
-            self.path.display().to_string(),
+            tooltip,
             // An archive row has no object behind it, so nothing about the tab on screen
             // ever picks one out: it lights when the reader pressed it and not otherwise.
             list_row(hovering, picking.drawn(&pick, false))
@@ -129,7 +138,8 @@ impl Component for ArchiveRow {
                 // The count -- the one thing about an archive that is not visible while it
                 // is folded shut -- in the column `count_column` draws, which every row of
                 // a list that counts anything keeps, empty or not.
-                .child(count_column(count)),
+                .child(count_column(count))
+                .maybe_child(load_mark(self.worst, MEMBERS_TROUBLED)),
         )
     }
 
@@ -193,6 +203,12 @@ impl Component for ObjectRow {
         } else {
             self.object.path.display().to_string()
         };
+        // What went wrong reading the object goes after it: the tooltip is one line.
+        let told = told(&self.object);
+        let tooltip = match told.is_empty() {
+            true => tooltip,
+            false => format!("{tooltip} \u{2014} {told}"),
+        };
 
         name_tooltip(
             fitted.cut(),
@@ -229,13 +245,50 @@ impl Component for ObjectRow {
                     self.object.name.clone(),
                     false,
                     &self.marks,
-                )),
+                ))
+                .maybe_child(load_mark(self.object.worst(), &told)),
         )
     }
 
     fn render_key(&self) -> DiffKey {
         self.keyed()
     }
+}
+
+/// What an archive row says when an object under it had something go wrong while it was
+/// read. Which one is said on the object's own row.
+pub(crate) const MEMBERS_TROUBLED: &str = "Something went wrong reading an object in this file.";
+
+/// Everything that went wrong reading `object`, as one line; empty where nothing did.
+fn told(object: &Object) -> String {
+    let texts: Vec<&str> = object
+        .messages
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect();
+    texts.join(" ")
+}
+
+/// The mark at the end of an Objects row whose object, or an object under it, had something
+/// go wrong while it was read: a triangle, red for an error. [`None`] where nothing did.
+///
+/// `words` is what went wrong, which the row's tooltip says too. It is set as the mark's
+/// accessibility label, a glyph being a raster that says nothing the element tree can read:
+/// that is what a screen reader reads and what the headless tests find the mark by.
+fn load_mark(worst: Option<Severity>, words: &str) -> Option<Element> {
+    let colour = match worst? {
+        Severity::Error => palette().error_fg,
+        Severity::Warning => palette().icon_fg,
+    };
+    Some(
+        rect()
+            .a11y_alt(words)
+            .child(glyph_in(
+                ("triangle-alert", lucide::triangle_alert()),
+                colour,
+            ))
+            .into_element(),
+    )
 }
 
 /// One symbol in a filtered list: the name marked, and the object it is in after it
@@ -674,6 +727,7 @@ impl Component for ObjectsPanel {
                             members,
                             expansion,
                             loading,
+                            worst,
                         } => ArchiveRow {
                             name: name.clone(),
                             path: path.clone(),
@@ -683,6 +737,7 @@ impl Component for ObjectsPanel {
                                 expanded: *expanded,
                             }),
                             loading: *loading,
+                            worst: *worst,
                             at: row,
                             marks: marking.marks(name),
                             states,
@@ -696,6 +751,7 @@ impl Component for ObjectsPanel {
                             path: path.clone(),
                             folds: None,
                             loading: true,
+                            worst: None,
                             at: row,
                             marks: marking.marks(name),
                             states,

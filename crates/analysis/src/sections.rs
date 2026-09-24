@@ -3,7 +3,7 @@
 //! parse and the DWARF loader share, and the byte order `gimli` reads them in, which the DWARF
 //! loader and the unwind reader share.
 
-use crate::Bias;
+use crate::{Bias, LoadMessage};
 use object::{
     CompressedData, CompressionFormat, Object as _, ObjectKind, ObjectSection, SectionIndex,
     SectionKind,
@@ -34,6 +34,10 @@ pub(crate) fn runtime_endian(file: &object::File<'_>) -> gimli::RunTimeEndian {
 /// states, so a section is placed at or above where the file put it: a query can add a bias
 /// with checked arithmetic and mean what `line::relocate`'s wrapping add means.
 ///
+/// **Running out of address space is reported, not worked around.** A section stating an
+/// address near the top leaves no room after it, so the sections not placed by then stay
+/// where the file put them, and [`Placement::message`] says so.
+///
 /// Two limits, both load-bearing:
 ///
 /// * **Relocatable objects only.** A linked image holds real addresses literally rather than
@@ -42,10 +46,13 @@ pub(crate) fn runtime_endian(file: &object::File<'_>) -> gimli::RunTimeEndian {
 /// * **Code sections only.** An absolute relocation in a debug section is often an offset
 ///   into another `.debug_*` section (`DW_AT_stmt_list`, `DW_FORM_strp`), which must come out
 ///   exactly as it went in.
-pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, Bias> {
-    let mut biases = HashMap::new();
+pub(crate) fn section_biases(file: &object::File<'_>) -> Placement {
+    let mut placement = Placement {
+        biases: HashMap::new(),
+        message: None,
+    };
     if file.kind() != ObjectKind::Relocatable {
-        return biases;
+        return placement;
     }
 
     let text = || {
@@ -57,12 +64,13 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, B
     // never moved *down* and a bias is never a wrapped subtraction. Nothing moves for the
     // usual relocatable object, whose text sections all state 0; a Mach-O `.o` lays its
     // sections out with addresses of their own and does state more.
-    let mut next: u64 = text().map(|section| section.address()).max().unwrap_or(0);
+    let highest = text().max_by_key(|section| section.address());
+    let mut next: u64 = highest.as_ref().map_or(0, |section| section.address());
 
     for section in text() {
         // `next` starts at or above every text address and only grows, so this is the plain
         // difference. `wrapping_sub` and not `-` so that a proof going wrong is not a panic.
-        biases.insert(
+        placement.biases.insert(
             section.index(),
             Bias::new(next.wrapping_sub(section.address())),
         );
@@ -72,8 +80,7 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, B
         // takes in the file. A section `section_data` drops takes no more room than an empty
         // one, and a zero-length section still takes an address of its own, so that two of
         // them are two places. Each slot is then at most `MAX_SECTION_DATA`, so the layout
-        // runs out of address space only for a file stating an address near the top of it,
-        // and past that point sections are left where the file put them.
+        // runs out of address space only for a file stating an address near the top of it.
         // FIXME: warn the reader where the two sizes disagree -- a compressed loadable section,
         // which the ELF spec forbids.
         let length = section
@@ -81,16 +88,41 @@ pub(crate) fn section_biases(file: &object::File<'_>) -> HashMap<SectionIndex, B
             .ok()
             .and_then(|compressed| kept_size(&compressed))
             .unwrap_or(0);
-        let Some(end) = next.checked_add(length.max(1)) else {
-            break;
-        };
-        let Some(aligned) = end.checked_next_multiple_of(SECTION_ALIGNMENT) else {
+        let aligned = next
+            .checked_add(length.max(1))
+            .and_then(|end| end.checked_next_multiple_of(SECTION_ALIGNMENT));
+        let Some(aligned) = aligned else {
+            // No room left. The sections not placed yet stay where the file put them, on
+            // top of each other, and the reader is told so rather than the layout moved.
+            placement.message = Some(out_of_room(highest.as_ref()));
             break;
         };
         next = aligned;
     }
 
-    biases
+    placement
+}
+
+/// What [`section_biases`] worked out: each code section's bias, and what went wrong.
+pub(crate) struct Placement {
+    pub(crate) biases: HashMap<SectionIndex, Bias>,
+    /// Said when the layout ran out of address space, which leaves some sections unplaced.
+    pub(crate) message: Option<LoadMessage>,
+}
+
+/// The error for a layout that ran out of address space. Only a stated address near the top
+/// can do that (see [`section_biases`]), so `highest`, the section stating the highest, is
+/// the one named.
+fn out_of_room(highest: Option<&object::Section<'_, '_>>) -> LoadMessage {
+    let name = highest
+        .and_then(|section| section.name_bytes().ok())
+        .map(|name| format!("`{}` ", String::from_utf8_lossy(name)))
+        .unwrap_or_default();
+    let address = highest.map_or(0, |section| section.address());
+    LoadMessage::error(format!(
+        "The code sections could not be placed apart: section {name}states the address \
+         {address:#x}, near the top of the address space, so addresses in this object overlap."
+    ))
 }
 
 /// The bias of the section `index` names in a map [`section_biases`] made. A section with no

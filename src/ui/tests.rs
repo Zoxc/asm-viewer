@@ -11,7 +11,7 @@ use crate::search::{Hit, SearchEvent, SearchQuery};
 use crate::source::Seeded;
 use crate::temporary::Temporary;
 use crate::walk::WalkEvent;
-use analysis::Extent;
+use analysis::{Extent, LoadMessage};
 use freya_testing::{TestingNode, TestingRunner};
 
 /// Every open tab's document, in the reader's tab order. Pages are skipped: they are tabs
@@ -4993,6 +4993,79 @@ fn two_loads_at_once_keep_a_file_to_one_row() {
             ("line_fixture.o".to_owned(), 3, false),
             ("line_fixture_split.o".to_owned(), 2, false)
         ]
+    );
+}
+
+/// An object that had an error while it was read carries a mark at the end of its row, and
+/// so does a folded file with such an object in it; a clean object's row has none. The mark
+/// is found by its accessibility label, which is what went wrong.
+#[test]
+fn an_object_with_a_load_error_is_marked_on_its_row() {
+    const WRONG: &str = "Something is wrong with this object.";
+    let wrong = |object: &mut Arc<Object>| {
+        Arc::get_mut(object)
+            .expect("nothing else holds the fixture yet")
+            .messages
+            .push(LoadMessage {
+                severity: Severity::Error,
+                text: WRONG.to_owned(),
+            });
+    };
+    let (lone, mut lones) = fixture_objects_of("line_fixture.o", 1);
+    let (archive, mut members) = fixture_objects_of("line_fixture_split.o", 2);
+    let (clean, cleans) = fixture_objects_of("line_fixture_hidden.so", 1);
+    wrong(&mut lones[0]);
+    wrong(&mut members[1]);
+
+    let (mut test, states, senders) = mount_loads(&[&lone, &archive, &clean]);
+    test.sync_and_update();
+    let loads = [(&lone, &lones), (&archive, &members), (&clean, &cleans)];
+    for (sender, (path, objects)) in senders.iter().zip(loads) {
+        for object in objects {
+            sender
+                .send_blocking(Progress::Parsed(object.clone()))
+                .expect("the app is still listening");
+        }
+        sender
+            .send_blocking(Progress::Finished(path.clone()))
+            .expect("the app is still listening");
+    }
+    pump(&mut test, |_| states.loading.peek().is_empty());
+    settle(&mut test);
+
+    // Everything labelled on an Objects row, by the row whose name shares its line: the
+    // labels are not filtered by what they say, so a mark on a clean row counts too.
+    let names = labels_with_areas(&test);
+    let marks: Vec<(String, String)> = test
+        .find_many(|node, _element| {
+            let area = node.layout().area;
+            let said = node.element().accessibility().builder.label()?.to_owned();
+            Some((said, area))
+        })
+        .into_iter()
+        .filter_map(|(said, area)| {
+            let row = names
+                .iter()
+                .find(|(text, name)| {
+                    let middle = area.center().y;
+                    text.starts_with("line_fixture")
+                        && (name.min_y()..=name.max_y()).contains(&middle)
+                })
+                .map(|(text, _)| text.clone())?;
+            Some((row, said))
+        })
+        .collect();
+
+    assert_eq!(
+        marks,
+        [
+            ("line_fixture.o".to_owned(), WRONG.to_owned()),
+            (
+                "line_fixture_split.o".to_owned(),
+                MEMBERS_TROUBLED.to_owned()
+            ),
+        ],
+        "the marks are not on the rows of the objects that had errors"
     );
 }
 

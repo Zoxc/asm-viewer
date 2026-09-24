@@ -54,7 +54,8 @@ impl Dwarf {
 
         let endian = runtime_endian(file);
 
-        let biases = section_biases(file);
+        // What went wrong laying the sections out was told to the reader at parse.
+        let biases = section_biases(file).biases;
 
         // Only a relocatable object's debug sections are written before their addresses are.
         // A linked image holds what the linker resolved, and one linked with `--emit-relocs`

@@ -18,7 +18,10 @@ pub use extent::Extent;
 pub use line::{LineInfo, LineRow, SourceDigests, SourceHash};
 pub use listing::{CodeListing, Gap, GapKind, Listing, Placed, Stretch};
 pub use made_up::MadeUp;
-pub use model::{CodeSection, FileDigest, Import, Object, ObjectData, Section, Symbol, SymbolData};
+pub use model::{
+    CodeSection, FileDigest, Import, LoadMessage, Object, ObjectData, Section, Severity, Symbol,
+    SymbolData,
+};
 pub use open::{open_data_streaming, open_files, open_files_streaming, Progress};
 pub use parse::parse_object;
 // Re-exported so the viewer needs no `object` dependency of its own.
@@ -31,6 +34,7 @@ const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Object>();
     assert_send_sync::<Symbol>();
+    assert_send_sync::<LoadMessage>();
     assert_send_sync::<Assembly>();
     assert_send_sync::<LineInfo>();
     assert_send_sync::<Listing>();

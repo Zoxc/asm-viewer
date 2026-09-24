@@ -6,7 +6,7 @@ mod common;
 
 use analysis::{
     parse_object, Architecture, Bias, CodeListing, Extent, GapKind, Listing, Object, Section,
-    SectionAddress, SymbolData,
+    SectionAddress, Severity, SymbolData,
 };
 use common::{
     at, caller_and_target, committed_fixture, declared_code_images, elf_text_padded, elf_x86_64,
@@ -957,4 +957,56 @@ fn a_linked_image_is_placed_at_its_own_addresses() {
     assert_eq!(code.at(placed_at(TEXT_ADDRESS + 4)), Some(1));
     assert!(!code.opens_section(1), "the section's second stretch");
     assert_eq!(code.at(placed_at(TEXT_ADDRESS - 1)), None);
+}
+
+/// Three code sections of a relocatable object, each one function at its start, with
+/// `.text.high` between the other two.
+fn three_sections() -> Vec<u8> {
+    use object::write;
+    use object::{BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope};
+
+    let mut obj = write::Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+    for name in ["first", "high", "second"] {
+        let section = obj.add_section(
+            Vec::new(),
+            format!(".text.{name}").into_bytes(),
+            SectionKind::Text,
+        );
+        obj.append_section_data(section, &[0x90, 0xC3], 1);
+        obj.add_symbol(write::Symbol {
+            name: name.as_bytes().to_vec(),
+            value: 0,
+            size: 2,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: write::SymbolSection::Section(section),
+            flags: SymbolFlags::None,
+        });
+    }
+    obj.write().expect("writing the fixture object")
+}
+
+/// A code section stating an address near the top of the address space leaves the layout no
+/// room, so the sections after it cannot be placed apart. The layout is left as it is and
+/// the object says so instead.
+#[test]
+fn a_section_near_the_top_of_the_address_space_is_a_load_error() {
+    let clean = parse(&three_sections());
+    assert_eq!(clean.messages, []);
+    assert_eq!(clean.worst(), None);
+
+    let mut data = three_sections();
+    common::elf_place_section(&mut data, ".text.high", u64::MAX - 4);
+    let object = parse(&data);
+
+    assert_eq!(object.worst(), Some(Severity::Error));
+    let [message] = &object.messages[..] else {
+        panic!("one message: {:?}", object.messages);
+    };
+    assert!(
+        message.text.contains("`.text.high`"),
+        "the message names the section: {}",
+        message.text
+    );
 }

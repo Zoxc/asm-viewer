@@ -15,7 +15,7 @@ use std::{
     sync::Arc,
 };
 
-use analysis::{BinaryFormat, Object};
+use analysis::{BinaryFormat, Object, Severity};
 
 use crate::filter::Matcher;
 use crate::shared::Shared;
@@ -180,6 +180,9 @@ pub enum TreeRow {
         expansion: Expansion,
         /// Whether more objects may still arrive out of this file.
         loading: bool,
+        /// The worst of what went wrong reading the objects counted in `members`
+        /// ([`Object::worst`]), so a folded file still shows that one of them is wrong.
+        worst: Option<Severity>,
     },
     /// A file being read that has contributed nothing yet: a row so the reader can see it
     /// was opened, with nothing under it to fold and no format until it has been parsed.
@@ -291,6 +294,7 @@ fn file(
         members: members.len(),
         expansion,
         loading,
+        worst: members.iter().filter_map(|object| object.worst()).max(),
     }];
 
     if expansion != Expansion::Collapsed {

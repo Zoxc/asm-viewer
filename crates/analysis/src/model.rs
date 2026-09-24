@@ -1,5 +1,6 @@
-//! The data model: an [`Object`], its [`Section`]s and its symbols, and the bytes it was
-//! parsed from. Built by [`parse_object`](crate::parse_object) and read by everything else.
+//! The data model: an [`Object`], its [`Section`]s and its symbols, the bytes it was parsed
+//! from, and the [`LoadMessage`]s saying what went wrong while it was read. Built by
+//! [`parse_object`](crate::parse_object) and read by everything else.
 //! Also [`covering`], the one search the crate looks an address up in a sorted list of
 //! ranges with.
 
@@ -39,6 +40,9 @@ pub struct Object {
     pub sections: Vec<Arc<Section>>,
     /// The bytes this object was parsed from. See [`ObjectData`].
     pub data: ObjectData,
+    /// What went wrong while the object was read, in the order it was found. Empty for a
+    /// file that read cleanly. See [`LoadMessage`].
+    pub messages: Vec<LoadMessage>,
 
     /// This object's debug info, built on the first query — except for a PE whose matching
     /// `.pdb` was opened at parse time for the symbols it names, whose backend is seeded
@@ -50,6 +54,34 @@ pub struct Object {
     /// `symbols` has no estimate and no label, and no call is named after it. See
     /// `PlacedSymbols`.
     pub(crate) placed: PlacedSymbols,
+}
+
+/// Something that went wrong while an object was read, said in the reader's terms. The
+/// object is still shown; this says what in it cannot be trusted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadMessage {
+    pub severity: Severity,
+    /// One or two plain sentences.
+    pub text: String,
+}
+
+/// How bad a [`LoadMessage`] is. Ordered, so the worst of several is their `max`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Severity {
+    /// Something odd that leaves what is shown correct.
+    Warning,
+    /// Something that makes part of what is shown wrong.
+    Error,
+}
+
+impl LoadMessage {
+    /// An [`Error`](Severity::Error) saying `text`.
+    pub(crate) fn error(text: String) -> LoadMessage {
+        LoadMessage {
+            severity: Severity::Error,
+            text,
+        }
+    }
 }
 
 /// [`Object::placed`]: every symbol inside a code section's bytes
@@ -146,6 +178,7 @@ impl Object {
             imports,
             sections,
             data,
+            messages: Vec::new(),
             debug_info: DebugInfoCache::new(preloaded),
             placed: PlacedSymbols(placed),
         }
@@ -161,6 +194,11 @@ impl Object {
         let start = all.partition_point(|data| data.name.as_str() < name);
         let end = all.partition_point(|data| data.name.as_str() <= name);
         &all[start..end.max(start)]
+    }
+
+    /// The worst of [`messages`](Self::messages), or [`None`] where there are none.
+    pub fn worst(&self) -> Option<Severity> {
+        self.messages.iter().map(|message| message.severity).max()
     }
 
     /// [`placed`](Self::placed).

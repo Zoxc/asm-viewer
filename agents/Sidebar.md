@@ -155,6 +155,18 @@ is which one it is -- a glyph is drawn from a raster -- so open or shut is carri
 accessibility's own `expanded` on the column, which is both what a screen reader reads and what the
 headless tests find a triangle by (`disclosures`, `src/ui/tests.rs`).
 
+**An object that had something go wrong while it was read is marked at the end of its row**
+(`load_mark`, `src/ui/sidebar.rs`): Lucide's `triangle-alert`, in `error_fg` for an error and
+`icon_fg` for a warning alone. What went wrong is said in the row's own tooltip, after the name or
+path it already gave. Not in a tooltip on the mark: freya's `TooltipContainer` shows on its own
+hover, so one inside the row's would put two tooltips up at once, and freya's tooltip is one line
+(`max_lines(1)`), so the messages are joined into it. A file row carries the mark too whenever an
+object it counts has one, folded or not, and its tooltip says only that one of them does: the
+member's own row says which. The mark is a column only on a row that has it, after the name and
+the count, so it changes no row's height and moves no name. Like the triangle, which mark is drawn
+is not in the element tree, so the words are the mark's accessibility label, which is what the
+headless test finds it by.
+
 **A file being read is a row before it has an object**, which is `notes/specs/Sidebar.md`'s file
 still being read. The state is on the **file**, not on an object, because an object that has not
 been parsed does not exist: the unit part-way through is the one the reader opened, the one

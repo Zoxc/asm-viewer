@@ -105,7 +105,13 @@ fn a_mach_o_subtractor_pair_writes_a_difference() {
         .section_by_name("__debug_info")
         .expect("the fixture has a debug section");
     let mut data = section.data().expect("the debug section reads").to_vec();
-    relocate(&mut data, &file, &section, Little, &section_biases(&file));
+    relocate(
+        &mut data,
+        &file,
+        &section,
+        Little,
+        &section_biases(&file).biases,
+    );
     assert_eq!(read_uint(&data, Little), 4);
 }
 
@@ -166,7 +172,7 @@ fn a_mach_o_section_relocation_counts_the_section_address_once() {
     // The `object` writer leaves the offset alone in the bytes; an assembler writes the address.
     let mut data = section.data().expect("the debug section reads").to_vec();
     write_uint(&mut data, Little, init.address() + 2);
-    let biases = section_biases(&file);
+    let biases = section_biases(&file).biases;
     relocate(&mut data, &file, &section, Little, &biases);
     let placed = SectionAddress::new(init.address() + 2).placed(biases[&init.index()]);
     assert_eq!(read_uint(&data, Little), placed.get());

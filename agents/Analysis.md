@@ -30,6 +30,14 @@ against archives the `object` writer built, with nothing on a disk. The digest s
 each path and every member is cut from it. That is the thing streaming must not quietly turn into
 196 hashes of the same 20 MB.
 
+**What went wrong reading an object is kept on it** (`Object::messages`): a `LoadMessage` is a
+`Severity`, an error or a warning, and a sentence or two in the reader's terms. A file that will not
+parse at all is still dropped, having nothing to show; a message is for an object that is shown but
+that cannot be trusted in part. The parse collects them. A rule the parse follows hands back what
+went wrong beside its answer rather than reporting it itself, as `section_biases` does, so the DWARF
+loader, which asks the same rule again, drops the second copy. The Objects list marks the row
+(`agents/Sidebar.md`). One case is reported so far: the layout running out of address space.
+
 **Data model**, built once at open time and shared via `Arc`. Only *defined* `SymbolKind::Text`
 symbols are kept. `object` calls an undefined ELF `STT_FUNC` or COFF function text too, but it has
 no code here: as a symbol it would be a row with nothing to draw, a link a relocation resolves to,
@@ -427,7 +435,11 @@ or debug info that says nothing about the range asked about. Four design points 
   grain and no more: sized by a compressed header's declared size instead, one lying section ran
   the layout out of address space and left every section after it on 0. The layout starts above the highest address the file
   states — a Mach-O `.o` states one per section — so nothing is moved *down* and a bias is never a
-  wrapped value: `relocate`'s wrapping add and a query's checked one mean the same thing. It lives
+  wrapped value: `relocate`'s wrapping add and a query's checked one mean the same thing. So a
+  section stating an address near the top of the address space leaves no room after it: the
+  sections not placed by then stay where the file put them, which for an ELF `.o` is 0 for all of
+  them, and `section_biases` returns an error saying so, which the parse puts on the object. The
+  reader is told rather than the layout bent around one corrupt field. It lives
   in `sections.rs`, in neither the parse nor `line.rs`, because both read it and the listing of an
   object's whole code is laid out by the same rule: one layout read twice cannot disagree with
   itself. Both limits matter: a linked image holds real addresses literally and must be left

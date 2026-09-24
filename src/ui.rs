@@ -30,7 +30,7 @@ pub(crate) use rfd::AsyncFileDialog;
 
 pub(crate) use analysis::{
     open_files_streaming, Assembly, Bias, CodeListing, Instruction, LineInfo, Object, Operand,
-    PlacedAddress, Progress, SectionAddress, SpanKind, Symbol, SymbolData,
+    PlacedAddress, Progress, SectionAddress, Severity, SpanKind, Symbol, SymbolData,
 };
 
 pub(crate) use crate::bookmarks::{Bookmark, Bookmarks};

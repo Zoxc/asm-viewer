@@ -147,6 +147,9 @@ pub(crate) struct Palette {
 
     /// What a pattern that will not compile, and the reason it will not, are written in.
     pub(crate) invalid_fg: Color,
+    /// The warning glyph on an Objects row whose object had an error while it was read:
+    /// brighter than `invalid_fg`, being a small mark rather than a line of text.
+    pub(crate) error_fg: Color,
     /// Under the file finder's panel, falling on whatever the window was showing: what
     /// lifts it off the app rather than dimming the app to say the same thing. The
     /// reader is choosing a file by what they can see of the window under it, so nothing
@@ -214,6 +217,7 @@ impl Palette {
         name_hover_fg: Color::from_rgb(105, 89, 132),
 
         invalid_fg: Color::from_rgb(176, 0, 32),
+        error_fg: Color::from_rgb(214, 40, 40),
         match_bg: Color::from_argb(64, 120, 160, 110),
         find_bg: Color::from_argb(64, 150, 118, 190),
     };
@@ -267,6 +271,7 @@ impl Palette {
         name_hover_fg: Color::from_rgb(190, 168, 224),
 
         invalid_fg: Color::from_rgb(240, 110, 120),
+        error_fg: Color::from_rgb(244, 84, 84),
         match_bg: Color::from_argb(80, 120, 160, 110),
         find_bg: Color::from_argb(80, 150, 118, 190),
     };

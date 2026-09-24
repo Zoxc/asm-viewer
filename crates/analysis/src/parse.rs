@@ -3,10 +3,11 @@
 
 use crate::demangle;
 use crate::line::{DebugInfo, Declared};
-use crate::sections::{bias_of, section_biases, section_data};
+use crate::sections::{bias_of, section_biases, section_data, Placement};
 use crate::unwind::{self, UnwindEntry};
 use crate::{
-    Import, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress, SymbolData,
+    Import, LoadMessage, MadeUp, Object, ObjectData, PlacedAddress, Section, SectionAddress,
+    SymbolData,
 };
 use object::macho;
 use object::read::macho::{MachHeader, MachOFile};
@@ -294,7 +295,8 @@ fn code_sections(
 pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc<Object>> {
     let file = object::File::parse(data.bytes()).ok()?;
 
-    let sections = read_sections(&file);
+    let mut messages = Vec::new();
+    let sections = read_sections(&file, &mut messages);
     let SymbolTable {
         named: mut symbols,
         unnamed,
@@ -336,7 +338,7 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
 
     let format = file.format();
     let architecture = file.architecture();
-    let object = Object::preloaded(
+    let mut object = Object::preloaded(
         path,
         name,
         format,
@@ -347,13 +349,19 @@ pub fn parse_object(data: ObjectData, name: String, path: PathBuf) -> Option<Arc
         data,
         preloaded,
     );
+    object.messages = messages;
     Some(Arc::new(object))
 }
 
 /// Every section the file states, by index. Each code section's place is decided here, once,
-/// for the line info and the code listing both ([`section_biases`]).
-fn read_sections(file: &object::File<'_>) -> HashMap<SectionIndex, Section> {
-    let biases = section_biases(file);
+/// for the line info and the code listing both ([`section_biases`]), and what went wrong
+/// deciding it is pushed onto `messages`.
+fn read_sections(
+    file: &object::File<'_>,
+    messages: &mut Vec<LoadMessage>,
+) -> HashMap<SectionIndex, Section> {
+    let Placement { biases, message } = section_biases(file);
+    messages.extend(message);
     let format = file.format();
     file.sections()
         .filter_map(|section| {
