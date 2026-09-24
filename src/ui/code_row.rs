@@ -1183,8 +1183,9 @@ fn on_move(
         // is being swept out: a drag along a line would otherwise light every name it
         // passed under. The name is said whether it is a link or not -- a name where one
         // is defined is not a link and is still something to ask the server about -- but
-        // under the same guard, for the same reason.
-        let sweeping = dragging(marked, pane);
+        // under the same guard, for the same reason. A sweep in either pane counts: with
+        // the button held, moves reach the other pane's rows too.
+        let sweeping = sweeping_in(&marked.peek());
         // Alt says a press on a link is not a door, so what is under the pointer is text.
         // The link under it is kept all the same: the light asks Alt for itself, so the
         // link lights again as Alt comes up, with no move to say so.

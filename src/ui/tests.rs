@@ -10099,6 +10099,49 @@ fn a_sweep_along_a_line_asks_about_none_of_the_names_it_passes() {
     );
 }
 
+/// **A sweep begun in the other pane asks about nothing either.** freya sends a move to
+/// whatever is under the pointer while the button is held, so a sweep out of the Assembly
+/// pane crosses the Source pane's rows. Fails on `on_move` judging the sweep by its own
+/// pane alone.
+#[test]
+fn a_sweep_from_the_other_pane_asks_about_no_name_it_rests_on() {
+    let (file, _directory) = calling_file("resting");
+    let (mut test, roots, asks) = mount_linking(|_job: LspJob| None, file.clone());
+    let states = roots.states;
+    open_document(
+        states.open,
+        states.visits,
+        Document::Source(file.clone()),
+        Reach::NewTab,
+    );
+    settle(&mut test);
+    serving(&mut test, &roots);
+    while next_job(&asks).is_some() {}
+
+    // A run being swept out in the Assembly pane, the button still down.
+    let mut marked = roots.doors.marked;
+    marked.set(Marks {
+        assembly: Some(Picked {
+            chars: CharSelection::between(Caret { row: 0, col: 0 }, Caret { row: 1, col: 0 }),
+            dragging: true,
+            by_rows: true,
+            file: None,
+            owed: Owed::default(),
+        }),
+        source: None,
+    });
+    settle(&mut test);
+
+    test.move_cursor(word_point(&test, "helper"));
+    hovered(&mut test);
+    let asked =
+        std::iter::from_fn(|| next_job(&asks)).any(|job| matches!(job, AskedOfServer::Hover(_)));
+    assert!(
+        !asked,
+        "a sweep from the other pane asked about the name it rested on"
+    );
+}
+
 /// The answer is markdown and is drawn as markdown: the fenced signature as code, the
 /// prose as prose, and none of the marks it is written with left in the text.
 #[test]

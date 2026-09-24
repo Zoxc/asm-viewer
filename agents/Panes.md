@@ -1307,7 +1307,10 @@ and showed theirs (`notes/upstream/freya.md`). The answer is a **memo** over the
 flags (`Sweeping`, made in `roots` beside the marks): `Marks` is written on every pointer move that
 grows a run, and the four controls that ask this want two bools out of it, so read off the state
 they were all drawn again for every one of those moves
-(`a_sweep_growing_draws_no_name_in_the_bar_again`). **What re-renders a row when the caret moves** is its
+(`a_sweep_growing_draws_no_name_in_the_bar_again`). **Nor do the rows**: while either pane is swept, no row lights
+a link or asks about a name. freya sends a held button's moves to whatever is under the pointer,
+so a sweep out of one pane crosses the other's rows. A row asks `sweeping_in` in its move handler,
+a peek and not the memo (`a_sweep_from_the_other_pane_asks_about_no_name_it_rests_on`). **What re-renders a row when the caret moves** is its
 list's data: the three lists hand their rows `chars` through `new_with_data`, and the section view's
 hand-written `SectionRows` comparison must include it, or a move along a row, which changes no row
 of the run, rebuilds nothing and the caret stays drawn where it was. **Nothing inside a row may
