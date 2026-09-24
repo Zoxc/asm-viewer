@@ -11342,6 +11342,68 @@ fn a_declaration_the_server_places_on_its_own_line_opens_nothing() {
     );
 }
 
+/// The same when the server spells the file another way than the tab does: here the tab's
+/// spelling has a `..` in it, which the server's has not. The two were compared as they
+/// were spelled, so the answer was taken for somewhere else and the tab put a step on its
+/// trail that went nowhere.
+#[test]
+fn a_declaration_on_its_own_line_opens_nothing_however_the_server_spells_the_file() {
+    // A file on the disk, since only `canonicalize` reduces the `..`.
+    let directory = Temporary::fresh_directory("itself-spelled");
+    std::fs::create_dir_all(directory.join("sub")).expect("creating the directory walked into");
+    let path = directory.join("calls.rs");
+    std::fs::write(&path, "fn main() {\n    let n = helper(1);\n}\n")
+        .expect("writing the source file");
+    let stepped: Arc<Path> = Arc::from(directory.join("sub").join("..").join("calls.rs"));
+    let legend = lsp::Legend::of(&["function"], &["declaration", "trait"]);
+    let in_an_impl = links::Links::of(
+        &legend,
+        &[lsp::Token {
+            line: 2,
+            columns: 12..18,
+            kind: 0,
+            modifiers: 0b11,
+        }],
+    );
+    let itself = lsp::Place {
+        file: path.to_path_buf(),
+        line: 2,
+        columns: 12..18,
+    };
+    let (mut test, roots, asks) = mount_linking_calling(
+        move |job: LspJob| match job {
+            LspJob::Ask { ticket, want, .. } => Some(LspAnswer::Answered {
+                ticket,
+                reply: replied(want, Ok(vec![itself.clone()]), &mut unread()),
+            }),
+            _ => None,
+        },
+        stepped.clone(),
+        in_an_impl,
+    );
+    let states = roots.states;
+    let calling = Document::Source(stepped.clone());
+    open_document(states.open, states.visits, calling, Reach::NewTab);
+    settle(&mut test);
+    serving(&mut test, &roots);
+
+    let tab = states.open.now().expect("a tab").0;
+    let before = stops_of(&states, tab).len();
+    let call = word_point(&test, "helper");
+    press_at(&mut test, call);
+    assert!(
+        next_ask(&mut test, &asks).is_some(),
+        "the press asked the server nothing"
+    );
+    settle(&mut test);
+
+    assert_eq!(
+        stops_of(&states, tab).len(),
+        before,
+        "it put a step on the trail that goes nowhere"
+    );
+}
+
 /// The spans each drawn paragraph is made of, in the order they are drawn.
 fn drawn_spans(test: &TestingRunner) -> Vec<Vec<String>> {
     use freya::elements::paragraph::ParagraphElement;

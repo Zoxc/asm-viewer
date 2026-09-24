@@ -675,7 +675,7 @@ fn spelling(open: Open, path: &Path) -> Arc<Path> {
 ///
 /// The reduction of `path` is the caller's and not taken here: it is one path against
 /// every open tab, and taking it per tab is the same call over again.
-fn same_file(one: &Path, real: Option<&Path>, path: &Path) -> bool {
+pub(crate) fn same_file(one: &Path, real: Option<&Path>, path: &Path) -> bool {
     one == path || matches!((reduced(one), real), (Some(one), Some(real)) if one == real)
 }
 
@@ -693,7 +693,7 @@ fn same_file(one: &Path, real: Option<&Path>, path: &Path) -> bool {
 /// row, and not what a `file:` URI comes back as. `Path` reads that prefix as a different
 /// component, so reducing to it would spell one file two ways, which is the one thing this
 /// walk exists to prevent.
-fn reduced(path: &Path) -> Option<PathBuf> {
+pub(crate) fn reduced(path: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
     let full = std::path::absolute(path);
     #[cfg(not(windows))]

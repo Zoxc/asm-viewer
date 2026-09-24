@@ -69,10 +69,13 @@ impl Follow {
         // door -- the same file is a different path through `land` and not a different
         // outcome -- and one that lands on the line it was asked from is a name defined
         // where it is used, which is a place like any other.
+        //
+        // The file is compared as the doors compare one, the server's spelling and the
+        // tab's being two spellings of one file as often as not.
         let nowhere = |place: &&lsp::Place| {
             asked.want == lsp::Followed::Declaration
-                && place.file == asked.at.file
                 && place.line == asked.at.line
+                && same_file(&asked.at.file, reduced(&place.file).as_deref(), &place.file)
         };
         self.arrived = places
             .first()
