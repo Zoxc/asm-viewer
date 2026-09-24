@@ -97,10 +97,18 @@ asked for just before the window closed could spawn after the walk, go on a list
 walk again, and outlive the app in a group of its own. The check is after the spawn and under
 the list's lock, so a program is either walked or stopped by its own start.
 
-`shutdown::before_exit` is the whole of the end of the process: the project, the settings and the
-scratchpads flushed, then `stop_all`. One list, so the sequence cannot be half-copied. The window's close hook
+`shutdown::before_exit` is the whole of the end of the process: `stop_all`, then the project, the
+settings and the scratchpads flushed. One list, so the sequence cannot be half-copied. The window's close hook
 and the panic hook's shutdown thread are the two ways the app comes down and both call it; the
 30-second autosave in the Project view calls `flush` alone, a switch not being an exit.
+
+**The stop comes first, and a panic in one step does not skip the rest.** The stop used to come
+last, and a save can fail to return. After a panic, `project::flush` can block on the saves lock
+the panicking UI thread holds, and the main thread gives up waiting after five seconds. Or a
+save can panic on the shutdown thread, which then unwinds past its `exit` and leaves the app up.
+Either way every child outlived the app. The stop takes only `process`'s own locks, and no save
+depends on a child. Each step is run under `catch_unwind`: the hook still writes the panic down,
+and the steps after it and the `exit` still happen.
 
 ## The pipes
 
