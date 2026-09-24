@@ -23877,6 +23877,68 @@ fn back_returns_to_the_place_a_link_was_followed_from() {
     );
 }
 
+/// **A planting is the place's it was left for, and not its document's.** Back pressed
+/// before the listing had spent the caret an instruction shown in the code left for it
+/// went to a place of the same document, which took the caret and scrolled to it instead
+/// of opening where it was left. How many passes the listing takes to spend it is the
+/// runner's to say, so every count up to settled is tried.
+#[test]
+fn back_before_a_caret_is_planted_leaves_it_to_the_place_it_was_for() {
+    let (_path, objects) = fixture_objects(1);
+    let object = objects[0].clone();
+    let code = Document::Code(object.clone());
+    // The last instruction, so the view has to move to show it.
+    let last = {
+        let rows = rows_of(&reading_of(&object, &[0, 1, 2]));
+        (0..rows.len())
+            .rev()
+            .find_map(|row| rows.address_of(row))
+            .expect("the code has an address")
+    };
+    for passes in 0..8 {
+        let (mut test, roots) = TestingRunner::new(
+            doors_harness,
+            (600., 4.0 * code_row_height()).into(),
+            |runner: &mut _| runner.provide_root_context(test_roots),
+            1.,
+        );
+        let (doors, states) = (roots.doors, roots.states);
+        let mut open = states.objects;
+        open.write().push(object.clone());
+        settle(&mut test);
+        open_document(states.open, states.visits, code.clone(), Reach::NewTab)
+            .expect("a document panel");
+        settle(&mut test);
+        let mut sections = roots.sectioned.reading;
+        let mut decoded = reading_of(&object, &[0, 1, 2]);
+        decoded.generation = sections.peek().generation + 1;
+        sections.set(decoded);
+        settle(&mut test);
+        let shown = address_labels(&test);
+
+        show_in_code(doors, object.clone(), last, None, Reach::InPlace);
+        for _ in 0..passes {
+            test.sync_and_update();
+        }
+        navigate(states.open, Nav::Back);
+        settle(&mut test);
+        settle(&mut test);
+        assert!(
+            states.open.now().map(|(_, stop)| stop) == Some(Stop::whole(code.clone())),
+            "Back after {passes} passes did not go back"
+        );
+        assert_eq!(
+            address_labels(&test),
+            shown,
+            "Back after {passes} passes did not come back to where the place was left"
+        );
+        assert!(
+            doors.marked.peek().assembly.is_none(),
+            "Back after {passes} passes planted the newer place's caret"
+        );
+    }
+}
+
 /// A call target no symbol names is a place in the unified view as much as a named one
 /// is: a plain press on the bare address moves the listing there, where in a symbol's own
 /// listing the same press opens the object's code in place
@@ -24842,7 +24904,7 @@ fn show_in_unified_view_puts_the_caret_on_the_instruction_once_it_has_a_row() {
         .peek()
         .clone()
         .expect("the instruction was not left for the rows");
-    assert!(planting.tab == code && planting.address == Address::Placed(address));
+    assert!(planting.at.document == code && planting.address == Address::Placed(address));
 
     // The worker's first answer, `sum_to` still a guess: the caret on the guessed row,
     // the planting spent.
@@ -24976,7 +25038,7 @@ fn open_as_symbol_puts_the_caret_on_the_instruction_once_the_listing_is_drawn() 
         .peek()
         .clone()
         .expect("the instruction was not left for the listing");
-    assert!(planting.tab == symbol && planting.address == Address::Local(address));
+    assert!(planting.at.document == symbol && planting.address == Address::Local(address));
 
     // The worker's answer: the listing is drawn, and the caret is on the row.
     let mut analysis = roots.analysis;
@@ -25043,7 +25105,7 @@ fn a_landings_instruction_is_spent_by_whichever_document_arrives() {
         .peek()
         .clone()
         .expect("the instruction was not left for the listing");
-    assert!(planting.tab == first_tab);
+    assert!(planting.at.document == first_tab);
 
     // Another document arrives: spent.
     let second_tab = Document::Symbol(second);
@@ -25120,7 +25182,7 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
     // spend, and not this listing's to plant.
     let mut plant = doors.plant;
     let other = Planting {
-        tab: Document::Symbol(elsewhere),
+        at: Stop::whole(Document::Symbol(elsewhere)),
         address: Address::Local(first),
     };
     plant.set(Some(other.clone()));
@@ -25137,7 +25199,7 @@ fn a_symbols_listing_spends_its_own_planting_and_only_its_own() {
 
     // Its own, at an address no row holds: spent all the same.
     plant.set(Some(Planting {
-        tab,
+        at: Stop::whole(tab),
         address: Address::Local(before),
     }));
     settle(&mut test);
@@ -25191,7 +25253,7 @@ fn a_planting_lands_in_the_listing_drawn_now() {
         .address;
     let mut plant = doors.plant;
     plant.set(Some(Planting {
-        tab: two,
+        at: Stop::whole(two),
         address: Address::Local(address),
     }));
     settle(&mut test);

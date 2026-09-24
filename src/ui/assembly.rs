@@ -1383,8 +1383,7 @@ impl Component for InstructionList {
                 }
                 // The planting for a symbol's own tab, whose listing draws the
                 // section's own addresses; a placed one is another listing's.
-                let Some(address) = take_planting(plant, &stop.document).and_then(Address::local)
-                else {
+                let Some(address) = take_planting(plant, stop).and_then(Address::local) else {
                     return;
                 };
                 // The instruction holding the planted byte. An address before the listing's

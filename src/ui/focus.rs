@@ -110,36 +110,37 @@ impl Landed {
     }
 }
 
-/// An instruction the assembly pane's caret is to be put on once the listing of `tab` is
-/// drawn: the half of a [`Landing`] the change of document cannot answer, since the rows
-/// arrive after the document does -- a symbol's from the worker, an object's code's as
-/// the skeleton and then as the stretch decodes. Left by `use_land` as it plants the
-/// other half, or by `land` for a tab already on top, and spent by the listing drawing
-/// the document it names through [`take_planting`]: `use_kept_place` for an object's
-/// code, which puts the caret on the row at or below the address and keeps the address
-/// with it so a decode re-places it on the instruction itself; `InstructionList`'s
-/// planting effect for a symbol's. Spent by `use_land` on every change of document
-/// besides, so one left lying -- a listing that never arrived -- plants nothing in a
-/// listing opened for some other reason later.
+/// An instruction the assembly pane's caret is to be put on once the listing of the
+/// place `at` is drawn: the half of a [`Landing`] the change of document cannot answer,
+/// since the rows arrive after the document does -- a symbol's from the worker, an
+/// object's code's as the skeleton and then as the stretch decodes. Left by `use_land` as
+/// it plants the other half, or by `land` for a tab already on top, and spent by the
+/// listing drawing the place it names through [`take_planting`]: `use_kept_place` for an
+/// object's code, which puts the caret on the row at or below the address and keeps the
+/// address with it so a decode re-places it on the instruction itself;
+/// `InstructionList`'s planting effect for a symbol's. Spent by `use_land` on every
+/// change of place besides, so one left lying -- a listing that never arrived -- plants
+/// nothing in a listing opened for some other reason later.
+///
+/// **Keyed by the place and not the document.** Two stops in one document are two
+/// places drawn by one listing. Keyed by the document, a planting not yet spent when
+/// Back was pressed was taken by the place Back went to.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Planting {
-    pub(crate) tab: Document,
+    pub(crate) at: Stop,
     pub(crate) address: Address,
 }
 
-/// The address a planting left for `document`, taken: [`None`] where there is none, or
-/// where it names another document, whose listing is left to spend it.
+/// The address a planting left for the place `at`, taken: [`None`] where there is none, or
+/// where it names another place, whose listing is left to spend it.
 ///
 /// **Read and not peeked**, so a door opened over the tab already on top wakes the
 /// caller; the read is a statement of its own, since a read guard held across the write
 /// would panic. **Spent before the caller looks for a row**, so an address the listing
 /// cannot place is dropped rather than left owed to a listing drawn later.
-pub(crate) fn take_planting(
-    mut plant: State<Option<Planting>>,
-    document: &Document,
-) -> Option<Address> {
+pub(crate) fn take_planting(mut plant: State<Option<Planting>>, at: &Stop) -> Option<Address> {
     let planting = plant.read().clone();
-    let planting = planting.filter(|planting| planting.tab == *document)?;
+    let planting = planting.filter(|planting| planting.at == *at)?;
     plant.set(None);
     Some(planting.address)
 }
@@ -491,7 +492,7 @@ fn keep_leaving(
 /// file, which has the same rows every time; the instruction is a row of a listing that
 /// arrives after the document -- a symbol's from the worker, an object's code's as the
 /// skeleton comes and again as the stretch decodes. So the address is handed on as a
-/// [`Planting`] naming the document, for the listing that draws it to spend
+/// [`Planting`] naming the place, for the listing that draws it to spend
 /// (`use_kept_place`, `InstructionList`). A planting is written on every arrival, `None`
 /// included, so a listing that never came leaves no caret for the next one that does.
 fn take_landing(
@@ -513,7 +514,7 @@ fn take_landing(
     step.landed = asked.filter(|_| names_this);
     let planting = step.landed.as_ref().and_then(|landing| {
         Some(Planting {
-            tab: landing.tab.clone(),
+            at: step.active.as_ref()?.1.clone(),
             address: landing.address?,
         })
     });

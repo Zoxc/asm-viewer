@@ -1329,7 +1329,7 @@ fn rebuild(
     Some(built)
 }
 
-/// Plant the caret a door left for this document ([`Planting`]), in the first run that
+/// Plant the caret a door left for this place ([`Planting`]), in the first run that
 /// has rows to plant it in -- over the kept run, a landing winning -- on the row at or
 /// below its address (`Rows::body_row_for`). [`take_planting`] spends it before the row
 /// is looked for, so an address in no stretch is dropped rather than left for ever.
@@ -1353,7 +1353,7 @@ fn plant_caret(
 ) -> Option<(usize, Spot)> {
     // A planting for this listing, which draws an object's whole code and so places
     // every address it draws; a symbol's own is another listing's.
-    let address = take_planting(plant, &step.stop.document)?.placed()?;
+    let address = take_planting(plant, step.stop)?.placed()?;
     let row = built.body_row_for(address)?;
     land_row(marked, file_at(built, row), row, Owed::by(Pane::Assembly));
     let first = built.row_for(address).unwrap_or(row);

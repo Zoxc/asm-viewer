@@ -464,7 +464,7 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
     let on_top = open
         .now()
         .filter(|(_, current)| current.document == landing.tab);
-    if let Some((id, _)) = on_top {
+    if let Some((id, current)) = on_top {
         // The document is already on top, so nothing is opened and `open_stop` never
         // runs: the push here is the only record that the reader was somewhere else in
         // it a moment ago. Which is why an instruction of the symbol on top is a place
@@ -493,7 +493,7 @@ pub(crate) fn land(doors: Doors, landing: Landing, reach: Reach) -> Option<DocId
         }
         if let Some(address) = landing.address {
             plant.set(Some(Planting {
-                tab: landing.tab,
+                at: current,
                 address,
             }));
         }

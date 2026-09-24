@@ -878,7 +878,7 @@ impl Component for PadAssembly {
         // parent's and so runs before the listing's first.
         let mut plant = use_doors().plant;
         let opening = self.opening.map(|address| Planting {
-            tab: Document::Code(self.object.clone()),
+            at: Stop::whole(Document::Code(self.object.clone())),
             address: Address::Placed(address),
         });
         use_hook(move || {

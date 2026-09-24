@@ -817,14 +817,16 @@ not when the document arrives.** A line is a row of a file, which has the same r
 `use_land` plants it as the document arrives. An instruction is a row of a listing that comes
 *after* the document (a symbol's from the worker, an object's code's as the skeleton comes and again
 as the stretch decodes), and a caret planted before the rows exist would be planted in nothing. So
-the address half of a `Landing` goes on as a `Planting` (`Doors::plant`) naming the document.
-It is left by `use_land` in the same run that plants the line, never before it, which is what makes
+the address half of a `Landing` goes on as a `Planting` (`Doors::plant`) naming the **place**, the
+stop it arrived at, and not the document: two stops in one document are drawn by one listing, and a
+planting that named the document was taken by the place Back went to when Back came before the
+listing had spent it. It is left by `use_land` in the same run that plants the line, never before it, which is what makes
 the order safe: `use_land` resets both panes' runs as a place arrives, and a caret planted ahead of
 that would be reset with them. Or it is left by `land` itself where the door moves the tab nowhere
 -- the same place again -- since nothing is woken there to leave it. Two listings spend it, both
 through `take_planting` (`focus.rs`), which reads the state so a door opened over the tab on top
 wakes the caller and spends it before the row is looked for. **In an object's code**
-`use_kept_place` plants it in the first run that has rows and finds a planting naming its document,
+`use_kept_place` plants it in the first run that has rows and finds a planting naming its place,
 over the kept run: on the row **holding the byte** (`Rows::body_row_for`, `row_for` past a
 stretch's header and labels, since the view is better shown the label over a function and a caret
 is not), and with `Owed::by(Assembly)`: the reveal is what puts the view there, over the place the
@@ -847,7 +849,7 @@ which `use_kept_position` pays first and over the kept row as it pays any reveal
 is authoritative, a symbol's tab having no place by address. So either listing spends the planting
 whether or not it could answer it (an address in no stretch, or before the first instruction, is
 dropped, not left owed), and `use_land` drops it on every arrival besides, so a listing that never
-came leaves no caret for a document opened later.
+came leaves no caret for a place opened later.
 
 **Navigating brings back each pane's caret and selection with the place.** Back, Forward, a switch
 of tab and a place a tab has been at before put back, in **both** panes, what the reader had
