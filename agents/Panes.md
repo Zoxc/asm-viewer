@@ -86,7 +86,8 @@ was compiled from, else the first row naming a file at all), so the line can nev
 other file; both are worked out on the worker, beside the info they come from. `source_side` names that line, or
 the pressed instruction's for an object's code, and `SourceSide::opening` turns it into the row
 `use_kept_position` opens a tab it has never shown at, backed off by the `CONTEXT_ROWS` a reveal
-keeps above the row it scrolls to. A row remembered for the tab wins over it, so this is the *first*
+keeps above the row it scrolls to. As in a reveal, a pane too short for both gives up the margin and
+not the row, so the open waits for the pane's first measurement. A row remembered for the tab wins over it, so this is the *first*
 open and not every one. Everything with nothing to say falls back to the top of the file as it
 always did: an object with no line info, a prologue DWARF places on no line, a source-driven tab
 (whose subject is a **file** the reader opened, and files open at the top), and a companion that is

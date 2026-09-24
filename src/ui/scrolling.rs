@@ -494,10 +494,21 @@ pub(crate) fn use_kept_position(
             // The margin is taken here and not by the caller, which had to know how much
             // of the listing above a row is part of showing it -- and could not say a row
             // inside the margin at all, that coming out as 0 and reading as nothing to do.
+            //
+            // **An open waits for the pane to be measured, and gives up the margin before
+            // the row**, as `reveal_row` does: backed off by the whole margin, a pane three
+            // rows tall or less showed only the rows above the one it opened on.
             let top = match kept.owing.take() {
                 Some(Move::Place(row)) => Some(row),
+                Some(Move::Open(row)) if seen <= 0.0 => {
+                    kept.owing = Some(Move::Open(row));
+                    None
+                }
                 Some(Move::Open(row)) => {
-                    Some(TopRow::at(row.saturating_sub(CONTEXT_ROWS as usize)))
+                    // The rows the pane holds beside the row itself.
+                    let room = ((seen / height).floor() as usize).saturating_sub(1);
+                    let margin = (CONTEXT_ROWS as usize).min(room);
+                    Some(TopRow::at(row.saturating_sub(margin)))
                 }
                 None => None,
             };

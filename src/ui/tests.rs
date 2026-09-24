@@ -84,10 +84,15 @@ const PAIRED_LISTING: u64 = 1;
 /// here lays out against a window, and a reveal needs to know what it can already see.
 const VIEWPORT: f32 = 100.0;
 
-/// A viewport a test states for itself, for the one case that is about not having one
-/// yet. Absent, [`revealing_harness`] is [`VIEWPORT`] tall.
+/// A viewport a test states for itself, for the cases about not having one yet or about
+/// a short pane. Absent, a scrolling harness is [`VIEWPORT`] tall.
 #[derive(Clone, Copy)]
 struct KeptViewport(State<f32>);
+
+/// The row a tab nothing is remembered for opens at, as the Source pane's symbol line is.
+/// Absent, [`scrolling_harness`] opens at the top.
+#[derive(Clone, Copy)]
+struct KeptOpening(usize);
 
 /// The two tabs the scrolling harnesses key by: a [`Docs`] with two files open, and the
 /// entry naming each. A source stop needs no object, so the harnesses stay object-free.
@@ -118,7 +123,9 @@ fn scrolling_harness() -> impl IntoElement {
     // How tall the pane says it is, which is all the hook wants a viewport for: how far
     // the listing can be scrolled, so neither the row it takes from the offset nor the
     // offset it writes for a row is one the view could not be at.
-    let viewport = use_state(|| VIEWPORT);
+    let assumed = use_state(|| VIEWPORT);
+    let viewport = try_consume_context::<KeptViewport>().map_or(assumed, |kept| kept.0);
+    let opening = try_consume_context::<KeptOpening>().map(|kept| kept.0);
     use_kept_position(
         at,
         docs,
@@ -134,7 +141,7 @@ fn scrolling_harness() -> impl IntoElement {
         rows,
         // One listing throughout: nothing here is owed a reveal.
         0,
-        None,
+        opening,
     );
 
     rect().expanded().child(
@@ -254,6 +261,49 @@ fn a_tab_comes_back_to_the_row_it_was_left_at() {
         test.sync_and_update();
     }
     assert_eq!(at.peek().at(&a), None);
+}
+
+/// A tab opened in a pane too short for its row and the context rows above it gives up
+/// the margin and not the row. Backed off by the whole margin, a pane two rows tall showed
+/// the two rows before the one it opened on. The pane is measured only after the first
+/// run, as a real one is, so the open has to wait for the measurement to know its room.
+#[test]
+fn a_tab_opening_in_a_short_pane_shows_its_row() {
+    let short: f32 = 2.0 * 26.0;
+    let (mut test, (top, viewport)) = TestingRunner::new(
+        scrolling_harness,
+        (100., short).into(),
+        |runner| {
+            let (docs, a, _) = kept_tabs();
+            runner.provide_root_context(|| KeptAt(State::create(Positions::default())));
+            runner.provide_root_context(|| KeptDocs(State::create(docs)));
+            runner.provide_root_context(|| KeptLength(State::create(100)));
+            runner.provide_root_context(|| KeptTab(State::create(a)));
+            runner.provide_root_context(|| KeptOpening(40));
+            (
+                runner.provide_root_context(|| KeptTop(State::create(0))).0,
+                runner
+                    .provide_root_context(|| KeptViewport(State::create(0.0)))
+                    .0,
+            )
+        },
+        1.,
+    );
+    assert_eq!(code_row_height(), 26.0);
+    let mut viewport = viewport;
+    // Settled unmeasured, so the open is owed before the pane knows its room.
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    viewport.set(short);
+    for _ in 0..4 {
+        test.sync_and_update();
+    }
+    test.move_cursor((50., f64::from(short) - 5.));
+    test.sync_and_update();
+    test.move_cursor((50., 5.));
+    test.sync_and_update();
+    assert_eq!(*top.peek(), 39, "the pane did not open with row 40 in view");
 }
 
 /// [`scrolling_harness`] with the panes' reveal made through the kept position, as
