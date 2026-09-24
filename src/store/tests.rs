@@ -124,7 +124,7 @@ fn a_name_already_taken_gets_a_number() {
 }
 
 /// A file that is not there, or that the system will not hand over, is not a file that
-/// will not parse: there is nothing to rescue and nothing is about to write over it.
+/// will not parse: there is nothing to rescue.
 #[test]
 fn a_missing_file_moves_nothing() {
     let base = Temporary::fresh("store-test");
@@ -306,4 +306,50 @@ fn a_write_through_a_symlink_lands_in_its_target() {
     assert_eq!(mode & 0o777, 0o640);
     assert_eq!(temporaries(&base), Vec::<PathBuf>::new());
     assert_eq!(temporaries(&base.join("elsewhere")), Vec::<PathBuf>::new());
+}
+
+/// A file the system will not hand over is not written over while it cannot be read: the
+/// read answers the default, and the next write would have replaced the reader's file with
+/// it -- a rename needs no permission on the file. Once it reads again, it is written.
+#[cfg(unix)]
+#[test]
+fn a_file_that_cannot_be_read_is_not_written_over() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let base = Temporary::fresh_directory("store-test");
+    let path = base.join("settings.toml");
+    written(&path, b"name = \"mine\"\n");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("the mode is set");
+    if fs::read(&path).is_ok() {
+        // Root reads it anyway, so there is nothing here to test.
+        return;
+    }
+
+    let store = Store::at(&base);
+    assert_eq!(store.read::<Named>(&path), None);
+    assert!(store
+        .write_toml(
+            &path,
+            &Named {
+                name: "default".into()
+            }
+        )
+        .is_err());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("the mode is set");
+    assert_eq!(
+        fs::read(&path).expect("the file reads"),
+        b"name = \"mine\"\n",
+        "the file was written over"
+    );
+    assert!(!base.join(INCOMPATIBLE_DIR).exists());
+
+    assert_eq!(
+        store.read::<Named>(&path),
+        Some(Named {
+            name: "mine".into()
+        })
+    );
+    store
+        .write_toml(&path, &Named { name: "new".into() })
+        .expect("a file that reads is written");
 }

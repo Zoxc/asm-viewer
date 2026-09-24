@@ -11,10 +11,14 @@
 //! Framework-free, like every module that calls it: no freya types appear here.
 
 use std::{
+    collections::HashSet,
     fs::{self, File},
-    io::Write,
+    io::{ErrorKind, Write},
     path::{Component, Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
 };
 
 use async_channel::{Receiver, Sender};
@@ -81,6 +85,9 @@ pub struct Store {
     /// per store, which its clones share, so a load on any thread is heard by whoever
     /// listens to the store it was handed.
     moved: (Sender<PathBuf>, Receiver<PathBuf>),
+    /// The files a [`Store::read`] could not read, which no [`Store::write`] replaces until
+    /// one can. Shared by the clones for `moved`'s reason.
+    unread: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 /// Two stores are one when they are one directory.
@@ -97,7 +104,15 @@ impl Store {
         Store {
             base,
             moved: async_channel::unbounded(),
+            unread: Arc::default(),
         }
+    }
+
+    fn unread(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
+        // A set of paths is whole whatever panicked holding it.
+        self.unread
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     /// The store this run keeps its files in, or `None` on a system with no state or
@@ -144,8 +159,17 @@ impl Store {
     }
 
     /// Write `contents` at `path`, atomically. See [`write_atomically`].
+    ///
+    /// Refused for a file the last [`Store::read`] of it could not read: that read answered
+    /// the default, and this would put it over whatever the file holds.
     pub fn write(&self, path: impl AsRef<Path>, contents: &[u8]) -> std::io::Result<()> {
-        write_atomically(&self.path(path), contents)
+        let path = self.path(path);
+        if self.unread().contains(&path) {
+            return Err(std::io::Error::other(
+                "it could not be read, so it is not written over",
+            ));
+        }
+        write_atomically(&path, contents)
     }
 
     /// The same for a value written as TOML — which is every file the app owns.
@@ -201,9 +225,10 @@ impl Store {
     /// through here.**
     ///
     /// The bytes and not a string: a file that is not UTF-8 will not parse either, and is
-    /// lost in exactly the same way. A file the system will not hand over at all is left
-    /// where it is — nothing can be salvaged from it, and nothing is about to write over
-    /// it either.
+    /// lost in exactly the same way. A file the system will not hand over at all -- no
+    /// permission, a directory in its place, a failing disk -- is left where it is, since
+    /// nothing can be salvaged from it, and **no write replaces it** until a read of it
+    /// succeeds: the rename a write ends with needs no permission on the file itself.
     ///
     /// **Only the app's own files are read here**, wherever they are: a session sits
     /// beside its project file, outside the store once the reader gave the project a
@@ -211,7 +236,22 @@ impl Store {
     /// project file itself, is read some other way.
     pub fn read<T: DeserializeOwned>(&self, path: impl AsRef<Path>) -> Option<T> {
         let path = self.path(path);
-        let data = fs::read(&path).ok()?;
+        let data = match fs::read(&path) {
+            Ok(data) => data,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                self.unread().remove(&path);
+                return None;
+            }
+            Err(error) => {
+                log::warn!(
+                    "could not read {}, so it will not be written over: {error}",
+                    path.display()
+                );
+                self.unread().insert(path);
+                return None;
+            }
+        };
+        self.unread().remove(&path);
         let parsed = std::str::from_utf8(&data)
             .ok()
             .and_then(|text| toml::from_str(text).ok());
